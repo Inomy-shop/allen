@@ -1,0 +1,22 @@
+version: '3.8'
+services:
+  mongodb:
+    image: mongo:7
+    ports:
+      - "27017:27017"
+    volumes:
+      - flowforge-data:/data/db
+
+  server:
+    build: ./packages/server
+    ports:
+      - "4000:4000"
+    environment:
+      MONGODB_URI: mongodb://mongodb:27017/flowforge
+    volumes:
+      - ~/.claude:/root/.claude:ro
+    depends_on:
+      - mongodb
+
+volumes:
+  flowforge-data:

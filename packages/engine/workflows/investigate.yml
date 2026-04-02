@@ -1,0 +1,55 @@
+name: investigate
+description: Investigate a problem and decide whether to fix
+version: 1
+
+context:
+  requires: [repo]
+  tools: [filesystem, terminal, database, web-search]
+
+input:
+  problem: { type: string, required: true }
+  repo_path: { type: string, required: true }
+
+nodes:
+  gather:
+    role: investigator
+    prompt: "Investigate: {{problem}}"
+    outputs: [evidence, hypotheses]
+
+  verify:
+    role: investigator
+    prompt: "Test hypotheses:\n{{hypotheses}}\nEvidence: {{evidence}}"
+    outputs: [root_cause, confidence]
+
+  decide:
+    type: human
+    prompt: "Root cause: {{root_cause}} (confidence: {{confidence}}). What should we do?"
+    fields:
+      - { name: action, type: select, options: [fix-now, report-only, investigate-more] }
+      - { name: notes, type: text, required: false }
+    outputs: [action, notes]
+
+  fix:
+    type: workflow
+    workflow: bugfix
+    input_map:
+      task: "Fix: {{root_cause}}"
+      repo_path: "{{repo_path}}"
+    output_map:
+      pr_url: fix_pr_url
+
+  report:
+    role: writer
+    prompt: "Write incident report:\nProblem: {{problem}}\nRoot cause: {{root_cause}}\nEvidence: {{evidence}}"
+    outputs: [incident_report]
+
+edges:
+  - { from: START, to: gather }
+  - { from: gather, to: verify }
+  - { from: verify, to: gather, condition: "confidence < 0.7", max_retries: 2 }
+  - { from: verify, to: decide, condition: "confidence >= 0.7" }
+  - { from: decide, to: fix, condition: "action == 'fix-now'" }
+  - { from: decide, to: report, condition: "action == 'report-only'" }
+  - { from: decide, to: gather, condition: "action == 'investigate-more'", max_retries: 1 }
+  - { from: fix, to: report }
+  - { from: report, to: END }

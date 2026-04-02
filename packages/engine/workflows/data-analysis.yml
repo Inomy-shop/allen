@@ -1,0 +1,39 @@
+name: data-analysis
+description: Analyze data and generate a report
+version: 1
+
+context:
+  requires: []
+  tools: [filesystem, terminal, database]
+
+input:
+  question: { type: string, required: true }
+  repo_path: { type: string, required: false }
+
+nodes:
+  plan:
+    role: analyst
+    prompt: "Plan analysis for: {{question}}"
+    outputs: [analysis_plan, data_sources]
+
+  query:
+    role: analyst
+    prompt: "Execute queries:\n{{analysis_plan}}"
+    outputs: [raw_results, anomalies]
+
+  synthesize:
+    role: analyst
+    prompt: "Synthesize:\nResults: {{raw_results}}\nAnomalies: {{anomalies}}"
+    outputs: [summary, insights, recommendations]
+
+  report:
+    role: writer
+    prompt: "Write report:\n{{summary}}\n{{insights}}\n{{recommendations}}"
+    outputs: [report]
+
+edges:
+  - { from: START, to: plan }
+  - { from: plan, to: query }
+  - { from: query, to: synthesize }
+  - { from: synthesize, to: report }
+  - { from: report, to: END }

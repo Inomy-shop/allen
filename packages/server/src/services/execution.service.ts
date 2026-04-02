@@ -1,0 +1,243 @@
+import { randomUUID } from 'node:crypto';
+import type { Db } from 'mongodb';
+import {
+  FlowForgeEngine,
+  StateManager,
+  loadRoles,
+  getBuiltIns,
+  type WorkflowDef,
+  type EngineConfig,
+  type ExecutionState,
+} from '@flowforge/engine';
+import { createSSEEmitter } from './stream.service.js';
+
+// Track running engines by executionId
+const runningEngines = new Map<string, FlowForgeEngine>();
+
+export class ExecutionService {
+  private db: Db;
+  private stateManager: StateManager;
+
+  constructor(db: Db) {
+    this.db = db;
+    this.stateManager = new StateManager(db);
+  }
+
+  async start(workflowId: string, input: Record<string, unknown>): Promise<Record<string, unknown>> {
+    const { ObjectId } = await import('mongodb');
+    const workflowDoc = await this.db.collection('workflows').findOne({ _id: new ObjectId(workflowId) });
+    if (!workflowDoc) throw new Error('Workflow not found');
+
+    const workflow = workflowDoc.parsed as WorkflowDef;
+    const executionId = randomUUID();
+
+    // Check concurrency limits — queue if exceeded
+    if (workflow.context?.concurrency) {
+      const running = await this.stateManager.countRunningExecutions(workflow.name);
+      if (running >= workflow.context.concurrency) {
+        // Queue the execution instead of rejecting
+        const queuedExec: ExecutionState = {
+          id: executionId,
+          workflowId,
+          workflowName: workflow.name,
+          workflowVersion: workflow.version ?? 1,
+          status: 'queued',
+          input,
+          state: { ...input },
+          sessions: {},
+          retryCounts: {},
+          currentNodes: [],
+          completedNodes: [],
+          cost: { actual: null, estimated: 0 },
+          durationMs: 0,
+          startedAt: new Date(),
+        };
+        await this.stateManager.createExecution(queuedExec);
+
+        return {
+          id: executionId,
+          status: 'queued',
+          workflowName: workflow.name,
+          workflowId,
+        };
+      }
+    }
+
+    // Start immediately
+    return this.launchExecution(executionId, workflowId, workflow, input);
+  }
+
+  /**
+   * Launch an execution (called directly or from dequeue).
+   */
+  private async launchExecution(
+    executionId: string,
+    workflowId: string,
+    workflow: WorkflowDef,
+    input: Record<string, unknown>,
+  ): Promise<Record<string, unknown>> {
+    const emitter = createSSEEmitter(executionId);
+
+    const allWorkflowDocs = await this.db.collection('workflows').find({}).toArray();
+    const workflows: Record<string, WorkflowDef> = {};
+    for (const doc of allWorkflowDocs) {
+      workflows[(doc.parsed as WorkflowDef).name] = doc.parsed as WorkflowDef;
+    }
+
+    const config: EngineConfig = {
+      db: this.db,
+      roles: loadRoles(),
+      builtIns: getBuiltIns(),
+      workflows,
+      emitter,
+    };
+
+    const engine = new FlowForgeEngine(config);
+    runningEngines.set(executionId, engine);
+
+    engine.run(workflow, input, 0, { executionId, workflowId })
+      .catch(() => {})
+      .finally(() => {
+        runningEngines.delete(executionId);
+        // Auto-dequeue next waiting execution for this workflow
+        this.dequeueNext(workflow.name).catch(() => {});
+      });
+
+    return {
+      id: executionId,
+      status: 'running',
+      workflowName: workflow.name,
+      workflowId,
+    };
+  }
+
+  /**
+   * Dequeue the next queued execution for a workflow when a slot opens.
+   */
+  private async dequeueNext(workflowName: string): Promise<void> {
+    // Find the workflow definition to check concurrency config
+    const workflowDoc = await this.db.collection('workflows').findOne({ name: workflowName });
+    if (!workflowDoc) return;
+
+    const workflow = workflowDoc.parsed as WorkflowDef;
+    const limit = workflow.context?.concurrency;
+    if (!limit) return;
+
+    const running = await this.stateManager.countRunningExecutions(workflowName);
+    if (running >= limit) return;
+
+    // Find oldest queued execution
+    const queued = await this.db.collection('executions')
+      .findOne(
+        { workflowName, status: 'queued' },
+        { sort: { startedAt: 1 } },
+      );
+
+    if (!queued) return;
+
+    const exec = queued as unknown as ExecutionState;
+    await this.launchExecution(exec.id, exec.workflowId, workflow, exec.input);
+  }
+
+  async list(filter: Record<string, unknown> = {}): Promise<Record<string, unknown>[]> {
+    const query: Record<string, unknown> = {};
+    if (filter.status) query.status = filter.status;
+    if (filter.workflowId) query.workflowId = filter.workflowId;
+    if (filter.workflowName) query.workflowName = filter.workflowName;
+
+    const results = await this.stateManager.listExecutions(query);
+    return results as unknown as Record<string, unknown>[];
+  }
+
+  async getById(id: string): Promise<Record<string, unknown> | null> {
+    const result = await this.stateManager.getExecution(id);
+    return result as unknown as Record<string, unknown> | null;
+  }
+
+  async cancel(id: string): Promise<void> {
+    const engine = runningEngines.get(id);
+    if (engine) {
+      engine.cancelExecution(id);
+    }
+    await this.stateManager.updateExecution(id, {
+      status: 'cancelled',
+      completedAt: new Date(),
+    });
+  }
+
+  async pause(id: string): Promise<void> {
+    const engine = runningEngines.get(id);
+    if (engine) {
+      engine.pauseExecution(id);
+    }
+    await this.stateManager.updateExecution(id, { status: 'waiting_for_input' as never });
+  }
+
+  async resume(id: string): Promise<void> {
+    const engine = runningEngines.get(id);
+    if (engine) {
+      engine.resumeExecution(id);
+    }
+    await this.stateManager.updateExecution(id, { status: 'running' as never });
+  }
+
+  async submitInput(id: string, node: string, data: Record<string, unknown>): Promise<boolean> {
+    const engine = runningEngines.get(id);
+    if (engine) {
+      return engine.submitInput(id, node, data);
+    }
+    return false;
+  }
+
+  async retryFromNode(executionId: string, nodeName: string): Promise<Record<string, unknown>> {
+    const exec = await this.stateManager.getExecution(executionId);
+    if (!exec) throw new Error('Execution not found');
+
+    const workflowDoc = exec.workflowId
+      ? await this.db.collection('workflows').findOne({ _id: (await import('mongodb')).ObjectId.createFromHexString(exec.workflowId) })
+      : await this.db.collection('workflows').findOne({ name: exec.workflowName });
+    if (!workflowDoc) throw new Error('Workflow not found');
+
+    const workflow = workflowDoc.parsed as WorkflowDef;
+    const emitter = createSSEEmitter(executionId);
+
+    const allWorkflowDocs = await this.db.collection('workflows').find({}).toArray();
+    const workflows: Record<string, WorkflowDef> = {};
+    for (const doc of allWorkflowDocs) {
+      workflows[(doc.parsed as WorkflowDef).name] = doc.parsed as WorkflowDef;
+    }
+
+    const config: EngineConfig = {
+      db: this.db,
+      roles: loadRoles(),
+      builtIns: getBuiltIns(),
+      workflows,
+      emitter,
+    };
+
+    const engine = new FlowForgeEngine(config);
+    runningEngines.set(executionId, engine);
+
+    engine.retryFromNode(workflow, executionId, nodeName)
+      .catch(() => {})
+      .finally(() => runningEngines.delete(executionId));
+
+    return { id: executionId, status: 'running', retryingFrom: nodeName };
+  }
+
+  async getTraces(executionId: string): Promise<Record<string, unknown>[]> {
+    return this.stateManager.getTraces(executionId);
+  }
+
+  async getTracesByNode(executionId: string, node: string): Promise<Record<string, unknown>[]> {
+    return this.stateManager.getTracesByNode(executionId, node);
+  }
+
+  async getTraceByAttempt(executionId: string, node: string, attempt: number): Promise<Record<string, unknown> | null> {
+    return this.stateManager.getTraceByAttempt(executionId, node, attempt);
+  }
+
+  async getStats(): Promise<Record<string, unknown>> {
+    return this.stateManager.getExecutionStats();
+  }
+}

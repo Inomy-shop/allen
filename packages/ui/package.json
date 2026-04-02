@@ -1,0 +1,9 @@
+{
+  "name": "@flowforge/ui",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "echo 'UI not yet implemented (Phase 4+)'",
+    "build": "echo 'UI not yet implemented (Phase 4+)'"
+  }
+}

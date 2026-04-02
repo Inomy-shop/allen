@@ -1,0 +1,28 @@
+{
+  "name": "@flowforge/server",
+  "version": "0.1.0",
+  "type": "module",
+  "main": "./dist/app.js",
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsx watch src/app.ts",
+    "start": "node dist/app.js",
+    "lint": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@flowforge/engine": "*",
+    "cors": "^2.8.5",
+    "js-yaml": "^4.1.0",
+    "express": "^4.21.0",
+    "mongodb": "^6.12.0",
+    "multer": "^1.4.5-lts.1"
+  },
+  "devDependencies": {
+    "@types/cors": "^2.8.17",
+    "@types/js-yaml": "^4.0.9",
+    "@types/express": "^5.0.0",
+    "@types/multer": "^1.4.12",
+    "@types/node": "^22.0.0",
+    "tsx": "^4.19.0"
+  }
+}

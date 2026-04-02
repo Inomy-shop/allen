@@ -1,0 +1,47 @@
+name: bugfix
+description: Quick bugfix workflow
+version: 1
+
+context:
+  requires: [repo]
+  tools: [filesystem, git, terminal]
+
+input:
+  task: { type: string, required: true }
+  repo_path: { type: string, required: true }
+
+nodes:
+  analyze:
+    role: investigator
+    prompt: "Find root cause: {{task}}"
+    outputs: [root_cause, affected_files]
+
+  branch:
+    type: code
+    function: git-create-branch
+    outputs: [worktree_path, branch_name]
+
+  fix:
+    role: developer
+    prompt: "Fix {{root_cause}} in {{worktree_path}}. {{#if retry_context}}Errors: {{retry_context}}{{/if}}"
+    outputs: [changed_files]
+    resume_on_retry: true
+
+  test:
+    role: tester
+    prompt: "Test the fix in {{worktree_path}}"
+    outputs: [test_passed, test_output]
+
+  pr:
+    role: git-ops
+    prompt: "Create bugfix PR from {{branch_name}}"
+    outputs: [pr_url]
+
+edges:
+  - { from: START, to: analyze }
+  - { from: analyze, to: branch }
+  - { from: branch, to: fix }
+  - { from: fix, to: test }
+  - { from: test, to: pr, condition: "test_passed" }
+  - { from: test, to: fix, condition: "NOT test_passed", max_retries: 3, retry_context: "{{test_output}}" }
+  - { from: pr, to: END }

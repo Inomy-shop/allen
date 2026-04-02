@@ -1,0 +1,64 @@
+name: sdlc
+description: Full software development lifecycle
+version: 1
+
+context:
+  requires: [repo]
+  tools: [filesystem, git, terminal]
+  concurrency: 1
+
+input:
+  task: { type: string, required: true }
+  repo_path: { type: string, required: true }
+
+nodes:
+  plan:
+    role: planner
+    prompt: "Break down: {{task}}"
+    outputs: [plan]
+
+  create-branch:
+    type: code
+    function: git-create-branch
+    outputs: [worktree_path, branch_name]
+
+  implement:
+    role: developer
+    prompt: |
+      Implement in {{worktree_path}}:
+      {{plan}}
+      {{#if retry_context}}FIX: {{retry_context}}{{/if}}
+    outputs: [changed_files, summary]
+    resume_on_retry: true
+
+  test:
+    role: tester
+    prompt: "Test changes in {{worktree_path}}: {{changed_files}}"
+    outputs: [test_passed, test_output]
+
+  build:
+    type: code
+    function: run-build
+    retries: 1
+    outputs: [build_passed, build_errors]
+
+  review:
+    role: reviewer
+    prompt: "Review {{worktree_path}} on {{branch_name}}. Verdict: APPROVED or REQUEST_CHANGES."
+    outputs: [review_verdict, review_feedback]
+
+  create-pr:
+    role: git-ops
+    prompt: "Create PR from {{branch_name}}: {{summary}}"
+    outputs: [pr_url]
+
+edges:
+  - { from: START, to: plan }
+  - { from: plan, to: create-branch }
+  - { from: create-branch, to: implement }
+  - { from: implement, to: [test, build], parallel: true, join: wait-all }
+  - { from: [test, build], to: review, condition: "test_passed AND build_passed" }
+  - { from: [test, build], to: implement, condition: "NOT test_passed OR NOT build_passed", max_retries: 3, retry_context: "{{test_output}}\n{{build_errors}}" }
+  - { from: review, to: create-pr, condition: "review_verdict == 'APPROVED'" }
+  - { from: review, to: implement, condition: "review_verdict == 'REQUEST_CHANGES'", max_retries: 3, retry_context: "{{review_feedback}}" }
+  - { from: create-pr, to: END }

@@ -1,0 +1,47 @@
+name: research-and-write
+description: Research a topic and write content
+version: 1
+
+context:
+  requires: []
+  tools: [web-search, web-fetch]
+
+input:
+  topic: { type: string, required: true }
+  tone: { type: string, default: professional }
+  platform: { type: string, default: linkedin }
+
+nodes:
+  research:
+    role: researcher
+    prompt: "Research deeply: {{topic}}"
+    outputs: [findings, key_stats, angles]
+
+  draft:
+    role: writer
+    prompt: |
+      Write a {{platform}} post about: {{topic}}
+      Tone: {{tone}}
+      Findings: {{findings}}
+      Stats: {{key_stats}}
+      500-800 words. Hook in first line. End with question.
+      {{#if retry_context}}REVISION NOTES: {{retry_context}}{{/if}}
+    outputs: [draft]
+
+  review:
+    role: editor
+    prompt: "Review {{platform}} post:\n{{draft}}\nVerdict: PUBLISH or REVISE."
+    outputs: [verdict, feedback]
+
+  format:
+    role: formatter
+    prompt: "Format for {{platform}} with hashtags and line breaks:\n{{draft}}"
+    outputs: [final_post]
+
+edges:
+  - { from: START, to: research }
+  - { from: research, to: draft }
+  - { from: draft, to: review }
+  - { from: review, to: format, condition: "verdict == 'PUBLISH'" }
+  - { from: review, to: draft, condition: "verdict == 'REVISE'", max_retries: 2, retry_context: "{{feedback}}" }
+  - { from: format, to: END }
