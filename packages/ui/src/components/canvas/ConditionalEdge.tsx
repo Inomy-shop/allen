@@ -1,15 +1,34 @@
-import { BaseEdge, getSmoothStepPath, type EdgeProps } from '@xyflow/react';
+import { BaseEdge, getBezierPath, type EdgeProps, MarkerType } from '@xyflow/react';
 
 export default function ConditionalEdge(props: EdgeProps) {
-  const { sourceX, sourceY, targetX, targetY, sourcePosition, targetPosition, data, label } = props;
+  const { sourceX, sourceY, targetX, targetY, sourcePosition, targetPosition, label, markerEnd } = props;
 
-  const [edgePath, labelX, labelY] = getSmoothStepPath({
+  const [edgePath, labelX, labelY] = getBezierPath({
     sourceX, sourceY, targetX, targetY, sourcePosition, targetPosition,
   });
 
   return (
     <>
-      <BaseEdge path={edgePath} style={{ stroke: '#a855f7', strokeWidth: 2 }} />
+      <BaseEdge
+        path={edgePath}
+        style={{ stroke: '#a855f7', strokeWidth: 2 }}
+        markerEnd={markerEnd ?? `url(#ff-arrow-purple)`}
+      />
+      {/* Custom arrow marker definition */}
+      <defs>
+        <marker
+          id="ff-arrow-purple"
+          markerWidth="16"
+          markerHeight="16"
+          viewBox="-5 -5 10 10"
+          refX="0"
+          refY="0"
+          orient="auto-start-reverse"
+          markerUnits="strokeWidth"
+        >
+          <path d="M-3,-3 L3,0 L-3,3 Z" fill="#a855f7" />
+        </marker>
+      </defs>
       {label && (
         <foreignObject
           x={labelX - 60} y={labelY - 12}

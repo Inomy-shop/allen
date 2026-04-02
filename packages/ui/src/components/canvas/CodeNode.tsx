@@ -3,7 +3,7 @@ import { Cog } from 'lucide-react';
 
 export default function CodeNode({ data, selected }: NodeProps) {
   return (
-    <div className={`px-4 py-3 rounded-sm border-2 bg-surface-100/90 backdrop-blur-sm min-w-[150px] transition-all
+    <div className={`px-4 py-3 rounded-lg border-2 bg-surface-100/90 backdrop-blur-sm min-w-[150px] transition-all
       ${selected ? 'border-accent-green ring-2 ring-accent-green/30 shadow-glow-green' : 'border-accent-green/30 hover:border-accent-green/50'}
     `}>
       <Handle type="target" position={Position.Top} className="!bg-accent-green !w-2.5 !h-2.5 !border-surface" />

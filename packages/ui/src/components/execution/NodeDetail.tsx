@@ -1,17 +1,36 @@
+import { useState } from 'react';
 import type { NodeState, ActivityEntry } from '../../hooks/useExecution';
 import StatusBadge from '../common/StatusBadge';
 import CostDisplay from '../common/CostDisplay';
 import StreamOutput from './StreamOutput';
-import { Wrench, CheckCircle } from 'lucide-react';
+import { Wrench, CheckCircle, Send, MessageSquare } from 'lucide-react';
+
+interface HumanInputField {
+  name: string;
+  type: string;
+  label?: string;
+  required?: boolean;
+  options?: string[];
+}
 
 interface Props {
   nodeName: string;
   nodeState: NodeState | undefined;
   trace: any | undefined;
+  waitingInput?: {
+    node: string;
+    prompt: string;
+    fields: HumanInputField[];
+  } | null;
+  onSubmitInput?: (data: Record<string, unknown>) => void;
 }
 
-export default function NodeDetail({ nodeName, nodeState, trace }: Props) {
-  if (!nodeState && !trace) {
+export default function NodeDetail({ nodeName, nodeState, trace, waitingInput, onSubmitInput }: Props) {
+  const [formData, setFormData] = useState<Record<string, unknown>>({});
+
+  const isWaitingNode = waitingInput && waitingInput.node === nodeName;
+
+  if (!nodeState && !trace && !isWaitingNode) {
     return (
       <div className="p-4 text-gray-500 text-sm font-mono">
         SELECT A NODE TO VIEW DETAILS
@@ -19,13 +38,18 @@ export default function NodeDetail({ nodeName, nodeState, trace }: Props) {
     );
   }
 
-  const status = nodeState?.status ?? trace?.status ?? 'pending';
+  const status = nodeState?.status ?? trace?.status ?? (isWaitingNode ? 'waiting_for_input' : 'pending');
   const output = nodeState?.output ?? trace?.output;
   const cost = nodeState?.cost ?? trace?.cost;
   const durationMs = nodeState?.durationMs ?? trace?.durationMs;
   const prompt = trace?.renderedPrompt;
   const streamText = nodeState?.streamText ?? trace?.rawResponse ?? '';
   const activity: ActivityEntry[] = nodeState?.activity ?? trace?.activity ?? [];
+
+  const handleSubmit = () => {
+    if (onSubmitInput) onSubmitInput(formData);
+    setFormData({});
+  };
 
   return (
     <div className="flex flex-col h-full overflow-hidden">
@@ -48,6 +72,65 @@ export default function NodeDetail({ nodeName, nodeState, trace }: Props) {
 
       {/* Content sections */}
       <div className="flex-1 overflow-auto">
+        {/* Human input form — shown when this node is waiting */}
+        {isWaitingNode && (
+          <section className="p-4 border-b-2 border-accent-yellow/50 bg-accent-yellow/5">
+            <div className="flex items-center gap-2 mb-3">
+              <MessageSquare className="w-4 h-4 text-accent-yellow" />
+              <h4 className="font-heading text-xs font-semibold text-accent-yellow uppercase tracking-widest">Input Required</h4>
+            </div>
+            <p className="text-xs text-gray-300 font-body mb-4 whitespace-pre-wrap">{waitingInput.prompt}</p>
+            <div className="space-y-3">
+              {waitingInput.fields.map((field) => (
+                <div key={field.name}>
+                  <label className="block text-[11px] font-label uppercase tracking-wider text-gray-400 mb-1">
+                    {field.label ?? field.name}
+                    {field.required !== false && <span className="text-accent-red ml-0.5">*</span>}
+                  </label>
+                  {field.type === 'select' && field.options ? (
+                    <select
+                      className="input w-full text-xs"
+                      value={(formData[field.name] as string) ?? ''}
+                      onChange={e => setFormData(p => ({ ...p, [field.name]: e.target.value }))}
+                    >
+                      <option value="">Select...</option>
+                      {field.options.map(o => <option key={o} value={o}>{o}</option>)}
+                    </select>
+                  ) : field.type === 'boolean' ? (
+                    <label className="flex items-center gap-2 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={!!formData[field.name]}
+                        onChange={e => setFormData(p => ({ ...p, [field.name]: e.target.checked }))}
+                        className="w-4 h-4 rounded-sm accent-accent-blue"
+                      />
+                      <span className="text-xs text-gray-300 font-body">{field.label ?? field.name}</span>
+                    </label>
+                  ) : field.type === 'text' ? (
+                    <textarea
+                      className="input w-full text-xs resize-none"
+                      rows={2}
+                      placeholder={`Enter ${field.label ?? field.name}...`}
+                      value={(formData[field.name] as string) ?? ''}
+                      onChange={e => setFormData(p => ({ ...p, [field.name]: e.target.value }))}
+                    />
+                  ) : (
+                    <input
+                      type={field.type === 'number' ? 'number' : 'text'}
+                      className="input w-full text-xs"
+                      placeholder={`Enter ${field.label ?? field.name}...`}
+                      value={(formData[field.name] as string) ?? ''}
+                      onChange={e => setFormData(p => ({ ...p, [field.name]: field.type === 'number' ? Number(e.target.value) : e.target.value }))}
+                    />
+                  )}
+                </div>
+              ))}
+            </div>
+            <button onClick={handleSubmit} className="btn-primary w-full mt-4 inline-flex items-center justify-center gap-2 text-xs">
+              <Send className="w-3.5 h-3.5" /> Submit
+            </button>
+          </section>
+        )}
         {/* Rendered prompt */}
         {prompt && (
           <section className="p-4 border-b border-border/50">

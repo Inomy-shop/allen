@@ -1,4 +1,4 @@
-import { useState, useCallback, useMemo } from 'react';
+import { useState, useCallback, useMemo, useEffect } from 'react';
 import { useWorkflows } from '../hooks/useWorkflows';
 import { workflows as wfApi, executions as execApi } from '../services/api';
 import { useNavigate, Link } from 'react-router-dom';
@@ -11,6 +11,13 @@ import { CardSkeleton } from '../components/common/Skeleton';
 interface RunDialogState {
   open: boolean;
   workflow: any | null;
+}
+
+interface WorkflowExecStats {
+  total: number;
+  completed: number;
+  failed: number;
+  running: number;
 }
 
 export default function WorkflowListPage() {
@@ -28,6 +35,23 @@ export default function WorkflowListPage() {
       map[wf._id] = { nodes, edges };
     }
     return map;
+  }, [workflows]);
+
+  // Fetch execution stats per workflow
+  const [execStats, setExecStats] = useState<Record<string, WorkflowExecStats>>({});
+  useEffect(() => {
+    execApi.list().then((execs: any[]) => {
+      const map: Record<string, WorkflowExecStats> = {};
+      for (const exec of execs) {
+        const name = exec.workflowName;
+        if (!map[name]) map[name] = { total: 0, completed: 0, failed: 0, running: 0 };
+        map[name].total++;
+        if (exec.status === 'completed') map[name].completed++;
+        else if (exec.status === 'failed') map[name].failed++;
+        else if (exec.status === 'running') map[name].running++;
+      }
+      setExecStats(map);
+    }).catch(() => {});
   }, [workflows]);
 
   const openRunDialog = useCallback((wf: any) => {
@@ -120,11 +144,11 @@ export default function WorkflowListPage() {
           </Link>
         </div>
       ) : (
-        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-5">
+        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
           {workflows.map((wf: any) => {
             const wfStats = stats[wf._id] ?? { nodes: 0, edges: 0 };
+            const es = execStats[wf.name] ?? { total: 0, completed: 0, failed: 0, running: 0 };
             const isValid = wf.validation?.valid;
-            const hasWarnings = (wf.validation?.warnings?.length ?? 0) > 0;
             const isRunning = runningId === wf._id;
 
             return (
@@ -134,105 +158,71 @@ export default function WorkflowListPage() {
                   hover:shadow-glow-blue/10 hover:border-accent-blue/30
                   transition-all duration-300"
               >
-                {/* Top accent — thin gradient line */}
                 <div className={`h-0.5 ${
                   isValid
                     ? 'bg-gradient-to-r from-accent-blue via-accent-cyan to-accent-green'
                     : 'bg-gradient-to-r from-accent-red via-accent-orange to-accent-yellow'
                 }`} />
 
-                <div className="p-6">
-                  {/* Header: icon + name + version + delete */}
-                  <div className="flex items-start gap-3 mb-4">
-                    <div className={`w-10 h-10 rounded-sm flex items-center justify-center shrink-0 border
-                      ${isValid
-                        ? 'bg-accent-blue/10 border-accent-blue/30'
-                        : 'bg-accent-red/10 border-accent-red/30'
-                      }`}>
+                <div className="p-4 flex gap-4">
+                  {/* Left: icon block */}
+                  <div className="shrink-0 flex flex-col items-center gap-1.5">
+                    <div className={`w-10 h-10 rounded-sm flex items-center justify-center border ${
+                      isValid ? 'bg-accent-blue/10 border-accent-blue/30' : 'bg-accent-red/10 border-accent-red/30'
+                    }`}>
                       <GitBranch className={`w-5 h-5 ${isValid ? 'text-accent-blue' : 'text-accent-red'}`} />
                     </div>
-                    <div className="flex-1 min-w-0">
-                      <h3 className="text-[15px] font-heading font-semibold text-white truncate leading-tight tracking-wider">{wf.name}</h3>
-                      <div className="flex items-center gap-2 mt-0.5">
-                        <span className="text-[11px] text-gray-500 font-mono">v{wf.version}</span>
-                        <span className="text-gray-700">|</span>
-                        <span className="text-[11px] text-gray-500 font-mono">{wfStats.nodes} nodes</span>
-                        <span className="text-gray-700">|</span>
-                        <span className="text-[11px] text-gray-500 font-mono">{wfStats.edges} edges</span>
-                      </div>
-                    </div>
-                    <button
-                      onClick={(e) => handleDelete(e, wf._id)}
-                      className="opacity-0 group-hover:opacity-100 p-1.5 -mr-1 rounded-sm
-                        text-gray-600 hover:text-accent-red hover:bg-accent-red/10
-                        transition-all duration-200"
-                      title="Delete"
-                    >
-                      <Trash2 className="w-4 h-4" />
-                    </button>
+                    <span className="text-[9px] text-gray-600 font-mono">v{wf.version}</span>
                   </div>
 
-                  {/* Description */}
-                  <p className={`text-[13px] leading-relaxed mb-4 line-clamp-2 font-body ${
-                    wf.description ? 'text-gray-400' : 'text-gray-600 italic'
-                  }`}>
-                    {wf.description || 'No description'}
-                  </p>
+                  {/* Right: content */}
+                  <div className="flex-1 min-w-0">
+                    {/* Name + delete */}
+                    <div className="flex items-center gap-2">
+                      <h3 className="text-sm font-heading font-semibold text-white truncate tracking-wider flex-1">{wf.name}</h3>
+                      {isValid
+                        ? <CheckCircle className="w-3.5 h-3.5 text-accent-green shrink-0" />
+                        : <XCircle className="w-3.5 h-3.5 text-accent-red shrink-0" />
+                      }
+                      <button
+                        onClick={(e) => handleDelete(e, wf._id)}
+                        className="opacity-0 group-hover:opacity-100 p-0.5 rounded-sm text-gray-600 hover:text-accent-red transition-all shrink-0"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
 
-                  {/* Tags */}
-                  {wf.tags?.length > 0 && (
-                    <div className="flex flex-wrap gap-1.5 mb-4">
-                      {wf.tags.map((tag: string) => (
-                        <span key={tag} className="text-[11px] px-2.5 py-1 rounded-sm bg-surface-200/80 text-gray-400 border border-border/40 font-mono uppercase tracking-wider">
-                          {tag}
-                        </span>
+                    {/* Description */}
+                    <p className="text-xs text-gray-500 font-body truncate mt-0.5">{wf.description || 'No description'}</p>
+
+                    {/* Stats row */}
+                    <div className="flex items-center gap-6 mt-2.5 font-mono">
+                      <span className="text-xs text-gray-400"><Layers className="w-3 h-3 inline mr-1 text-accent-blue/60" />{wfStats.nodes} nodes</span>
+                      <span className="inline-flex items-center gap-1 text-gray-400"><span className="text-lg text-white font-heading">{es.total}</span> <span className="text-[10px] text-gray-500 font-mono">runs</span></span>
+                      <span className="inline-flex items-center gap-2 text-accent-green"><span className="text-lg font-heading">{es.completed}</span><CheckCircle className="w-3.5 h-3.5" /></span>
+                      <span className="inline-flex items-center gap-2 text-accent-red"><span className="text-lg font-heading">{es.failed}</span><XCircle className="w-3.5 h-3.5" /></span>
+                    </div>
+
+                    {/* Tags + actions */}
+                    <div className="flex items-center gap-2 mt-2.5">
+                      {wf.tags?.map((tag: string) => (
+                        <span key={tag} className="text-[10px] px-1.5 py-0.5 bg-surface-200/60 text-gray-500 rounded-sm font-mono uppercase border border-border/30">{tag}</span>
                       ))}
-                    </div>
-                  )}
-
-                  {/* Validation status */}
-                  <div className="flex items-center gap-2 mb-5">
-                    {isValid ? (
-                      <span className="inline-flex items-center gap-1.5 text-[11px] font-label font-semibold text-accent-green bg-accent-green/10 px-2.5 py-1 rounded-sm uppercase tracking-wider">
-                        <CheckCircle className="w-3.5 h-3.5" /> Valid
-                      </span>
-                    ) : (
-                      <span className="inline-flex items-center gap-1.5 text-[11px] font-label font-semibold text-accent-red bg-accent-red/10 px-2.5 py-1 rounded-sm uppercase tracking-wider">
-                        <XCircle className="w-3.5 h-3.5" /> {wf.validation?.errors?.length ?? 0} error{(wf.validation?.errors?.length ?? 0) !== 1 ? 's' : ''}
-                      </span>
-                    )}
-                    {hasWarnings && (
-                      <span className="inline-flex items-center gap-1.5 text-[11px] font-label font-semibold text-accent-yellow bg-accent-yellow/10 px-2.5 py-1 rounded-sm uppercase tracking-wider">
-                        <AlertTriangle className="w-3 h-3" /> {wf.validation.warnings.length}
-                      </span>
-                    )}
-                  </div>
-
-                  {/* Action buttons */}
-                  <div className="flex items-center gap-2.5">
-                    <Link
-                      to={`/workflows/${wf._id}/edit`}
-                      className="btn-ghost inline-flex items-center gap-1.5 text-xs"
-                    >
-                      <Pencil className="w-3.5 h-3.5" /> Edit
-                    </Link>
-                    <button
-                      onClick={() => openRunDialog(wf)}
-                      disabled={isRunning || !isValid}
-                      className={`flex-1 btn inline-flex items-center justify-center gap-2
-                        ${isValid
-                          ? 'bg-accent-blue/15 border-accent-blue/50 text-accent-blue hover:bg-accent-blue/25 hover:shadow-glow-blue'
-                          : 'bg-surface-200 border-border text-gray-500 cursor-not-allowed'
+                      <div className="flex-1" />
+                      <Link to={`/workflows/${wf._id}/edit`} className="btn-ghost inline-flex items-center gap-1 text-xs px-3 py-1">
+                        <Pencil className="w-3 h-3" /> Edit
+                      </Link>
+                      <button
+                        onClick={() => openRunDialog(wf)}
+                        disabled={isRunning || !isValid}
+                        className="btn-primary inline-flex items-center gap-1 text-xs px-3 py-1"
+                      >
+                        {isRunning
+                          ? <><Loader2 className="w-3 h-3 animate-spin" /> Starting</>
+                          : <><Play className="w-3 h-3" /> Run</>
                         }
-                        disabled:opacity-40 disabled:shadow-none disabled:cursor-not-allowed
-                      `}
-                    >
-                      {isRunning ? (
-                        <><Loader2 className="w-3.5 h-3.5 animate-spin" /> Starting...</>
-                      ) : (
-                        <><Play className="w-3.5 h-3.5" /> Run</>
-                      )}
-                    </button>
+                      </button>
+                    </div>
                   </div>
                 </div>
               </div>

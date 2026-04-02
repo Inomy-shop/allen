@@ -1,17 +1,17 @@
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useEffect } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import {
   ArrowLeft, XCircle, Pause, Play, RefreshCw, Wifi, WifiOff,
   Download, RotateCcw,
 } from 'lucide-react';
 import { useExecution, type TimelineEvent } from '../hooks/useExecution';
+import { useResizable } from '../hooks/useResizable';
 import { executions as api } from '../services/api';
 import StatusBadge from '../components/common/StatusBadge';
 import CostDisplay from '../components/common/CostDisplay';
 import LiveGraph from '../components/execution/LiveGraph';
 import Timeline from '../components/execution/Timeline';
 import NodeDetail from '../components/execution/NodeDetail';
-import HumanInputDialog from '../components/execution/HumanInputDialog';
 
 export default function ExecutionDetailPage() {
   const { id } = useParams<{ id: string }>();
@@ -23,6 +23,16 @@ export default function ExecutionDetailPage() {
   const [selectedNode, setSelectedNode] = useState<string | null>(null);
 
   const latestInputEvent = [...timeline].reverse().find((e: TimelineEvent) => e.event === 'input_required');
+
+  // Auto-select the waiting node
+  useEffect(() => {
+    if (execution?.status === 'waiting_for_input' && latestInputEvent?.data?.node && !selectedNode) {
+      setSelectedNode(latestInputEvent.data.node);
+    }
+  }, [execution?.status, latestInputEvent, selectedNode]);
+
+  const { size: rightWidth, handleMouseDown: rightResizeStart } = useResizable({ direction: 'horizontal', initialSize: 384, minSize: 280, maxSize: 600 });
+  const { size: bottomHeight, handleMouseDown: bottomResizeStart } = useResizable({ direction: 'vertical', initialSize: 200, minSize: 120, maxSize: 500 });
 
   const handleCancel = useCallback(async () => {
     if (id) await api.cancel(id);
@@ -76,6 +86,23 @@ export default function ExecutionDetailPage() {
   const selectedState = selectedNode ? nodeStates.get(selectedNode) : undefined;
   const isPaused = execution.status === 'waiting_for_input' && !latestInputEvent;
 
+  // Compute total cost from node states (more accurate for live executions)
+  const liveCost = (() => {
+    let estimated = 0;
+    let actual: number | null = null;
+    for (const state of nodeStates.values()) {
+      if (state.cost) {
+        estimated += state.cost.estimated ?? 0;
+        if (state.cost.actual != null) {
+          actual = (actual ?? 0) + state.cost.actual;
+        }
+      }
+    }
+    // Use live sum if available, fallback to execution record
+    if (estimated > 0 || actual != null) return { estimated, actual };
+    return execution.cost;
+  })();
+
   return (
     <div className="flex flex-col h-full">
       {/* Top bar */}
@@ -107,7 +134,7 @@ export default function ExecutionDetailPage() {
           {execution.durationMs != null && (
             <span className="text-xs text-gray-400 font-mono">{(execution.durationMs / 1000).toFixed(1)}s</span>
           )}
-          <CostDisplay cost={execution.cost} />
+          <CostDisplay cost={liveCost} />
           <button onClick={handleExportTraces} className="btn-ghost text-xs" title="Export traces">
             <Download className="w-3.5 h-3.5" />
           </button>
@@ -142,19 +169,12 @@ export default function ExecutionDetailPage() {
         </div>
       </header>
 
-      {/* Main content — 3 panel layout */}
-      <div className="flex-1 flex overflow-hidden">
-        {/* Left: Timeline */}
-        <div className="w-72 border-r border-border/50 overflow-auto shrink-0 bg-surface">
-          <div className="px-3 py-2 border-b border-border/50">
-            <h2 className="font-heading text-xs font-semibold text-gray-400 uppercase tracking-widest">Timeline</h2>
-          </div>
-          <Timeline events={timeline} />
-        </div>
-
-        {/* Center: Live graph + execution log table */}
-        <div className="flex-1 flex flex-col overflow-hidden">
-          <div className="flex-1 overflow-auto">
+      {/* Main content — graph + detail top, timeline bottom */}
+      <div className="flex-1 flex flex-col overflow-hidden">
+        {/* Top: Graph + Node detail side by side */}
+        <div className="flex-1 flex overflow-hidden min-h-0">
+          {/* Left: Live graph (takes most space) */}
+          <div className="flex-1 overflow-hidden">
             <LiveGraph
               workflow={workflow}
               nodeStates={nodeStates}
@@ -163,16 +183,62 @@ export default function ExecutionDetailPage() {
             />
           </div>
 
-          {/* Bottom: Execution log table */}
-          <div className="border-t border-border/50 shrink-0 max-h-56 overflow-auto">
+          {/* Right: Node detail + inline human input — resizable */}
+          <div
+            className="overflow-hidden shrink-0 bg-surface border-l-2 border-border/50 hover:border-accent-blue/50 transition-colors relative"
+            style={{ width: rightWidth }}
+          >
+            {/* Invisible resize grab zone on the left edge */}
+            <div
+              className="absolute top-0 left-0 bottom-0 w-2 cursor-col-resize z-10"
+              onMouseDown={rightResizeStart}
+            />
+            <NodeDetail
+              nodeName={selectedNode ?? ''}
+              nodeState={selectedState}
+              trace={selectedTrace}
+              waitingInput={
+                latestInputEvent && execution.status === 'waiting_for_input'
+                  ? { node: latestInputEvent.data.node, prompt: latestInputEvent.data.prompt, fields: latestInputEvent.data.fields ?? [] }
+                  : null
+              }
+              onSubmitInput={handleSubmitInput}
+            />
+          </div>
+        </div>
+
+        {/* Bottom: Timeline (horizontal) + Execution log table — resizable */}
+        <div
+          className="shrink-0 bg-surface overflow-hidden flex flex-col border-t-2 border-border/50 group/bottom"
+          style={{ minHeight: 120, height: bottomHeight, maxHeight: '60%' }}
+        >
+          {/* Resize grab zone — full width strip at top, overlapping border */}
+          <div
+            className="shrink-0 h-1 cursor-row-resize relative z-20 hover:[&]:border-t-2 hover:[&]:border-accent-blue"
+            onMouseDown={bottomResizeStart}
+            style={{ marginTop: -2 }}
+            onMouseEnter={e => { (e.currentTarget.parentElement as HTMLElement).style.borderTopColor = 'rgb(var(--color-accent))'; }}
+            onMouseLeave={e => { (e.currentTarget.parentElement as HTMLElement).style.borderTopColor = ''; }}
+          />
+          <div className="flex flex-1 overflow-hidden">
+          {/* Timeline */}
+          <div className="w-1/2 shrink-0 border-r border-border/50 overflow-auto">
+            <div className="px-3 py-1.5 border-b border-border/50 sticky top-0 bg-surface-50 z-10">
+              <h2 className="font-heading text-[10px] font-semibold text-gray-400 uppercase tracking-widest">Timeline</h2>
+            </div>
+            <Timeline events={timeline} />
+          </div>
+
+          {/* Execution log table */}
+          <div className="flex-1 overflow-auto">
             <table className="w-full text-xs font-body">
-              <thead className="sticky top-0">
+              <thead className="sticky top-0 z-10">
                 <tr className="text-gray-500 bg-surface-50 font-label uppercase tracking-wider">
-                  <th className="text-left px-4 py-2 font-medium">Node</th>
-                  <th className="text-left px-4 py-2 font-medium">Status</th>
-                  <th className="text-left px-4 py-2 font-medium">Attempt</th>
-                  <th className="text-left px-4 py-2 font-medium">Duration</th>
-                  <th className="text-left px-4 py-2 font-medium">Cost</th>
+                  <th className="text-left px-4 py-1.5 font-medium">Node</th>
+                  <th className="text-left px-4 py-1.5 font-medium">Status</th>
+                  <th className="text-left px-4 py-1.5 font-medium">Attempt</th>
+                  <th className="text-left px-4 py-1.5 font-medium">Duration</th>
+                  <th className="text-left px-4 py-1.5 font-medium">Cost</th>
                 </tr>
               </thead>
               <tbody>
@@ -183,40 +249,21 @@ export default function ExecutionDetailPage() {
                     className={`cursor-pointer hover:bg-accent-blue/5 transition-colors
                       ${selectedNode === name ? 'bg-accent-blue/10' : ''}`}
                   >
-                    <td className="px-4 py-2 font-mono text-gray-200">{name}</td>
-                    <td className="px-4 py-2"><StatusBadge status={state.status} /></td>
-                    <td className="px-4 py-2 text-gray-400 tabular-nums font-mono">{state.attempt}</td>
-                    <td className="px-4 py-2 text-gray-400 tabular-nums font-mono">
+                    <td className="px-4 py-1.5 font-mono text-gray-200">{name}</td>
+                    <td className="px-4 py-1.5"><StatusBadge status={state.status} /></td>
+                    <td className="px-4 py-1.5 text-gray-400 tabular-nums font-mono">{state.attempt}</td>
+                    <td className="px-4 py-1.5 text-gray-400 tabular-nums font-mono">
                       {state.durationMs != null ? `${(state.durationMs / 1000).toFixed(1)}s` : '-'}
                     </td>
-                    <td className="px-4 py-2"><CostDisplay cost={state.cost} /></td>
+                    <td className="px-4 py-1.5"><CostDisplay cost={state.cost} /></td>
                   </tr>
                 ))}
               </tbody>
             </table>
           </div>
-        </div>
-
-        {/* Right: Node detail */}
-        <div className="w-96 border-l border-border/50 overflow-hidden shrink-0 bg-surface">
-          <NodeDetail
-            nodeName={selectedNode ?? ''}
-            nodeState={selectedState}
-            trace={selectedTrace}
-          />
+          </div>
         </div>
       </div>
-
-      {/* Human input dialog */}
-      {latestInputEvent && execution.status === 'waiting_for_input' && (
-        <HumanInputDialog
-          node={latestInputEvent.data.node}
-          prompt={latestInputEvent.data.prompt}
-          fields={latestInputEvent.data.fields ?? []}
-          onSubmit={handleSubmitInput}
-          onCancel={() => {}}
-        />
-      )}
     </div>
   );
 }

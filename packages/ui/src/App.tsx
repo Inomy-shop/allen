@@ -1,3 +1,4 @@
+import { useEffect } from 'react';
 import { NavLink, Outlet } from 'react-router-dom';
 import ErrorBoundary from './components/common/ErrorBoundary';
 import {
@@ -6,7 +7,9 @@ import {
   Play,
   Users,
   Activity,
+  Settings,
 } from 'lucide-react';
+import { useSettingsStore } from './stores/settingsStore';
 
 const navItems = [
   { to: '/', icon: LayoutDashboard, label: 'Dashboard' },
@@ -16,6 +19,9 @@ const navItems = [
 ];
 
 export default function App() {
+  const initSettings = useSettingsStore((s) => s.initFromLocalStorage);
+  useEffect(() => { initSettings(); }, [initSettings]);
+
   return (
     <div className="flex h-screen">
       {/* Sidebar — mission control panel */}
@@ -51,8 +57,23 @@ export default function App() {
             </NavLink>
           ))}
         </div>
-        <div className="p-4 border-t border-border/50 text-xs text-gray-600 font-mono tracking-wider">
-          FLOWFORGE v0.1.0
+        <div className="border-t border-border/50">
+          <NavLink
+            to="/settings"
+            className={({ isActive }) =>
+              `flex items-center gap-3 px-4 py-2.5 mx-2 my-1 rounded-sm text-sm font-label uppercase tracking-wider transition-all duration-200 ${
+                isActive
+                  ? 'bg-accent-blue/10 text-accent-blue border-l-2 border-accent-blue shadow-glow-blue/20'
+                  : 'text-gray-500 hover:text-gray-300 hover:bg-surface-200/50 border-l-2 border-transparent'
+              }`
+            }
+          >
+            <Settings className="w-4 h-4" />
+            Settings
+          </NavLink>
+          <div className="px-4 pb-3 pt-1 text-xs text-gray-600 font-mono tracking-wider">
+            FLOWFORGE v0.1.0
+          </div>
         </div>
       </nav>
 

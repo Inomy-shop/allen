@@ -33,7 +33,7 @@ export default function NodeProperties({ node, onUpdate, onDelete }: Props) {
     if (node) setLocalData({ ...node.data });
   }, [node?.id, node?.data]);
 
-  if (!node) {
+  if (!node || node.id === 'START' || node.id === 'END') {
     return (
       <div className="p-4 text-sm text-gray-500 font-mono">
         SELECT A NODE TO EDIT

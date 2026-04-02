@@ -1,0 +1,486 @@
+import { create } from 'zustand';
+
+/* ─── Theme Presets ─── */
+
+export interface ThemePreset {
+  name: string;
+  label: string;
+  colors: {
+    surface: string;
+    surface100: string;
+    surface200: string;
+    border: string;
+    accent: string;
+    accentGreen: string;
+    accentRed: string;
+    accentYellow: string;
+    accentPurple: string;
+  };
+}
+
+export const THEME_PRESETS: ThemePreset[] = [
+  {
+    name: 'cyberpunk',
+    label: 'Cyberpunk',
+    colors: {
+      surface: '#0a0e1a',
+      surface100: '#111730',
+      surface200: '#181e38',
+      border: '#1e2740',
+      accent: '#00d4ff',
+      accentGreen: '#00ff88',
+      accentRed: '#ff3366',
+      accentYellow: '#ffaa00',
+      accentPurple: '#a855f7',
+    },
+  },
+  {
+    name: 'terminal',
+    label: 'Terminal',
+    colors: {
+      surface: '#000000',
+      surface100: '#0a0f0a',
+      surface200: '#111a11',
+      border: '#1a2e1a',
+      accent: '#00ff41',
+      accentGreen: '#00ff41',
+      accentRed: '#ff3333',
+      accentYellow: '#ffcc00',
+      accentPurple: '#cc66ff',
+    },
+  },
+  {
+    name: 'midnight',
+    label: 'Midnight',
+    colors: {
+      surface: '#0d0a1a',
+      surface100: '#15112b',
+      surface200: '#1d1838',
+      border: '#2a2250',
+      accent: '#a855f7',
+      accentGreen: '#34d399',
+      accentRed: '#f87171',
+      accentYellow: '#fbbf24',
+      accentPurple: '#c084fc',
+    },
+  },
+  {
+    name: 'arctic',
+    label: 'Arctic',
+    colors: {
+      surface: '#0f1520',
+      surface100: '#151d2e',
+      surface200: '#1b2538',
+      border: '#243048',
+      accent: '#60a5fa',
+      accentGreen: '#4ade80',
+      accentRed: '#fb7185',
+      accentYellow: '#facc15',
+      accentPurple: '#a78bfa',
+    },
+  },
+  {
+    name: 'ember',
+    label: 'Ember',
+    colors: {
+      surface: '#120a0a',
+      surface100: '#1c1010',
+      surface200: '#261616',
+      border: '#3d2020',
+      accent: '#f97316',
+      accentGreen: '#84cc16',
+      accentRed: '#ef4444',
+      accentYellow: '#eab308',
+      accentPurple: '#d946ef',
+    },
+  },
+  {
+    name: 'deep-ocean',
+    label: 'Deep Ocean',
+    colors: {
+      surface: '#020c1b',
+      surface100: '#0a192f',
+      surface200: '#112240',
+      border: '#1d3461',
+      accent: '#64ffda',
+      accentGreen: '#64ffda',
+      accentRed: '#ff6b6b',
+      accentYellow: '#ffd93d',
+      accentPurple: '#bd93f9',
+    },
+  },
+];
+
+/* ─── Font Presets ─── */
+
+export interface FontPreset {
+  name: string;
+  label: string;
+  heading: string;
+  body: string;
+  mono: string;
+  labelFont: string;
+  googleFontsUrl: string;
+}
+
+export const FONT_PRESETS: FontPreset[] = [
+  {
+    name: 'cyberdeck',
+    label: 'Cyberdeck',
+    heading: 'Audiowide',
+    body: 'Chakra Petch',
+    mono: 'Space Mono',
+    labelFont: 'Michroma',
+    googleFontsUrl:
+      'https://fonts.googleapis.com/css2?family=Audiowide&family=Chakra+Petch:wght@300;400;500;600;700&family=Space+Mono:wght@400;700&family=Michroma&display=swap',
+  },
+  {
+    name: 'neo-tokyo',
+    label: 'Neo Tokyo',
+    heading: 'Orbitron',
+    body: 'Rajdhani',
+    mono: 'Share Tech Mono',
+    labelFont: 'Exo 2',
+    googleFontsUrl:
+      'https://fonts.googleapis.com/css2?family=Orbitron:wght@400;500;600;700&family=Rajdhani:wght@300;400;500;600;700&family=Share+Tech+Mono&family=Exo+2:wght@400;500;600;700&display=swap',
+  },
+  {
+    name: 'mainframe',
+    label: 'Mainframe',
+    heading: 'IBM Plex Mono',
+    body: 'IBM Plex Sans',
+    mono: 'IBM Plex Mono',
+    labelFont: 'IBM Plex Sans',
+    googleFontsUrl:
+      'https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600;700&family=IBM+Plex+Sans:wght@300;400;500;600;700&display=swap',
+  },
+  {
+    name: 'synth',
+    label: 'Synth Wave',
+    heading: 'Monoton',
+    body: 'Quicksand',
+    mono: 'Fira Code',
+    labelFont: 'Quicksand',
+    googleFontsUrl:
+      'https://fonts.googleapis.com/css2?family=Monoton&family=Quicksand:wght@300;400;500;600;700&family=Fira+Code:wght@400;500;600;700&display=swap',
+  },
+  {
+    name: 'military',
+    label: 'Military',
+    heading: 'Black Ops One',
+    body: 'Saira',
+    mono: 'Source Code Pro',
+    labelFont: 'Saira Condensed',
+    googleFontsUrl:
+      'https://fonts.googleapis.com/css2?family=Black+Ops+One&family=Saira:wght@300;400;500;600;700&family=Source+Code+Pro:wght@400;500;600;700&family=Saira+Condensed:wght@400;500;600;700&display=swap',
+  },
+  {
+    name: 'clean',
+    label: 'Clean',
+    heading: 'Inter',
+    body: 'Inter',
+    mono: 'JetBrains Mono',
+    labelFont: 'Inter',
+    googleFontsUrl:
+      'https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap',
+  },
+  // ── Non-robotic / Classic / Elegant fonts ──
+  {
+    name: 'editorial',
+    label: 'Editorial',
+    heading: 'Playfair Display',
+    body: 'Lora',
+    mono: 'Inconsolata',
+    labelFont: 'Lora',
+    googleFontsUrl:
+      'https://fonts.googleapis.com/css2?family=Playfair+Display:wght@400;500;600;700&family=Lora:wght@400;500;600;700&family=Inconsolata:wght@400;500;600;700&display=swap',
+  },
+  {
+    name: 'minimal',
+    label: 'Minimal',
+    heading: 'DM Sans',
+    body: 'DM Sans',
+    mono: 'DM Mono',
+    labelFont: 'DM Sans',
+    googleFontsUrl:
+      'https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500;600;700&family=DM+Mono:wght@400;500&display=swap',
+  },
+  {
+    name: 'geometric',
+    label: 'Geometric',
+    heading: 'Poppins',
+    body: 'Nunito',
+    mono: 'Roboto Mono',
+    labelFont: 'Poppins',
+    googleFontsUrl:
+      'https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;500;600;700&family=Nunito:wght@300;400;500;600;700&family=Roboto+Mono:wght@400;500;600;700&display=swap',
+  },
+  {
+    name: 'handcraft',
+    label: 'Handcraft',
+    heading: 'Caveat',
+    body: 'Comic Neue',
+    mono: 'Victor Mono',
+    labelFont: 'Comic Neue',
+    googleFontsUrl:
+      'https://fonts.googleapis.com/css2?family=Caveat:wght@400;500;600;700&family=Comic+Neue:wght@300;400;700&family=Victor+Mono:wght@400;500;600;700&display=swap',
+  },
+  {
+    name: 'swiss',
+    label: 'Swiss',
+    heading: 'Space Grotesk',
+    body: 'Outfit',
+    mono: 'Fira Code',
+    labelFont: 'Space Grotesk',
+    googleFontsUrl:
+      'https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;600;700&family=Outfit:wght@300;400;500;600;700&family=Fira+Code:wght@400;500;600;700&display=swap',
+  },
+  {
+    name: 'newsroom',
+    label: 'Newsroom',
+    heading: 'Merriweather',
+    body: 'Source Sans 3',
+    mono: 'Source Code Pro',
+    labelFont: 'Source Sans 3',
+    googleFontsUrl:
+      'https://fonts.googleapis.com/css2?family=Merriweather:wght@400;700;900&family=Source+Sans+3:wght@300;400;500;600;700&family=Source+Code+Pro:wght@400;500;600;700&display=swap',
+  },
+  {
+    name: 'default',
+    label: 'System Default',
+    heading: 'system-ui',
+    body: 'system-ui',
+    mono: 'ui-monospace',
+    labelFont: 'system-ui',
+    googleFontsUrl: '',
+  },
+  {
+    name: 'roboto',
+    label: 'Roboto',
+    heading: 'Roboto',
+    body: 'Roboto',
+    mono: 'Roboto Mono',
+    labelFont: 'Roboto',
+    googleFontsUrl:
+      'https://fonts.googleapis.com/css2?family=Roboto:wght@300;400;500;700&family=Roboto+Mono:wght@400;500;700&display=swap',
+  },
+  {
+    name: 'open-sans',
+    label: 'Open Sans',
+    heading: 'Montserrat',
+    body: 'Open Sans',
+    mono: 'Fira Code',
+    labelFont: 'Montserrat',
+    googleFontsUrl:
+      'https://fonts.googleapis.com/css2?family=Montserrat:wght@400;500;600;700&family=Open+Sans:wght@300;400;500;600;700&family=Fira+Code:wght@400;500;600;700&display=swap',
+  },
+  {
+    name: 'lato',
+    label: 'Lato',
+    heading: 'Raleway',
+    body: 'Lato',
+    mono: 'Inconsolata',
+    labelFont: 'Raleway',
+    googleFontsUrl:
+      'https://fonts.googleapis.com/css2?family=Raleway:wght@400;500;600;700&family=Lato:wght@300;400;700&family=Inconsolata:wght@400;500;600;700&display=swap',
+  },
+  {
+    name: 'ubuntu',
+    label: 'Ubuntu',
+    heading: 'Ubuntu',
+    body: 'Ubuntu',
+    mono: 'Ubuntu Mono',
+    labelFont: 'Ubuntu',
+    googleFontsUrl:
+      'https://fonts.googleapis.com/css2?family=Ubuntu:wght@300;400;500;700&family=Ubuntu+Mono:wght@400;700&display=swap',
+  },
+  {
+    name: 'noto',
+    label: 'Noto',
+    heading: 'Noto Sans',
+    body: 'Noto Sans',
+    mono: 'Noto Sans Mono',
+    labelFont: 'Noto Sans',
+    googleFontsUrl:
+      'https://fonts.googleapis.com/css2?family=Noto+Sans:wght@300;400;500;600;700&family=Noto+Sans+Mono:wght@400;500;600;700&display=swap',
+  },
+  {
+    name: 'work-sans',
+    label: 'Work Sans',
+    heading: 'Josefin Sans',
+    body: 'Work Sans',
+    mono: 'JetBrains Mono',
+    labelFont: 'Josefin Sans',
+    googleFontsUrl:
+      'https://fonts.googleapis.com/css2?family=Josefin+Sans:wght@300;400;500;600;700&family=Work+Sans:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap',
+  },
+];
+
+/* ─── Accent Color Overrides ─── */
+
+export interface AccentOption {
+  name: string;
+  label: string;
+  color: string;
+}
+
+export const ACCENT_OPTIONS: AccentOption[] = [
+  { name: 'cyan', label: 'Cyan', color: '#00d4ff' },
+  { name: 'blue', label: 'Blue', color: '#3b82f6' },
+  { name: 'green', label: 'Green', color: '#22c55e' },
+  { name: 'purple', label: 'Purple', color: '#a855f7' },
+  { name: 'orange', label: 'Orange', color: '#f97316' },
+  { name: 'red', label: 'Red', color: '#ef4444' },
+  { name: 'pink', label: 'Pink', color: '#ec4899' },
+  { name: 'yellow', label: 'Yellow', color: '#eab308' },
+];
+
+/* ─── Store ─── */
+
+const STORAGE_KEY = 'flowforge-settings';
+
+interface PersistedSettings {
+  themeName: string;
+  fontName: string;
+  customAccent: string | null;
+}
+
+function loadFromStorage(): PersistedSettings {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    if (raw) {
+      return JSON.parse(raw) as PersistedSettings;
+    }
+  } catch {
+    // corrupted data — ignore
+  }
+  return { themeName: 'cyberpunk', fontName: 'clean', customAccent: null };
+}
+
+function saveToStorage(s: PersistedSettings) {
+  localStorage.setItem(STORAGE_KEY, JSON.stringify(s));
+}
+
+/** Convert hex (#rrggbb) to space-separated RGB channels for Tailwind */
+function hexToRgbChannels(hex: string): string {
+  const h = hex.replace('#', '');
+  const r = parseInt(h.substring(0, 2), 16);
+  const g = parseInt(h.substring(2, 4), 16);
+  const b = parseInt(h.substring(4, 6), 16);
+  return `${r} ${g} ${b}`;
+}
+
+function applyThemeColors(theme: ThemePreset, customAccent: string | null) {
+  const root = document.documentElement.style;
+  root.setProperty('--color-surface', hexToRgbChannels(theme.colors.surface));
+  root.setProperty('--color-surface-100', hexToRgbChannels(theme.colors.surface100));
+  root.setProperty('--color-surface-200', hexToRgbChannels(theme.colors.surface200));
+  root.setProperty('--color-border', hexToRgbChannels(theme.colors.border));
+  const accentHex = customAccent ?? theme.colors.accent;
+  root.setProperty('--color-accent', hexToRgbChannels(accentHex));
+  root.setProperty('--accent-hex', accentHex);
+  root.setProperty('--color-accent-green', hexToRgbChannels(theme.colors.accentGreen));
+  root.setProperty('--color-accent-red', hexToRgbChannels(theme.colors.accentRed));
+  root.setProperty('--accent-red-hex', theme.colors.accentRed);
+  root.setProperty('--color-accent-yellow', hexToRgbChannels(theme.colors.accentYellow));
+  root.setProperty('--color-accent-purple', hexToRgbChannels(theme.colors.accentPurple));
+
+  // Force repaint so all CSS-variable-dependent styles update immediately
+  document.body.style.opacity = '0.99';
+  requestAnimationFrame(() => {
+    document.body.style.opacity = '1';
+  });
+}
+
+function applyFontPreset(preset: FontPreset) {
+  let link = document.getElementById('flowforge-fonts') as HTMLLinkElement | null;
+  if (!link) {
+    link = document.createElement('link');
+    link.id = 'flowforge-fonts';
+    link.rel = 'stylesheet';
+    document.head.appendChild(link);
+  }
+  link.href = preset.googleFontsUrl;
+
+  const root = document.documentElement.style;
+  root.setProperty('--font-heading', `'${preset.heading}', sans-serif`);
+  root.setProperty('--font-body', `'${preset.body}', sans-serif`);
+  root.setProperty('--font-mono', `'${preset.mono}', monospace`);
+  root.setProperty('--font-label', `'${preset.labelFont}', sans-serif`);
+
+  // Force browser to re-evaluate font rendering after stylesheet loads
+  if (document.fonts?.ready) {
+    document.fonts.ready.then(() => {
+      document.body.style.opacity = '0.99';
+      requestAnimationFrame(() => {
+        document.body.style.opacity = '1';
+      });
+    });
+  }
+}
+
+function getTheme(name: string): ThemePreset {
+  return THEME_PRESETS.find((t) => t.name === name) ?? THEME_PRESETS[0];
+}
+
+function getFont(name: string): FontPreset {
+  return FONT_PRESETS.find((f) => f.name === name) ?? FONT_PRESETS[0];
+}
+
+interface SettingsState {
+  themeName: string;
+  fontName: string;
+  customAccent: string | null;
+
+  setTheme: (name: string) => void;
+  setFont: (name: string) => void;
+  setCustomAccent: (color: string | null) => void;
+  resetToDefaults: () => void;
+  initFromLocalStorage: () => void;
+}
+
+export const useSettingsStore = create<SettingsState>((set, get) => ({
+  themeName: 'cyberpunk',
+  fontName: 'clean',
+  customAccent: null,
+
+  setTheme: (name: string) => {
+    const theme = getTheme(name);
+    const { customAccent } = get();
+    applyThemeColors(theme, customAccent);
+    set({ themeName: name });
+    saveToStorage({ themeName: name, fontName: get().fontName, customAccent });
+  },
+
+  setFont: (name: string) => {
+    const font = getFont(name);
+    applyFontPreset(font);
+    set({ fontName: name });
+    saveToStorage({ themeName: get().themeName, fontName: name, customAccent: get().customAccent });
+  },
+
+  setCustomAccent: (color: string | null) => {
+    const theme = getTheme(get().themeName);
+    applyThemeColors(theme, color);
+    set({ customAccent: color });
+    saveToStorage({ themeName: get().themeName, fontName: get().fontName, customAccent: color });
+  },
+
+  resetToDefaults: () => {
+    localStorage.removeItem(STORAGE_KEY);
+    const theme = getTheme('cyberpunk');
+    const font = getFont('clean');
+    applyThemeColors(theme, null);
+    applyFontPreset(font);
+    set({ themeName: 'cyberpunk', fontName: 'clean', customAccent: null });
+  },
+
+  initFromLocalStorage: () => {
+    const saved = loadFromStorage();
+    const theme = getTheme(saved.themeName);
+    const font = getFont(saved.fontName);
+    applyThemeColors(theme, saved.customAccent);
+    applyFontPreset(font);
+    set(saved);
+  },
+}));

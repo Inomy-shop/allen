@@ -1,11 +1,11 @@
-version: '3.8'
 services:
   mongodb:
     image: mongo:7
     ports:
       - "27017:27017"
     volumes:
-      - flowforge-data:/data/db
+      - ./data/mongodb:/data/db
+    restart: unless-stopped
 
   server:
     build: ./packages/server
@@ -17,6 +17,3 @@ services:
       - ~/.claude:/root/.claude:ro
     depends_on:
       - mongodb
-
-volumes:
-  flowforge-data:

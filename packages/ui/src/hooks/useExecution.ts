@@ -70,6 +70,55 @@ export function useExecution(id: string | undefined) {
         }
         setNodeStates(map);
 
+        // If waiting for input, synthesize the input_required event from execution state + workflow
+        if (exec.status === 'waiting_for_input' && exec.currentNodes?.length > 0) {
+          const waitingNode = exec.currentNodes[0];
+          // Look up node definition from workflow to get prompt and fields
+          let wfForInput = null;
+          if (exec.workflowId) {
+            try { wfForInput = await wfApi.get(exec.workflowId); } catch {}
+          }
+          const nodeDef = wfForInput?.parsed?.nodes?.[waitingNode];
+          if (nodeDef) {
+            // Render prompt with current state (simple replacement)
+            let prompt = nodeDef.prompt ?? `Input required for ${waitingNode}`;
+            for (const [key, val] of Object.entries(exec.state ?? {})) {
+              prompt = prompt.replace(new RegExp(`\\{\\{${key}\\}\\}`, 'g'), String(val ?? ''));
+            }
+
+            const inputEvent: TimelineEvent = {
+              id: 'synth-input-required',
+              timestamp: new Date(),
+              event: 'input_required',
+              node: waitingNode,
+              data: {
+                node: waitingNode,
+                prompt,
+                fields: nodeDef.fields ?? [],
+              },
+            };
+            setTimeline(prev => [...prev, inputEvent]);
+
+            // Set the waiting node's status in nodeStates
+            setNodeStates(prev => {
+              const next = new Map(prev);
+              const existing = next.get(waitingNode);
+              if (existing) {
+                next.set(waitingNode, { ...existing, status: 'waiting_for_input' as any });
+              } else {
+                next.set(waitingNode, {
+                  name: waitingNode,
+                  status: 'waiting_for_input' as any,
+                  attempt: 1,
+                  streamText: '',
+                  activity: [],
+                });
+              }
+              return next;
+            });
+          }
+        }
+
         // Build timeline from traces for completed/failed executions
         // (SSE events are only available during live execution)
         if (exec.status !== 'running' && exec.status !== 'waiting_for_input' && tr.length > 0) {
@@ -291,7 +340,25 @@ export function useExecution(id: string | undefined) {
           break;
         }
 
-        // parallel_branch_done, parallel_joined, input_required, input_received
+        case 'input_required': {
+          if (!node) break;
+          const existing = next.get(node);
+          if (existing) {
+            next.set(node, { ...existing, status: 'waiting_for_input' as any });
+          }
+          break;
+        }
+
+        case 'input_received': {
+          if (!node) break;
+          const existing = next.get(node);
+          if (existing) {
+            next.set(node, { ...existing, status: 'running' });
+          }
+          break;
+        }
+
+        // parallel_branch_done, parallel_joined
         // are already reflected in timeline — no additional node state changes needed
       }
 

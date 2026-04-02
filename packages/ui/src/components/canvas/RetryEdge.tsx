@@ -1,9 +1,9 @@
-import { BaseEdge, getSmoothStepPath, type EdgeProps } from '@xyflow/react';
+import { BaseEdge, getBezierPath, type EdgeProps } from '@xyflow/react';
 
 export default function RetryEdge(props: EdgeProps) {
-  const { sourceX, sourceY, targetX, targetY, sourcePosition, targetPosition, data } = props;
+  const { sourceX, sourceY, targetX, targetY, sourcePosition, targetPosition, data, markerEnd } = props;
 
-  const [edgePath, labelX, labelY] = getSmoothStepPath({
+  const [edgePath, labelX, labelY] = getBezierPath({
     sourceX, sourceY, targetX, targetY, sourcePosition, targetPosition,
   });
 
@@ -11,6 +11,20 @@ export default function RetryEdge(props: EdgeProps) {
 
   return (
     <>
+      <defs>
+        <marker
+          id="ff-arrow-yellow"
+          markerWidth="16"
+          markerHeight="16"
+          viewBox="-5 -5 10 10"
+          refX="0"
+          refY="0"
+          orient="auto-start-reverse"
+          markerUnits="strokeWidth"
+        >
+          <path d="M-3,-3 L3,0 L-3,3 Z" fill="#ffaa00" />
+        </marker>
+      </defs>
       <BaseEdge
         path={edgePath}
         style={{
@@ -18,6 +32,7 @@ export default function RetryEdge(props: EdgeProps) {
           strokeWidth: 2,
           strokeDasharray: '6 3',
         }}
+        markerEnd={markerEnd ?? `url(#ff-arrow-yellow)`}
       />
       {maxRetries != null && (
         <foreignObject

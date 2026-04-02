@@ -1,4 +1,4 @@
-import type { Node, Edge } from '@xyflow/react';
+import { MarkerType, type Node, type Edge } from '@xyflow/react';
 import dagre from '@dagrejs/dagre';
 
 const NODE_WIDTH = 180;
@@ -41,6 +41,12 @@ export function yamlToReactFlow(
               merge: edge.merge,
             },
             animated: !!edge.parallel,
+            markerEnd: {
+              type: MarkerType.ArrowClosed,
+              width: 16,
+              height: 16,
+              color: isRetry ? '#eab308' : edge.condition ? '#a855f7' : '#4b5563',
+            },
             style: isRetry
               ? { stroke: '#eab308', strokeDasharray: '5 3' }
               : edge.condition
@@ -71,6 +77,16 @@ export function yamlToReactFlow(
 
   dagre.layout(g);
 
+  // Add START node
+  const startPos = g.node('START');
+  rfNodes.push({
+    id: 'START',
+    type: 'ff-terminal',
+    position: { x: (startPos?.x ?? 0) - 60, y: (startPos?.y ?? 0) - 20 },
+    data: { label: 'START' },
+    deletable: false,
+  });
+
   // Create RF nodes with dagre positions
   for (const [name, nodeDef] of nodeEntries) {
     const dagreNode = g.node(name);
@@ -87,11 +103,15 @@ export function yamlToReactFlow(
     });
   }
 
-  // Filter edges to only include edges between actual nodes (not START/END)
-  const nodeIds = new Set(nodeEntries.map(([name]) => name));
-  const filteredEdges = rfEdges.filter(
-    e => nodeIds.has(e.source) && nodeIds.has(e.target),
-  );
+  // Add END node
+  const endPos = g.node('END');
+  rfNodes.push({
+    id: 'END',
+    type: 'ff-terminal',
+    position: { x: (endPos?.x ?? 0) - 60, y: (endPos?.y ?? 0) - 20 },
+    data: { label: 'END' },
+    deletable: false,
+  });
 
-  return { nodes: rfNodes, edges: filteredEdges };
+  return { nodes: rfNodes, edges: rfEdges };
 }

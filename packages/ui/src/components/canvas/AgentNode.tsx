@@ -3,7 +3,7 @@ import RoleIcon from '../common/RoleIcon';
 
 export default function AgentNode({ data, selected }: NodeProps) {
   return (
-    <div className={`px-4 py-3 rounded-sm border-2 bg-surface-100/90 backdrop-blur-sm min-w-[150px] transition-all
+    <div className={`px-4 py-3 rounded-lg border-2 bg-surface-100/90 backdrop-blur-sm min-w-[150px] transition-all
       ${selected ? 'border-accent-blue ring-2 ring-accent-blue/30 shadow-glow-blue' : 'border-accent-blue/30 hover:border-accent-blue/50'}
     `}>
       <Handle type="target" position={Position.Top} className="!bg-accent-blue !w-2.5 !h-2.5 !border-surface" />

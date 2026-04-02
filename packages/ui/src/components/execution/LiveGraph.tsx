@@ -1,13 +1,159 @@
+import { useMemo, useState, useCallback, useEffect, useRef } from 'react';
+import {
+  ReactFlow,
+  Background,
+  Controls,
+  BackgroundVariant,
+  MarkerType,
+  useReactFlow,
+  ReactFlowProvider,
+  type Node,
+  type Edge,
+  type OnNodesChange,
+  applyNodeChanges,
+} from '@xyflow/react';
+import '@xyflow/react/dist/style.css';
+import dagre from '@dagrejs/dagre';
+
 import type { NodeState } from '../../hooks/useExecution';
 import RoleIcon from '../common/RoleIcon';
+import { Handle, Position, type NodeProps } from '@xyflow/react';
 
-const statusColors: Record<string, string> = {
-  pending: 'border-gray-600/50 bg-surface-200',
-  running: 'border-accent-blue bg-accent-blue/10 ring-1 ring-accent-blue/30 shadow-glow-blue',
-  completed: 'border-accent-green bg-accent-green/10',
-  failed: 'border-accent-red bg-accent-red/10 shadow-glow-red/30',
+// ── Status-aware border/glow styles ──
+const statusBorder: Record<string, string> = {
+  pending: 'border-gray-600/40',
+  running: 'border-accent-blue shadow-glow-blue',
+  completed: 'border-accent-green',
+  failed: 'border-accent-red shadow-glow-red',
+  waiting_for_input: 'border-accent-yellow shadow-glow-yellow animate-pulse',
 };
 
+const statusRing: Record<string, string> = {
+  running: 'ring-2 ring-accent-blue/40',
+  failed: 'ring-1 ring-accent-red/30',
+  waiting_for_input: 'ring-2 ring-accent-yellow/50',
+};
+
+// ── Execution Node (read-only, status-aware) ──
+function ExecutionNode({ data, selected }: NodeProps) {
+  const d = data as any;
+  const status: string = d.__status ?? 'pending';
+  const attempt: number = d.__attempt ?? 1;
+  const type: string = d.type ?? 'agent';
+
+  const typeColors: Record<string, string> = {
+    agent: 'accent-blue',
+    code: 'accent-green',
+    human: 'accent-yellow',
+    workflow: 'accent-purple',
+    condition: 'accent-yellow',
+  };
+  const accent = typeColors[type] ?? 'accent-blue';
+
+  return (
+    <div
+      className={`relative px-4 py-3 rounded-lg border-2 bg-surface-100/90 backdrop-blur-sm min-w-[160px] transition-all
+        ${statusBorder[status] ?? statusBorder.pending}
+        ${statusRing[status] ?? ''}
+        ${selected ? 'ring-2 ring-white/40' : ''}
+      `}
+    >
+      <Handle type="target" position={Position.Top} className={`!bg-${accent} !w-2 !h-2 !border-surface`} />
+
+      <div className="flex items-center gap-2">
+        <RoleIcon icon={d.icon} color={d.color} size={16} />
+        <div>
+          <div className="text-xs font-label font-medium text-gray-100">{d.label}</div>
+          <div className={`text-[10px] font-mono uppercase text-${accent}/70`}>
+            {type === 'agent' ? (d.role ?? 'agent') : type === 'code' ? (d.function ?? 'code') : type}
+          </div>
+        </div>
+      </div>
+
+      {/* Status indicator */}
+      <div className="flex items-center gap-1.5 mt-1.5">
+        <span className={`w-2 h-2 rounded-full ${
+          status === 'running' ? 'bg-accent-blue animate-pulse' :
+          status === 'completed' ? 'bg-accent-green' :
+          status === 'failed' ? 'bg-accent-red' :
+          status === 'waiting_for_input' ? 'bg-accent-yellow animate-pulse' :
+          'bg-gray-600'
+        }`} />
+        <span className="text-[9px] font-mono text-gray-400 uppercase">{status}</span>
+        {d.__durationMs != null && (
+          <span className="text-[9px] font-mono text-gray-500">{(d.__durationMs / 1000).toFixed(1)}s</span>
+        )}
+      </div>
+
+      {/* Outputs pills */}
+      {d.outputs?.length > 0 && (
+        <div className="mt-1.5 flex flex-wrap gap-1">
+          {d.outputs.map((o: string) => (
+            <span key={o} className={`text-[8px] bg-${accent}/10 text-${accent}/60 px-1 rounded-sm font-mono`}>{o}</span>
+          ))}
+        </div>
+      )}
+
+      {/* Retry badge */}
+      {attempt > 1 && (
+        <span className="absolute -top-2 -right-2 bg-accent-yellow text-black text-[9px] font-bold rounded-sm w-5 h-5 flex items-center justify-center font-mono">
+          {attempt}
+        </span>
+      )}
+
+      {/* Running ping */}
+      {status === 'running' && (
+        <span className="absolute -top-1 -right-1 w-3 h-3 bg-accent-blue rounded-full animate-ping" />
+      )}
+
+      <Handle type="source" position={Position.Bottom} className={`!bg-${accent} !w-2 !h-2 !border-surface`} />
+    </div>
+  );
+}
+
+import TerminalNode from '../canvas/TerminalNode';
+
+const nodeTypes = { 'exec-node': ExecutionNode, 'ff-terminal': TerminalNode };
+
+import ConditionalEdge from '../canvas/ConditionalEdge';
+import RetryEdge from '../canvas/RetryEdge';
+
+const edgeTypes = {
+  'ff-conditional': ConditionalEdge,
+  'ff-retry': RetryEdge,
+};
+
+// ── Dagre Layout ──
+const NODE_WIDTH = 180;
+const NODE_HEIGHT = 100;
+
+function layoutGraph(nodes: Node[], edges: Edge[]): Node[] {
+  const g = new dagre.graphlib.Graph();
+  g.setDefaultEdgeLabel(() => ({}));
+  g.setGraph({ rankdir: 'TB', nodesep: 120, ranksep: 130, marginx: 60, marginy: 60 });
+
+  for (const node of nodes) {
+    g.setNode(node.id, { width: NODE_WIDTH, height: NODE_HEIGHT });
+  }
+  for (const edge of edges) {
+    g.setEdge(edge.source, edge.target);
+  }
+
+  dagre.layout(g);
+
+  return nodes.map(node => {
+    const pos = g.node(node.id);
+    return {
+      ...node,
+      position: {
+        x: (pos?.x ?? 0) - NODE_WIDTH / 2,
+        y: (pos?.y ?? 0) - NODE_HEIGHT / 2,
+      },
+    };
+  });
+}
+
+// ── Props ──
 interface Props {
   workflow: any;
   nodeStates: Map<string, NodeState>;
@@ -16,13 +162,119 @@ interface Props {
 }
 
 export default function LiveGraph({ workflow, nodeStates, selectedNode, onSelectNode }: Props) {
-  // Build nodes from workflow definition if available, otherwise from nodeStates
   const workflowNodes = workflow?.parsed?.nodes;
-  const nodeEntries: [string, any][] = workflowNodes
-    ? Object.entries(workflowNodes)
-    : Array.from(nodeStates.entries()).map(([name, state]) => [name, { type: 'agent', role: name }]);
+  const workflowEdges: any[] = workflow?.parsed?.edges ?? [];
 
-  if (nodeEntries.length === 0) {
+  // Build edges once from workflow definition (they don't change)
+  const edges = useMemo<Edge[]>(() => {
+    if (!workflowNodes) return [];
+
+    const rfEdges: Edge[] = [];
+    for (const edge of workflowEdges) {
+      const froms = Array.isArray(edge.from) ? edge.from : [edge.from];
+      const tos = Array.isArray(edge.to) ? edge.to : [edge.to];
+      for (const from of froms) {
+        for (const to of tos) {
+          const isRetry = edge.max_retries != null;
+          rfEdges.push({
+            id: `${from}-${to}`,
+            source: from,
+            target: to,
+            type: isRetry ? 'ff-retry' : edge.condition ? 'ff-conditional' : 'default',
+            label: edge.condition ?? (edge.parallel ? '∥ parallel' : undefined),
+            labelStyle: { fill: '#d1d5db', fontSize: 10, fontFamily: 'var(--font-mono)' },
+            labelBgStyle: { fill: '#111730', fillOpacity: 0.95 },
+            labelBgPadding: [8, 4] as [number, number],
+            labelBgBorderRadius: 3,
+            data: {
+              condition: edge.condition,
+              parallel: edge.parallel,
+              max_retries: edge.max_retries,
+            },
+            animated: !!edge.parallel,
+            markerEnd: {
+              type: MarkerType.ArrowClosed,
+              width: 16,
+              height: 16,
+              color: isRetry ? '#eab308' : edge.condition ? '#a855f7' : '#9ca3af',
+            },
+            style: isRetry
+              ? { stroke: '#eab308', strokeDasharray: '8 5', strokeWidth: 2 }
+              : edge.condition
+                ? { stroke: '#a855f7', strokeWidth: 2 }
+                : { stroke: '#9ca3af', strokeWidth: 2 },
+          });
+        }
+      }
+    }
+    return rfEdges;
+  }, [workflowNodes, workflowEdges]);
+
+  // Build initial node positions from dagre layout (once)
+  const initialNodes = useMemo<Node[]>(() => {
+    if (!workflowNodes) return [];
+    const nodeEntries = Object.entries(workflowNodes) as [string, any][];
+
+    const rfNodes: Node[] = [
+      // START terminal
+      { id: 'START', type: 'ff-terminal', position: { x: 0, y: 0 }, data: { label: 'START' }, selectable: false, draggable: true },
+    ];
+
+    rfNodes.push(...nodeEntries.map(([name, nodeDef]) => ({
+      id: name,
+      type: 'exec-node',
+      position: { x: 0, y: 0 },
+      data: {
+        ...nodeDef,
+        label: name,
+        type: nodeDef.type ?? 'agent',
+        __status: 'pending',
+        __attempt: 1,
+        __durationMs: undefined,
+      },
+    })));
+
+    // END terminal
+    rfNodes.push({ id: 'END', type: 'ff-terminal', position: { x: 0, y: 0 }, data: { label: 'END' }, selectable: false, draggable: true });
+
+    return layoutGraph(rfNodes, edges);
+  }, [workflowNodes, edges]);
+
+  // Maintain node state separately so dragging persists
+  const [nodes, setNodes] = useState<Node[]>(initialNodes);
+
+  // When initialNodes change (workflow loaded), reset
+  useEffect(() => {
+    setNodes(initialNodes);
+  }, [initialNodes]);
+
+  // When nodeStates change (live updates), update node data without resetting positions
+  useEffect(() => {
+    setNodes(prev => prev.map(node => {
+      const state = nodeStates.get(node.id);
+      return {
+        ...node,
+        selected: selectedNode === node.id,
+        data: {
+          ...node.data,
+          __status: state?.status ?? 'pending',
+          __attempt: state?.attempt ?? 1,
+          __durationMs: state?.durationMs,
+        },
+      };
+    }));
+  }, [nodeStates, selectedNode]);
+
+  // Handle drag
+  const onNodesChange: OnNodesChange = useCallback((changes) => {
+    setNodes(prev => applyNodeChanges(changes, prev));
+  }, []);
+
+  const handleReset = useCallback(() => {
+    setNodes(initialNodes);
+  }, [initialNodes]);
+
+  if (nodes.length === 0) {
     return (
       <div className="flex items-center justify-center h-full text-gray-500 text-sm font-mono">
         WAITING FOR NODES...
@@ -30,65 +282,75 @@ export default function LiveGraph({ workflow, nodeStates, selectedNode, onSelect
     );
   }
 
-  // Build edges from workflow if available
-  const edges: any[] = workflow?.parsed?.edges ?? [];
+  return (
+    <div className="h-full w-full relative">
+      <ReactFlowProvider>
+        <LiveGraphInner
+          nodes={nodes}
+          edges={edges}
+          onNodesChange={onNodesChange}
+          onNodeClick={onSelectNode}
+          onReset={handleReset}
+        />
+      </ReactFlowProvider>
+    </div>
+  );
+}
+
+// Inner component that can use useReactFlow (must be inside ReactFlowProvider)
+function LiveGraphInner({
+  nodes, edges, onNodesChange, onNodeClick, onReset,
+}: {
+  nodes: Node[];
+  edges: Edge[];
+  onNodesChange: OnNodesChange;
+  onNodeClick: (name: string) => void;
+  onReset: () => void;
+}) {
+  const { fitView } = useReactFlow();
+
+  const handleReset = useCallback(() => {
+    onReset();
+    // Wait for state update then fit view
+    setTimeout(() => fitView({ padding: 0.3, maxZoom: 1 }), 50);
+  }, [onReset, fitView]);
 
   return (
-    <div className="p-4 overflow-auto h-full">
-      {/* Node graph */}
-      <div className="flex flex-wrap gap-3 mb-4">
-        {nodeEntries.map(([name, nodeDef]) => {
-          const state = nodeStates.get(name);
-          const status = state?.status ?? 'pending';
-          const isSelected = selectedNode === name;
-          const type = nodeDef?.type ?? 'agent';
+    <>
+      <ReactFlow
+        nodes={nodes}
+        edges={edges}
+        onNodesChange={onNodesChange}
+        nodeTypes={nodeTypes}
+        edgeTypes={edgeTypes}
+        onNodeClick={(_e, node) => onNodeClick(node.id)}
+        fitView
+        fitViewOptions={{ padding: 0.3, maxZoom: 1 }}
+        colorMode="dark"
+        nodesConnectable={false}
+        panOnDrag
+        zoomOnScroll
+        defaultEdgeOptions={{ type: 'default', style: { stroke: '#9ca3af', strokeWidth: 2 } }}
+      >
+        <Background variant={BackgroundVariant.Lines} gap={30} size={1} color="rgb(var(--color-border) / 0.2)" />
+        <Controls
+          showInteractive={false}
+          className="!bg-surface-100 !border-border/50 !shadow-lg [&>button]:!bg-surface-200 [&>button]:!border-border/50 [&>button]:!text-gray-400 [&>button:hover]:!bg-surface-300 [&>button:hover]:!text-accent-blue"
+        />
+      </ReactFlow>
 
-          return (
-            <button
-              key={name}
-              onClick={() => onSelectNode(name)}
-              className={`relative flex items-center gap-2 px-4 py-3 rounded-sm border-2 transition-all cursor-pointer min-w-[140px]
-                ${statusColors[status] ?? statusColors.pending}
-                ${isSelected ? 'ring-2 ring-accent-blue' : ''}
-              `}
-            >
-              <RoleIcon icon={nodeDef?.icon} color={nodeDef?.color} size={18} />
-              <div className="text-left">
-                <div className="text-sm font-label font-medium text-gray-100">{name}</div>
-                <div className="text-xs text-gray-400 font-mono">
-                  {type === 'agent' ? nodeDef?.role ?? 'agent' : type}
-                </div>
-              </div>
-              {state?.attempt != null && state.attempt > 1 && (
-                <span className="absolute -top-2 -right-2 bg-accent-yellow text-black text-[10px] font-bold rounded-sm w-5 h-5 flex items-center justify-center font-mono">
-                  {state.attempt}
-                </span>
-              )}
-              {status === 'running' && (
-                <span className="absolute -top-1 -right-1 w-3 h-3 bg-accent-blue rounded-full animate-ping" />
-              )}
-            </button>
-          );
-        })}
-      </div>
-
-      {/* Edge flow indicators */}
-      {edges.length > 0 && (
-        <div className="flex flex-wrap gap-2 text-[10px] text-gray-500">
-          {edges.map((edge: any, i: number) => {
-            const from = Array.isArray(edge.from) ? edge.from.join(', ') : edge.from;
-            const to = Array.isArray(edge.to) ? edge.to.join(', ') : edge.to;
-            return (
-              <span key={i} className="bg-surface-200 border border-border/40 px-2 py-0.5 rounded-sm font-mono">
-                {from} {to}
-                {edge.condition && <span className="text-accent-yellow ml-1">({edge.condition})</span>}
-                {edge.parallel && <span className="text-accent-purple ml-1">||</span>}
-                {edge.max_retries != null && <span className="text-accent-orange ml-1">{edge.max_retries}</span>}
-              </span>
-            );
-          })}
-        </div>
-      )}
-    </div>
+      {/* Reset button */}
+      <button
+        onClick={handleReset}
+        className="absolute top-3 right-3 z-10 btn-ghost text-[10px] px-2 py-1 flex items-center gap-1"
+        title="Reset layout"
+      >
+        <svg className="w-3 h-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8" />
+          <path d="M3 3v5h5" />
+        </svg>
+        Reset
+      </button>
+    </>
   );
 }

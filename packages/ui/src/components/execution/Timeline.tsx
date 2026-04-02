@@ -29,7 +29,7 @@ export default function Timeline({ events }: { events: TimelineEvent[] }) {
   }
 
   return (
-    <div className="overflow-auto max-h-full">
+    <div>
       {events.map(evt => {
         const cfg = eventIcons[evt.event] ?? { icon: Zap, color: 'text-gray-400' };
         const Icon = cfg.icon;

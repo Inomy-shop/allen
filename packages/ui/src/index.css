@@ -3,6 +3,26 @@
 @tailwind utilities;
 
 @layer base {
+  :root {
+    /* RGB channel values for Tailwind opacity support */
+    --color-surface: 10 14 26;
+    --color-surface-100: 17 23 48;
+    --color-surface-200: 24 30 56;
+    --color-border: 30 39 64;
+    --color-accent: 0 212 255;
+    --color-accent-green: 0 255 136;
+    --color-accent-red: 255 51 102;
+    --color-accent-yellow: 255 170 0;
+    --color-accent-purple: 168 85 247;
+    /* Hex values for non-Tailwind usage (gradients, box-shadow, etc.) */
+    --accent-hex: #00d4ff;
+    --accent-red-hex: #ff3366;
+    --font-heading: 'Inter', sans-serif;
+    --font-body: 'Inter', sans-serif;
+    --font-mono: 'JetBrains Mono', monospace;
+    --font-label: 'Inter', sans-serif;
+  }
+
   body {
     @apply bg-surface text-gray-100 font-body;
   }
@@ -21,7 +41,7 @@
   }
   ::-webkit-scrollbar-thumb {
     @apply bg-accent-blue/30 rounded-full;
-    border: 1px solid rgba(0, 212, 255, 0.1);
+    border: 1px solid rgb(var(--color-accent) / 0.1);
   }
   ::-webkit-scrollbar-thumb:hover {
     @apply bg-accent-blue/50;
@@ -41,8 +61,8 @@
       0deg,
       transparent,
       transparent 2px,
-      rgba(0, 212, 255, 0.015) 2px,
-      rgba(0, 212, 255, 0.015) 4px
+      rgb(var(--color-accent) / 0.015) 2px,
+      rgb(var(--color-accent) / 0.015) 4px
     );
     pointer-events: none;
     z-index: 50;
@@ -62,7 +82,7 @@
     left: 0;
     right: 0;
     height: 1px;
-    background: linear-gradient(90deg, transparent, rgba(0, 212, 255, 0.4), transparent);
+    background: linear-gradient(90deg, transparent, rgb(var(--color-accent) / 0.4), transparent);
   }
 
   /* ─── Buttons: Robotic / clipped corners ─── */
@@ -78,14 +98,14 @@
     @apply btn bg-accent-blue/15 border-accent-blue/50 text-accent-blue;
     @apply hover:bg-accent-blue/25 hover:shadow-glow-blue hover:border-accent-blue/80;
     @apply active:scale-[0.97];
-    text-shadow: 0 0 8px rgba(0, 212, 255, 0.5);
+    text-shadow: 0 0 8px rgb(var(--color-accent) / 0.5);
   }
 
   .btn-danger {
     @apply btn bg-accent-red/15 border-accent-red/50 text-accent-red;
     @apply hover:bg-accent-red/25 hover:shadow-glow-red hover:border-accent-red/80;
     @apply active:scale-[0.97];
-    text-shadow: 0 0 8px rgba(255, 51, 102, 0.5);
+    text-shadow: 0 0 8px rgb(var(--color-accent-red) / 0.5);
   }
 
   .btn-ghost {
@@ -121,8 +141,8 @@
   /* ─── Grid background pattern ─── */
   .grid-bg {
     background-image:
-      linear-gradient(rgba(0, 212, 255, 0.03) 1px, transparent 1px),
-      linear-gradient(90deg, rgba(0, 212, 255, 0.03) 1px, transparent 1px);
+      linear-gradient(rgb(var(--color-accent) / 0.03) 1px, transparent 1px),
+      linear-gradient(90deg, rgb(var(--color-accent) / 0.03) 1px, transparent 1px);
     background-size: 40px 40px;
   }
 }

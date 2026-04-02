@@ -1,8 +1,12 @@
 import { useCallback, useEffect, useRef } from 'react';
+import { useResizable } from '../../hooks/useResizable';
 import {
   ReactFlow,
   Background,
   Controls,
+  MarkerType,
+  ReactFlowProvider,
+  useReactFlow,
   type Node,
   type Edge,
   type OnNodesChange,
@@ -20,6 +24,7 @@ import CodeNode from './CodeNode';
 import HumanNode from './HumanNode';
 import WorkflowNode from './WorkflowNode';
 import ConditionNode from './ConditionNode';
+import TerminalNode from './TerminalNode';
 import ConditionalEdge from './ConditionalEdge';
 import RetryEdge from './RetryEdge';
 import NodePalette from './NodePalette';
@@ -31,6 +36,7 @@ const nodeTypes = {
   'ff-human': HumanNode,
   'ff-workflow': WorkflowNode,
   'ff-condition': ConditionNode,
+  'ff-terminal': TerminalNode,
 };
 
 const edgeTypes = {
@@ -95,6 +101,8 @@ interface Props {
 
 export default function Canvas({ nodes, edges, onNodesChange, onEdgesChange }: Props) {
   const selectedNode = nodes.find(n => n.selected) ?? null;
+  const { size: paletteWidth, handleMouseDown: paletteResizeStart } = useResizable({ direction: 'horizontal', initialSize: 192, minSize: 140, maxSize: 300 });
+  const { size: propsWidth, handleMouseDown: propsResizeStart } = useResizable({ direction: 'horizontal', initialSize: 288, minSize: 220, maxSize: 500 });
   const { pushSnapshot, undo, redo } = useUndoRedo(nodes, edges, onNodesChange, onEdgesChange);
 
   // Keyboard shortcut for undo/redo
@@ -128,7 +136,12 @@ export default function Canvas({ nodes, edges, onNodesChange, onEdgesChange }: P
   const handleConnect: OnConnect = useCallback((connection) => {
     pushSnapshot();
     const updated = addEdge(
-      { ...connection, type: 'default', style: { stroke: '#1e2740' } },
+      {
+        ...connection,
+        type: 'default',
+        style: { stroke: '#1e2740' },
+        markerEnd: { type: MarkerType.ArrowClosed, width: 16, height: 16, color: '#1e2740' },
+      },
       edges,
     );
     onEdgesChange(updated);
@@ -162,35 +175,28 @@ export default function Canvas({ nodes, edges, onNodesChange, onEdgesChange }: P
 
   return (
     <div className="flex h-full">
-      {/* Left: Node palette */}
-      <div className="w-48 border-r border-border/50 bg-surface shrink-0 overflow-auto">
+      {/* Left: Node palette — resizable */}
+      <div className="bg-surface shrink-0 overflow-auto border-r-2 border-border/50 hover:border-accent-blue/50 transition-colors relative" style={{ width: paletteWidth }}>
         <NodePalette onAdd={handleAddNode} />
+        <div className="absolute top-0 right-0 bottom-0 w-2 cursor-col-resize z-10" onMouseDown={paletteResizeStart} />
       </div>
 
       {/* Center: React Flow canvas */}
       <div className="flex-1 relative">
-        <ReactFlow
-          nodes={nodes}
-          edges={edges}
-          onNodesChange={handleNodesChange}
-          onEdgesChange={handleEdgesChange}
-          onConnect={handleConnect}
-          nodeTypes={nodeTypes}
-          edgeTypes={edgeTypes}
-          fitView
-          colorMode="dark"
-          defaultEdgeOptions={{ style: { stroke: '#1e2740', strokeWidth: 2 } }}
-        >
-          <Background variant={BackgroundVariant.Dots} gap={20} size={1} color="#1e2740" />
-          <Controls
-            showInteractive={false}
-            className="!bg-surface-100 !border-border/50 !shadow-lg [&>button]:!bg-surface-200 [&>button]:!border-border/50 [&>button]:!text-gray-400 [&>button:hover]:!bg-surface-300 [&>button:hover]:!text-accent-blue"
+        <ReactFlowProvider>
+          <CanvasInner
+            nodes={nodes}
+            edges={edges}
+            onNodesChange={handleNodesChange}
+            onEdgesChange={handleEdgesChange}
+            onConnect={handleConnect}
           />
-        </ReactFlow>
+        </ReactFlowProvider>
       </div>
 
-      {/* Right: Node properties */}
-      <div className="w-72 border-l border-border/50 bg-surface shrink-0 overflow-auto">
+      {/* Right: Node properties — resizable */}
+      <div className="bg-surface shrink-0 overflow-auto border-l-2 border-border/50 hover:border-accent-blue/50 transition-colors relative" style={{ width: propsWidth }}>
+        <div className="absolute top-0 left-0 bottom-0 w-2 cursor-col-resize z-10" onMouseDown={propsResizeStart} />
         <NodeProperties
           node={selectedNode}
           onUpdate={handleUpdateNode}
@@ -198,5 +204,60 @@ export default function Canvas({ nodes, edges, onNodesChange, onEdgesChange }: P
         />
       </div>
     </div>
+  );
+}
+
+function CanvasInner({
+  nodes, edges, onNodesChange, onEdgesChange, onConnect,
+}: {
+  nodes: Node[];
+  edges: Edge[];
+  onNodesChange: OnNodesChange;
+  onEdgesChange: OnEdgesChange;
+  onConnect: OnConnect;
+}) {
+  const { fitView } = useReactFlow();
+
+  const handleReset = useCallback(() => {
+    fitView({ padding: 0.3, maxZoom: 1 });
+  }, [fitView]);
+
+  return (
+    <>
+      <ReactFlow
+        nodes={nodes}
+        edges={edges}
+        onNodesChange={onNodesChange}
+        onEdgesChange={onEdgesChange}
+        onConnect={onConnect}
+        nodeTypes={nodeTypes}
+        edgeTypes={edgeTypes}
+        fitView
+        fitViewOptions={{ padding: 0.3, maxZoom: 1 }}
+        colorMode="dark"
+        defaultEdgeOptions={{
+          style: { stroke: '#1e2740', strokeWidth: 2 },
+          markerEnd: { type: MarkerType.ArrowClosed, width: 16, height: 16, color: '#1e2740' },
+        }}
+      >
+        <Background variant={BackgroundVariant.Lines} gap={30} size={1} color="rgb(var(--color-border) / 0.2)" />
+        <Controls
+          showInteractive={false}
+          className="!bg-surface-100 !border-border/50 !shadow-lg [&>button]:!bg-surface-200 [&>button]:!border-border/50 [&>button]:!text-gray-400 [&>button:hover]:!bg-surface-300 [&>button:hover]:!text-accent-blue"
+        />
+      </ReactFlow>
+
+      <button
+        onClick={handleReset}
+        className="absolute top-3 right-3 z-10 btn-ghost text-[10px] px-2 py-1 inline-flex items-center gap-1 whitespace-nowrap"
+        title="Reset view"
+      >
+        <svg className="w-3 h-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8" />
+          <path d="M3 3v5h5" />
+        </svg>
+        Reset
+      </button>
+    </>
   );
 }

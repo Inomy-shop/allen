@@ -3,7 +3,7 @@ import { useParams, useNavigate, useBlocker } from 'react-router-dom';
 import yaml from 'js-yaml';
 import type { Node, Edge } from '@xyflow/react';
 import {
-  Save, CheckCircle, Play, Eye, Code2, ArrowLeft, AlertTriangle,
+  Save, CheckCircle, Play, Eye, Code2, ArrowLeft, AlertTriangle, XCircle, X, ChevronDown,
 } from 'lucide-react';
 import { workflows as wfApi, executions as execApi } from '../services/api';
 import Canvas from '../components/canvas/Canvas';
@@ -28,6 +28,7 @@ export default function WorkflowBuilderPage() {
   const [saving, setSaving] = useState(false);
   const [loading, setLoading] = useState(!!id);
   const [dirty, setDirty] = useState(false);
+  const [showValidation, setShowValidation] = useState(false);
   const savedYamlRef = useRef('');
 
   // Block navigation when there are unsaved changes
@@ -224,29 +225,78 @@ export default function WorkflowBuilderPage() {
 
           <div className="w-px h-6 bg-border/50 mx-1" />
 
-          {/* Validation status */}
-          {validation.errors.length > 0 ? (
-            <span className="flex items-center gap-1 text-xs text-accent-red font-label uppercase tracking-wider">
-              <AlertTriangle className="w-3.5 h-3.5" /> {validation.errors.length} errors
-            </span>
-          ) : validation.warnings.length > 0 ? (
-            <span className="flex items-center gap-1 text-xs text-accent-yellow font-label uppercase tracking-wider">
-              <AlertTriangle className="w-3.5 h-3.5" /> {validation.warnings.length} warnings
-            </span>
-          ) : null}
+          {/* Validation status — clickable to show details */}
+          {(validation.errors.length > 0 || validation.warnings.length > 0) && (
+            <div className="relative">
+              <button
+                onClick={() => setShowValidation(!showValidation)}
+                className={`inline-flex items-center gap-1.5 text-xs font-label uppercase tracking-wider px-2 py-1 rounded-sm border transition-all cursor-pointer ${
+                  validation.errors.length > 0
+                    ? 'text-accent-red border-accent-red/30 bg-accent-red/5 hover:bg-accent-red/10'
+                    : 'text-accent-yellow border-accent-yellow/30 bg-accent-yellow/5 hover:bg-accent-yellow/10'
+                }`}
+              >
+                {validation.errors.length > 0 ? (
+                  <><XCircle className="w-3.5 h-3.5" /> {validation.errors.length} error{validation.errors.length !== 1 ? 's' : ''}</>
+                ) : (
+                  <><AlertTriangle className="w-3.5 h-3.5" /> {validation.warnings.length} warning{validation.warnings.length !== 1 ? 's' : ''}</>
+                )}
+                <ChevronDown className={`w-3 h-3 transition-transform ${showValidation ? 'rotate-180' : ''}`} />
+              </button>
 
-          <button onClick={handleValidate} className="btn-ghost text-xs">
-            <CheckCircle className="w-3.5 h-3.5 mr-1" /> Validate
+              {/* Dropdown panel */}
+              {showValidation && (
+                <div className="absolute right-0 top-full mt-2 w-96 max-h-80 overflow-auto z-50 bg-surface-100 border border-border rounded-sm shadow-lg">
+                  {/* Header */}
+                  <div className="flex items-center justify-between px-3 py-2 border-b border-border/50 sticky top-0 bg-surface-100">
+                    <span className="text-xs font-label uppercase tracking-wider text-gray-400">Validation Issues</span>
+                    <button onClick={() => setShowValidation(false)} className="text-gray-500 hover:text-white">
+                      <X className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+
+                  {/* Errors */}
+                  {validation.errors.length > 0 && (
+                    <div className="px-3 py-2">
+                      <div className="text-[10px] font-label uppercase tracking-wider text-accent-red mb-1.5">Errors</div>
+                      {validation.errors.map((err, i) => (
+                        <div key={`err-${i}`} className="flex items-start gap-2 py-1.5 border-b border-border/20 last:border-0">
+                          <XCircle className="w-3.5 h-3.5 text-accent-red shrink-0 mt-0.5" />
+                          <span className="text-xs text-gray-300 font-mono leading-relaxed">{err}</span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+
+                  {/* Warnings */}
+                  {validation.warnings.length > 0 && (
+                    <div className="px-3 py-2">
+                      <div className="text-[10px] font-label uppercase tracking-wider text-accent-yellow mb-1.5">Warnings</div>
+                      {validation.warnings.map((warn, i) => (
+                        <div key={`warn-${i}`} className="flex items-start gap-2 py-1.5 border-b border-border/20 last:border-0">
+                          <AlertTriangle className="w-3.5 h-3.5 text-accent-yellow shrink-0 mt-0.5" />
+                          <span className="text-xs text-gray-300 font-mono leading-relaxed">{warn}</span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
+
+          <button onClick={handleValidate} className="btn-ghost text-xs inline-flex items-center gap-1.5 whitespace-nowrap">
+            <CheckCircle className="w-3.5 h-3.5" /> Validate
           </button>
-          <button onClick={handleSave} disabled={saving} className="btn-ghost text-xs">
-            <Save className="w-3.5 h-3.5 mr-1" /> {saving ? 'Saving...' : 'Save'}
+          <button onClick={handleSave} disabled={saving} className="btn-ghost text-xs inline-flex items-center gap-1.5 whitespace-nowrap">
+            <Save className="w-3.5 h-3.5" /> {saving ? 'Saving...' : 'Save'}
           </button>
           <button
             onClick={handleRun}
             disabled={!id || validation.errors.length > 0}
-            className="btn-primary text-xs"
+            className="btn-primary text-xs inline-flex items-center gap-1.5 whitespace-nowrap"
           >
-            <Play className="w-3.5 h-3.5 mr-1" /> Run
+            <Play className="w-3.5 h-3.5" /> Run
           </button>
         </div>
       </header>

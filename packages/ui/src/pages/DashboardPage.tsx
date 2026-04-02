@@ -147,7 +147,7 @@ export default function DashboardPage() {
                   <span className="text-sm text-gray-300 font-body">{name}</span>
                   <div className="text-right">
                     <span className="text-sm text-white tabular-nums font-mono">
-                      ${(d.totalEstimated ?? 0).toFixed(4)}
+                      ${(d.totalEstimated ?? 0).toFixed(2)}
                     </span>
                     <span className="text-xs text-gray-600 ml-2 font-mono">
                       ({d.count} runs)

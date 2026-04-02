@@ -3,7 +3,7 @@ import { GitBranch } from 'lucide-react';
 
 export default function WorkflowNode({ data, selected }: NodeProps) {
   return (
-    <div className={`px-4 py-3 rounded-sm border-2 bg-surface-100/90 backdrop-blur-sm min-w-[150px] transition-all
+    <div className={`px-4 py-3 rounded-lg border-2 bg-surface-100/90 backdrop-blur-sm min-w-[150px] transition-all
       ${selected ? 'border-accent-purple ring-2 ring-accent-purple/30 shadow-glow-purple' : 'border-accent-purple/30 hover:border-accent-purple/50'}
     `}>
       <Handle type="target" position={Position.Top} className="!bg-accent-purple !w-2.5 !h-2.5 !border-surface" />
