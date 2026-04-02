@@ -190,11 +190,46 @@ function parseValue(raw: string): unknown {
 
 /**
  * Build the output instruction appended to agent prompts.
+ * Includes auto-gate instruction so agents can signal stop/skip/clarify.
  */
 export function buildOutputInstruction(outputs: string[], format: string | undefined): string {
   if (!outputs.length) return '';
   if (format === 'freeform') return '';
 
   const fields = outputs.map(o => `"${o}": ...`).join(', ');
-  return `\n\nWhen done, return results as JSON:\n\`\`\`json\n{ ${fields} }\n\`\`\``;
+  return `\n\nWhen done, return results as JSON:\n\`\`\`json\n{ ${fields} }\n\`\`\`\n\nIMPORTANT: If you determine the task is already done, not needed, impossible, or you need more information before proceeding, add these fields to your JSON output:\n- "__action": "stop" (task already done / not needed) or "skip" (cannot proceed) or "clarify" (need human input)\n- "__reason": "brief explanation"\nIf everything is normal and work should continue, omit __action or set it to "continue".`;
+}
+
+/**
+ * Extract auto-gate fields (__action, __reason) from agent response,
+ * even if they weren't in the declared outputs list.
+ */
+export function extractAutoGateFields(
+  response: string,
+  outputs: Record<string, unknown>,
+): { action: string; reason?: string } {
+  // Check if already in extracted outputs
+  if (outputs.__action && typeof outputs.__action === 'string') {
+    return { action: outputs.__action, reason: outputs.__reason as string | undefined };
+  }
+
+  // Try to find in JSON block
+  const jsonMatch = response.match(/```json\s*\n?([\s\S]*?)\n?\s*```/);
+  if (jsonMatch) {
+    try {
+      const parsed = JSON.parse(jsonMatch[1]);
+      if (parsed.__action) {
+        return { action: parsed.__action, reason: parsed.__reason };
+      }
+    } catch { /* fall through */ }
+  }
+
+  // Try key-value pattern
+  const actionMatch = response.match(/__action\s*[:=]\s*["']?(stop|skip|clarify|continue)["']?/i);
+  if (actionMatch) {
+    const reasonMatch = response.match(/__reason\s*[:=]\s*["']?(.+?)["']?\s*$/m);
+    return { action: actionMatch[1].toLowerCase(), reason: reasonMatch?.[1] };
+  }
+
+  return { action: 'continue' };
 }

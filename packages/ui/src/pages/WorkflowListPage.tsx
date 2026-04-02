@@ -1,7 +1,7 @@
 import { useState, useCallback } from 'react';
 import { useWorkflows } from '../hooks/useWorkflows';
 import { workflows as wfApi, executions as execApi } from '../services/api';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, Link } from 'react-router-dom';
 import {
   GitBranch, Plus, Play, Trash2, CheckCircle, XCircle, RefreshCw, X,
 } from 'lucide-react';
@@ -83,6 +83,9 @@ export default function WorkflowListPage() {
           <button onClick={refresh} className="btn-ghost text-xs">
             <RefreshCw className="w-3.5 h-3.5" />
           </button>
+          <Link to="/workflows/new" className="btn-primary text-xs">
+            <Plus className="w-3.5 h-3.5 mr-1" /> New Workflow
+          </Link>
         </div>
       </div>
 
@@ -127,6 +130,12 @@ export default function WorkflowListPage() {
               </div>
 
               <div className="flex items-center gap-2 mt-4 pt-3 border-t border-border">
+                <Link
+                  to={`/workflows/${wf._id}/edit`}
+                  className="btn-ghost text-xs"
+                >
+                  Edit
+                </Link>
                 <button
                   onClick={() => openRunDialog(wf)}
                   disabled={runningId === wf._id || !wf.validation?.valid}

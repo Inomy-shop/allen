@@ -8,6 +8,15 @@ export type OnFailure = 'fail' | 'skip' | 'fallback';
 
 export type BackoffStrategy = 'exponential' | 'linear' | 'fixed';
 
+/**
+ * Auto-gate actions that any agent node can return to control graph flow.
+ * - 'continue': normal behavior — follow edges (default if not returned)
+ * - 'stop': task is already done or not needed — exit graph gracefully
+ * - 'skip': skip remaining nodes — exit graph gracefully
+ * - 'clarify': pause and ask human for more information
+ */
+export type AutoGateAction = 'continue' | 'stop' | 'skip' | 'clarify';
+
 export interface NodeDef {
   type?: NodeType;               // default: 'agent'
   role?: string;                 // for agent nodes

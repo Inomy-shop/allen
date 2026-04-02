@@ -12,6 +12,7 @@ import ExecutionListPage from './pages/ExecutionListPage';
 import ExecutionDetailPage from './pages/ExecutionDetailPage';
 import DashboardPage from './pages/DashboardPage';
 import RoleManagerPage from './pages/RoleManagerPage';
+import WorkflowBuilderPage from './pages/WorkflowBuilderPage';
 
 const navItems = [
   { to: '/', icon: LayoutDashboard, label: 'Dashboard' },
@@ -61,6 +62,8 @@ export default function App() {
           <Routes>
             <Route path="/" element={<DashboardPage />} />
             <Route path="/workflows" element={<WorkflowListPage />} />
+            <Route path="/workflows/new" element={<WorkflowBuilderPage />} />
+            <Route path="/workflows/:id/edit" element={<WorkflowBuilderPage />} />
             <Route path="/executions" element={<ExecutionListPage />} />
             <Route path="/executions/:id" element={<ExecutionDetailPage />} />
             <Route path="/roles" element={<RoleManagerPage />} />

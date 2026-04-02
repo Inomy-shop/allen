@@ -15,6 +15,7 @@ import { executeNode, type NodeExecutorDeps, type NodeResult } from './node-exec
 import { evaluateCondition } from './condition-parser.js';
 import { renderTemplate } from './template.js';
 import { mergeParallelOutputs } from './parallel.js';
+import { extractAutoGateFields } from './output-extractor.js';
 import { StateManager } from './state-manager.js';
 import type { Db } from 'mongodb';
 
@@ -371,9 +372,46 @@ export class FlowForgeEngine {
         const nextNodes = this.getNextNodes(parallelEdge.to, edges, exec.state, exec.retryCounts);
         currentNodes = nextNodes;
       } else {
+        let gateAction: 'continue' | 'stop' | 'skip' | 'clarify' = 'continue';
+
         for (const nodeName of currentNodes) {
           if (nodeName === 'END') continue;
-          await this.executeSingleNode(nodeName, nodes[nodeName], exec, nestingDepth);
+          gateAction = await this.executeSingleNode(nodeName, nodes[nodeName], exec, nestingDepth);
+
+          if (gateAction === 'stop' || gateAction === 'skip') {
+            // Don't emit execution_completed here — let run() handle it
+            // to avoid double-emit. Just return state to exit the graph.
+            return exec.state;
+          }
+
+          if (gateAction === 'clarify') {
+            // Pause and wait for human input at this node
+            const reason = (exec.state.__gate_reason as string) ?? 'Agent needs clarification';
+            exec.status = 'waiting_for_input';
+            await this.stateManager.updateExecution(exec.id, { status: 'waiting_for_input' });
+
+            this.emit({
+              event: 'input_required',
+              data: {
+                node: nodeName,
+                prompt: reason,
+                fields: [{ name: 'clarification', type: 'text', label: reason, required: true }],
+              },
+            });
+
+            const humanData = await this.waitForInput(exec.id, nodeName, 86400);
+            this.emit({ event: 'input_received', data: { node: nodeName, data: humanData } });
+            Object.assign(exec.state, humanData);
+
+            // Clean up gate fields so downstream nodes don't see stale data
+            delete exec.state.__gate_action;
+            delete exec.state.__gate_reason;
+            delete exec.state.__gate_node;
+
+            exec.status = 'running';
+            await this.stateManager.updateExecution(exec.id, { status: 'running' });
+            // Continue to next nodes after clarification
+          }
         }
 
         const completedSet = currentNodes.filter(n => n !== 'END');
@@ -390,12 +428,15 @@ export class FlowForgeEngine {
 
   // ── Single Node Execution ──────────────────────────────────────────────────
 
+  /**
+   * Execute a single node. Returns the auto-gate action if the agent signals one.
+   */
   private async executeSingleNode(
     nodeName: string,
     nodeDef: NodeDef | undefined,
     exec: ExecutionState,
     nestingDepth: number,
-  ): Promise<void> {
+  ): Promise<'continue' | 'stop' | 'skip' | 'clarify'> {
     if (!nodeDef) {
       throw new Error(`Node definition not found: ${nodeName}`);
     }
@@ -503,6 +544,21 @@ export class FlowForgeEngine {
           cost: result.cost,
         },
       });
+
+      // Auto-gate: check if agent signaled stop/skip/clarify
+      const nodeType = nodeDef.type ?? 'agent';
+      if (nodeType === 'agent') {
+        const gate = extractAutoGateFields(result.rawResponse ?? '', result.outputs);
+        if (gate.action !== 'continue') {
+          // Store reason in state for visibility
+          exec.state.__gate_action = gate.action;
+          exec.state.__gate_reason = gate.reason ?? 'Agent decided to ' + gate.action;
+          exec.state.__gate_node = nodeName;
+          return gate.action as 'stop' | 'skip' | 'clarify';
+        }
+      }
+
+      return 'continue';
     } catch (err: unknown) {
       exec.failedNode = nodeName;
       const message = err instanceof Error ? err.message : String(err);
