@@ -104,7 +104,7 @@ export default function ExecutionListPage() {
   return (
     <div className="p-6">
       <div className="flex items-center justify-between mb-6">
-        <h1 className="text-xl font-bold text-white">Executions</h1>
+        <h1 className="font-heading text-xl font-bold text-white tracking-widest uppercase">Executions</h1>
         <div className="flex items-center gap-3">
           <select
             value={filter}
@@ -125,7 +125,7 @@ export default function ExecutionListPage() {
         <div className="card overflow-hidden">
           <table className="w-full text-sm">
             <thead>
-              <tr className="text-gray-500 bg-surface-50 text-xs">
+              <tr className="text-gray-500 bg-surface-50 text-xs font-label uppercase tracking-wider">
                 <th className="text-left px-4 py-3 font-medium">ID</th>
                 <th className="text-left px-4 py-3 font-medium">Workflow</th>
                 <th className="text-left px-4 py-3 font-medium">Status</th>
@@ -135,7 +135,7 @@ export default function ExecutionListPage() {
                 <th className="text-left px-4 py-3 font-medium">Actions</th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-border">
+            <tbody className="divide-y divide-border/40">
               <TableSkeleton rows={5} cols={7} />
             </tbody>
           </table>
@@ -143,36 +143,36 @@ export default function ExecutionListPage() {
       ) : data.length === 0 ? (
         <div className="card p-8 text-center">
           <Play className="w-8 h-8 text-gray-600 mx-auto mb-3" />
-          <p className="text-gray-400 text-sm">No executions yet</p>
-          <p className="text-gray-500 text-xs mt-1">Start a workflow to see executions here</p>
+          <p className="text-gray-400 text-sm font-body">No executions yet</p>
+          <p className="text-gray-600 text-xs mt-1 font-mono">START A WORKFLOW TO SEE EXECUTIONS HERE</p>
         </div>
       ) : (
         <div className="card overflow-hidden">
-          <table className="w-full text-sm">
+          <table className="w-full text-sm font-body">
             <thead>
-              <tr className="text-gray-500 bg-surface-50 text-xs">
+              <tr className="text-gray-500 bg-surface-50 text-xs font-label uppercase tracking-wider">
                 <th className="text-left px-4 py-3 font-medium">ID</th>
                 <th
-                  className="text-left px-4 py-3 font-medium cursor-pointer hover:text-gray-300"
+                  className="text-left px-4 py-3 font-medium cursor-pointer hover:text-accent-blue transition-colors"
                   onClick={() => toggleSort('workflowName')}
                 >
                   Workflow <SortIcon col="workflowName" />
                 </th>
                 <th
-                  className="text-left px-4 py-3 font-medium cursor-pointer hover:text-gray-300"
+                  className="text-left px-4 py-3 font-medium cursor-pointer hover:text-accent-blue transition-colors"
                   onClick={() => toggleSort('status')}
                 >
                   Status <SortIcon col="status" />
                 </th>
                 <th
-                  className="text-left px-4 py-3 font-medium cursor-pointer hover:text-gray-300"
+                  className="text-left px-4 py-3 font-medium cursor-pointer hover:text-accent-blue transition-colors"
                   onClick={() => toggleSort('durationMs')}
                 >
                   Duration <SortIcon col="durationMs" />
                 </th>
                 <th className="text-left px-4 py-3 font-medium">Cost</th>
                 <th
-                  className="text-left px-4 py-3 font-medium cursor-pointer hover:text-gray-300"
+                  className="text-left px-4 py-3 font-medium cursor-pointer hover:text-accent-blue transition-colors"
                   onClick={() => toggleSort('startedAt')}
                 >
                   Started <SortIcon col="startedAt" />
@@ -180,24 +180,24 @@ export default function ExecutionListPage() {
                 <th className="text-left px-4 py-3 font-medium">Actions</th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-border">
+            <tbody className="divide-y divide-border/40">
               {sorted.map((exec: any) => (
-                <tr key={exec.id ?? exec._id} className="hover:bg-surface-100 transition-colors">
+                <tr key={exec.id ?? exec._id} className="hover:bg-accent-blue/5 transition-colors">
                   <td className="px-4 py-3">
                     <Link
                       to={`/executions/${exec.id}`}
-                      className="text-accent-blue hover:underline font-mono text-xs"
+                      className="text-accent-blue hover:text-accent-blue/80 font-mono text-xs"
                     >
                       {exec.id?.slice(0, 8) ?? 'N/A'}
                     </Link>
                   </td>
                   <td className="px-4 py-3 text-gray-200">{exec.workflowName}</td>
                   <td className="px-4 py-3"><StatusBadge status={exec.status} /></td>
-                  <td className="px-4 py-3 text-gray-400 text-xs tabular-nums">
+                  <td className="px-4 py-3 text-gray-400 text-xs tabular-nums font-mono">
                     {exec.durationMs != null ? `${(exec.durationMs / 1000).toFixed(1)}s` : '-'}
                   </td>
                   <td className="px-4 py-3"><CostDisplay cost={exec.cost} /></td>
-                  <td className="px-4 py-3 text-gray-400 text-xs">
+                  <td className="px-4 py-3 text-gray-400 text-xs font-mono">
                     {exec.startedAt ? new Date(exec.startedAt).toLocaleString() : '-'}
                   </td>
                   <td className="px-4 py-3">
@@ -219,7 +219,7 @@ export default function ExecutionListPage() {
                             await api.retryFrom(exec.id, exec.failedNode);
                             refresh();
                           }}
-                          className="btn-ghost text-xs p-1 text-yellow-400"
+                          className="btn-ghost text-xs p-1 text-accent-yellow"
                           title={`Retry from ${exec.failedNode}`}
                         >
                           <RotateCcw className="w-3.5 h-3.5" />

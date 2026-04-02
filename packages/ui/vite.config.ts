@@ -14,6 +14,18 @@ export default defineConfig(({ mode }) => {
         '@': resolve(__dirname, './src'),
       },
     },
+    build: {
+      chunkSizeWarningLimit: 600,
+      rollupOptions: {
+        output: {
+          manualChunks: {
+            mermaid: ['mermaid'],
+            monaco: ['@monaco-editor/react'],
+            reactflow: ['@xyflow/react'],
+          },
+        },
+      },
+    },
     server: {
       port: 5173,
       proxy: {

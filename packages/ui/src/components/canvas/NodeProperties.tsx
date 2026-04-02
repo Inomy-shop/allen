@@ -1,9 +1,15 @@
 import { useState, useEffect } from 'react';
 import type { Node } from '@xyflow/react';
-import { Trash2 } from 'lucide-react';
+import { Trash2, Plus, X } from 'lucide-react';
+import { roles as rolesApi } from '../../services/api';
 
-const roles = ['planner', 'developer', 'tester', 'reviewer', 'researcher', 'writer', 'editor', 'analyst', 'investigator', 'git-ops', 'formatter'];
-const builtIns = ['git-create-branch', 'git-commit', 'git-push', 'git-create-pr', 'git-cleanup-worktree', 'run-build', 'run-tests', 'classify-task'];
+interface HumanField {
+  name: string;
+  type: string;
+  label?: string;
+  required?: boolean;
+  options?: string[];
+}
 
 interface Props {
   node: Node | null;
@@ -11,8 +17,17 @@ interface Props {
   onDelete: (id: string) => void;
 }
 
+const builtIns = ['git-create-branch', 'git-commit', 'git-push', 'git-create-pr', 'git-cleanup-worktree', 'run-build', 'run-tests', 'classify-task'];
+const fieldTypes = ['string', 'text', 'boolean', 'number', 'select'];
+
 export default function NodeProperties({ node, onUpdate, onDelete }: Props) {
   const [localData, setLocalData] = useState<Record<string, any>>({});
+  const [roleList, setRoleList] = useState<any[]>([]);
+
+  // Fetch roles from backend
+  useEffect(() => {
+    rolesApi.list().then(setRoleList).catch(() => {});
+  }, []);
 
   useEffect(() => {
     if (node) setLocalData({ ...node.data });
@@ -20,8 +35,8 @@ export default function NodeProperties({ node, onUpdate, onDelete }: Props) {
 
   if (!node) {
     return (
-      <div className="p-4 text-sm text-gray-500">
-        Select a node to edit its properties
+      <div className="p-4 text-sm text-gray-500 font-mono">
+        SELECT A NODE TO EDIT
       </div>
     );
   }
@@ -39,31 +54,41 @@ export default function NodeProperties({ node, onUpdate, onDelete }: Props) {
     update('outputs', outputs);
   };
 
+  // ── Human field helpers ──
+  const fields: HumanField[] = (localData.fields as HumanField[]) ?? [];
+
+  const addField = () => {
+    update('fields', [...fields, { name: '', type: 'string', label: '', required: false }]);
+  };
+
+  const updateField = (idx: number, key: keyof HumanField, value: any) => {
+    const next = [...fields];
+    next[idx] = { ...next[idx], [key]: value };
+    update('fields', next);
+  };
+
+  const removeField = (idx: number) => {
+    update('fields', fields.filter((_, i) => i !== idx));
+  };
+
   return (
     <div className="p-4 space-y-4 overflow-auto h-full">
       <div className="flex items-center justify-between">
-        <h3 className="text-sm font-semibold text-white">{(localData.label as string) ?? node.id}</h3>
-        <button
-          onClick={() => onDelete(node.id)}
-          className="btn-ghost text-xs text-red-400 hover:text-red-300 p-1"
-        >
+        <h3 className="font-heading text-sm font-semibold text-white tracking-wider">{(localData.label as string) ?? node.id}</h3>
+        <button onClick={() => onDelete(node.id)} className="btn-ghost text-xs text-accent-red hover:text-accent-red/80 p-1">
           <Trash2 className="w-3.5 h-3.5" />
         </button>
       </div>
 
       {/* Node name */}
       <div>
-        <label className="block text-xs font-medium text-gray-400 mb-1">Name</label>
-        <input
-          className="input w-full text-xs"
-          value={(localData.label as string) ?? ''}
-          onChange={e => update('label', e.target.value)}
-        />
+        <label className="block text-xs font-label font-medium text-gray-400 mb-1 uppercase tracking-wider">Name</label>
+        <input className="input w-full text-xs" value={(localData.label as string) ?? ''} onChange={e => update('label', e.target.value)} />
       </div>
 
       {/* Type selector */}
       <div>
-        <label className="block text-xs font-medium text-gray-400 mb-1">Type</label>
+        <label className="block text-xs font-label font-medium text-gray-400 mb-1 uppercase tracking-wider">Type</label>
         <select className="input w-full text-xs" value={type} onChange={e => update('type', e.target.value)}>
           <option value="agent">Agent</option>
           <option value="code">Code</option>
@@ -73,18 +98,18 @@ export default function NodeProperties({ node, onUpdate, onDelete }: Props) {
         </select>
       </div>
 
-      {/* Agent-specific */}
+      {/* ── Agent-specific ── */}
       {type === 'agent' && (
         <>
           <div>
-            <label className="block text-xs font-medium text-gray-400 mb-1">Role</label>
+            <label className="block text-xs font-label font-medium text-gray-400 mb-1 uppercase tracking-wider">Role</label>
             <select className="input w-full text-xs" value={(localData.role as string) ?? ''} onChange={e => update('role', e.target.value)}>
               <option value="">Select role...</option>
-              {roles.map(r => <option key={r} value={r}>{r}</option>)}
+              {roleList.map((r: any) => <option key={r.name} value={r.name}>{r.name}</option>)}
             </select>
           </div>
           <div>
-            <label className="block text-xs font-medium text-gray-400 mb-1">Prompt</label>
+            <label className="block text-xs font-label font-medium text-gray-400 mb-1 uppercase tracking-wider">Prompt</label>
             <textarea
               className="input w-full text-xs h-28 resize-none font-mono"
               value={(localData.prompt as string) ?? ''}
@@ -93,90 +118,92 @@ export default function NodeProperties({ node, onUpdate, onDelete }: Props) {
             />
           </div>
           <div className="flex items-center gap-2">
-            <input
-              type="checkbox"
-              checked={!!localData.resume_on_retry}
-              onChange={e => update('resume_on_retry', e.target.checked)}
-              className="w-3.5 h-3.5 rounded bg-surface-200 border-border"
-            />
-            <label className="text-xs text-gray-300">Resume on retry</label>
+            <input type="checkbox" checked={!!localData.resume_on_retry} onChange={e => update('resume_on_retry', e.target.checked)} className="w-3.5 h-3.5 rounded-sm bg-surface-200 border-accent-blue/30 accent-accent-blue" />
+            <label className="text-xs text-gray-300 font-label">Resume on retry</label>
           </div>
         </>
       )}
 
-      {/* Code-specific */}
+      {/* ── Code-specific ── */}
       {type === 'code' && (
         <>
           <div>
-            <label className="block text-xs font-medium text-gray-400 mb-1">Function</label>
+            <label className="block text-xs font-label font-medium text-gray-400 mb-1 uppercase tracking-wider">Function</label>
             <select className="input w-full text-xs" value={(localData.function as string) ?? ''} onChange={e => update('function', e.target.value)}>
               <option value="">Select function...</option>
               {builtIns.map(b => <option key={b} value={b}>{b}</option>)}
             </select>
           </div>
           <div>
-            <label className="block text-xs font-medium text-gray-400 mb-1">Retries</label>
-            <input
-              type="number"
-              min={0}
-              max={10}
-              className="input w-20 text-xs"
-              value={(localData.retries as number) ?? 0}
-              onChange={e => update('retries', parseInt(e.target.value) || 0)}
-            />
+            <label className="block text-xs font-label font-medium text-gray-400 mb-1 uppercase tracking-wider">Retries</label>
+            <input type="number" min={0} max={10} className="input w-20 text-xs" value={(localData.retries as number) ?? 0} onChange={e => update('retries', parseInt(e.target.value) || 0)} />
           </div>
         </>
       )}
 
-      {/* Human-specific */}
+      {/* ── Human-specific ── */}
       {type === 'human' && (
-        <div>
-          <label className="block text-xs font-medium text-gray-400 mb-1">Prompt</label>
-          <textarea
-            className="input w-full text-xs h-20 resize-none"
-            value={(localData.prompt as string) ?? ''}
-            onChange={e => update('prompt', e.target.value)}
-            placeholder="What should the user see?"
-          />
-        </div>
+        <>
+          <div>
+            <label className="block text-xs font-label font-medium text-gray-400 mb-1 uppercase tracking-wider">Prompt</label>
+            <textarea className="input w-full text-xs h-20 resize-none" value={(localData.prompt as string) ?? ''} onChange={e => update('prompt', e.target.value)} placeholder="What should the user see?" />
+          </div>
+
+          {/* Field editor */}
+          <div>
+            <div className="flex items-center justify-between mb-2">
+              <label className="block text-xs font-label font-medium text-gray-400 uppercase tracking-wider">Fields</label>
+              <button onClick={addField} className="btn-ghost text-xs p-1 text-accent-blue">
+                <Plus className="w-3 h-3" />
+              </button>
+            </div>
+            <div className="space-y-2">
+              {fields.map((field, idx) => (
+                <div key={idx} className="bg-surface-200/80 rounded-sm p-2 space-y-1.5 border border-border/30">
+                  <div className="flex items-center gap-1">
+                    <input className="input flex-1 text-xs" placeholder="name" value={field.name} onChange={e => updateField(idx, 'name', e.target.value)} />
+                    <select className="input text-xs w-20" value={field.type} onChange={e => updateField(idx, 'type', e.target.value)}>
+                      {fieldTypes.map(t => <option key={t} value={t}>{t}</option>)}
+                    </select>
+                    <button onClick={() => removeField(idx)} className="text-gray-500 hover:text-accent-red p-0.5 transition-colors">
+                      <X className="w-3 h-3" />
+                    </button>
+                  </div>
+                  <input className="input w-full text-xs" placeholder="Label" value={field.label ?? ''} onChange={e => updateField(idx, 'label', e.target.value)} />
+                  <div className="flex items-center gap-2">
+                    <input type="checkbox" checked={!!field.required} onChange={e => updateField(idx, 'required', e.target.checked)} className="w-3 h-3 rounded-sm bg-surface border-border accent-accent-blue" />
+                    <span className="text-[10px] text-gray-400 font-label uppercase tracking-wider">Required</span>
+                  </div>
+                  {field.type === 'select' && (
+                    <input className="input w-full text-xs" placeholder="Options (comma-separated)" value={(field.options ?? []).join(', ')} onChange={e => updateField(idx, 'options', e.target.value.split(',').map(s => s.trim()).filter(Boolean))} />
+                  )}
+                </div>
+              ))}
+            </div>
+          </div>
+        </>
       )}
 
-      {/* Workflow-specific */}
+      {/* ── Workflow-specific ── */}
       {type === 'workflow' && (
         <div>
-          <label className="block text-xs font-medium text-gray-400 mb-1">Sub-workflow name</label>
-          <input
-            className="input w-full text-xs"
-            value={(localData.workflow as string) ?? ''}
-            onChange={e => update('workflow', e.target.value)}
-            placeholder="e.g., bugfix"
-          />
+          <label className="block text-xs font-label font-medium text-gray-400 mb-1 uppercase tracking-wider">Sub-workflow name</label>
+          <input className="input w-full text-xs" value={(localData.workflow as string) ?? ''} onChange={e => update('workflow', e.target.value)} placeholder="e.g., bugfix" />
         </div>
       )}
 
       {/* Outputs (all types except condition) */}
       {type !== 'condition' && (
         <div>
-          <label className="block text-xs font-medium text-gray-400 mb-1">Outputs (comma-separated)</label>
-          <input
-            className="input w-full text-xs"
-            value={((localData.outputs as string[]) ?? []).join(', ')}
-            onChange={e => updateOutputs(e.target.value)}
-            placeholder="e.g., changed_files, summary"
-          />
+          <label className="block text-xs font-label font-medium text-gray-400 mb-1 uppercase tracking-wider">Outputs (comma-separated)</label>
+          <input className="input w-full text-xs" value={((localData.outputs as string[]) ?? []).join(', ')} onChange={e => updateOutputs(e.target.value)} placeholder="e.g., changed_files, summary" />
         </div>
       )}
 
       {/* Timeout */}
       <div>
-        <label className="block text-xs font-medium text-gray-400 mb-1">Timeout (seconds)</label>
-        <input
-          type="number"
-          className="input w-20 text-xs"
-          value={(localData.timeout as number) ?? ''}
-          onChange={e => update('timeout', parseInt(e.target.value) || undefined)}
-          placeholder="600"
-        />
+        <label className="block text-xs font-label font-medium text-gray-400 mb-1 uppercase tracking-wider">Timeout (seconds)</label>
+        <input type="number" className="input w-20 text-xs" value={(localData.timeout as number) ?? ''} onChange={e => update('timeout', parseInt(e.target.value) || undefined)} placeholder="600" />
       </div>
     </div>
   );

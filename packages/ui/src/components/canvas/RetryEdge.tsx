@@ -14,7 +14,7 @@ export default function RetryEdge(props: EdgeProps) {
       <BaseEdge
         path={edgePath}
         style={{
-          stroke: '#eab308',
+          stroke: '#ffaa00',
           strokeWidth: 2,
           strokeDasharray: '6 3',
         }}
@@ -26,8 +26,8 @@ export default function RetryEdge(props: EdgeProps) {
           className="pointer-events-none"
         >
           <div className="flex items-center justify-center">
-            <span className="bg-surface-200 border border-yellow-500/30 text-yellow-300 text-[9px] px-2 py-0.5 rounded-full">
-              ↻ ≤{maxRetries}
+            <span className="bg-surface-200 border border-accent-yellow/30 text-accent-yellow text-[9px] px-2 py-0.5 rounded-sm font-mono">
+              {maxRetries}
             </span>
           </div>
         </foreignObject>

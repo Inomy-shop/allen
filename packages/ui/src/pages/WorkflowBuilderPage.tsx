@@ -1,5 +1,5 @@
-import { useState, useCallback, useEffect, useMemo } from 'react';
-import { useParams, useNavigate } from 'react-router-dom';
+import { useState, useCallback, useEffect, useMemo, useRef } from 'react';
+import { useParams, useNavigate, useBlocker } from 'react-router-dom';
 import yaml from 'js-yaml';
 import type { Node, Edge } from '@xyflow/react';
 import {
@@ -27,6 +27,26 @@ export default function WorkflowBuilderPage() {
   const [validation, setValidation] = useState<{ errors: string[]; warnings: string[] }>({ errors: [], warnings: [] });
   const [saving, setSaving] = useState(false);
   const [loading, setLoading] = useState(!!id);
+  const [dirty, setDirty] = useState(false);
+  const savedYamlRef = useRef('');
+
+  // Block navigation when there are unsaved changes
+  const blocker = useBlocker(dirty);
+  useEffect(() => {
+    if (blocker.state === 'blocked') {
+      const proceed = window.confirm('You have unsaved changes. Leave anyway?');
+      if (proceed) blocker.proceed();
+      else blocker.reset();
+    }
+  }, [blocker]);
+
+  // Warn on browser close/refresh
+  useEffect(() => {
+    if (!dirty) return;
+    const handler = (e: BeforeUnloadEvent) => { e.preventDefault(); };
+    window.addEventListener('beforeunload', handler);
+    return () => window.removeEventListener('beforeunload', handler);
+  }, [dirty]);
 
   // Load existing workflow
   useEffect(() => {
@@ -102,6 +122,7 @@ export default function WorkflowBuilderPage() {
   // YAML change handler
   const handleYamlChange = useCallback((val: string) => {
     setYamlContent(val);
+    setDirty(true);
   }, []);
 
   // Save
@@ -117,9 +138,11 @@ export default function WorkflowBuilderPage() {
 
       if (isNew) {
         const result = await wfApi.create({ yaml: finalYaml });
+        setDirty(false);
         navigate(`/workflows/${result._id}/edit`, { replace: true });
       } else {
         await wfApi.update(id!, { yaml: finalYaml });
+        setDirty(false);
       }
     } catch (e: any) {
       alert(e.message);
@@ -159,55 +182,55 @@ export default function WorkflowBuilderPage() {
   }, [id, navigate]);
 
   if (loading) {
-    return <div className="flex items-center justify-center h-full text-gray-500">Loading...</div>;
+    return <div className="flex items-center justify-center h-full text-gray-500 font-mono text-sm">LOADING...</div>;
   }
 
   return (
     <div className="flex flex-col h-full">
       {/* Top bar */}
-      <header className="flex items-center justify-between px-4 py-2 border-b border-border bg-surface-50 shrink-0">
+      <header className="flex items-center justify-between px-4 py-2 border-b border-border/50 bg-surface-50 shrink-0">
         <div className="flex items-center gap-3">
-          <button onClick={() => navigate('/workflows')} className="text-gray-400 hover:text-gray-200">
+          <button onClick={() => navigate('/workflows')} className="text-gray-400 hover:text-accent-blue transition-colors">
             <ArrowLeft className="w-4 h-4" />
           </button>
-          <span className="text-sm font-semibold text-white">
+          <span className="font-heading text-sm font-semibold text-white tracking-wider uppercase">
             {workflowMeta.name ?? 'New Workflow'}
           </span>
           {workflowMeta.version && (
-            <span className="text-xs text-gray-500">v{workflowMeta.version}</span>
+            <span className="text-xs text-gray-500 font-mono">v{workflowMeta.version}</span>
           )}
         </div>
 
         <div className="flex items-center gap-2">
           {/* Mode toggle */}
-          <div className="flex items-center bg-surface-200 rounded-md p-0.5">
+          <div className="flex items-center bg-surface-200 rounded-sm p-0.5 border border-border/40">
             <button
               onClick={() => handleModeSwitch('visual')}
-              className={`flex items-center gap-1.5 px-3 py-1.5 rounded text-xs transition-colors ${
-                mode === 'visual' ? 'bg-surface-300 text-white' : 'text-gray-400 hover:text-gray-200'
+              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-sm text-xs font-label uppercase tracking-wider transition-all ${
+                mode === 'visual' ? 'bg-accent-blue/15 text-accent-blue border border-accent-blue/30' : 'text-gray-400 hover:text-gray-200 border border-transparent'
               }`}
             >
               <Eye className="w-3.5 h-3.5" /> Visual
             </button>
             <button
               onClick={() => handleModeSwitch('yaml')}
-              className={`flex items-center gap-1.5 px-3 py-1.5 rounded text-xs transition-colors ${
-                mode === 'yaml' ? 'bg-surface-300 text-white' : 'text-gray-400 hover:text-gray-200'
+              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-sm text-xs font-label uppercase tracking-wider transition-all ${
+                mode === 'yaml' ? 'bg-accent-blue/15 text-accent-blue border border-accent-blue/30' : 'text-gray-400 hover:text-gray-200 border border-transparent'
               }`}
             >
               <Code2 className="w-3.5 h-3.5" /> YAML
             </button>
           </div>
 
-          <div className="w-px h-6 bg-border mx-1" />
+          <div className="w-px h-6 bg-border/50 mx-1" />
 
           {/* Validation status */}
           {validation.errors.length > 0 ? (
-            <span className="flex items-center gap-1 text-xs text-red-400">
+            <span className="flex items-center gap-1 text-xs text-accent-red font-label uppercase tracking-wider">
               <AlertTriangle className="w-3.5 h-3.5" /> {validation.errors.length} errors
             </span>
           ) : validation.warnings.length > 0 ? (
-            <span className="flex items-center gap-1 text-xs text-yellow-400">
+            <span className="flex items-center gap-1 text-xs text-accent-yellow font-label uppercase tracking-wider">
               <AlertTriangle className="w-3.5 h-3.5" /> {validation.warnings.length} warnings
             </span>
           ) : null}
@@ -234,13 +257,13 @@ export default function WorkflowBuilderPage() {
           <Canvas
             nodes={nodes}
             edges={edges}
-            onNodesChange={setNodes}
-            onEdgesChange={setEdges}
+            onNodesChange={(n) => { setNodes(n); setDirty(true); }}
+            onEdgesChange={(e) => { setEdges(e); setDirty(true); }}
           />
         ) : (
           <div className="flex h-full">
             {/* YAML editor */}
-            <div className="flex-1 border-r border-border">
+            <div className="flex-1 border-r border-border/50">
               <YamlEditor
                 value={yamlContent}
                 onChange={handleYamlChange}

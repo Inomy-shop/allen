@@ -4,40 +4,125 @@
 
 @layer base {
   body {
-    @apply bg-surface text-gray-100;
+    @apply bg-surface text-gray-100 font-body;
   }
+
+  h1, h2, h3, h4, h5, h6 {
+    @apply font-heading tracking-wide;
+  }
+
+  /* Sci-fi scrollbars */
   ::-webkit-scrollbar {
-    width: 6px;
-    height: 6px;
+    width: 5px;
+    height: 5px;
   }
   ::-webkit-scrollbar-track {
     @apply bg-surface;
   }
   ::-webkit-scrollbar-thumb {
-    @apply bg-surface-300 rounded-full;
+    @apply bg-accent-blue/30 rounded-full;
+    border: 1px solid rgba(0, 212, 255, 0.1);
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    @apply bg-accent-blue/50;
+  }
+
+  /* Terminal-style inputs */
+  input, textarea, select {
+    @apply font-body;
+  }
+
+  /* Global scan-line overlay for main layout */
+  .scan-lines::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    background: repeating-linear-gradient(
+      0deg,
+      transparent,
+      transparent 2px,
+      rgba(0, 212, 255, 0.015) 2px,
+      rgba(0, 212, 255, 0.015) 4px
+    );
+    pointer-events: none;
+    z-index: 50;
   }
 }
 
 @layer components {
+  /* ─── Cards: Sci-fi panel style ─── */
   .card {
-    @apply bg-surface-100 border border-border rounded-lg;
+    @apply bg-surface-100/80 backdrop-blur-sm border border-border/60 rounded-sm relative;
+    clip-path: polygon(0 0, calc(100% - 12px) 0, 100% 12px, 100% 100%, 4px 100%, 0 calc(100% - 4px));
   }
+  .card::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    height: 1px;
+    background: linear-gradient(90deg, transparent, rgba(0, 212, 255, 0.4), transparent);
+  }
+
+  /* ─── Buttons: Robotic / clipped corners ─── */
   .btn {
-    @apply px-4 py-2 rounded-md font-medium text-sm transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed;
+    @apply font-label uppercase tracking-wider text-xs font-semibold;
+    @apply px-4 py-2 rounded-sm border;
+    @apply transition-all duration-200 cursor-pointer;
+    @apply disabled:opacity-40 disabled:cursor-not-allowed disabled:shadow-none;
+    clip-path: polygon(0 0, calc(100% - 6px) 0, 100% 6px, 100% 100%, 2px 100%, 0 calc(100% - 2px));
   }
+
   .btn-primary {
-    @apply btn bg-accent-blue hover:bg-blue-600 text-white;
+    @apply btn bg-accent-blue/15 border-accent-blue/50 text-accent-blue;
+    @apply hover:bg-accent-blue/25 hover:shadow-glow-blue hover:border-accent-blue/80;
+    @apply active:scale-[0.97];
+    text-shadow: 0 0 8px rgba(0, 212, 255, 0.5);
   }
+
   .btn-danger {
-    @apply btn bg-accent-red hover:bg-red-600 text-white;
+    @apply btn bg-accent-red/15 border-accent-red/50 text-accent-red;
+    @apply hover:bg-accent-red/25 hover:shadow-glow-red hover:border-accent-red/80;
+    @apply active:scale-[0.97];
+    text-shadow: 0 0 8px rgba(255, 51, 102, 0.5);
   }
+
   .btn-ghost {
-    @apply btn bg-transparent hover:bg-surface-200 text-gray-300;
+    @apply btn bg-transparent border-gray-600/30 text-gray-400;
+    @apply hover:border-accent-blue/40 hover:text-accent-blue hover:bg-accent-blue/5;
+    @apply active:scale-[0.97];
   }
+
+  /* ─── Inputs: Terminal style with bottom accent ─── */
   .input {
-    @apply bg-surface-200 border border-border text-gray-100 rounded-md px-3 py-2 text-sm focus:outline-none focus:border-accent-blue focus:ring-1 focus:ring-accent-blue;
+    @apply bg-surface-200/80 border-0 border-b-2 border-accent-blue/30 text-gray-100 rounded-none px-3 py-2 text-sm font-body;
+    @apply focus:outline-none focus:border-accent-blue focus:shadow-glow-blue;
+    @apply transition-all duration-200;
   }
+
+  /* ─── Badges: Glowing status indicators ─── */
   .badge {
-    @apply inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium;
+    @apply inline-flex items-center px-2.5 py-0.5 rounded-sm text-xs font-label font-semibold uppercase tracking-wider;
+  }
+
+  /* ─── Status glow effects ─── */
+  .glow-running {
+    @apply shadow-glow-blue;
+    animation: pulse-glow 2s ease-in-out infinite;
+  }
+  .glow-completed {
+    @apply shadow-glow-green;
+  }
+  .glow-failed {
+    @apply shadow-glow-red;
+  }
+
+  /* ─── Grid background pattern ─── */
+  .grid-bg {
+    background-image:
+      linear-gradient(rgba(0, 212, 255, 0.03) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(0, 212, 255, 0.03) 1px, transparent 1px);
+    background-size: 40px 40px;
   }
 }
