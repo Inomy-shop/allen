@@ -60,8 +60,10 @@ export function validateWorkflow(
     const tos = Array.isArray(edge.to) ? edge.to : [edge.to];
     const froms = Array.isArray(edge.from) ? edge.from : [edge.from];
     // A backward edge targets a node that appears as source in an earlier edge
+    // Skip START/END — they are not real nodes
     for (const t of tos) {
-      if (froms.some(f => f !== 'START' && nodeNames.indexOf(t) <= nodeNames.indexOf(f))) {
+      if (t === 'END' || t === 'START') continue;
+      if (froms.some(f => f !== 'START' && f !== 'END' && nodeNames.indexOf(t) <= nodeNames.indexOf(f))) {
         if (edge.max_retries == null) {
           errors.push(`Backward edge to ${t} must have max_retries to prevent infinite loops`);
         }

@@ -1,6 +1,6 @@
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { mkdtemp } from 'node:fs/promises';
+import { mkdtemp, mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import type { BuiltInFunction } from '../types.js';
@@ -21,8 +21,9 @@ export const gitCreateBranch: BuiltInFunction = async (config, state) => {
     .slice(0, 40);
   const branchName = `flowforge/${taskSlug}-${Date.now().toString(36)}`;
 
-  // Create worktree
+  // Create worktree directory (ensure parent exists)
   const worktreeBase = join(tmpdir(), 'flowforge', 'wt');
+  await mkdir(worktreeBase, { recursive: true });
   const worktreePath = await mkdtemp(join(worktreeBase, 'exec-'));
 
   await git(['worktree', 'add', '-b', branchName, worktreePath, baseBranch], repoPath);

@@ -1,0 +1,343 @@
+import { useState, useEffect, useCallback, useRef } from 'react';
+import { executions as api, workflows as wfApi } from '../services/api';
+import { useSSE, type SSEEvent } from './useSSE';
+
+export interface TimelineEvent {
+  id: string;
+  timestamp: Date;
+  event: string;
+  node?: string;
+  data: any;
+}
+
+export interface ActivityEntry {
+  timestamp: Date;
+  type: 'text' | 'tool_start' | 'tool_complete';
+  tool?: string;
+  content: string;
+}
+
+export interface NodeState {
+  name: string;
+  status: 'pending' | 'running' | 'completed' | 'failed';
+  attempt: number;
+  output?: any;
+  durationMs?: number;
+  cost?: any;
+  streamText: string;
+  activity: ActivityEntry[];
+}
+
+export function useExecution(id: string | undefined) {
+  const [execution, setExecution] = useState<any>(null);
+  const [workflow, setWorkflow] = useState<any>(null);
+  const [traces, setTraces] = useState<any[]>([]);
+  const [timeline, setTimeline] = useState<TimelineEvent[]>([]);
+  const [nodeStates, setNodeStates] = useState<Map<string, NodeState>>(new Map());
+  const [loading, setLoading] = useState(true);
+  const eventCounter = useRef(0);
+
+  // Fetch initial data
+  useEffect(() => {
+    if (!id) return;
+    setLoading(true);
+    Promise.all([api.get(id), api.traces(id)])
+      .then(async ([exec, tr]) => {
+        setExecution(exec);
+        setTraces(tr);
+
+        // Fetch the workflow definition for the graph
+        if (exec.workflowId) {
+          try {
+            const wf = await wfApi.get(exec.workflowId);
+            setWorkflow(wf);
+          } catch { /* workflow may have been deleted */ }
+        }
+
+        // Build initial node states from traces
+        const map = new Map<string, NodeState>();
+        for (const t of tr) {
+          map.set(t.node, {
+            name: t.node,
+            status: t.status,
+            attempt: t.attempt,
+            output: t.output,
+            durationMs: t.durationMs,
+            cost: t.cost,
+            streamText: t.rawResponse ?? '',
+            activity: t.activity ?? [],
+          });
+        }
+        setNodeStates(map);
+
+        // Build timeline from traces for completed/failed executions
+        // (SSE events are only available during live execution)
+        if (exec.status !== 'running' && exec.status !== 'waiting_for_input' && tr.length > 0) {
+          const events: TimelineEvent[] = [];
+          let counter = 0;
+
+          // Execution started event
+          events.push({
+            id: `hist-${++counter}`,
+            timestamp: new Date(exec.startedAt),
+            event: 'execution_started',
+            data: { workflowName: exec.workflowName },
+          });
+
+          // Node events from traces
+          for (const t of tr) {
+            if (t.startedAt) {
+              events.push({
+                id: `hist-${++counter}`,
+                timestamp: new Date(t.startedAt),
+                event: 'node_started',
+                node: t.node,
+                data: { node: t.node, role: t.role, attempt: t.attempt },
+              });
+            }
+            if (t.attempt > 1) {
+              events.push({
+                id: `hist-${++counter}`,
+                timestamp: new Date(t.startedAt),
+                event: 'node_retrying',
+                node: t.node,
+                data: { node: t.node, attempt: t.attempt },
+              });
+            }
+            if (t.completedAt) {
+              events.push({
+                id: `hist-${++counter}`,
+                timestamp: new Date(t.completedAt),
+                event: t.status === 'failed' ? 'node_failed' : 'node_completed',
+                node: t.node,
+                data: {
+                  node: t.node,
+                  durationMs: t.durationMs,
+                  cost: t.cost,
+                  output: t.output,
+                  error: t.status === 'failed' ? (t.output?.error ?? 'Node failed') : undefined,
+                },
+              });
+            }
+          }
+
+          // Execution terminal event
+          if (exec.completedAt) {
+            events.push({
+              id: `hist-${++counter}`,
+              timestamp: new Date(exec.completedAt),
+              event: exec.status === 'failed' ? 'execution_failed' : 'execution_completed',
+              data: {
+                durationMs: exec.durationMs,
+                cost: exec.cost,
+                error: exec.errorMessage,
+                failedNode: exec.failedNode,
+              },
+            });
+          }
+
+          // Sort by timestamp
+          events.sort((a, b) => a.timestamp.getTime() - b.timestamp.getTime());
+          setTimeline(events);
+        }
+      })
+      .catch(() => {})
+      .finally(() => setLoading(false));
+  }, [id]);
+
+  // SSE for live updates
+  const isLive = execution?.status === 'running' || execution?.status === 'waiting_for_input';
+  const sseUrl = id && isLive ? api.streamUrl(id) : null;
+
+  const handleEvent = useCallback((e: SSEEvent) => {
+    const entry: TimelineEvent = {
+      id: `evt-${++eventCounter.current}`,
+      timestamp: new Date(),
+      event: e.event,
+      node: e.data.node,
+      data: e.data,
+    };
+
+    setTimeline(prev => {
+      const next = [...prev, entry];
+      // Cap at 1000 events to prevent memory leak on long-running executions
+      return next.length > 1000 ? next.slice(-1000) : next;
+    });
+
+    setNodeStates(prev => {
+      const next = new Map(prev);
+      const node = e.data.node as string | undefined;
+
+      switch (e.event) {
+        case 'node_started': {
+          if (!node) break;
+          next.set(node, {
+            name: node,
+            status: 'running',
+            attempt: e.data.attempt ?? 1,
+            streamText: '',
+            activity: [],
+          });
+          break;
+        }
+
+        case 'node_completed': {
+          if (!node) break;
+          const existing = next.get(node);
+          if (existing) {
+            next.set(node, {
+              ...existing,
+              status: 'completed',
+              output: e.data.output,
+              durationMs: e.data.durationMs,
+              cost: e.data.cost,
+            });
+          }
+          break;
+        }
+
+        case 'node_failed': {
+          if (!node) break;
+          const existing = next.get(node);
+          if (existing) {
+            next.set(node, { ...existing, status: 'failed' });
+          }
+          break;
+        }
+
+        case 'node_retrying': {
+          if (!node) break;
+          const existing = next.get(node);
+          if (existing) {
+            next.set(node, {
+              ...existing,
+              status: 'running',
+              attempt: e.data.attempt ?? (existing.attempt + 1),
+              streamText: '',
+              activity: [],
+            });
+          }
+          break;
+        }
+
+        case 'agent_text': {
+          if (!node) break;
+          const existing = next.get(node);
+          if (existing) {
+            next.set(node, {
+              ...existing,
+              streamText: existing.streamText + (e.data.text ?? ''),
+            });
+          }
+          break;
+        }
+
+        case 'agent_tool_start': {
+          if (!node) break;
+          const existing = next.get(node);
+          if (existing) {
+            next.set(node, {
+              ...existing,
+              activity: [
+                ...existing.activity,
+                {
+                  timestamp: new Date(),
+                  type: 'tool_start',
+                  tool: e.data.tool,
+                  content: `Using tool: ${e.data.tool}`,
+                },
+              ],
+            });
+          }
+          break;
+        }
+
+        case 'agent_tool_complete': {
+          if (!node) break;
+          const existing = next.get(node);
+          if (existing) {
+            next.set(node, {
+              ...existing,
+              activity: [
+                ...existing.activity,
+                {
+                  timestamp: new Date(),
+                  type: 'tool_complete',
+                  tool: e.data.tool,
+                  content: e.data.summary ?? `Tool completed: ${e.data.tool}`,
+                },
+              ],
+            });
+          }
+          break;
+        }
+
+        case 'parallel_started': {
+          // Mark all parallel nodes as pending
+          const nodes = e.data.nodes as string[] | undefined;
+          if (nodes) {
+            for (const n of nodes) {
+              if (!next.has(n)) {
+                next.set(n, {
+                  name: n,
+                  status: 'pending',
+                  attempt: 1,
+                  streamText: '',
+                  activity: [],
+                });
+              }
+            }
+          }
+          break;
+        }
+
+        // parallel_branch_done, parallel_joined, input_required, input_received
+        // are already reflected in timeline — no additional node state changes needed
+      }
+
+      return next;
+    });
+
+    // Update execution status on terminal events
+    if (e.event === 'execution_completed') {
+      setExecution((prev: any) => ({
+        ...prev,
+        status: 'completed',
+        durationMs: e.data.durationMs,
+        cost: e.data.cost,
+      }));
+    } else if (e.event === 'execution_failed') {
+      setExecution((prev: any) => ({
+        ...prev,
+        status: 'failed',
+        failedNode: e.data.failedNode,
+        errorMessage: e.data.error,
+      }));
+    } else if (e.event === 'input_required') {
+      setExecution((prev: any) => ({ ...prev, status: 'waiting_for_input' }));
+    } else if (e.event === 'input_received') {
+      setExecution((prev: any) => ({ ...prev, status: 'running' }));
+    }
+  }, []);
+
+  const { connected } = useSSE(sseUrl, handleEvent);
+
+  const refresh = useCallback(async () => {
+    if (!id) return;
+    const [exec, tr] = await Promise.all([api.get(id), api.traces(id)]);
+    setExecution(exec);
+    setTraces(tr);
+  }, [id]);
+
+  return {
+    execution,
+    workflow,
+    traces,
+    timeline,
+    nodeStates,
+    loading,
+    connected,
+    isLive: !!isLive,
+    refresh,
+  };
+}
