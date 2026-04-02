@@ -1,7 +1,13 @@
 #!/usr/bin/env node
 
+import dotenv from 'dotenv';
+import { resolve, dirname } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+const __dirname = dirname(fileURLToPath(import.meta.url));
+dotenv.config({ path: resolve(__dirname, '..', '..', '..', '.env') });
+
 import { readFileSync } from 'node:fs';
-import { resolve } from 'node:path';
 import yaml from 'js-yaml';
 import { MongoClient } from 'mongodb';
 import { FlowForgeEngine } from './engine.js';
@@ -120,7 +126,7 @@ async function main(): Promise<void> {
   }
 
   if (command === 'run') {
-    const dbUri = getArg('db') ?? 'mongodb://localhost:27017/flowforge';
+    const dbUri = getArg('db') ?? process.env.MONGODB_URI ?? 'mongodb://localhost:27017/flowforge';
     const client = new MongoClient(dbUri);
     await client.connect();
     const db = client.db();
