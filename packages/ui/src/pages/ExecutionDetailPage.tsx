@@ -17,6 +17,7 @@ export default function ExecutionDetailPage() {
   const { id } = useParams<{ id: string }>();
   const {
     execution, workflow, traces, timeline, nodeStates,
+    logs, logFilter, setLogFilter,
     loading, connected, isLive, refresh,
   } = useExecution(id);
 
@@ -33,6 +34,7 @@ export default function ExecutionDetailPage() {
 
   const { size: rightWidth, handleMouseDown: rightResizeStart } = useResizable({ direction: 'horizontal', initialSize: 384, minSize: 280, maxSize: 600 });
   const { size: bottomHeight, handleMouseDown: bottomResizeStart } = useResizable({ direction: 'vertical', initialSize: 200, minSize: 120, maxSize: 500 });
+  const { size: logsPct, handleMouseDown: logsResizeStart } = useResizable({ direction: 'horizontal', initialSize: 60, minSize: 25, maxSize: 85, side: 'start', unit: 'percent' });
 
   const handleCancel = useCallback(async () => {
     if (id) await api.cancel(id);
@@ -221,12 +223,18 @@ export default function ExecutionDetailPage() {
             onMouseLeave={e => { (e.currentTarget.parentElement as HTMLElement).style.borderTopColor = ''; }}
           />
           <div className="flex flex-1 overflow-hidden">
-          {/* Timeline */}
-          <div className="w-1/2 shrink-0 border-r border-border/50 overflow-auto">
-            <div className="px-3 py-1.5 border-b border-border/50 sticky top-0 bg-surface-50 z-10">
-              <h2 className="font-heading text-[10px] font-semibold text-gray-400 uppercase tracking-widest">Timeline</h2>
-            </div>
-            <Timeline events={timeline} />
+          {/* Logs — resizable */}
+          <div
+            className="shrink-0 overflow-hidden border-r-2 border-border/50 hover:border-accent-blue/50 transition-colors relative"
+            style={{ width: `${logsPct}%` }}
+          >
+            <div className="absolute top-0 right-0 bottom-0 w-2 cursor-col-resize z-10" onMouseDown={logsResizeStart} />
+            <Timeline
+              logs={logs}
+              nodeFilter={logFilter}
+              onNodeFilterChange={setLogFilter}
+              workflowNodes={workflow?.parsed?.nodes ? Object.keys(workflow.parsed.nodes) : []}
+            />
           </div>
 
           {/* Execution log table */}

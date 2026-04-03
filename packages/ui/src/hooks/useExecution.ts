@@ -10,6 +10,16 @@ export interface TimelineEvent {
   data: any;
 }
 
+export interface ExecutionLog {
+  executionId: string;
+  timestamp: Date;
+  level: 'info' | 'debug' | 'warn' | 'error';
+  category: 'agent' | 'tool' | 'condition' | 'routing' | 'system' | 'gate';
+  node?: string;
+  message: string;
+  data?: any;
+}
+
 export interface ActivityEntry {
   timestamp: Date;
   type: 'text' | 'tool_start' | 'tool_complete';
@@ -34,6 +44,8 @@ export function useExecution(id: string | undefined) {
   const [traces, setTraces] = useState<any[]>([]);
   const [timeline, setTimeline] = useState<TimelineEvent[]>([]);
   const [nodeStates, setNodeStates] = useState<Map<string, NodeState>>(new Map());
+  const [logs, setLogs] = useState<ExecutionLog[]>([]);
+  const [logFilter, setLogFilter] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const eventCounter = useRef(0);
 
@@ -117,6 +129,13 @@ export function useExecution(id: string | undefined) {
               return next;
             });
           }
+        }
+
+        // Fetch persisted logs for non-live executions
+        if (exec.status !== 'running' && exec.status !== 'waiting_for_input') {
+          api.logs(exec.id).then(fetchedLogs => {
+            setLogs(fetchedLogs.map((l: any) => ({ ...l, timestamp: new Date(l.timestamp) })));
+          }).catch(() => {});
         }
 
         // Build timeline from traces for completed/failed executions
@@ -206,6 +225,20 @@ export function useExecution(id: string | undefined) {
       node: e.data.node,
       data: e.data,
     };
+
+    // Append execution_log to logs state
+    if (e.event === 'execution_log') {
+      const logEntry: ExecutionLog = {
+        ...(e.data as any),
+        timestamp: new Date(e.data.timestamp ?? Date.now()),
+      };
+      setLogs(prev => {
+        const next = [...prev, logEntry];
+        return next.length > 2000 ? next.slice(-2000) : next;
+      });
+      // execution_log events don't go into the timeline
+      return;
+    }
 
     setTimeline(prev => {
       const next = [...prev, entry];
@@ -396,12 +429,28 @@ export function useExecution(id: string | undefined) {
     setTraces(tr);
   }, [id]);
 
+  // Auto-refresh every 5 seconds when execution is active
+  useEffect(() => {
+    if (!id) return;
+    const status = execution?.status;
+    if (status !== 'running' && status !== 'waiting_for_input' && status !== 'queued') return;
+
+    const interval = setInterval(() => {
+      refresh().catch(() => {});
+    }, 5000);
+
+    return () => clearInterval(interval);
+  }, [id, execution?.status, refresh]);
+
   return {
     execution,
     workflow,
     traces,
     timeline,
     nodeStates,
+    logs,
+    logFilter,
+    setLogFilter,
     loading,
     connected,
     isLive: !!isLive,

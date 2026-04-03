@@ -10,6 +10,7 @@ import ExecutionListPage from './pages/ExecutionListPage';
 import ExecutionDetailPage from './pages/ExecutionDetailPage';
 import DashboardPage from './pages/DashboardPage';
 import RoleManagerPage from './pages/RoleManagerPage';
+import RepoManagerPage from './pages/RepoManagerPage';
 import SettingsPage from './pages/SettingsPage';
 
 const router = createBrowserRouter([
@@ -21,6 +22,7 @@ const router = createBrowserRouter([
       { path: 'workflows', element: <WorkflowListPage /> },
       { path: 'workflows/new', element: <WorkflowBuilderPage /> },
       { path: 'workflows/:id/edit', element: <WorkflowBuilderPage /> },
+      { path: 'repos', element: <RepoManagerPage /> },
       { path: 'executions', element: <ExecutionListPage /> },
       { path: 'executions/:id', element: <ExecutionDetailPage /> },
       { path: 'roles', element: <RoleManagerPage /> },

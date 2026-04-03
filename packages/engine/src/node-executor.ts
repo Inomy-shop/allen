@@ -6,11 +6,30 @@ import type {
   EngineEventEmitter,
   CostInfo,
   BuiltInFunction,
+  ExecutionLog,
 } from './types.js';
 import { renderTemplate } from './template.js';
 import { extractOutputs, buildOutputInstruction } from './output-extractor.js';
 // extractOutputs is now async (supports LLM fallback)
 import { evaluateCondition } from './condition-parser.js';
+
+function emitLog(
+  deps: NodeExecutorDeps,
+  nodeName: string,
+  entry: { level?: 'info' | 'debug' | 'warn' | 'error'; category: string; message: string; data?: unknown },
+): void {
+  if (!deps.executionId) return;
+  const log: ExecutionLog = {
+    executionId: deps.executionId,
+    timestamp: new Date(),
+    level: entry.level ?? 'info',
+    category: entry.category as ExecutionLog['category'],
+    node: nodeName,
+    message: entry.message,
+    data: entry.data,
+  };
+  deps.emitter.emit({ event: 'execution_log', data: log as unknown as Record<string, unknown> });
+}
 
 const COST_PER_TURN: Record<string, number> = {
   opus: 0.15,
@@ -24,6 +43,7 @@ export interface NodeExecutorDeps {
   workflows: Record<string, WorkflowDef>;
   emitter: EngineEventEmitter;
   runWorkflow: (workflow: WorkflowDef, input: Record<string, unknown>) => Promise<Record<string, unknown>>;
+  executionId?: string;
 }
 
 export interface NodeResult {
@@ -90,6 +110,10 @@ async function executeAgentNode(
   let turns = 0;
   let actualCost: number | null = null;
 
+  // Throttle agent text logs: buffer text and emit when >= 100 chars or every 5th chunk
+  let agentTextBuffer = '';
+  let agentTextChunkCount = 0;
+
   try {
     const { query } = await import('@anthropic-ai/claude-code');
 
@@ -116,10 +140,31 @@ async function executeAgentNode(
           if (block.type === 'text') {
             rawResponse += block.text;
             deps.emitter.emit({ event: 'agent_text', data: { node: nodeName, text: block.text } });
+
+            // Throttled agent text log
+            agentTextBuffer += block.text;
+            agentTextChunkCount++;
+            if (agentTextBuffer.length >= 100 || agentTextChunkCount % 5 === 0) {
+              emitLog(deps, nodeName, {
+                category: 'agent',
+                level: 'debug',
+                message: agentTextBuffer.slice(0, 200),
+              });
+              agentTextBuffer = '';
+            }
           } else if (block.type === 'tool_use') {
             deps.emitter.emit({
               event: 'agent_tool_start',
               data: { node: nodeName, tool: block.name, args: block.input },
+            });
+
+            // Tool call log
+            const toolArgs = block.input as Record<string, unknown> | undefined;
+            const argSummary = toolArgs ? Object.keys(toolArgs).join(', ') : '';
+            emitLog(deps, nodeName, {
+              category: 'tool',
+              message: `Tool: ${block.name}${argSummary ? ` (${argSummary})` : ''}`,
+              data: { tool: block.name, args: toolArgs },
             });
           }
         }
@@ -129,6 +174,15 @@ async function executeAgentNode(
         actualCost = message.total_cost_usd ?? null;
         turns = message.num_turns;
       }
+    }
+
+    // Flush remaining agent text buffer
+    if (agentTextBuffer.length > 0) {
+      emitLog(deps, nodeName, {
+        category: 'agent',
+        level: 'debug',
+        message: agentTextBuffer.slice(0, 200),
+      });
     }
 
     clearTimeout(timer);

@@ -8,12 +8,14 @@ import {
   Users,
   Activity,
   Settings,
+  FolderGit2,
 } from 'lucide-react';
 import { useSettingsStore } from './stores/settingsStore';
 
 const navItems = [
   { to: '/', icon: LayoutDashboard, label: 'Dashboard' },
   { to: '/workflows', icon: GitBranch, label: 'Workflows' },
+  { to: '/repos', icon: FolderGit2, label: 'Repos' },
   { to: '/executions', icon: Play, label: 'Executions' },
   { to: '/roles', icon: Users, label: 'Roles' },
 ];

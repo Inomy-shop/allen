@@ -121,6 +121,31 @@ export function executionRoutes(db: Db): Router {
     }
   });
 
+  // GET /api/executions/:id/logs
+  router.get('/:id/logs', async (req: Request, res: Response) => {
+    try {
+      const executionId = param(req, 'id');
+      const filter: Record<string, unknown> = { executionId };
+      if (req.query.node) filter.node = String(req.query.node);
+      if (req.query.category) filter.category = String(req.query.category);
+      if (req.query.level) filter.level = String(req.query.level);
+
+      const limit = Math.min(parseInt(String(req.query.limit ?? '500'), 10), 2000);
+      const offset = parseInt(String(req.query.offset ?? '0'), 10);
+
+      const logs = await db.collection('execution_logs')
+        .find(filter)
+        .sort({ timestamp: 1 })
+        .skip(offset)
+        .limit(limit)
+        .toArray();
+
+      res.json(logs);
+    } catch (err: unknown) {
+      res.status(500).json({ error: (err as Error).message });
+    }
+  });
+
   // GET /api/executions/:id/traces/:node/:attempt
   router.get('/:id/traces/:node/:attempt', async (req: Request, res: Response) => {
     try {

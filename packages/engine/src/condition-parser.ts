@@ -11,7 +11,10 @@ function normalizeExpression(expression: string): string {
   return expression
     .replace(/\bAND\b/g, 'and')
     .replace(/\bOR\b/g, 'or')
-    .replace(/\bNOT\b/g, 'not');
+    .replace(/\bNOT\b/g, 'not')
+    // Filtrex uses double quotes for strings, not single quotes.
+    // Convert 'value' to "value" so YAML-friendly single quotes work.
+    .replace(/'/g, '"');
 }
 
 export function evaluateCondition(expression: string, state: Record<string, unknown>): boolean {

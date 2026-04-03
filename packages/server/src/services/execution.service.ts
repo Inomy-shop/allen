@@ -63,6 +63,9 @@ export class ExecutionService {
       }
     }
 
+    // Track repo usage
+    await this.trackRepoUsage(input);
+
     // Start immediately
     return this.launchExecution(executionId, workflowId, workflow, input);
   }
@@ -137,6 +140,22 @@ export class ExecutionService {
 
     const exec = queued as unknown as ExecutionState;
     await this.launchExecution(exec.id, exec.workflowId, workflow, exec.input);
+  }
+
+  /**
+   * Increment executionCount and update lastUsedAt for the repo matching the input path.
+   */
+  private async trackRepoUsage(input: Record<string, unknown>): Promise<void> {
+    const repoPath = input.repo_path as string | undefined;
+    if (!repoPath) return;
+    try {
+      await this.db.collection('repos').updateOne(
+        { path: repoPath },
+        { $inc: { executionCount: 1 }, $set: { lastUsedAt: new Date() } },
+      );
+    } catch {
+      // Non-critical — don't block execution
+    }
   }
 
   async list(filter: Record<string, unknown> = {}): Promise<Record<string, unknown>[]> {

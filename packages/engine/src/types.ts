@@ -226,7 +226,23 @@ export type SSEEventType =
   | 'input_received'
   | 'parallel_started'
   | 'parallel_branch_done'
-  | 'parallel_joined';
+  | 'parallel_joined'
+  | 'execution_log';
+
+// ── Execution Log ──────────────────────────────────────────────────────────
+
+export type LogCategory = 'agent' | 'tool' | 'condition' | 'routing' | 'system' | 'gate';
+export type LogLevel = 'info' | 'debug' | 'warn' | 'error';
+
+export interface ExecutionLog {
+  executionId: string;
+  timestamp: Date;
+  level: LogLevel;
+  category: LogCategory;
+  node?: string;
+  message: string;
+  data?: unknown;
+}
 
 export interface SSEEvent {
   event: SSEEventType;

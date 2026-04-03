@@ -27,5 +27,14 @@ export async function ensureIndexes(db: Db): Promise<void> {
   // Secrets
   await db.collection('secrets').createIndex({ key: 1 }, { unique: true });
 
+  // Repos
+  await db.collection('repos').createIndex({ path: 1 }, { unique: true });
+  await db.collection('repos').createIndex({ tags: 1 });
+  await db.collection('repos').createIndex({ status: 1, lastUsedAt: -1 });
+
+  // Execution Logs
+  await db.collection('execution_logs').createIndex({ executionId: 1, timestamp: 1 });
+  await db.collection('execution_logs').createIndex({ executionId: 1, node: 1, timestamp: 1 });
+
   console.log('Database indexes ensured');
 }

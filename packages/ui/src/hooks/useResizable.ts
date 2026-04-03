@@ -7,21 +7,25 @@ interface UseResizableOptions {
   initialSize: number;
   minSize: number;
   maxSize: number;
+  /** 'right' or 'bottom' = drag towards origin increases size (default). 'left' or 'top' = drag away from origin increases size. */
+  side?: 'start' | 'end';
+  /** 'px' (default) or 'percent' — when percent, delta is converted relative to container */
+  unit?: 'px' | 'percent';
 }
 
-export function useResizable({ direction, initialSize, minSize, maxSize }: UseResizableOptions) {
+export function useResizable({ direction, initialSize, minSize, maxSize, side = 'end', unit = 'px' }: UseResizableOptions) {
   const [size, setSize] = useState(initialSize);
 
   const handleMouseDown = useCallback((e: React.MouseEvent) => {
     e.preventDefault();
     const startPos = direction === 'horizontal' ? e.clientX : e.clientY;
     const startSize = size;
+    const containerSize = direction === 'horizontal' ? window.innerWidth : window.innerHeight;
 
     const onMove = (ev: MouseEvent) => {
       const currentPos = direction === 'horizontal' ? ev.clientX : ev.clientY;
-      // For horizontal: drag left = increase (panel is on right side)
-      // For vertical: drag up = increase (panel is on bottom)
-      const delta = startPos - currentPos;
+      const rawDelta = side === 'end' ? startPos - currentPos : currentPos - startPos;
+      const delta = unit === 'percent' ? (rawDelta / containerSize) * 100 : rawDelta;
       setSize(Math.max(minSize, Math.min(startSize + delta, maxSize)));
     };
 

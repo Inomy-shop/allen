@@ -1,5 +1,6 @@
 import type { Response } from 'express';
 import type { SSEEvent, EngineEventEmitter } from '@flowforge/engine';
+import type { Db } from 'mongodb';
 
 type SSEClient = {
   res: Response;
@@ -7,6 +8,12 @@ type SSEClient = {
 };
 
 const clients: SSEClient[] = [];
+
+let _db: Db | null = null;
+
+export function setStreamDb(db: Db): void {
+  _db = db;
+}
 
 export function addSSEClient(executionId: string, res: Response): void {
   res.writeHead(200, {
@@ -44,6 +51,15 @@ export function broadcastToExecution(executionId: string, event: SSEEvent): void
         clients.splice(i, 1);
       }
     }
+  }
+
+  // Persist execution_log events to MongoDB (fire-and-forget)
+  if (event.event === 'execution_log' && _db) {
+    const logData = event.data as Record<string, unknown>;
+    _db.collection('execution_logs').insertOne({
+      ...logData,
+      timestamp: logData.timestamp ?? new Date(),
+    }).catch(() => {});
   }
 }
 

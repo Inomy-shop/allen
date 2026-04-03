@@ -52,6 +52,10 @@ export const executions = {
     request<any>(`/executions/${id}/input`, { method: 'POST', body: JSON.stringify({ node, data }) }),
   retryFrom: (id: string, node: string) =>
     request<any>(`/executions/${id}/retry-from/${node}`, { method: 'POST' }),
+  logs: (id: string, params?: Record<string, string>) => {
+    const qs = params ? '?' + new URLSearchParams(params).toString() : '';
+    return request<any[]>(`/executions/${id}/logs${qs}`);
+  },
   traces: (id: string) => request<any[]>(`/executions/${id}/traces`),
   tracesByNode: (id: string, node: string) =>
     request<any[]>(`/executions/${id}/traces/${node}`),
@@ -78,6 +82,20 @@ export const secrets = {
     request<any>(`/secrets/${key}`, { method: 'PUT', body: JSON.stringify({ value }) }),
   delete: (key: string) =>
     request<void>(`/secrets/${key}`, { method: 'DELETE' }),
+};
+
+// ── Repos ─────────────────────────────────────────────────────────────────
+export const repos = {
+  list: () => request<any[]>('/repos'),
+  get: (id: string) => request<any>(`/repos/${id}`),
+  create: (body: any) =>
+    request<any>('/repos', { method: 'POST', body: JSON.stringify(body) }),
+  update: (id: string, body: any) =>
+    request<any>(`/repos/${id}`, { method: 'PUT', body: JSON.stringify(body) }),
+  delete: (id: string) =>
+    request<void>(`/repos/${id}`, { method: 'DELETE' }),
+  scan: (id: string) =>
+    request<any>(`/repos/${id}/scan`, { method: 'POST' }),
 };
 
 // ── Dashboard ──────────────────────────────────────────────────────────────

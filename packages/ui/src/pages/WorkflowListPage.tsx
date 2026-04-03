@@ -1,12 +1,13 @@
 import { useState, useCallback, useMemo, useEffect } from 'react';
 import { useWorkflows } from '../hooks/useWorkflows';
-import { workflows as wfApi, executions as execApi } from '../services/api';
+import { workflows as wfApi, executions as execApi, repos as repoApi } from '../services/api';
 import { useNavigate, Link } from 'react-router-dom';
 import {
   GitBranch, Plus, Play, Trash2, CheckCircle, XCircle, AlertTriangle,
   RefreshCw, X, Pencil, Loader2, Layers, ArrowRight, Sparkles,
 } from 'lucide-react';
 import { CardSkeleton } from '../components/common/Skeleton';
+import Select from '../components/common/Select';
 
 interface RunDialogState {
   open: boolean;
@@ -26,6 +27,8 @@ export default function WorkflowListPage() {
   const [runningId, setRunningId] = useState<string | null>(null);
   const [runDialog, setRunDialog] = useState<RunDialogState>({ open: false, workflow: null });
   const [runInput, setRunInput] = useState<Record<string, string>>({});
+  const [repoList, setRepoList] = useState<any[]>([]);
+  const [repoMode, setRepoMode] = useState<'select' | 'manual'>('select');
 
   const stats = useMemo(() => {
     const map: Record<string, { nodes: number; edges: number }> = {};
@@ -54,16 +57,25 @@ export default function WorkflowListPage() {
     }).catch(() => {});
   }, [workflows]);
 
-  const openRunDialog = useCallback((wf: any) => {
+  const openRunDialog = useCallback(async (wf: any) => {
+    // Fetch full workflow detail to get parsed.input and context.requires
+    let fullWf = wf;
+    try {
+      fullWf = await wfApi.get(wf._id);
+    } catch { /* fallback to list data */ }
+
     const defaults: Record<string, string> = {};
-    if (wf.parsed?.input) {
-      for (const key of Object.keys(wf.parsed.input)) defaults[key] = '';
+    if (fullWf.parsed?.input) {
+      for (const [key, schema] of Object.entries(fullWf.parsed.input) as [string, any][]) {
+        defaults[key] = schema?.default != null ? String(schema.default) : '';
+      }
     } else {
       defaults['task'] = '';
-      defaults['repo_path'] = '';
     }
     setRunInput(defaults);
-    setRunDialog({ open: true, workflow: wf });
+    setRepoMode('select');
+    setRunDialog({ open: true, workflow: fullWf });
+    repoApi.list().then(setRepoList).catch(() => setRepoList([]));
   }, []);
 
   const handleRun = useCallback(async () => {
@@ -271,6 +283,12 @@ export default function WorkflowListPage() {
                 const isPath = key.includes('path') || key.includes('repo');
                 const isLong = ['task', 'topic', 'question', 'problem', 'description'].includes(key);
 
+                // Check if workflow requires repo — hide repo field if context.requires doesn't include 'repo'
+                const requires = runDialog.workflow.parsed?.context?.requires;
+                if (isPath && requires && Array.isArray(requires) && !requires.includes('repo')) {
+                  return null;
+                }
+
                 return (
                   <div key={key}>
                     <label className="flex items-center gap-1 text-xs font-label font-semibold text-gray-400 mb-2 uppercase tracking-widest">
@@ -278,13 +296,47 @@ export default function WorkflowListPage() {
                       {isRequired && <span className="text-accent-red normal-case text-[10px]">*</span>}
                     </label>
                     {isPath ? (
-                      <input
-                        type="text"
-                        value={value}
-                        onChange={e => setRunInput(prev => ({ ...prev, [key]: e.target.value }))}
-                        placeholder="/path/to/your/project"
-                        className="input w-full font-mono text-sm"
-                      />
+                      repoMode === 'select' ? (
+                        <div className="space-y-2">
+                          <Select
+                            value={value}
+                            placeholder="Select a repository..."
+                            options={[
+                              ...repoList.map((repo: any) => ({
+                                value: repo.path,
+                                label: repo.name,
+                                sublabel: repo.path,
+                              })),
+                              { value: '__manual__', label: 'Enter path manually...' },
+                            ]}
+                            onChange={v => {
+                              if (v === '__manual__') {
+                                setRepoMode('manual');
+                                setRunInput(prev => ({ ...prev, [key]: '' }));
+                              } else {
+                                setRunInput(prev => ({ ...prev, [key]: v }));
+                              }
+                            }}
+                          />
+                        </div>
+                      ) : (
+                        <div className="space-y-2">
+                          <input
+                            type="text"
+                            value={value}
+                            onChange={e => setRunInput(prev => ({ ...prev, [key]: e.target.value }))}
+                            placeholder="/path/to/your/project"
+                            className="input w-full font-mono text-sm"
+                          />
+                          <button
+                            type="button"
+                            onClick={() => { setRepoMode('select'); setRunInput(prev => ({ ...prev, [key]: '' })); }}
+                            className="text-[10px] text-accent-blue hover:text-accent-cyan font-mono uppercase tracking-wider"
+                          >
+                            Back to repo list
+                          </button>
+                        </div>
+                      )
                     ) : (
                       <textarea
                         value={value}

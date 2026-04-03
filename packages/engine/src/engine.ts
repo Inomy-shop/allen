@@ -10,6 +10,9 @@ import type {
   NodeTrace,
   SSEEvent,
   Checkpoint,
+  ExecutionLog,
+  LogCategory,
+  LogLevel,
 } from './types.js';
 import { executeNode, type NodeExecutorDeps, type NodeResult } from './node-executor.js';
 import { evaluateCondition } from './condition-parser.js';
@@ -82,6 +85,7 @@ export class FlowForgeEngine {
 
     await this.stateManager.createExecution(exec);
     this.emit({ event: 'execution_started', data: { executionId, workflowName: workflow.name } });
+    this.log(executionId, { category: 'system', message: `Execution started: ${workflow.name}` });
 
     try {
       const result = await this.executeGraph(workflow, exec, nestingDepth);
@@ -98,6 +102,7 @@ export class FlowForgeEngine {
         completedNodes: exec.completedNodes,
       });
 
+      this.log(executionId, { category: 'system', message: `Execution completed in ${(exec.durationMs / 1000).toFixed(1)}s` });
       this.emit({
         event: 'execution_completed',
         data: { executionId, durationMs: exec.durationMs, cost: exec.cost },
@@ -122,6 +127,7 @@ export class FlowForgeEngine {
         durationMs: exec.durationMs,
       });
 
+      this.log(executionId, { category: 'system', level: 'error', message: `Execution failed: ${message}` });
       this.emit({
         event: 'execution_failed',
         data: { executionId, failedNode: exec.failedNode, error: message },
@@ -331,7 +337,7 @@ export class FlowForgeEngine {
 
     // If resuming, skip already-completed nodes
     if (exec.completedNodes.length > 0) {
-      currentNodes = this.getNextNodes(exec.completedNodes, edges, exec.state, exec.retryCounts);
+      currentNodes = this.getNextNodes(exec.completedNodes, edges, exec.state, exec.retryCounts, exec.id);
       if (currentNodes.length === 0 || currentNodes.includes('END')) {
         return exec.state;
       }
@@ -369,14 +375,14 @@ export class FlowForgeEngine {
 
       if (parallelEdge && Array.isArray(parallelEdge.to)) {
         await this.executeParallelNodes(parallelEdge.to, parallelEdge, nodes, exec, nestingDepth);
-        const nextNodes = this.getNextNodes(parallelEdge.to, edges, exec.state, exec.retryCounts);
+        const nextNodes = this.getNextNodes(parallelEdge.to, edges, exec.state, exec.retryCounts, exec.id);
         currentNodes = nextNodes;
       } else {
         let gateAction: 'continue' | 'stop' | 'skip' | 'clarify' = 'continue';
 
         for (const nodeName of currentNodes) {
           if (nodeName === 'END') continue;
-          gateAction = await this.executeSingleNode(nodeName, nodes[nodeName], exec, nestingDepth);
+          gateAction = await this.executeSingleNode(nodeName, nodes[nodeName], exec, nestingDepth, edges);
 
           if (gateAction === 'stop' || gateAction === 'skip') {
             // Don't emit execution_completed here — let run() handle it
@@ -415,7 +421,7 @@ export class FlowForgeEngine {
         }
 
         const completedSet = currentNodes.filter(n => n !== 'END');
-        currentNodes = this.getNextNodes(completedSet, edges, exec.state, exec.retryCounts);
+        currentNodes = this.getNextNodes(completedSet, edges, exec.state, exec.retryCounts, exec.id);
       }
 
       if (currentNodes.includes('END') || currentNodes.length === 0) {
@@ -436,6 +442,7 @@ export class FlowForgeEngine {
     nodeDef: NodeDef | undefined,
     exec: ExecutionState,
     nestingDepth: number,
+    edges?: EdgeDef[],
   ): Promise<'continue' | 'stop' | 'skip' | 'clarify'> {
     if (!nodeDef) {
       throw new Error(`Node definition not found: ${nodeName}`);
@@ -452,7 +459,15 @@ export class FlowForgeEngine {
       workflows: this.config.workflows,
       emitter: this.config.emitter,
       runWorkflow: (wf, input) => this.run(wf, input, nestingDepth + 1),
+      executionId: exec.id,
     };
+
+    const nodeType = nodeDef.type ?? 'agent';
+    this.log(exec.id, {
+      category: 'system',
+      node: nodeName,
+      message: `Node started (type: ${nodeType}${nodeDef.role ? `, role: ${nodeDef.role}` : ''}${nodeDef.role && deps.roles[nodeDef.role]?.model ? `, model: ${deps.roles[nodeDef.role].model}` : ''})`,
+    });
 
     try {
       const result = await executeNode(nodeName, nodeDef, exec.state, exec.sessions, deps);
@@ -534,6 +549,24 @@ export class FlowForgeEngine {
         createdAt: new Date(),
       });
 
+      const costStr = result.cost.actual != null ? `$${result.cost.actual.toFixed(4)}` : `~$${result.cost.estimated.toFixed(4)}`;
+      this.log(exec.id, {
+        category: 'system',
+        node: nodeName,
+        message: `Node completed in ${(result.durationMs / 1000).toFixed(1)}s — cost: ${costStr}`,
+      });
+
+      // Log extracted outputs
+      const outputKeys = Object.keys(result.outputs).filter(k => !k.startsWith('__'));
+      if (outputKeys.length > 0) {
+        this.log(exec.id, {
+          category: 'system',
+          node: nodeName,
+          message: `Extracted outputs: ${outputKeys.join(', ')}`,
+          data: { outputKeys },
+        });
+      }
+
       this.emit({
         event: 'node_completed',
         data: {
@@ -546,16 +579,42 @@ export class FlowForgeEngine {
       });
 
       // Auto-gate: check if agent signaled stop/skip/clarify
-      const nodeType = nodeDef.type ?? 'agent';
-      if (nodeType === 'agent') {
+      // Skip auto-gate for nodes that have outgoing conditional/retry edges
+      // (those nodes make routing decisions via their outputs, not via auto-gate)
+      const hasConditionalOutEdges = edges?.some(e => {
+        const froms = Array.isArray(e.from) ? e.from : [e.from];
+        return froms.includes(nodeName) && (e.condition || e.max_retries != null);
+      }) ?? false;
+
+      if (nodeType === 'agent' && !hasConditionalOutEdges) {
         const gate = extractAutoGateFields(result.rawResponse ?? '', result.outputs);
         if (gate.action !== 'continue') {
+          this.log(exec.id, {
+            category: 'gate',
+            node: nodeName,
+            message: `Auto-gate: ${gate.action} — ${gate.reason ?? 'Agent decided to ' + gate.action}`,
+            data: { action: gate.action, reason: gate.reason },
+          });
           // Store reason in state for visibility
           exec.state.__gate_action = gate.action;
           exec.state.__gate_reason = gate.reason ?? 'Agent decided to ' + gate.action;
           exec.state.__gate_node = nodeName;
           return gate.action as 'stop' | 'skip' | 'clarify';
+        } else {
+          this.log(exec.id, {
+            category: 'gate',
+            node: nodeName,
+            level: 'debug',
+            message: 'Auto-gate: continue',
+          });
         }
+      } else if (nodeType === 'agent' && hasConditionalOutEdges) {
+        this.log(exec.id, {
+          category: 'gate',
+          node: nodeName,
+          level: 'debug',
+          message: 'Auto-gate: skipped (node has conditional edges)',
+        });
       }
 
       return 'continue';
@@ -581,6 +640,11 @@ export class FlowForgeEngine {
     this.emit({
       event: 'parallel_started',
       data: { nodes: nodeNames, joinPolicy },
+    });
+
+    this.log(exec.id, {
+      category: 'system',
+      message: `Parallel fork: [${nodeNames.join(', ')}] with join: ${joinPolicy}`,
     });
 
     // Snapshot state BEFORE parallel branches so they don't interfere
@@ -705,6 +769,11 @@ export class FlowForgeEngine {
     const merged = mergeParallelOutputs(cleanResults, edge.merge);
     Object.assign(exec.state, merged);
 
+    this.log(exec.id, {
+      category: 'system',
+      message: `Parallel joined: all branches completed`,
+    });
+
     this.emit({
       event: 'parallel_joined',
       data: { nodes: nodeNames, allPassed: true },
@@ -728,6 +797,7 @@ export class FlowForgeEngine {
     edges: EdgeDef[],
     state: Record<string, unknown>,
     retryCounts: Record<string, number>,
+    executionId?: string,
   ): string[] {
     const nextNodes: string[] = [];
 
@@ -739,7 +809,17 @@ export class FlowForgeEngine {
       if (!allFromCompleted) continue;
 
       if (edge.condition) {
-        if (!evaluateCondition(edge.condition, state)) continue;
+        const condResult = evaluateCondition(edge.condition, state);
+        if (executionId) {
+          const fromLabel = fromNodes.join(',');
+          this.log(executionId, {
+            category: 'condition',
+            node: fromLabel,
+            message: `Condition "${edge.condition}" → ${condResult}`,
+            data: { expression: edge.condition, result: condResult },
+          });
+        }
+        if (!condResult) continue;
       }
 
       // Check retry limit for backward edges
@@ -757,10 +837,21 @@ export class FlowForgeEngine {
           state.retry_context = renderTemplate(edge.retry_context, state);
         }
 
+        const targetNode = Array.isArray(edge.to) ? edge.to[0] : edge.to;
+        if (executionId) {
+          this.log(executionId, {
+            category: 'routing',
+            node: targetNode,
+            level: 'warn',
+            message: `Retry attempt ${count + 2}/${edge.max_retries}`,
+            data: { attempt: count + 2, maxRetries: edge.max_retries, retryContext: state.retry_context },
+          });
+        }
+
         this.emit({
           event: 'node_retrying',
           data: {
-            node: Array.isArray(edge.to) ? edge.to[0] : edge.to,
+            node: targetNode,
             fromNode: fromNodes.join(','),
             attempt: count + 2,
             retryContext: state.retry_context,
@@ -772,7 +863,18 @@ export class FlowForgeEngine {
       nextNodes.push(...targets);
     }
 
-    return [...new Set(nextNodes)];
+    const deduped = [...new Set(nextNodes)];
+    if (executionId && deduped.length > 0) {
+      const fromLabel = completedNodes[completedNodes.length - 1] ?? 'START';
+      this.log(executionId, {
+        category: 'routing',
+        node: fromLabel,
+        message: `Routing to: ${deduped.join(', ')}`,
+        data: { nextNodes: deduped },
+      });
+    }
+
+    return deduped;
   }
 
   /**
@@ -823,6 +925,22 @@ export class FlowForgeEngine {
 
   private emit(event: SSEEvent): void {
     this.config.emitter.emit(event);
+  }
+
+  private log(
+    executionId: string,
+    entry: { level?: LogLevel; category: LogCategory; node?: string; message: string; data?: unknown },
+  ): void {
+    const logEntry: ExecutionLog = {
+      executionId,
+      timestamp: new Date(),
+      level: entry.level ?? 'info',
+      category: entry.category,
+      node: entry.node,
+      message: entry.message,
+      data: entry.data,
+    };
+    this.emit({ event: 'execution_log', data: logEntry as unknown as Record<string, unknown> });
   }
 }
 
