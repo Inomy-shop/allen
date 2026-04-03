@@ -206,6 +206,6 @@ function extractConditionVariables(expression: string): string[] {
   // Extract identifiers
   const matches = cleaned.match(/\b[a-zA-Z_][a-zA-Z0-9_]*\b/g) ?? [];
   // Filter out operators and keywords
-  const keywords = new Set(['AND', 'OR', 'NOT', 'true', 'false', 'null', 'in', 'of']);
+  const keywords = new Set(['AND', 'OR', 'NOT', 'and', 'or', 'not', 'true', 'false', 'null', 'in', 'of', 'then', 'else']);
   return [...new Set(matches.filter(m => !keywords.has(m)))];
 }

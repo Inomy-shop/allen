@@ -4,33 +4,42 @@ export default function RetryEdge(props: EdgeProps) {
   const { sourceX, sourceY, targetX, targetY, data, markerEnd } = props;
 
   const maxRetries = (data as any)?.max_retries;
+  const side = (data as any)?.retrySide ?? 'right';
 
-  // Custom path: right → out → up → back → in
-  // Source exits from right side, target enters from right side
-  const offset = 60; // how far right the loop goes
+  const offset = 60;
   const cornerRadius = 15;
 
-  // Build the path:
-  // 1. Go right from source
-  // 2. Curve up
-  // 3. Go straight up to target height
-  // 4. Curve left
-  // 5. Connect to target
+  let edgePath: string;
+  let labelX: number;
+  let labelY: number;
 
-  const midX = Math.max(sourceX, targetX) + offset;
-
-  const edgePath = [
-    `M ${sourceX} ${sourceY}`,                                         // start at source (right handle)
-    `L ${midX - cornerRadius} ${sourceY}`,                             // go right
-    `Q ${midX} ${sourceY} ${midX} ${sourceY - cornerRadius}`,         // curve up
-    `L ${midX} ${targetY + cornerRadius}`,                             // go straight up
-    `Q ${midX} ${targetY} ${midX - cornerRadius} ${targetY}`,         // curve left
-    `L ${targetX} ${targetY}`,                                         // go to target
-  ].join(' ');
-
-  // Label position: middle of the vertical segment
-  const labelX = midX + 8;
-  const labelY = (sourceY + targetY) / 2;
+  if (side === 'left') {
+    // Left side: go left → up → right to target
+    const midX = Math.min(sourceX, targetX) - offset;
+    edgePath = [
+      `M ${sourceX} ${sourceY}`,
+      `L ${midX + cornerRadius} ${sourceY}`,
+      `Q ${midX} ${sourceY} ${midX} ${sourceY - cornerRadius}`,
+      `L ${midX} ${targetY + cornerRadius}`,
+      `Q ${midX} ${targetY} ${midX + cornerRadius} ${targetY}`,
+      `L ${targetX} ${targetY}`,
+    ].join(' ');
+    labelX = midX - 40;
+    labelY = (sourceY + targetY) / 2;
+  } else {
+    // Right side: go right → up → left to target
+    const midX = Math.max(sourceX, targetX) + offset;
+    edgePath = [
+      `M ${sourceX} ${sourceY}`,
+      `L ${midX - cornerRadius} ${sourceY}`,
+      `Q ${midX} ${sourceY} ${midX} ${sourceY - cornerRadius}`,
+      `L ${midX} ${targetY + cornerRadius}`,
+      `Q ${midX} ${targetY} ${midX - cornerRadius} ${targetY}`,
+      `L ${targetX} ${targetY}`,
+    ].join(' ');
+    labelX = midX + 8;
+    labelY = (sourceY + targetY) / 2;
+  }
 
   return (
     <>

@@ -60,6 +60,7 @@ function ExecutionNode({ data, selected }: NodeProps) {
     >
       <Handle type="target" position={Position.Top} id="top" className="!opacity-0 !w-1 !h-1" />
       <Handle type="target" position={Position.Right} id="right" className="!opacity-0 !w-1 !h-1" />
+      <Handle type="target" position={Position.Left} id="left" className="!opacity-0 !w-1 !h-1" />
 
       <div className="flex items-center gap-2">
         <RoleIcon icon={d.icon} color={d.color} size={16} />
@@ -109,6 +110,7 @@ function ExecutionNode({ data, selected }: NodeProps) {
 
       <Handle type="source" position={Position.Bottom} id="bottom" className="!opacity-0 !w-1 !h-1" />
       <Handle type="source" position={Position.Right} id="right" className="!opacity-0 !w-1 !h-1" />
+      <Handle type="source" position={Position.Left} id="left" className="!opacity-0 !w-1 !h-1" />
     </div>
   );
 }
@@ -197,18 +199,26 @@ export default function LiveGraph({ workflow, nodeStates, selectedNode, onSelect
     }
 
     const rfEdges: Edge[] = [];
+    const retryCountPerTarget: Record<string, number> = {};
     for (const edge of workflowEdges) {
       const froms = Array.isArray(edge.from) ? edge.from : [edge.from];
       const tos = Array.isArray(edge.to) ? edge.to : [edge.to];
       for (const from of froms) {
         for (const to of tos) {
           const isRetry = edge.max_retries != null;
+
+          let retrySide: 'right' | 'left' = 'right';
+          if (isRetry) {
+            retryCountPerTarget[to] = (retryCountPerTarget[to] ?? 0) + 1;
+            retrySide = retryCountPerTarget[to] % 2 === 1 ? 'right' : 'left';
+          }
+
           rfEdges.push({
             id: `${from}-${to}`,
             source: from,
-            sourceHandle: isRetry ? 'right' : 'bottom',
+            sourceHandle: isRetry ? retrySide : 'bottom',
             target: to,
-            targetHandle: isRetry ? 'right' : 'top',
+            targetHandle: isRetry ? retrySide : 'top',
             type: isRetry ? 'ff-retry' : edge.condition ? 'ff-conditional' : 'default',
             label: edge.condition ?? (edge.parallel ? '∥ parallel' : undefined),
             labelStyle: { fill: '#d1d5db', fontSize: 10, fontFamily: 'var(--font-mono)' },

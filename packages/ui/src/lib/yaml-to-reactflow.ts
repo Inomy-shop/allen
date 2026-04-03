@@ -17,6 +17,9 @@ export function yamlToReactFlow(
   const rfNodes: Node[] = [];
   const rfEdges: Edge[] = [];
 
+  // Track retry edge count per target to alternate left/right sides
+  const retryCountPerTarget: Record<string, number> = {};
+
   // Build edges first so dagre can compute layout
   if (workflow.edges) {
     for (const edge of workflow.edges) {
@@ -26,12 +29,21 @@ export function yamlToReactFlow(
       for (const from of froms) {
         for (const to of tos) {
           const isRetry = edge.max_retries != null;
+
+          // Alternate retry edges between right and left
+          let retrySide: 'right' | 'left' = 'right';
+          if (isRetry) {
+            const key = to;
+            retryCountPerTarget[key] = (retryCountPerTarget[key] ?? 0) + 1;
+            retrySide = retryCountPerTarget[key] % 2 === 1 ? 'right' : 'left';
+          }
+
           rfEdges.push({
             id: `${from}-${to}`,
             source: from,
-            sourceHandle: isRetry ? 'right' : 'bottom',
+            sourceHandle: isRetry ? retrySide : 'bottom',
             target: to,
-            targetHandle: isRetry ? 'right' : 'top',
+            targetHandle: isRetry ? retrySide : 'top',
             type: isRetry ? 'ff-retry' : edge.condition ? 'ff-conditional' : 'default',
             label: edge.condition ?? (edge.parallel ? '∥' : undefined),
             data: {
@@ -41,6 +53,7 @@ export function yamlToReactFlow(
               retry_context: edge.retry_context,
               join: edge.join,
               merge: edge.merge,
+              retrySide: isRetry ? retrySide : undefined,
             },
             animated: !!edge.parallel,
             markerEnd: {

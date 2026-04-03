@@ -8,6 +8,7 @@ export default function WorkflowNode({ data, selected }: NodeProps) {
     `}>
       <Handle type="target" position={Position.Top} id="top" className="!bg-accent-purple !w-2.5 !h-2.5 !border-surface" />
       <Handle type="target" position={Position.Right} id="right" className="!bg-accent-yellow !w-2 !h-2 !border-surface" />
+      <Handle type="target" position={Position.Left} id="left" className="!bg-accent-yellow !w-2 !h-2 !border-surface" />
       <div className="flex items-center gap-2">
         <GitBranch className="w-4 h-4 text-accent-purple" />
         <div>
@@ -17,6 +18,7 @@ export default function WorkflowNode({ data, selected }: NodeProps) {
       </div>
       <Handle type="source" position={Position.Bottom} id="bottom" className="!bg-accent-purple !w-2.5 !h-2.5 !border-surface" />
       <Handle type="source" position={Position.Right} id="right" className="!bg-accent-yellow !w-2 !h-2 !border-surface" />
+      <Handle type="source" position={Position.Left} id="left" className="!bg-accent-yellow !w-2 !h-2 !border-surface" />
     </div>
   );
 }

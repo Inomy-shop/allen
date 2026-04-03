@@ -8,6 +8,7 @@ import {
 } from 'lucide-react';
 import { CardSkeleton } from '../components/common/Skeleton';
 import Select from '../components/common/Select';
+import DeleteConfirmDialog from '../components/common/DeleteConfirmDialog';
 
 interface RunDialogState {
   open: boolean;
@@ -27,6 +28,7 @@ export default function WorkflowListPage() {
   const [runningId, setRunningId] = useState<string | null>(null);
   const [runDialog, setRunDialog] = useState<RunDialogState>({ open: false, workflow: null });
   const [runInput, setRunInput] = useState<Record<string, string>>({});
+  const [deletingWf, setDeletingWf] = useState<{ id: string; name: string } | null>(null);
   const [repoList, setRepoList] = useState<any[]>([]);
   const [repoMode, setRepoMode] = useState<'select' | 'manual'>('select');
 
@@ -96,11 +98,10 @@ export default function WorkflowListPage() {
     setRunningId(null);
   }, [navigate, runDialog.workflow, runInput]);
 
-  const handleDelete = useCallback(async (e: React.MouseEvent, id: string) => {
-    e.preventDefault();
-    e.stopPropagation();
-    if (!confirm('Delete this workflow?')) return;
-    await wfApi.delete(id);
+  const handleDelete = useCallback(async () => {
+    if (!deletingWf) return;
+    await wfApi.delete(deletingWf.id);
+    setDeletingWf(null);
     refresh();
   }, [refresh]);
 
@@ -197,7 +198,7 @@ export default function WorkflowListPage() {
                         : <XCircle className="w-3.5 h-3.5 text-accent-red shrink-0" />
                       }
                       <button
-                        onClick={(e) => handleDelete(e, wf._id)}
+                        onClick={(e) => { e.preventDefault(); e.stopPropagation(); setDeletingWf({ id: wf._id, name: wf.name }); }}
                         className="opacity-0 group-hover:opacity-100 p-0.5 rounded-sm text-gray-600 hover:text-accent-red transition-all shrink-0"
                       >
                         <Trash2 className="w-3.5 h-3.5" />
@@ -370,6 +371,14 @@ export default function WorkflowListPage() {
           </div>
         </div>
       )}
+
+      <DeleteConfirmDialog
+        open={!!deletingWf}
+        resourceType="workflow"
+        resourceName={deletingWf?.name ?? ''}
+        onConfirm={handleDelete}
+        onCancel={() => setDeletingWf(null)}
+      />
     </div>
   );
 }

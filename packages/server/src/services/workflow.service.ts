@@ -12,9 +12,10 @@ export class WorkflowService {
     this.col = db.collection('workflows');
   }
 
-  async list(): Promise<Record<string, unknown>[]> {
-    return this.col.find({}, {
-      projection: { name: 1, description: 1, version: 1, tags: 1, validation: 1, updatedAt: 1 },
+  async list(includeArchived = false): Promise<Record<string, unknown>[]> {
+    const filter = includeArchived ? {} : { archived: { $ne: true } };
+    return this.col.find(filter, {
+      projection: { name: 1, description: 1, version: 1, tags: 1, validation: 1, updatedAt: 1, archived: 1 },
     }).sort({ updatedAt: -1 }).toArray();
   }
 

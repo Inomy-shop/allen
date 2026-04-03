@@ -101,7 +101,6 @@ interface Props {
 
 export default function Canvas({ nodes, edges, onNodesChange, onEdgesChange }: Props) {
   const selectedNode = nodes.find(n => n.selected) ?? null;
-  const { size: paletteWidth, handleMouseDown: paletteResizeStart } = useResizable({ direction: 'horizontal', initialSize: 192, minSize: 140, maxSize: 300 });
   const { size: propsWidth, handleMouseDown: propsResizeStart } = useResizable({ direction: 'horizontal', initialSize: 288, minSize: 220, maxSize: 500 });
   const { pushSnapshot, undo, redo } = useUndoRedo(nodes, edges, onNodesChange, onEdgesChange);
 
@@ -175,14 +174,13 @@ export default function Canvas({ nodes, edges, onNodesChange, onEdgesChange }: P
 
   return (
     <div className="flex h-full">
-      {/* Left: Node palette — resizable */}
-      <div className="bg-surface shrink-0 overflow-auto border-r-2 border-border/50 hover:border-accent-blue/50 transition-colors relative" style={{ width: paletteWidth }}>
-        <NodePalette onAdd={handleAddNode} />
-        <div className="absolute top-0 right-0 bottom-0 w-2 cursor-col-resize z-10" onMouseDown={paletteResizeStart} />
-      </div>
-
-      {/* Center: React Flow canvas */}
+      {/* Canvas with floating palette */}
       <div className="flex-1 relative">
+        {/* Floating node palette — top left on canvas */}
+        <div className="absolute top-3 left-3 z-10">
+          <NodePalette onAdd={handleAddNode} />
+        </div>
+
         <ReactFlowProvider>
           <CanvasInner
             nodes={nodes}

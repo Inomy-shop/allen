@@ -5,49 +5,49 @@ interface PaletteItem {
   label: string;
   icon: any;
   color: string;
-  borderColor: string;
+  bgColor: string;
   defaults: Record<string, any>;
 }
 
 const paletteItems: PaletteItem[] = [
   {
     type: 'agent',
-    label: 'Agent Node',
+    label: 'Agent',
     icon: Bot,
     color: 'text-accent-blue',
-    borderColor: 'border-accent-blue/40',
+    bgColor: 'hover:bg-accent-blue/10',
     defaults: { role: 'developer', prompt: '', outputs: [] },
   },
   {
     type: 'code',
-    label: 'Code Node',
+    label: 'Code',
     icon: Cog,
     color: 'text-accent-green',
-    borderColor: 'border-accent-green/40',
+    bgColor: 'hover:bg-accent-green/10',
     defaults: { type: 'code', function: 'run-build', outputs: [] },
   },
   {
     type: 'human',
-    label: 'Human Node',
+    label: 'Human',
     icon: MessageSquare,
     color: 'text-accent-orange',
-    borderColor: 'border-accent-orange/40',
+    bgColor: 'hover:bg-accent-orange/10',
     defaults: { type: 'human', prompt: '', fields: [], outputs: [] },
   },
   {
     type: 'workflow',
-    label: 'Workflow Node',
+    label: 'Workflow',
     icon: GitBranch,
     color: 'text-accent-purple',
-    borderColor: 'border-accent-purple/40',
+    bgColor: 'hover:bg-accent-purple/10',
     defaults: { type: 'workflow', workflow: '', input_map: {}, output_map: {} },
   },
   {
     type: 'condition',
-    label: 'Condition Node',
+    label: 'Condition',
     icon: HelpCircle,
     color: 'text-accent-yellow',
-    borderColor: 'border-accent-yellow/40',
+    bgColor: 'hover:bg-accent-yellow/10',
     defaults: { type: 'condition', conditions: [] },
   },
 ];
@@ -58,19 +58,18 @@ interface Props {
 
 export default function NodePalette({ onAdd }: Props) {
   return (
-    <div className="p-3 space-y-1.5">
-      <div className="font-heading text-xs font-semibold text-gray-400 uppercase mb-2 tracking-widest">Add Node</div>
+    <div className="flex flex-col gap-1 bg-surface-100/90 backdrop-blur-sm border border-border/50 rounded-sm p-1.5 shadow-lg">
       {paletteItems.map(item => {
         const Icon = item.icon;
         return (
           <button
             key={item.type}
             onClick={() => onAdd(item.type, item.defaults)}
-            className={`w-full flex items-center gap-2.5 px-3 py-2 rounded-sm border bg-surface-200/80
-              hover:bg-surface-300 hover:shadow-glow-blue/10 transition-all text-left ${item.borderColor}`}
+            className={`flex items-center gap-2 px-2.5 py-1.5 rounded-sm transition-all cursor-pointer w-full ${item.bgColor}`}
+            title={`Add ${item.label} Node`}
           >
-            <Icon className={`w-4 h-4 shrink-0 ${item.color}`} />
-            <span className="text-xs text-gray-200 font-label uppercase tracking-wider">{item.label}</span>
+            <Icon className={`w-3.5 h-3.5 shrink-0 ${item.color}`} />
+            <span className="text-[10px] text-gray-300 font-label uppercase tracking-wider">{item.label}</span>
           </button>
         );
       })}

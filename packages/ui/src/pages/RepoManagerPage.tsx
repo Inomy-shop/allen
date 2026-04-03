@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import { repos as repoApi, workflows as wfApi } from '../services/api';
+import DeleteConfirmDialog from '../components/common/DeleteConfirmDialog';
 import {
   FolderGit2, Plus, RefreshCw, Trash2, Pencil, ScanSearch, X,
   GitBranch, Package, Code2, Sparkles, ExternalLink, Loader2,
@@ -290,6 +291,7 @@ export default function RepoManagerPage() {
   const [addOpen, setAddOpen] = useState(false);
   const [editRepo, setEditRepo] = useState<Repo | null>(null);
   const [scanningId, setScanningId] = useState<string | null>(null);
+  const [deletingRepo, setDeletingRepo] = useState<{ id: string; name: string } | null>(null);
 
   const refresh = useCallback(async () => {
     setLoading(true);
@@ -302,10 +304,10 @@ export default function RepoManagerPage() {
 
   useEffect(() => { refresh(); }, [refresh]);
 
-  const handleDelete = async (e: React.MouseEvent, id: string) => {
-    e.stopPropagation();
-    if (!confirm('Delete this repository?')) return;
-    await repoApi.delete(id);
+  const handleDelete = async () => {
+    if (!deletingRepo) return;
+    await repoApi.delete(deletingRepo.id);
+    setDeletingRepo(null);
     refresh();
   };
 
@@ -400,7 +402,7 @@ export default function RepoManagerPage() {
                     {/* Name */}
                     <div className="flex items-center gap-2">
                       <h3 className="text-sm font-heading font-semibold text-white truncate tracking-wider flex-1">{repo.name}</h3>
-                      <button onClick={(e) => handleDelete(e, repo._id)}
+                      <button onClick={(e) => { e.stopPropagation(); setDeletingRepo({ id: repo._id, name: repo.name }); }}
                         className="opacity-0 group-hover:opacity-100 p-0.5 rounded-sm text-gray-600 hover:text-accent-red transition-all shrink-0">
                         <Trash2 className="w-3.5 h-3.5" />
                       </button>
@@ -494,6 +496,13 @@ export default function RepoManagerPage() {
       {/* Dialogs */}
       <AddRepoDialog open={addOpen} onClose={() => setAddOpen(false)} onCreated={refresh} />
       <EditRepoDialog repo={editRepo} open={!!editRepo} onClose={() => setEditRepo(null)} onUpdated={refresh} />
+      <DeleteConfirmDialog
+        open={!!deletingRepo}
+        resourceType="repo"
+        resourceName={deletingRepo?.name ?? ''}
+        onConfirm={handleDelete}
+        onCancel={() => setDeletingRepo(null)}
+      />
     </div>
   );
 }

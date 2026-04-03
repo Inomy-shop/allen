@@ -1,7 +1,7 @@
 rules:
   - match: [code, fix, build, implement, refactor, add, feature, bug]
     has_input: [repo_path]
-    workflow: sdlc
+    workflow: coding-agent
 
   - match: [write, post, linkedin, twitter, blog, content, article]
     workflow: research-and-write
