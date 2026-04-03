@@ -106,6 +106,20 @@ export default function NodeDetail({ nodeName, nodeState, trace, allTraces = [],
         </div>
       </div>
 
+      {/* Auto-gate banner — shown when this node triggered a gate action */}
+      {output?.__action && output.__action !== 'continue' && (
+        <div className={`px-4 py-2 border-b text-xs font-mono flex items-center gap-2 ${
+          output.__action === 'stop' ? 'border-accent-red/50 bg-accent-red/5 text-accent-red' :
+          output.__action === 'skip' ? 'border-accent-yellow/50 bg-accent-yellow/5 text-accent-yellow' :
+          'border-accent-orange/50 bg-accent-orange/5 text-accent-orange'
+        }`}>
+          <span className="font-label uppercase tracking-wider font-semibold">
+            {output.__action === 'stop' ? '⛔ STOPPED' : output.__action === 'skip' ? '⏭ SKIPPED' : '❓ CLARIFY'}
+          </span>
+          {output.__reason && <span className="text-gray-300">— {String(output.__reason)}</span>}
+        </div>
+      )}
+
       {/* Attempt tabs — shown when node has multiple attempts */}
       {hasMultipleAttempts && (
         <div className="flex items-center gap-1 px-4 py-2 border-b border-border/50 shrink-0 bg-surface-50/50">

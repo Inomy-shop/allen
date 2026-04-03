@@ -64,7 +64,8 @@ export function validateWorkflow(
     for (const t of tos) {
       if (t === 'END' || t === 'START') continue;
       if (froms.some(f => f !== 'START' && f !== 'END' && nodeNames.indexOf(t) <= nodeNames.indexOf(f))) {
-        if (edge.max_retries == null) {
+        // Only flag if no max_retries AND no condition (conditional edges without retries are OK — they're routing, not loops)
+        if (edge.max_retries == null && !edge.condition) {
           errors.push(`Backward edge to ${t} must have max_retries to prevent infinite loops`);
         }
       }

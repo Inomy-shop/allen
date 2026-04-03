@@ -18,7 +18,7 @@ import { executeNode, type NodeExecutorDeps, type NodeResult } from './node-exec
 import { evaluateCondition } from './condition-parser.js';
 import { renderTemplate } from './template.js';
 import { mergeParallelOutputs } from './parallel.js';
-import { extractAutoGateFields } from './output-extractor.js';
+import { extractAutoGateFields, buildNodeContext } from './output-extractor.js';
 import { StateManager } from './state-manager.js';
 import type { Db } from 'mongodb';
 
@@ -382,7 +382,7 @@ export class FlowForgeEngine {
 
         for (const nodeName of currentNodes) {
           if (nodeName === 'END') continue;
-          gateAction = await this.executeSingleNode(nodeName, nodes[nodeName], exec, nestingDepth, edges);
+          gateAction = await this.executeSingleNode(nodeName, nodes[nodeName], exec, nestingDepth, edges, workflow);
 
           if (gateAction === 'stop' || gateAction === 'skip') {
             // Don't emit execution_completed here — let run() handle it
@@ -393,6 +393,14 @@ export class FlowForgeEngine {
           if (gateAction === 'clarify') {
             // Pause and wait for human input at this node
             const reason = (exec.state.__gate_reason as string) ?? 'Agent needs clarification';
+            const clarifyAction = (exec.state.__clarify_action as string) ?? 'retry';
+            const clarifyFields = exec.state.__clarify_fields as any[] | undefined;
+
+            // Use agent-provided form fields, or fallback to single text input
+            const fields = Array.isArray(clarifyFields) && clarifyFields.length > 0
+              ? clarifyFields
+              : [{ name: 'clarification', type: 'text', label: reason, required: true }];
+
             exec.status = 'waiting_for_input';
             await this.stateManager.updateExecution(exec.id, { status: 'waiting_for_input' });
 
@@ -401,8 +409,15 @@ export class FlowForgeEngine {
               data: {
                 node: nodeName,
                 prompt: reason,
-                fields: [{ name: 'clarification', type: 'text', label: reason, required: true }],
+                fields,
               },
+            });
+
+            this.log(exec.id, {
+              level: 'warn',
+              category: 'gate',
+              node: nodeName,
+              message: `Clarify (${clarifyAction}): ${reason}`,
             });
 
             const humanData = await this.waitForInput(exec.id, nodeName, 86400);
@@ -413,10 +428,29 @@ export class FlowForgeEngine {
             delete exec.state.__gate_action;
             delete exec.state.__gate_reason;
             delete exec.state.__gate_node;
+            delete exec.state.__clarify_action;
+            delete exec.state.__clarify_fields;
 
             exec.status = 'running';
             await this.stateManager.updateExecution(exec.id, { status: 'running' });
-            // Continue to next nodes after clarification
+
+            if (clarifyAction === 'retry') {
+              // Remove from completedNodes so the node can re-run
+              exec.completedNodes = exec.completedNodes.filter(n => n !== nodeName);
+              // Build retry context from all human-provided fields
+              const clarificationParts = Object.entries(humanData)
+                .map(([k, v]) => `${k}: ${typeof v === 'string' ? v : JSON.stringify(v)}`)
+                .join('\n');
+              exec.state.retry_context = `Human provided:\n${clarificationParts}`;
+              // Re-run the same node immediately with the clarification
+              gateAction = await this.executeSingleNode(nodeName, nodes[nodeName], exec, nestingDepth, edges, workflow);
+              // If re-run returns stop/skip, exit graph
+              if (gateAction === 'stop' || gateAction === 'skip') {
+                return exec.state;
+              }
+              // If re-run returns clarify again, the next iteration of the for loop handles it
+            }
+            // For 'continue': node output stays, human input added to state, advance to next nodes
           }
         }
 
@@ -443,15 +477,31 @@ export class FlowForgeEngine {
     exec: ExecutionState,
     nestingDepth: number,
     edges?: EdgeDef[],
+    workflow?: WorkflowDef,
   ): Promise<'continue' | 'stop' | 'skip' | 'clarify'> {
     if (!nodeDef) {
       throw new Error(`Node definition not found: ${nodeName}`);
     }
 
     // Track retry count per node for trace attempt numbering
+    // Count how many times this node has already been traced (completed traces for this node)
     const edgeRetryKey = this.findRetryEdgeKey(nodeName, exec.retryCounts);
-    const attempt = edgeRetryKey ? (exec.retryCounts[edgeRetryKey] ?? 0) : 1;
+    const previousAttempts = exec.completedNodes.filter(n => n === nodeName).length;
+    const attempt = previousAttempts + 1;
     const traceStart = new Date();
+
+    const nodeType = nodeDef.type ?? 'agent';
+
+    // Compute hasConditionalOutEdges before execution (used for both nodeContext and gate check)
+    const hasConditionalOutEdges = edges?.some(e => {
+      const froms = Array.isArray(e.from) ? e.from : [e.from];
+      return froms.includes(nodeName) && (e.condition || e.max_retries != null);
+    }) ?? false;
+
+    // Build context-aware auto-gate instruction for agent nodes
+    const nodeContext = nodeType === 'agent' && !hasConditionalOutEdges && workflow
+      ? buildNodeContext(nodeName, { nodes: workflow.nodes as Record<string, unknown>, edges: workflow.edges as unknown as Array<Record<string, unknown>> })
+      : '';
 
     const deps: NodeExecutorDeps = {
       roles: this.config.roles,
@@ -460,9 +510,8 @@ export class FlowForgeEngine {
       emitter: this.config.emitter,
       runWorkflow: (wf, input) => this.run(wf, input, nestingDepth + 1),
       executionId: exec.id,
+      nodeContext,
     };
-
-    const nodeType = nodeDef.type ?? 'agent';
     this.log(exec.id, {
       category: 'system',
       node: nodeName,
@@ -581,11 +630,6 @@ export class FlowForgeEngine {
       // Auto-gate: check if agent signaled stop/skip/clarify
       // Skip auto-gate for nodes that have outgoing conditional/retry edges
       // (those nodes make routing decisions via their outputs, not via auto-gate)
-      const hasConditionalOutEdges = edges?.some(e => {
-        const froms = Array.isArray(e.from) ? e.from : [e.from];
-        return froms.includes(nodeName) && (e.condition || e.max_retries != null);
-      }) ?? false;
-
       if (nodeType === 'agent' && !hasConditionalOutEdges) {
         const gate = extractAutoGateFields(result.rawResponse ?? '', result.outputs);
         if (gate.action !== 'continue') {
@@ -593,12 +637,18 @@ export class FlowForgeEngine {
             category: 'gate',
             node: nodeName,
             message: `Auto-gate: ${gate.action} — ${gate.reason ?? 'Agent decided to ' + gate.action}`,
-            data: { action: gate.action, reason: gate.reason },
+            data: { action: gate.action, reason: gate.reason, clarifyAction: gate.clarifyAction },
           });
           // Store reason in state for visibility
           exec.state.__gate_action = gate.action;
           exec.state.__gate_reason = gate.reason ?? 'Agent decided to ' + gate.action;
           exec.state.__gate_node = nodeName;
+          if (gate.clarifyAction) {
+            exec.state.__clarify_action = gate.clarifyAction;
+          }
+          if (gate.clarifyFields) {
+            exec.state.__clarify_fields = gate.clarifyFields;
+          }
           return gate.action as 'stop' | 'skip' | 'clarify';
         } else {
           this.log(exec.id, {

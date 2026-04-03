@@ -2,7 +2,7 @@ export { FlowForgeEngine, type EngineConfig, type RunOptions } from './engine.js
 export { StateManager } from './state-manager.js';
 export { renderTemplate } from './template.js';
 export { evaluateCondition, validateCondition } from './condition-parser.js';
-export { extractOutputs, extractOutputsSync, buildOutputInstruction } from './output-extractor.js';
+export { extractOutputs, extractOutputsSync, buildOutputInstruction, buildNodeContext } from './output-extractor.js';
 export { mergeParallelOutputs } from './parallel.js';
 export { validateWorkflow } from './validator.js';
 export { generateMermaid } from './visualizer.js';

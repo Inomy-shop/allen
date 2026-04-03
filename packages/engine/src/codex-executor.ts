@@ -28,15 +28,22 @@ export async function executeCodexNode(
   role: RoleDef | undefined,
   emitter: EngineEventEmitter,
   executionId: string,
+  sessionId?: string,
+  nodeContext?: string,
 ): Promise<CodexResult> {
   const start = Date.now();
   const model = role?.model ?? 'default';
+  const isResume = !!(nodeDef.resume_on_retry && sessionId);
 
   let prompt = nodeDef.prompt ? renderTemplate(nodeDef.prompt, state) : '';
-  if (role?.system) {
+  if (!isResume && role?.system) {
+    // Only prepend system prompt on first run — resume already has context
     prompt = `${role.system}\n\n${prompt}`;
   }
   prompt += buildOutputInstruction(nodeDef.outputs ?? [], nodeDef.output_format);
+  if (nodeContext) {
+    prompt += nodeContext;
+  }
 
   emitter.emit({
     event: 'node_started',
@@ -51,7 +58,7 @@ export async function executeCodexNode(
       level: 'info',
       category: 'system',
       node: nodeName,
-      message: `Node started (provider: codex, model: ${model})`,
+      message: `Node started (provider: codex, model: ${model}${isResume ? ', resuming session ' + sessionId : ''})`,
     },
   });
 
@@ -59,16 +66,19 @@ export async function executeCodexNode(
   const timeoutMs = (nodeDef.timeout ?? 600) * 1000;
 
   return new Promise<CodexResult>((resolve, reject) => {
-    const args = [
-      'exec',
-      '--json',
-      '--full-auto',
-    ];
-    // Only pass model config if explicitly set (otherwise use codex default)
-    if (model && model !== 'default') {
-      args.push('-c', `model="${model}"`);
+    const args: string[] = ['exec'];
+
+    if (isResume) {
+      // Resume previous session
+      args.push('resume', '--json', '--full-auto', sessionId!, prompt);
+    } else {
+      // Fresh session
+      args.push('--json', '--full-auto');
+      if (model && model !== 'default') {
+        args.push('-c', `model="${model}"`);
+      }
+      args.push(prompt);
     }
-    args.push(prompt);
 
     const proc = spawn('codex', args, {
       cwd,
@@ -81,6 +91,7 @@ export async function executeCodexNode(
 
     let rawResponse = '';
     let turns = 0;
+    let threadId: string | undefined = isResume ? sessionId : undefined;
     const timer = setTimeout(() => {
       proc.kill('SIGTERM');
       reject(new Error(`Codex node ${nodeName} timed out after ${nodeDef.timeout ?? 600}s`));
@@ -97,6 +108,11 @@ export async function executeCodexNode(
         if (!line.trim()) continue;
         try {
           const event = JSON.parse(line);
+          // Capture thread ID for session resume
+          if (event.type === 'thread.started' && event.thread_id) {
+            threadId = event.thread_id;
+          }
+
           // Check for error events
           if (event.type === 'error' || event.type === 'turn.failed') {
             const errMsg = event.message ?? event.error?.message ?? JSON.stringify(event);
@@ -155,7 +171,11 @@ export async function executeCodexNode(
       }
 
       try {
-        const outputs = await extractOutputs(rawResponse, nodeDef);
+        const extractLog = (msg: string) => emitter.emit({
+          event: 'execution_log',
+          data: { executionId, timestamp: new Date(), level: 'debug', category: 'system', node: nodeName, message: `[extraction] ${msg}` },
+        });
+        const outputs = await extractOutputs(rawResponse, nodeDef, extractLog);
 
         emitter.emit({
           event: 'execution_log',
@@ -172,9 +192,10 @@ export async function executeCodexNode(
         resolve({
           outputs,
           rawResponse,
+          sessionId: threadId,
           cost: {
             actual: null,
-            estimated: 0.02 * Math.max(turns, 1), // rough estimate for codex
+            estimated: 0.02 * Math.max(turns, 1),
             model,
             turns: Math.max(turns, 1),
             method: 'estimated',

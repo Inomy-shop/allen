@@ -15,8 +15,15 @@ nodes:
     prompt: |
       Answer this question accurately and concisely:
       {{question}}
+
+      {{#if retry_context}}
+      YOUR PREVIOUS ANSWER WAS REJECTED.
+      {{retry_context}}
+      Provide a corrected answer.
+      {{/if}}
     outputs: [answer, sources]
     output_format: json
+    resume_on_retry: true
 
   review:
     role: reviewer

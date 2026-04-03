@@ -1,0 +1,82 @@
+name: retry-test
+description: Test retry with human judge for both Claude and Codex agents
+version: 1
+
+context:
+  requires: []
+  tools: []
+
+input:
+  question: { type: string, required: true }
+
+nodes:
+  claude-answer:
+    role: planner
+    prompt: |
+      Answer this question in one short paragraph:
+      {{question}}
+      {{#if retry_context}}
+      PREVIOUS ANSWER REJECTED: {{retry_context}}
+      Provide a better answer.
+      {{/if}}
+    outputs: [claude_answer]
+    output_format: json
+    resume_on_retry: true
+
+  codex-answer:
+    role: codex-researcher
+    prompt: |
+      Answer this question in one short paragraph:
+      {{question}}
+      {{#if retry_context}}
+      PREVIOUS ANSWER REJECTED: {{retry_context}}
+      Provide a better answer.
+      {{/if}}
+    outputs: [codex_answer]
+    output_format: json
+    resume_on_retry: true
+
+  judge-claude:
+    type: human
+    prompt: |
+      Claude answered: {{claude_answer}}
+
+      Approve or reject?
+    fields:
+      - { name: claude_verdict, type: select, label: "Verdict", options: [APPROVED, REJECTED], required: true }
+      - { name: claude_feedback, type: text, label: "Feedback (if rejecting)" }
+    outputs: [claude_verdict, claude_feedback]
+
+  judge-codex:
+    type: human
+    prompt: |
+      Codex answered: {{codex_answer}}
+
+      Approve or reject?
+    fields:
+      - { name: codex_verdict, type: select, label: "Verdict", options: [APPROVED, REJECTED], required: true }
+      - { name: codex_feedback, type: text, label: "Feedback (if rejecting)" }
+    outputs: [codex_verdict, codex_feedback]
+
+  summary:
+    type: human
+    prompt: |
+      Both answers approved!
+
+      Claude: {{claude_answer}}
+      Codex: {{codex_answer}}
+
+      Which was better?
+    fields:
+      - { name: winner, type: select, label: "Winner", options: [claude, codex, tie], required: true }
+    outputs: [winner]
+
+edges:
+  - { from: START, to: claude-answer }
+  - { from: claude-answer, to: judge-claude }
+  - { from: judge-claude, to: codex-answer, condition: "claude_verdict == 'APPROVED'" }
+  - { from: judge-claude, to: claude-answer, condition: "claude_verdict == 'REJECTED'", max_retries: 3, retry_context: "{{claude_feedback}}" }
+  - { from: codex-answer, to: judge-codex }
+  - { from: judge-codex, to: summary, condition: "codex_verdict == 'APPROVED'" }
+  - { from: judge-codex, to: codex-answer, condition: "codex_verdict == 'REJECTED'", max_retries: 3, retry_context: "{{codex_feedback}}" }
+  - { from: summary, to: END }

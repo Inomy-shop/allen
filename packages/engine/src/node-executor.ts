@@ -44,6 +44,7 @@ export interface NodeExecutorDeps {
   emitter: EngineEventEmitter;
   runWorkflow: (workflow: WorkflowDef, input: Record<string, unknown>) => Promise<Record<string, unknown>>;
   executionId?: string;
+  nodeContext?: string;
 }
 
 export interface NodeResult {
@@ -67,7 +68,8 @@ export async function executeNode(
     case 'agent': {
       const role = nodeDef.role ? deps.roles[nodeDef.role] : undefined;
       if (role?.provider === 'codex') {
-        return executeCodexNode(nodeName, nodeDef, state, role, deps.emitter, deps.executionId ?? '');
+        const existingSession = sessions[nodeName];
+        return executeCodexNode(nodeName, nodeDef, state, role, deps.emitter, deps.executionId ?? '', existingSession, deps.nodeContext);
       }
       return executeAgentNode(nodeName, nodeDef, state, sessions, deps);
     }
@@ -99,6 +101,9 @@ async function executeAgentNode(
 
   let prompt = nodeDef.prompt ? renderTemplate(nodeDef.prompt, state) : '';
   prompt += buildOutputInstruction(nodeDef.outputs ?? [], nodeDef.output_format);
+  if (deps.nodeContext) {
+    prompt += deps.nodeContext;
+  }
 
   deps.emitter.emit({
     event: 'node_started',
@@ -200,7 +205,8 @@ async function executeAgentNode(
   }
 
   const model = role?.model ?? 'sonnet';
-  const outputs = await extractOutputs(rawResponse, nodeDef);
+  const extractLog = (msg: string) => emitLog(deps, nodeName, { level: 'debug', category: 'system', message: `[extraction] ${msg}` });
+  const outputs = await extractOutputs(rawResponse, nodeDef, extractLog);
 
   return {
     outputs,

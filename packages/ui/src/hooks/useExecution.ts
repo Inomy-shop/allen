@@ -91,13 +91,30 @@ export function useExecution(id: string | undefined) {
             try { wfForInput = await wfApi.get(exec.workflowId); } catch {}
           }
           const nodeDef = wfForInput?.parsed?.nodes?.[waitingNode];
-          if (nodeDef) {
-            // Render prompt with current state (simple replacement)
-            let prompt = nodeDef.prompt ?? `Input required for ${waitingNode}`;
+          // Use gate-provided fields/reason if available, otherwise fall back to node definition
+          const gateReason = exec.state?.__gate_reason;
+          const gateFields = exec.state?.__clarify_fields;
+
+          let prompt: string;
+          let fields: any[];
+
+          if (gateReason || gateFields) {
+            // Auto-gate clarify — use agent-provided prompt and fields
+            prompt = (gateReason as string) ?? `Input required for ${waitingNode}`;
+            fields = Array.isArray(gateFields) ? gateFields : [{ name: 'clarification', type: 'text', label: prompt, required: true }];
+          } else if (nodeDef) {
+            // Human node — use workflow definition
+            prompt = nodeDef.prompt ?? `Input required for ${waitingNode}`;
             for (const [key, val] of Object.entries(exec.state ?? {})) {
               prompt = prompt.replace(new RegExp(`\\{\\{${key}\\}\\}`, 'g'), String(val ?? ''));
             }
+            fields = nodeDef.fields ?? [];
+          } else {
+            prompt = `Input required for ${waitingNode}`;
+            fields = [{ name: 'clarification', type: 'text', label: prompt, required: true }];
+          }
 
+          {
             const inputEvent: TimelineEvent = {
               id: 'synth-input-required',
               timestamp: new Date(),
@@ -106,7 +123,7 @@ export function useExecution(id: string | undefined) {
               data: {
                 node: waitingNode,
                 prompt,
-                fields: nodeDef.fields ?? [],
+                fields,
               },
             };
             setTimeline(prev => [...prev, inputEvent]);

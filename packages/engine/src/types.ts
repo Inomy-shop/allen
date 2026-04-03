@@ -17,6 +17,8 @@ export type BackoffStrategy = 'exponential' | 'linear' | 'fixed';
  */
 export type AutoGateAction = 'continue' | 'stop' | 'skip' | 'clarify';
 
+export type ClarifyAction = 'retry' | 'continue';
+
 export interface NodeDef {
   type?: NodeType;               // default: 'agent'
   role?: string;                 // for agent nodes
