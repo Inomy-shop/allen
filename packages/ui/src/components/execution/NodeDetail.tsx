@@ -17,6 +17,7 @@ interface Props {
   nodeName: string;
   nodeState: NodeState | undefined;
   trace: any | undefined;
+  allTraces?: any[];
   waitingInput?: {
     node: string;
     prompt: string;
@@ -25,8 +26,9 @@ interface Props {
   onSubmitInput?: (data: Record<string, unknown>) => void;
 }
 
-export default function NodeDetail({ nodeName, nodeState, trace, waitingInput, onSubmitInput }: Props) {
+export default function NodeDetail({ nodeName, nodeState, trace, allTraces = [], waitingInput, onSubmitInput }: Props) {
   const [formData, setFormData] = useState<Record<string, unknown>>({});
+  const [viewAttempt, setViewAttempt] = useState<number | null>(null);
 
   const isWaitingNode = waitingInput && waitingInput.node === nodeName;
 
@@ -38,13 +40,47 @@ export default function NodeDetail({ nodeName, nodeState, trace, waitingInput, o
     );
   }
 
-  const status = nodeState?.status ?? trace?.status ?? (isWaitingNode ? 'waiting_for_input' : 'pending');
-  const output = nodeState?.output ?? trace?.output;
-  const cost = nodeState?.cost ?? trace?.cost;
-  const durationMs = nodeState?.durationMs ?? trace?.durationMs;
-  const prompt = trace?.renderedPrompt;
-  const streamText = nodeState?.streamText ?? trace?.rawResponse ?? '';
-  const activity: ActivityEntry[] = nodeState?.activity ?? trace?.activity ?? [];
+  // Deduplicate traces by attempt number (keep latest per attempt)
+  const dedupedTraces = (() => {
+    const map = new Map<number, any>();
+    for (const t of allTraces) {
+      map.set(t.attempt, t); // later entry overwrites earlier for same attempt
+    }
+    return Array.from(map.values()).sort((a, b) => a.attempt - b.attempt);
+  })();
+
+  const hasMultipleAttempts = dedupedTraces.length > 1;
+  const activeTrace = viewAttempt != null
+    ? dedupedTraces.find(t => t.attempt === viewAttempt) ?? trace
+    : trace;
+
+  const status = nodeState?.status ?? activeTrace?.status ?? (isWaitingNode ? 'waiting_for_input' : 'pending');
+  const output = viewAttempt != null ? activeTrace?.output : (nodeState?.output ?? activeTrace?.output);
+
+  // Cost: when viewing specific attempt show that attempt's cost, otherwise sum all attempts
+  const cost = viewAttempt != null ? activeTrace?.cost : (() => {
+    if (dedupedTraces.length <= 1) return nodeState?.cost ?? activeTrace?.cost;
+    let estimated = 0;
+    let actual: number | null = null;
+    for (const t of dedupedTraces) {
+      if (t.cost) {
+        estimated += t.cost.estimated ?? 0;
+        if (t.cost.actual != null) actual = (actual ?? 0) + t.cost.actual;
+      }
+    }
+    return estimated > 0 || actual != null ? { estimated, actual } : (nodeState?.cost ?? activeTrace?.cost);
+  })();
+
+  // Duration: same — sum all attempts when viewing overall
+  const durationMs = viewAttempt != null ? activeTrace?.durationMs : (() => {
+    if (dedupedTraces.length <= 1) return nodeState?.durationMs ?? activeTrace?.durationMs;
+    let total = 0;
+    for (const t of dedupedTraces) { total += t.durationMs ?? 0; }
+    return total > 0 ? total : (nodeState?.durationMs ?? activeTrace?.durationMs);
+  })();
+  const prompt = activeTrace?.renderedPrompt;
+  const streamText = viewAttempt != null ? (activeTrace?.rawResponse ?? '') : (nodeState?.streamText ?? activeTrace?.rawResponse ?? '');
+  const activity: ActivityEntry[] = viewAttempt != null ? (activeTrace?.activity ?? []) : (nodeState?.activity ?? activeTrace?.activity ?? []);
 
   const handleSubmit = () => {
     if (onSubmitInput) onSubmitInput(formData);
@@ -60,7 +96,7 @@ export default function NodeDetail({ nodeName, nodeState, trace, waitingInput, o
           <div className="flex items-center gap-3 mt-1">
             <StatusBadge status={status} />
             {nodeState?.attempt && nodeState.attempt > 1 && (
-              <span className="text-xs text-accent-yellow font-mono">attempt #{nodeState.attempt}</span>
+              <span className="text-xs text-accent-yellow font-mono">attempt #{viewAttempt ?? nodeState.attempt}</span>
             )}
             {durationMs != null && (
               <span className="text-xs text-gray-400 font-mono">{(durationMs / 1000).toFixed(1)}s</span>
@@ -69,6 +105,30 @@ export default function NodeDetail({ nodeName, nodeState, trace, waitingInput, o
           </div>
         </div>
       </div>
+
+      {/* Attempt tabs — shown when node has multiple attempts */}
+      {hasMultipleAttempts && (
+        <div className="flex items-center gap-1 px-4 py-2 border-b border-border/50 shrink-0 bg-surface-50/50">
+          <span className="text-[10px] font-label uppercase tracking-wider text-gray-500 mr-2">Attempt:</span>
+          {dedupedTraces.map(t => (
+            <button
+              key={t.attempt}
+              onClick={() => setViewAttempt(t.attempt === (trace?.attempt) && viewAttempt == null ? null : t.attempt)}
+              className={`text-[11px] font-mono px-2 py-0.5 rounded-sm border transition-colors cursor-pointer ${
+                (viewAttempt === t.attempt || (viewAttempt == null && t.attempt === trace?.attempt))
+                  ? 'border-accent-blue bg-accent-blue/10 text-accent-blue'
+                  : t.status === 'failed'
+                    ? 'border-accent-red/30 text-accent-red/70 hover:bg-accent-red/5'
+                    : 'border-border text-gray-400 hover:bg-surface-200'
+              }`}
+            >
+              #{t.attempt}
+              {t.status === 'completed' && <span className="ml-1 text-accent-green">✓</span>}
+              {t.status === 'failed' && <span className="ml-1 text-accent-red">✗</span>}
+            </button>
+          ))}
+        </div>
+      )}
 
       {/* Content sections */}
       <div className="flex-1 overflow-auto">

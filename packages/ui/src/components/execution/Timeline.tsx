@@ -14,7 +14,11 @@ const categoryColors: Record<string, string> = {
 };
 
 function formatTime(d: Date) {
-  return d.toLocaleTimeString('en-US', { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' });
+  return d.toLocaleString('en-US', {
+    month: 'short', day: '2-digit',
+    hour: '2-digit', minute: '2-digit', second: '2-digit',
+    hour12: false,
+  });
 }
 
 interface TimelineProps {
@@ -101,7 +105,7 @@ export default function Timeline({ logs, nodeFilter, onNodeFilterChange, workflo
                 className={`flex items-start gap-1.5 px-3 py-0.5 hover:bg-accent-blue/5 text-xs transition-colors ${isError ? 'bg-accent-red/5' : ''}`}
               >
                 {/* Timestamp */}
-                <span className="text-[10px] text-gray-500 font-mono mt-px shrink-0 w-14 tabular-nums">
+                <span className="text-[10px] text-gray-500 font-mono mt-px shrink-0 w-28 tabular-nums">
                   {formatTime(new Date(log.timestamp))}
                 </span>
 

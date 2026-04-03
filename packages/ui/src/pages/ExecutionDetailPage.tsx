@@ -25,12 +25,39 @@ export default function ExecutionDetailPage() {
 
   const latestInputEvent = [...timeline].reverse().find((e: TimelineEvent) => e.event === 'input_required');
 
-  // Auto-select the waiting node
+  // Auto-select node based on execution state
   useEffect(() => {
-    if (execution?.status === 'waiting_for_input' && latestInputEvent?.data?.node && !selectedNode) {
+    if (!execution) return;
+
+    // Waiting for input → select the waiting node
+    if (execution.status === 'waiting_for_input' && latestInputEvent?.data?.node) {
       setSelectedNode(latestInputEvent.data.node);
+      return;
     }
-  }, [execution?.status, latestInputEvent, selectedNode]);
+
+    // Running → select the currently running node
+    if (execution.status === 'running') {
+      for (const [name, state] of nodeStates) {
+        if (state.status === 'running') {
+          setSelectedNode(name);
+          return;
+        }
+      }
+    }
+
+    // Completed → select the last completed node
+    if (execution.status === 'completed' && execution.completedNodes?.length > 0) {
+      const lastNode = execution.completedNodes[execution.completedNodes.length - 1];
+      if (!selectedNode) setSelectedNode(lastNode);
+      return;
+    }
+
+    // Failed → select the failed node
+    if (execution.status === 'failed' && execution.failedNode) {
+      setSelectedNode(execution.failedNode);
+      return;
+    }
+  }, [execution?.status, execution?.failedNode, execution?.completedNodes, latestInputEvent, nodeStates]);
 
   const { size: rightWidth, handleMouseDown: rightResizeStart } = useResizable({ direction: 'horizontal', initialSize: 384, minSize: 280, maxSize: 600 });
   const { size: bottomHeight, handleMouseDown: bottomResizeStart } = useResizable({ direction: 'vertical', initialSize: 200, minSize: 120, maxSize: 500 });
@@ -84,7 +111,8 @@ export default function ExecutionDetailPage() {
     return <div className="flex items-center justify-center h-full text-gray-500 font-mono text-sm">EXECUTION NOT FOUND</div>;
   }
 
-  const selectedTrace = traces.find((t: any) => t.node === selectedNode);
+  const selectedTraces = traces.filter((t: any) => t.node === selectedNode);
+  const selectedTrace = selectedTraces.length > 0 ? selectedTraces[selectedTraces.length - 1] : undefined;
   const selectedState = selectedNode ? nodeStates.get(selectedNode) : undefined;
   const isPaused = execution.status === 'waiting_for_input' && !latestInputEvent;
 
@@ -199,6 +227,7 @@ export default function ExecutionDetailPage() {
               nodeName={selectedNode ?? ''}
               nodeState={selectedState}
               trace={selectedTrace}
+              allTraces={selectedTraces}
               waitingInput={
                 latestInputEvent && execution.status === 'waiting_for_input'
                   ? { node: latestInputEvent.data.node, prompt: latestInputEvent.data.prompt, fields: latestInputEvent.data.fields ?? [] }
@@ -250,22 +279,44 @@ export default function ExecutionDetailPage() {
                 </tr>
               </thead>
               <tbody>
-                {Array.from(nodeStates.entries()).map(([name, state]) => (
-                  <tr
-                    key={name}
-                    onClick={() => setSelectedNode(name)}
-                    className={`cursor-pointer hover:bg-accent-blue/5 transition-colors
-                      ${selectedNode === name ? 'bg-accent-blue/10' : ''}`}
-                  >
-                    <td className="px-4 py-1.5 font-mono text-gray-200">{name}</td>
-                    <td className="px-4 py-1.5"><StatusBadge status={state.status} /></td>
-                    <td className="px-4 py-1.5 text-gray-400 tabular-nums font-mono">{state.attempt}</td>
-                    <td className="px-4 py-1.5 text-gray-400 tabular-nums font-mono">
-                      {state.durationMs != null ? `${(state.durationMs / 1000).toFixed(1)}s` : '-'}
-                    </td>
-                    <td className="px-4 py-1.5"><CostDisplay cost={state.cost} /></td>
-                  </tr>
-                ))}
+                {Array.from(nodeStates.entries()).map(([name, state]) => {
+                  // Sum cost and duration across all attempts from traces
+                  const nodeTraces = traces.filter((t: any) => t.node === name);
+                  const dedupMap = new Map<number, any>();
+                  for (const t of nodeTraces) dedupMap.set(t.attempt, t);
+                  const deduped = Array.from(dedupMap.values());
+
+                  let totalCost = state.cost;
+                  let totalDuration = state.durationMs;
+
+                  if (deduped.length > 1) {
+                    let est = 0; let act: number | null = null; let dur = 0;
+                    for (const t of deduped) {
+                      est += t.cost?.estimated ?? 0;
+                      if (t.cost?.actual != null) act = (act ?? 0) + t.cost.actual;
+                      dur += t.durationMs ?? 0;
+                    }
+                    if (est > 0 || act != null) totalCost = { estimated: est, actual: act };
+                    if (dur > 0) totalDuration = dur;
+                  }
+
+                  return (
+                    <tr
+                      key={name}
+                      onClick={() => setSelectedNode(name)}
+                      className={`cursor-pointer hover:bg-accent-blue/5 transition-colors
+                        ${selectedNode === name ? 'bg-accent-blue/10' : ''}`}
+                    >
+                      <td className="px-4 py-1.5 font-mono text-gray-200">{name}</td>
+                      <td className="px-4 py-1.5"><StatusBadge status={state.status} /></td>
+                      <td className="px-4 py-1.5 text-gray-400 tabular-nums font-mono">{state.attempt}</td>
+                      <td className="px-4 py-1.5 text-gray-400 tabular-nums font-mono">
+                        {totalDuration != null ? `${(totalDuration / 1000).toFixed(1)}s` : '-'}
+                      </td>
+                      <td className="px-4 py-1.5"><CostDisplay cost={totalCost} /></td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>

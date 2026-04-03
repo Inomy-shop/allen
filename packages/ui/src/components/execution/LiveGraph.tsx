@@ -58,7 +58,8 @@ function ExecutionNode({ data, selected }: NodeProps) {
         ${selected ? 'ring-2 ring-white/40' : ''}
       `}
     >
-      <Handle type="target" position={Position.Top} className={`!bg-${accent} !w-2 !h-2 !border-surface`} />
+      <Handle type="target" position={Position.Top} id="top" className="!opacity-0 !w-1 !h-1" />
+      <Handle type="target" position={Position.Right} id="right" className="!opacity-0 !w-1 !h-1" />
 
       <div className="flex items-center gap-2">
         <RoleIcon icon={d.icon} color={d.color} size={16} />
@@ -106,7 +107,8 @@ function ExecutionNode({ data, selected }: NodeProps) {
         <span className="absolute -top-1 -right-1 w-3 h-3 bg-accent-blue rounded-full animate-ping" />
       )}
 
-      <Handle type="source" position={Position.Bottom} className={`!bg-${accent} !w-2 !h-2 !border-surface`} />
+      <Handle type="source" position={Position.Bottom} id="bottom" className="!opacity-0 !w-1 !h-1" />
+      <Handle type="source" position={Position.Right} id="right" className="!opacity-0 !w-1 !h-1" />
     </div>
   );
 }
@@ -179,7 +181,9 @@ export default function LiveGraph({ workflow, nodeStates, selectedNode, onSelect
           rfEdges.push({
             id: `${from}-${to}`,
             source: from,
+            sourceHandle: isRetry ? 'right' : 'bottom',
             target: to,
+            targetHandle: isRetry ? 'right' : 'top',
             type: isRetry ? 'ff-retry' : edge.condition ? 'ff-conditional' : 'default',
             label: edge.condition ?? (edge.parallel ? '∥ parallel' : undefined),
             labelStyle: { fill: '#d1d5db', fontSize: 10, fontFamily: 'var(--font-mono)' },

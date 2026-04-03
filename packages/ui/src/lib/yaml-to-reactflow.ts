@@ -29,7 +29,9 @@ export function yamlToReactFlow(
           rfEdges.push({
             id: `${from}-${to}`,
             source: from,
+            sourceHandle: isRetry ? 'right' : 'bottom',
             target: to,
+            targetHandle: isRetry ? 'right' : 'top',
             type: isRetry ? 'ff-retry' : edge.condition ? 'ff-conditional' : 'default',
             label: edge.condition ?? (edge.parallel ? '∥' : undefined),
             data: {

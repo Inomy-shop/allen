@@ -1,4 +1,5 @@
 import { useState, useRef, useEffect } from 'react';
+import { createPortal } from 'react-dom';
 import { ChevronDown } from 'lucide-react';
 
 interface Option {
@@ -17,15 +18,19 @@ interface Props {
 
 export default function Select({ value, onChange, options, placeholder = 'Select...', className = '' }: Props) {
   const [open, setOpen] = useState(false);
-  const [dropUp, setDropUp] = useState(false);
-  const ref = useRef<HTMLDivElement>(null);
+  const [pos, setPos] = useState<{ top: number; left: number; width: number; dropUp: boolean }>({ top: 0, left: 0, width: 0, dropUp: false });
   const triggerRef = useRef<HTMLButtonElement>(null);
+  const dropdownRef = useRef<HTMLDivElement>(null);
 
   // Close on click outside
   useEffect(() => {
     if (!open) return;
     const handler = (e: MouseEvent) => {
-      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+      if (
+        triggerRef.current?.contains(e.target as Node) ||
+        dropdownRef.current?.contains(e.target as Node)
+      ) return;
+      setOpen(false);
     };
     document.addEventListener('mousedown', handler);
     return () => document.removeEventListener('mousedown', handler);
@@ -39,19 +44,33 @@ export default function Select({ value, onChange, options, placeholder = 'Select
     return () => document.removeEventListener('keydown', handler);
   }, [open]);
 
+  // Close on scroll (any parent)
+  useEffect(() => {
+    if (!open) return;
+    const handler = () => setOpen(false);
+    window.addEventListener('scroll', handler, true);
+    return () => window.removeEventListener('scroll', handler, true);
+  }, [open]);
+
   const selected = options.find(o => o.value === value);
 
   const handleOpen = () => {
     if (!open && triggerRef.current) {
       const rect = triggerRef.current.getBoundingClientRect();
       const spaceBelow = window.innerHeight - rect.bottom;
-      setDropUp(spaceBelow < 250);
+      const dropUp = spaceBelow < 200;
+      setPos({
+        top: dropUp ? rect.top : rect.bottom + 4,
+        left: rect.left,
+        width: rect.width,
+        dropUp,
+      });
     }
     setOpen(!open);
   };
 
   return (
-    <div ref={ref} className={`relative ${className}`}>
+    <div className={`relative ${className}`}>
       {/* Trigger */}
       <button
         ref={triggerRef}
@@ -69,11 +88,18 @@ export default function Select({ value, onChange, options, placeholder = 'Select
         <ChevronDown className={`w-3.5 h-3.5 text-gray-500 shrink-0 transition-transform ${open ? 'rotate-180 text-accent-blue' : ''}`} />
       </button>
 
-      {/* Dropdown — auto-flips above if no space below */}
-      {open && (
-        <div className={`absolute z-50 left-0 right-0 bg-surface-100 border border-border rounded-sm shadow-lg max-h-60 overflow-auto ${
-          dropUp ? 'bottom-full mb-1' : 'top-full mt-1'
-        }`}>
+      {/* Dropdown — portaled to body, positioned fixed relative to viewport */}
+      {open && createPortal(
+        <div
+          ref={dropdownRef}
+          className="fixed z-[9999] bg-surface-100 border border-border rounded-sm shadow-lg max-h-60 overflow-auto"
+          style={{
+            top: pos.dropUp ? undefined : pos.top,
+            bottom: pos.dropUp ? window.innerHeight - pos.top + 4 : undefined,
+            left: pos.left,
+            width: Math.max(pos.width, 200),
+          }}
+        >
           {options.map(opt => (
             <button
               key={opt.value}
@@ -94,7 +120,8 @@ export default function Select({ value, onChange, options, placeholder = 'Select
           {options.length === 0 && (
             <div className="px-3 py-3 text-xs text-gray-500 text-center font-mono">No options</div>
           )}
-        </div>
+        </div>,
+        document.body,
       )}
     </div>
   );

@@ -1,13 +1,36 @@
-import { BaseEdge, getBezierPath, type EdgeProps } from '@xyflow/react';
+import { BaseEdge, type EdgeProps } from '@xyflow/react';
 
 export default function RetryEdge(props: EdgeProps) {
-  const { sourceX, sourceY, targetX, targetY, sourcePosition, targetPosition, data, markerEnd } = props;
-
-  const [edgePath, labelX, labelY] = getBezierPath({
-    sourceX, sourceY, targetX, targetY, sourcePosition, targetPosition,
-  });
+  const { sourceX, sourceY, targetX, targetY, data, markerEnd } = props;
 
   const maxRetries = (data as any)?.max_retries;
+
+  // Custom path: right → out → up → back → in
+  // Source exits from right side, target enters from right side
+  const offset = 60; // how far right the loop goes
+  const cornerRadius = 15;
+
+  // Build the path:
+  // 1. Go right from source
+  // 2. Curve up
+  // 3. Go straight up to target height
+  // 4. Curve left
+  // 5. Connect to target
+
+  const midX = Math.max(sourceX, targetX) + offset;
+
+  const edgePath = [
+    `M ${sourceX} ${sourceY}`,                                         // start at source (right handle)
+    `L ${midX - cornerRadius} ${sourceY}`,                             // go right
+    `Q ${midX} ${sourceY} ${midX} ${sourceY - cornerRadius}`,         // curve up
+    `L ${midX} ${targetY + cornerRadius}`,                             // go straight up
+    `Q ${midX} ${targetY} ${midX - cornerRadius} ${targetY}`,         // curve left
+    `L ${targetX} ${targetY}`,                                         // go to target
+  ].join(' ');
+
+  // Label position: middle of the vertical segment
+  const labelX = midX + 8;
+  const labelY = (sourceY + targetY) / 2;
 
   return (
     <>
@@ -32,17 +55,17 @@ export default function RetryEdge(props: EdgeProps) {
           strokeWidth: 2,
           strokeDasharray: '6 3',
         }}
-        markerEnd={markerEnd ?? `url(#ff-arrow-yellow)`}
+        markerEnd={markerEnd ?? 'url(#ff-arrow-yellow)'}
       />
       {maxRetries != null && (
         <foreignObject
-          x={labelX - 30} y={labelY - 12}
-          width={60} height={24}
+          x={labelX} y={labelY - 16}
+          width={80} height={32}
           className="pointer-events-none"
         >
           <div className="flex items-center justify-center">
-            <span className="bg-surface-200 border border-accent-yellow/30 text-accent-yellow text-[9px] px-2 py-0.5 rounded-sm font-mono">
-              {maxRetries}
+            <span className="bg-surface-200 border border-accent-yellow/30 text-accent-yellow text-base px-3 py-1 rounded-sm font-mono font-semibold">
+              ↻ ≤{maxRetries}
             </span>
           </div>
         </foreignObject>

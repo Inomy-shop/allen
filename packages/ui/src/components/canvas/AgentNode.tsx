@@ -6,7 +6,8 @@ export default function AgentNode({ data, selected }: NodeProps) {
     <div className={`px-4 py-3 rounded-lg border-2 bg-surface-100/90 backdrop-blur-sm min-w-[150px] transition-all
       ${selected ? 'border-accent-blue ring-2 ring-accent-blue/30 shadow-glow-blue' : 'border-accent-blue/30 hover:border-accent-blue/50'}
     `}>
-      <Handle type="target" position={Position.Top} className="!bg-accent-blue !w-2.5 !h-2.5 !border-surface" />
+      <Handle type="target" position={Position.Top} id="top" className="!bg-accent-blue !w-2.5 !h-2.5 !border-surface" />
+      <Handle type="target" position={Position.Right} id="right" className="!bg-accent-yellow !w-2 !h-2 !border-surface" />
       <div className="flex items-center gap-2">
         <RoleIcon icon={(data as any).icon} color={(data as any).color ?? '#00d4ff'} size={16} />
         <div>
@@ -21,7 +22,8 @@ export default function AgentNode({ data, selected }: NodeProps) {
           ))}
         </div>
       )}
-      <Handle type="source" position={Position.Bottom} className="!bg-accent-blue !w-2.5 !h-2.5 !border-surface" />
+      <Handle type="source" position={Position.Bottom} id="bottom" className="!bg-accent-blue !w-2.5 !h-2.5 !border-surface" />
+      <Handle type="source" position={Position.Right} id="right" className="!bg-accent-yellow !w-2 !h-2 !border-surface" />
     </div>
   );
 }
