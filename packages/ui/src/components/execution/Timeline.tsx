@@ -1,8 +1,7 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type { ExecutionLog } from '../../hooks/useExecution';
 import Select from '../common/Select';
-import { Search } from 'lucide-react';
-import { useState } from 'react';
+import { Search, ArrowDown } from 'lucide-react';
 
 const categoryColors: Record<string, string> = {
   system: 'text-gray-400 bg-gray-500/10',
@@ -33,11 +32,12 @@ export default function Timeline({ logs, nodeFilter, onNodeFilterChange, workflo
   const containerRef = useRef<HTMLDivElement>(null);
   const [search, setSearch] = useState('');
   const [autoScroll, setAutoScroll] = useState(true);
+  const isUserScrolling = useRef(false);
 
-  // Auto-scroll to bottom when new logs arrive
+  // Auto-scroll to bottom when new logs arrive — only if user hasn't scrolled up
   useEffect(() => {
-    if (autoScroll && bottomRef.current) {
-      bottomRef.current.scrollIntoView({ behavior: 'smooth' });
+    if (autoScroll && !isUserScrolling.current && containerRef.current) {
+      containerRef.current.scrollTop = containerRef.current.scrollHeight;
     }
   }, [logs.length, autoScroll]);
 
@@ -46,6 +46,8 @@ export default function Timeline({ logs, nodeFilter, onNodeFilterChange, workflo
     const el = containerRef.current;
     if (!el) return;
     const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 40;
+    if (!atBottom) isUserScrolling.current = true;
+    else isUserScrolling.current = false;
     setAutoScroll(atBottom);
   };
 
@@ -61,7 +63,7 @@ export default function Timeline({ logs, nodeFilter, onNodeFilterChange, workflo
   });
 
   return (
-    <div className="flex flex-col h-full">
+    <div className="flex flex-col h-full relative">
       {/* Header with filter and search */}
       <div className="px-3 py-1.5 border-b border-border/50 sticky top-0 bg-surface-50 z-10 flex items-center gap-2">
         <h2 className="font-heading text-[10px] font-semibold text-gray-400 uppercase tracking-widest shrink-0">Logs</h2>
@@ -133,6 +135,22 @@ export default function Timeline({ logs, nodeFilter, onNodeFilterChange, workflo
         )}
         <div ref={bottomRef} />
       </div>
+
+      {/* Scroll to bottom button — shown when user scrolled up */}
+      {!autoScroll && logs.length > 0 && (
+        <button
+          onClick={() => {
+            isUserScrolling.current = false;
+            setAutoScroll(true);
+            if (containerRef.current) {
+              containerRef.current.scrollTop = containerRef.current.scrollHeight;
+            }
+          }}
+          className="absolute bottom-2 right-2 z-10 btn-primary text-[10px] px-2 py-1 inline-flex items-center gap-1 shadow-lg"
+        >
+          <ArrowDown className="w-3 h-3" /> Latest
+        </button>
+      )}
     </div>
   );
 }

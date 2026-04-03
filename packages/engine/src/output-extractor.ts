@@ -14,6 +14,23 @@ export async function extractOutputs(
   const outputs = nodeDef.outputs ?? [];
   if (outputs.length === 0) return {};
 
+  // Layer 0: Try parsing entire response as JSON directly
+  const trimmed = response.trim();
+  if (trimmed.startsWith('{') || trimmed.startsWith('[')) {
+    try {
+      const parsed = JSON.parse(trimmed);
+      if (typeof parsed === 'object' && parsed !== null) {
+        const result: Record<string, unknown> = {};
+        for (const key of outputs) {
+          if (key in parsed) result[key] = parsed[key];
+        }
+        if (Object.keys(result).length > 0) return result;
+      }
+    } catch {
+      // Not valid JSON — fall through
+    }
+  }
+
   // Layer 1: JSON code block
   const jsonMatch = response.match(/```json\s*\n?([\s\S]*?)\n?\s*```/);
   if (jsonMatch) {
@@ -28,6 +45,23 @@ export async function extractOutputs(
       }
     } catch {
       // fall through to layer 2
+    }
+  }
+
+  // Layer 1b: Find JSON object anywhere in response (not in code block)
+  const jsonInText = response.match(/\{[\s\S]*\}/);
+  if (jsonInText) {
+    try {
+      const parsed = JSON.parse(jsonInText[0]);
+      if (typeof parsed === 'object' && parsed !== null) {
+        const result: Record<string, unknown> = {};
+        for (const key of outputs) {
+          if (key in parsed) result[key] = parsed[key];
+        }
+        if (Object.keys(result).length > 0) return result;
+      }
+    } catch {
+      // fall through
     }
   }
 
@@ -77,6 +111,19 @@ export function extractOutputsSync(
 ): Record<string, unknown> {
   const outputs = nodeDef.outputs ?? [];
   if (outputs.length === 0) return {};
+
+  // Layer 0: Try parsing entire response as JSON
+  const trimmed = response.trim();
+  if (trimmed.startsWith('{') || trimmed.startsWith('[')) {
+    try {
+      const parsed = JSON.parse(trimmed);
+      if (typeof parsed === 'object' && parsed !== null) {
+        const result: Record<string, unknown> = {};
+        for (const key of outputs) { if (key in parsed) result[key] = parsed[key]; }
+        if (Object.keys(result).length > 0) return result;
+      }
+    } catch { /* fall through */ }
+  }
 
   // Layer 1: JSON code block
   const jsonMatch = response.match(/```json\s*\n?([\s\S]*?)\n?\s*```/);

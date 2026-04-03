@@ -110,9 +110,12 @@ export interface WorkflowDef {
 
 // ── Role ────────────────────────────────────────────────────────────────────
 
+export type AgentProvider = 'claude' | 'codex';
+
 export interface RoleDef {
   system: string;
   model?: string;
+  provider?: AgentProvider;  // default: 'claude'
   tools?: string[];
   icon?: string;
   color?: string;

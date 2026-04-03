@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect } from 'react';
+import { useState, useCallback, useEffect, useRef } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import {
   ArrowLeft, XCircle, Pause, Play, RefreshCw, Wifi, WifiOff,
@@ -26,37 +26,57 @@ export default function ExecutionDetailPage() {
   const latestInputEvent = [...timeline].reverse().find((e: TimelineEvent) => e.event === 'input_required');
 
   // Auto-select node based on execution state
+  const prevStatusRef = useRef<string | null>(null);
   useEffect(() => {
     if (!execution) return;
+    const status = execution.status;
 
     // Waiting for input → select the waiting node
-    if (execution.status === 'waiting_for_input' && latestInputEvent?.data?.node) {
+    if (status === 'waiting_for_input' && latestInputEvent?.data?.node) {
       setSelectedNode(latestInputEvent.data.node);
+      prevStatusRef.current = status;
       return;
     }
 
-    // Running → select the currently running node
-    if (execution.status === 'running') {
+    // Running → always follow the running node
+    if (status === 'running') {
       for (const [name, state] of nodeStates) {
         if (state.status === 'running') {
           setSelectedNode(name);
-          return;
+          break;
         }
+      }
+      prevStatusRef.current = status;
+      return;
+    }
+
+    // Just transitioned to completed/failed → select the final node
+    if (status === 'completed' && prevStatusRef.current !== 'completed') {
+      if (execution.completedNodes?.length > 0) {
+        setSelectedNode(execution.completedNodes[execution.completedNodes.length - 1]);
+      }
+      prevStatusRef.current = status;
+      return;
+    }
+
+    if (status === 'failed' && prevStatusRef.current !== 'failed') {
+      if (execution.failedNode) {
+        setSelectedNode(execution.failedNode);
+      }
+      prevStatusRef.current = status;
+      return;
+    }
+
+    // Initial load for already-terminal executions
+    if ((status === 'completed' || status === 'failed') && !selectedNode) {
+      if (execution.failedNode) {
+        setSelectedNode(execution.failedNode);
+      } else if (execution.completedNodes?.length > 0) {
+        setSelectedNode(execution.completedNodes[execution.completedNodes.length - 1]);
       }
     }
 
-    // Completed → select the last completed node
-    if (execution.status === 'completed' && execution.completedNodes?.length > 0) {
-      const lastNode = execution.completedNodes[execution.completedNodes.length - 1];
-      if (!selectedNode) setSelectedNode(lastNode);
-      return;
-    }
-
-    // Failed → select the failed node
-    if (execution.status === 'failed' && execution.failedNode) {
-      setSelectedNode(execution.failedNode);
-      return;
-    }
+    prevStatusRef.current = status;
   }, [execution?.status, execution?.failedNode, execution?.completedNodes, latestInputEvent, nodeStates]);
 
   const { size: rightWidth, handleMouseDown: rightResizeStart } = useResizable({ direction: 'horizontal', initialSize: 384, minSize: 280, maxSize: 600 });

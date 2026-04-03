@@ -1,0 +1,48 @@
+name: codex-qa
+description: Ask a question answered by OpenAI Codex, reviewed by Claude
+version: 1
+
+context:
+  requires: []
+  tools: []
+
+input:
+  question: { type: string, required: true }
+
+nodes:
+  answer:
+    role: codex-researcher
+    prompt: |
+      Answer this question accurately and concisely:
+      {{question}}
+    outputs: [answer, sources]
+    output_format: json
+
+  review:
+    role: reviewer
+    prompt: |
+      Review this answer for accuracy:
+
+      Question: {{question}}
+      Answer: {{answer}}
+
+      Is this factually correct and complete?
+      Verdict: APPROVED or REJECTED with feedback.
+    outputs: [verdict, feedback]
+    output_format: json
+
+  format:
+    role: writer
+    prompt: |
+      Format this Q&A:
+      Question: {{question}}
+      Answer: {{answer}}
+      Review: {{verdict}} — {{feedback}}
+    outputs: [formatted_qa]
+
+edges:
+  - { from: START, to: answer }
+  - { from: answer, to: review }
+  - { from: review, to: format, condition: "verdict == 'APPROVED'" }
+  - { from: review, to: answer, condition: "verdict == 'REJECTED'", max_retries: 2, retry_context: "{{feedback}}" }
+  - { from: format, to: END }

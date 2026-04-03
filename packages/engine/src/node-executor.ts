@@ -10,8 +10,8 @@ import type {
 } from './types.js';
 import { renderTemplate } from './template.js';
 import { extractOutputs, buildOutputInstruction } from './output-extractor.js';
-// extractOutputs is now async (supports LLM fallback)
 import { evaluateCondition } from './condition-parser.js';
+import { executeCodexNode } from './codex-executor.js';
 
 function emitLog(
   deps: NodeExecutorDeps,
@@ -64,8 +64,13 @@ export async function executeNode(
   const type: NodeType = nodeDef.type ?? 'agent';
 
   switch (type) {
-    case 'agent':
+    case 'agent': {
+      const role = nodeDef.role ? deps.roles[nodeDef.role] : undefined;
+      if (role?.provider === 'codex') {
+        return executeCodexNode(nodeName, nodeDef, state, role, deps.emitter, deps.executionId ?? '');
+      }
       return executeAgentNode(nodeName, nodeDef, state, sessions, deps);
+    }
     case 'code':
       return executeCodeNode(nodeName, nodeDef, state, deps);
     case 'human':

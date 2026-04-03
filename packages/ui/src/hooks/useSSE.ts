@@ -27,6 +27,7 @@ export function useSSE(url: string | null, onEvent: (e: SSEEvent) => void) {
       'agent_text', 'agent_tool_start', 'agent_tool_complete',
       'input_required', 'input_received',
       'parallel_started', 'parallel_branch_done', 'parallel_joined',
+      'execution_log',
     ];
 
     for (const type of eventTypes) {

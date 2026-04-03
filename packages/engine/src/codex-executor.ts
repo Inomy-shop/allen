@@ -1,0 +1,282 @@
+import { spawn } from 'node:child_process';
+import type { NodeDef, RoleDef, EngineEventEmitter } from './types.js';
+import { renderTemplate } from './template.js';
+import { extractOutputs, buildOutputInstruction } from './output-extractor.js';
+
+interface CodexResult {
+  outputs: Record<string, unknown>;
+  rawResponse: string;
+  sessionId?: string;
+  cost: {
+    actual: number | null;
+    estimated: number;
+    model: string;
+    turns: number;
+    method: 'sdk_reported' | 'estimated';
+  };
+  durationMs: number;
+}
+
+/**
+ * Execute an agent node using OpenAI Codex CLI (`codex exec --json`).
+ * Spawns codex as a subprocess and parses JSONL output.
+ */
+export async function executeCodexNode(
+  nodeName: string,
+  nodeDef: NodeDef,
+  state: Record<string, unknown>,
+  role: RoleDef | undefined,
+  emitter: EngineEventEmitter,
+  executionId: string,
+): Promise<CodexResult> {
+  const start = Date.now();
+  const model = role?.model ?? 'default';
+
+  let prompt = nodeDef.prompt ? renderTemplate(nodeDef.prompt, state) : '';
+  if (role?.system) {
+    prompt = `${role.system}\n\n${prompt}`;
+  }
+  prompt += buildOutputInstruction(nodeDef.outputs ?? [], nodeDef.output_format);
+
+  emitter.emit({
+    event: 'node_started',
+    data: { node: nodeName, role: nodeDef.role, attempt: 1 },
+  });
+
+  emitter.emit({
+    event: 'execution_log',
+    data: {
+      executionId,
+      timestamp: new Date(),
+      level: 'info',
+      category: 'system',
+      node: nodeName,
+      message: `Node started (provider: codex, model: ${model})`,
+    },
+  });
+
+  const cwd = (state.worktree_path as string) ?? (state.repo_path as string) ?? process.cwd();
+  const timeoutMs = (nodeDef.timeout ?? 600) * 1000;
+
+  return new Promise<CodexResult>((resolve, reject) => {
+    const args = [
+      'exec',
+      '--json',
+      '--full-auto',
+    ];
+    // Only pass model config if explicitly set (otherwise use codex default)
+    if (model && model !== 'default') {
+      args.push('-c', `model="${model}"`);
+    }
+    args.push(prompt);
+
+    const proc = spawn('codex', args, {
+      cwd,
+      env: { ...process.env },
+      stdio: ['pipe', 'pipe', 'pipe'],
+    });
+
+    // Close stdin immediately so codex doesn't wait for input
+    proc.stdin.end();
+
+    let rawResponse = '';
+    let turns = 0;
+    const timer = setTimeout(() => {
+      proc.kill('SIGTERM');
+      reject(new Error(`Codex node ${nodeName} timed out after ${nodeDef.timeout ?? 600}s`));
+    }, timeoutMs);
+
+    // Parse JSONL from stdout
+    let lineBuffer = '';
+    proc.stdout.on('data', (chunk: Buffer) => {
+      lineBuffer += chunk.toString();
+      const lines = lineBuffer.split('\n');
+      lineBuffer = lines.pop() ?? '';
+
+      for (const line of lines) {
+        if (!line.trim()) continue;
+        try {
+          const event = JSON.parse(line);
+          // Check for error events
+          if (event.type === 'error' || event.type === 'turn.failed') {
+            const errMsg = event.message ?? event.error?.message ?? JSON.stringify(event);
+            emitter.emit({
+              event: 'execution_log',
+              data: {
+                executionId,
+                timestamp: new Date(),
+                level: 'error',
+                category: 'agent',
+                node: nodeName,
+                message: `Codex error: ${errMsg}`,
+              },
+            });
+            rawResponse += `ERROR: ${errMsg}\n`;
+          }
+
+          handleCodexEvent(event, nodeName, emitter, executionId, (text) => {
+            rawResponse += text;
+          });
+          if (event.type === 'turn.completed') {
+            turns++;
+          }
+        } catch {
+          // Not JSON — treat as raw text
+          rawResponse += line + '\n';
+          emitter.emit({
+            event: 'agent_text',
+            data: { node: nodeName, text: line + '\n' },
+          });
+        }
+      }
+    });
+
+    let stderrText = '';
+    proc.stderr.on('data', (chunk: Buffer) => {
+      stderrText += chunk.toString();
+    });
+
+    proc.on('close', async (code) => {
+      clearTimeout(timer);
+
+      // Process any remaining buffer
+      if (lineBuffer.trim()) {
+        rawResponse += lineBuffer;
+      }
+
+      if (code !== 0 && !rawResponse) {
+        reject(new Error(`Codex process exited with code ${code}: ${stderrText.slice(0, 500)}`));
+        return;
+      }
+      // If rawResponse only contains errors, still fail
+      if (code !== 0 && rawResponse.startsWith('ERROR:')) {
+        reject(new Error(rawResponse.slice(0, 500)));
+        return;
+      }
+
+      try {
+        const outputs = await extractOutputs(rawResponse, nodeDef);
+
+        emitter.emit({
+          event: 'execution_log',
+          data: {
+            executionId,
+            timestamp: new Date(),
+            level: 'info',
+            category: 'system',
+            node: nodeName,
+            message: `Outputs extracted: ${Object.keys(outputs).join(', ') || 'none'}`,
+          },
+        });
+
+        resolve({
+          outputs,
+          rawResponse,
+          cost: {
+            actual: null,
+            estimated: 0.02 * Math.max(turns, 1), // rough estimate for codex
+            model,
+            turns: Math.max(turns, 1),
+            method: 'estimated',
+          },
+          durationMs: Date.now() - start,
+        });
+      } catch (err: unknown) {
+        reject(err);
+      }
+    });
+
+    proc.on('error', (err) => {
+      clearTimeout(timer);
+      reject(new Error(`Failed to spawn codex: ${err.message}`));
+    });
+  });
+}
+
+function handleCodexEvent(
+  event: any,
+  nodeName: string,
+  emitter: EngineEventEmitter,
+  executionId: string,
+  appendText: (text: string) => void,
+) {
+  const type = event.type;
+  const item = event.item;
+
+  // Agent text message
+  if (type === 'item.completed' && item?.type === 'agent_message' && item.text) {
+    appendText(item.text);
+    emitter.emit({
+      event: 'agent_text',
+      data: { node: nodeName, text: item.text },
+    });
+    emitter.emit({
+      event: 'execution_log',
+      data: {
+        executionId,
+        timestamp: new Date(),
+        level: 'info',
+        category: 'agent',
+        node: nodeName,
+        message: item.text.slice(0, 200),
+      },
+    });
+  }
+
+  // Command/tool started
+  if (type === 'item.started' && item?.type === 'command_execution') {
+    const cmd = item.command ?? 'unknown';
+    emitter.emit({
+      event: 'agent_tool_start',
+      data: { node: nodeName, tool: 'shell', args: { command: cmd } },
+    });
+    emitter.emit({
+      event: 'execution_log',
+      data: {
+        executionId,
+        timestamp: new Date(),
+        level: 'info',
+        category: 'tool',
+        node: nodeName,
+        message: `Running: ${cmd.slice(0, 150)}`,
+      },
+    });
+  }
+
+  // Command/tool completed
+  if (type === 'item.completed' && item?.type === 'command_execution') {
+    const cmd = item.command ?? 'unknown';
+    const output = item.aggregated_output ?? '';
+    const status = item.status === 'completed' ? 'completed' : 'failed';
+    emitter.emit({
+      event: 'agent_tool_complete',
+      data: { node: nodeName, tool: 'shell', summary: `${status}: ${cmd.slice(0, 80)}` },
+    });
+    emitter.emit({
+      event: 'execution_log',
+      data: {
+        executionId,
+        timestamp: new Date(),
+        level: status === 'failed' ? 'warn' : 'info',
+        category: 'tool',
+        node: nodeName,
+        message: `${status === 'failed' ? '✗' : '✓'} ${cmd.slice(0, 100)}${output ? ' → ' + output.slice(0, 100) : ''}`,
+      },
+    });
+  }
+
+  // Turn completed — usage info
+  if (type === 'turn.completed' && event.usage) {
+    emitter.emit({
+      event: 'execution_log',
+      data: {
+        executionId,
+        timestamp: new Date(),
+        level: 'info',
+        category: 'system',
+        node: nodeName,
+        message: `Tokens: ${event.usage.input_tokens} in, ${event.usage.output_tokens} out (${event.usage.cached_input_tokens ?? 0} cached)`,
+      },
+    });
+  }
+}

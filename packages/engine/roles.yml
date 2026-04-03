@@ -98,3 +98,34 @@ roles:
     tools: []
     icon: layout
     color: "#16a085"
+
+  # ── Codex (OpenAI) roles ──
+  codex-developer:
+    system: |
+      You are a software developer using OpenAI Codex.
+      Read the codebase, understand patterns, and implement changes.
+    model: gpt-5.3-codex
+    provider: codex
+    tools: [filesystem, terminal, git]
+    icon: code
+    color: "#10a37f"
+
+  codex-researcher:
+    system: |
+      You are a researcher using OpenAI Codex.
+      Analyze questions, search for information, and provide accurate answers.
+    model: gpt-5.1-codex-mini
+    provider: codex
+    tools: [filesystem, terminal]
+    icon: search
+    color: "#10a37f"
+
+  codex-reviewer:
+    system: |
+      You are a code reviewer using OpenAI Codex.
+      Review code for correctness, security, and best practices.
+    model: gpt-5.2-codex
+    provider: codex
+    tools: [filesystem]
+    icon: eye
+    color: "#10a37f"

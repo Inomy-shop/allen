@@ -167,9 +167,34 @@ export default function LiveGraph({ workflow, nodeStates, selectedNode, onSelect
   const workflowNodes = workflow?.parsed?.nodes;
   const workflowEdges: any[] = workflow?.parsed?.edges ?? [];
 
+  // Snapshot nodeStates keys once for fallback (avoids infinite loop from Map reference changes)
+  const fallbackNodeNames = useRef<string[] | null>(null);
+  if (!workflowNodes && nodeStates.size > 0 && !fallbackNodeNames.current) {
+    fallbackNodeNames.current = Array.from(nodeStates.keys());
+  }
+
   // Build edges once from workflow definition (they don't change)
   const edges = useMemo<Edge[]>(() => {
-    if (!workflowNodes) return [];
+    if (!workflowNodes) {
+      // Fallback: build simple sequential edges from snapshot
+      const names = fallbackNodeNames.current;
+      if (names && names.length > 0) {
+        const rfEdges: Edge[] = [];
+        for (let i = 0; i < names.length - 1; i++) {
+          rfEdges.push({
+            id: `${names[i]}-${names[i + 1]}`,
+            source: names[i],
+            sourceHandle: 'bottom',
+            target: names[i + 1],
+            targetHandle: 'top',
+            type: 'default',
+            style: { stroke: '#9ca3af', strokeWidth: 2 },
+          });
+        }
+        return rfEdges;
+      }
+      return [];
+    }
 
     const rfEdges: Edge[] = [];
     for (const edge of workflowEdges) {
@@ -216,7 +241,26 @@ export default function LiveGraph({ workflow, nodeStates, selectedNode, onSelect
 
   // Build initial node positions from dagre layout (once)
   const initialNodes = useMemo<Node[]>(() => {
-    if (!workflowNodes) return [];
+    if (!workflowNodes) {
+      // Fallback: build nodes from snapshot
+      const names = fallbackNodeNames.current;
+      if (names && names.length > 0) {
+        const rfNodes: Node[] = names.map(name => ({
+          id: name,
+          type: 'exec-node',
+          position: { x: 0, y: 0 },
+          data: {
+            label: name,
+            type: 'agent',
+            __status: 'pending',
+            __attempt: 1,
+            __durationMs: undefined,
+          },
+        }));
+        return layoutGraph(rfNodes, edges);
+      }
+      return [];
+    }
     const nodeEntries = Object.entries(workflowNodes) as [string, any][];
 
     const rfNodes: Node[] = [

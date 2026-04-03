@@ -266,24 +266,29 @@ export function useExecution(id: string | undefined) {
         case 'node_completed': {
           if (!node) break;
           const existing = next.get(node);
-          if (existing) {
-            next.set(node, {
-              ...existing,
-              status: 'completed',
-              output: e.data.output,
-              durationMs: e.data.durationMs,
-              cost: e.data.cost,
-            });
-          }
+          next.set(node, {
+            name: node,
+            status: 'completed',
+            attempt: existing?.attempt ?? e.data.attempt ?? 1,
+            output: e.data.output,
+            durationMs: e.data.durationMs,
+            cost: e.data.cost,
+            streamText: existing?.streamText ?? '',
+            activity: existing?.activity ?? [],
+          });
           break;
         }
 
         case 'node_failed': {
           if (!node) break;
           const existing = next.get(node);
-          if (existing) {
-            next.set(node, { ...existing, status: 'failed' });
-          }
+          next.set(node, {
+            name: node,
+            status: 'failed',
+            attempt: existing?.attempt ?? 1,
+            streamText: existing?.streamText ?? '',
+            activity: existing?.activity ?? [],
+          });
           break;
         }
 
@@ -427,6 +432,32 @@ export function useExecution(id: string | undefined) {
     const [exec, tr] = await Promise.all([api.get(id), api.traces(id)]);
     setExecution(exec);
     setTraces(tr);
+
+    // Rebuild nodeStates from traces to fix any missed SSE events
+    const map = new Map<string, NodeState>();
+    for (const t of tr) {
+      map.set(t.node, {
+        name: t.node,
+        status: t.status,
+        attempt: t.attempt,
+        output: t.output,
+        durationMs: t.durationMs,
+        cost: t.cost,
+        streamText: t.rawResponse ?? '',
+        activity: t.activity ?? [],
+      });
+    }
+    // Merge: keep SSE-provided running states, but fill in any missing nodes from traces
+    setNodeStates(prev => {
+      const merged = new Map(map);
+      // If a node is currently running via SSE but trace shows completed, trust SSE (more recent)
+      for (const [name, state] of prev) {
+        if (state.status === 'running' && (!merged.has(name) || merged.get(name)?.status !== 'completed')) {
+          merged.set(name, state);
+        }
+      }
+      return merged;
+    });
   }, [id]);
 
   // Auto-refresh every 5 seconds when execution is active
