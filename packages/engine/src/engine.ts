@@ -20,6 +20,7 @@ import { renderTemplate } from './template.js';
 import { mergeParallelOutputs } from './parallel.js';
 import { extractAutoGateFields, buildNodeContext } from './output-extractor.js';
 import { StateManager } from './state-manager.js';
+import { LearningManager, type ExtractionContext } from './learning-manager.js';
 import type { Db } from 'mongodb';
 
 export interface EngineConfig {
@@ -40,6 +41,7 @@ export interface RunOptions {
 
 export class FlowForgeEngine {
   private stateManager: StateManager;
+  private learningManager: LearningManager;
   private config: EngineConfig;
   private pendingInputResolvers = new Map<string, (data: Record<string, unknown>) => void>();
   private cancelledExecutions = new Set<string>();
@@ -48,6 +50,7 @@ export class FlowForgeEngine {
   constructor(config: EngineConfig) {
     this.config = config;
     this.stateManager = new StateManager(config.db);
+    this.learningManager = new LearningManager(config.db);
   }
 
   get state(): StateManager {
@@ -83,6 +86,10 @@ export class FlowForgeEngine {
       startedAt: new Date(),
     };
 
+    // Derive context tags for the learning system
+    const contextTags = this.learningManager.deriveContextTags(input, workflow);
+    exec.state.__contextTags = contextTags;
+
     await this.stateManager.createExecution(exec);
     this.emit({ event: 'execution_started', data: { executionId, workflowName: workflow.name } });
     this.log(executionId, { category: 'system', message: `Execution started: ${workflow.name}` });
@@ -108,6 +115,9 @@ export class FlowForgeEngine {
         data: { executionId, durationMs: exec.durationMs, cost: exec.cost },
       });
 
+      // Post-execution review: fire-and-forget (never delays result)
+      this.triggerPostExecutionReview(exec).catch(() => {});
+
       // Inject cost info into result so parent workflow nodes can access it
       result.__cost_estimated = exec.cost.estimated;
       result.__cost_actual = exec.cost.actual;
@@ -132,6 +142,10 @@ export class FlowForgeEngine {
         event: 'execution_failed',
         data: { executionId, failedNode: exec.failedNode, error: message },
       });
+
+      // Post-execution review on failure: fire-and-forget
+      this.triggerPostExecutionReview(exec).catch(() => {});
+
       throw err;
     }
   }
@@ -320,6 +334,39 @@ export class FlowForgeEngine {
     this.pausedExecutions.delete(executionId);
   }
 
+  // ── Post-Execution Review ──────────────────────────────────────────────────
+
+  private async triggerPostExecutionReview(exec: ExecutionState): Promise<void> {
+    try {
+      const contextTags = (exec.state.__contextTags as string[]) ?? [];
+      const traces = await this.stateManager.getTraces(exec.id);
+
+      const hasRetries = traces.some((t: any) => t.attempt > 1);
+      const hasFailures = traces.some((t: any) => t.status === 'failed');
+      const hasGateEvents = !!(exec.state.__gate_action);
+
+      this.learningManager.postExecutionReview(
+        exec.id,
+        exec.workflowName,
+        contextTags,
+        traces.map((t: any) => ({
+          node: t.node,
+          status: t.status,
+          attempt: t.attempt,
+          durationMs: t.durationMs,
+          output: t.output,
+          rawResponse: t.rawResponse,
+        })),
+        hasRetries,
+        hasFailures,
+        hasGateEvents,
+        exec.durationMs,
+      ).catch(() => {});
+    } catch {
+      // Fire-and-forget
+    }
+  }
+
   // ── Graph Execution ────────────────────────────────────────────────────────
 
   private async executeGraph(
@@ -399,7 +446,7 @@ export class FlowForgeEngine {
             // Use agent-provided form fields, or fallback to single text input
             const fields = Array.isArray(clarifyFields) && clarifyFields.length > 0
               ? clarifyFields
-              : [{ name: 'clarification', type: 'text', label: reason, required: true }];
+              : [{ name: 'clarification', type: 'text', label: 'Your response', required: true, placeholder: 'Type your answer here...' }];
 
             exec.status = 'waiting_for_input';
             await this.stateManager.updateExecution(exec.id, { status: 'waiting_for_input' });
@@ -424,6 +471,37 @@ export class FlowForgeEngine {
             this.emit({ event: 'input_received', data: { node: nodeName, data: humanData } });
             Object.assign(exec.state, humanData);
 
+            // Learning system: DON'T extract from every human correction inline
+            // Single clarification is routine — not worth a learning
+            // The post-execution review (Phase 4) will analyze the FULL trace
+            // and extract learnings if a PATTERN emerges (e.g., this workflow
+            // always needs clarification → suggest adding fields to input schema)
+            //
+            // Exception: if this is the 2nd+ clarify for the SAME node in the SAME execution,
+            // that's a signal the workflow input schema is broken
+            const clarifyCount = (exec.state.__clarify_count as number ?? 0) + 1;
+            exec.state.__clarify_count = clarifyCount;
+
+            const humanCorrectionCtx: ExtractionContext = {
+              executionId: exec.id,
+              workflowName: exec.workflowName,
+              contextTags: (exec.state.__contextTags as string[]) ?? [],
+              nodeName,
+            };
+
+            // Only extract if this is a repeated clarification (2nd+ time)
+            if (clarifyCount >= 2) {
+              const humanLearning = this.learningManager.extractFromHumanCorrection(
+                nodeName,
+                reason,
+                humanData,
+                humanCorrectionCtx,
+              );
+              if (humanLearning) {
+                this.learningManager.classifyAndStore(humanLearning).catch(() => {});
+              }
+            }
+
             // Clean up gate fields so downstream nodes don't see stale data
             delete exec.state.__gate_action;
             delete exec.state.__gate_reason;
@@ -437,6 +515,8 @@ export class FlowForgeEngine {
             if (clarifyAction === 'retry') {
               // Remove from completedNodes so the node can re-run
               exec.completedNodes = exec.completedNodes.filter(n => n !== nodeName);
+              // Capture state before retry for delta extraction
+              const preRetryState = { ...exec.state };
               // Build retry context from all human-provided fields
               const clarificationParts = Object.entries(humanData)
                 .map(([k, v]) => `${k}: ${typeof v === 'string' ? v : JSON.stringify(v)}`)
@@ -444,6 +524,27 @@ export class FlowForgeEngine {
               exec.state.retry_context = `Human provided:\n${clarificationParts}`;
               // Re-run the same node immediately with the clarification
               gateAction = await this.executeSingleNode(nodeName, nodes[nodeName], exec, nestingDepth, edges, workflow);
+
+              // Learning system: extract retry delta (fire-and-forget)
+              if (gateAction === 'continue') {
+                const retryDeltaCtx: ExtractionContext = {
+                  executionId: exec.id,
+                  workflowName: exec.workflowName,
+                  contextTags: (exec.state.__contextTags as string[]) ?? [],
+                  nodeName,
+                };
+                const retryLearning = this.learningManager.extractFromRetryDelta(
+                  nodeName,
+                  preRetryState,
+                  exec.state,
+                  retryDeltaCtx,
+                  exec.state.retry_context as string | undefined,
+                );
+                if (retryLearning) {
+                  this.learningManager.classifyAndStore(retryLearning).catch(() => {});
+                }
+              }
+
               // If re-run returns stop/skip, exit graph
               if (gateAction === 'stop' || gateAction === 'skip') {
                 return exec.state;
@@ -499,9 +600,37 @@ export class FlowForgeEngine {
     }) ?? false;
 
     // Build context-aware auto-gate instruction for agent nodes
-    const nodeContext = nodeType === 'agent' && !hasConditionalOutEdges && workflow
+    let nodeContext = nodeType === 'agent' && !hasConditionalOutEdges && workflow
       ? buildNodeContext(nodeName, { nodes: workflow.nodes as Record<string, unknown>, edges: workflow.edges as unknown as Array<Record<string, unknown>> })
       : '';
+
+    // Learning injection: query and inject relevant learnings before execution
+    const contextTags = (exec.state.__contextTags as string[]) ?? [];
+    let injectedLearningIds: any[] = [];
+    if (nodeType === 'agent') {
+      try {
+        const learnings = await this.learningManager.query(
+          contextTags,
+          exec.workflowName,
+          nodeDef.role,
+          nodeName,
+          550,
+        );
+        if (learnings.length > 0) {
+          nodeContext += this.learningManager.buildLearningsPrompt(learnings);
+          injectedLearningIds = learnings.map(l => l._id).filter(Boolean);
+          const totalTokens = learnings.reduce((sum, l) => sum + l.tokenCount, 0);
+          const previews = learnings.map(l => `"${l.content.slice(0, 50)}..."`).join(', ');
+          this.log(exec.id, {
+            category: 'system',
+            node: nodeName,
+            message: `[learning] Injected ${learnings.length} learnings (tokens: ${totalTokens}/550): ${previews}`,
+          });
+        }
+      } catch {
+        // Fire-and-forget — never block execution
+      }
+    }
 
     const deps: NodeExecutorDeps = {
       roles: this.config.roles,
@@ -627,6 +756,31 @@ export class FlowForgeEngine {
         },
       });
 
+      // Learning system: confirm injected learnings on success (fire-and-forget)
+      const learningCtx: ExtractionContext = {
+        executionId: exec.id,
+        workflowName: exec.workflowName,
+        contextTags,
+        nodeName,
+      };
+
+      for (const lid of injectedLearningIds) {
+        this.learningManager.confirm(lid, exec.id).catch(() => {});
+      }
+
+      // Learning system: extract from __learnings in output (fire-and-forget)
+      if (Array.isArray(result.outputs.__learnings)) {
+        const agentLearnings = this.learningManager.extractFromAgentOutput(
+          result.outputs.__learnings as any[],
+          learningCtx,
+        );
+        for (const l of agentLearnings) {
+          this.learningManager.classifyAndStore(l).catch(() => {});
+        }
+        // Clean up __learnings from state
+        delete exec.state.__learnings;
+      }
+
       // Auto-gate: check if agent signaled stop/skip/clarify
       // Skip auto-gate for nodes that have outgoing conditional/retry edges
       // (those nodes make routing decisions via their outputs, not via auto-gate)
@@ -639,6 +793,22 @@ export class FlowForgeEngine {
             message: `Auto-gate: ${gate.action} — ${gate.reason ?? 'Agent decided to ' + gate.action}`,
             data: { action: gate.action, reason: gate.reason, clarifyAction: gate.clarifyAction },
           });
+
+          // Learning system: extract from auto-gate ONLY for stop (workflow was pointless)
+          // Clarify is routine — not worth a learning unless it happens repeatedly
+          // The post-execution review (Phase 4) will analyze patterns across the full trace
+          if (gate.action === 'stop') {
+            const gateLearning = this.learningManager.extractFromAutoGate(
+              nodeName,
+              gate.action,
+              gate.reason ?? '',
+              learningCtx,
+            );
+            if (gateLearning) {
+              this.learningManager.classifyAndStore(gateLearning).catch(() => {});
+            }
+          }
+
           // Store reason in state for visibility
           exec.state.__gate_action = gate.action;
           exec.state.__gate_reason = gate.reason ?? 'Agent decided to ' + gate.action;
@@ -672,6 +842,12 @@ export class FlowForgeEngine {
       exec.failedNode = nodeName;
       const message = err instanceof Error ? err.message : String(err);
       this.emit({ event: 'node_failed', data: { node: nodeName, attempt, error: message } });
+
+      // Learning system: contradict injected learnings on failure (fire-and-forget)
+      for (const lid of injectedLearningIds) {
+        this.learningManager.contradict(lid, exec.id).catch(() => {});
+      }
+
       throw err;
     }
   }
@@ -700,14 +876,6 @@ export class FlowForgeEngine {
     // Snapshot state BEFORE parallel branches so they don't interfere
     const stateSnapshot = { ...exec.state };
 
-    const deps: NodeExecutorDeps = {
-      roles: this.config.roles,
-      builtIns: this.config.builtIns,
-      workflows: this.config.workflows,
-      emitter: this.config.emitter,
-      runWorkflow: (wf, input) => this.run(wf, input, nestingDepth + 1),
-    };
-
     // For fail-fast / wait-any we need an abort mechanism
     const abortController = new AbortController();
 
@@ -716,13 +884,42 @@ export class FlowForgeEngine {
       outputs: Record<string, unknown>;
       result: NodeResult;
       traceStart: Date;
+      injectedLearningIds: any[];
     }
+
+    const contextTags = (exec.state.__contextTags as string[]) ?? [];
 
     const promises = nodeNames.map(async (nodeName): Promise<BranchResult> => {
       const nodeDef = nodes[nodeName];
       if (!nodeDef) throw new Error(`Node not found: ${nodeName}`);
 
       const traceStart = new Date();
+      const nodeType = nodeDef.type ?? 'agent';
+
+      // Learning injection for parallel branches
+      let nodeContext = '';
+      let branchLearningIds: any[] = [];
+      if (nodeType === 'agent') {
+        try {
+          const learnings = await this.learningManager.query(
+            contextTags, exec.workflowName, nodeDef.role, nodeName, 550,
+          );
+          if (learnings.length > 0) {
+            nodeContext = this.learningManager.buildLearningsPrompt(learnings);
+            branchLearningIds = learnings.map(l => l._id).filter(Boolean);
+          }
+        } catch { /* fire-and-forget */ }
+      }
+
+      const deps: NodeExecutorDeps = {
+        roles: this.config.roles,
+        builtIns: this.config.builtIns,
+        workflows: this.config.workflows,
+        emitter: this.config.emitter,
+        runWorkflow: (wf, input) => this.run(wf, input, nestingDepth + 1),
+        executionId: exec.id,
+        nodeContext,
+      };
 
       // Each branch reads from the snapshot, not the live state
       const result = await executeNode(nodeName, nodeDef, stateSnapshot, exec.sessions, deps);
@@ -737,7 +934,7 @@ export class FlowForgeEngine {
         exec.sessions[nodeName] = result.sessionId;
       }
 
-      return { node: nodeName, outputs: result.outputs, result, traceStart };
+      return { node: nodeName, outputs: result.outputs, result, traceStart, injectedLearningIds: branchLearningIds };
     });
 
     let branchResults: BranchResult[];
@@ -807,6 +1004,11 @@ export class FlowForgeEngine {
         event: 'parallel_branch_done',
         data: { node: br.node, status: 'completed', remaining: 0 },
       });
+
+      // Learning: confirm injected learnings for this branch (fire-and-forget)
+      for (const lid of br.injectedLearningIds) {
+        this.learningManager.confirm(lid, exec.id).catch(() => {});
+      }
     }
 
     // Merge parallel outputs (filter internal markers)

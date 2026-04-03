@@ -11,6 +11,7 @@ interface HumanInputField {
   label?: string;
   required?: boolean;
   options?: string[];
+  placeholder?: string;
 }
 
 interface Props {
@@ -182,9 +183,9 @@ export default function NodeDetail({ nodeName, nodeState, trace, allTraces = [],
                     </label>
                   ) : field.type === 'text' ? (
                     <textarea
-                      className="input w-full text-xs resize-none"
-                      rows={2}
-                      placeholder={`Enter ${field.label ?? field.name}...`}
+                      className="w-full text-xs resize-none bg-surface-200 border border-accent-blue/30 rounded-sm px-3 py-2 text-gray-100 font-body focus:outline-none focus:border-accent-blue focus:shadow-glow-blue transition-all"
+                      rows={3}
+                      placeholder={field.placeholder ?? `Enter ${field.label ?? field.name}...`}
                       value={(formData[field.name] as string) ?? ''}
                       onChange={e => setFormData(p => ({ ...p, [field.name]: e.target.value }))}
                     />

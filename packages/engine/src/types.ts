@@ -275,3 +275,51 @@ export type BuiltInFunction = (
   state: Record<string, unknown>,
   emitter: EngineEventEmitter,
 ) => Promise<Record<string, unknown>>;
+
+// ── Learning System ────────────────────────────────────────────────────────
+
+export type LearningType = 'fact' | 'pattern' | 'mistake' | 'preference' | 'skill' | 'optimization';
+
+/**
+ * 'agent' — injected into agent prompts to improve node execution quality
+ * 'system' — shown to humans/engine for workflow design, model selection, input schema improvements
+ *            NEVER injected into agent prompts
+ */
+export type LearningTarget = 'agent' | 'system';
+
+export interface Learning {
+  _id?: any;
+  content: string;
+  type: LearningType;
+  target: LearningTarget;  // who this learning is for
+  tags: string[];
+  scope: {
+    level: 'global' | 'workflow' | 'context' | 'role' | 'node_pattern';
+    workflowName?: string;
+    contextTags?: string[];
+    roleName?: string;
+    nodePattern?: string;
+  };
+  source: {
+    executionId: string;
+    nodeName: string;
+    workflowName: string;
+    sourceType: 'retry_delta' | 'auto_gate' | 'human_correction' | 'agent_explicit' | 'post_execution_review' | 'manual';
+    timestamp: Date;
+  };
+  confidence: number;
+  confirmations: number;
+  contradictions: number;
+  usageCount: number;
+  lastUsedAt?: Date;
+  lastConfirmedAt?: Date;
+  validFrom: Date;
+  supersededBy?: any;
+  supersededAt?: Date;
+  tokenCount: number;
+  status: 'active' | 'archived' | 'superseded' | 'evolved';
+  evolvedAt?: Date;
+  evolvedIntoRole?: string;
+  createdAt: Date;
+  updatedAt: Date;
+}

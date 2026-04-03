@@ -44,10 +44,13 @@ export default function Select({ value, onChange, options, placeholder = 'Select
     return () => document.removeEventListener('keydown', handler);
   }, [open]);
 
-  // Close on scroll (any parent)
+  // Close on scroll from OUTSIDE the dropdown (not from scrolling inside it)
   useEffect(() => {
     if (!open) return;
-    const handler = () => setOpen(false);
+    const handler = (e: Event) => {
+      if (dropdownRef.current?.contains(e.target as Node)) return; // scrolling inside dropdown — ignore
+      setOpen(false);
+    };
     window.addEventListener('scroll', handler, true);
     return () => window.removeEventListener('scroll', handler, true);
   }, [open]);

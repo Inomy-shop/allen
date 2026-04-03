@@ -16,6 +16,7 @@ import { streamRoutes } from './routes/stream.routes.js';
 import { secretRoutes } from './routes/secret.routes.js';
 import { dashboardRoutes } from './routes/dashboard.routes.js';
 import { repoRoutes } from './routes/repo.routes.js';
+import { learningRoutes, executionLearningsRoute } from './routes/learning.routes.js';
 import { seedDefaultRoles, seedDefaultWorkflows } from './seed.js';
 import { setStreamDb } from './services/stream.service.js';
 
@@ -46,6 +47,8 @@ async function main(): Promise<void> {
   app.use('/api/secrets', secretRoutes(db));
   app.use('/api/dashboard', dashboardRoutes(db));
   app.use('/api/repos', repoRoutes(db));
+  app.use('/api/learnings', learningRoutes(db));
+  app.use('/api/executions', executionLearningsRoute(db));
 
   app.listen(PORT, () => {
     console.log(`FlowForge server running on http://localhost:${PORT}`);

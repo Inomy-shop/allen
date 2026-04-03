@@ -2,7 +2,7 @@ import { useState, useCallback, useEffect, useRef } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import {
   ArrowLeft, XCircle, Pause, Play, RefreshCw, Wifi, WifiOff,
-  Download, RotateCcw,
+  Download, RotateCcw, Brain,
 } from 'lucide-react';
 import { useExecution, type TimelineEvent } from '../hooks/useExecution';
 import { useResizable } from '../hooks/useResizable';
@@ -136,6 +136,24 @@ export default function ExecutionDetailPage() {
   const selectedState = selectedNode ? nodeStates.get(selectedNode) : undefined;
   const isPaused = execution.status === 'waiting_for_input' && !latestInputEvent;
 
+  // Count learnings from logs
+  const learningCounts = (() => {
+    let injected = 0;
+    let extracted = 0;
+    for (const log of logs) {
+      const msg = typeof log.message === 'string' ? log.message : '';
+      if (msg.includes('[learning] Injected')) {
+        const m = msg.match(/Injected (\d+)/);
+        if (m) injected += parseInt(m[1], 10);
+      }
+      if (msg.includes('[learning] Post-execution review extracted')) {
+        const m = msg.match(/extracted (\d+)/);
+        if (m) extracted += parseInt(m[1], 10);
+      }
+    }
+    return { injected, extracted };
+  })();
+
   // Compute total cost from node states (more accurate for live executions)
   const liveCost = (() => {
     let estimated = 0;
@@ -185,6 +203,17 @@ export default function ExecutionDetailPage() {
             <span className="text-xs text-gray-400 font-mono">{(execution.durationMs / 1000).toFixed(1)}s</span>
           )}
           <CostDisplay cost={liveCost} />
+          {(learningCounts.injected > 0 || learningCounts.extracted > 0) && (
+            <Link
+              to={`/learnings?search=${encodeURIComponent(id ?? '')}`}
+              className="flex items-center gap-1 text-[10px] font-mono text-purple-400 hover:text-purple-300 transition-colors"
+              title="Learnings"
+            >
+              <Brain className="w-3 h-3" />
+              {learningCounts.injected > 0 && <span>{learningCounts.injected} in</span>}
+              {learningCounts.extracted > 0 && <span>{learningCounts.extracted} out</span>}
+            </Link>
+          )}
           <button onClick={handleExportTraces} className="btn-ghost text-xs" title="Export traces">
             <Download className="w-3.5 h-3.5" />
           </button>

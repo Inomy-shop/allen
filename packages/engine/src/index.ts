@@ -10,4 +10,5 @@ export { loadRoles } from './roles-loader.js';
 export { loadRouter, autoRoute } from './router.js';
 export { getBuiltIns } from './built-ins/index.js';
 export type { NodeResult } from './node-executor.js';
+export { LearningManager, type ExtractionContext } from './learning-manager.js';
 export * from './types.js';

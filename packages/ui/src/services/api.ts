@@ -103,3 +103,33 @@ export const dashboard = {
   stats: () => request<any>('/dashboard/stats'),
   cost: () => request<any>('/dashboard/cost'),
 };
+
+// ── Learnings ─────────────────────────────────────────────────────────────
+export const learnings = {
+  list: (params?: Record<string, string>) => {
+    const qs = params ? '?' + new URLSearchParams(params).toString() : '';
+    return request<any[]>(`/learnings${qs}`);
+  },
+  stats: () => request<any>('/learnings/stats'),
+  get: (id: string) => request<any>(`/learnings/${id}`),
+  create: (body: any) =>
+    request<any>('/learnings', { method: 'POST', body: JSON.stringify(body) }),
+  update: (id: string, body: any) =>
+    request<any>(`/learnings/${id}`, { method: 'PUT', body: JSON.stringify(body) }),
+  approve: (id: string) =>
+    request<any>(`/learnings/${id}/approve`, { method: 'POST' }),
+  reject: (id: string) =>
+    request<any>(`/learnings/${id}/reject`, { method: 'POST' }),
+  delete: (id: string) =>
+    request<void>(`/learnings/${id}`, { method: 'DELETE' }),
+  forExecution: (execId: string) =>
+    request<any>(`/executions/${execId}/learnings`),
+  evolutionCandidates: (roleName?: string) => {
+    const qs = roleName ? `?roleName=${roleName}` : '';
+    return request<any>(`/learnings/evolution-candidates${qs}`);
+  },
+  evolutionPreview: (roleName: string) =>
+    request<any>(`/learnings/evolve/${roleName}/preview`),
+  evolve: (roleName: string, newPrompt: string) =>
+    request<any>(`/learnings/evolve/${roleName}`, { method: 'POST', body: JSON.stringify({ newPrompt }) }),
+};

@@ -101,7 +101,9 @@ export function useExecution(id: string | undefined) {
           if (gateReason || gateFields) {
             // Auto-gate clarify — use agent-provided prompt and fields
             prompt = (gateReason as string) ?? `Input required for ${waitingNode}`;
-            fields = Array.isArray(gateFields) ? gateFields : [{ name: 'clarification', type: 'text', label: prompt, required: true }];
+            fields = Array.isArray(gateFields) && gateFields.length > 0
+              ? gateFields
+              : [{ name: 'clarification', type: 'text', label: 'Your response', required: true, placeholder: 'Type your answer here...' }];
           } else if (nodeDef) {
             // Human node — use workflow definition
             prompt = nodeDef.prompt ?? `Input required for ${waitingNode}`;

@@ -36,5 +36,14 @@ export async function ensureIndexes(db: Db): Promise<void> {
   await db.collection('execution_logs').createIndex({ executionId: 1, timestamp: 1 });
   await db.collection('execution_logs').createIndex({ executionId: 1, node: 1, timestamp: 1 });
 
+  // Learnings
+  await db.collection('learnings').createIndex({ 'scope.level': 1, status: 1, confidence: -1 });
+  await db.collection('learnings').createIndex({ 'scope.contextTags': 1 });
+  await db.collection('learnings').createIndex({ 'scope.workflowName': 1 });
+  await db.collection('learnings').createIndex({ 'scope.roleName': 1 });
+  await db.collection('learnings').createIndex({ tags: 1 });
+  await db.collection('learnings').createIndex({ status: 1, lastUsedAt: 1 });
+  await db.collection('learnings').createIndex({ 'source.executionId': 1 });
+
   console.log('Database indexes ensured');
 }

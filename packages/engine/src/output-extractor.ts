@@ -8,7 +8,7 @@ import type { NodeDef } from './types.js';
  * Layer 4: LLM fallback via Haiku
  */
 /** Gate fields that should always be preserved if present in parsed JSON */
-const GATE_FIELDS = ['__action', '__reason', '__clarify_action', '__clarify_fields'];
+const GATE_FIELDS = ['__action', '__reason', '__clarify_action', '__clarify_fields', '__learnings'];
 
 function extractFromParsed(parsed: Record<string, unknown>, outputs: string[]): Record<string, unknown> {
   const result: Record<string, unknown> = {};
