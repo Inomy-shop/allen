@@ -167,4 +167,31 @@
       linear-gradient(90deg, rgb(var(--color-accent) / 0.03) 1px, transparent 1px);
     background-size: 40px 40px;
   }
+
+  /* ─── Chat markdown body ─── */
+  .markdown-body {
+    word-break: break-word;
+  }
+  .markdown-body > *:first-child {
+    margin-top: 0;
+  }
+  .markdown-body > *:last-child {
+    margin-bottom: 0;
+  }
+
+  /* ─── Chat message entry animation ─── */
+  .ff-msg-enter {
+    animation: ff-msg-enter 0.3s ease-out;
+  }
+}
+
+@keyframes ff-msg-enter {
+  from {
+    opacity: 0;
+    transform: translateY(0.5rem);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
 }

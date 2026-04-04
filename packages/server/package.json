@@ -10,6 +10,7 @@
     "lint": "tsc --noEmit"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.82.0",
     "@flowforge/engine": "*",
     "cors": "^2.8.5",
     "dotenv": "^17.4.0",

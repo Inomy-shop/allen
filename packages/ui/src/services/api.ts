@@ -104,6 +104,24 @@ export const dashboard = {
   cost: () => request<any>('/dashboard/cost'),
 };
 
+// ── Chat ──────────────────────────────────────────────────────────────────
+export const chat = {
+  listSessions: () => request<any[]>('/chat/sessions'),
+  createSession: () => request<any>('/chat/sessions', { method: 'POST' }),
+  getSession: (id: string) => request<any>(`/chat/sessions/${id}`),
+  getMessages: (id: string, params?: Record<string, string>) => {
+    const qs = params ? '?' + new URLSearchParams(params).toString() : '';
+    return request<any>(`/chat/sessions/${id}/messages${qs}`);
+  },
+  sendMessageUrl: (id: string) => `${BASE}/chat/sessions/${id}/messages`,
+  streamUrl: (id: string) => `${BASE}/chat/sessions/${id}/stream`,
+  isStreaming: (id: string) => request<{ streaming: boolean }>(`/chat/sessions/${id}/streaming`),
+  updateSession: (id: string, body: any) =>
+    request<any>(`/chat/sessions/${id}`, { method: 'PATCH', body: JSON.stringify(body) }),
+  deleteSession: (id: string) =>
+    request<void>(`/chat/sessions/${id}`, { method: 'DELETE' }),
+};
+
 // ── Learnings ─────────────────────────────────────────────────────────────
 export const learnings = {
   list: (params?: Record<string, string>) => {

@@ -45,5 +45,12 @@ export async function ensureIndexes(db: Db): Promise<void> {
   await db.collection('learnings').createIndex({ status: 1, lastUsedAt: 1 });
   await db.collection('learnings').createIndex({ 'source.executionId': 1 });
 
+  // Chat Sessions
+  await db.collection('chat_sessions').createIndex({ status: 1, lastMessageAt: -1 });
+  await db.collection('chat_sessions').createIndex({ claudeSessionId: 1 });
+
+  // Chat Messages
+  await db.collection('chat_messages').createIndex({ sessionId: 1, createdAt: 1 });
+
   console.log('Database indexes ensured');
 }

@@ -10,10 +10,12 @@ import {
   Settings,
   FolderGit2,
   Brain,
+  MessageSquare,
 } from 'lucide-react';
 import { useSettingsStore } from './stores/settingsStore';
 
 const navItems = [
+  { to: '/chat', icon: MessageSquare, label: 'Chat' },
   { to: '/', icon: LayoutDashboard, label: 'Dashboard' },
   { to: '/workflows', icon: GitBranch, label: 'Workflows' },
   { to: '/repos', icon: FolderGit2, label: 'Repos' },
