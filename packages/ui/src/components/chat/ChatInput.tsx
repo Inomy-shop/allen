@@ -1,6 +1,11 @@
-import { useState, useRef, useCallback, useEffect } from 'react';
+import { useState, useRef, useCallback, useEffect, forwardRef, useImperativeHandle } from 'react';
 import { Send, Square } from 'lucide-react';
 import MentionAutocomplete, { type MentionOption } from './MentionAutocomplete';
+
+export interface ChatInputHandle {
+  setValue: (v: string) => void;
+  focus: () => void;
+}
 
 interface ChatInputProps {
   onSend: (content: string) => void;
@@ -9,11 +14,31 @@ interface ChatInputProps {
   disabled?: boolean;
 }
 
-export default function ChatInput({ onSend, onCancel, streaming, disabled }: ChatInputProps) {
+const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function ChatInput(
+  { onSend, onCancel, streaming, disabled },
+  ref,
+) {
   const [value, setValue] = useState('');
   const [mentionVisible, setMentionVisible] = useState(false);
   const [mentionQuery, setMentionQuery] = useState('');
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+
+  // Expose setValue and focus to parent via ref
+  useImperativeHandle(ref, () => ({
+    setValue: (v: string) => {
+      setValue(v);
+      // Move cursor to end after setting
+      setTimeout(() => {
+        const el = textareaRef.current;
+        if (el) {
+          el.focus();
+          el.selectionStart = v.length;
+          el.selectionEnd = v.length;
+        }
+      }, 0);
+    },
+    focus: () => textareaRef.current?.focus(),
+  }));
 
   // Auto-resize textarea
   useEffect(() => {
@@ -34,7 +59,6 @@ export default function ChatInput({ onSend, onCancel, streaming, disabled }: Cha
 
     if (lastAt !== -1) {
       const afterAt = textBeforeCursor.slice(lastAt + 1);
-      // Only show if @ is at start or preceded by space, and no space in the query part
       const charBefore = lastAt > 0 ? textBeforeCursor[lastAt - 1] : ' ';
       if ((charBefore === ' ' || charBefore === '\n' || lastAt === 0) && !afterAt.includes(' ')) {
         setMentionVisible(true);
@@ -60,10 +84,9 @@ export default function ChatInput({ onSend, onCancel, streaming, disabled }: Cha
     setMentionVisible(false);
     setMentionQuery('');
 
-    // Focus and set cursor
     setTimeout(() => {
       if (el) {
-        const newPos = lastAt + option.name.length + 2; // @name + space
+        const newPos = lastAt + option.name.length + 2;
         el.focus();
         el.selectionStart = newPos;
         el.selectionEnd = newPos;
@@ -73,10 +96,9 @@ export default function ChatInput({ onSend, onCancel, streaming, disabled }: Cha
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
-      // If mention autocomplete is visible, let it handle Arrow/Enter/Tab/Escape
       if (mentionVisible) {
         if (['ArrowDown', 'ArrowUp', 'Enter', 'Tab', 'Escape'].includes(e.key)) {
-          return; // MentionAutocomplete's document listener handles these
+          return;
         }
       }
 
@@ -95,7 +117,6 @@ export default function ChatInput({ onSend, onCancel, streaming, disabled }: Cha
     setValue('');
     setMentionVisible(false);
 
-    // Reset textarea height
     if (textareaRef.current) {
       textareaRef.current.style.height = 'auto';
     }
@@ -115,7 +136,7 @@ export default function ChatInput({ onSend, onCancel, streaming, disabled }: Cha
           value={value}
           onChange={handleChange}
           onKeyDown={handleKeyDown}
-          placeholder="Message FlowForge... Use @ to mention resources"
+          placeholder="Message FlowForge... (⌘K for commands, @ for mentions)"
           disabled={streaming || disabled}
           rows={1}
           className="flex-1 resize-none bg-surface-200/50 border border-border/30 rounded-sm px-3 py-2 text-sm text-white placeholder-gray-600 font-body focus:outline-none focus:border-accent-blue/50 disabled:opacity-50 disabled:cursor-not-allowed"
@@ -142,4 +163,6 @@ export default function ChatInput({ onSend, onCancel, streaming, disabled }: Cha
       </div>
     </div>
   );
-}
+});
+
+export default ChatInput;

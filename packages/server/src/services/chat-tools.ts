@@ -262,7 +262,7 @@ const listRoles: ChatTool = {
 
 const spawnRole: ChatTool = {
   name: 'spawn_role',
-  description: 'Spawn a one-shot agent with a specific role to perform a task. The agent runs with the role\'s system prompt, model, and tools. Use this when the user asks to "ask @role-name to do something" or when a task requires a specialized role. Returns the agent\'s response.',
+  description: 'Spawn a one-shot agent with a specific role to perform a task that requires the agent\'s capabilities (reading files, writing code, running commands). Do NOT use this for simple questions about a role — answer those from mention context instead.',
   inputSchema: {
     type: 'object',
     properties: {
@@ -275,19 +275,42 @@ const spawnRole: ChatTool = {
   async execute(args, db) {
     const roleName = args.role_name as string;
     const prompt = args.prompt as string;
+    const startMs = Date.now();
 
-    // Look up the role
     const role = await db.collection('roles').findOne({ name: roleName });
     if (!role) {
       return { error: `Role "${roleName}" not found. Use list_roles to see available roles.` };
     }
 
+    // Create execution record
+    const { randomUUID } = await import('node:crypto');
+    const executionId = randomUUID();
+    await db.collection('executions').insertOne({
+      id: executionId,
+      workflowName: `chat:spawn_role/${roleName}`,
+      workflowId: null,
+      workflowVersion: 0,
+      status: 'running',
+      source: 'chat',
+      input: { prompt, role_name: roleName, repo_path: args.repo_path },
+      state: {},
+      sessions: {},
+      retryCounts: {},
+      currentNodes: [roleName],
+      completedNodes: [],
+      cost: { actual: null, estimated: 0 },
+      durationMs: 0,
+      startedAt: new Date(),
+    });
+
     try {
       const { query } = await import('@anthropic-ai/claude-code');
       const provider = role.provider ?? 'claude';
 
+      let response = '';
+      let costUsd = 0;
+
       if (provider === 'claude') {
-        let result = '';
         const conversation = query({
           prompt,
           options: {
@@ -301,49 +324,84 @@ const spawnRole: ChatTool = {
         for await (const msg of conversation) {
           if (msg.type === 'assistant') {
             const blocks = msg.message.content as Array<{ type: string; text?: string }>;
-            result = blocks.filter(b => b.type === 'text').map(b => b.text || '').join('');
+            response = blocks.filter(b => b.type === 'text').map(b => b.text || '').join('');
           }
-          if (msg.type === 'result' && (msg as any).subtype === 'success' && (msg as any).result) {
-            result = (msg as any).result;
+          if (msg.type === 'result') {
+            costUsd = (msg as any).total_cost_usd ?? 0;
+            if ((msg as any).subtype === 'success' && (msg as any).result) {
+              response = (msg as any).result;
+            }
           }
         }
-
-        return {
-          role_name: roleName,
-          response: result,
-          provider: 'claude',
-        };
-      }
-
-      // Codex support
-      if (provider === 'codex') {
+      } else if (provider === 'codex') {
         const { execFile } = await import('node:child_process');
         const { promisify } = await import('node:util');
         const execFileAsync = promisify(execFile);
-
         const codexArgs = ['exec', '--json', '--full-auto', '-m', role.model ?? 'codex-mini', prompt];
         const cwd = (args.repo_path as string) || process.cwd();
-
         const { stdout } = await execFileAsync('codex', codexArgs, { cwd, timeout: 120000 });
-        // Parse JSONL output for the final agent message
-        const lines = stdout.trim().split('\n');
-        let response = '';
-        for (const line of lines) {
+        for (const line of stdout.trim().split('\n')) {
           try {
             const evt = JSON.parse(line);
             if (evt.type === 'item.completed' && evt.item?.type === 'agent_message') {
               const text = evt.item.content?.filter((c: any) => c.type === 'output_text').map((c: any) => c.text).join('');
               if (text) response = text;
             }
-          } catch { /* skip non-JSON lines */ }
+          } catch { /* skip */ }
         }
-
-        return { role_name: roleName, response, provider: 'codex' };
+      } else {
+        throw new Error(`Unsupported provider: ${provider}`);
       }
 
-      return { error: `Unsupported provider: ${provider}` };
+      const durationMs = Date.now() - startMs;
+
+      // Update execution record as completed
+      await db.collection('executions').updateOne(
+        { id: executionId },
+        { $set: {
+          status: 'completed',
+          completedNodes: [roleName],
+          currentNodes: [],
+          cost: { actual: costUsd, estimated: costUsd },
+          durationMs,
+          completedAt: new Date(),
+        } },
+      );
+
+      // Save node trace for debugging
+      await db.collection('node_traces').insertOne({
+        executionId,
+        node: roleName,
+        attempt: 1,
+        status: 'completed',
+        type: 'agent',
+        role: roleName,
+        inputState: { prompt },
+        renderedPrompt: prompt,
+        rawResponse: response,
+        output: { response },
+        activity: [],
+        cost: { actual: costUsd, estimated: costUsd, model: role.model ?? 'sonnet', method: 'sdk_reported' },
+        durationMs,
+        startedAt: new Date(startMs),
+        completedAt: new Date(),
+      });
+
+      return {
+        role_name: roleName,
+        execution_id: executionId,
+        response,
+        provider: provider as string,
+        cost_usd: costUsd,
+        duration_ms: durationMs,
+      };
     } catch (err) {
-      return { error: `Failed to spawn role "${roleName}": ${(err as Error).message}` };
+      const durationMs = Date.now() - startMs;
+      await db.collection('executions').updateOne(
+        { id: executionId },
+        { $set: { status: 'failed', errorMessage: (err as Error).message, durationMs, completedAt: new Date() } },
+      );
+      return { error: `Failed to spawn role "${roleName}": ${(err as Error).message}`, execution_id: executionId };
     }
   },
 };

@@ -1,15 +1,16 @@
-import { useEffect } from 'react';
+import { useEffect, useState, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useChat } from '../hooks/useChat';
 import ChatInput from '../components/chat/ChatInput';
 import ChatMessageList from '../components/chat/ChatMessageList';
+import CommandPalette from '../components/chat/CommandPalette';
 import DeleteConfirmDialog from '../components/common/DeleteConfirmDialog';
-import { useState } from 'react';
 import {
   Plus,
   Trash2,
   MessageSquare,
   Circle,
+  Command,
 } from 'lucide-react';
 
 function timeAgo(dateStr: string): string {
@@ -27,6 +28,8 @@ export default function ChatPage() {
   const { sessionId: urlSessionId } = useParams<{ sessionId?: string }>();
   const navigate = useNavigate();
   const [deletingSession, setDeletingSession] = useState<{ id: string; title: string } | null>(null);
+  const [cmdPaletteOpen, setCmdPaletteOpen] = useState(false);
+  const chatInputRef = useRef<{ setValue: (v: string) => void; focus: () => void } | null>(null);
 
   const {
     sessions,
@@ -45,6 +48,18 @@ export default function ChatPage() {
     cancelStream,
   } = useChat();
 
+  // Cmd+K shortcut
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key === 'k') {
+        e.preventDefault();
+        setCmdPaletteOpen(prev => !prev);
+      }
+    };
+    window.addEventListener('keydown', handler);
+    return () => window.removeEventListener('keydown', handler);
+  }, []);
+
   // Sync URL → active session on mount
   useEffect(() => {
     if (urlSessionId && urlSessionId !== activeSessionId) {
@@ -62,21 +77,34 @@ export default function ChatPage() {
   }, [activeSessionId]);
 
   function handleNewConversation() {
-    // Don't create session yet — just clear the current one
-    // Session will be created on first message
     switchSession('');
     navigate('/chat', { replace: true });
   }
 
   async function handleSend(content: string) {
     if (!activeSessionId) {
-      // No active session — create one, then send with explicit session ID
       const session = await createSession();
       navigate(`/chat/${session._id}`, { replace: true });
       sendMessage(content, session._id);
       return;
     }
     sendMessage(content);
+  }
+
+  // Quick action / suggestion click — sends immediately
+  function handleSuggestionClick(prompt: string) {
+    handleSend(prompt);
+  }
+
+  // Command palette selection
+  function handleCommandSelect(prompt: string, partial?: boolean) {
+    if (partial) {
+      chatInputRef.current?.setValue(prompt);
+      chatInputRef.current?.focus();
+    } else {
+      handleSend(prompt);
+    }
+    setCmdPaletteOpen(false);
   }
 
   function handleSwitchSession(id: string) {
@@ -166,13 +194,23 @@ export default function ChatPage() {
               {activeSessionId ? sessions.find(s => s._id === activeSessionId)?.title ?? 'Chat' : 'FlowForge Chat'}
             </span>
           </div>
-          {activeSessionId && (
-            <span className="text-[10px] text-gray-600 font-mono">
-              {sessions.find(s => s._id === activeSessionId)?.totalCostUsd != null
-                ? `$${(sessions.find(s => s._id === activeSessionId)?.totalCostUsd ?? 0).toFixed(2)}`
-                : ''}
-            </span>
-          )}
+          <div className="flex items-center gap-3">
+            {activeSessionId && (
+              <span className="text-[10px] text-gray-600 font-mono">
+                {sessions.find(s => s._id === activeSessionId)?.totalCostUsd != null
+                  ? `$${(sessions.find(s => s._id === activeSessionId)?.totalCostUsd ?? 0).toFixed(2)}`
+                  : ''}
+              </span>
+            )}
+            <button
+              onClick={() => setCmdPaletteOpen(true)}
+              className="flex items-center gap-1.5 px-2 py-1 rounded-md bg-surface-200/40 border border-border/30 hover:bg-surface-200/70 hover:border-accent-blue/30 transition-all text-gray-500 hover:text-gray-300"
+              title="Command palette (⌘K)"
+            >
+              <Command className="w-3 h-3" />
+              <span className="text-[10px] font-mono">K</span>
+            </button>
+          </div>
         </div>
 
         {loadingMessages && messages.length === 0 && !streaming ? (
@@ -188,11 +226,25 @@ export default function ChatPage() {
             </p>
           </div>
         ) : (
-          <ChatMessageList messages={messages} streamText={streamText} thinkingText={thinkingText} streaming={streaming} activeToolCalls={activeToolCalls} />
+          <ChatMessageList
+            messages={messages}
+            streamText={streamText}
+            thinkingText={thinkingText}
+            streaming={streaming}
+            activeToolCalls={activeToolCalls}
+            onSuggestionClick={handleSuggestionClick}
+          />
         )}
 
-        <ChatInput onSend={handleSend} onCancel={cancelStream} streaming={streaming} disabled={false} />
+        <ChatInput ref={chatInputRef} onSend={handleSend} onCancel={cancelStream} streaming={streaming} disabled={false} />
       </div>
+
+      {/* Command Palette */}
+      <CommandPalette
+        open={cmdPaletteOpen}
+        onClose={() => setCmdPaletteOpen(false)}
+        onSelect={handleCommandSelect}
+      />
 
       <DeleteConfirmDialog
         open={!!deletingSession}

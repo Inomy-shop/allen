@@ -8,6 +8,7 @@ interface ChatMessageListProps {
   thinkingText?: string;
   streaming: boolean;
   activeToolCalls?: ActiveToolCall[];
+  onSuggestionClick?: (text: string) => void;
 }
 
 /* ── Copy button for code blocks ─────────────────────────────────────────── */
@@ -575,7 +576,26 @@ function ActiveToolCallsSection({ calls }: { calls: ActiveToolCall[] }) {
 
 /* ── Main component ──────────────────────────────────────────────────────── */
 
-export default function ChatMessageList({ messages, streamText, thinkingText, streaming, activeToolCalls = [] }: ChatMessageListProps) {
+const QUICK_ACTIONS = [
+  { label: 'List workflows', icon: 'zap', prompt: 'What workflows do I have?' },
+  { label: 'Dashboard stats', icon: 'chart', prompt: 'Show me dashboard stats' },
+  { label: 'Recent executions', icon: 'terminal', prompt: 'Show my recent executions' },
+  { label: 'List repos', icon: 'folder', prompt: 'List my registered repos' },
+  { label: 'Failed today', icon: 'alert', prompt: 'Find all failed executions in the last 24 hours' },
+  { label: 'Available roles', icon: 'bot', prompt: 'What agent roles are available?' },
+] as const;
+
+import { Zap, BarChart3, Terminal, FolderOpen, AlertTriangle, Bot as BotIcon2 } from 'lucide-react';
+const QUICK_ICONS: Record<string, React.ReactNode> = {
+  zap: <Zap className="w-3.5 h-3.5 text-accent-blue" />,
+  chart: <BarChart3 className="w-3.5 h-3.5 text-accent-green" />,
+  terminal: <Terminal className="w-3.5 h-3.5 text-gray-400" />,
+  folder: <FolderOpen className="w-3.5 h-3.5 text-accent-yellow" />,
+  alert: <AlertTriangle className="w-3.5 h-3.5 text-accent-red" />,
+  bot: <BotIcon2 className="w-3.5 h-3.5 text-accent-purple" />,
+};
+
+export default function ChatMessageList({ messages, streamText, thinkingText, streaming, activeToolCalls = [], onSuggestionClick }: ChatMessageListProps) {
   const bottomRef = useRef<HTMLDivElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const autoScrollRef = useRef(true);
@@ -599,7 +619,7 @@ export default function ChatMessageList({ messages, streamText, thinkingText, st
 
   return (
     <div ref={containerRef} className="flex-1 overflow-y-auto px-4 py-6 space-y-5">
-      {/* Empty state */}
+      {/* Empty state with quick actions */}
       {messages.length === 0 && !streaming && (
         <div className="flex flex-col items-center justify-center h-full text-center">
           <div className="w-14 h-14 rounded-lg bg-accent-blue/10 border border-accent-blue/20 flex items-center justify-center mb-4">
@@ -611,6 +631,20 @@ export default function ChatMessageList({ messages, streamText, thinkingText, st
           <p className="text-xs text-gray-600 mt-2 font-body max-w-xs">
             Use <span className="text-accent-blue font-mono">@mentions</span> to reference workflows, repos, and roles.
           </p>
+          {onSuggestionClick && (
+            <div className="mt-6 grid grid-cols-2 gap-2 max-w-sm">
+              {QUICK_ACTIONS.map(action => (
+                <button
+                  key={action.label}
+                  onClick={() => onSuggestionClick(action.prompt)}
+                  className="flex items-center gap-2.5 px-3 py-2 rounded-lg bg-surface-200/40 border border-border/30 hover:bg-surface-200/70 hover:border-accent-blue/30 transition-all text-left group"
+                >
+                  {QUICK_ICONS[action.icon]}
+                  <span className="text-xs text-gray-400 group-hover:text-gray-300 font-body">{action.label}</span>
+                </button>
+              ))}
+            </div>
+          )}
         </div>
       )}
 
