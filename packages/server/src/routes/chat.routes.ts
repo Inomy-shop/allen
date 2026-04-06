@@ -1,11 +1,24 @@
 import { Router, type Request, type Response } from 'express';
 import { param } from '../types.js';
 import { ChatService } from '../services/chat.service.js';
+import { executeChatTool } from '../services/chat-tools.js';
 import type { Db } from 'mongodb';
 
 export function chatRoutes(db: Db): Router {
   const router = Router();
   const chatService = new ChatService(db);
+
+  // POST /api/chat/spawn-role — Execute spawn_role tool via API (used by FlowForge MCP server)
+  router.post('/spawn-role', async (req: Request, res: Response) => {
+    try {
+      const { role_name, prompt, repo_path } = req.body;
+      if (!role_name || !prompt) return res.status(400).json({ error: 'role_name and prompt are required' });
+      const result = await executeChatTool('spawn_role', { role_name, prompt, repo_path }, db);
+      res.json(result);
+    } catch (err: unknown) {
+      res.status(500).json({ error: (err as Error).message });
+    }
+  });
 
   // GET /api/chat/sessions — List all sessions
   router.get('/sessions', async (_req: Request, res: Response) => {

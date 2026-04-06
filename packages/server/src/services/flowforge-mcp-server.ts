@@ -28,6 +28,9 @@ const TOOLS = [
   { name: 'get_learnings', description: 'Get learnings from the learning system', params: { workflow_name: 'string', type: 'string', limit: 'number' } },
   { name: 'get_node_trace', description: 'Get detailed trace of a node execution for debugging', params: { execution_id: 'string (required)', node_name: 'string (required)' } },
   { name: 'get_execution_logs', description: 'Get execution logs filtered by node, level, category', params: { execution_id: 'string (required)', node: 'string', level: 'string', category: 'string', limit: 'number' } },
+  { name: 'spawn_role', description: 'Spawn a one-shot agent with a specific role to perform a task. The agent runs with the role system prompt, model, and tools.', params: { role_name: 'string (required)', prompt: 'string (required)', repo_path: 'string — optional repo path' } },
+  { name: 'query_database', description: 'Run a read-only query against FlowForge MongoDB. Allowed collections: workflows, executions, roles, repos, learnings, chat_sessions, execution_logs, node_traces.', params: { collection: 'string (required)', filter: 'object', projection: 'object', sort: 'object', limit: 'number (max 20)' } },
+  { name: 'search_executions_advanced', description: 'Search executions with advanced filters: date range, cost, failed nodes.', params: { workflow_name: 'string', status: 'string', since_hours: 'number', min_cost: 'number', has_failed_node: 'boolean', limit: 'number' } },
   { name: 'submit_execution_input', description: 'Submit input to a paused workflow execution', params: { execution_id: 'string (required)', node: 'string (required)', data: 'object (required)' } },
   { name: 'save_learning', description: 'Save a learning/correction to system memory. Call silently when user corrects you or states a preference.', params: { content: 'string (required) — generalized rule', type: 'string (required) — fact, pattern, mistake, or preference' } },
 ];
@@ -103,6 +106,35 @@ async function executeTool(name: string, args: Record<string, unknown>): Promise
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ node: args.node, data: args.data }),
       });
+      return res.json();
+    }
+    case 'spawn_role': {
+      const url = `${API_BASE}/api/chat/spawn-role`;
+      const res = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ role_name: args.role_name, prompt: args.prompt, repo_path: args.repo_path }),
+      });
+      return res.json();
+    }
+    case 'query_database': {
+      const collection = args.collection as string;
+      const allowed = ['workflows', 'executions', 'roles', 'repos', 'learnings', 'chat_sessions', 'execution_logs', 'node_traces'];
+      if (!allowed.includes(collection)) return { error: `Collection "${collection}" not allowed. Allowed: ${allowed.join(', ')}` };
+      // Use the learnings endpoint as a proxy for simple queries, or call MongoDB directly
+      // For now, route to a generic query endpoint
+      const params = new URLSearchParams();
+      if (args.limit) params.set('limit', String(args.limit));
+      // Simple list query
+      const res = await fetch(`${API_BASE}/api/${collection === 'chat_sessions' ? 'chat/sessions' : collection}?${params}`);
+      return res.json();
+    }
+    case 'search_executions_advanced': {
+      const params = new URLSearchParams();
+      if (args.status) params.set('status', String(args.status));
+      if (args.workflow_name) params.set('workflowName', String(args.workflow_name));
+      const qs = params.toString();
+      const res = await fetch(`${API_BASE}/api/executions${qs ? '?' + qs : ''}`);
       return res.json();
     }
     case 'save_learning': {

@@ -386,7 +386,7 @@ const spawnRole: ChatTool = {
       );
 
       // Save node trace for debugging
-      await db.collection('node_traces').insertOne({
+      await db.collection('execution_traces').insertOne({
         executionId,
         node: roleName,
         attempt: 1,

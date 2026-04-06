@@ -2,7 +2,8 @@ import { useState, useCallback, useEffect, useRef } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import {
   ArrowLeft, XCircle, Pause, Play, RefreshCw, Wifi, WifiOff,
-  Download, RotateCcw, Brain,
+  Download, RotateCcw, Brain, Bot, Clock, DollarSign, Terminal,
+  CheckCircle, AlertCircle, Wrench, ChevronDown, ChevronRight,
 } from 'lucide-react';
 import { useExecution, type TimelineEvent } from '../hooks/useExecution';
 import { useResizable } from '../hooks/useResizable';
@@ -12,6 +13,140 @@ import CostDisplay from '../components/common/CostDisplay';
 import LiveGraph from '../components/execution/LiveGraph';
 import Timeline from '../components/execution/Timeline';
 import NodeDetail from '../components/execution/NodeDetail';
+
+// ── Role Execution View (single-node) ──
+
+function RoleExecutionView({ execution, roleName, trace, id }: {
+  execution: any; roleName: string; trace: any; id: string;
+}) {
+  const [showPrompt, setShowPrompt] = useState(false);
+  const [showResponse, setShowResponse] = useState(true);
+  const [showActivity, setShowActivity] = useState(false);
+
+  const prompt = trace?.renderedPrompt ?? execution.input?.prompt ?? '';
+  const response = trace?.rawResponse ?? '';
+  const cost = trace?.cost ?? execution.cost ?? {};
+  const activity = trace?.activity ?? [];
+  const durationMs = trace?.durationMs ?? execution.durationMs ?? 0;
+
+  return (
+    <div className="flex flex-col h-full">
+      {/* Header */}
+      <header className="flex items-center justify-between px-6 py-3 border-b border-border/50 bg-surface-50 shrink-0">
+        <div className="flex items-center gap-3">
+          <Link to="/executions" className="text-gray-400 hover:text-accent-blue transition-colors">
+            <ArrowLeft className="w-4 h-4" />
+          </Link>
+          <div className="w-9 h-9 rounded-lg bg-accent-purple/10 border border-accent-purple/20 flex items-center justify-center">
+            <Bot className="w-5 h-5 text-accent-purple" />
+          </div>
+          <div>
+            <h1 className="font-heading text-sm font-semibold text-white tracking-wider uppercase">{roleName}</h1>
+            <div className="flex items-center gap-2 mt-0.5">
+              <span className="text-[10px] text-gray-600 font-mono bg-surface-200/40 px-1.5 py-0.5 rounded">role execution</span>
+              <span className="text-xs text-gray-500 font-mono">{id?.slice(0, 8)}</span>
+              <StatusBadge status={execution.status} />
+            </div>
+          </div>
+        </div>
+        <div className="flex items-center gap-3">
+          {durationMs > 0 && (
+            <span className="flex items-center gap-1 text-xs text-gray-400 font-mono">
+              <Clock className="w-3 h-3" /> {(durationMs / 1000).toFixed(1)}s
+            </span>
+          )}
+          <CostDisplay cost={cost} />
+        </div>
+      </header>
+
+      {/* Content */}
+      <div className="flex-1 overflow-y-auto p-6 space-y-4">
+        {/* Metadata cards */}
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+          <div className="card p-3">
+            <span className="text-[10px] font-label uppercase tracking-widest text-gray-500">Status</span>
+            <div className="mt-1"><StatusBadge status={execution.status} /></div>
+          </div>
+          <div className="card p-3">
+            <span className="text-[10px] font-label uppercase tracking-widest text-gray-500">Duration</span>
+            <div className="mt-1 text-sm text-white font-mono">{(durationMs / 1000).toFixed(1)}s</div>
+          </div>
+          <div className="card p-3">
+            <span className="text-[10px] font-label uppercase tracking-widest text-gray-500">Cost</span>
+            <div className="mt-1 text-sm text-white font-mono">${(cost.actual ?? cost.estimated ?? 0).toFixed(4)}</div>
+          </div>
+          <div className="card p-3">
+            <span className="text-[10px] font-label uppercase tracking-widest text-gray-500">Model</span>
+            <div className="mt-1 text-sm text-white font-mono">{cost.model ?? 'sonnet'}</div>
+          </div>
+        </div>
+
+        {/* Prompt */}
+        <div className="card overflow-hidden">
+          <button onClick={() => setShowPrompt(!showPrompt)} className="w-full flex items-center gap-2 px-4 py-3 hover:bg-surface-200/30 transition-colors text-left">
+            {showPrompt ? <ChevronDown className="w-4 h-4 text-gray-500" /> : <ChevronRight className="w-4 h-4 text-gray-500" />}
+            <Terminal className="w-4 h-4 text-accent-blue" />
+            <span className="text-xs font-label uppercase tracking-widest text-gray-400">Prompt</span>
+            <span className="text-[10px] text-gray-600 font-mono ml-auto">{prompt.length} chars</span>
+          </button>
+          {showPrompt && (
+            <div className="px-4 pb-4 border-t border-border/20">
+              <pre className="text-xs text-gray-400 font-mono whitespace-pre-wrap mt-2 max-h-60 overflow-auto">{prompt}</pre>
+            </div>
+          )}
+        </div>
+
+        {/* Response */}
+        <div className="card overflow-hidden">
+          <button onClick={() => setShowResponse(!showResponse)} className="w-full flex items-center gap-2 px-4 py-3 hover:bg-surface-200/30 transition-colors text-left">
+            {showResponse ? <ChevronDown className="w-4 h-4 text-gray-500" /> : <ChevronRight className="w-4 h-4 text-gray-500" />}
+            {execution.status === 'completed' ? <CheckCircle className="w-4 h-4 text-accent-green" /> : <AlertCircle className="w-4 h-4 text-accent-red" />}
+            <span className="text-xs font-label uppercase tracking-widest text-gray-400">Response</span>
+            <span className="text-[10px] text-gray-600 font-mono ml-auto">{response.length} chars</span>
+          </button>
+          {showResponse && (
+            <div className="px-4 pb-4 border-t border-border/20">
+              <div className="text-sm text-gray-300 font-body whitespace-pre-wrap mt-2 max-h-96 overflow-auto leading-relaxed">{response || execution.errorMessage || '(no response)'}</div>
+            </div>
+          )}
+        </div>
+
+        {/* Activity / Tool Calls */}
+        {activity.length > 0 && (
+          <div className="card overflow-hidden">
+            <button onClick={() => setShowActivity(!showActivity)} className="w-full flex items-center gap-2 px-4 py-3 hover:bg-surface-200/30 transition-colors text-left">
+              {showActivity ? <ChevronDown className="w-4 h-4 text-gray-500" /> : <ChevronRight className="w-4 h-4 text-gray-500" />}
+              <Wrench className="w-4 h-4 text-accent-yellow" />
+              <span className="text-xs font-label uppercase tracking-widest text-gray-400">Activity</span>
+              <span className="text-[10px] text-gray-600 font-mono ml-auto">{activity.length} events</span>
+            </button>
+            {showActivity && (
+              <div className="px-4 pb-4 border-t border-border/20 max-h-80 overflow-auto">
+                {activity.map((a: any, i: number) => (
+                  <div key={i} className="flex items-start gap-2 py-1.5 border-b border-border/10 last:border-0 text-xs">
+                    <span className="text-gray-600 font-mono w-14 shrink-0">{new Date(a.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}</span>
+                    <span className={`shrink-0 ${a.type === 'tool_start' ? 'text-accent-yellow' : a.type === 'tool_error' ? 'text-accent-red' : 'text-gray-500'}`}>
+                      {a.type === 'tool_start' ? '🔧' : a.type === 'tool_complete' ? '✅' : a.type === 'tool_error' ? '❌' : '📝'}
+                    </span>
+                    <span className="text-gray-400 font-body">{a.content?.slice(0, 200)}</span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* Timestamps */}
+        <div className="text-[10px] text-gray-600 font-mono flex gap-4">
+          <span>Started: {execution.startedAt ? new Date(execution.startedAt).toLocaleString() : 'n/a'}</span>
+          <span>Completed: {execution.completedAt ? new Date(execution.completedAt).toLocaleString() : 'n/a'}</span>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── Main Execution Detail Page ──
 
 export default function ExecutionDetailPage() {
   const { id } = useParams<{ id: string }>();
@@ -129,6 +264,14 @@ export default function ExecutionDetailPage() {
 
   if (!execution) {
     return <div className="flex items-center justify-center h-full text-gray-500 font-mono text-sm">EXECUTION NOT FOUND</div>;
+  }
+
+  // Role execution — simplified single-node view
+  const isRoleExecution = execution.workflowName?.startsWith('chat:spawn_role/') || execution.source === 'chat';
+  if (isRoleExecution) {
+    const roleName = execution.workflowName?.replace('chat:spawn_role/', '') ?? 'unknown';
+    const roleTrace = traces.length > 0 ? traces[traces.length - 1] : null;
+    return <RoleExecutionView execution={execution} roleName={roleName} trace={roleTrace} id={id!} />;
   }
 
   const selectedTraces = traces.filter((t: any) => t.node === selectedNode);
