@@ -14,6 +14,7 @@ import RepoManagerPage from './pages/RepoManagerPage';
 import SettingsPage from './pages/SettingsPage';
 import LearningsPage from './pages/LearningsPage';
 import ChatPage from './pages/ChatPage';
+import AnalyticsPage from './pages/AnalyticsPage';
 
 const router = createBrowserRouter([
   {
@@ -31,6 +32,7 @@ const router = createBrowserRouter([
       { path: 'roles', element: <RoleManagerPage /> },
       { path: 'chat', element: <ChatPage /> },
       { path: 'chat/:sessionId', element: <ChatPage /> },
+      { path: 'analytics', element: <AnalyticsPage /> },
       { path: 'settings', element: <SettingsPage /> },
       { path: 'settings/:tab', element: <SettingsPage /> },
     ],

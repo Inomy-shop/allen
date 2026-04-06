@@ -8,7 +8,7 @@ import DeleteConfirmDialog from '../components/common/DeleteConfirmDialog';
 import {
   Plus, Trash2, MessageSquare, Circle, Command, Server,
 } from 'lucide-react';
-import { chat as chatApi, mcp as mcpApi } from '../services/api';
+import { chat as chatApi, mcp as mcpApi, learnings as learningsApi } from '../services/api';
 
 function timeAgo(dateStr: string): string {
   const diff = Date.now() - new Date(dateStr).getTime();
@@ -62,7 +62,7 @@ export default function ChatPage() {
     }).catch(() => {});
   }, []);
 
-  // Get current session's provider for display
+  // Get current session's provider and autonomy for display
   const activeSession = sessions.find(s => s._id === activeSessionId);
   const activeProvider = activeSession?.provider ?? selectedProvider;
 
@@ -99,6 +99,21 @@ export default function ChatPage() {
   }
 
   function handleSuggestionClick(prompt: string) { handleSend(prompt); }
+
+  async function handleSaveToLearnings(content: string) {
+    try {
+      await learningsApi.create({
+        content: content.slice(0, 1000),
+        type: 'fact',
+        target: 'agent',
+        tags: ['chat', 'saved'],
+        scope: { level: 'global' },
+        source: { sourceType: 'manual', workflowName: 'chat', nodeName: 'chat', executionId: activeSessionId ?? '', timestamp: new Date() },
+        confidence: 0.8,
+        status: 'active',
+      });
+    } catch (e) { console.error('Failed to save learning:', e); }
+  }
 
   function handleCommandSelect(prompt: string, partial?: boolean) {
     if (partial) { chatInputRef.current?.setValue(prompt); chatInputRef.current?.focus(); }
@@ -208,7 +223,7 @@ export default function ChatPage() {
             </p>
           </div>
         ) : (
-          <ChatMessageList messages={messages} streamText={streamText} thinkingText={thinkingText} streaming={streaming} activeToolCalls={activeToolCalls} onSuggestionClick={handleSuggestionClick} />
+          <ChatMessageList messages={messages} streamText={streamText} thinkingText={thinkingText} streaming={streaming} activeToolCalls={activeToolCalls} onSuggestionClick={handleSuggestionClick} onSaveToLearnings={handleSaveToLearnings} />
         )}
 
         <ChatInput
@@ -218,8 +233,8 @@ export default function ChatPage() {
           streaming={streaming}
           disabled={false}
           providers={providers}
-          selectedProvider={selectedProvider}
-          selectedModel={selectedModel}
+          selectedProvider={activeSession?.provider ?? selectedProvider}
+          selectedModel={activeSession?.model ?? selectedModel}
           modelLocked={!!activeSessionId}
           onProviderChange={(p, m) => { setSelectedProvider(p); setSelectedModel(m); }}
         />

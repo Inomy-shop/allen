@@ -9,6 +9,9 @@ import type { Db } from 'mongodb';
 import { ObjectId } from 'mongodb';
 import type { Response } from 'express';
 import { runChatLLM, type ChatLLMMessage, type ChatProvider, PROVIDERS } from './chat-llm.js';
+import { AlertService } from './alert.service.js';
+import { searchSimilar, backfillEmbeddings } from './embedding.service.js';
+// Note: embedding.service.ts re-exports from @flowforge/engine — single implementation shared by engine + server
 
 // ── Types ──
 
@@ -19,11 +22,8 @@ export interface ChatSession {
   messageCount: number;
   lastMessageAt: Date;
   totalCostUsd: number;
-  /** LLM provider for this conversation */
   provider: ChatProvider;
-  /** Model override (optional, uses provider default if not set) */
   model?: string;
-  /** Claude Code SDK session ID for multi-turn resume (claude-cli only) */
   claudeSessionId?: string;
   createdAt: Date;
   updatedAt: Date;
@@ -104,10 +104,43 @@ const API_PORT = process.env.PORT ?? '4023';
  * - codex: uses bash + curl against local API
  * - gemini/anthropic-api: uses native function calling (tools registered at API level)
  */
-function getSystemPrompt(provider: ChatProvider): string {
+async function getSystemPrompt(provider: ChatProvider, db: Db, userMessage?: string): Promise<string> {
+  // Load relevant learnings using embedding similarity search
+  let learningsBlock = '';
+  try {
+    // Backfill embeddings for any learnings that don't have them
+    await backfillEmbeddings(db);
+
+    if (userMessage) {
+      // Semantic search — find learnings most relevant to the user's message
+      const results = await searchSimilar(db, userMessage, { limit: 10, threshold: 0.25 });
+      if (results.length > 0) {
+        const items = results.map(l => `- [${l.type}] (relevance: ${(l.score * 100).toFixed(0)}%) ${l.content}`).join('\n');
+        learningsBlock = `\n\n## Memory from previous conversations\nApply these learned preferences and facts:\n${items}`;
+      }
+    } else {
+      // No message context — load top preferences
+      const prefs = await db.collection('learnings')
+        .find({ status: 'active', tags: 'chat', type: 'preference' })
+        .sort({ confidence: -1 })
+        .limit(5)
+        .toArray();
+      if (prefs.length > 0) {
+        const items = prefs.map(l => `- [${l.type}] ${l.content}`).join('\n');
+        learningsBlock = `\n\n## Memory from previous conversations\nApply these learned preferences and facts:\n${items}`;
+      }
+    }
+  } catch (err) {
+    console.error('\x1b[35m[embedding]\x1b[0m Failed to load learnings:', (err as Error).message);
+  }
+
   const base = `You are FlowForge Assistant — the intelligent command center for the FlowForge workflow orchestration platform.
 When users mention @workflow-name, @repo-name, or @role-name, you receive context about those resources. Use this to answer or fill in parameters automatically.
-Be concise and technical. Use markdown. Always provide IDs for tracking.`;
+Be concise and technical. Use markdown. Always provide IDs for tracking.
+
+IMPORTANT RULES:
+1. Before executing any destructive action (running workflows, cancelling executions, creating/editing/deleting tickets, spawning roles), tell the user what you're about to do and ask for confirmation. Read-only actions execute immediately.
+2. When the user corrects you or states a preference ("no, use staging DB", "always run tests first", "I prefer TypeScript"), silently call save_learning to remember it. Write it as a generalized rule. Don't tell the user you're saving — just do it.${learningsBlock}`;
 
   if (provider === 'codex') {
     return `${base}
@@ -312,7 +345,7 @@ export class ChatService {
       const result = await runChatLLM(this.db, {
         provider,
         model,
-        systemPrompt: getSystemPrompt(provider),
+        systemPrompt: await getSystemPrompt(provider, this.db, content),
         messages: llmMessages,
         resumeSessionId: hasSessionResume ? resumeSessionId : undefined,
         onText: (fullText) => {
@@ -420,6 +453,9 @@ export class ChatService {
       }).catch(() => {});
 
       broadcastToListeners(entry, 'error', { error: errorMsg, messageId: assistantMsgId });
+
+      // Fire alert
+      new AlertService(this.db).onChatError(sessionId, errorMsg).catch(() => {});
     } finally {
       for (const listener of entry.listeners) { try { listener.end(); } catch {} }
       activeQueries.delete(sessionId);

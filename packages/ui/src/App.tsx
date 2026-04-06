@@ -1,6 +1,7 @@
 import { useEffect } from 'react';
 import { NavLink, Outlet } from 'react-router-dom';
 import ErrorBoundary from './components/common/ErrorBoundary';
+import NotificationBell from './components/common/NotificationBell';
 import {
   LayoutDashboard,
   GitBranch,
@@ -11,6 +12,7 @@ import {
   FolderGit2,
   Brain,
   MessageSquare,
+  BarChart3,
 } from 'lucide-react';
 import { useSettingsStore } from './stores/settingsStore';
 
@@ -22,6 +24,7 @@ const navItems = [
   { to: '/learnings', icon: Brain, label: 'Learnings' },
   { to: '/executions', icon: Play, label: 'Executions' },
   { to: '/roles', icon: Users, label: 'Roles' },
+  { to: '/analytics', icon: BarChart3, label: 'Analytics' },
 ];
 
 export default function App() {
@@ -64,6 +67,9 @@ export default function App() {
           ))}
         </div>
         <div className="border-t border-border/50">
+          <div className="flex items-center justify-between px-4 py-2">
+            <NotificationBell />
+          </div>
           <NavLink
             to="/settings"
             className={({ isActive }) =>

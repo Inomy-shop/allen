@@ -40,8 +40,10 @@ const SCOPE_SPECIFICITY: Record<string, number> = {
 
 export class LearningManager {
   private collection: Collection<Learning>;
+  private db: Db;
 
   constructor(db: Db) {
+    this.db = db;
     this.collection = db.collection<Learning>('learnings');
   }
 
@@ -153,52 +155,51 @@ export class LearningManager {
 
       if (existing.length === 0) {
         await this.enforceGrowthLimits(learning.scope);
-        await this.collection.insertOne(learning);
+        const result = await this.collection.insertOne(learning);
+        this.generateEmbedding(result.insertedId.toString(), learning.content);
         return;
       }
 
       const { item: mostSimilar, score: similarity } = existing[0];
 
       if (similarity > 0.95) {
-        // NOOP — duplicate, confirm existing
         await this.confirm(mostSimilar._id, learning.source.executionId);
         return;
       }
 
       if (similarity > 0.7 && !this.contradicts(learning, mostSimilar)) {
-        // UPDATE — refine existing
         await this.collection.updateOne(
           { _id: mostSimilar._id },
-          {
-            $set: { content: learning.content, updatedAt: new Date() },
-            $inc: { confirmations: 1 },
-          },
+          { $set: { content: learning.content, updatedAt: new Date() }, $inc: { confirmations: 1 } },
         );
+        // Re-embed since content changed
+        this.generateEmbedding(mostSimilar._id.toString(), learning.content);
         return;
       }
 
       if (this.contradicts(learning, mostSimilar)) {
-        // DELETE old + ADD new — supersede
         await this.collection.updateOne(
           { _id: mostSimilar._id },
-          {
-            $set: {
-              status: 'superseded' as const,
-              supersededBy: learning._id,
-              supersededAt: new Date(),
-            },
-          },
+          { $set: { status: 'superseded' as const, supersededBy: learning._id, supersededAt: new Date() } },
         );
-        await this.collection.insertOne(learning);
+        const result = await this.collection.insertOne(learning);
+        this.generateEmbedding(result.insertedId.toString(), learning.content);
         return;
       }
 
-      // Different enough — ADD as new learning
       await this.enforceGrowthLimits(learning.scope);
-      await this.collection.insertOne(learning);
+      const result = await this.collection.insertOne(learning);
+      this.generateEmbedding(result.insertedId.toString(), learning.content);
     } catch (err) {
       console.error('Learning storage failed (non-blocking):', err);
     }
+  }
+
+  /** Generate embedding for a learning (fire-and-forget). */
+  private generateEmbedding(learningId: string, content: string): void {
+    import('./embedding.js').then(({ embedAndSave }) => {
+      embedAndSave(this.db, learningId, content).catch(() => {});
+    }).catch(() => {});
   }
 
   // ── Growth Limits ──────────────────────────────────────────────────────
@@ -709,7 +710,16 @@ export class LearningManager {
       return true;
     });
 
-    // Phase 2: Relevance ranking
+    // Phase 2: Relevance ranking (with optional embedding similarity)
+    let queryEmbedding: number[] | null = null;
+    try {
+      const hasEmbeddedLearnings = filtered.some(l => (l as any).embedding?.length > 0);
+      if (hasEmbeddedLearnings) {
+        const { embed } = await import('./embedding.js');
+        queryEmbedding = await embed(`${workflowName} ${nodeName} ${roleName ?? ''} ${contextTags.join(' ')}`);
+      }
+    } catch { /* embedding not available — skip */ }
+
     const now = Date.now();
     const scored = filtered.map(learning => {
       const scopeSpec = SCOPE_SPECIFICITY[learning.scope.level] ?? 0.4;
@@ -721,7 +731,24 @@ export class LearningManager {
 
       const novelty = 1 - Math.min(learning.usageCount / 20, 1);
 
-      const score = scopeSpec * 0.3 + confidence * 0.3 + recency * 0.2 + novelty * 0.2;
+      // Embedding similarity boost for chat learnings
+      let semanticBoost = 0;
+      if (queryEmbedding && (learning as any).embedding?.length > 0) {
+        const emb = (learning as any).embedding as number[];
+        let dot = 0, nA = 0, nB = 0;
+        for (let i = 0; i < Math.min(emb.length, queryEmbedding.length); i++) {
+          dot += emb[i] * queryEmbedding[i];
+          nA += emb[i] * emb[i];
+          nB += queryEmbedding[i] * queryEmbedding[i];
+        }
+        const denom = Math.sqrt(nA) * Math.sqrt(nB);
+        semanticBoost = denom > 0 ? Math.max(0, dot / denom) : 0;
+      }
+
+      const score = semanticBoost > 0
+        ? scopeSpec * 0.2 + confidence * 0.2 + recency * 0.15 + novelty * 0.15 + semanticBoost * 0.3
+        : scopeSpec * 0.3 + confidence * 0.3 + recency * 0.2 + novelty * 0.2;
+
       return { learning, score };
     });
 

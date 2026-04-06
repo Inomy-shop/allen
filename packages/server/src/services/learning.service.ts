@@ -1,4 +1,5 @@
 import type { Db, Collection, ObjectId } from 'mongodb';
+import { embedAndSave } from './embedding.service.js';
 
 export class LearningService {
   private collection: Collection;
@@ -131,6 +132,8 @@ export class LearningService {
     };
 
     const result = await this.collection.insertOne(doc);
+    // Generate embedding (non-blocking)
+    embedAndSave(this.db, result.insertedId.toString(), body.content).catch(() => {});
     return { ...doc, _id: result.insertedId };
   }
 

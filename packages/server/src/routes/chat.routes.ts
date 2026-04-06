@@ -100,6 +100,17 @@ export function chatRoutes(db: Db): Router {
     }
   });
 
+  // POST /api/chat/embeddings/backfill — Generate embeddings for learnings that don't have them
+  router.post('/embeddings/backfill', async (_req: Request, res: Response) => {
+    try {
+      const { backfillEmbeddings } = await import('../services/embedding.service.js');
+      const count = await backfillEmbeddings(db);
+      res.json({ indexed: count });
+    } catch (err: unknown) {
+      res.status(500).json({ error: (err as Error).message });
+    }
+  });
+
   // GET /api/chat/sessions/:id/logs — Get execution traces for a session
   router.get('/sessions/:id/logs', async (req: Request, res: Response) => {
     try {

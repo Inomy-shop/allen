@@ -17,6 +17,7 @@ interface ChatMessageListProps {
   streaming: boolean;
   activeToolCalls?: ActiveToolCall[];
   onSuggestionClick?: (text: string) => void;
+  onSaveToLearnings?: (content: string) => void;
 }
 
 /* ── Copy button for code blocks ─────────────────────────────────────────── */
@@ -605,7 +606,9 @@ const QUICK_ICONS: Record<string, React.ReactNode> = {
   bot: <Bot className="w-3.5 h-3.5 text-accent-purple" />,
 };
 
-export default function ChatMessageList({ messages, streamText, thinkingText, streaming, activeToolCalls = [], onSuggestionClick }: ChatMessageListProps) {
+import { Bookmark } from 'lucide-react';
+
+export default function ChatMessageList({ messages, streamText, thinkingText, streaming, activeToolCalls = [], onSuggestionClick, onSaveToLearnings }: ChatMessageListProps) {
   const agentIconName = useSettingsStore((s) => s.agentIcon);
   const AgentIcon = AGENT_ICONS[agentIconName] ?? Bot;
   const bottomRef = useRef<HTMLDivElement>(null);
@@ -666,7 +669,7 @@ export default function ChatMessageList({ messages, streamText, thinkingText, st
           key={msg._id || i}
           className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'} ff-msg-enter`}
         >
-          <div className={`flex gap-3 ${msg.role === 'user' ? 'flex-row-reverse max-w-[75%]' : 'max-w-[85%]'}`}>
+          <div className={`group/msg flex gap-3 ${msg.role === 'user' ? 'flex-row-reverse max-w-[75%]' : 'max-w-[85%]'}`}>
             {/* Avatar */}
             <div
               className={`shrink-0 w-8 h-8 rounded-lg flex items-center justify-center mt-0.5 ${
@@ -733,9 +736,20 @@ export default function ChatMessageList({ messages, streamText, thinkingText, st
                 </>
               )}
 
-              {/* Error message */}
+              {/* Save to learnings + error */}
+              <div className="flex items-center gap-2 mt-1">
+                {msg.role === 'assistant' && msg.content && onSaveToLearnings && (
+                  <button
+                    onClick={() => onSaveToLearnings(msg.content)}
+                    className="flex items-center gap-1 text-[10px] text-gray-600 hover:text-accent-blue transition-colors opacity-0 group-hover/msg:opacity-100"
+                    title="Save to learnings"
+                  >
+                    <Bookmark className="w-3 h-3" /> Save
+                  </button>
+                )}
+              </div>
               {msg.error && (
-                <div className="mt-2 flex items-center gap-1.5 text-xs text-red-400 font-mono bg-red-500/5 border border-red-500/10 px-2.5 py-1.5 rounded-md">
+                <div className="mt-1 flex items-center gap-1.5 text-xs text-red-400 font-mono bg-red-500/5 border border-red-500/10 px-2.5 py-1.5 rounded-md">
                   <AlertCircle className="w-3 h-3 shrink-0" />
                   {msg.error}
                 </div>

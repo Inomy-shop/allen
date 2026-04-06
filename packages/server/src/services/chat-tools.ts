@@ -6,6 +6,7 @@
 
 import type { Db, ObjectId } from 'mongodb';
 import { ExecutionService } from './execution.service.js';
+import { embedAndSave, invalidateCache } from './embedding.service.js';
 
 // ── Tool Definition Shape ──
 
@@ -13,8 +14,19 @@ export interface ChatTool {
   name: string;
   description: string;
   inputSchema: Record<string, unknown>;
+  /** If true, this tool mutates state (requires approval in guided/manual mode) */
+  destructive?: boolean;
   execute: (args: Record<string, unknown>, db: Db) => Promise<Record<string, unknown>>;
 }
+
+/** Tools that mutate state — require approval in guided mode */
+export const DESTRUCTIVE_TOOLS = new Set([
+  'run_workflow', 'cancel_execution', 'spawn_role', 'submit_execution_input',
+  // MCP tools that mutate (linear create/edit/delete)
+  'mcp__linear__linear_create_issue', 'mcp__linear__linear_edit_issue',
+  'mcp__linear__linear_delete_issue', 'mcp__linear__linear_create_comment',
+  'mcp__linear__linear_bulk_update_issues',
+]);
 
 // ── Helpers ──
 
@@ -727,6 +739,47 @@ const submitExecutionInput: ChatTool = {
   },
 };
 
+// ── Learning Capture ──
+
+const saveLearning: ChatTool = {
+  name: 'save_learning',
+  description: 'Save a learning/correction to the system memory. Call this automatically when the user corrects you, provides a preference, or shares a fact that should be remembered for future conversations. Do NOT ask the user before saving — just save it silently.',
+  inputSchema: {
+    type: 'object',
+    properties: {
+      content: { type: 'string', description: 'The learning content — write it as a generalized rule, not specific to this conversation. E.g., "Always use staging database for testing" not "User said use staging"' },
+      type: { type: 'string', description: 'Learning type: fact, pattern, mistake, preference', enum: ['fact', 'pattern', 'mistake', 'preference'] },
+    },
+    required: ['content', 'type'],
+  },
+  async execute(args, db) {
+    const content = args.content as string;
+    const type = args.type as string;
+
+    const result = await db.collection('learnings').insertOne({
+      content,
+      type,
+      target: 'agent',
+      tags: ['chat', 'auto-extracted'],
+      scope: { level: 'global' },
+      source: { sourceType: 'human_correction', workflowName: 'chat', nodeName: 'chat', executionId: '', timestamp: new Date() },
+      confidence: 0.9,
+      confirmations: 1,
+      contradictions: 0,
+      usageCount: 0,
+      tokenCount: content.length,
+      status: 'active',
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    });
+
+    // Generate and save embedding (async, non-blocking)
+    embedAndSave(db, result.insertedId.toString(), content).catch(() => {});
+
+    return { saved: true, content, type };
+  },
+};
+
 export const chatTools: ChatTool[] = [
   // Core
   listWorkflows,
@@ -747,6 +800,8 @@ export const chatTools: ChatTool[] = [
   getExecutionLogs,
   // Human-in-the-loop
   submitExecutionInput,
+  // Learning capture
+  saveLearning,
 ];
 
 /**

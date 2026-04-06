@@ -124,6 +124,15 @@ export const chat = {
     request<void>(`/chat/sessions/${id}`, { method: 'DELETE' }),
 };
 
+// ── Alerts ───────────────────────────────────────────────────────────────
+export const alerts = {
+  list: (unread?: boolean) => request<any[]>(`/alerts${unread ? '?unread=true' : ''}`),
+  count: () => request<{ count: number }>('/alerts/count'),
+  markRead: (id: string) => request<any>(`/alerts/${id}/read`, { method: 'POST' }),
+  markAllRead: () => request<any>('/alerts/read-all', { method: 'POST' }),
+  dismiss: (id: string) => request<void>(`/alerts/${id}`, { method: 'DELETE' }),
+};
+
 // ── MCP Servers ──────────────────────────────────────────────────────────
 export const mcp = {
   list: () => request<any[]>('/mcp/servers'),

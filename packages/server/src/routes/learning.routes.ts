@@ -1,6 +1,7 @@
 import { Router, type Request, type Response } from 'express';
 import { LearningService } from '../services/learning.service.js';
 import { LearningManager } from '@flowforge/engine';
+import { embedAndSave } from '../services/embedding.service.js';
 import { param } from '../types.js';
 import type { Db } from 'mongodb';
 
@@ -137,6 +138,10 @@ export function learningRoutes(db: Db): Router {
         return res.status(400).json({ error: 'content, type, and scope are required' });
       }
       const learning = await service.create({ content, type, scope, tags });
+      // Generate embedding (non-blocking)
+      if (learning._id) {
+        embedAndSave(db, learning._id.toString(), content).catch(() => {});
+      }
       res.status(201).json(learning);
     } catch (err: unknown) {
       res.status(500).json({ error: (err as Error).message });

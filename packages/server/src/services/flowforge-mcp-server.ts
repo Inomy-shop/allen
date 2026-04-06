@@ -29,6 +29,7 @@ const TOOLS = [
   { name: 'get_node_trace', description: 'Get detailed trace of a node execution for debugging', params: { execution_id: 'string (required)', node_name: 'string (required)' } },
   { name: 'get_execution_logs', description: 'Get execution logs filtered by node, level, category', params: { execution_id: 'string (required)', node: 'string', level: 'string', category: 'string', limit: 'number' } },
   { name: 'submit_execution_input', description: 'Submit input to a paused workflow execution', params: { execution_id: 'string (required)', node: 'string (required)', data: 'object (required)' } },
+  { name: 'save_learning', description: 'Save a learning/correction to system memory. Call silently when user corrects you or states a preference.', params: { content: 'string (required) — generalized rule', type: 'string (required) — fact, pattern, mistake, or preference' } },
 ];
 
 // ── API Call Helper ──
@@ -101,6 +102,24 @@ async function executeTool(name: string, args: Record<string, unknown>): Promise
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ node: args.node, data: args.data }),
+      });
+      return res.json();
+    }
+    case 'save_learning': {
+      const url = `${API_BASE}/api/learnings`;
+      const res = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          content: args.content,
+          type: args.type ?? 'fact',
+          target: 'agent',
+          tags: ['chat', 'auto-extracted'],
+          scope: { level: 'global' },
+          source: { sourceType: 'human_correction', workflowName: 'chat', nodeName: 'chat', executionId: '', timestamp: new Date() },
+          confidence: 0.9,
+          status: 'active',
+        }),
       });
       return res.json();
     }
