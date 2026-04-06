@@ -1,6 +1,14 @@
 import { useEffect, useRef, useState } from 'react';
-import { Bot, User, AlertCircle, Copy, Check, Clock, Wrench, CheckCircle, ExternalLink, Loader2, Brain } from 'lucide-react';
+import { Bot, User, AlertCircle, Copy, Check, Clock, Wrench, CheckCircle, ExternalLink, Loader2, Brain,
+  Sparkles, Zap, Cpu, Atom, Terminal, Code, Rocket, Shield, Hexagon, Flame,
+} from 'lucide-react';
 import type { ChatMessage, ToolCallRecord, ActiveToolCall } from '../../hooks/useChat';
+import { useSettingsStore } from '../../stores/settingsStore';
+
+const AGENT_ICONS: Record<string, React.ElementType> = {
+  bot: Bot, brain: Brain, sparkles: Sparkles, zap: Zap, cpu: Cpu, atom: Atom,
+  terminal: Terminal, code: Code, rocket: Rocket, shield: Shield, hexagon: Hexagon, flame: Flame,
+};
 
 interface ChatMessageListProps {
   messages: ChatMessage[];
@@ -485,9 +493,11 @@ const TOOL_LABELS: Record<string, { label: string; color: string }> = {
   query_database: { label: 'Query Database', color: 'text-accent-orange' },
   search_executions_advanced: { label: 'Search Executions', color: 'text-accent-blue' },
   get_dashboard_stats: { label: 'Dashboard Stats', color: 'text-accent-green' },
-  // Phase 6: Debugging
+  // Debugging
   get_node_trace: { label: 'Node Trace', color: 'text-accent-yellow' },
   get_execution_logs: { label: 'Execution Logs', color: 'text-accent-yellow' },
+  // Human-in-the-loop
+  submit_execution_input: { label: 'Submit Input', color: 'text-accent-green' },
 };
 
 function ToolCallCard({ call, active }: { call: ToolCallRecord | ActiveToolCall; active?: boolean }) {
@@ -585,17 +595,19 @@ const QUICK_ACTIONS = [
   { label: 'Available roles', icon: 'bot', prompt: 'What agent roles are available?' },
 ] as const;
 
-import { Zap, BarChart3, Terminal, FolderOpen, AlertTriangle, Bot as BotIcon2 } from 'lucide-react';
+import { BarChart3, FolderOpen, AlertTriangle } from 'lucide-react';
 const QUICK_ICONS: Record<string, React.ReactNode> = {
   zap: <Zap className="w-3.5 h-3.5 text-accent-blue" />,
   chart: <BarChart3 className="w-3.5 h-3.5 text-accent-green" />,
   terminal: <Terminal className="w-3.5 h-3.5 text-gray-400" />,
   folder: <FolderOpen className="w-3.5 h-3.5 text-accent-yellow" />,
   alert: <AlertTriangle className="w-3.5 h-3.5 text-accent-red" />,
-  bot: <BotIcon2 className="w-3.5 h-3.5 text-accent-purple" />,
+  bot: <Bot className="w-3.5 h-3.5 text-accent-purple" />,
 };
 
 export default function ChatMessageList({ messages, streamText, thinkingText, streaming, activeToolCalls = [], onSuggestionClick }: ChatMessageListProps) {
+  const agentIconName = useSettingsStore((s) => s.agentIcon);
+  const AgentIcon = AGENT_ICONS[agentIconName] ?? Bot;
   const bottomRef = useRef<HTMLDivElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const autoScrollRef = useRef(true);
@@ -623,7 +635,7 @@ export default function ChatMessageList({ messages, streamText, thinkingText, st
       {messages.length === 0 && !streaming && (
         <div className="flex flex-col items-center justify-center h-full text-center">
           <div className="w-14 h-14 rounded-lg bg-accent-blue/10 border border-accent-blue/20 flex items-center justify-center mb-4">
-            <Bot className="w-7 h-7 text-accent-blue/50" />
+            <AgentIcon className="w-7 h-7 text-accent-blue/50" />
           </div>
           <p className="text-sm text-gray-400 font-body">
             Start a conversation with FlowForge Assistant.
@@ -670,7 +682,7 @@ export default function ChatMessageList({ messages, streamText, thinkingText, st
               ) : msg.status === 'failed' ? (
                 <AlertCircle className="w-4 h-4" />
               ) : (
-                <Bot className="w-4 h-4" />
+                <AgentIcon className="w-4 h-4" />
               )}
             </div>
 
@@ -736,8 +748,8 @@ export default function ChatMessageList({ messages, streamText, thinkingText, st
       {/* Streaming message */}
       {streaming && (
         <div className="flex gap-3 ff-msg-enter">
-          <div className="shrink-0 w-8 h-8 rounded-lg flex items-center justify-center bg-accent-blue/10 border border-accent-blue/20 text-accent-blue mt-0.5">
-            <Bot className="w-4 h-4 animate-pulse" />
+          <div className="shrink-0 w-8 h-8 rounded-lg flex items-center justify-center bg-accent-blue/15 border border-accent-blue/30 text-accent-blue mt-0.5">
+            <AgentIcon className="w-4 h-4 ff-agent-thinking" />
           </div>
           <div className="flex-1 min-w-0 max-w-[85%]">
             <div className="flex items-center gap-2 mb-1.5">

@@ -8,6 +8,8 @@ export interface ChatSession {
   messageCount: number;
   lastMessageAt: string;
   totalCostUsd: number;
+  provider: string;
+  model?: string;
   claudeSessionId?: string;
 }
 
@@ -219,8 +221,8 @@ export function useChat() {
     }
   }, [streamText]);
 
-  const createSession = useCallback(async () => {
-    const session = await api.createSession();
+  const createSession = useCallback(async (provider?: string, model?: string) => {
+    const session = await api.createSession(provider, model);
     setSessions(prev => [session, ...prev]);
     setActiveSessionId(session._id);
     setMessages([]);

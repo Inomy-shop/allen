@@ -335,6 +335,29 @@ export const ACCENT_OPTIONS: AccentOption[] = [
   { name: 'yellow', label: 'Yellow', color: '#eab308' },
 ];
 
+/* ─── Agent Icon Presets ─── */
+
+export interface AgentIconPreset {
+  name: string;
+  label: string;
+  icon: string;  // lucide icon name
+}
+
+export const AGENT_ICON_PRESETS: AgentIconPreset[] = [
+  { name: 'bot', label: 'Bot', icon: 'Bot' },
+  { name: 'brain', label: 'Brain', icon: 'Brain' },
+  { name: 'sparkles', label: 'Sparkles', icon: 'Sparkles' },
+  { name: 'zap', label: 'Zap', icon: 'Zap' },
+  { name: 'cpu', label: 'CPU', icon: 'Cpu' },
+  { name: 'atom', label: 'Atom', icon: 'Atom' },
+  { name: 'terminal', label: 'Terminal', icon: 'Terminal' },
+  { name: 'code', label: 'Code', icon: 'Code' },
+  { name: 'rocket', label: 'Rocket', icon: 'Rocket' },
+  { name: 'shield', label: 'Shield', icon: 'Shield' },
+  { name: 'hexagon', label: 'Hexagon', icon: 'Hexagon' },
+  { name: 'flame', label: 'Flame', icon: 'Flame' },
+];
+
 /* ─── Store ─── */
 
 const STORAGE_KEY = 'flowforge-settings';
@@ -343,6 +366,7 @@ interface PersistedSettings {
   themeName: string;
   fontName: string;
   customAccent: string | null;
+  agentIcon: string;
 }
 
 function loadFromStorage(): PersistedSettings {
@@ -354,7 +378,7 @@ function loadFromStorage(): PersistedSettings {
   } catch {
     // corrupted data — ignore
   }
-  return { themeName: 'cyberpunk', fontName: 'clean', customAccent: null };
+  return { themeName: 'cyberpunk', fontName: 'clean', customAccent: null, agentIcon: 'sparkles' };
 }
 
 function saveToStorage(s: PersistedSettings) {
@@ -431,10 +455,12 @@ interface SettingsState {
   themeName: string;
   fontName: string;
   customAccent: string | null;
+  agentIcon: string;
 
   setTheme: (name: string) => void;
   setFont: (name: string) => void;
   setCustomAccent: (color: string | null) => void;
+  setAgentIcon: (icon: string) => void;
   resetToDefaults: () => void;
   initFromLocalStorage: () => void;
 }
@@ -443,27 +469,33 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
   themeName: 'cyberpunk',
   fontName: 'clean',
   customAccent: null,
+  agentIcon: 'sparkles',
 
   setTheme: (name: string) => {
     const theme = getTheme(name);
     const { customAccent } = get();
     applyThemeColors(theme, customAccent);
     set({ themeName: name });
-    saveToStorage({ themeName: name, fontName: get().fontName, customAccent });
+    saveToStorage({ themeName: name, fontName: get().fontName, customAccent, agentIcon: get().agentIcon });
   },
 
   setFont: (name: string) => {
     const font = getFont(name);
     applyFontPreset(font);
     set({ fontName: name });
-    saveToStorage({ themeName: get().themeName, fontName: name, customAccent: get().customAccent });
+    saveToStorage({ themeName: get().themeName, fontName: name, customAccent: get().customAccent, agentIcon: get().agentIcon });
   },
 
   setCustomAccent: (color: string | null) => {
     const theme = getTheme(get().themeName);
     applyThemeColors(theme, color);
     set({ customAccent: color });
-    saveToStorage({ themeName: get().themeName, fontName: get().fontName, customAccent: color });
+    saveToStorage({ themeName: get().themeName, fontName: get().fontName, customAccent: color, agentIcon: get().agentIcon });
+  },
+
+  setAgentIcon: (icon: string) => {
+    set({ agentIcon: icon });
+    saveToStorage({ themeName: get().themeName, fontName: get().fontName, customAccent: get().customAccent, agentIcon: icon });
   },
 
   resetToDefaults: () => {
@@ -472,7 +504,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
     const font = getFont('clean');
     applyThemeColors(theme, null);
     applyFontPreset(font);
-    set({ themeName: 'cyberpunk', fontName: 'clean', customAccent: null });
+    set({ themeName: 'cyberpunk', fontName: 'clean', customAccent: null, agentIcon: 'bot' });
   },
 
   initFromLocalStorage: () => {

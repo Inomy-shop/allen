@@ -32,6 +32,7 @@ const router = createBrowserRouter([
       { path: 'chat', element: <ChatPage /> },
       { path: 'chat/:sessionId', element: <ChatPage /> },
       { path: 'settings', element: <SettingsPage /> },
+      { path: 'settings/:tab', element: <SettingsPage /> },
     ],
   },
 ]);

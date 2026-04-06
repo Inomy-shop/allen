@@ -1,14 +1,26 @@
 /**
- * Chat LLM Backend
- * Uses Claude Code SDK (CLI auth — no API key needed) with prompt-based tool calling.
- * Claude outputs <tool_call> JSON blocks, server parses + executes them, injects results,
- * and resumes the conversation in the same session.
+ * Chat LLM Router
+ * Routes to the correct provider. All providers use MCP for tool access:
+ * - FlowForge MCP server: our 16 built-in tools (workflows, executions, roles, etc.)
+ * - External MCP servers: Linear, GitHub, etc. (configured in Settings)
  */
 
 import type { Db } from 'mongodb';
-import { chatTools, executeChatTool } from './chat-tools.js';
+import {
+  type ChatProvider,
+  type ProviderCallbacks,
+  PROVIDERS,
+  runCodexCLI,
+  runOpenAI,
+  runAnthropicAPI,
+  runGemini,
+} from './chat-providers.js';
+import { loadExternalMcpServers } from './chat-mcp.js';
 
 // ── Types ──
+
+export type { ChatProvider } from './chat-providers.js';
+export { PROVIDERS } from './chat-providers.js';
 
 export interface ChatLLMMessage {
   role: 'user' | 'assistant';
@@ -16,9 +28,11 @@ export interface ChatLLMMessage {
 }
 
 export interface ChatLLMOptions {
+  provider?: ChatProvider;
   model?: string;
   systemPrompt: string;
   messages: ChatLLMMessage[];
+  resumeSessionId?: string;
   onText: (text: string) => void;
   onThinking?: (thinking: string) => void;
   onToolStart: (tool: string, args: Record<string, unknown>, toolUseId: string) => void;
@@ -27,231 +41,192 @@ export interface ChatLLMOptions {
   signal?: AbortSignal;
 }
 
+export interface ChatTraceEvent {
+  timestamp: Date;
+  type: 'session_start' | 'thinking' | 'tool_call' | 'tool_result' | 'error' | 'complete';
+  tool?: string;
+  toolUseId?: string;
+  args?: Record<string, unknown>;
+  result?: Record<string, unknown>;
+  durationMs?: number;
+  isError?: boolean;
+  text?: string;
+}
+
 export interface ChatLLMResult {
   text: string;
   costUsd: number;
   durationMs: number;
   model: string;
+  provider: ChatProvider;
   sessionId?: string;
+  trace: ChatTraceEvent[];
 }
 
-// ── Tool Call Protocol ──
+// ── Logger ──
 
-/**
- * Build the tool-calling instructions appended to the system prompt.
- * Claude is instructed to output <tool_call> JSON blocks when it wants to use a tool.
- */
-function buildToolInstructions(): string {
-  const toolDefs = chatTools.map(t => {
-    const params = (t.inputSchema as any).properties ?? {};
-    const required = (t.inputSchema as any).required ?? [];
-    const paramList = Object.entries(params)
-      .map(([k, v]: [string, any]) => `    "${k}": ${v.description ?? v.type}${required.includes(k) ? ' (required)' : ''}`)
-      .join('\n');
-    return `- **${t.name}**: ${t.description}\n  Parameters:\n${paramList || '    (none)'}`;
-  }).join('\n\n');
-
-  return `
-
-## Tool Calling
-
-You have access to tools. To call a tool, output a <tool_call> block in your response:
-
-<tool_call>
-{"tool": "tool_name", "args": {"param1": "value1"}}
-</tool_call>
-
-After you output a <tool_call>, the system will execute it and provide the result in a <tool_result> block. You can then continue your response using that information.
-
-You may call multiple tools in sequence. Wait for each result before calling the next.
-
-Available tools:
-
-${toolDefs}
-
-IMPORTANT: Only use <tool_call> blocks to invoke tools. Do NOT describe what you would do — actually call the tool.`;
+const LOG = '\x1b[36m[chat]\x1b[0m';
+function log(msg: string): void {
+  console.log(`${LOG} ${new Date().toISOString().slice(11, 23)} ${msg}`);
 }
 
-/** Parse <tool_call> blocks from text. Returns the tool call and the text before/after. */
-function parseToolCalls(text: string): { beforeText: string; toolCall: { tool: string; args: Record<string, unknown> } | null; afterText: string } {
-  const match = text.match(/<tool_call>\s*(\{[\s\S]*?\})\s*<\/tool_call>/);
-  if (!match) return { beforeText: text, toolCall: null, afterText: '' };
+// ── Claude CLI Provider (all tools via MCP) ──
 
-  const beforeText = text.slice(0, match.index!);
-  const afterText = text.slice(match.index! + match[0].length);
-
-  try {
-    const parsed = JSON.parse(match[1]);
-    return { beforeText, toolCall: { tool: parsed.tool, args: parsed.args ?? {} }, afterText };
-  } catch {
-    return { beforeText: text, toolCall: null, afterText: '' };
-  }
-}
-
-/** Strip all <tool_call>...</tool_call> and <tool_result>...</tool_result> blocks from final display text. */
-function cleanDisplayText(text: string): string {
-  return text
-    .replace(/<tool_call>[\s\S]*?<\/tool_call>/g, '')
-    .replace(/<tool_result>[\s\S]*?<\/tool_result>/g, '')
-    .replace(/\n{3,}/g, '\n\n')
-    .trim();
-}
-
-// ── Main Function ──
-
-/**
- * Run a chat conversation using Claude Code SDK with prompt-based tool calling.
- * - First call: sends prompt with tool instructions, gets response
- * - If response contains <tool_call>: execute tool, resume conversation with result
- * - Loop until no more tool calls or max rounds reached
- */
-export async function runChatLLM(
+async function runClaudeCLI(
   db: Db,
-  options: ChatLLMOptions,
-): Promise<ChatLLMResult> {
+  systemPrompt: string,
+  messages: ChatLLMMessage[],
+  model: string,
+  callbacks: ProviderCallbacks,
+  resumeSessionId?: string,
+  skipTools?: boolean,
+): Promise<{ text: string; costUsd: number; sessionId?: string; trace: ChatTraceEvent[] }> {
   const { query } = await import('@anthropic-ai/claude-code');
+  const { resolve, dirname } = await import('node:path');
 
-  const model = options.model ?? 'sonnet';
-  const systemPrompt = options.skipTools
-    ? options.systemPrompt
-    : options.systemPrompt + buildToolInstructions();
-
-  // Build the initial prompt from conversation history
-  // Claude Code SDK doesn't take a messages array — it takes a single prompt string.
-  // We reconstruct the conversation as a prompt.
-  let conversationPrompt = '';
-  for (const msg of options.messages) {
-    if (msg.role === 'user') {
-      conversationPrompt += msg.content + '\n';
-    }
-    // Skip assistant messages in prompt reconstruction — Claude Code handles its own context via session resume
-  }
-
-  let claudeSessionId: string | undefined;
-  let totalCost = 0;
-  let totalDuration = 0;
-  let fullDisplayText = '';
-  let toolCallCount = 0;
-
-  const MAX_TOOL_ROUNDS = 10;
-
-  // Initial prompt is the last user message (the conversation history was for the Messages API approach)
-  const lastUserMsg = options.messages.length > 0
-    ? options.messages[options.messages.length - 1].content
-    : '';
-
-  let currentPrompt = lastUserMsg;
-
-  for (let round = 0; round <= MAX_TOOL_ROUNDS; round++) {
-    if (options.signal?.aborted) break;
-
-    let rawResponse = '';
-    let sessionId: string | undefined;
-    let costUsd = 0;
-    let durationMs = 0;
-
-    const sdkOptions: Record<string, unknown> = {
-      model,
-      maxTurns: 30,
-      permissionMode: 'bypassPermissions',
+  // Build MCP servers: FlowForge + external
+  const mcpServers: Record<string, unknown> = {};
+  if (!skipTools) {
+    // FlowForge MCP server (our built-in tools)
+    const serverPath = resolve(dirname(new URL(import.meta.url).pathname), 'flowforge-mcp-server.ts');
+    mcpServers.flowforge = {
+      type: 'stdio',
+      command: 'npx',
+      args: ['tsx', serverPath],
+      env: { FLOWFORGE_API_URL: `http://localhost:${process.env.PORT ?? '4023'}` },
     };
 
-    // Resume session for follow-up rounds (tool result injection)
-    if (claudeSessionId && round > 0) {
-      sdkOptions.resume = claudeSessionId;
-    } else {
-      sdkOptions.customSystemPrompt = systemPrompt;
+    // External MCP servers (Linear, GitHub, etc.)
+    const external = await loadExternalMcpServers(db);
+    Object.assign(mcpServers, external);
+
+    const names = Object.keys(mcpServers);
+    systemPrompt += `\n\nYou have MCP tools from: ${names.join(', ')}. Use them directly. The "flowforge" tools provide workflow, execution, repo, role, and dashboard data.`;
+  }
+
+  const lastUserMsg = messages.length > 0 ? messages[messages.length - 1].content : '';
+  const trace: ChatTraceEvent[] = [];
+  let claudeSessionId: string | undefined = resumeSessionId;
+  const activeMcpToolCalls = new Map<string, { tool: string; args: Record<string, unknown>; startMs: number }>();
+
+  const sdkOptions: Record<string, unknown> = {
+    model,
+    maxTurns: 30,
+    permissionMode: 'bypassPermissions',
+    cwd: '/tmp',
+  };
+
+  if (resumeSessionId) sdkOptions.resume = resumeSessionId;
+  else sdkOptions.customSystemPrompt = systemPrompt;
+  if (Object.keys(mcpServers).length > 0) sdkOptions.mcpServers = mcpServers;
+
+  let fullText = '';
+  let costUsd = 0;
+  const conversation = query({ prompt: lastUserMsg, options: sdkOptions as any });
+
+  for await (const message of conversation) {
+    if ('session_id' in message && message.session_id && !claudeSessionId) {
+      claudeSessionId = message.session_id as string;
+      trace.push({ timestamp: new Date(), type: 'session_start', text: claudeSessionId });
     }
 
-    const startMs = Date.now();
+    if (message.type === 'assistant') {
+      const blocks = message.message.content as Array<{ type: string; text?: string; thinking?: string; name?: string; input?: unknown; id?: string }>;
+      const text = blocks.filter(b => b.type === 'text').map(b => b.text || '').join('');
+      if (text && text !== fullText) { fullText = text; callbacks.onText(fullText); }
 
-    const conversation = query({
-      prompt: currentPrompt,
-      options: sdkOptions as any,
-    });
-
-    for await (const message of conversation) {
-      if (options.signal?.aborted) break;
-
-      if ('session_id' in message && message.session_id) {
-        sessionId = message.session_id as string;
-        if (!claudeSessionId) claudeSessionId = sessionId;
+      if (callbacks.onThinking) {
+        const thinking = blocks.filter(b => b.type === 'thinking').map(b => b.thinking || b.text || '').join('');
+        if (thinking) { trace.push({ timestamp: new Date(), type: 'thinking', text: thinking }); callbacks.onThinking(thinking); }
       }
 
-      if (message.type === 'assistant') {
-        const blocks = message.message.content as Array<{ type: string; text?: string; thinking?: string }>;
-        const text = blocks.filter(b => b.type === 'text').map(b => b.text || '').join('');
-        if (text) {
-          rawResponse = text;
-          const display = cleanDisplayText(fullDisplayText + rawResponse);
-          options.onText(display);
+      for (const block of blocks) {
+        if (block.type === 'tool_use' && block.name && block.id) {
+          const args = (block.input as Record<string, unknown>) ?? {};
+          activeMcpToolCalls.set(block.id, { tool: block.name, args, startMs: Date.now() });
+          trace.push({ timestamp: new Date(), type: 'tool_call', tool: block.name, toolUseId: block.id, args });
+          callbacks.onToolStart(block.name, args, block.id);
         }
-        // Emit thinking blocks
-        if (options.onThinking) {
-          const thinking = blocks.filter(b => b.type === 'thinking').map(b => b.thinking || b.text || '').join('');
-          if (thinking) {
-            options.onThinking(thinking);
+      }
+    }
+
+    if (message.type === 'user') {
+      const content = (message as any).message?.content;
+      if (Array.isArray(content)) {
+        for (const block of content) {
+          if (block.type === 'tool_result' && block.tool_use_id) {
+            const pending = activeMcpToolCalls.get(block.tool_use_id);
+            if (pending) {
+              const durationMs = Date.now() - pending.startMs;
+              let resultData: Record<string, unknown> = {};
+              try {
+                const rc = Array.isArray(block.content) ? block.content.map((c: any) => c.text || '').join('') : typeof block.content === 'string' ? block.content : JSON.stringify(block.content);
+                resultData = JSON.parse(rc);
+              } catch { resultData = { raw: String(block.content) }; }
+              trace.push({ timestamp: new Date(), type: 'tool_result', tool: pending.tool, toolUseId: block.tool_use_id, result: resultData, durationMs });
+              callbacks.onToolResult(pending.tool, resultData, block.tool_use_id, durationMs);
+              activeMcpToolCalls.delete(block.tool_use_id);
+            }
           }
         }
       }
+    }
 
-      if (message.type === 'result') {
-        costUsd = (message as any).total_cost_usd ?? 0;
-        durationMs = Date.now() - startMs;
-        if ((message as any).subtype === 'success' && (message as any).result) {
-          rawResponse = (message as any).result;
-        }
-        if ((message as any).session_id) {
-          claudeSessionId = (message as any).session_id;
-        }
+    if (message.type === 'result') {
+      costUsd = (message as any).total_cost_usd ?? 0;
+      if ((message as any).subtype === 'success' && (message as any).result) {
+        const rt = (message as any).result;
+        if (rt !== fullText) { fullText = rt; callbacks.onText(fullText); }
       }
+      if ((message as any).session_id) claudeSessionId = (message as any).session_id;
     }
-
-    totalCost += costUsd;
-    totalDuration += durationMs;
-
-    // Check for tool calls in the response
-    if (options.skipTools) {
-      fullDisplayText = rawResponse;
-      break;
-    }
-
-    const { beforeText, toolCall, afterText } = parseToolCalls(rawResponse);
-
-    if (!toolCall) {
-      // No tool call — this is the final response
-      fullDisplayText += rawResponse;
-      fullDisplayText = cleanDisplayText(fullDisplayText);
-      options.onText(fullDisplayText);
-      break;
-    }
-
-    // Found a tool call — execute it
-    fullDisplayText += beforeText;
-    toolCallCount++;
-    const toolId = `tool_${toolCallCount}`;
-
-    options.onToolStart(toolCall.tool, toolCall.args, toolId);
-
-    const toolStartMs = Date.now();
-    const result = await executeChatTool(toolCall.tool, toolCall.args, db);
-    const toolDuration = Date.now() - toolStartMs;
-
-    options.onToolResult(toolCall.tool, result, toolId, toolDuration);
-
-    // Resume conversation with tool result
-    currentPrompt = `<tool_result>
-${JSON.stringify(result, null, 2)}
-</tool_result>
-
-${afterText ? afterText + '\n\n' : ''}Continue your response using the tool result above. If you need another tool, use <tool_call> again. Otherwise, provide your final answer to the user.`;
   }
 
-  return {
-    text: fullDisplayText,
-    costUsd: totalCost,
-    durationMs: totalDuration,
-    model,
-    sessionId: claudeSessionId,
+  return { text: fullText, costUsd, sessionId: claudeSessionId, trace };
+}
+
+// ── Main Router ──
+
+export async function runChatLLM(db: Db, options: ChatLLMOptions): Promise<ChatLLMResult> {
+  const provider = options.provider ?? 'codex';
+  const providerConfig = PROVIDERS.find(p => p.provider === provider) ?? PROVIDERS[0];
+  const model = options.model ?? providerConfig.defaultModel;
+
+  log(`━━━ New message [${provider}/${model}] ━━━`);
+  const prompt = options.messages.length > 0 ? options.messages[options.messages.length - 1].content : '';
+  log(`Prompt: "${prompt.slice(0, 100)}${prompt.length > 100 ? '...' : ''}"`);
+  if (options.resumeSessionId) log(`Resume: ${options.resumeSessionId.slice(0, 8)}...`);
+
+  const startMs = Date.now();
+
+  const callbacks: ProviderCallbacks = {
+    onText: options.onText,
+    onThinking: options.onThinking,
+    onToolStart: options.onToolStart,
+    onToolResult: options.onToolResult,
   };
+
+  let result: { text: string; costUsd: number; sessionId?: string; trace: ChatTraceEvent[] };
+
+  switch (provider) {
+    case 'codex':
+      result = await runCodexCLI(db, options.systemPrompt, options.messages, model, callbacks, options.resumeSessionId, options.skipTools);
+      break;
+    case 'claude-cli':
+      result = await runClaudeCLI(db, options.systemPrompt, options.messages, model, callbacks, options.resumeSessionId, options.skipTools);
+      break;
+    case 'gemini':
+      result = await runGemini(db, options.systemPrompt, options.messages, model, callbacks, options.skipTools);
+      break;
+    case 'anthropic-api':
+      result = await runAnthropicAPI(db, options.systemPrompt, options.messages, model, callbacks, options.skipTools);
+      break;
+    default:
+      throw new Error(`Unknown provider: ${provider}`);
+  }
+
+  const durationMs = Date.now() - startMs;
+  log(`━━━ Complete [${provider}] | $${result.costUsd.toFixed(4)} | ${durationMs}ms | ${result.text.length} chars ━━━`);
+
+  return { ...result, durationMs, model, provider };
 }

@@ -17,10 +17,16 @@ export function chatRoutes(db: Db): Router {
     }
   });
 
+  // GET /api/chat/providers — List available LLM providers
+  router.get('/providers', (_req: Request, res: Response) => {
+    res.json(chatService.getProviders());
+  });
+
   // POST /api/chat/sessions — Create new session
-  router.post('/sessions', async (_req: Request, res: Response) => {
+  router.post('/sessions', async (req: Request, res: Response) => {
     try {
-      const session = await chatService.createSession();
+      const { provider, model } = req.body ?? {};
+      const session = await chatService.createSession(provider, model);
       res.status(201).json(session);
     } catch (err: unknown) {
       res.status(500).json({ error: (err as Error).message });
@@ -89,6 +95,54 @@ export function chatRoutes(db: Db): Router {
       const session = await chatService.updateSession(id, { title, status });
       if (!session) return res.status(404).json({ error: 'Session not found' });
       res.json(session);
+    } catch (err: unknown) {
+      res.status(500).json({ error: (err as Error).message });
+    }
+  });
+
+  // GET /api/chat/sessions/:id/logs — Get execution traces for a session
+  router.get('/sessions/:id/logs', async (req: Request, res: Response) => {
+    try {
+      const sessionId = param(req, 'id');
+      const limit = Math.min(parseInt(req.query.limit as string ?? '50', 10), 200);
+      const logs = await db.collection('chat_logs')
+        .find({ sessionId })
+        .sort({ timestamp: -1 })
+        .limit(limit)
+        .toArray();
+      logs.reverse();
+      res.json(logs);
+    } catch (err: unknown) {
+      res.status(500).json({ error: (err as Error).message });
+    }
+  });
+
+  // GET /api/chat/logs — Get all chat logs (cross-session)
+  router.get('/logs', async (req: Request, res: Response) => {
+    try {
+      const limit = Math.min(parseInt(req.query.limit as string ?? '50', 10), 200);
+      const status = req.query.status as string | undefined;
+      const filter: Record<string, unknown> = {};
+      if (status) filter.status = status;
+
+      const logs = await db.collection('chat_logs')
+        .find(filter)
+        .sort({ timestamp: -1 })
+        .limit(limit)
+        .toArray();
+      res.json(logs);
+    } catch (err: unknown) {
+      res.status(500).json({ error: (err as Error).message });
+    }
+  });
+
+  // GET /api/chat/logs/:logId — Get single log with full trace
+  router.get('/logs/:logId', async (req: Request, res: Response) => {
+    try {
+      const { ObjectId } = await import('mongodb');
+      const log = await db.collection('chat_logs').findOne({ _id: new ObjectId(param(req, 'logId')) });
+      if (!log) return res.status(404).json({ error: 'Log not found' });
+      res.json(log);
     } catch (err: unknown) {
       res.status(500).json({ error: (err as Error).message });
     }

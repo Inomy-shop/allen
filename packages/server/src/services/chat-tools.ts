@@ -688,8 +688,47 @@ const getDashboardStats: ChatTool = {
 
 // ── Export all tools ──
 
+// ── Human-in-the-Loop ──
+
+const submitExecutionInput: ChatTool = {
+  name: 'submit_execution_input',
+  description: 'Submit human input to a paused workflow execution. Use this when get_execution shows status "waiting_for_input" — it means a human node or auto-gate clarify is waiting for the user\'s response.',
+  inputSchema: {
+    type: 'object',
+    properties: {
+      execution_id: { type: 'string', description: 'The execution ID that is waiting for input' },
+      node: { type: 'string', description: 'The node name that is waiting (from get_execution current_nodes)' },
+      data: { type: 'object', description: 'The input data to submit. For human nodes: field values. For clarify: { response: "user answer", __clarify_action: "retry" or "continue" }', additionalProperties: true },
+    },
+    required: ['execution_id', 'node', 'data'],
+  },
+  async execute(args, db) {
+    const executionService = new ExecutionService(db);
+    const execId = args.execution_id as string;
+    const node = args.node as string;
+    const data = (args.data as Record<string, unknown>) ?? {};
+
+    const exec = await executionService.getById(execId);
+    if (!exec) return { error: `Execution "${execId}" not found.` };
+    if (exec.status !== 'waiting_for_input') {
+      return { error: `Execution is not waiting for input. Current status: ${exec.status}` };
+    }
+
+    const delivered = await executionService.submitInput(execId, node, data);
+    if (!delivered) {
+      return { error: `No pending input request found for node "${node}" in execution "${execId}".` };
+    }
+
+    return {
+      message: `Input submitted to node "${node}" in execution "${execId}". The workflow is continuing.`,
+      execution_id: execId,
+      node,
+    };
+  },
+};
+
 export const chatTools: ChatTool[] = [
-  // Phase 3-4: Core
+  // Core
   listWorkflows,
   runWorkflow,
   getExecution,
@@ -699,13 +738,15 @@ export const chatTools: ChatTool[] = [
   listRoles,
   spawnRole,
   getLearnings,
-  // Phase 5: Advanced queries
+  // Advanced queries
   queryDatabase,
   searchExecutionsAdvanced,
   getDashboardStats,
-  // Phase 6: Debugging
+  // Debugging
   getNodeTrace,
   getExecutionLogs,
+  // Human-in-the-loop
+  submitExecutionInput,
 ];
 
 /**

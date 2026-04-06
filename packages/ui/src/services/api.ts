@@ -107,7 +107,9 @@ export const dashboard = {
 // ── Chat ──────────────────────────────────────────────────────────────────
 export const chat = {
   listSessions: () => request<any[]>('/chat/sessions'),
-  createSession: () => request<any>('/chat/sessions', { method: 'POST' }),
+  providers: () => request<any[]>('/chat/providers'),
+  createSession: (provider?: string, model?: string) =>
+    request<any>('/chat/sessions', { method: 'POST', body: JSON.stringify({ provider, model }) }),
   getSession: (id: string) => request<any>(`/chat/sessions/${id}`),
   getMessages: (id: string, params?: Record<string, string>) => {
     const qs = params ? '?' + new URLSearchParams(params).toString() : '';
@@ -120,6 +122,22 @@ export const chat = {
     request<any>(`/chat/sessions/${id}`, { method: 'PATCH', body: JSON.stringify(body) }),
   deleteSession: (id: string) =>
     request<void>(`/chat/sessions/${id}`, { method: 'DELETE' }),
+};
+
+// ── MCP Servers ──────────────────────────────────────────────────────────
+export const mcp = {
+  list: () => request<any[]>('/mcp/servers'),
+  presets: () => request<any[]>('/mcp/presets'),
+  create: (body: any) =>
+    request<any>('/mcp/servers', { method: 'POST', body: JSON.stringify(body) }),
+  update: (id: string, body: any) =>
+    request<any>(`/mcp/servers/${id}`, { method: 'PUT', body: JSON.stringify(body) }),
+  toggle: (id: string) =>
+    request<any>(`/mcp/servers/${id}/toggle`, { method: 'PATCH' }),
+  delete: (id: string) =>
+    request<void>(`/mcp/servers/${id}`, { method: 'DELETE' }),
+  test: (id: string) =>
+    request<any>(`/mcp/servers/${id}/test`, { method: 'POST' }),
 };
 
 // ── Learnings ─────────────────────────────────────────────────────────────

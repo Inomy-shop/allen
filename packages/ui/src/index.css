@@ -183,15 +183,27 @@
   .ff-msg-enter {
     animation: ff-msg-enter 0.3s ease-out;
   }
+
+  /* ─── Agent icon streaming animation ─── */
+  .ff-agent-thinking {
+    animation: ff-agent-glow 2s ease-in-out infinite, ff-agent-spin 3s linear infinite;
+  }
 }
 
 @keyframes ff-msg-enter {
-  from {
-    opacity: 0;
-    transform: translateY(0.5rem);
-  }
-  to {
-    opacity: 1;
-    transform: translateY(0);
-  }
+  from { opacity: 0; transform: translateY(0.5rem); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes ff-agent-glow {
+  0%, 100% { filter: drop-shadow(0 0 2px rgb(var(--color-accent) / 0.3)); }
+  50% { filter: drop-shadow(0 0 8px rgb(var(--color-accent) / 0.6)); }
+}
+
+@keyframes ff-agent-spin {
+  0% { transform: rotate(0deg) scale(1); }
+  25% { transform: rotate(5deg) scale(1.05); }
+  50% { transform: rotate(0deg) scale(1); }
+  75% { transform: rotate(-5deg) scale(1.05); }
+  100% { transform: rotate(0deg) scale(1); }
 }

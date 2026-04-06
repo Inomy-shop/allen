@@ -8,7 +8,7 @@
 import type { Db } from 'mongodb';
 import { ObjectId } from 'mongodb';
 import type { Response } from 'express';
-import { runChatLLM, type ChatLLMMessage } from './chat-llm.js';
+import { runChatLLM, type ChatLLMMessage, type ChatProvider, PROVIDERS } from './chat-llm.js';
 
 // ── Types ──
 
@@ -19,6 +19,12 @@ export interface ChatSession {
   messageCount: number;
   lastMessageAt: Date;
   totalCostUsd: number;
+  /** LLM provider for this conversation */
+  provider: ChatProvider;
+  /** Model override (optional, uses provider default if not set) */
+  model?: string;
+  /** Claude Code SDK session ID for multi-turn resume (claude-cli only) */
+  claudeSessionId?: string;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -90,49 +96,54 @@ async function resolveMentions(content: string, db: Db): Promise<string> {
 
 // ── System Prompt ──
 
-const SYSTEM_PROMPT = `You are FlowForge Assistant — the intelligent command center for the FlowForge workflow orchestration platform.
+const API_PORT = process.env.PORT ?? '4023';
+
+/**
+ * System prompt varies by provider:
+ * - claude-cli: uses <tool_call> protocol (appended by chat-llm.ts)
+ * - codex: uses bash + curl against local API
+ * - gemini/anthropic-api: uses native function calling (tools registered at API level)
+ */
+function getSystemPrompt(provider: ChatProvider): string {
+  const base = `You are FlowForge Assistant — the intelligent command center for the FlowForge workflow orchestration platform.
+When users mention @workflow-name, @repo-name, or @role-name, you receive context about those resources. Use this to answer or fill in parameters automatically.
+Be concise and technical. Use markdown. Always provide IDs for tracking.`;
+
+  if (provider === 'codex') {
+    return `${base}
+
+You have MCP tools available. Use them to get data — don't describe what you would do, actually call the tool.
+
+Key MCP tools:
+- flowforge: list_workflows, list_executions, get_execution, list_roles, list_repos, get_dashboard_stats, run_workflow, get_node_trace, get_execution_logs, submit_execution_input
+- Other MCP servers (Linear, GitHub, etc.) are also available if configured
+
+Examples:
+- "What workflows do I have?" → call flowforge list_workflows
+- "Show me linear tickets" → call linear linear_search_issues
+- "Check execution abc123" → call flowforge get_execution with execution_id=abc123
+- "List my roles" → call flowforge list_roles
+
+For code tasks (review, investigate, plan): use flowforge spawn_role or run_workflow with the correct repo_path from @mentions.`;
+  }
+
+  // For claude-cli: tool instructions are appended by buildToolInstructions() in chat-llm.ts
+  // For gemini/anthropic-api: tools are registered natively, just need guidance
+  return `${base}
 
 You have tools to interact with the system. When a user asks to run a workflow, check status, query data, or debug — use the appropriate tool. Don't describe what you would do; actually do it.
 
-## When to use tools
+Examples:
+- "What workflows do I have?" → use list_workflows
+- "Check execution abc123" → use get_execution
+- "What happened in my last run?" → use list_executions
+- "Show me dashboard stats" → use get_dashboard_stats
+- "Find failed executions today" → use search_executions_advanced
+- "Review code in @my-repo" → use list_roles, then spawn_role with repo_path
+- If an execution is waiting for input → present the fields, then use submit_execution_input
 
-USE a tool when:
-- The user wants to perform an action (run workflow, cancel execution, etc.)
-- The user asks for live data (list workflows, check status, dashboard stats)
-- The user asks to debug (get traces, logs)
-- The user wants a role to DO WORK on code/files (review code, investigate bug, plan feature)
-
-DO NOT use a tool when:
-- The user asks a general knowledge question you can answer directly
-- The user asks about a @mentioned resource and the mention context already provides enough info
-- The user asks "what is @role-name" or "explain @role-name" — the role metadata is in the mention context, just summarize it
-- The user wants to chat about concepts, architecture, or ideas
-
-## spawn_role — use sparingly
-
-Only use spawn_role when the user explicitly wants a role to PERFORM A TASK that requires the agent's capabilities (reading files, analyzing code, running commands). Examples:
-- "Ask @coding-reviewer to review the auth flow" → YES, spawn it (needs file access)
-- "Have @coding-planner design a caching layer" → YES, spawn it (needs codebase analysis)
-- "What does @coding-reviewer do?" → NO, answer from mention context
-- "Explain the role of @coding-planner" → NO, answer from mention context
-
-## Examples
-
-- "Run coding-agent on my repo" → list_workflows then run_workflow
-- "What workflows do I have?" → list_workflows
-- "Check execution abc123" → get_execution
-- "What happened in my last run?" → list_executions
-- "Why did the build node fail?" → get_node_trace + get_execution_logs
-- "Show me dashboard stats" → get_dashboard_stats
-- "Find failed executions today" → search_executions_advanced with since_hours=24, has_failed_node=true
-
-## @mentions
-
-When users mention @workflow-name, @repo-name, or @role-name, you receive context about those resources in CONTEXT FROM @MENTIONS. Use this to:
-1. Answer questions about the resource directly (without tool calls)
-2. Fill in tool parameters automatically (repo_path, workflow name, role name)
-
-Be concise and technical. Use markdown. Always provide execution IDs for tracking.`;
+For code tasks (review, investigate, plan): delegate to a role via spawn_role with the correct repo_path from @mentions.`;
+}
 
 // ── Active Query Tracking ──
 
@@ -166,11 +177,14 @@ export class ChatService {
   private get sessions() { return this.db.collection('chat_sessions'); }
   private get messages() { return this.db.collection('chat_messages'); }
 
-  async createSession(): Promise<ChatSession> {
+  getProviders() { return PROVIDERS; }
+
+  async createSession(provider: ChatProvider = 'codex', model?: string): Promise<ChatSession> {
     const now = new Date();
     const doc: ChatSession = {
       title: 'New Conversation', status: 'active', messageCount: 0,
-      lastMessageAt: now, totalCostUsd: 0, createdAt: now, updatedAt: now,
+      lastMessageAt: now, totalCostUsd: 0, provider, model,
+      createdAt: now, updatedAt: now,
     };
     const result = await this.sessions.insertOne(doc);
     return { ...doc, _id: result.insertedId };
@@ -259,33 +273,48 @@ export class ChatService {
     const startMs = Date.now();
 
     try {
-      // Load conversation history (last 20 messages for context)
-      const history = await this.messages
-        .find({ sessionId, status: 'completed' })
-        .sort({ createdAt: -1 })
-        .limit(20)
-        .toArray();
-      history.reverse();
+      // Load session for provider config and resume
+      const session = await this.sessions.findOne({ _id: new ObjectId(sessionId) });
+      const provider = (session?.provider as ChatProvider) ?? 'codex';
+      const model = session?.model as string | undefined;
+      const resumeSessionId = session?.claudeSessionId as string | undefined;
 
-      const llmMessages: ChatLLMMessage[] = history.map(m => ({
-        role: m.role as 'user' | 'assistant',
-        content: m.content as string,
-      }));
-
-      // Resolve @mentions and prepend context to the latest user message
+      // Resolve @mentions
       const mentionContext = await resolveMentions(content, this.db);
-      const lastUserMsg = mentionContext
+      const enrichedContent = mentionContext
         ? `CONTEXT FROM @MENTIONS:\n${mentionContext}\n\nUSER MESSAGE:\n${content}`
         : content;
 
-      // Replace last user message with the enriched one
-      if (llmMessages.length > 0 && llmMessages[llmMessages.length - 1].role === 'user') {
-        llmMessages[llmMessages.length - 1].content = lastUserMsg;
+      // Build message history
+      let llmMessages: ChatLLMMessage[];
+      const hasSessionResume = (provider === 'claude-cli' || provider === 'codex') && resumeSessionId;
+      if (hasSessionResume) {
+        // CLI providers use session resume — only send new message
+        llmMessages = [{ role: 'user', content: enrichedContent }];
+      } else {
+        // API providers need full conversation history
+        const history = await this.messages
+          .find({ sessionId, status: 'completed' })
+          .sort({ createdAt: -1 })
+          .limit(30)
+          .toArray();
+        history.reverse();
+        llmMessages = history.map(m => ({
+          role: m.role as 'user' | 'assistant',
+          content: m.content as string,
+        }));
+        // Replace last user message with enriched version
+        if (llmMessages.length > 0 && llmMessages[llmMessages.length - 1].role === 'user') {
+          llmMessages[llmMessages.length - 1].content = enrichedContent;
+        }
       }
 
       const result = await runChatLLM(this.db, {
-        systemPrompt: SYSTEM_PROMPT,
+        provider,
+        model,
+        systemPrompt: getSystemPrompt(provider),
         messages: llmMessages,
+        resumeSessionId: hasSessionResume ? resumeSessionId : undefined,
         onText: (fullText) => {
           entry.currentText = fullText;
           broadcastToListeners(entry, 'message_delta', { text: fullText, messageId: assistantMsgId });
@@ -312,29 +341,52 @@ export class ChatService {
         { $set: { content: result.text, status: 'completed', costUsd, durationMs, toolCalls: entry.toolCalls, completedAt: new Date() } },
       );
 
+      // Save execution trace to chat_logs (fire-and-forget)
+      this.db.collection('chat_logs').insertOne({
+        sessionId,
+        messageId: assistantMsgId,
+        claudeSessionId: result.sessionId,
+        userMessage: content,
+        assistantResponse: result.text.slice(0, 2000),
+        model: result.model,
+        costUsd,
+        durationMs,
+        toolCalls: entry.toolCalls,
+        trace: result.trace,
+        status: 'completed',
+        timestamp: new Date(),
+      }).catch(() => {});
+
+      // Save claudeSessionId for session resume on next message
+      const sessionUpdate: Record<string, unknown> = { updatedAt: new Date() };
+      if (result.sessionId) sessionUpdate.claudeSessionId = result.sessionId;
+
       await this.sessions.updateOne(
         { _id: new ObjectId(sessionId) },
-        { $set: { updatedAt: new Date() }, $inc: { totalCostUsd: costUsd } },
+        { $set: sessionUpdate, $inc: { totalCostUsd: costUsd } },
       );
 
       broadcastToListeners(entry, 'message_complete', {
         messageId: assistantMsgId, text: result.text, costUsd, durationMs, toolCalls: entry.toolCalls,
       });
 
-      // Auto-title on first response
+      // Auto-title on first response — extract from content, no LLM call
       const currentSession = await this.sessions.findOne({ _id: new ObjectId(sessionId) });
       if (currentSession && (currentSession.title as string) === 'New Conversation') {
         try {
-          const titleResult = await runChatLLM(this.db, {
-            systemPrompt: 'Generate a short conversational title (3-6 words, under 40 chars) for this chat. Reply with ONLY the title text, no quotes, no punctuation.',
-            messages: [{ role: 'user', content: `User said: "${content.slice(0, 150)}"\nAssistant replied about: ${result.text.slice(0, 150)}` }],
-            skipTools: true,
-            onText: () => {},
-            onToolStart: () => {},
-            onToolResult: () => {},
-          });
-          let title = titleResult.text.trim().replace(/^["']|["']$/g, '').replace(/\.+$/, '');
-          if (title && title.length > 0 && title.length <= 60) {
+          // Generate title from user message + response without spawning another LLM
+          let title = content.slice(0, 50).trim();
+          // Clean up: capitalize first letter, remove trailing punctuation
+          title = title.charAt(0).toUpperCase() + title.slice(1);
+          title = title.replace(/[?.!,;:]+$/, '').trim();
+          // If too short, append from response
+          if (title.length < 10 && result.text) {
+            const firstLine = result.text.split('\n').find(l => l.trim().length > 5)?.trim() ?? '';
+            if (firstLine) title = firstLine.slice(0, 40).replace(/[#*_`]+/g, '').trim();
+          }
+          if (title.length > 50) title = title.slice(0, 47) + '...';
+
+          if (title && title.length > 0) {
             await this.sessions.updateOne(
               { _id: new ObjectId(sessionId) },
               { $set: { title, updatedAt: new Date() } },
@@ -354,6 +406,19 @@ export class ChatService {
         { _id: new ObjectId(assistantMsgId) },
         { $set: { content: entry.currentText || '', status: 'failed', error: errorMsg, toolCalls: entry.toolCalls, completedAt: new Date() } },
       );
+
+      // Save failed trace
+      this.db.collection('chat_logs').insertOne({
+        sessionId,
+        messageId: assistantMsgId,
+        userMessage: content,
+        error: errorMsg,
+        toolCalls: entry.toolCalls,
+        status: 'failed',
+        durationMs: Date.now() - startMs,
+        timestamp: new Date(),
+      }).catch(() => {});
+
       broadcastToListeners(entry, 'error', { error: errorMsg, messageId: assistantMsgId });
     } finally {
       for (const listener of entry.listeners) { try { listener.end(); } catch {} }

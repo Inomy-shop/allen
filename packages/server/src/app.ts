@@ -18,6 +18,7 @@ import { dashboardRoutes } from './routes/dashboard.routes.js';
 import { repoRoutes } from './routes/repo.routes.js';
 import { learningRoutes, executionLearningsRoute } from './routes/learning.routes.js';
 import { chatRoutes } from './routes/chat.routes.js';
+import { mcpRoutes } from './routes/mcp.routes.js';
 import { seedDefaultRoles, seedDefaultWorkflows } from './seed.js';
 import { setStreamDb } from './services/stream.service.js';
 
@@ -51,6 +52,7 @@ async function main(): Promise<void> {
   app.use('/api/learnings', learningRoutes(db));
   app.use('/api/executions', executionLearningsRoute(db));
   app.use('/api/chat', chatRoutes(db));
+  app.use('/api/mcp', mcpRoutes(db));
 
   app.listen(PORT, () => {
     console.log(`FlowForge server running on http://localhost:${PORT}`);
