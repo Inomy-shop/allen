@@ -323,6 +323,10 @@ const spawnRole: ChatTool = {
       let costUsd = 0;
 
       if (provider === 'claude') {
+        // Load MCP servers so spawned role can access Linear, Postgres, etc.
+        const { loadAllMcpServers } = await import('@flowforge/engine');
+        const mcpServers = await loadAllMcpServers(db);
+
         const conversation = query({
           prompt,
           options: {
@@ -330,6 +334,7 @@ const spawnRole: ChatTool = {
             customSystemPrompt: role.system as string,
             maxTurns: 20,
             permissionMode: 'bypassPermissions',
+            ...(Object.keys(mcpServers).length > 0 ? { mcpServers } : {}),
           } as any,
         });
 

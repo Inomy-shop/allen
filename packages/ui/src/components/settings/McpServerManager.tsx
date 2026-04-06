@@ -30,6 +30,7 @@ interface McpPreset {
   command?: string;
   args?: string[];
   envKeys: string[];
+  argKeys?: string[];
   docsUrl: string;
 }
 
@@ -130,9 +131,10 @@ function ServerCard({
   );
 }
 
-function AddFromPreset({ presets, onAdd }: { presets: McpPreset[]; onAdd: (preset: McpPreset, env: Record<string, string>) => void }) {
+function AddFromPreset({ presets, onAdd }: { presets: McpPreset[]; onAdd: (preset: McpPreset, env: Record<string, string>, extraArgs: Record<string, string>) => void }) {
   const [selected, setSelected] = useState<McpPreset | null>(null);
   const [envValues, setEnvValues] = useState<Record<string, string>>({});
+  const [argValues, setArgValues] = useState<Record<string, string>>({});
 
   if (!selected) {
     return (
@@ -140,7 +142,7 @@ function AddFromPreset({ presets, onAdd }: { presets: McpPreset[]; onAdd: (prese
         {presets.map(p => (
           <button
             key={p.name}
-            onClick={() => { setSelected(p); setEnvValues({}); }}
+            onClick={() => { setSelected(p); setEnvValues({}); setArgValues({}); }}
             className="flex flex-col gap-1 px-3 py-2.5 rounded-lg bg-surface-200/30 border border-border/30 hover:bg-surface-200/60 hover:border-accent-blue/30 transition-all text-left"
           >
             <span className="text-sm font-body text-white">{p.name}</span>
@@ -151,6 +153,9 @@ function AddFromPreset({ presets, onAdd }: { presets: McpPreset[]; onAdd: (prese
     );
   }
 
+  const allEnvFilled = selected.envKeys.every(k => envValues[k]);
+  const allArgsFilled = (selected.argKeys ?? []).every(k => argValues[k]);
+
   return (
     <div className="border border-border/40 rounded-lg p-4 bg-surface-200/20 space-y-3">
       <div className="flex items-center justify-between">
@@ -158,6 +163,20 @@ function AddFromPreset({ presets, onAdd }: { presets: McpPreset[]; onAdd: (prese
         <button onClick={() => setSelected(null)} className="text-xs text-gray-500 hover:text-gray-300">Cancel</button>
       </div>
       <p className="text-[11px] text-gray-500">{selected.description}</p>
+      {/* Connection strings / args */}
+      {(selected.argKeys ?? []).map(key => (
+        <div key={key}>
+          <label className="text-[10px] font-label uppercase tracking-wider text-gray-500 mb-1 block">{key}</label>
+          <input
+            type="text"
+            value={argValues[key] ?? ''}
+            onChange={e => setArgValues(prev => ({ ...prev, [key]: e.target.value }))}
+            placeholder={key === 'POSTGRES_CONNECTION_STRING' ? 'postgresql://user:pass@host:5432/db?sslmode=require' : key === 'MONGODB_CONNECTION_STRING' ? 'mongodb://user:pass@host:27017/db' : `Enter ${key}...`}
+            className="w-full bg-surface-200/50 border border-border/30 rounded-sm px-3 py-1.5 text-sm text-white font-mono placeholder-gray-600 focus:outline-none focus:border-accent-blue/50"
+          />
+        </div>
+      ))}
+      {/* Env vars (API keys, secrets) */}
       {selected.envKeys.map(key => (
         <div key={key}>
           <label className="text-[10px] font-label uppercase tracking-wider text-gray-500 mb-1 block">{key}</label>
@@ -172,8 +191,8 @@ function AddFromPreset({ presets, onAdd }: { presets: McpPreset[]; onAdd: (prese
       ))}
       <div className="flex items-center gap-2">
         <button
-          onClick={() => { onAdd(selected, envValues); setSelected(null); }}
-          disabled={selected.envKeys.some(k => !envValues[k])}
+          onClick={() => { onAdd(selected, envValues, argValues); setSelected(null); }}
+          disabled={!allEnvFilled || !allArgsFilled}
           className="btn-primary text-xs px-3 py-1.5 disabled:opacity-30"
         >
           Add Server
@@ -207,15 +226,20 @@ export default function McpServerManager() {
 
   useEffect(() => { loadServers(); }, []);
 
-  const handleAddPreset = async (preset: McpPreset, env: Record<string, string>) => {
+  const handleAddPreset = async (preset: McpPreset, env: Record<string, string>, extraArgs: Record<string, string>) => {
     try {
+      // Append user-provided args (connection strings) to the preset args
+      const args = [...(preset.args ?? [])];
+      for (const key of (preset.argKeys ?? [])) {
+        if (extraArgs[key]) args.push(extraArgs[key]);
+      }
       await api.create({
         name: preset.name,
         description: preset.description,
         type: preset.type,
         enabled: true,
         command: preset.command,
-        args: preset.args,
+        args,
         env,
       });
       setShowAdd(false);

@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { BarChart3, MessageSquare, Wrench, Clock, DollarSign, TrendingUp } from 'lucide-react';
 import { chat as chatApi } from '../services/api';
+import ConversationLogs from '../components/chat/ConversationLogs';
 
 interface ChatLog {
   _id: string;
@@ -17,6 +18,7 @@ interface ChatLog {
 export default function AnalyticsPage() {
   const [logs, setLogs] = useState<ChatLog[]>([]);
   const [loading, setLoading] = useState(true);
+  const [viewingSessionId, setViewingSessionId] = useState<string | null>(null);
 
   useEffect(() => {
     fetch('/api/chat/logs?limit=100')
@@ -145,15 +147,23 @@ export default function AnalyticsPage() {
         <h3 className="font-heading text-sm text-white tracking-wider mb-4">Recent Messages</h3>
         <div className="space-y-1 max-h-80 overflow-y-auto">
           {logs.slice(0, 30).map(log => (
-            <div key={log._id} className="flex items-center gap-3 py-1.5 border-b border-border/20 last:border-0 text-xs">
+            <button
+              key={log._id}
+              onClick={() => setViewingSessionId(log.sessionId)}
+              className="w-full flex items-center gap-3 py-1.5 border-b border-border/20 last:border-0 text-xs hover:bg-surface-200/30 transition-colors text-left"
+            >
               <span className={`w-2 h-2 rounded-full shrink-0 ${log.status === 'completed' ? 'bg-accent-green' : 'bg-accent-red'}`} />
               <span className="text-gray-600 font-mono w-16 shrink-0">{(log.durationMs / 1000).toFixed(1)}s</span>
               <span className="text-gray-400 font-body truncate flex-1">{log.userMessage?.slice(0, 60)}</span>
               <span className="text-gray-600 font-mono shrink-0">{(log.trace ?? []).filter(t => t.type === 'tool_call').length} tools</span>
-            </div>
+            </button>
           ))}
         </div>
       </div>
+
+      {viewingSessionId && (
+        <ConversationLogs sessionId={viewingSessionId} onClose={() => setViewingSessionId(null)} />
+      )}
     </div>
   );
 }

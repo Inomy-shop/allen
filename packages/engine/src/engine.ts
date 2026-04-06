@@ -416,8 +416,15 @@ export class FlowForgeEngine {
       });
 
       // Check if current node triggers a parallel fork
+      // Case 1: single source node has a parallel edge (e.g., { from: 'implement', to: ['test', 'build'], parallel: true })
+      // Case 2: START edge was parallel and getStartNodes returned all targets — detect by checking if all currentNodes match a parallel edge's `to`
       const parallelEdge = edges.find(
-        e => e.parallel && Array.isArray(e.to) && currentNodes.length === 1 && currentNodes[0] === this.normalizeFrom(e.from),
+        e => e.parallel && Array.isArray(e.to) && (
+          // Single source node
+          (currentNodes.length === 1 && currentNodes[0] === this.normalizeFrom(e.from)) ||
+          // Multiple nodes from START that match the parallel edge's targets
+          (currentNodes.length > 1 && Array.isArray(e.to) && e.to.length === currentNodes.length && e.to.every(t => currentNodes.includes(t)))
+        ),
       );
 
       if (parallelEdge && Array.isArray(parallelEdge.to)) {
@@ -640,6 +647,7 @@ export class FlowForgeEngine {
       runWorkflow: (wf, input) => this.run(wf, input, nestingDepth + 1),
       executionId: exec.id,
       nodeContext,
+      db: this.config.db,
     };
     this.log(exec.id, {
       category: 'system',
@@ -919,6 +927,7 @@ export class FlowForgeEngine {
         runWorkflow: (wf, input) => this.run(wf, input, nestingDepth + 1),
         executionId: exec.id,
         nodeContext,
+        db: this.config.db,
       };
 
       // Each branch reads from the snapshot, not the live state

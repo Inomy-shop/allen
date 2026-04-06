@@ -146,20 +146,23 @@ export async function extractOutputs(
     log?.(`Layer 4 (LLM fallback): failed — ${err instanceof Error ? err.message : String(err)}`);
   }
 
-  // Layer 5: Auto-detect clarification — if response is a question and no outputs extracted,
-  // treat it as an implicit clarify request
-  if (outputs.length > 0 && response.trim().length > 10) {
-    const hasQuestion = /\?\s*$/.test(response.trim()) ||
-      /could you|can you|please (provide|share|tell|specify)|what is|which|where|who|when|how/i.test(response);
-    if (hasQuestion) {
-      log?.(`Layer 5 (auto-detect): response contains question patterns — treating as clarify`);
+  // Layer 5: Auto-detect clarification — ONLY if no outputs were extracted at all
+  // and the response looks like a direct question to the user (not a report with question words)
+  if (outputs.length === 0 && response.trim().length > 10 && response.trim().length < 500) {
+    // Only match if the LAST sentence is a direct question (ends with ?)
+    // Don't match question words in the middle of a report/analysis
+    const lastSentence = response.trim().split(/[.!]\s+/).pop()?.trim() ?? '';
+    const isDirectQuestion = /\?\s*$/.test(lastSentence) &&
+      /^(could you|can you|please|what|which|where|do you|would you|should I|shall I)/i.test(lastSentence);
+    if (isDirectQuestion) {
+      log?.(`Layer 5 (auto-detect): last sentence is a direct question — treating as clarify`);
       return {
         __action: 'clarify',
-        __reason: response.trim().slice(0, 300),
+        __reason: lastSentence.slice(0, 300),
         __clarify_action: 'retry',
       };
     }
-    log?.('Layer 5 (auto-detect): no question patterns found');
+    log?.('Layer 5 (auto-detect): no direct question found');
   }
 
   log?.('ALL LAYERS FAILED — returning empty output');

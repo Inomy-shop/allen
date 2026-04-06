@@ -47,6 +47,8 @@ export const MCP_PRESETS: Array<{
   command?: string;
   args?: string[];
   envKeys: string[];
+  /** Args that user must provide — appended to args[] at the end */
+  argKeys?: string[];
   docsUrl: string;
 }> = [
   {
@@ -72,9 +74,20 @@ export const MCP_PRESETS: Array<{
     description: 'PostgreSQL database — read-only SQL queries',
     type: 'stdio',
     command: 'npx',
-    args: ['-y', '@modelcontextprotocol/server-postgres', 'postgresql://user:pass@localhost:5432/db'],
+    args: ['-y', '@modelcontextprotocol/server-postgres'],
     envKeys: [],
+    argKeys: ['POSTGRES_CONNECTION_STRING'],
     docsUrl: 'https://github.com/modelcontextprotocol/servers/tree/main/src/postgres',
+  },
+  {
+    name: 'mongodb',
+    description: 'MongoDB / DocumentDB — query collections, read documents',
+    type: 'stdio',
+    command: 'npx',
+    args: ['-y', 'mcp-mongo-server'],
+    envKeys: [],
+    argKeys: ['MONGODB_CONNECTION_STRING'],
+    docsUrl: 'https://github.com/kiliczsh/mcp-mongo-server',
   },
   {
     name: 'slack',

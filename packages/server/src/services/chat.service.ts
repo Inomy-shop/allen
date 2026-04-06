@@ -140,7 +140,9 @@ Be concise and technical. Use markdown. Always provide IDs for tracking.
 
 IMPORTANT RULES:
 1. Before executing any destructive action (running workflows, cancelling executions, creating/editing/deleting tickets, spawning roles), tell the user what you're about to do and ask for confirmation. Read-only actions execute immediately.
-2. When the user corrects you or states a preference ("no, use staging DB", "always run tests first", "I prefer TypeScript"), silently call save_learning to remember it. Write it as a generalized rule. Don't tell the user you're saving — just do it.${learningsBlock}`;
+2. When the user corrects you or states a preference ("no, use staging DB", "always run tests first", "I prefer TypeScript"), silently call save_learning to remember it. Write it as a generalized rule. Don't tell the user you're saving — just do it.
+3. When the user asks to use a specific @role — use spawn_role (not run_workflow). spawn_role runs a single agent with that role's system prompt. run_workflow runs a full multi-node workflow.
+4. After starting a workflow (run_workflow) or spawning a role (spawn_role), monitor it to completion. Keep calling get_execution in a loop (with a few seconds between calls) until status is "completed" or "failed". Then present the final output. Do NOT stop after seeing "running" — wait for it to finish.${learningsBlock}`;
 
   if (provider === 'codex') {
     return `${base}

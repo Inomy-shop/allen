@@ -1,7 +1,55 @@
 import { Router, type Request, type Response } from 'express';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
 import { param } from '../types.js';
-import { McpService } from '../services/mcp.service.js';
+import { McpService, type McpServerRecord } from '../services/mcp.service.js';
 import type { Db } from 'mongodb';
+
+const execFileAsync = promisify(execFile);
+
+/** Sync all enabled MCP servers to Codex CLI config */
+async function syncAllToCodex(service: McpService): Promise<void> {
+  try {
+    const servers = await service.list();
+    let existing = '';
+    try { existing = (await execFileAsync('codex', ['mcp', 'list'], { timeout: 5000 })).stdout; } catch {}
+
+    for (const s of servers) {
+      if (s.type !== 'stdio') continue;
+      const isRegistered = existing.includes(s.name);
+
+      if (s.enabled && !isRegistered) {
+        // Add
+        const args = ['mcp', 'add', s.name];
+        if (s.env) { for (const [k, v] of Object.entries(s.env)) args.push('--env', `${k}=${v}`); }
+        args.push('--', s.command!, ...(s.args ?? []));
+        await execFileAsync('codex', args, { timeout: 10000 });
+      } else if (!s.enabled && isRegistered) {
+        // Remove
+        await execFileAsync('codex', ['mcp', 'remove', s.name], { timeout: 5000 });
+      } else if (s.enabled && isRegistered) {
+        // Update: remove + re-add
+        await execFileAsync('codex', ['mcp', 'remove', s.name], { timeout: 5000 });
+        const args = ['mcp', 'add', s.name];
+        if (s.env) { for (const [k, v] of Object.entries(s.env)) args.push('--env', `${k}=${v}`); }
+        args.push('--', s.command!, ...(s.args ?? []));
+        await execFileAsync('codex', args, { timeout: 10000 });
+      }
+    }
+
+    // Remove servers from Codex that no longer exist in DB
+    const dbNames = new Set(servers.map(s => s.name));
+    const lines = existing.split('\n').filter(l => l.trim() && !l.startsWith('Name'));
+    for (const line of lines) {
+      const name = line.split(/\s+/)[0];
+      if (name && !dbNames.has(name) && name !== 'flowforge') {
+        await execFileAsync('codex', ['mcp', 'remove', name], { timeout: 5000 }).catch(() => {});
+      }
+    }
+  } catch (err) {
+    console.error('[mcp] Codex sync failed:', (err as Error).message);
+  }
+}
 
 export function mcpRoutes(db: Db): Router {
   const router = Router();
@@ -35,6 +83,7 @@ export function mcpRoutes(db: Db): Router {
         name, description: description ?? '', type, enabled: enabled ?? true,
         command, args, env, url, headers,
       });
+      syncAllToCodex(service).catch(() => {});
       res.status(201).json(server);
     } catch (err: unknown) {
       res.status(500).json({ error: (err as Error).message });
@@ -47,6 +96,7 @@ export function mcpRoutes(db: Db): Router {
       const id = param(req, 'id');
       const server = await service.update(id, req.body);
       if (!server) return res.status(404).json({ error: 'MCP server not found' });
+      syncAllToCodex(service).catch(() => {});
       res.json(server);
     } catch (err: unknown) {
       res.status(500).json({ error: (err as Error).message });
@@ -59,6 +109,7 @@ export function mcpRoutes(db: Db): Router {
       const id = param(req, 'id');
       const server = await service.toggle(id);
       if (!server) return res.status(404).json({ error: 'MCP server not found' });
+      syncAllToCodex(service).catch(() => {});
       res.json(server);
     } catch (err: unknown) {
       res.status(500).json({ error: (err as Error).message });
@@ -70,6 +121,7 @@ export function mcpRoutes(db: Db): Router {
     try {
       const id = param(req, 'id');
       await service.delete(id);
+      syncAllToCodex(service).catch(() => {});
       res.status(204).send();
     } catch (err: unknown) {
       res.status(500).json({ error: (err as Error).message });

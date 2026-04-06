@@ -13,3 +13,4 @@ export type { NodeResult } from './node-executor.js';
 export { LearningManager, type ExtractionContext } from './learning-manager.js';
 export * from './types.js';
 export { embed, embedAndSave, searchSimilarLearnings, backfillEmbeddings, invalidateEmbeddingCache, cosineSimilarity, registerEmbeddingProvider, setEmbeddingProvider, getActiveProvider, type EmbeddingProvider } from './embedding.js';
+export { loadMcpServers, loadAllMcpServers, getFlowForgeMcpConfig } from './mcp-loader.js';

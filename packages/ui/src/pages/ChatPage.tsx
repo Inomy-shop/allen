@@ -6,8 +6,9 @@ import ChatMessageList from '../components/chat/ChatMessageList';
 import CommandPalette from '../components/chat/CommandPalette';
 import DeleteConfirmDialog from '../components/common/DeleteConfirmDialog';
 import {
-  Plus, Trash2, MessageSquare, Circle, Command, Server,
+  Plus, Trash2, MessageSquare, Circle, Command, Server, ScrollText,
 } from 'lucide-react';
+import ConversationLogs from '../components/chat/ConversationLogs';
 import { chat as chatApi, mcp as mcpApi, learnings as learningsApi } from '../services/api';
 
 function timeAgo(dateStr: string): string {
@@ -33,6 +34,7 @@ export default function ChatPage() {
   const navigate = useNavigate();
   const [deletingSession, setDeletingSession] = useState<{ id: string; title: string } | null>(null);
   const [cmdPaletteOpen, setCmdPaletteOpen] = useState(false);
+  const [logsOpen, setLogsOpen] = useState(false);
   const [mcpCount, setMcpCount] = useState<{ enabled: number; connected: number }>({ enabled: 0, connected: 0 });
   const [providers, setProviders] = useState<any[]>([]);
   const [selectedProvider, setSelectedProvider] = useState('codex');
@@ -204,6 +206,11 @@ export default function ChatPage() {
             {activeSessionId && activeSession?.totalCostUsd != null && (
               <span className="text-[10px] text-gray-600 font-mono">${activeSession.totalCostUsd.toFixed(2)}</span>
             )}
+            {activeSessionId && (
+              <button onClick={() => setLogsOpen(true)} className="flex items-center gap-1.5 px-2 py-1 rounded-md bg-surface-200/40 border border-border/30 hover:bg-surface-200/70 hover:border-accent-blue/30 transition-all text-gray-500 hover:text-gray-300" title="Conversation logs">
+                <ScrollText className="w-3 h-3" />
+              </button>
+            )}
             <button onClick={() => setCmdPaletteOpen(true)} className="flex items-center gap-1.5 px-2 py-1 rounded-md bg-surface-200/40 border border-border/30 hover:bg-surface-200/70 hover:border-accent-blue/30 transition-all text-gray-500 hover:text-gray-300" title="Command palette">
               <Command className="w-3 h-3" /><span className="text-[10px] font-mono">K</span>
             </button>
@@ -242,6 +249,10 @@ export default function ChatPage() {
 
       <CommandPalette open={cmdPaletteOpen} onClose={() => setCmdPaletteOpen(false)} onSelect={handleCommandSelect} />
       <DeleteConfirmDialog open={!!deletingSession} resourceType="conversation" resourceName={deletingSession?.title ?? ''} onConfirm={handleDeleteSession} onCancel={() => setDeletingSession(null)} />
+
+      {logsOpen && activeSessionId && (
+        <ConversationLogs sessionId={activeSessionId} onClose={() => setLogsOpen(false)} />
+      )}
     </div>
   );
 }

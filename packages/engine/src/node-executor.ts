@@ -45,6 +45,7 @@ export interface NodeExecutorDeps {
   runWorkflow: (workflow: WorkflowDef, input: Record<string, unknown>) => Promise<Record<string, unknown>>;
   executionId?: string;
   nodeContext?: string;
+  db?: import('mongodb').Db;
 }
 
 export interface NodeResult {
@@ -130,6 +131,13 @@ async function executeAgentNode(
     const abortController = new AbortController();
     const timer = setTimeout(() => abortController.abort(), timeoutMs);
 
+    // Load MCP servers so agent nodes can access Linear, Postgres, etc.
+    let mcpServers: Record<string, unknown> | undefined;
+    try {
+      const { loadAllMcpServers } = await import('./mcp-loader.js');
+      if (deps.db) mcpServers = await loadAllMcpServers(deps.db);
+    } catch { /* MCP not available — continue without */ }
+
     const conversation = query({
       prompt,
       options: {
@@ -141,6 +149,7 @@ async function executeAgentNode(
         abortController,
         maxTurns: 50,
         permissionMode: 'bypassPermissions',
+        ...(mcpServers && Object.keys(mcpServers).length > 0 ? { mcpServers: mcpServers as any } : {}),
       },
     });
 

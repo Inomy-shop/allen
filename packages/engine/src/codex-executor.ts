@@ -70,10 +70,10 @@ export async function executeCodexNode(
 
     if (isResume) {
       // Resume previous session
-      args.push('resume', '--json', '--full-auto', sessionId!, prompt);
+      args.push('resume', '--json', '--dangerously-bypass-approvals-and-sandbox', sessionId!, prompt);
     } else {
-      // Fresh session
-      args.push('--json', '--full-auto');
+      // Fresh session — bypass approvals so MCP tools work
+      args.push('--json', '--dangerously-bypass-approvals-and-sandbox');
       if (model && model !== 'default') {
         args.push('-c', `model="${model}"`);
       }
