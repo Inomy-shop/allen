@@ -127,7 +127,7 @@ export default function WorkflowListPage() {
           </p>
         </div>
         <div className="flex items-center gap-3">
-          <button onClick={refresh} className="p-2 rounded-sm text-gray-500 hover:text-accent-blue hover:bg-accent-blue/5 transition-all">
+          <button title="Refresh" onClick={refresh} className="p-2 rounded-sm text-gray-500 hover:text-accent-blue hover:bg-accent-blue/5 transition-all">
             <RefreshCw className="w-4 h-4" />
           </button>
           <Link
@@ -200,6 +200,7 @@ export default function WorkflowListPage() {
                       <button
                         onClick={(e) => { e.preventDefault(); e.stopPropagation(); setDeletingWf({ id: wf._id, name: wf.name }); }}
                         className="opacity-0 group-hover:opacity-100 p-0.5 rounded-sm text-gray-600 hover:text-accent-red transition-all shrink-0"
+                        title="Delete workflow"
                       >
                         <Trash2 className="w-3.5 h-3.5" />
                       </button>
@@ -267,6 +268,7 @@ export default function WorkflowListPage() {
                 <button
                   onClick={() => setRunDialog({ open: false, workflow: null })}
                   className="p-2 rounded-sm hover:bg-surface-200 text-gray-500 hover:text-gray-300 transition-colors"
+                  title="Close"
                 >
                   <X className="w-4 h-4" />
                 </button>
@@ -332,6 +334,7 @@ export default function WorkflowListPage() {
                           <button
                             type="button"
                             onClick={() => { setRepoMode('select'); setRunInput(prev => ({ ...prev, [key]: '' })); }}
+                            title="Switch to repo selector"
                             className="text-[10px] text-accent-blue hover:text-accent-cyan font-mono uppercase tracking-wider"
                           >
                             Back to repo list

@@ -61,10 +61,10 @@ export default function RoleManagerPage() {
       <div className="flex items-center justify-between mb-6">
         <h1 className="font-heading text-xl font-bold text-white tracking-widest uppercase">Roles</h1>
         <div className="flex items-center gap-2">
-          <button onClick={refresh} className="btn-ghost text-xs">
+          <button title="Refresh roles" onClick={refresh} className="btn-ghost text-xs">
             <RefreshCw className="w-3.5 h-3.5" />
           </button>
-          <button onClick={handleCreate} className="btn-primary text-xs inline-flex items-center gap-1.5 whitespace-nowrap">
+          <button title="Create new role" onClick={handleCreate} className="btn-primary text-xs inline-flex items-center gap-1.5 whitespace-nowrap">
             <Plus className="w-3.5 h-3.5" /> Create Role
           </button>
         </div>

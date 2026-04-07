@@ -1,5 +1,5 @@
 import { useEffect, useRef } from 'react';
-import { useParams, useNavigate, NavLink } from 'react-router-dom';
+import { useParams, useNavigate } from 'react-router-dom';
 import { RotateCcw, Check, Palette, Type, Sparkles, Server, User, Eye, Key,
   Bot, Brain, Zap, Cpu, Atom, Terminal, Code, Rocket, Shield, Hexagon, Flame,
 } from 'lucide-react';
@@ -22,10 +22,10 @@ const ICON_MAP: Record<string, React.ElementType> = {
 // ── Settings Tabs ──
 
 const TABS = [
-  { id: 'profile', label: 'Profile', icon: User },
-  { id: 'theme', label: 'Theme & Fonts', icon: Palette },
-  { id: 'mcp', label: 'MCP Servers', icon: Server },
-  { id: 'secrets', label: 'Secrets', icon: Key },
+  { id: 'mcp', label: 'MCP Servers', icon: Server, description: 'External tool integrations' },
+  { id: 'theme', label: 'Appearance', icon: Palette, description: 'Theme, fonts & agent icon' },
+  { id: 'secrets', label: 'Secrets', icon: Key, description: 'API keys & credentials' },
+  { id: 'profile', label: 'Profile', icon: User, description: 'Account & environment' },
 ] as const;
 
 type TabId = (typeof TABS)[number]['id'];
@@ -105,6 +105,7 @@ function ThemeCard({ preset, isActive, onSelect }: { preset: ThemePreset; isActi
   return (
     <button
       onClick={onSelect}
+      title={preset.label}
       className={`relative group flex flex-col rounded-sm border p-3 transition-all duration-200 cursor-pointer ${isActive ? 'border-accent-blue shadow-glow-blue' : 'border-border/60 hover:border-border-light'}`}
       style={isActive ? { borderColor: accent, boxShadow: `0 0 12px ${accent}40` } : undefined}
     >
@@ -183,85 +184,89 @@ function ThemeTab() {
   const currentAccent = customAccent ?? activeTheme.colors.accent;
 
   return (
-    <div className="space-y-8">
+    <div className="space-y-6">
       <FontPreloader />
+
+      {/* Header */}
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="font-heading text-xl text-white tracking-wider">Theme & Fonts</h1>
-          <p className="text-sm text-gray-500 font-body mt-1">Customize the look and feel</p>
+          <h1 className="font-heading text-xl text-white tracking-wider">Appearance</h1>
+          <p className="text-sm text-gray-500 font-body mt-1">Personalize your workspace</p>
         </div>
-        <button onClick={resetToDefaults} className="btn-ghost flex items-center gap-2">
-          <RotateCcw className="w-3.5 h-3.5" /> Reset Defaults
+        <button onClick={resetToDefaults} className="btn-ghost flex items-center gap-2 text-xs">
+          <RotateCcw className="w-3 h-3" /> Reset All
         </button>
       </div>
 
-      <section>
-        <SectionHeader icon={Palette} title="Theme" />
-        <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-6 gap-3">
-          {THEME_PRESETS.map((preset) => (
-            <ThemeCard key={preset.name} preset={preset} isActive={themeName === preset.name} onSelect={() => setTheme(preset.name)} />
-          ))}
+      {/* Top row: Theme + Accent + Icon */}
+      <div className="grid grid-cols-1 xl:grid-cols-4 gap-4">
+        {/* Themes — 3 cols on xl */}
+        <div className="xl:col-span-3">
+          <SectionHeader icon={Palette} title="Theme" />
+          <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-6 gap-2.5">
+            {THEME_PRESETS.map((preset) => (
+              <ThemeCard key={preset.name} preset={preset} isActive={themeName === preset.name} onSelect={() => setTheme(preset.name)} />
+            ))}
+          </div>
         </div>
-      </section>
 
-      <section>
-        <SectionHeader icon={Sparkles} title="Accent Color" />
-        <div className="flex flex-wrap items-center gap-3">
-          {ACCENT_OPTIONS.map((opt) => (
-            <button key={opt.name} onClick={() => setCustomAccent(opt.color)}
-              className={`group relative w-8 h-8 rounded-full border-2 transition-all duration-150 cursor-pointer ${currentAccent === opt.color ? 'scale-110' : 'border-transparent hover:scale-105'}`}
-              style={{ background: opt.color, borderColor: currentAccent === opt.color ? '#fff' : undefined, boxShadow: currentAccent === opt.color ? `0 0 10px ${opt.color}80` : undefined }}
-              title={opt.label}
-            >
-              {currentAccent === opt.color && <Check className="w-3.5 h-3.5 text-black absolute inset-0 m-auto" />}
-            </button>
-          ))}
-          <button onClick={() => setCustomAccent(null)} className="flex items-center gap-1.5 px-3 py-1.5 rounded-sm border border-border/60 text-xs font-label uppercase tracking-wider text-gray-500 hover:text-gray-300 hover:border-border-light transition-colors cursor-pointer">
-            <RotateCcw className="w-3 h-3" /> Theme Default
-          </button>
+        {/* Accent + Icon — 1 col on xl */}
+        <div className="space-y-4">
+          <div>
+            <SectionHeader icon={Sparkles} title="Accent" />
+            <div className="flex flex-wrap gap-2">
+              {ACCENT_OPTIONS.map((opt) => (
+                <button key={opt.name} onClick={() => setCustomAccent(opt.color)}
+                  className={`w-8 h-8 rounded-lg border-2 transition-all duration-150 cursor-pointer flex items-center justify-center ${currentAccent === opt.color ? 'scale-110' : 'border-transparent hover:scale-105'}`}
+                  style={{ background: opt.color, borderColor: currentAccent === opt.color ? '#fff' : undefined, boxShadow: currentAccent === opt.color ? `0 0 8px ${opt.color}60` : undefined }}
+                  title={opt.label}
+                >
+                  {currentAccent === opt.color && <Check className="w-3 h-3 text-black" />}
+                </button>
+              ))}
+              <button onClick={() => setCustomAccent(null)} className="w-8 h-8 rounded-lg border border-dashed border-border/50 flex items-center justify-center text-gray-600 hover:text-gray-400 hover:border-border transition-colors cursor-pointer" title="Reset to theme default">
+                <RotateCcw className="w-3 h-3" />
+              </button>
+            </div>
+          </div>
+
+          <div>
+            <SectionHeader icon={Bot} title="Agent Icon" />
+            <div className="flex flex-wrap gap-1.5">
+              {AGENT_ICON_PRESETS.map((preset) => {
+                const IconComp = ICON_MAP[preset.icon] ?? Bot;
+                const isActive = agentIcon === preset.name;
+                return (
+                  <button
+                    key={preset.name}
+                    onClick={() => setAgentIcon(preset.name)}
+                    className={`w-9 h-9 rounded-lg flex items-center justify-center transition-all duration-200 cursor-pointer ${isActive ? 'bg-accent-blue/15 text-accent-blue border border-accent-blue/30' : 'bg-surface-200/30 text-gray-500 border border-transparent hover:border-border/50 hover:text-gray-300'}`}
+                    title={preset.label}
+                  >
+                    <IconComp className="w-4 h-4" />
+                  </button>
+                );
+              })}
+            </div>
+          </div>
         </div>
-      </section>
+      </div>
 
-      <section>
+      {/* Fonts */}
+      <div>
         <SectionHeader icon={Type} title="Font Style" />
-        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3">
+        <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-2.5">
           {FONT_PRESETS.map((preset) => (
             <FontCard key={preset.name} preset={preset} isActive={fontName === preset.name} onSelect={() => setFont(preset.name)} />
           ))}
         </div>
-      </section>
+      </div>
 
-      <section>
-        <SectionHeader icon={Bot} title="Agent Icon" />
-        <div className="grid grid-cols-4 sm:grid-cols-6 gap-3">
-          {AGENT_ICON_PRESETS.map((preset) => {
-            const IconComp = ICON_MAP[preset.icon] ?? Bot;
-            const isActive = agentIcon === preset.name;
-            return (
-              <button
-                key={preset.name}
-                onClick={() => setAgentIcon(preset.name)}
-                className={`flex flex-col items-center gap-1.5 p-3 rounded-sm border transition-all duration-200 cursor-pointer ${isActive ? 'border-accent-blue shadow-glow-blue bg-surface-100/80' : 'border-border/60 hover:border-border-light bg-surface-100/40'}`}
-              >
-                <div className={`w-10 h-10 rounded-lg flex items-center justify-center ${isActive ? 'bg-accent-blue/15 text-accent-blue' : 'bg-surface-200/60 text-gray-400'}`}>
-                  <IconComp className="w-5 h-5" />
-                </div>
-                <span className="text-[10px] font-label uppercase tracking-wider text-gray-500">{preset.label}</span>
-                {isActive && (
-                  <div className="absolute top-1 right-1 w-4 h-4 rounded-full bg-accent-blue flex items-center justify-center">
-                    <Check className="w-2.5 h-2.5 text-black" />
-                  </div>
-                )}
-              </button>
-            );
-          })}
-        </div>
-      </section>
-
-      <section>
+      {/* Preview */}
+      <div>
         <SectionHeader icon={Eye} title="Preview" />
         <LivePreview />
-      </section>
+      </div>
     </div>
   );
 }
@@ -313,44 +318,17 @@ const TAB_COMPONENTS: Record<TabId, React.FC> = {
 export default function SettingsPage() {
   const { tab } = useParams<{ tab?: string }>();
   const navigate = useNavigate();
-  const activeTab = (TABS.some(t => t.id === tab) ? tab : 'profile') as TabId;
+  const activeTab = (TABS.some(t => t.id === tab) ? tab : 'mcp') as TabId;
 
-  // Redirect /settings to /settings/profile
   useEffect(() => {
-    if (!tab) navigate('/settings/profile', { replace: true });
+    if (!tab) navigate('/settings/mcp', { replace: true });
   }, [tab]);
 
   const TabContent = TAB_COMPONENTS[activeTab];
 
   return (
-    <div className="flex h-full">
-      {/* Settings sidebar */}
-      <div className="w-56 shrink-0 bg-surface-50 border-r border-border/50 flex flex-col">
-        <div className="p-4 border-b border-border/50">
-          <h2 className="font-heading text-sm font-bold text-white tracking-widest uppercase">Settings</h2>
-        </div>
-        <div className="flex-1 py-2">
-          {TABS.map(({ id, label, icon: Icon }) => (
-            <NavLink
-              key={id}
-              to={`/settings/${id}`}
-              className={`flex items-center gap-3 px-4 py-2.5 mx-2 rounded-sm text-sm font-body transition-all duration-150 ${
-                activeTab === id
-                  ? 'bg-accent-blue/10 text-accent-blue border-l-2 border-accent-blue'
-                  : 'text-gray-500 hover:text-gray-300 hover:bg-surface-200/50 border-l-2 border-transparent'
-              }`}
-            >
-              <Icon className="w-4 h-4" />
-              {label}
-            </NavLink>
-          ))}
-        </div>
-      </div>
-
-      {/* Tab content */}
-      <div className="flex-1 overflow-auto p-6">
-        <TabContent />
-      </div>
+    <div className="flex-1 overflow-auto p-6">
+      <TabContent />
     </div>
   );
 }

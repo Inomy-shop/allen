@@ -141,6 +141,7 @@ const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function ChatInput
               <button
                 onClick={() => !modelLocked && setShowModelPicker(!showModelPicker)}
                 disabled={modelLocked}
+                title={modelLocked ? 'Model locked for this conversation' : 'Select model'}
                 className={`flex items-center gap-1 px-2 py-0.5 rounded-md text-[11px] font-mono transition-all ${
                   modelLocked
                     ? 'text-gray-700 cursor-default'

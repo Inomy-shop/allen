@@ -123,7 +123,7 @@ export default function RoleDialog({ open, onClose, onSave, role }: RoleDialogPr
           <h2 className="font-heading text-sm font-bold text-white tracking-widest uppercase">
             {isEdit ? 'Edit Role' : 'Create Role'}
           </h2>
-          <button type="button" onClick={onClose} className="btn-ghost p-1">
+          <button type="button" onClick={onClose} className="btn-ghost p-1" title="Close">
             <X className="w-4 h-4" />
           </button>
         </div>

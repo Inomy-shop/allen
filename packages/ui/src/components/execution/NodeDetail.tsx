@@ -129,6 +129,7 @@ export default function NodeDetail({ nodeName, nodeState, trace, allTraces = [],
             <button
               key={t.attempt}
               onClick={() => setViewAttempt(t.attempt === (trace?.attempt) && viewAttempt == null ? null : t.attempt)}
+              title={`View attempt ${t.attempt}`}
               className={`text-[11px] font-mono px-2 py-0.5 rounded-sm border transition-colors cursor-pointer ${
                 (viewAttempt === t.attempt || (viewAttempt == null && t.attempt === trace?.attempt))
                   ? 'border-accent-blue bg-accent-blue/10 text-accent-blue'

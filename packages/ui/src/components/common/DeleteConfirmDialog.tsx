@@ -27,7 +27,7 @@ export default function DeleteConfirmDialog({ open, resourceType, resourceName, 
             <h2 className="font-heading text-sm font-bold text-white tracking-wider uppercase">Delete {resourceType}</h2>
             <p className="text-xs text-gray-400 font-body mt-0.5">This action cannot be undone</p>
           </div>
-          <button onClick={onCancel} className="text-gray-400 hover:text-white shrink-0">
+          <button title="Close" onClick={onCancel} className="text-gray-400 hover:text-white shrink-0">
             <X className="w-4 h-4" />
           </button>
         </div>

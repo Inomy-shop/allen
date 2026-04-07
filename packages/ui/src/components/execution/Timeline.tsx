@@ -139,6 +139,7 @@ export default function Timeline({ logs, nodeFilter, onNodeFilterChange, workflo
       {/* Scroll to bottom button — shown when user scrolled up */}
       {!autoScroll && logs.length > 0 && (
         <button
+          title="Scroll to latest"
           onClick={() => {
             isUserScrolling.current = false;
             setAutoScroll(true);

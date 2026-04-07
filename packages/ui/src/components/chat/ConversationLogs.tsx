@@ -100,6 +100,7 @@ function LogEntry({ log }: { log: ChatLogEntry }) {
     <div className="border border-border/30 rounded-lg overflow-hidden mb-3">
       <button
         onClick={() => setExpanded(!expanded)}
+        title={expanded ? "Collapse" : "Expand"}
         className="w-full flex items-center gap-3 px-4 py-3 bg-surface-200/20 hover:bg-surface-200/40 transition-colors text-left"
       >
         <span className={`w-2 h-2 rounded-full shrink-0 ${log.status === 'completed' ? 'bg-accent-green' : 'bg-accent-red'}`} />
@@ -174,7 +175,7 @@ export default function ConversationLogs({ sessionId, onClose }: ConversationLog
               {session?.totalCostUsd > 0 && <span className="text-[10px] text-gray-500 font-mono">${session.totalCostUsd.toFixed(4)}</span>}
             </div>
           </div>
-          <button onClick={onClose} className="p-1.5 rounded-md hover:bg-surface-200/50 text-gray-500 hover:text-gray-300 transition-colors">
+          <button onClick={onClose} className="p-1.5 rounded-md hover:bg-surface-200/50 text-gray-500 hover:text-gray-300 transition-colors" title="Close logs">
             <X className="w-4 h-4" />
           </button>
         </div>

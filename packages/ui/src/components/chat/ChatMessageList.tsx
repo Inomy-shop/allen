@@ -59,6 +59,7 @@ function ThinkingBlock({ text }: { text: string }) {
       <button
         onClick={() => setExpanded(!expanded)}
         className="flex items-center gap-1.5 text-[11px] text-purple-400/70 hover:text-purple-400 transition-colors font-mono"
+        title={expanded ? 'Collapse thinking' : 'Expand thinking'}
       >
         <Brain className="w-3 h-3 animate-pulse" />
         <span>Thinking</span>
@@ -516,6 +517,7 @@ function ToolCallCard({ call, active }: { call: ToolCallRecord | ActiveToolCall;
       <button
         onClick={() => setExpanded(!expanded)}
         className="w-full flex items-center gap-2 px-3 py-2 hover:bg-surface-200/50 transition-colors text-left"
+        title={expanded ? 'Collapse tool result' : 'Expand tool result'}
       >
         {isRunning ? (
           <Loader2 className={`w-3.5 h-3.5 ${meta.color} animate-spin`} />
@@ -653,6 +655,7 @@ export default function ChatMessageList({ messages, streamText, thinkingText, st
                   key={action.label}
                   onClick={() => onSuggestionClick(action.prompt)}
                   className="flex items-center gap-2.5 px-3 py-2 rounded-lg bg-surface-200/40 border border-border/30 hover:bg-surface-200/70 hover:border-accent-blue/30 transition-all text-left group"
+                  title={action.prompt}
                 >
                   {QUICK_ICONS[action.icon]}
                   <span className="text-xs text-gray-400 group-hover:text-gray-300 font-body">{action.label}</span>

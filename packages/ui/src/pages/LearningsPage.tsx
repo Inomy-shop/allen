@@ -209,13 +209,13 @@ export default function LearningsPage() {
           <h1 className="font-heading text-xl font-bold text-white tracking-widest uppercase">Learnings</h1>
         </div>
         <div className="flex items-center gap-2">
-          <button onClick={() => setShowAdd(!showAdd)} className="btn-primary text-xs inline-flex items-center gap-1.5 whitespace-nowrap">
+          <button title="Add learning" onClick={() => setShowAdd(!showAdd)} className="btn-primary text-xs inline-flex items-center gap-1.5 whitespace-nowrap">
             <Plus className="w-3.5 h-3.5" /> Add Learning
           </button>
-          <button onClick={toggleStats} className="btn-ghost text-xs">
+          <button title="Toggle statistics" onClick={toggleStats} className="btn-ghost text-xs">
             <BarChart2 className="w-3.5 h-3.5" />
           </button>
-          <button onClick={fetchLearnings} className="btn-ghost text-xs">
+          <button title="Refresh learnings" onClick={fetchLearnings} className="btn-ghost text-xs">
             <RefreshCw className="w-3.5 h-3.5" />
           </button>
         </div>
@@ -225,6 +225,7 @@ export default function LearningsPage() {
       <div className="flex items-center gap-1 mb-6 border-b border-border/30 pb-2">
         <button
           onClick={() => setActiveTab('learnings')}
+          title="View learnings"
           className={`px-4 py-1.5 text-xs font-heading uppercase tracking-wider rounded-t-sm transition-colors ${
             activeTab === 'learnings'
               ? 'text-accent-blue border-b-2 border-accent-blue'
@@ -235,6 +236,7 @@ export default function LearningsPage() {
         </button>
         <button
           onClick={() => setActiveTab('evolution')}
+          title="Role evolution candidates"
           className={`px-4 py-1.5 text-xs font-heading uppercase tracking-wider rounded-t-sm transition-colors flex items-center gap-1.5 ${
             activeTab === 'evolution'
               ? 'text-accent-blue border-b-2 border-accent-blue'
@@ -398,7 +400,7 @@ export default function LearningsPage() {
           <div className="bg-surface-100 border border-border rounded-sm w-full max-w-lg shadow-lg">
             <div className="flex items-center justify-between px-5 py-4 border-b border-border/50">
               <h3 className="font-heading text-sm text-white tracking-wider uppercase">Add Learning</h3>
-              <button onClick={() => setShowAdd(false)} className="text-gray-400 hover:text-white">
+              <button onClick={() => setShowAdd(false)} className="text-gray-400 hover:text-white" title="Close">
                 <X className="w-4 h-4" />
               </button>
             </div>

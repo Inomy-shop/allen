@@ -115,7 +115,7 @@ export default function ExecutionListPage() {
               <option key={s} value={s}>{s || 'All statuses'}</option>
             ))}
           </select>
-          <button onClick={refresh} className="btn-ghost text-xs">
+          <button title="Refresh executions" onClick={refresh} className="btn-ghost text-xs">
             <RefreshCw className="w-3.5 h-3.5" />
           </button>
         </div>

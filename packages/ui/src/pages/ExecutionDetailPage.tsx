@@ -83,7 +83,7 @@ function RoleExecutionView({ execution, roleName, trace, id }: {
 
         {/* Prompt */}
         <div className="card overflow-hidden">
-          <button onClick={() => setShowPrompt(!showPrompt)} className="w-full flex items-center gap-2 px-4 py-3 hover:bg-surface-200/30 transition-colors text-left">
+          <button title="Toggle prompt" onClick={() => setShowPrompt(!showPrompt)} className="w-full flex items-center gap-2 px-4 py-3 hover:bg-surface-200/30 transition-colors text-left">
             {showPrompt ? <ChevronDown className="w-4 h-4 text-gray-500" /> : <ChevronRight className="w-4 h-4 text-gray-500" />}
             <Terminal className="w-4 h-4 text-accent-blue" />
             <span className="text-xs font-label uppercase tracking-widest text-gray-400">Prompt</span>
@@ -98,7 +98,7 @@ function RoleExecutionView({ execution, roleName, trace, id }: {
 
         {/* Response */}
         <div className="card overflow-hidden">
-          <button onClick={() => setShowResponse(!showResponse)} className="w-full flex items-center gap-2 px-4 py-3 hover:bg-surface-200/30 transition-colors text-left">
+          <button title="Toggle response" onClick={() => setShowResponse(!showResponse)} className="w-full flex items-center gap-2 px-4 py-3 hover:bg-surface-200/30 transition-colors text-left">
             {showResponse ? <ChevronDown className="w-4 h-4 text-gray-500" /> : <ChevronRight className="w-4 h-4 text-gray-500" />}
             {execution.status === 'completed' ? <CheckCircle className="w-4 h-4 text-accent-green" /> : <AlertCircle className="w-4 h-4 text-accent-red" />}
             <span className="text-xs font-label uppercase tracking-widest text-gray-400">Response</span>
@@ -114,7 +114,7 @@ function RoleExecutionView({ execution, roleName, trace, id }: {
         {/* Activity / Tool Calls */}
         {activity.length > 0 && (
           <div className="card overflow-hidden">
-            <button onClick={() => setShowActivity(!showActivity)} className="w-full flex items-center gap-2 px-4 py-3 hover:bg-surface-200/30 transition-colors text-left">
+            <button title="Toggle activity" onClick={() => setShowActivity(!showActivity)} className="w-full flex items-center gap-2 px-4 py-3 hover:bg-surface-200/30 transition-colors text-left">
               {showActivity ? <ChevronDown className="w-4 h-4 text-gray-500" /> : <ChevronRight className="w-4 h-4 text-gray-500" />}
               <Wrench className="w-4 h-4 text-accent-yellow" />
               <span className="text-xs font-label uppercase tracking-widest text-gray-400">Activity</span>
@@ -372,15 +372,15 @@ export default function ExecutionDetailPage() {
           {isLive && (
             <>
               {isPaused ? (
-                <button onClick={handleResume} className="btn-primary text-xs">
+                <button onClick={handleResume} className="btn-primary text-xs" title="Resume execution">
                   <Play className="w-3.5 h-3.5 mr-1" /> Resume
                 </button>
               ) : (
-                <button onClick={handlePause} className="btn-ghost text-xs">
+                <button onClick={handlePause} className="btn-ghost text-xs" title="Pause execution">
                   <Pause className="w-3.5 h-3.5" />
                 </button>
               )}
-              <button onClick={handleCancel} className="btn-danger text-xs">
+              <button onClick={handleCancel} className="btn-danger text-xs" title="Cancel execution">
                 <XCircle className="w-3.5 h-3.5 mr-1" /> Cancel
               </button>
             </>

@@ -191,7 +191,7 @@ export default function WorkflowBuilderPage() {
       {/* Top bar */}
       <header className="flex items-center justify-between px-4 py-2 border-b border-border/50 bg-surface-50 shrink-0">
         <div className="flex items-center gap-3">
-          <button onClick={() => navigate('/workflows')} className="text-gray-400 hover:text-accent-blue transition-colors">
+          <button onClick={() => navigate('/workflows')} className="text-gray-400 hover:text-accent-blue transition-colors" title="Back to workflows">
             <ArrowLeft className="w-4 h-4" />
           </button>
           <span className="font-heading text-sm font-semibold text-white tracking-wider uppercase">
@@ -207,6 +207,7 @@ export default function WorkflowBuilderPage() {
           <div className="flex items-center bg-surface-200 rounded-sm p-0.5 border border-border/40">
             <button
               onClick={() => handleModeSwitch('visual')}
+              title="Visual editor"
               className={`flex items-center gap-1.5 px-3 py-1.5 rounded-sm text-xs font-label uppercase tracking-wider transition-all ${
                 mode === 'visual' ? 'bg-accent-blue/15 text-accent-blue border border-accent-blue/30' : 'text-gray-400 hover:text-gray-200 border border-transparent'
               }`}
@@ -215,6 +216,7 @@ export default function WorkflowBuilderPage() {
             </button>
             <button
               onClick={() => handleModeSwitch('yaml')}
+              title="YAML editor"
               className={`flex items-center gap-1.5 px-3 py-1.5 rounded-sm text-xs font-label uppercase tracking-wider transition-all ${
                 mode === 'yaml' ? 'bg-accent-blue/15 text-accent-blue border border-accent-blue/30' : 'text-gray-400 hover:text-gray-200 border border-transparent'
               }`}
@@ -230,6 +232,7 @@ export default function WorkflowBuilderPage() {
             <div className="relative">
               <button
                 onClick={() => setShowValidation(!showValidation)}
+                title="View validation issues"
                 className={`inline-flex items-center gap-1.5 text-xs font-label uppercase tracking-wider px-2 py-1 rounded-sm border transition-all cursor-pointer ${
                   validation.errors.length > 0
                     ? 'text-accent-red border-accent-red/30 bg-accent-red/5 hover:bg-accent-red/10'
@@ -250,7 +253,7 @@ export default function WorkflowBuilderPage() {
                   {/* Header */}
                   <div className="flex items-center justify-between px-3 py-2 border-b border-border/50 sticky top-0 bg-surface-100">
                     <span className="text-xs font-label uppercase tracking-wider text-gray-400">Validation Issues</span>
-                    <button onClick={() => setShowValidation(false)} className="text-gray-500 hover:text-white">
+                    <button onClick={() => setShowValidation(false)} className="text-gray-500 hover:text-white" title="Close">
                       <X className="w-3.5 h-3.5" />
                     </button>
                   </div>
@@ -285,15 +288,16 @@ export default function WorkflowBuilderPage() {
             </div>
           )}
 
-          <button onClick={handleValidate} className="btn-ghost text-xs inline-flex items-center gap-1.5 whitespace-nowrap">
+          <button title="Validate workflow" onClick={handleValidate} className="btn-ghost text-xs inline-flex items-center gap-1.5 whitespace-nowrap">
             <CheckCircle className="w-3.5 h-3.5" /> Validate
           </button>
-          <button onClick={handleSave} disabled={saving} className="btn-ghost text-xs inline-flex items-center gap-1.5 whitespace-nowrap">
+          <button title="Save workflow" onClick={handleSave} disabled={saving} className="btn-ghost text-xs inline-flex items-center gap-1.5 whitespace-nowrap">
             <Save className="w-3.5 h-3.5" /> {saving ? 'Saving...' : 'Save'}
           </button>
           <button
             onClick={handleRun}
             disabled={!id || validation.errors.length > 0}
+            title="Run workflow"
             className="btn-primary text-xs inline-flex items-center gap-1.5 whitespace-nowrap"
           >
             <Play className="w-3.5 h-3.5" /> Run

@@ -60,7 +60,7 @@ function ServerCard({
   return (
     <div className={`border rounded-lg overflow-hidden transition-colors ${server.enabled ? 'border-border/40 bg-surface-100/60' : 'border-border/20 bg-surface-100/30 opacity-60'}`}>
       <div className="flex items-center gap-3 px-4 py-3">
-        <button onClick={() => setExpanded(!expanded)} className="text-gray-500 hover:text-gray-300">
+        <button onClick={() => setExpanded(!expanded)} className="text-gray-500 hover:text-gray-300" title={expanded ? 'Collapse details' : 'Expand details'}>
           {expanded ? <ChevronDown className="w-4 h-4" /> : <ChevronRight className="w-4 h-4" />}
         </button>
         <Server className={`w-4 h-4 shrink-0 ${server.enabled ? 'text-accent-blue' : 'text-gray-600'}`} />
@@ -310,7 +310,7 @@ export default function McpServerManager() {
         </div>
       ) : (
         <button
-          onClick={() => setShowAdd(true)}
+          title="Add MCP server"
           className="flex items-center gap-2 px-3 py-2 rounded-lg border border-dashed border-border/40 hover:border-accent-blue/30 hover:bg-surface-200/30 transition-all text-gray-500 hover:text-gray-300 w-full"
         >
           <Plus className="w-4 h-4" />
