@@ -2,7 +2,8 @@ import { useEffect, useRef, useState } from 'react';
 import { Bot, User, AlertCircle, Copy, Check, Clock, Wrench, CheckCircle, ExternalLink, Loader2, Brain,
   Sparkles, Zap, Cpu, Atom, Terminal, Code, Rocket, Shield, Hexagon, Flame,
 } from 'lucide-react';
-import type { ChatMessage, ToolCallRecord, ActiveToolCall } from '../../hooks/useChat';
+import type { ChatMessage, ToolCallRecord, ActiveToolCall, AgentThread as AgentThreadType, AgentReport } from '../../hooks/useChat';
+import { AgentThread } from './AgentThread';
 import { useSettingsStore } from '../../stores/settingsStore';
 
 const AGENT_ICONS: Record<string, React.ElementType> = {
@@ -16,6 +17,8 @@ interface ChatMessageListProps {
   thinkingText?: string;
   streaming: boolean;
   activeToolCalls?: ActiveToolCall[];
+  agentThreads?: AgentThreadType[];
+  agentReports?: AgentReport[];
   onSuggestionClick?: (text: string) => void;
   onSaveToLearnings?: (content: string) => void;
 }
@@ -488,8 +491,10 @@ const TOOL_LABELS: Record<string, { label: string; color: string }> = {
   list_executions: { label: 'List Executions', color: 'text-accent-blue' },
   cancel_execution: { label: 'Cancel Execution', color: 'text-accent-red' },
   list_repos: { label: 'List Repos', color: 'text-accent-blue' },
-  list_roles: { label: 'List Roles', color: 'text-accent-purple' },
-  spawn_role: { label: 'Spawn Role', color: 'text-accent-purple' },
+  list_agents: { label: 'List Agents', color: 'text-accent-purple' },
+  spawn_agent: { label: 'Spawn Agent', color: 'text-accent-purple' },
+  delegate_to_agent: { label: 'Delegate', color: 'text-accent-cyan' },
+  report_to_user: { label: 'Progress Update', color: 'text-accent-green' },
   get_learnings: { label: 'Get Learnings', color: 'text-accent-yellow' },
   // Phase 5: Advanced queries
   query_database: { label: 'Query Database', color: 'text-accent-orange' },
@@ -595,7 +600,7 @@ const QUICK_ACTIONS = [
   { label: 'Recent executions', icon: 'terminal', prompt: 'Show my recent executions' },
   { label: 'List repos', icon: 'folder', prompt: 'List my registered repos' },
   { label: 'Failed today', icon: 'alert', prompt: 'Find all failed executions in the last 24 hours' },
-  { label: 'Available roles', icon: 'bot', prompt: 'What agent roles are available?' },
+  { label: 'Available agents', icon: 'bot', prompt: 'What agents are available?' },
 ] as const;
 
 import { BarChart3, FolderOpen, AlertTriangle } from 'lucide-react';
@@ -610,7 +615,7 @@ const QUICK_ICONS: Record<string, React.ReactNode> = {
 
 import { Bookmark } from 'lucide-react';
 
-export default function ChatMessageList({ messages, streamText, thinkingText, streaming, activeToolCalls = [], onSuggestionClick, onSaveToLearnings }: ChatMessageListProps) {
+export default function ChatMessageList({ messages, streamText, thinkingText, streaming, activeToolCalls = [], agentThreads = [], agentReports = [], onSuggestionClick, onSaveToLearnings }: ChatMessageListProps) {
   const agentIconName = useSettingsStore((s) => s.agentIcon);
   const AgentIcon = AGENT_ICONS[agentIconName] ?? Bot;
   const bottomRef = useRef<HTMLDivElement>(null);
@@ -646,7 +651,7 @@ export default function ChatMessageList({ messages, streamText, thinkingText, st
             Start a conversation with FlowForge Assistant.
           </p>
           <p className="text-xs text-gray-600 mt-2 font-body max-w-xs">
-            Use <span className="text-accent-blue font-mono">@mentions</span> to reference workflows, repos, and roles.
+            Use <span className="text-accent-blue font-mono">@mentions</span> to reference workflows, repos, and agents.
           </p>
           {onSuggestionClick && (
             <div className="mt-6 grid grid-cols-2 gap-2 max-w-sm">
@@ -801,6 +806,40 @@ export default function ChatMessageList({ messages, streamText, thinkingText, st
               )}
             </div>
           </div>
+        </div>
+      )}
+
+      {/* Agent threads (delegation conversations) */}
+      {agentThreads.length > 0 && (
+        <div className="space-y-2 px-2">
+          {agentThreads.map(thread => (
+            <AgentThread
+              key={thread.conversationId}
+              thread={{
+                conversationId: thread.conversationId,
+                fromAgent: thread.fromAgent,
+                toAgent: thread.toAgent,
+                task: thread.task,
+                status: thread.status as 'active' | 'completed' | 'failed',
+                summary: thread.summary,
+                costUsd: thread.costUsd,
+                durationMs: thread.durationMs,
+                depth: thread.depth,
+              }}
+            />
+          ))}
+        </div>
+      )}
+
+      {/* Agent progress reports */}
+      {agentReports.length > 0 && (
+        <div className="space-y-1 px-4">
+          {agentReports.map((report, i) => (
+            <div key={i} className="flex items-start gap-2 text-[11px] text-gray-500 font-body">
+              <span className="font-mono text-accent-cyan shrink-0">{report.agent}:</span>
+              <span>{report.message}</span>
+            </div>
+          ))}
         </div>
       )}
 

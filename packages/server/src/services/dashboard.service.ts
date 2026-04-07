@@ -46,12 +46,12 @@ export class DashboardService {
   async getCostBreakdown(): Promise<Record<string, unknown>> {
     const tracesCol = this.db.collection('execution_traces');
 
-    const byRole = await tracesCol
+    const byAgent = await tracesCol
       .aggregate([
-        { $match: { role: { $ne: null } } },
+        { $match: { agent: { $ne: null } } },
         {
           $group: {
-            _id: '$role',
+            _id: '$agent',
             totalEstimated: { $sum: '$cost.estimated' },
             totalActual: { $sum: '$cost.actual' },
             count: { $sum: 1 },
@@ -75,7 +75,7 @@ export class DashboardService {
       .toArray();
 
     return {
-      byRole: Object.fromEntries(byRole.map(r => [r._id, r])),
+      byAgent: Object.fromEntries(byAgent.map(r => [r._id, r])),
       byWorkflow: Object.fromEntries(byWorkflow.map(w => [w._id, w])),
     };
   }

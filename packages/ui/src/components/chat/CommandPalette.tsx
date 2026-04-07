@@ -7,7 +7,7 @@ interface CommandItem {
   description: string;
   icon: React.ReactNode;
   prompt: string;
-  category: 'workflow' | 'query' | 'debug' | 'role';
+  category: 'workflow' | 'query' | 'debug' | 'agent';
 }
 
 const COMMANDS: CommandItem[] = [
@@ -20,10 +20,10 @@ const COMMANDS: CommandItem[] = [
   { id: 'dashboard', label: 'Dashboard stats', description: 'Aggregated platform metrics', icon: <BarChart3 className="w-4 h-4" />, prompt: 'Show me dashboard stats', category: 'query' },
   { id: 'list-repos', label: 'List repos', description: 'Registered repositories', icon: <FolderOpen className="w-4 h-4" />, prompt: 'List my registered repos', category: 'query' },
   { id: 'learnings', label: 'View learnings', description: 'System learnings and patterns', icon: <Brain className="w-4 h-4" />, prompt: 'Show me recent learnings', category: 'query' },
-  // Roles
-  { id: 'list-roles', label: 'List roles', description: 'Available agent roles', icon: <Bot className="w-4 h-4" />, prompt: 'What agent roles are available?', category: 'role' },
-  { id: 'spawn-reviewer', label: 'Code review', description: 'Spawn coding-reviewer agent', icon: <Bot className="w-4 h-4" />, prompt: 'Ask @coding-reviewer to review ', category: 'role' },
-  { id: 'spawn-planner', label: 'Plan feature', description: 'Spawn coding-planner agent', icon: <Bot className="w-4 h-4" />, prompt: 'Ask @coding-planner to design ', category: 'role' },
+  // Agents
+  { id: 'list-agents', label: 'List agents', description: 'Available agents', icon: <Bot className="w-4 h-4" />, prompt: 'What agents are available?', category: 'agent' },
+  { id: 'spawn-reviewer', label: 'Code review', description: 'Spawn coding-reviewer', icon: <Bot className="w-4 h-4" />, prompt: 'Ask @coding-reviewer to review ', category: 'agent' },
+  { id: 'spawn-planner', label: 'Plan feature', description: 'Spawn coding-planner', icon: <Bot className="w-4 h-4" />, prompt: 'Ask @coding-planner to design ', category: 'agent' },
   // Debug
   { id: 'debug-node', label: 'Debug node', description: 'Get node trace for an execution', icon: <AlertCircle className="w-4 h-4" />, prompt: 'Why did the ', category: 'debug' },
   { id: 'exec-logs', label: 'Execution logs', description: 'View logs for an execution', icon: <Terminal className="w-4 h-4" />, prompt: 'Show error logs for execution ', category: 'debug' },
@@ -32,11 +32,11 @@ const COMMANDS: CommandItem[] = [
 const CATEGORY_LABELS: Record<string, string> = {
   workflow: 'Workflows',
   query: 'Queries',
-  role: 'Roles',
+  agent: 'Agents',
   debug: 'Debug',
 };
 
-const CATEGORY_ORDER = ['workflow', 'query', 'role', 'debug'];
+const CATEGORY_ORDER = ['workflow', 'query', 'agent', 'debug'];
 
 interface CommandPaletteProps {
   open: boolean;

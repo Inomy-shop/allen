@@ -11,6 +11,7 @@ export interface ChatSession {
   provider: string;
   model?: string;
   claudeSessionId?: string;
+  activeAgent?: string | null;
 }
 
 export interface ToolCallRecord {
@@ -43,6 +44,28 @@ export interface ActiveToolCall {
   durationMs?: number;
 }
 
+/** Agent-to-agent delegation thread (live-updated via SSE) */
+export interface AgentThread {
+  conversationId: string;
+  fromAgent: string;
+  toAgent: string;
+  task: string;
+  status: 'active' | 'completed' | 'failed';
+  summary?: string;
+  costUsd?: number;
+  durationMs?: number;
+  depth?: number;
+  toolCalls?: string[];
+}
+
+/** Progress report from an agent */
+export interface AgentReport {
+  agent: string;
+  message: string;
+  status: string;
+  timestamp: string;
+}
+
 export function useChat() {
   const [sessions, setSessions] = useState<ChatSession[]>([]);
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
@@ -51,6 +74,8 @@ export function useChat() {
   const [streamText, setStreamText] = useState('');
   const [thinkingText, setThinkingText] = useState('');
   const [activeToolCalls, setActiveToolCalls] = useState<ActiveToolCall[]>([]);
+  const [agentThreads, setAgentThreads] = useState<AgentThread[]>([]);
+  const [agentReports, setAgentReports] = useState<AgentReport[]>([]);
   const [loadingSessions, setLoadingSessions] = useState(true);
   const [loadingMessages, setLoadingMessages] = useState(false);
   const abortRef = useRef<AbortController | null>(null);
@@ -197,6 +222,42 @@ export function useChat() {
         }
         break;
 
+      case 'agent_thread_start':
+        setAgentThreads(prev => [...prev, {
+          conversationId: data.conversationId,
+          fromAgent: data.fromAgent,
+          toAgent: data.toAgent,
+          task: data.task ?? '',
+          status: 'active',
+          depth: data.depth,
+        }]);
+        break;
+
+      case 'agent_thread_message':
+        setAgentThreads(prev => prev.map(t =>
+          t.conversationId === data.conversationId
+            ? { ...t, toolCalls: [...(t.toolCalls ?? []), data.tool as string] }
+            : t,
+        ));
+        break;
+
+      case 'agent_thread_complete':
+        setAgentThreads(prev => prev.map(t =>
+          t.conversationId === data.conversationId
+            ? { ...t, status: data.error ? 'failed' : 'completed', summary: data.summary as string, costUsd: data.costUsd as number, durationMs: data.durationMs as number }
+            : t,
+        ));
+        break;
+
+      case 'agent_report':
+        setAgentReports(prev => [...prev, {
+          agent: data.agent as string,
+          message: data.message as string,
+          status: data.status as string,
+          timestamp: data.timestamp as string,
+        }]);
+        break;
+
       case 'stream_inactive':
         setStreaming(false);
         setActiveToolCalls([]);
@@ -246,7 +307,7 @@ export function useChat() {
     setActiveToolCalls([]);
   }, [streaming]);
 
-  const sendMessage = useCallback(async (content: string, overrideSessionId?: string) => {
+  const sendMessage = useCallback(async (content: string, overrideSessionId?: string, agent?: string) => {
     const sessionId = overrideSessionId || activeSessionId;
     if (!sessionId || streaming) return;
 
@@ -255,6 +316,8 @@ export function useChat() {
     setStreamText('');
     setThinkingText('');
     setActiveToolCalls([]);
+    setAgentThreads([]);
+    setAgentReports([]);
 
     // Add user message optimistically
     const userMsg: ChatMessage = {
@@ -273,7 +336,7 @@ export function useChat() {
       const response = await fetch(api.sendMessageUrl(sessionId), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ content }),
+        body: JSON.stringify({ content, agent }),
         signal: abortController.signal,
       });
 
@@ -371,6 +434,42 @@ export function useChat() {
                   }
                   break;
 
+                case 'agent_thread_start':
+                  setAgentThreads(prev => [...prev, {
+                    conversationId: data.conversationId,
+                    fromAgent: data.fromAgent,
+                    toAgent: data.toAgent,
+                    task: data.task ?? '',
+                    status: 'active',
+                    depth: data.depth,
+                  }]);
+                  break;
+
+                case 'agent_thread_message':
+                  setAgentThreads(prev => prev.map(t =>
+                    t.conversationId === data.conversationId
+                      ? { ...t, toolCalls: [...(t.toolCalls ?? []), data.tool as string] }
+                      : t,
+                  ));
+                  break;
+
+                case 'agent_thread_complete':
+                  setAgentThreads(prev => prev.map(t =>
+                    t.conversationId === data.conversationId
+                      ? { ...t, status: data.error ? 'failed' : 'completed', summary: data.summary as string, costUsd: data.costUsd as number, durationMs: data.durationMs as number }
+                      : t,
+                  ));
+                  break;
+
+                case 'agent_report':
+                  setAgentReports(prev => [...prev, {
+                    agent: data.agent as string,
+                    message: data.message as string,
+                    status: data.status as string,
+                    timestamp: data.timestamp as string,
+                  }]);
+                  break;
+
                 case 'error':
                   setMessages(prev => [
                     ...prev,
@@ -437,6 +536,8 @@ export function useChat() {
     streamText,
     thinkingText,
     activeToolCalls,
+    agentThreads,
+    agentReports,
     loadingSessions,
     loadingMessages,
     sendMessage,

@@ -13,7 +13,7 @@ input:
 
 nodes:
   plan:
-    role: planner
+    agent: planner
     prompt: "Break down: {{task}}"
     outputs: [plan]
 
@@ -23,7 +23,7 @@ nodes:
     outputs: [worktree_path, branch_name]
 
   implement:
-    role: developer
+    agent: developer
     prompt: |
       Implement in {{worktree_path}}:
       {{plan}}
@@ -32,7 +32,7 @@ nodes:
     resume_on_retry: true
 
   test:
-    role: tester
+    agent: tester
     prompt: "Test changes in {{worktree_path}}: {{changed_files}}"
     outputs: [test_passed, test_output]
 
@@ -43,12 +43,12 @@ nodes:
     outputs: [build_passed, build_errors]
 
   review:
-    role: reviewer
+    agent: reviewer
     prompt: "Review {{worktree_path}} on {{branch_name}}. Verdict: APPROVED or REQUEST_CHANGES."
     outputs: [review_verdict, review_feedback]
 
   create-pr:
-    role: git-ops
+    agent: git-ops
     prompt: "Create PR from {{branch_name}}: {{summary}}"
     outputs: [pr_url]
 

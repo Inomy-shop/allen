@@ -23,16 +23,18 @@ const TOOLS = [
   { name: 'list_executions', description: 'List recent executions. Filter by status or workflow name.', params: { status: 'string', workflow_name: 'string', limit: 'number' } },
   { name: 'cancel_execution', description: 'Cancel a running execution', params: { execution_id: 'string (required)' } },
   { name: 'list_repos', description: 'List registered repositories with tech stack', params: {} },
-  { name: 'list_roles', description: 'List available agent roles with provider, model, tools', params: {} },
-  { name: 'get_dashboard_stats', description: 'Get dashboard statistics: workflow count, executions, success rate', params: {} },
+  { name: 'list_agents', description: 'List all available agents with provider, model, and tools', params: {} },
+  { name: 'get_dashboard_stats', description: 'Get dashboard statistics: workflow count, executions, success rate, agent count', params: {} },
   { name: 'get_learnings', description: 'Get learnings from the learning system', params: { workflow_name: 'string', type: 'string', limit: 'number' } },
   { name: 'get_node_trace', description: 'Get detailed trace of a node execution for debugging', params: { execution_id: 'string (required)', node_name: 'string (required)' } },
   { name: 'get_execution_logs', description: 'Get execution logs filtered by node, level, category', params: { execution_id: 'string (required)', node: 'string', level: 'string', category: 'string', limit: 'number' } },
-  { name: 'spawn_role', description: 'Spawn a one-shot agent with a specific role to perform a task. The agent runs with the role system prompt, model, and tools.', params: { role_name: 'string (required)', prompt: 'string (required)', repo_path: 'string — optional repo path' } },
-  { name: 'query_database', description: 'Run a read-only query against FlowForge MongoDB. Allowed collections: workflows, executions, roles, repos, learnings, chat_sessions, execution_logs, node_traces.', params: { collection: 'string (required)', filter: 'object', projection: 'object', sort: 'object', limit: 'number (max 20)' } },
+  { name: 'spawn_agent', description: 'Spawn a one-shot agent to perform a task. The agent runs with the agent system prompt, model, and tools.', params: { agent_name: 'string (required)', prompt: 'string (required)', repo_path: 'string — optional repo path' } },
+  { name: 'query_database', description: 'Run a read-only query against FlowForge MongoDB. Allowed collections: workflows, executions, agents, repos, learnings, chat_sessions, execution_logs, node_traces.', params: { collection: 'string (required)', filter: 'object', projection: 'object', sort: 'object', limit: 'number (max 20)' } },
   { name: 'search_executions_advanced', description: 'Search executions with advanced filters: date range, cost, failed nodes.', params: { workflow_name: 'string', status: 'string', since_hours: 'number', min_cost: 'number', has_failed_node: 'boolean', limit: 'number' } },
   { name: 'submit_execution_input', description: 'Submit input to a paused workflow execution', params: { execution_id: 'string (required)', node: 'string (required)', data: 'object (required)' } },
   { name: 'save_learning', description: 'Save a learning/correction to system memory. Call silently when user corrects you or states a preference.', params: { content: 'string (required) — generalized rule', type: 'string (required) — fact, pattern, mistake, or preference' } },
+  { name: 'delegate_to_agent', description: 'Delegate a task to another team agent. The target agent processes the task and returns their response. Use to involve other agents (e.g., delegate technical analysis to engineer, data queries to data-analyst).', params: { agent_name: 'string (required) — target agent', task: 'string (required) — what you need from them', context: 'object — relevant context' } },
+  { name: 'report_to_user', description: 'Send a progress update to the user during a delegation chain.', params: { message: 'string (required)', status: 'string — in_progress | completed | needs_input' } },
 ];
 
 // ── API Call Helper ──
@@ -79,7 +81,7 @@ async function executeTool(name: string, args: Record<string, unknown>): Promise
       return res.json();
     }
     case 'list_repos': return callAPI('/api/repos');
-    case 'list_roles': return callAPI('/api/roles');
+    case 'list_agents': return callAPI('/api/agents');
     case 'get_dashboard_stats': return callAPI('/api/dashboard/stats');
     case 'get_learnings': {
       const params = new URLSearchParams();
@@ -108,24 +110,21 @@ async function executeTool(name: string, args: Record<string, unknown>): Promise
       });
       return res.json();
     }
-    case 'spawn_role': {
-      const url = `${API_BASE}/api/chat/spawn-role`;
+    case 'spawn_agent': {
+      const url = `${API_BASE}/api/chat/spawn-agent`;
       const res = await fetch(url, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ role_name: args.role_name, prompt: args.prompt, repo_path: args.repo_path }),
+        body: JSON.stringify({ agent_name: args.agent_name, prompt: args.prompt, repo_path: args.repo_path }),
       });
       return res.json();
     }
     case 'query_database': {
       const collection = args.collection as string;
-      const allowed = ['workflows', 'executions', 'roles', 'repos', 'learnings', 'chat_sessions', 'execution_logs', 'node_traces'];
+      const allowed = ['workflows', 'executions', 'agents', 'repos', 'learnings', 'chat_sessions', 'execution_logs', 'node_traces'];
       if (!allowed.includes(collection)) return { error: `Collection "${collection}" not allowed. Allowed: ${allowed.join(', ')}` };
-      // Use the learnings endpoint as a proxy for simple queries, or call MongoDB directly
-      // For now, route to a generic query endpoint
       const params = new URLSearchParams();
       if (args.limit) params.set('limit', String(args.limit));
-      // Simple list query
       const res = await fetch(`${API_BASE}/api/${collection === 'chat_sessions' ? 'chat/sessions' : collection}?${params}`);
       return res.json();
     }
@@ -154,6 +153,20 @@ async function executeTool(name: string, args: Record<string, unknown>): Promise
         }),
       });
       return res.json();
+    }
+    case 'delegate_to_agent': {
+      const url = `${API_BASE}/api/chat/delegate`;
+      const res = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ agent_name: args.agent_name, task: args.task, context: args.context }),
+      });
+      return res.json();
+    }
+    case 'report_to_user': {
+      // report_to_user is handled in-process by the chat service, not via API
+      // When called through MCP, it's a no-op that returns success
+      return { reported: true, message: args.message, status: args.status ?? 'in_progress' };
     }
     default: return { error: `Unknown tool: ${name}` };
   }

@@ -11,7 +11,7 @@ input:
 
 nodes:
   analyze:
-    role: codex-researcher
+    agent: codex-researcher
     prompt: |
       Analyze this task: {{task}}
 
@@ -29,7 +29,7 @@ nodes:
     resume_on_retry: true
 
   execute:
-    role: codex-researcher
+    agent: codex-researcher
     prompt: |
       Execute step 1 of this plan:
       {{plan}}
@@ -44,7 +44,7 @@ nodes:
     output_format: json
 
   review:
-    role: codex-reviewer
+    agent: codex-reviewer
     prompt: |
       Review the work done:
       Original task: {{task}}
@@ -57,7 +57,7 @@ nodes:
     output_format: json
 
   format:
-    role: codex-researcher
+    agent: codex-researcher
     prompt: |
       Format the final output:
       Task: {{task}}

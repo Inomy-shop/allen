@@ -5,8 +5,8 @@ export async function ensureIndexes(db: Db): Promise<void> {
   await db.collection('workflows').createIndex({ name: 1 }, { unique: true });
   await db.collection('workflows').createIndex({ tags: 1 });
 
-  // Roles
-  await db.collection('roles').createIndex({ name: 1 }, { unique: true });
+  // Agents
+  await db.collection('agents').createIndex({ name: 1 }, { unique: true });
 
   // Executions
   await db.collection('executions').createIndex({ id: 1 }, { unique: true });
@@ -40,7 +40,7 @@ export async function ensureIndexes(db: Db): Promise<void> {
   await db.collection('learnings').createIndex({ 'scope.level': 1, status: 1, confidence: -1 });
   await db.collection('learnings').createIndex({ 'scope.contextTags': 1 });
   await db.collection('learnings').createIndex({ 'scope.workflowName': 1 });
-  await db.collection('learnings').createIndex({ 'scope.roleName': 1 });
+  await db.collection('learnings').createIndex({ 'scope.agentName': 1 });
   await db.collection('learnings').createIndex({ tags: 1 });
   await db.collection('learnings').createIndex({ status: 1, lastUsedAt: 1 });
   await db.collection('learnings').createIndex({ 'source.executionId': 1 });
@@ -51,6 +51,11 @@ export async function ensureIndexes(db: Db): Promise<void> {
 
   // Chat Messages
   await db.collection('chat_messages').createIndex({ sessionId: 1, createdAt: 1 });
+
+  // Agent Conversations (delegation threads)
+  await db.collection('agent_conversations').createIndex({ chatSessionId: 1, startedAt: -1 });
+  await db.collection('agent_conversations').createIndex({ fromAgent: 1, toAgent: 1 });
+  await db.collection('agent_conversations').createIndex({ status: 1 });
 
   console.log('Database indexes ensured');
 }

@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
-import { roles as api } from '../services/api';
+import { agents as api } from '../services/api';
 
-export function useRoles() {
+export function useAgents() {
   const [data, setData] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -21,5 +21,5 @@ export function useRoles() {
 
   useEffect(() => { refresh(); }, [refresh]);
 
-  return { roles: data, loading, error, refresh };
+  return { agents: data, loading, error, refresh };
 }

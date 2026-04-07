@@ -13,7 +13,7 @@ export default function AgentNode({ data, selected }: NodeProps) {
         <RoleIcon icon={(data as any).icon} color={(data as any).color ?? '#00d4ff'} size={16} />
         <div>
           <div className="text-sm font-label font-medium text-gray-100">{(data as any).label}</div>
-          <div className="text-[10px] text-accent-blue/70 font-mono uppercase">{(data as any).role ?? 'agent'}</div>
+          <div className="text-[10px] text-accent-blue/70 font-mono uppercase">{(data as any).agent ?? 'agent'}</div>
         </div>
       </div>
       {(data as any).outputs?.length > 0 && (

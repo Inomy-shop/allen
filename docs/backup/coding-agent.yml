@@ -15,7 +15,7 @@ input:
 
 nodes:
   understand:
-    agent: coding-planner
+    role: coding-planner
     prompt: |
       Analyze this task and the repository at {{repo_path}}.
 
@@ -38,7 +38,7 @@ nodes:
     timeout: 300
 
   design:
-    agent: coding-planner
+    role: coding-planner
     prompt: |
       Design the implementation for this feature in the repository at {{repo_path}}.
 
@@ -65,7 +65,7 @@ nodes:
     timeout: 600
 
   investigate:
-    agent: coding-investigator
+    role: coding-investigator
     prompt: |
       Investigate and find the root cause of this bug in {{repo_path}}.
 
@@ -96,7 +96,7 @@ nodes:
     timeout: 600
 
   refactor-plan:
-    agent: coding-planner
+    role: coding-planner
     prompt: |
       Plan a safe refactoring for the repository at {{repo_path}}.
 
@@ -125,7 +125,7 @@ nodes:
     timeout: 600
 
   merge-plan:
-    agent: coding-planner
+    role: coding-planner
     prompt: |
       Synthesize the analysis and plan into a single actionable implementation plan.
 
@@ -155,7 +155,7 @@ nodes:
     outputs: [worktree_path, branch_name]
 
   implement:
-    agent: coding-developer
+    role: coding-developer
     prompt: |
       Implement the following plan in {{worktree_path}}.
 
@@ -184,7 +184,7 @@ nodes:
     timeout: 1200
 
   test:
-    agent: coding-tester
+    role: coding-tester
     prompt: |
       Write and run tests for the changes made in {{worktree_path}}.
 
@@ -217,7 +217,7 @@ nodes:
     outputs: [build_passed, build_errors]
 
   review:
-    agent: coding-reviewer
+    role: coding-reviewer
     prompt: |
       Review the code changes in {{worktree_path}} on branch {{branch_name}}.
 
@@ -244,7 +244,7 @@ nodes:
     timeout: 600
 
   verify:
-    agent: coding-planner
+    role: coding-planner
     prompt: |
       Verify that the implementation correctly addresses the original task in {{worktree_path}}.
 
@@ -297,7 +297,7 @@ nodes:
     timeout: 600
 
   update-docs:
-    agent: coding-writer
+    role: coding-writer
     prompt: |
       Check if documentation needs updating based on changes in {{worktree_path}}.
 
@@ -312,7 +312,7 @@ nodes:
     timeout: 300
 
   create-pr:
-    agent: git-ops
+    role: git-ops
     prompt: |
       Create a pull request for the changes on branch {{branch_name}} in {{worktree_path}}.
 
@@ -330,7 +330,7 @@ nodes:
     timeout: 300
 
   summary:
-    agent: coding-writer
+    role: coding-writer
     prompt: |
       Write a concise summary of what was accomplished.
 

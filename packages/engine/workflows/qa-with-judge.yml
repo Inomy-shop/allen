@@ -11,7 +11,7 @@ input:
 
 nodes:
   answer:
-    role: researcher
+    agent: researcher
     prompt: |
       Answer this question accurately and concisely:
       {{question}}
@@ -26,7 +26,7 @@ nodes:
     resume_on_retry: true
 
   judge:
-    role: reviewer
+    agent: reviewer
     prompt: |
       You are a strict fact-checking judge. Evaluate this answer:
 
@@ -44,7 +44,7 @@ nodes:
     output_format: json
 
   format:
-    role: writer
+    agent: writer
     prompt: |
       Format this Q&A cleanly:
 

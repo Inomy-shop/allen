@@ -6,9 +6,9 @@ import ChatMessageList from '../components/chat/ChatMessageList';
 import CommandPalette from '../components/chat/CommandPalette';
 import ConversationLogs from '../components/chat/ConversationLogs';
 import {
-  MessageSquare, Command, Server, ScrollText,
+  MessageSquare, Command, Server, ScrollText, Users,
 } from 'lucide-react';
-import { chat as chatApi, mcp as mcpApi, learnings as learningsApi } from '../services/api';
+import { chat as chatApi, mcp as mcpApi, learnings as learningsApi, agents as agentsApi } from '../services/api';
 
 const PROVIDER_DISPLAY: Record<string, { label: string; color: string }> = {
   codex: { label: 'Codex', color: 'text-accent-green' },
@@ -26,11 +26,14 @@ export default function ChatPage() {
   const [providers, setProviders] = useState<any[]>([]);
   const [selectedProvider, setSelectedProvider] = useState('codex');
   const [selectedModel, setSelectedModel] = useState('');
+  const [selectedAgent, setSelectedAgent] = useState<string | null>(null);
+  const [teamAgents, setTeamAgents] = useState<any[]>([]);
   const chatInputRef = useRef<{ setValue: (v: string) => void; focus: () => void } | null>(null);
 
   const {
     sessions, activeSessionId, messages, streaming, streamText,
-    thinkingText, activeToolCalls, loadingSessions, loadingMessages,
+    thinkingText, activeToolCalls, agentThreads, agentReports,
+    loadingSessions, loadingMessages,
     sendMessage, createSession, switchSession, cancelStream,
   } = useChat();
 
@@ -42,10 +45,22 @@ export default function ChatPage() {
     mcpApi.list().then(servers => {
       setMcpCount({ enabled: servers.filter((s: any) => s.enabled).length, connected: servers.filter((s: any) => s.status === 'connected').length });
     }).catch(() => {});
+    agentsApi.list().then(all => {
+      setTeamAgents(all.filter((a: any) => a.type === 'team'));
+    }).catch(() => {});
   }, []);
 
   const activeSession = sessions.find(s => s._id === activeSessionId);
   const activeProvider = activeSession?.provider ?? selectedProvider;
+
+  // Restore agent selector from session when switching conversations
+  useEffect(() => {
+    if (activeSession?.activeAgent) {
+      setSelectedAgent(activeSession.activeAgent);
+    } else if (activeSessionId) {
+      setSelectedAgent(null);
+    }
+  }, [activeSessionId]);
 
   useEffect(() => {
     const handler = (e: KeyboardEvent) => { if ((e.metaKey || e.ctrlKey) && e.key === 'k') { e.preventDefault(); setCmdPaletteOpen(prev => !prev); } };
@@ -63,10 +78,10 @@ export default function ChatPage() {
     if (!activeSessionId) {
       const session = await createSession(selectedProvider, selectedModel || undefined);
       navigate(`/chat/${session._id}`, { replace: true });
-      sendMessage(content, session._id);
+      sendMessage(content, session._id, selectedAgent ?? undefined);
       return;
     }
-    sendMessage(content);
+    sendMessage(content, undefined, selectedAgent ?? undefined);
   }
 
   function handleSuggestionClick(prompt: string) { handleSend(prompt); }
@@ -99,6 +114,11 @@ export default function ChatPage() {
           {activeSessionId && activeProvider && (
             <span className={`text-[10px] font-mono px-1.5 py-0.5 rounded bg-surface-200/40 ${PROVIDER_DISPLAY[activeProvider]?.color ?? 'text-gray-500'}`}>
               {PROVIDER_DISPLAY[activeProvider]?.label}
+            </span>
+          )}
+          {selectedAgent && (
+            <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-accent-cyan/10 text-accent-cyan border border-accent-cyan/20">
+              @{selectedAgent}
             </span>
           )}
         </div>
@@ -135,18 +155,47 @@ export default function ChatPage() {
           </p>
         </div>
       ) : (
-        <ChatMessageList messages={messages} streamText={streamText} thinkingText={thinkingText} streaming={streaming} activeToolCalls={activeToolCalls} onSuggestionClick={handleSuggestionClick} onSaveToLearnings={handleSaveToLearnings} />
+        <ChatMessageList messages={messages} streamText={streamText} thinkingText={thinkingText} streaming={streaming} activeToolCalls={activeToolCalls} agentThreads={agentThreads} agentReports={agentReports} onSuggestionClick={handleSuggestionClick} onSaveToLearnings={handleSaveToLearnings} />
       )}
 
-      {/* Input */}
-      <ChatInput
-        ref={chatInputRef} onSend={handleSend} onCancel={cancelStream} streaming={streaming} disabled={false}
-        providers={providers}
-        selectedProvider={activeSession?.provider ?? selectedProvider}
-        selectedModel={activeSession?.model ?? selectedModel}
-        modelLocked={!!activeSessionId}
-        onProviderChange={(p, m) => { setSelectedProvider(p); setSelectedModel(m); }}
-      />
+      {/* Agent selector + Input */}
+      <div>
+        {teamAgents.length > 0 && (
+          <div className="px-3 pt-2 flex items-center gap-1.5 border-t border-border/30">
+            <Users className="w-3 h-3 text-gray-600" />
+            <button
+              onClick={() => setSelectedAgent(null)}
+              className={`text-[10px] font-mono px-2 py-0.5 rounded transition-colors ${
+                !selectedAgent ? 'bg-accent-blue/10 text-accent-blue border border-accent-blue/20' : 'text-gray-600 hover:text-gray-400'
+              }`}
+            >
+              Assistant
+            </button>
+            {teamAgents.map((agent: any) => (
+              <button
+                key={agent.name}
+                onClick={() => setSelectedAgent(selectedAgent === agent.name ? null : agent.name)}
+                title={agent.displayName ?? agent.name}
+                className={`text-[10px] font-mono px-2 py-0.5 rounded transition-colors ${
+                  selectedAgent === agent.name
+                    ? 'bg-accent-cyan/10 text-accent-cyan border border-accent-cyan/20'
+                    : 'text-gray-600 hover:text-gray-400'
+                }`}
+              >
+                {agent.displayName ?? agent.name}
+              </button>
+            ))}
+          </div>
+        )}
+        <ChatInput
+          ref={chatInputRef} onSend={handleSend} onCancel={cancelStream} streaming={streaming} disabled={false}
+          providers={providers}
+          selectedProvider={activeSession?.provider ?? selectedProvider}
+          selectedModel={activeSession?.model ?? selectedModel}
+          modelLocked={!!activeSessionId}
+          onProviderChange={(p, m) => { setSelectedProvider(p); setSelectedModel(m); }}
+        />
+      </div>
 
       <CommandPalette open={cmdPaletteOpen} onClose={() => setCmdPaletteOpen(false)} onSelect={handleCommandSelect} />
       {logsOpen && activeSessionId && <ConversationLogs sessionId={activeSessionId} onClose={() => setLogsOpen(false)} />}

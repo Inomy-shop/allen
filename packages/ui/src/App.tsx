@@ -19,8 +19,8 @@ const NAV_GROUPS = [
     { to: '/', icon: LayoutDashboard, label: 'Dashboard' },
   ]},
   { label: 'Build', items: [
-    { to: '/workflows', icon: GitBranch, label: 'Workflows' },
-    { to: '/roles', icon: Users, label: 'Roles' },
+    { to: '/workflows', icon: GitBranch, label: 'Agent Workflows' },
+    { to: '/agents', icon: Users, label: 'Agents' },
     { to: '/repos', icon: FolderGit2, label: 'Repos' },
   ]},
   { label: 'Monitor', items: [

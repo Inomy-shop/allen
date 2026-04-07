@@ -14,10 +14,10 @@ import LiveGraph from '../components/execution/LiveGraph';
 import Timeline from '../components/execution/Timeline';
 import NodeDetail from '../components/execution/NodeDetail';
 
-// ── Role Execution View (single-node) ──
+// ── Agent Execution View (single-node) ──
 
-function RoleExecutionView({ execution, roleName, trace, id }: {
-  execution: any; roleName: string; trace: any; id: string;
+function AgentExecutionView({ execution, agentName, trace, id }: {
+  execution: any; agentName: string; trace: any; id: string;
 }) {
   const [showPrompt, setShowPrompt] = useState(false);
   const [showResponse, setShowResponse] = useState(true);
@@ -41,9 +41,9 @@ function RoleExecutionView({ execution, roleName, trace, id }: {
             <Bot className="w-5 h-5 text-accent-purple" />
           </div>
           <div>
-            <h1 className="font-heading text-sm font-semibold text-white tracking-wider uppercase">{roleName}</h1>
+            <h1 className="font-heading text-sm font-semibold text-white tracking-wider uppercase">{agentName}</h1>
             <div className="flex items-center gap-2 mt-0.5">
-              <span className="text-[10px] text-gray-600 font-mono bg-surface-200/40 px-1.5 py-0.5 rounded">role execution</span>
+              <span className="text-[10px] text-gray-600 font-mono bg-surface-200/40 px-1.5 py-0.5 rounded">agent execution</span>
               <span className="text-xs text-gray-500 font-mono">{id?.slice(0, 8)}</span>
               <StatusBadge status={execution.status} />
             </div>
@@ -267,11 +267,11 @@ export default function ExecutionDetailPage() {
   }
 
   // Role execution — simplified single-node view
-  const isRoleExecution = execution.workflowName?.startsWith('chat:spawn_role/') || execution.source === 'chat';
-  if (isRoleExecution) {
-    const roleName = execution.workflowName?.replace('chat:spawn_role/', '') ?? 'unknown';
-    const roleTrace = traces.length > 0 ? traces[traces.length - 1] : null;
-    return <RoleExecutionView execution={execution} roleName={roleName} trace={roleTrace} id={id!} />;
+  const isAgentExecution = execution.workflowName?.startsWith('chat:spawn_agent/') || execution.source === 'chat';
+  if (isAgentExecution) {
+    const agentName = execution.workflowName?.replace('chat:spawn_agent/', '') ?? 'unknown';
+    const agentTrace = traces.length > 0 ? traces[traces.length - 1] : null;
+    return <AgentExecutionView execution={execution} agentName={agentName} trace={agentTrace} id={id!} />;
   }
 
   const selectedTraces = traces.filter((t: any) => t.node === selectedNode);

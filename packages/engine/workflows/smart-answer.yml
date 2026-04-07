@@ -11,7 +11,7 @@ input:
 
 nodes:
   answer:
-    role: codex-researcher
+    agent: codex-researcher
     prompt: |
       Answer this question:
       {{question}}
@@ -25,7 +25,7 @@ nodes:
     resume_on_retry: true
 
   format:
-    role: codex-researcher
+    agent: codex-researcher
     prompt: |
       Format this Q&A for display:
 

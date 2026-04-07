@@ -3,36 +3,50 @@ import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import yaml from 'js-yaml';
 import type { Db } from 'mongodb';
-import { loadRoles, validateWorkflow, getBuiltIns } from '@flowforge/engine';
-import type { WorkflowDef, RoleDef } from '@flowforge/engine';
+import { loadAgents, validateWorkflow, getBuiltIns } from '@flowforge/engine';
+import type { WorkflowDef, AgentDef } from '@flowforge/engine';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
 /**
- * Seed the database with default roles from roles.yml.
+ * Seed the database with default agents from agents.yml.
  */
-export async function seedDefaultRoles(db: Db): Promise<void> {
-  const col = db.collection('roles');
-  const roles = loadRoles();
+export async function seedDefaultAgents(db: Db): Promise<void> {
+  const col = db.collection('agents');
+  const agents = loadAgents();
 
-  for (const [name, role] of Object.entries(roles)) {
-    const existing = await col.findOne({ name });
-    if (!existing) {
-      await col.insertOne({
-        name,
-        system: role.system,
-        model: role.model,
-        tools: role.tools,
-        icon: role.icon,
-        color: role.color,
-        isBuiltIn: true,
-        createdAt: new Date(),
-        updatedAt: new Date(),
-      });
-    }
+  for (const [name, agent] of Object.entries(agents)) {
+    await col.updateOne(
+      { name },
+      {
+        $set: {
+          system: agent.system,
+          model: agent.model,
+          provider: agent.provider,
+          tools: agent.tools,
+          icon: agent.icon,
+          color: agent.color,
+          type: agent.type ?? 'technical',
+          displayName: agent.displayName ?? name,
+          personality: agent.personality,
+          capabilities: agent.capabilities ?? [],
+          canDelegateTo: agent.canDelegateTo ?? [],
+          canTrigger: agent.canTrigger ?? [],
+          isBuiltIn: true,
+          updatedAt: new Date(),
+        },
+        $setOnInsert: { createdAt: new Date() },
+      },
+      { upsert: true },
+    );
   }
 
-  console.log(`Seeded ${Object.keys(roles).length} default roles`);
+  // Ensure indexes for agent_conversations collection
+  const convCol = db.collection('agent_conversations');
+  await convCol.createIndex({ chatSessionId: 1 }).catch(() => {});
+  await convCol.createIndex({ fromAgent: 1, toAgent: 1 }).catch(() => {});
+
+  console.log(`Seeded ${Object.keys(agents).length} default agents`);
 }
 
 /**
@@ -40,14 +54,13 @@ export async function seedDefaultRoles(db: Db): Promise<void> {
  */
 export async function seedDefaultWorkflows(db: Db): Promise<void> {
   const col = db.collection('workflows');
-  const roles = loadRoles();
+  const agents = loadAgents();
   const builtInNames = Object.keys(getBuiltIns());
 
   // Locate the engine's workflows directory
-  // In the monorepo, engine is a sibling package
   const possiblePaths = [
-    join(__dirname, '..', '..', 'engine', 'workflows'),       // from dist/
-    join(__dirname, '..', '..', '..', 'engine', 'workflows'),  // from src/ during dev
+    join(__dirname, '..', '..', 'engine', 'workflows'),
+    join(__dirname, '..', '..', '..', 'engine', 'workflows'),
   ];
 
   let workflowDir: string | null = null;
@@ -73,7 +86,7 @@ export async function seedDefaultWorkflows(db: Db): Promise<void> {
     const existing = await col.findOne({ name: parsed.name });
     if (existing) continue;
 
-    const validation = validateWorkflow(parsed, roles, builtInNames);
+    const validation = validateWorkflow(parsed, agents, builtInNames);
 
     await col.insertOne({
       name: parsed.name,

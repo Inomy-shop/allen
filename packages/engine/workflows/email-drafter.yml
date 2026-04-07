@@ -11,7 +11,7 @@ input:
 
 nodes:
   draft:
-    role: codex-developer
+    agent: codex-developer
     prompt: |
       You are an email drafting assistant.
 
@@ -35,7 +35,7 @@ nodes:
     resume_on_retry: true
 
   polish:
-    role: codex-developer
+    agent: codex-developer
     prompt: |
       Polish this email for sending:
 

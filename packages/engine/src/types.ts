@@ -21,7 +21,7 @@ export type ClarifyAction = 'retry' | 'continue';
 
 export interface NodeDef {
   type?: NodeType;               // default: 'agent'
-  role?: string;                 // for agent nodes
+  agent?: string;                // for agent nodes
   prompt?: string;               // for agent/human nodes
   outputs?: string[];
   output_format?: OutputFormat;
@@ -110,17 +110,24 @@ export interface WorkflowDef {
   edges: EdgeDef[];
 }
 
-// ── Role ────────────────────────────────────────────────────────────────────
+// ── Agent ───────────────────────────────────────────────────────────────────
 
 export type AgentProvider = 'claude' | 'codex';
 
-export interface RoleDef {
+export interface AgentDef {
   system: string;
   model?: string;
   provider?: AgentProvider;  // default: 'claude'
   tools?: string[];
   icon?: string;
   color?: string;
+  /** 'team' = orchestrator agent, 'technical' = execution agent */
+  type?: 'team' | 'technical';
+  displayName?: string;
+  personality?: string;
+  capabilities?: string[];
+  canDelegateTo?: string[];
+  canTrigger?: string[];
 }
 
 // ── Router ──────────────────────────────────────────────────────────────────
@@ -153,7 +160,7 @@ export interface NodeTrace {
   attempt: number;
   status: NodeStatus;
   type: NodeType;
-  role?: string;
+  agent?: string;
   inputState: Record<string, unknown>;
   renderedPrompt?: string;
   output: Record<string, unknown>;
@@ -294,10 +301,10 @@ export interface Learning {
   target: LearningTarget;  // who this learning is for
   tags: string[];
   scope: {
-    level: 'global' | 'workflow' | 'context' | 'role' | 'node_pattern';
+    level: 'global' | 'workflow' | 'context' | 'agent' | 'node_pattern';
     workflowName?: string;
     contextTags?: string[];
-    roleName?: string;
+    agentName?: string;
     nodePattern?: string;
   };
   source: {
@@ -319,7 +326,7 @@ export interface Learning {
   tokenCount: number;
   status: 'active' | 'archived' | 'superseded' | 'evolved';
   evolvedAt?: Date;
-  evolvedIntoRole?: string;
+  evolvedIntoAgent?: string;
   createdAt: Date;
   updatedAt: Date;
 }

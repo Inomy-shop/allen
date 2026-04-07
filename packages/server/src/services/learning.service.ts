@@ -104,7 +104,7 @@ export class LearningService {
   async create(body: {
     content: string;
     type: string;
-    scope: { level: string; workflowName?: string; contextTags?: string[]; roleName?: string };
+    scope: { level: string; workflowName?: string; contextTags?: string[]; agentName?: string };
     tags?: string[];
   }): Promise<any> {
     const now = new Date();

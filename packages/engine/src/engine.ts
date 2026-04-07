@@ -5,7 +5,7 @@ import type {
   NodeDef,
   ExecutionState,
   EngineEventEmitter,
-  RoleDef,
+  AgentDef,
   BuiltInFunction,
   NodeTrace,
   SSEEvent,
@@ -25,7 +25,7 @@ import type { Db } from 'mongodb';
 
 export interface EngineConfig {
   db: Db;
-  roles: Record<string, RoleDef>;
+  agents: Record<string, AgentDef>;
   builtIns: Record<string, BuiltInFunction>;
   workflows: Record<string, WorkflowDef>;
   emitter: EngineEventEmitter;
@@ -619,7 +619,7 @@ export class FlowForgeEngine {
         const learnings = await this.learningManager.query(
           contextTags,
           exec.workflowName,
-          nodeDef.role,
+          nodeDef.agent,
           nodeName,
           550,
         );
@@ -640,7 +640,7 @@ export class FlowForgeEngine {
     }
 
     const deps: NodeExecutorDeps = {
-      roles: this.config.roles,
+      agents: this.config.agents,
       builtIns: this.config.builtIns,
       workflows: this.config.workflows,
       emitter: this.config.emitter,
@@ -652,7 +652,7 @@ export class FlowForgeEngine {
     this.log(exec.id, {
       category: 'system',
       node: nodeName,
-      message: `Node started (type: ${nodeType}${nodeDef.role ? `, role: ${nodeDef.role}` : ''}${nodeDef.role && deps.roles[nodeDef.role]?.model ? `, model: ${deps.roles[nodeDef.role].model}` : ''})`,
+      message: `Node started (type: ${nodeType}${nodeDef.agent ? `, role: ${nodeDef.agent}` : ''}${nodeDef.agent && deps.agents[nodeDef.agent]?.model ? `, model: ${deps.agents[nodeDef.agent].model}` : ''})`,
     });
 
     try {
@@ -709,7 +709,7 @@ export class FlowForgeEngine {
         attempt,
         status: 'completed',
         type: nodeDef.type ?? 'agent',
-        role: nodeDef.role,
+        agent: nodeDef.agent,
         inputState: { ...exec.state },
         renderedPrompt: nodeDef.prompt ? renderTemplate(nodeDef.prompt, exec.state) : undefined,
         output: result.outputs,
@@ -910,7 +910,7 @@ export class FlowForgeEngine {
       if (nodeType === 'agent') {
         try {
           const learnings = await this.learningManager.query(
-            contextTags, exec.workflowName, nodeDef.role, nodeName, 550,
+            contextTags, exec.workflowName, nodeDef.agent, nodeName, 550,
           );
           if (learnings.length > 0) {
             nodeContext = this.learningManager.buildLearningsPrompt(learnings);
@@ -920,7 +920,7 @@ export class FlowForgeEngine {
       }
 
       const deps: NodeExecutorDeps = {
-        roles: this.config.roles,
+        agents: this.config.agents,
         builtIns: this.config.builtIns,
         workflows: this.config.workflows,
         emitter: this.config.emitter,
@@ -995,7 +995,7 @@ export class FlowForgeEngine {
         attempt: 1,
         status: 'completed',
         type: nodeDef?.type ?? 'agent',
-        role: nodeDef?.role,
+        agent: nodeDef?.agent,
         inputState: stateSnapshot,
         renderedPrompt: nodeDef?.prompt ? renderTemplate(nodeDef.prompt, stateSnapshot) : undefined,
         output: br.outputs,

@@ -1,9 +1,9 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
-import { workflows as wfApi, repos as repoApi, roles as rolesApi } from '../../services/api';
+import { workflows as wfApi, repos as repoApi, agents as agentsApi } from '../../services/api';
 import { GitBranch, FolderGit2, Users } from 'lucide-react';
 
 export interface MentionOption {
-  type: 'workflow' | 'repo' | 'role';
+  type: 'workflow' | 'repo' | 'agent';
   id: string;
   name: string;
   description?: string;
@@ -19,19 +19,19 @@ interface MentionAutocompleteProps {
 const ICON_MAP: Record<string, typeof GitBranch> = {
   workflow: GitBranch,
   repo: FolderGit2,
-  role: Users,
+  agent: Users,
 };
 
 const COLOR_MAP: Record<string, string> = {
   workflow: 'text-accent-blue',
   repo: 'text-green-400',
-  role: 'text-purple-400',
+  agent: 'text-purple-400',
 };
 
 const LABEL_MAP: Record<string, string> = {
   workflow: 'Workflows',
   repo: 'Repos',
-  role: 'Roles',
+  agent: 'Agents',
 };
 
 export default function MentionAutocomplete({
@@ -52,10 +52,10 @@ export default function MentionAutocomplete({
 
     (async () => {
       try {
-        const [workflows, repos, roles] = await Promise.all([
+        const [workflows, repos, agentsList] = await Promise.all([
           wfApi.list(),
           repoApi.list(),
-          rolesApi.list(),
+          agentsApi.list(),
         ]);
 
         const all: MentionOption[] = [
@@ -71,11 +71,11 @@ export default function MentionAutocomplete({
             name: r.name,
             description: r.path,
           })),
-          ...roles.map((r: any) => ({
-            type: 'role' as const,
-            id: r._id ?? r.name,
-            name: r.name,
-            description: r.model,
+          ...agentsList.map((a: any) => ({
+            type: 'agent' as const,
+            id: a._id ?? a.name,
+            name: a.name,
+            description: a.model,
           })),
         ];
         setOptions(all);

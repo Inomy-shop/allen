@@ -11,7 +11,7 @@ import { readFileSync } from 'node:fs';
 import yaml from 'js-yaml';
 import { MongoClient } from 'mongodb';
 import { FlowForgeEngine } from './engine.js';
-import { loadRoles } from './roles-loader.js';
+import { loadAgents } from './agents-loader.js';
 import { loadRouter, autoRoute } from './router.js';
 import { getBuiltIns } from './built-ins/index.js';
 import { validateWorkflow } from './validator.js';
@@ -100,9 +100,9 @@ async function main(): Promise<void> {
     const file = args[1];
     if (!file) { console.error('Usage: flowforge validate <workflow.yml>'); process.exit(1); }
     const workflow = loadWorkflow(file);
-    const roles = loadRoles();
+    const agents = loadAgents();
     const builtIns = getBuiltIns();
-    const result = validateWorkflow(workflow, roles, Object.keys(builtIns));
+    const result = validateWorkflow(workflow, agents, Object.keys(builtIns));
     if (result.errors.length > 0) {
       console.error('Errors:');
       result.errors.forEach(e => console.error(`  ✗ ${e}`));
@@ -131,7 +131,7 @@ async function main(): Promise<void> {
     await client.connect();
     const db = client.db();
 
-    const roles = loadRoles();
+    const agents = loadAgents();
     const builtIns = getBuiltIns();
     const emitter = new ConsoleEmitter();
 
@@ -195,7 +195,7 @@ async function main(): Promise<void> {
 
     const engine = new FlowForgeEngine({
       db,
-      roles,
+      agents,
       builtIns,
       workflows,
       emitter,

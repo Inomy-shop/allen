@@ -3,7 +3,7 @@ import type { Db } from 'mongodb';
 import {
   FlowForgeEngine,
   StateManager,
-  loadRoles,
+  loadAgents,
   getBuiltIns,
   type WorkflowDef,
   type EngineConfig,
@@ -89,7 +89,7 @@ export class ExecutionService {
 
     const config: EngineConfig = {
       db: this.db,
-      roles: loadRoles(),
+      agents: loadAgents(),
       builtIns: getBuiltIns(),
       workflows,
       emitter,
@@ -228,7 +228,7 @@ export class ExecutionService {
 
     const config: EngineConfig = {
       db: this.db,
-      roles: loadRoles(),
+      agents: loadAgents(),
       builtIns: getBuiltIns(),
       workflows,
       emitter,

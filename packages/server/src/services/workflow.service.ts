@@ -1,6 +1,6 @@
 import yaml from 'js-yaml';
 import type { Collection, Db } from 'mongodb';
-import { validateWorkflow, loadRoles, getBuiltIns, generateMermaid } from '@flowforge/engine';
+import { validateWorkflow, loadAgents, getBuiltIns, generateMermaid } from '@flowforge/engine';
 import type { WorkflowDef, ValidationResult } from '@flowforge/engine';
 
 export class WorkflowService {
@@ -100,9 +100,9 @@ export class WorkflowService {
   }
 
   validate(workflow: WorkflowDef): ValidationResult {
-    const roles = loadRoles();
+    const agents = loadAgents();
     const builtIns = getBuiltIns();
-    return validateWorkflow(workflow, roles, Object.keys(builtIns));
+    return validateWorkflow(workflow, agents, Object.keys(builtIns));
   }
 
   async validateById(id: string): Promise<ValidationResult> {

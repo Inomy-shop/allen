@@ -6,7 +6,7 @@ export { extractOutputs, extractOutputsSync, buildOutputInstruction, buildNodeCo
 export { mergeParallelOutputs } from './parallel.js';
 export { validateWorkflow } from './validator.js';
 export { generateMermaid } from './visualizer.js';
-export { loadRoles } from './roles-loader.js';
+export { loadAgents } from './agents-loader.js';
 export { loadRouter, autoRoute } from './router.js';
 export { getBuiltIns } from './built-ins/index.js';
 export type { NodeResult } from './node-executor.js';

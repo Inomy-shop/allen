@@ -8,12 +8,24 @@ export function chatRoutes(db: Db): Router {
   const router = Router();
   const chatService = new ChatService(db);
 
-  // POST /api/chat/spawn-role — Execute spawn_role tool via API (used by FlowForge MCP server)
-  router.post('/spawn-role', async (req: Request, res: Response) => {
+  // POST /api/chat/spawn-agent — Execute spawn_agent tool via API (used by FlowForge MCP server)
+  router.post('/spawn-agent', async (req: Request, res: Response) => {
     try {
-      const { role_name, prompt, repo_path } = req.body;
-      if (!role_name || !prompt) return res.status(400).json({ error: 'role_name and prompt are required' });
-      const result = await executeChatTool('spawn_role', { role_name, prompt, repo_path }, db);
+      const { agent_name, prompt, repo_path } = req.body;
+      if (!agent_name || !prompt) return res.status(400).json({ error: 'agent_name and prompt are required' });
+      const result = await executeChatTool('spawn_agent', { agent_name, prompt, repo_path }, db);
+      res.json(result);
+    } catch (err: unknown) {
+      res.status(500).json({ error: (err as Error).message });
+    }
+  });
+
+  // POST /api/chat/delegate — Execute delegate_to_agent tool via API (used by FlowForge MCP server)
+  router.post('/delegate', async (req: Request, res: Response) => {
+    try {
+      const { agent_name, task, context } = req.body;
+      if (!agent_name || !task) return res.status(400).json({ error: 'agent_name and task are required' });
+      const result = await executeChatTool('delegate_to_agent', { agent_name, task, context }, db);
       res.json(result);
     } catch (err: unknown) {
       res.status(500).json({ error: (err as Error).message });
@@ -72,15 +84,17 @@ export function chatRoutes(db: Db): Router {
   });
 
   // POST /api/chat/sessions/:id/messages — Send message (SSE response)
+  // Body: { content: string, agent?: string }
+  // When `agent` is provided, the message is routed through that team agent's system prompt.
   router.post('/sessions/:id/messages', async (req: Request, res: Response) => {
     try {
       const sessionId = param(req, 'id');
-      const { content } = req.body;
+      const { content, agent } = req.body;
       if (!content || typeof content !== 'string') {
         return res.status(400).json({ error: 'content is required' });
       }
       // sendMessage handles SSE headers and streaming
-      await chatService.sendMessage(sessionId, content, res);
+      await chatService.sendMessage(sessionId, content, res, agent);
     } catch (err: unknown) {
       if (!res.headersSent) {
         res.status(500).json({ error: (err as Error).message });
@@ -167,6 +181,19 @@ export function chatRoutes(db: Db): Router {
       const log = await db.collection('chat_logs').findOne({ _id: new ObjectId(param(req, 'logId')) });
       if (!log) return res.status(404).json({ error: 'Log not found' });
       res.json(log);
+    } catch (err: unknown) {
+      res.status(500).json({ error: (err as Error).message });
+    }
+  });
+
+  // GET /api/chat/sessions/:id/threads — Get agent-to-agent conversations for a session
+  router.get('/sessions/:id/threads', async (req: Request, res: Response) => {
+    try {
+      const sessionId = param(req, 'id');
+      const { AgentConversationService } = await import('../services/agent-conversation.service.js');
+      const service = new AgentConversationService(db);
+      const threads = await service.forSession(sessionId);
+      res.json(threads);
     } catch (err: unknown) {
       res.status(500).json({ error: (err as Error).message });
     }

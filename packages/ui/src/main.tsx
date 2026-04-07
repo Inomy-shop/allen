@@ -29,7 +29,7 @@ const router = createBrowserRouter([
       { path: 'learnings', element: <LearningsPage /> },
       { path: 'executions', element: <ExecutionListPage /> },
       { path: 'executions/:id', element: <ExecutionDetailPage /> },
-      { path: 'roles', element: <RoleManagerPage /> },
+      { path: 'agents', element: <RoleManagerPage /> },
       { path: 'chat', element: <ChatPage /> },
       { path: 'chat/:sessionId', element: <ChatPage /> },
       { path: 'analytics', element: <AnalyticsPage /> },

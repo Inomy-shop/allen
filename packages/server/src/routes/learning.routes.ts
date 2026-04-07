@@ -13,72 +13,72 @@ export function learningRoutes(db: Db): Router {
   // GET /api/learnings/evolution-candidates
   router.get('/evolution-candidates', async (req: Request, res: Response) => {
     try {
-      const roleName = req.query.roleName ? String(req.query.roleName) : undefined;
-      const candidates = await learningManager.getEvolutionCandidates(roleName);
+      const agentName = req.query.agentName ? String(req.query.agentName) : undefined;
+      const candidates = await learningManager.getEvolutionCandidates(agentName);
 
-      const roles = Object.entries(candidates).map(([name, data]) => ({
-        roleName: name,
+      const agents = Object.entries(candidates).map(([name, data]) => ({
+        agentName: name,
         learningCount: data.count,
         learnings: data.learnings,
       }));
 
-      res.json({ roles });
+      res.json({ agents });
     } catch (err: unknown) {
       res.status(500).json({ error: (err as Error).message });
     }
   });
 
-  // GET /api/learnings/evolve/:roleName/preview
-  router.get('/evolve/:roleName/preview', async (req: Request, res: Response) => {
+  // GET /api/learnings/evolve/:agentName/preview
+  router.get('/evolve/:agentName/preview', async (req: Request, res: Response) => {
     try {
-      const roleName = param(req, 'roleName');
-      const rolesCollection = db.collection('roles');
-      const role = await rolesCollection.findOne({ name: roleName });
-      if (!role) return res.status(404).json({ error: `Role "${roleName}" not found` });
+      const agentName = param(req, 'agentName');
+      const agentsCollection = db.collection('agents');
+      const agent = await agentsCollection.findOne({ name: agentName });
+      if (!agent) return res.status(404).json({ error: `Agent "${agentName}" not found` });
 
-      const candidates = await learningManager.getEvolutionCandidates(roleName);
+      const candidates = await learningManager.getEvolutionCandidates(agentName);
 
-      // Collect learnings for this role + globals
-      const roleLearnings = [
-        ...(candidates[roleName]?.learnings ?? []),
+      // Collect learnings for this agent + globals
+      const agentLearnings = [
+        ...(candidates[agentName]?.learnings ?? []),
         ...(candidates['__global__']?.learnings ?? []),
       ];
 
-      if (roleLearnings.length === 0) {
-        return res.json({ roleName, currentPrompt: role.system ?? '', newPrompt: '', learnings: [] });
+      if (agentLearnings.length === 0) {
+        return res.json({ agentName, currentPrompt: agent.system ?? '', newPrompt: '', learnings: [] });
       }
 
-      const newPrompt = await learningManager.previewEvolution(roleName, role.system ?? '', roleLearnings);
+      const newPrompt = await learningManager.previewEvolution(agentName, agent.system ?? '', agentLearnings);
 
       res.json({
-        roleName,
-        currentPrompt: role.system ?? '',
+        agentName,
+        currentPrompt: agent.system ?? '',
         newPrompt,
-        learnings: roleLearnings,
+        learnings: agentLearnings,
       });
     } catch (err: unknown) {
       res.status(500).json({ error: (err as Error).message });
     }
   });
 
-  // POST /api/learnings/evolve/:roleName
-  router.post('/evolve/:roleName', async (req: Request, res: Response) => {
+  // POST /api/learnings/evolve/:agentName
+  router.post('/evolve/:agentName', async (req: Request, res: Response) => {
     try {
-      const roleName = param(req, 'roleName');
+      const agentName = param(req, 'agentName');
       const { newPrompt } = req.body;
       if (!newPrompt) return res.status(400).json({ error: 'newPrompt is required' });
 
       // Get learning IDs to mark as evolved
-      const candidates = await learningManager.getEvolutionCandidates(roleName);
+      const candidates = await learningManager.getEvolutionCandidates(agentName);
       const learningIds = [
-        ...(candidates[roleName]?.learnings ?? []),
+        ...(candidates[agentName]?.learnings ?? []),
         ...(candidates['__global__']?.learnings ?? []),
       ].map(l => l._id).filter(Boolean);
 
-      const result = await learningManager.evolveRole(roleName, newPrompt, learningIds, db);
+      const result = await learningManager.evolveAgent(agentName, newPrompt, learningIds, db);
 
       res.json({
-        roleName,
+        agentName,
         previousPrompt: result.previousPrompt,
         newPrompt: result.newPrompt,
         evolvedCount: result.evolvedCount,

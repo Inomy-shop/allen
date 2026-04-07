@@ -12,7 +12,7 @@ input:
 
 nodes:
   research:
-    role: researcher
+    agent: researcher
     prompt: |
       Research this topic: {{topic}}
       Target audience: {{audience}}
@@ -21,7 +21,7 @@ nodes:
     output_format: json
 
   outline:
-    role: planner
+    agent: planner
     prompt: |
       Create a blog post outline for: {{topic}}
       Key points: {{key_points}}
@@ -31,7 +31,7 @@ nodes:
     output_format: json
 
   write:
-    role: writer
+    agent: writer
     prompt: |
       Write a blog post following this outline:
       {{outline}}
@@ -44,7 +44,7 @@ nodes:
     outputs: [draft, word_count]
 
   review:
-    role: editor
+    agent: editor
     prompt: |
       Review this blog post:
       {{draft}}
@@ -55,7 +55,7 @@ nodes:
     output_format: json
 
   format:
-    role: formatter
+    agent: formatter
     prompt: |
       Format this blog post for publishing:
       {{draft}}

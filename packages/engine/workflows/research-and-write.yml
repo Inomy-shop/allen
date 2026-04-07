@@ -13,12 +13,12 @@ input:
 
 nodes:
   research:
-    role: researcher
+    agent: researcher
     prompt: "Research deeply: {{topic}}"
     outputs: [findings, key_stats, angles]
 
   draft:
-    role: writer
+    agent: writer
     prompt: |
       Write a {{platform}} post about: {{topic}}
       Tone: {{tone}}
@@ -29,12 +29,12 @@ nodes:
     outputs: [draft]
 
   review:
-    role: editor
+    agent: editor
     prompt: "Review {{platform}} post:\n{{draft}}\nVerdict: PUBLISH or REVISE."
     outputs: [verdict, feedback]
 
   format:
-    role: formatter
+    agent: formatter
     prompt: "Format for {{platform}} with hashtags and line breaks:\n{{draft}}"
     outputs: [final_post]
 

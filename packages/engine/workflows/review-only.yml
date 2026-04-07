@@ -12,12 +12,12 @@ input:
 
 nodes:
   review:
-    role: reviewer
+    agent: reviewer
     prompt: "Review the codebase at your CWD for: {{task}}"
     outputs: [review_verdict, review_feedback, issues]
 
   report:
-    role: writer
+    agent: writer
     prompt: |
       Write a code review report:
       Verdict: {{review_verdict}}

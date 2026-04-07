@@ -1,5 +1,5 @@
 import { spawn } from 'node:child_process';
-import type { NodeDef, RoleDef, EngineEventEmitter } from './types.js';
+import type { NodeDef, AgentDef, EngineEventEmitter } from './types.js';
 import { renderTemplate } from './template.js';
 import { extractOutputs, buildOutputInstruction } from './output-extractor.js';
 
@@ -25,7 +25,7 @@ export async function executeCodexNode(
   nodeName: string,
   nodeDef: NodeDef,
   state: Record<string, unknown>,
-  role: RoleDef | undefined,
+  role: AgentDef | undefined,
   emitter: EngineEventEmitter,
   executionId: string,
   sessionId?: string,
@@ -47,7 +47,7 @@ export async function executeCodexNode(
 
   emitter.emit({
     event: 'node_started',
-    data: { node: nodeName, role: nodeDef.role, attempt: 1 },
+    data: { node: nodeName, role: nodeDef.agent, attempt: 1 },
   });
 
   emitter.emit({

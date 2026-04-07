@@ -16,7 +16,7 @@ const topLevelKeys = [
 ];
 
 const nodeProperties = [
-  { label: 'role', detail: 'Agent role name', insertText: 'role: ' },
+  { label: 'agent', detail: 'Agent name', insertText: 'agent: ' },
   { label: 'prompt', detail: 'Node prompt template', insertText: 'prompt: |\n    ' },
   { label: 'type', detail: 'Node type', insertText: 'type: ' },
   { label: 'outputs', detail: 'Output field names', insertText: 'outputs: []' },
@@ -47,7 +47,7 @@ const edgeProperties = [
 ];
 
 const nodeTypes = ['agent', 'code', 'human', 'workflow', 'condition'];
-const roles = ['planner', 'developer', 'tester', 'reviewer', 'researcher', 'writer', 'editor', 'analyst', 'investigator', 'git-ops', 'formatter'];
+const agentNames = ['coding-planner', 'coding-developer', 'coding-tester', 'coding-reviewer', 'coding-investigator', 'coding-writer', 'git-ops', 'product-manager', 'engineer', 'qa-engineer', 'data-analyst', 'ceo', 'devops'];
 const builtIns = ['git-create-branch', 'git-commit', 'git-push', 'git-create-pr', 'git-cleanup-worktree', 'run-build', 'run-tests', 'classify-task'];
 
 export function registerYamlCompletions(monaco: any): void {
@@ -69,8 +69,8 @@ export function registerYamlCompletions(monaco: any): void {
         suggestions = topLevelKeys;
       } else if (line.includes('type:')) {
         suggestions = nodeTypes.map(t => ({ label: t, insertText: t }));
-      } else if (line.includes('role:')) {
-        suggestions = roles.map(r => ({ label: r, insertText: r }));
+      } else if (line.includes('agent:')) {
+        suggestions = agentNames.map(a => ({ label: a, insertText: a }));
       } else if (line.includes('function:')) {
         suggestions = builtIns.map(b => ({ label: b, insertText: b }));
       } else if (indent <= 4) {

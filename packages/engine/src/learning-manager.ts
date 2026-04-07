@@ -24,7 +24,7 @@ const GROWTH_LIMITS: Record<string, number> = {
   global: 200,
   workflow: 100,
   context: 500,
-  role: 50,
+  agent: 50,
   node_pattern: 50,
 };
 
@@ -32,7 +32,7 @@ const SCOPE_SPECIFICITY: Record<string, number> = {
   context: 1.0,
   workflow: 0.8,
   node_pattern: 0.7,
-  role: 0.6,
+  agent: 0.6,
   global: 0.4,
 };
 
@@ -80,8 +80,8 @@ export class LearningManager {
     if (scope.level === 'context' && scope.contextTags) {
       filter['scope.contextTags'] = { $all: scope.contextTags };
     }
-    if (scope.level === 'role' && scope.roleName) {
-      filter['scope.roleName'] = scope.roleName;
+    if (scope.level === 'agent' && scope.agentName) {
+      filter['scope.agentName'] = scope.agentName;
     }
     if (scope.level === 'node_pattern' && scope.nodePattern) {
       filter['scope.nodePattern'] = scope.nodePattern;
@@ -218,8 +218,8 @@ export class LearningManager {
     if (scope.level === 'context' && scope.contextTags) {
       filter['scope.contextTags'] = { $all: scope.contextTags };
     }
-    if (scope.level === 'role' && scope.roleName) {
-      filter['scope.roleName'] = scope.roleName;
+    if (scope.level === 'agent' && scope.agentName) {
+      filter['scope.agentName'] = scope.agentName;
     }
     if (scope.level === 'node_pattern' && scope.nodePattern) {
       filter['scope.nodePattern'] = scope.nodePattern;
@@ -666,7 +666,7 @@ export class LearningManager {
   async query(
     contextTags: string[],
     workflowName: string,
-    roleName: string | undefined,
+    agentName: string | undefined,
     nodeName: string,
     tokenBudget: number,
   ): Promise<Learning[]> {
@@ -685,8 +685,8 @@ export class LearningManager {
         ...(contextTags.length > 0
           ? [{ 'scope.level': 'context' }]
           : []),
-        ...(roleName
-          ? [{ 'scope.level': 'role', 'scope.roleName': roleName }]
+        ...(agentName
+          ? [{ 'scope.level': 'agent', 'scope.agentName': agentName }]
           : []),
         { 'scope.level': 'node_pattern' },
       ],
@@ -716,7 +716,7 @@ export class LearningManager {
       const hasEmbeddedLearnings = filtered.some(l => (l as any).embedding?.length > 0);
       if (hasEmbeddedLearnings) {
         const { embed } = await import('./embedding.js');
-        queryEmbedding = await embed(`${workflowName} ${nodeName} ${roleName ?? ''} ${contextTags.join(' ')}`);
+        queryEmbedding = await embed(`${workflowName} ${nodeName} ${agentName ?? ''} ${contextTags.join(' ')}`);
       }
     } catch { /* embedding not available — skip */ }
 
@@ -779,20 +779,20 @@ export class LearningManager {
   // ── Evolution Methods ──────────────────────────────────────────────────
 
   async getEvolutionCandidates(
-    roleName?: string,
-  ): Promise<Record<string, { role: string; learnings: Learning[]; count: number }>> {
+    agentName?: string,
+  ): Promise<Record<string, { agent: string; learnings: Learning[]; count: number }>> {
     const filter: Record<string, unknown> = {
       target: 'agent',
       confidence: { $gte: 0.8 },
       confirmations: { $gte: 3 },
-      'scope.level': { $in: ['global', 'role'] },
+      'scope.level': { $in: ['global', 'agent'] },
       status: 'active',
     };
 
-    if (roleName) {
+    if (agentName) {
       filter.$or = [
         { 'scope.level': 'global' },
-        { 'scope.level': 'role', 'scope.roleName': roleName },
+        { 'scope.level': 'agent', 'scope.agentName': agentName },
       ];
       // Remove the top-level scope.level filter since $or handles it
       delete filter['scope.level'];
@@ -800,17 +800,17 @@ export class LearningManager {
 
     const candidates = await this.collection.find(filter).limit(500).toArray();
 
-    const result: Record<string, { role: string; learnings: Learning[]; count: number }> = {};
+    const result: Record<string, { agent: string; learnings: Learning[]; count: number }> = {};
 
     for (const learning of candidates) {
-      if (learning.scope.level === 'role' && learning.scope.roleName) {
-        const rn = learning.scope.roleName;
-        if (!result[rn]) result[rn] = { role: rn, learnings: [], count: 0 };
+      if (learning.scope.level === 'agent' && learning.scope.agentName) {
+        const rn = learning.scope.agentName;
+        if (!result[rn]) result[rn] = { agent: rn, learnings: [], count: 0 };
         result[rn].learnings.push(learning);
         result[rn].count++;
       } else if (learning.scope.level === 'global') {
-        // Global learnings apply to all roles — group under '__global__'
-        if (!result['__global__']) result['__global__'] = { role: '__global__', learnings: [], count: 0 };
+        // Global learnings apply to all agents — group under '__global__'
+        if (!result['__global__']) result['__global__'] = { agent: '__global__', learnings: [], count: 0 };
         result['__global__'].learnings.push(learning);
         result['__global__'].count++;
       }
@@ -820,7 +820,7 @@ export class LearningManager {
   }
 
   async previewEvolution(
-    roleName: string,
+    agentName: string,
     currentPrompt: string,
     learnings: Learning[],
   ): Promise<string> {
@@ -830,9 +830,9 @@ export class LearningManager {
         .join('\n');
 
       const prompt = [
-        `You are updating a role's system prompt with proven learnings from past executions.`,
+        `You are updating an agent's system prompt with proven learnings from past executions.`,
         ``,
-        `Current system prompt for role "${roleName}":`,
+        `Current system prompt for agent "${agentName}":`,
         currentPrompt,
         ``,
         `Proven learnings to integrate (high confidence, confirmed 3+ times):`,
@@ -842,7 +842,7 @@ export class LearningManager {
         `- Merge the learnings into the system prompt naturally`,
         `- Remove any learning that's already covered by the existing prompt`,
         `- Keep the prompt concise — under 500 words total`,
-        `- Preserve the original role identity and purpose`,
+        `- Preserve the original agent identity and purpose`,
         `- Add a "LEARNED BEHAVIORS" section at the end for transparency`,
         `- Don't change the core instructions, just add the learned behaviors`,
         ``,
@@ -876,23 +876,23 @@ export class LearningManager {
     }
   }
 
-  async evolveRole(
-    roleName: string,
+  async evolveAgent(
+    agentName: string,
     newPrompt: string,
     learningIds: any[],
     db: Db,
   ): Promise<{ previousPrompt: string; newPrompt: string; evolvedCount: number }> {
-    const rolesCollection = db.collection('roles');
+    const agentsCollection = db.collection('agents');
 
-    // Get current role
-    const role = await rolesCollection.findOne({ name: roleName });
-    if (!role) throw new Error(`Role "${roleName}" not found`);
+    // Get current agent
+    const agent = await agentsCollection.findOne({ name: agentName });
+    if (!agent) throw new Error(`Agent "${agentName}" not found`);
 
-    const previousPrompt = role.system ?? '';
+    const previousPrompt = agent.system ?? '';
 
     // Save old prompt for rollback and update with new prompt
-    await rolesCollection.updateOne(
-      { name: roleName },
+    await agentsCollection.updateOne(
+      { name: agentName },
       {
         $set: {
           previousSystemPrompt: previousPrompt,
@@ -914,7 +914,7 @@ export class LearningManager {
         $set: {
           status: 'evolved' as const,
           evolvedAt: new Date(),
-          evolvedIntoRole: roleName,
+          evolvedIntoAgent: agentName,
           updatedAt: new Date(),
         },
       },
@@ -936,7 +936,7 @@ export class LearningManager {
       const scopeLabel = l.scope.level === 'global' ? 'global'
         : l.scope.level === 'workflow' ? 'workflow'
         : l.scope.level === 'context' ? 'repo'
-        : l.scope.level === 'role' ? 'role'
+        : l.scope.level === 'agent' ? 'agent'
         : 'pattern';
       return `- [${l.type}, ${scopeLabel}] ${l.content} (confidence: ${l.confidence.toFixed(1)})`;
     });

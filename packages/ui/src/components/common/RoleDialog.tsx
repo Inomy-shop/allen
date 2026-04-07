@@ -8,6 +8,10 @@ const CODEX_MODELS = ['gpt-5.3-codex', 'gpt-5.4', 'gpt-5.2-codex', 'gpt-5.1-code
 const PROVIDERS = ['claude', 'codex'];
 const TOOLS = ['filesystem', 'terminal', 'git', 'web-search', 'web-fetch', 'database'];
 const ICONS = ['clipboard', 'code', 'eye', 'search', 'flask', 'pen', 'git-branch', 'bar-chart', 'magnifying-glass', 'layout', 'bot'];
+const AGENT_TYPES = [
+  { value: 'team', label: 'Team Agent — coordinates and delegates' },
+  { value: 'technical', label: 'Technical Agent — executes specific tasks' },
+];
 
 function getModelsForProvider(provider: string): string[] {
   return provider === 'codex' ? CODEX_MODELS : CLAUDE_MODELS;
@@ -24,12 +28,14 @@ export default function RoleDialog({ open, onClose, onSave, role }: RoleDialogPr
   const isEdit = !!role;
 
   const [name, setName] = useState('');
+  const [displayName, setDisplayName] = useState('');
   const [system, setSystem] = useState('');
   const [provider, setProvider] = useState('claude');
   const [model, setModel] = useState('sonnet');
   const [tools, setTools] = useState<string[]>([]);
   const [icon, setIcon] = useState('clipboard');
   const [color, setColor] = useState('#3b82f6');
+  const [agentType, setAgentType] = useState('technical');
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
   const [showPreviousPrompt, setShowPreviousPrompt] = useState(false);
@@ -37,21 +43,25 @@ export default function RoleDialog({ open, onClose, onSave, role }: RoleDialogPr
   useEffect(() => {
     if (open && role) {
       setName((role.name as string) ?? '');
+      setDisplayName((role.displayName as string) ?? '');
       setSystem((role.system as string) ?? '');
       setProvider((role.provider as string) ?? 'claude');
       setModel((role.model as string) ?? 'sonnet');
       setTools((role.tools as string[]) ?? []);
       setIcon((role.icon as string) ?? 'clipboard');
       setColor((role.color as string) ?? '#3b82f6');
+      setAgentType((role.type as string) ?? 'technical');
       setShowPreviousPrompt(false);
     } else if (open) {
       setName('');
+      setDisplayName('');
       setSystem('');
       setProvider('claude');
       setModel('sonnet');
       setTools([]);
       setIcon('clipboard');
       setColor('#3b82f6');
+      setAgentType('technical');
       setShowPreviousPrompt(false);
     }
     setError('');
@@ -75,10 +85,20 @@ export default function RoleDialog({ open, onClose, onSave, role }: RoleDialogPr
     setSaving(true);
     setError('');
     try {
-      await onSave({ name: name.trim(), system: system.trim(), provider, model, tools, icon, color });
+      await onSave({
+        name: name.trim(),
+        displayName: displayName.trim() || name.trim(),
+        system: system.trim(),
+        provider,
+        model,
+        tools,
+        icon,
+        color,
+        type: agentType,
+      });
       onClose();
     } catch (err: unknown) {
-      setError(err instanceof Error ? err.message : 'Failed to save role');
+      setError(err instanceof Error ? err.message : 'Failed to save agent');
     } finally {
       setSaving(false);
     }
@@ -92,12 +112,13 @@ export default function RoleDialog({ open, onClose, onSave, role }: RoleDialogPr
       await onSave({
         name: role.name as string,
         system: role.previousSystemPrompt as string,
-        previousSystemPrompt: null, // clear evolved state on rollback
+        previousSystemPrompt: null,
         provider,
         model,
         tools,
         icon,
         color,
+        type: agentType,
       });
       onClose();
     } catch (err: unknown) {
@@ -112,6 +133,7 @@ export default function RoleDialog({ open, onClose, onSave, role }: RoleDialogPr
   const modelOptions = getModelsForProvider(provider).map(m => ({ value: m, label: m }));
   const providerOptions = PROVIDERS.map(p => ({ value: p, label: p }));
   const iconOptions = ICONS.map(i => ({ value: i, label: i }));
+  const typeOptions = AGENT_TYPES.map(t => ({ value: t.value, label: t.label }));
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm" onClick={onClose}>
@@ -121,7 +143,7 @@ export default function RoleDialog({ open, onClose, onSave, role }: RoleDialogPr
       >
         <div className="flex items-center justify-between p-4 border-b border-border">
           <h2 className="font-heading text-sm font-bold text-white tracking-widest uppercase">
-            {isEdit ? 'Edit Role' : 'Create Role'}
+            {isEdit ? 'Edit Agent' : 'Create Agent'}
           </h2>
           <button type="button" onClick={onClose} className="btn-ghost p-1" title="Close">
             <X className="w-4 h-4" />
@@ -135,17 +157,35 @@ export default function RoleDialog({ open, onClose, onSave, role }: RoleDialogPr
             </div>
           )}
 
-          {/* Name */}
+          {/* Agent Type */}
           <div>
-            <label className="font-label text-xs text-gray-400 mb-1 block">Name (kebab-case)</label>
-            <input
-              type="text"
-              value={name}
-              onChange={e => setName(e.target.value)}
-              disabled={isEdit}
-              placeholder="my-role-name"
-              className="input w-full disabled:opacity-50 disabled:cursor-not-allowed"
-            />
+            <label className="font-label text-xs text-gray-400 mb-1 block">Agent Type</label>
+            <Select value={agentType} onChange={setAgentType} options={typeOptions} />
+          </div>
+
+          {/* Name & Display Name */}
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="font-label text-xs text-gray-400 mb-1 block">Name (kebab-case)</label>
+              <input
+                type="text"
+                value={name}
+                onChange={e => setName(e.target.value)}
+                disabled={isEdit}
+                placeholder="my-agent-name"
+                className="input w-full disabled:opacity-50 disabled:cursor-not-allowed"
+              />
+            </div>
+            <div>
+              <label className="font-label text-xs text-gray-400 mb-1 block">Display Name</label>
+              <input
+                type="text"
+                value={displayName}
+                onChange={e => setDisplayName(e.target.value)}
+                placeholder="My Agent"
+                className="input w-full"
+              />
+            </div>
           </div>
 
           {/* System Prompt */}
@@ -155,7 +195,7 @@ export default function RoleDialog({ open, onClose, onSave, role }: RoleDialogPr
               value={system}
               onChange={e => setSystem(e.target.value)}
               rows={8}
-              placeholder="Enter the system prompt for this role..."
+              placeholder="Enter the system prompt for this agent..."
               className="w-full bg-surface-200 border border-accent-blue/30 rounded-sm px-3 py-2 text-sm text-gray-100 font-body resize-y focus:outline-none focus:border-accent-blue focus:shadow-glow-blue"
             />
           </div>
@@ -259,7 +299,7 @@ export default function RoleDialog({ open, onClose, onSave, role }: RoleDialogPr
               Cancel
             </button>
             <button type="submit" disabled={saving} className="btn-primary text-xs disabled:opacity-50">
-              {saving ? 'Saving...' : isEdit ? 'Update Role' : 'Create Role'}
+              {saving ? 'Saving...' : isEdit ? 'Update Agent' : 'Create Agent'}
             </button>
           </div>
         </form>

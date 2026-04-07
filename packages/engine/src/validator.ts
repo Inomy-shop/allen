@@ -1,9 +1,9 @@
-import type { WorkflowDef, RoleDef, ValidationResult } from './types.js';
+import type { WorkflowDef, AgentDef, ValidationResult } from './types.js';
 import { validateCondition } from './condition-parser.js';
 
 export function validateWorkflow(
   workflow: WorkflowDef,
-  roles: Record<string, RoleDef>,
+  agents: Record<string, AgentDef>,
   builtInNames: string[],
   knownWorkflows?: string[],
 ): ValidationResult {
@@ -76,10 +76,10 @@ export function validateWorkflow(
   for (const [name, node] of Object.entries(workflow.nodes)) {
     const type = node.type ?? 'agent';
 
-    // Roles exist
-    if (type === 'agent' && node.role) {
-      if (!roles[node.role]) {
-        errors.push(`Node ${name} references non-existent role: ${node.role}`);
+    // Agents exist
+    if (type === 'agent' && node.agent) {
+      if (!agents[node.agent]) {
+        errors.push(`Node ${name} references non-existent agent: ${node.agent}`);
       }
     }
 

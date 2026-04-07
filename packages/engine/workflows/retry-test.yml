@@ -11,7 +11,7 @@ input:
 
 nodes:
   claude-answer:
-    role: planner
+    agent: planner
     prompt: |
       Answer this question in one short paragraph:
       {{question}}
@@ -24,7 +24,7 @@ nodes:
     resume_on_retry: true
 
   codex-answer:
-    role: codex-researcher
+    agent: codex-researcher
     prompt: |
       Answer this question in one short paragraph:
       {{question}}

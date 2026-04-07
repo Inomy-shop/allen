@@ -7,6 +7,47 @@
 import type { Db, ObjectId } from 'mongodb';
 import { ExecutionService } from './execution.service.js';
 import { embedAndSave, invalidateCache } from './embedding.service.js';
+import { AgentConversationService } from './agent-conversation.service.js';
+
+// ── Active Session Registry ──────────────────────────────────────────────────
+// When chat.service starts processing a message, it registers the session context.
+// delegation tools (delegate_to_agent, report_to_user) read from this registry
+// to know which session they're running in, even when called via MCP → API chain.
+
+export interface ActiveSessionContext {
+  chatSessionId: string;
+  parentMessageId: string;
+  /** Which agent is currently responding (undefined = FlowForge Assistant) */
+  currentAgent?: string;
+  /** Current delegation depth (0 = top-level chat, 1+ = delegated) */
+  delegationDepth: number;
+  /** Broadcast SSE events to the chat listeners */
+  broadcastEvent: (event: string, data: Record<string, unknown>) => void;
+}
+
+// One active context per session (only one response at a time per session)
+const activeSessions = new Map<string, ActiveSessionContext>();
+
+/** Register a session context when starting to process a message */
+export function registerActiveSession(ctx: ActiveSessionContext): void {
+  activeSessions.set(ctx.chatSessionId, ctx);
+}
+
+/** Unregister when message processing completes */
+export function unregisterActiveSession(sessionId: string): void {
+  activeSessions.delete(sessionId);
+}
+
+/** Get the active context for a session (used by delegation tools) */
+export function getActiveSession(sessionId: string): ActiveSessionContext | undefined {
+  return activeSessions.get(sessionId);
+}
+
+/** Find any active session (for API-triggered delegations that don't know the session) */
+export function getAnyActiveSession(): ActiveSessionContext | undefined {
+  for (const ctx of activeSessions.values()) return ctx;
+  return undefined;
+}
 
 // ── Tool Definition Shape ──
 
@@ -21,7 +62,7 @@ export interface ChatTool {
 
 /** Tools that mutate state — require approval in guided mode */
 export const DESTRUCTIVE_TOOLS = new Set([
-  'run_workflow', 'cancel_execution', 'spawn_role', 'submit_execution_input',
+  'run_workflow', 'cancel_execution', 'spawn_agent', 'submit_execution_input', 'delegate_to_agent',
   // MCP tools that mutate (linear create/edit/delete)
   'mcp__linear__linear_create_issue', 'mcp__linear__linear_edit_issue',
   'mcp__linear__linear_delete_issue', 'mcp__linear__linear_create_comment',
@@ -246,15 +287,15 @@ const listRepos: ChatTool = {
   },
 };
 
-const listRoles: ChatTool = {
-  name: 'list_roles',
-  description: 'List all available agent roles with their provider, model, and capabilities.',
+const listAgents: ChatTool = {
+  name: 'list_agents',
+  description: 'List all available agents with their provider, model, and capabilities.',
   inputSchema: {
     type: 'object',
     properties: {},
   },
   async execute(_args, db) {
-    const roles = await db.collection('roles')
+    const roles = await db.collection('agents')
       .find({})
       .sort({ name: 1 })
       .toArray();
@@ -272,26 +313,26 @@ const listRoles: ChatTool = {
   },
 };
 
-const spawnRole: ChatTool = {
-  name: 'spawn_role',
-  description: 'Spawn a one-shot agent with a specific role to perform a task that requires the agent\'s capabilities (reading files, writing code, running commands). Do NOT use this for simple questions about a role — answer those from mention context instead.',
+const spawnAgent: ChatTool = {
+  name: 'spawn_agent',
+  description: 'Spawn a one-shot agent to perform a task that requires the agent\'s capabilities (reading files, writing code, running commands). Do NOT use this for simple questions about an agent — answer those from mention context instead.',
   inputSchema: {
     type: 'object',
     properties: {
-      role_name: { type: 'string', description: 'Name of the role to spawn (e.g., "coding-reviewer", "coding-planner")' },
+      agent_name: { type: 'string', description: 'Name of the agent to spawn (e.g., "coding-reviewer", "engineer", "product-manager")' },
       prompt: { type: 'string', description: 'The task/prompt to send to the spawned agent' },
       repo_path: { type: 'string', description: 'Optional repo path for the agent to work in' },
     },
-    required: ['role_name', 'prompt'],
+    required: ['agent_name', 'prompt'],
   },
   async execute(args, db) {
-    const roleName = args.role_name as string;
+    const agentName = args.agent_name as string;
     const prompt = args.prompt as string;
     const startMs = Date.now();
 
-    const role = await db.collection('roles').findOne({ name: roleName });
+    const role = await db.collection('agents').findOne({ name: agentName });
     if (!role) {
-      return { error: `Role "${roleName}" not found. Use list_roles to see available roles.` };
+      return { error: `Agent "${agentName}" not found. Use list_agents to see available agents.` };
     }
 
     // Create execution record
@@ -299,16 +340,16 @@ const spawnRole: ChatTool = {
     const executionId = randomUUID();
     await db.collection('executions').insertOne({
       id: executionId,
-      workflowName: `chat:spawn_role/${roleName}`,
+      workflowName: `chat:spawn_agent/${agentName}`,
       workflowId: null,
       workflowVersion: 0,
       status: 'running',
       source: 'chat',
-      input: { prompt, role_name: roleName, repo_path: args.repo_path },
+      input: { prompt, agent_name: agentName, repo_path: args.repo_path },
       state: {},
       sessions: {},
       retryCounts: {},
-      currentNodes: [roleName],
+      currentNodes: [agentName],
       completedNodes: [],
       cost: { actual: null, estimated: 0 },
       durationMs: 0,
@@ -377,7 +418,7 @@ const spawnRole: ChatTool = {
         { id: executionId },
         { $set: {
           status: 'completed',
-          completedNodes: [roleName],
+          completedNodes: [agentName],
           currentNodes: [],
           cost: { actual: costUsd, estimated: costUsd },
           durationMs,
@@ -388,11 +429,11 @@ const spawnRole: ChatTool = {
       // Save node trace for debugging
       await db.collection('execution_traces').insertOne({
         executionId,
-        node: roleName,
+        node: agentName,
         attempt: 1,
         status: 'completed',
         type: 'agent',
-        role: roleName,
+        agent: agentName,
         inputState: { prompt },
         renderedPrompt: prompt,
         rawResponse: response,
@@ -405,7 +446,7 @@ const spawnRole: ChatTool = {
       });
 
       return {
-        role_name: roleName,
+        agent_name: agentName,
         execution_id: executionId,
         response,
         provider: provider as string,
@@ -418,7 +459,7 @@ const spawnRole: ChatTool = {
         { id: executionId },
         { $set: { status: 'failed', errorMessage: (err as Error).message, durationMs, completedAt: new Date() } },
       );
-      return { error: `Failed to spawn role "${roleName}": ${(err as Error).message}`, execution_id: executionId };
+      return { error: `Failed to spawn agent "${agentName}": ${(err as Error).message}`, execution_id: executionId };
     }
   },
 };
@@ -465,11 +506,11 @@ const getLearnings: ChatTool = {
 
 const queryDatabase: ChatTool = {
   name: 'query_database',
-  description: 'Run a read-only query against the FlowForge MongoDB database. Can query collections: workflows, executions, roles, repos, learnings, chat_sessions. Returns up to 20 results.',
+  description: 'Run a read-only query against the FlowForge MongoDB database. Can query collections: workflows, executions, agents, repos, learnings, chat_sessions. Returns up to 20 results.',
   inputSchema: {
     type: 'object',
     properties: {
-      collection: { type: 'string', description: 'MongoDB collection name (e.g., "workflows", "executions", "roles", "repos", "learnings")' },
+      collection: { type: 'string', description: 'MongoDB collection name (e.g., "workflows", "executions", "agents", "repos", "learnings")' },
       filter: { type: 'object', description: 'MongoDB query filter (e.g., {"status": "completed"})', additionalProperties: true },
       projection: { type: 'object', description: 'Fields to include/exclude (e.g., {"name": 1, "status": 1})', additionalProperties: true },
       sort: { type: 'object', description: 'Sort order (e.g., {"createdAt": -1})', additionalProperties: true },
@@ -478,7 +519,7 @@ const queryDatabase: ChatTool = {
     required: ['collection'],
   },
   async execute(args, db) {
-    const allowedCollections = ['workflows', 'executions', 'roles', 'repos', 'learnings', 'chat_sessions', 'execution_logs', 'node_traces'];
+    const allowedCollections = ['workflows', 'executions', 'agents', 'repos', 'learnings', 'chat_sessions', 'execution_logs', 'node_traces'];
     const collection = args.collection as string;
     if (!allowedCollections.includes(collection)) {
       return { error: `Collection "${collection}" not allowed. Allowed: ${allowedCollections.join(', ')}` };
@@ -662,17 +703,17 @@ const getExecutionLogs: ChatTool = {
 
 const getDashboardStats: ChatTool = {
   name: 'get_dashboard_stats',
-  description: 'Get FlowForge dashboard statistics: total workflows, executions, success rate, cost totals, active roles, registered repos.',
+  description: 'Get FlowForge dashboard statistics: total workflows, executions, success rate, cost totals, active agents, registered repos.',
   inputSchema: {
     type: 'object',
     properties: {},
   },
   async execute(_args, db) {
-    const [workflowCount, executionCount, repoCount, roleCount] = await Promise.all([
+    const [workflowCount, executionCount, repoCount, agentCount] = await Promise.all([
       db.collection('workflows').countDocuments({ archived: { $ne: true } }),
       db.collection('executions').countDocuments({}),
       db.collection('repos').countDocuments({}),
-      db.collection('roles').countDocuments({}),
+      db.collection('agents').countDocuments({}),
     ]);
 
     const recentExecs = await db.collection('executions')
@@ -691,7 +732,7 @@ const getDashboardStats: ChatTool = {
       workflows: workflowCount,
       executions: executionCount,
       repos: repoCount,
-      roles: roleCount,
+      agents: agentCount,
       recent_100: {
         completed,
         failed,
@@ -785,6 +826,340 @@ const saveLearning: ChatTool = {
   },
 };
 
+// ── Delegation Tools ──────────────────────────────────────────────────────────
+
+const delegateToAgent: ChatTool = {
+  name: 'delegate_to_agent',
+  description: 'Delegate a task to another team agent. The target agent will process the task and return their response. Use this to involve other agents in the conversation — e.g., delegate technical analysis to Engineer, data queries to Analyst, quality review to QA.',
+  destructive: true,
+  inputSchema: {
+    type: 'object',
+    properties: {
+      agent_name: { type: 'string', description: 'Name of the agent to delegate to (e.g., "engineer", "qa-engineer", "data-analyst")' },
+      task: { type: 'string', description: 'The task or question for the target agent' },
+      context: { type: 'object', description: 'Any relevant context (repo path, ticket info, etc.)', additionalProperties: true },
+    },
+    required: ['agent_name', 'task'],
+  },
+  async execute(args, db) {
+    const targetName = args.agent_name as string;
+    const task = args.task as string;
+    const context = (args.context as Record<string, unknown>) ?? {};
+    const conversationService = new AgentConversationService(db);
+
+    // Find the target agent
+    const targetAgent = await db.collection('agents').findOne({ name: targetName });
+    if (!targetAgent) {
+      return { error: `Agent "${targetName}" not found. Use list_agents to see available agents.` };
+    }
+
+    // Read delegation context from the active session registry
+    // This works regardless of whether the tool was called in-process or via MCP → API
+    const activeCtx = getAnyActiveSession();
+    const chatSessionId = activeCtx?.chatSessionId ?? 'unknown';
+    const parentMessageId = activeCtx?.parentMessageId ?? 'unknown';
+    const fromAgent = activeCtx?.currentAgent ?? 'assistant';
+    const currentDepth = (activeCtx?.delegationDepth ?? 0) + 1;
+    const onEvent = activeCtx?.broadcastEvent;
+
+    // Check depth limit
+    if (!conversationService.canDelegate(currentDepth - 1)) {
+      return {
+        error: `Delegation depth limit reached (max ${conversationService.maxDepth}). Cannot delegate further. Summarize what you know and respond directly.`,
+        depth: currentDepth,
+        max_depth: conversationService.maxDepth,
+      };
+    }
+
+    // Check the calling agent is allowed to delegate to target
+    if (fromAgent !== 'assistant') {
+      const callingAgent = await db.collection('agents').findOne({ name: fromAgent });
+      if (callingAgent?.canDelegateTo && !callingAgent.canDelegateTo.includes(targetName)) {
+        return {
+          error: `Agent "${fromAgent}" cannot delegate to "${targetName}". Allowed targets: ${(callingAgent.canDelegateTo as string[]).join(', ')}`,
+        };
+      }
+    }
+
+    // Create conversation record
+    const conversation = await conversationService.create({
+      chatSessionId,
+      parentMessageId,
+      fromAgent,
+      toAgent: targetName,
+      task,
+      context,
+      depth: currentDepth,
+      parentConversationId: undefined,
+    });
+    const convId = conversation._id!.toString();
+
+    // Emit SSE: agent thread started
+    if (onEvent) {
+      onEvent('agent_thread_start', {
+        conversationId: convId,
+        fromAgent,
+        toAgent: targetName,
+        task: task.slice(0, 200),
+        depth: currentDepth,
+      });
+    }
+
+    // Add the delegation request as a message
+    await conversationService.addMessage(convId, {
+      agent: fromAgent,
+      content: task,
+      timestamp: new Date(),
+    });
+
+    const startMs = Date.now();
+
+    try {
+      // Build the system prompt for the target agent
+      const systemPrompt = buildDelegationPrompt(targetAgent, fromAgent, currentDepth, conversationService.maxDepth);
+
+      // Build the user prompt with context
+      let fullPrompt = task;
+      if (Object.keys(context).length > 0) {
+        fullPrompt = `CONTEXT:\n${JSON.stringify(context, null, 2)}\n\nTASK:\n${task}`;
+      }
+
+      // Run the target agent via Claude CLI with MCP tools
+      const { query } = await import('@anthropic-ai/claude-code');
+      const { resolve, dirname } = await import('node:path');
+
+      // Build MCP servers for the delegated agent
+      const mcpServers: Record<string, unknown> = {};
+      const serverPath = resolve(dirname(new URL(import.meta.url).pathname), 'flowforge-mcp-server.ts');
+      mcpServers.flowforge = {
+        type: 'stdio',
+        command: 'npx',
+        args: ['tsx', serverPath],
+        env: { FLOWFORGE_API_URL: `http://localhost:${process.env.PORT ?? '4023'}` },
+      };
+
+      // Load external MCP servers
+      const { loadExternalMcpServers } = await import('./chat-mcp.js');
+      const external = await loadExternalMcpServers(db);
+      Object.assign(mcpServers, external);
+
+      const provider = targetAgent.provider ?? 'claude';
+      const model = targetAgent.model ?? 'sonnet';
+
+      let responseText = '';
+      let costUsd = 0;
+      const toolCalls: { tool: string; args: Record<string, unknown>; result?: Record<string, unknown>; durationMs?: number }[] = [];
+
+      if (provider === 'codex') {
+        // Codex CLI
+        const { spawn } = await import('node:child_process');
+        const codexPrompt = `${systemPrompt}\n\n${fullPrompt}`;
+        const codexArgs = ['exec', '--json', '--dangerously-bypass-approvals-and-sandbox', '--skip-git-repo-check', '-m', model, codexPrompt];
+
+        responseText = await new Promise<string>((resolve, reject) => {
+          const child = spawn('codex', codexArgs, { stdio: ['pipe', 'pipe', 'pipe'] });
+          let output = '';
+          const timeout = setTimeout(() => { child.kill(); reject(new Error('Delegation timeout')); }, conversationService.timeoutMs);
+
+          child.stdout.on('data', (chunk: Buffer) => {
+            for (const line of chunk.toString().split('\n').filter(Boolean)) {
+              try {
+                const evt = JSON.parse(line);
+                if (evt.type === 'message' && evt.item?.text) output = evt.item.text;
+              } catch { /* skip non-JSON lines */ }
+            }
+          });
+          child.on('close', () => { clearTimeout(timeout); resolve(output); });
+          child.on('error', (err) => { clearTimeout(timeout); reject(err); });
+        });
+      } else {
+        // Claude CLI (default)
+        const abortController = new AbortController();
+        const sdkOptions: Record<string, unknown> = {
+          model,
+          maxTurns: 20,
+          permissionMode: 'bypassPermissions',
+          cwd: '/tmp',
+          customSystemPrompt: systemPrompt,
+          mcpServers,
+          abortSignal: abortController.signal,
+        };
+
+        const timeout = setTimeout(() => abortController.abort(), conversationService.timeoutMs);
+
+        // Update active session so nested delegate_to_agent calls get correct depth/agent
+        const prevCtx = activeCtx ? { ...activeCtx } : undefined;
+        if (activeCtx) {
+          activeCtx.currentAgent = targetName;
+          activeCtx.delegationDepth = currentDepth;
+        }
+
+        try {
+          for await (const message of query({ prompt: fullPrompt, options: sdkOptions as any })) {
+            if (message.type === 'assistant') {
+              const blocks = (message as any).message.content as Array<{ type: string; text?: string; name?: string; input?: unknown; id?: string }>;
+              const text = blocks.filter((b: any) => b.type === 'text').map((b: any) => b.text || '').join('');
+              if (text) responseText = text;
+
+              // Track tool calls for the conversation log
+              for (const block of blocks) {
+                if (block.type === 'tool_use' && block.name) {
+                  toolCalls.push({ tool: block.name, args: (block.input as Record<string, unknown>) ?? {} });
+                  if (onEvent) {
+                    onEvent('agent_thread_message', {
+                      conversationId: convId,
+                      agent: targetName,
+                      type: 'tool_call',
+                      tool: block.name,
+                    });
+                  }
+                }
+              }
+            }
+            if (message.type === 'result') {
+              costUsd = (message as any).total_cost_usd ?? 0;
+              if ((message as any).subtype === 'success' && (message as any).result) {
+                responseText = (message as any).result;
+              }
+            }
+          }
+        } finally {
+          clearTimeout(timeout);
+          // Restore previous context so the calling agent's subsequent calls use the right depth
+          if (activeCtx && prevCtx) {
+            activeCtx.currentAgent = prevCtx.currentAgent;
+            activeCtx.delegationDepth = prevCtx.delegationDepth;
+          }
+        }
+      }
+
+      const durationMs = Date.now() - startMs;
+
+      // Add the response as a message
+      await conversationService.addMessage(convId, {
+        agent: targetName,
+        content: responseText,
+        toolCalls,
+        timestamp: new Date(),
+      });
+
+      // Generate a one-line summary
+      const summary = responseText.split('\n').find(l => l.trim().length > 10)?.trim().slice(0, 150) ?? responseText.slice(0, 150);
+
+      // Complete the conversation
+      await conversationService.complete(convId, responseText, summary, costUsd);
+
+      // Emit SSE: agent thread completed
+      if (onEvent) {
+        onEvent('agent_thread_complete', {
+          conversationId: convId,
+          fromAgent,
+          toAgent: targetName,
+          summary,
+          costUsd,
+          durationMs,
+        });
+      }
+
+      return {
+        agent: targetName,
+        response: responseText,
+        summary,
+        conversation_id: convId,
+        cost_usd: costUsd,
+        duration_ms: durationMs,
+        depth: currentDepth,
+      };
+    } catch (err) {
+      const durationMs = Date.now() - startMs;
+      const errorMsg = (err as Error).message;
+      await conversationService.fail(convId, errorMsg);
+
+      if (onEvent) {
+        onEvent('agent_thread_complete', {
+          conversationId: convId,
+          fromAgent,
+          toAgent: targetName,
+          summary: `Failed: ${errorMsg}`,
+          costUsd: 0,
+          durationMs,
+          error: true,
+        });
+      }
+
+      return {
+        error: `Delegation to "${targetName}" failed: ${errorMsg}`,
+        conversation_id: convId,
+        duration_ms: durationMs,
+      };
+    }
+  },
+};
+
+function buildDelegationPrompt(
+  targetAgent: Record<string, unknown>,
+  fromAgent: string,
+  depth: number,
+  maxDepth: number,
+): string {
+  const systemBase = (targetAgent.system as string) ?? '';
+  const personality = (targetAgent.personality as string) ?? '';
+  const canDelegateTo = (targetAgent.canDelegateTo as string[]) ?? [];
+  const canTrigger = (targetAgent.canTrigger as string[]) ?? [];
+
+  const parts = [systemBase];
+
+  if (personality) parts.push(`\nYour personality: ${personality}`);
+
+  parts.push(`\nYou were delegated a task by ${fromAgent}. Respond with a clear, actionable answer.`);
+
+  if (canDelegateTo.length > 0 && depth < maxDepth) {
+    parts.push(`You can delegate sub-tasks to: ${canDelegateTo.join(', ')} using the delegate_to_agent tool.`);
+  } else if (depth >= maxDepth) {
+    parts.push(`You are at the maximum delegation depth (${depth}/${maxDepth}). Do NOT delegate further — respond directly with what you know.`);
+  }
+
+  if (canTrigger.length > 0) {
+    parts.push(`You can trigger these workflows: ${canTrigger.join(', ')} using the run_workflow tool.`);
+  }
+
+  parts.push(`\nIMPORTANT: Be concise. You are collaborating with another agent, not talking to a human. Get to the point.`);
+
+  return parts.join('\n');
+}
+
+const reportToUser: ChatTool = {
+  name: 'report_to_user',
+  description: 'Send a progress update or result to the user during a long-running delegation chain. Use this for intermediate status updates (e.g., "Engineer is analyzing the codebase...") or final results.',
+  inputSchema: {
+    type: 'object',
+    properties: {
+      message: { type: 'string', description: 'The progress update or result to show the user' },
+      status: { type: 'string', description: '"in_progress" | "completed" | "needs_input"', enum: ['in_progress', 'completed', 'needs_input'] },
+    },
+    required: ['message'],
+  },
+  async execute(args, _db) {
+    const message = args.message as string;
+    const status = (args.status as string) ?? 'in_progress';
+
+    // Read from active session registry
+    const activeCtx = getAnyActiveSession();
+    const fromAgent = activeCtx?.currentAgent ?? 'assistant';
+
+    if (activeCtx?.broadcastEvent) {
+      activeCtx.broadcastEvent('agent_report', {
+        agent: fromAgent,
+        message,
+        status,
+        timestamp: new Date().toISOString(),
+      });
+    }
+
+    return { reported: true, message, status };
+  },
+};
+
 export const chatTools: ChatTool[] = [
   // Core
   listWorkflows,
@@ -793,9 +1168,12 @@ export const chatTools: ChatTool[] = [
   listExecutions,
   cancelExecution,
   listRepos,
-  listRoles,
-  spawnRole,
+  listAgents,
+  spawnAgent,
   getLearnings,
+  // Delegation
+  delegateToAgent,
+  reportToUser,
   // Advanced queries
   queryDatabase,
   searchExecutionsAdvanced,

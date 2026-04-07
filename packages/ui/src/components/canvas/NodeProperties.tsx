@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import type { Node } from '@xyflow/react';
 import { Trash2, Plus, X } from 'lucide-react';
-import { roles as rolesApi } from '../../services/api';
+import { agents as agentsApi } from '../../services/api';
 
 interface HumanField {
   name: string;
@@ -22,11 +22,11 @@ const fieldTypes = ['string', 'text', 'boolean', 'number', 'select'];
 
 export default function NodeProperties({ node, onUpdate, onDelete }: Props) {
   const [localData, setLocalData] = useState<Record<string, any>>({});
-  const [roleList, setRoleList] = useState<any[]>([]);
+  const [agentList, setAgentList] = useState<any[]>([]);
 
-  // Fetch roles from backend
+  // Fetch agents from backend
   useEffect(() => {
-    rolesApi.list().then(setRoleList).catch(() => {});
+    agentsApi.list().then(setAgentList).catch(() => {});
   }, []);
 
   useEffect(() => {
@@ -102,10 +102,10 @@ export default function NodeProperties({ node, onUpdate, onDelete }: Props) {
       {type === 'agent' && (
         <>
           <div>
-            <label className="block text-xs font-label font-medium text-gray-400 mb-1 uppercase tracking-wider">Role</label>
-            <select className="input w-full text-xs" value={(localData.role as string) ?? ''} onChange={e => update('role', e.target.value)}>
-              <option value="">Select role...</option>
-              {roleList.map((r: any) => <option key={r.name} value={r.name}>{r.name}</option>)}
+            <label className="block text-xs font-label font-medium text-gray-400 mb-1 uppercase tracking-wider">Agent</label>
+            <select className="input w-full text-xs" value={(localData.agent as string) ?? ''} onChange={e => update('agent', e.target.value)}>
+              <option value="">Select agent...</option>
+              {agentList.map((a: any) => <option key={a.name} value={a.name}>{a.name}</option>)}
             </select>
           </div>
           <div>

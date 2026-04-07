@@ -1,7 +1,7 @@
 import type {
   NodeDef,
   NodeType,
-  RoleDef,
+  AgentDef,
   WorkflowDef,
   EngineEventEmitter,
   CostInfo,
@@ -38,7 +38,7 @@ const COST_PER_TURN: Record<string, number> = {
 };
 
 export interface NodeExecutorDeps {
-  roles: Record<string, RoleDef>;
+  agents: Record<string, AgentDef>;
   builtIns: Record<string, BuiltInFunction>;
   workflows: Record<string, WorkflowDef>;
   emitter: EngineEventEmitter;
@@ -67,7 +67,7 @@ export async function executeNode(
 
   switch (type) {
     case 'agent': {
-      const role = nodeDef.role ? deps.roles[nodeDef.role] : undefined;
+      const role = nodeDef.agent ? deps.agents[nodeDef.agent] : undefined;
       if (role?.provider === 'codex') {
         const existingSession = sessions[nodeName];
         return executeCodexNode(nodeName, nodeDef, state, role, deps.emitter, deps.executionId ?? '', existingSession, deps.nodeContext);
@@ -95,9 +95,9 @@ async function executeAgentNode(
   deps: NodeExecutorDeps,
 ): Promise<NodeResult> {
   const start = Date.now();
-  const role = nodeDef.role ? deps.roles[nodeDef.role] : undefined;
-  if (nodeDef.role && !role) {
-    throw new Error(`Role not found: ${nodeDef.role}`);
+  const role = nodeDef.agent ? deps.agents[nodeDef.agent] : undefined;
+  if (nodeDef.agent && !role) {
+    throw new Error(`Role not found: ${nodeDef.agent}`);
   }
 
   let prompt = nodeDef.prompt ? renderTemplate(nodeDef.prompt, state) : '';
@@ -108,7 +108,7 @@ async function executeAgentNode(
 
   deps.emitter.emit({
     event: 'node_started',
-    data: { node: nodeName, role: nodeDef.role, attempt: (state.retry_count as number ?? 0) + 1 },
+    data: { node: nodeName, role: nodeDef.agent, attempt: (state.retry_count as number ?? 0) + 1 },
   });
 
   const cwd = state.worktree_path as string | undefined;

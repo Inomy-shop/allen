@@ -121,7 +121,7 @@ export default function WorkflowListPage() {
       {/* Page header */}
       <div className="flex items-end justify-between mb-8">
         <div>
-          <h1 className="font-heading text-2xl font-bold text-white tracking-widest uppercase">Workflows</h1>
+          <h1 className="font-heading text-2xl font-bold text-white tracking-widest uppercase">Agent Workflows</h1>
           <p className="text-sm text-gray-500 mt-1 font-mono">
             {workflows.length} workflow{workflows.length !== 1 ? 's' : ''} available
           </p>

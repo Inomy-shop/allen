@@ -12,22 +12,22 @@ input:
 
 nodes:
   plan:
-    role: analyst
+    agent: analyst
     prompt: "Plan analysis for: {{question}}"
     outputs: [analysis_plan, data_sources]
 
   query:
-    role: analyst
+    agent: analyst
     prompt: "Execute queries:\n{{analysis_plan}}"
     outputs: [raw_results, anomalies]
 
   synthesize:
-    role: analyst
+    agent: analyst
     prompt: "Synthesize:\nResults: {{raw_results}}\nAnomalies: {{anomalies}}"
     outputs: [summary, insights, recommendations]
 
   report:
-    role: writer
+    agent: writer
     prompt: "Write report:\n{{summary}}\n{{insights}}\n{{recommendations}}"
     outputs: [report]
 

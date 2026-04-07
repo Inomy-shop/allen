@@ -21,12 +21,12 @@ const SCOPE_COLORS: Record<string, string> = {
   global: 'bg-gray-500/10 text-gray-400 border-gray-500/20',
   workflow: 'bg-accent-blue/10 text-accent-blue border-accent-blue/20',
   context: 'bg-purple-500/10 text-purple-400 border-purple-500/20',
-  role: 'bg-accent-green/10 text-accent-green border-accent-green/20',
+  agent: 'bg-accent-green/10 text-accent-green border-accent-green/20',
   node_pattern: 'bg-cyan-500/10 text-cyan-400 border-cyan-500/20',
 };
 
 const TYPES = ['fact', 'pattern', 'mistake', 'preference', 'skill', 'optimization'];
-const SCOPES = ['global', 'workflow', 'context', 'role', 'node_pattern'];
+const SCOPES = ['global', 'workflow', 'context', 'agent', 'node_pattern'];
 const STATUSES = ['active', 'archived', 'superseded', 'evolved'];
 
 // ── Component ─────────────────────────────────────────────────────────────
@@ -64,7 +64,7 @@ export default function LearningsPage() {
   const [addScope, setAddScope] = useState('global');
   const [addWorkflow, setAddWorkflow] = useState('');
   const [addContextTags, setAddContextTags] = useState('');
-  const [addRoleName, setAddRoleName] = useState('');
+  const [addAgentName, setAddAgentName] = useState('');
   const [addTags, setAddTags] = useState('');
 
   const fetchLearnings = useCallback(async () => {
@@ -135,7 +135,7 @@ export default function LearningsPage() {
     if (addScope === 'context' && addContextTags) {
       scope.contextTags = addContextTags.split(',').map(t => t.trim()).filter(Boolean);
     }
-    if (addScope === 'role' && addRoleName) scope.roleName = addRoleName;
+    if (addScope === 'agent' && addAgentName) scope.agentName = addAgentName;
 
     await api.create({
       content: addContent,
@@ -150,7 +150,7 @@ export default function LearningsPage() {
     setAddScope('global');
     setAddWorkflow('');
     setAddContextTags('');
-    setAddRoleName('');
+    setAddAgentName('');
     setAddTags('');
     fetchLearnings();
   };
@@ -164,18 +164,18 @@ export default function LearningsPage() {
     setEvolutionLoading(true);
     try {
       const data = await api.evolutionCandidates();
-      setEvolutionCandidates(data.roles ?? []);
+      setEvolutionCandidates(data.agents ?? []);
     } catch {
       // ignore
     }
     setEvolutionLoading(false);
   }, []);
 
-  const handlePreview = async (roleName: string) => {
+  const handlePreview = async (agentName: string) => {
     setPreviewLoading(true);
     setPreviewData(null);
     try {
-      const data = await api.evolutionPreview(roleName);
+      const data = await api.evolutionPreview(agentName);
       setPreviewData(data);
     } catch {
       // ignore
@@ -184,10 +184,10 @@ export default function LearningsPage() {
   };
 
   const handleEvolve = async () => {
-    if (!previewData?.roleName || !previewData?.newPrompt) return;
+    if (!previewData?.agentName || !previewData?.newPrompt) return;
     setEvolving(true);
     try {
-      await api.evolve(previewData.roleName, previewData.newPrompt);
+      await api.evolve(previewData.agentName, previewData.newPrompt);
       setPreviewData(null);
       fetchEvolutionCandidates();
     } catch {
@@ -236,7 +236,7 @@ export default function LearningsPage() {
         </button>
         <button
           onClick={() => setActiveTab('evolution')}
-          title="Role evolution candidates"
+          title="Agent evolution candidates"
           className={`px-4 py-1.5 text-xs font-heading uppercase tracking-wider rounded-t-sm transition-colors flex items-center gap-1.5 ${
             activeTab === 'evolution'
               ? 'text-accent-blue border-b-2 border-accent-blue'
@@ -255,7 +255,7 @@ export default function LearningsPage() {
             <div className="card p-5 border border-accent-blue/30 space-y-4">
               <div className="flex items-center justify-between">
                 <h3 className="font-heading text-sm text-white tracking-wider uppercase">
-                  Evolution Preview: {previewData.roleName}
+                  Evolution Preview: {previewData.agentName}
                 </h3>
                 <button onClick={() => setPreviewData(null)} className="btn-ghost text-xs">
                   <X className="w-3.5 h-3.5" />
@@ -306,18 +306,18 @@ export default function LearningsPage() {
             </div>
           ) : (
             <div className="space-y-3">
-              {evolutionCandidates.filter(c => c.roleName !== '__global__').map((candidate: any) => (
-                <div key={candidate.roleName} className="card p-4">
+              {evolutionCandidates.filter(c => c.agentName !== '__global__').map((candidate: any) => (
+                <div key={candidate.agentName} className="card p-4">
                   <div className="flex items-center justify-between mb-3">
                     <div className="flex items-center gap-2">
-                      <span className="font-heading text-sm text-white tracking-wider">{candidate.roleName}</span>
+                      <span className="font-heading text-sm text-white tracking-wider">{candidate.agentName}</span>
                       <span className="badge text-[10px] border bg-accent-green/10 text-accent-green border-accent-green/20">
                         {candidate.learningCount} ready
                       </span>
                     </div>
                     <div className="flex items-center gap-2">
                       <button
-                        onClick={() => handlePreview(candidate.roleName)}
+                        onClick={() => handlePreview(candidate.agentName)}
                         disabled={previewLoading}
                         className="btn-ghost text-xs flex items-center gap-1"
                       >
@@ -343,16 +343,16 @@ export default function LearningsPage() {
               ))}
 
               {/* Show global learnings info */}
-              {evolutionCandidates.find(c => c.roleName === '__global__') && (
+              {evolutionCandidates.find(c => c.agentName === '__global__') && (
                 <div className="card p-4 border-dashed">
                   <div className="flex items-center gap-2 mb-2">
                     <span className="font-heading text-sm text-gray-400 tracking-wider">Global Learnings</span>
                     <span className="badge text-[10px] border bg-gray-500/10 text-gray-400 border-gray-500/20">
-                      {evolutionCandidates.find(c => c.roleName === '__global__')?.learningCount ?? 0} available
+                      {evolutionCandidates.find(c => c.agentName === '__global__')?.learningCount ?? 0} available
                     </span>
                   </div>
                   <p className="text-[10px] text-gray-500 font-body">
-                    Global learnings are included when evolving any role.
+                    Global learnings are included when evolving any agent.
                   </p>
                 </div>
               )}
@@ -450,10 +450,10 @@ export default function LearningsPage() {
                   <input value={addContextTags} onChange={e => setAddContextTags(e.target.value)} placeholder="repo:/path, language:typescript" className="input text-xs w-full" />
                 </div>
               )}
-              {addScope === 'role' && (
+              {addScope === 'agent' && (
                 <div>
-                  <label className="block text-[11px] text-gray-500 font-label uppercase tracking-wider mb-1">Role Name</label>
-                  <input value={addRoleName} onChange={e => setAddRoleName(e.target.value)} placeholder="e.g., codex-researcher" className="input text-xs w-full" />
+                  <label className="block text-[11px] text-gray-500 font-label uppercase tracking-wider mb-1">Agent Name</label>
+                  <input value={addAgentName} onChange={e => setAddAgentName(e.target.value)} placeholder="e.g., codex-researcher" className="input text-xs w-full" />
                 </div>
               )}
             </div>

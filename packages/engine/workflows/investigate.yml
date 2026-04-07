@@ -12,12 +12,12 @@ input:
 
 nodes:
   gather:
-    role: investigator
+    agent: investigator
     prompt: "Investigate: {{problem}}"
     outputs: [evidence, hypotheses]
 
   verify:
-    role: investigator
+    agent: investigator
     prompt: "Test hypotheses:\n{{hypotheses}}\nEvidence: {{evidence}}"
     outputs: [root_cause, confidence]
 
@@ -39,7 +39,7 @@ nodes:
       pr_url: fix_pr_url
 
   report:
-    role: writer
+    agent: writer
     prompt: "Write incident report:\nProblem: {{problem}}\nRoot cause: {{root_cause}}\nEvidence: {{evidence}}"
     outputs: [incident_report]
 

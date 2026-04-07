@@ -62,15 +62,15 @@ export const executions = {
   streamUrl: (id: string) => `${BASE}/executions/${id}/stream`,
 };
 
-// ── Roles ──────────────────────────────────────────────────────────────────
-export const roles = {
-  list: () => request<any[]>('/roles'),
-  create: (role: any) =>
-    request<any>('/roles', { method: 'POST', body: JSON.stringify(role) }),
-  update: (name: string, role: any) =>
-    request<any>(`/roles/${name}`, { method: 'PUT', body: JSON.stringify(role) }),
+// ── Agents ─────────────────────────────────────────────────────────────────
+export const agents = {
+  list: () => request<any[]>('/agents'),
+  create: (agent: any) =>
+    request<any>('/agents', { method: 'POST', body: JSON.stringify(agent) }),
+  update: (name: string, agent: any) =>
+    request<any>(`/agents/${name}`, { method: 'PUT', body: JSON.stringify(agent) }),
   delete: (name: string) =>
-    request<void>(`/roles/${name}`, { method: 'DELETE' }),
+    request<void>(`/agents/${name}`, { method: 'DELETE' }),
 };
 
 // ── Secrets ────────────────────────────────────────────────────────────────
@@ -122,6 +122,8 @@ export const chat = {
     request<any>(`/chat/sessions/${id}`, { method: 'PATCH', body: JSON.stringify(body) }),
   deleteSession: (id: string) =>
     request<void>(`/chat/sessions/${id}`, { method: 'DELETE' }),
+  getThreads: (id: string) =>
+    request<any[]>(`/chat/sessions/${id}/threads`),
 };
 
 // ── Alerts ───────────────────────────────────────────────────────────────
@@ -169,12 +171,12 @@ export const learnings = {
     request<void>(`/learnings/${id}`, { method: 'DELETE' }),
   forExecution: (execId: string) =>
     request<any>(`/executions/${execId}/learnings`),
-  evolutionCandidates: (roleName?: string) => {
-    const qs = roleName ? `?roleName=${roleName}` : '';
+  evolutionCandidates: (agentName?: string) => {
+    const qs = agentName ? `?agentName=${agentName}` : '';
     return request<any>(`/learnings/evolution-candidates${qs}`);
   },
-  evolutionPreview: (roleName: string) =>
-    request<any>(`/learnings/evolve/${roleName}/preview`),
-  evolve: (roleName: string, newPrompt: string) =>
-    request<any>(`/learnings/evolve/${roleName}`, { method: 'POST', body: JSON.stringify({ newPrompt }) }),
+  evolutionPreview: (agentName: string) =>
+    request<any>(`/learnings/evolve/${agentName}/preview`),
+  evolve: (agentName: string, newPrompt: string) =>
+    request<any>(`/learnings/evolve/${agentName}`, { method: 'POST', body: JSON.stringify({ newPrompt }) }),
 };
