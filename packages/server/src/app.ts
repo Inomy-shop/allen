@@ -20,6 +20,9 @@ import { learningRoutes, executionLearningsRoute } from './routes/learning.route
 import { chatRoutes } from './routes/chat.routes.js';
 import { mcpRoutes } from './routes/mcp.routes.js';
 import { alertRoutes } from './routes/alert.routes.js';
+import { workspaceRoutes } from './routes/workspace.routes.js';
+import { startTerminalWebSocketServer } from './services/workspace-terminal.js';
+import { WorkspaceManager } from './services/workspace.service.js';
 import { seedDefaultAgents, seedDefaultWorkflows } from './seed.js';
 import { setStreamDb } from './services/stream.service.js';
 
@@ -55,17 +58,17 @@ async function main(): Promise<void> {
   app.use('/api/chat', chatRoutes(db));
   app.use('/api/mcp', mcpRoutes(db));
   app.use('/api/alerts', alertRoutes(db));
+  app.use('/api/workspaces', workspaceRoutes(db));
 
   app.listen(PORT, () => {
     console.log(`FlowForge server running on http://localhost:${PORT}`);
-    console.log(`API endpoints:`);
-    console.log(`  GET  /api/health`);
-    console.log(`  CRUD /api/workflows`);
-    console.log(`  CRUD /api/executions`);
-    console.log(`  CRUD /api/agents`);
-    console.log(`  CRUD /api/secrets`);
-    console.log(`  GET  /api/dashboard/stats`);
-    console.log(`  GET  /api/dashboard/cost`);
+  });
+
+  // Start dedicated WebSocket terminal server on port 4024
+  const wsManager = new WorkspaceManager(db);
+  startTerminalWebSocketServer(async (workspaceId: string) => {
+    const ws = await wsManager.get(workspaceId);
+    return ws?.worktreePath ?? null;
   });
 }
 

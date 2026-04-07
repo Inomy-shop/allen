@@ -1,0 +1,142 @@
+import { useState, useEffect, useCallback } from 'react';
+import { Link, useNavigate } from 'react-router-dom';
+import { workspaces } from '../services/workspaceService';
+import { repos as repoApi } from '../services/api';
+import { Plus, RefreshCw, GitBranch, Trash2, Terminal, FileCode, ExternalLink, Loader2 } from 'lucide-react';
+import DeleteConfirmDialog from '../components/common/DeleteConfirmDialog';
+
+export default function WorkspaceListPage() {
+  const [list, setList] = useState<any[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [creating, setCreating] = useState(false);
+  const [repos, setRepos] = useState<any[]>([]);
+  const [form, setForm] = useState({ repoId: '', repoPath: '', repoName: '', branch: '', baseBranch: 'main', name: '' });
+  const [deleting, setDeleting] = useState<{ id: string; name: string } | null>(null);
+  const navigate = useNavigate();
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    try { setList(await workspaces.list()); } catch {}
+    setLoading(false);
+  }, []);
+
+  useEffect(() => { load(); }, [load]);
+  useEffect(() => { repoApi.list().then(setRepos).catch(() => {}); }, []);
+
+  async function handleCreate(e: React.FormEvent) {
+    e.preventDefault();
+    if (!form.repoId || !form.branch || !form.name) return;
+    try {
+      const ws = await workspaces.create(form);
+      navigate(`/workspaces/${ws._id}`);
+    } catch (err: any) { alert(err.message); }
+  }
+
+  async function handleDelete() {
+    if (!deleting) return;
+    try { await workspaces.archive(deleting.id); setDeleting(null); load(); } catch {}
+  }
+
+  function selectRepo(repoId: string) {
+    const repo = repos.find(r => r._id === repoId);
+    setForm(f => ({ ...f, repoId, repoPath: repo?.path ?? '', repoName: repo?.name ?? '' }));
+  }
+
+  const statusColors: Record<string, string> = {
+    creating: 'text-accent-yellow bg-accent-yellow/10 border-accent-yellow/20',
+    setting_up: 'text-accent-yellow bg-accent-yellow/10 border-accent-yellow/20',
+    active: 'text-accent-green bg-accent-green/10 border-accent-green/20',
+    running: 'text-accent-blue bg-accent-blue/10 border-accent-blue/20',
+    archiving: 'text-gray-400 bg-gray-400/10 border-gray-400/20',
+    failed: 'text-red-400 bg-red-400/10 border-red-400/20',
+  };
+
+  return (
+    <div className="p-6">
+      <div className="flex items-center justify-between mb-6">
+        <div>
+          <h1 className="font-heading text-xl font-bold text-white tracking-widest uppercase">Workspaces</h1>
+          <p className="text-xs text-gray-500 mt-1 font-body">{list.length} active workspace{list.length !== 1 ? 's' : ''}</p>
+        </div>
+        <div className="flex items-center gap-2">
+          <button onClick={load} className="btn-ghost text-xs" title="Refresh"><RefreshCw className="w-3.5 h-3.5" /></button>
+          <button onClick={() => setCreating(!creating)} className="btn-primary text-xs inline-flex items-center gap-1.5">
+            <Plus className="w-3.5 h-3.5" /> New Workspace
+          </button>
+        </div>
+      </div>
+
+      {/* Create form */}
+      {creating && (
+        <form onSubmit={handleCreate} className="mb-6 p-4 rounded-lg border border-border/20 bg-surface-100/30 space-y-3">
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="text-[10px] font-label uppercase tracking-wider text-gray-500 block mb-1">Repository</label>
+              <select value={form.repoId} onChange={e => selectRepo(e.target.value)} className="input w-full text-xs">
+                <option value="">Select repo...</option>
+                {repos.map(r => <option key={r._id} value={r._id}>{r.name}</option>)}
+              </select>
+            </div>
+            <div>
+              <label className="text-[10px] font-label uppercase tracking-wider text-gray-500 block mb-1">Workspace Name</label>
+              <input value={form.name} onChange={e => setForm(f => ({ ...f, name: e.target.value }))} placeholder="feature/light-theme" className="input w-full text-xs" />
+            </div>
+            <div>
+              <label className="text-[10px] font-label uppercase tracking-wider text-gray-500 block mb-1">Branch Name</label>
+              <input value={form.branch} onChange={e => setForm(f => ({ ...f, branch: e.target.value }))} placeholder="feature/my-feature" className="input w-full text-xs" />
+            </div>
+            <div>
+              <label className="text-[10px] font-label uppercase tracking-wider text-gray-500 block mb-1">Base Branch</label>
+              <input value={form.baseBranch} onChange={e => setForm(f => ({ ...f, baseBranch: e.target.value }))} placeholder="main" className="input w-full text-xs" />
+            </div>
+          </div>
+          <div className="flex justify-end gap-2">
+            <button type="button" onClick={() => setCreating(false)} className="btn-ghost text-xs">Cancel</button>
+            <button type="submit" className="btn-primary text-xs">Create Workspace</button>
+          </div>
+        </form>
+      )}
+
+      {/* Workspace list */}
+      {loading ? (
+        <div className="flex items-center justify-center py-12"><Loader2 className="w-5 h-5 animate-spin text-gray-500" /></div>
+      ) : list.length === 0 ? (
+        <div className="text-center py-12">
+          <GitBranch className="w-10 h-10 text-gray-700 mx-auto mb-3" />
+          <p className="text-sm text-gray-500 font-body">No workspaces yet. Create one to get started.</p>
+        </div>
+      ) : (
+        <div className="space-y-3">
+          {list.map((ws: any) => (
+            <div key={ws._id} className="p-4 rounded-lg border border-border/20 bg-surface-100/20 hover:bg-surface-100/40 transition-colors group">
+              <div className="flex items-center gap-3">
+                <GitBranch className="w-5 h-5 text-accent-green shrink-0" />
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-2">
+                    <Link to={`/workspaces/${ws._id}`} className="text-sm font-heading font-semibold text-white hover:text-accent-blue transition-colors">{ws.name}</Link>
+                    <span className={`text-[10px] font-mono px-1.5 py-0.5 rounded border ${statusColors[ws.status] ?? 'text-gray-400'}`}>{ws.status}</span>
+                    {ws.source === 'pr' && <span className="text-[10px] font-mono text-accent-purple bg-accent-purple/10 px-1.5 py-0.5 rounded border border-accent-purple/20">PR #{ws.prNumber}</span>}
+                  </div>
+                  <div className="flex items-center gap-3 mt-1 text-[11px] text-gray-500 font-mono">
+                    <span>{ws.repoName}</span>
+                    <span>·</span>
+                    <span>{ws.branch} → {ws.baseBranch}</span>
+                    {ws.changedFiles > 0 && <><span>·</span><span>{ws.changedFiles} files changed</span></>}
+                    {ws.services?.some((s: any) => s.status === 'ready') && <><span>·</span><span className="text-accent-green">services running</span></>}
+                  </div>
+                </div>
+                <div className="flex items-center gap-1.5 opacity-0 group-hover:opacity-100 transition-opacity">
+                  <Link to={`/workspaces/${ws._id}`} className="btn-ghost p-1.5 text-xs" title="Open"><Terminal className="w-3.5 h-3.5" /></Link>
+                  <Link to={`/workspaces/${ws._id}?tab=diff`} className="btn-ghost p-1.5 text-xs" title="View diff"><FileCode className="w-3.5 h-3.5" /></Link>
+                  <button onClick={() => setDeleting({ id: ws._id, name: ws.name })} className="btn-ghost p-1.5 text-xs text-red-400" title="Archive"><Trash2 className="w-3.5 h-3.5" /></button>
+                </div>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      <DeleteConfirmDialog open={!!deleting} resourceType="workspace" resourceName={deleting?.name ?? ''} onConfirm={handleDelete} onCancel={() => setDeleting(null)} />
+    </div>
+  );
+}

@@ -33,6 +33,11 @@ export default defineConfig(({ mode }) => {
           target: `http://localhost:${apiPort}`,
           changeOrigin: true,
         },
+        '/ws': {
+          target: `http://localhost:4024`,
+          changeOrigin: true,
+          ws: true,
+        },
       },
     },
   };

@@ -23,6 +23,9 @@ const NAV_GROUPS = [
     { to: '/agents', icon: Users, label: 'Agents' },
     { to: '/repos', icon: FolderGit2, label: 'Repos' },
   ]},
+  { label: 'Develop', items: [
+    { to: '/workspaces', icon: FolderGit2, label: 'Workspaces' },
+  ]},
   { label: 'Monitor', items: [
     { to: '/executions', icon: Play, label: 'Executions' },
     { to: '/analytics', icon: BarChart3, label: 'Analytics' },
