@@ -23,6 +23,8 @@ export interface ProviderCallbacks {
   onThinking?: (thinking: string) => void;
   onToolStart: (tool: string, args: Record<string, unknown>, id: string) => void;
   onToolResult: (tool: string, result: Record<string, unknown>, id: string, durationMs: number) => void;
+  /** Called as soon as the session/thread ID is known (for early persistence) */
+  onSessionId?: (sessionId: string) => void;
 }
 
 export interface ProviderResult {
@@ -284,7 +286,7 @@ function getFlowForgeMcpServerPath(): string {
   return resolve(process.cwd(), 'dist/services/flowforge-mcp-server.js');
 }
 
-async function syncMcpToCodex(db: Db): Promise<void> {
+export async function syncMcpToCodex(db: Db): Promise<void> {
   const { execFile } = await import('node:child_process');
   const { promisify } = await import('node:util');
   const execFileAsync = promisify(execFile);
@@ -398,6 +400,7 @@ export async function runCodexCLI(
             threadId = event.thread_id;
             trace.push({ timestamp: new Date(), type: 'session_start', text: threadId });
             log(`Codex thread: ${threadId}`);
+            if (threadId) callbacks.onSessionId?.(threadId);
           }
 
           if (event.type === 'item.completed' && event.item?.type === 'agent_message') {
@@ -472,10 +475,9 @@ export async function runCodexCLI(
       }
     });
 
-    const timer = setTimeout(() => { proc.kill('SIGTERM'); reject(new Error('Codex CLI timed out')); }, 300000);
+    // No hard timeout — agents can take as long as they need
 
     proc.on('close', (code) => {
-      clearTimeout(timer);
       trace.push({ timestamp: new Date(), type: 'complete', text: `exit=${code}` });
       resolve({ text: rawResponse, costUsd: 0, sessionId: threadId, trace });
     });

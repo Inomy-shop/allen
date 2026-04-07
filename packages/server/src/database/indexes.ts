@@ -47,7 +47,7 @@ export async function ensureIndexes(db: Db): Promise<void> {
 
   // Chat Sessions
   await db.collection('chat_sessions').createIndex({ status: 1, lastMessageAt: -1 });
-  await db.collection('chat_sessions').createIndex({ claudeSessionId: 1 });
+  await db.collection('chat_sessions').createIndex({ llmSessionId: 1 });
 
   // Chat Messages
   await db.collection('chat_messages').createIndex({ sessionId: 1, createdAt: 1 });

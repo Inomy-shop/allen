@@ -20,13 +20,57 @@ export function chatRoutes(db: Db): Router {
     }
   });
 
-  // POST /api/chat/delegate — Execute delegate_to_agent tool via API (used by FlowForge MCP server)
+  // POST /api/chat/delegate — Execute delegation tools via API (used by FlowForge MCP server)
   router.post('/delegate', async (req: Request, res: Response) => {
     try {
-      const { agent_name, task, context, conversation_id } = req.body;
+      const { tool, agent_name, task, context, conversation_id, answer } = req.body;
+
+      // Route to the right tool
+      if (tool === 'answer_question') {
+        if (!conversation_id || !answer) return res.status(400).json({ error: 'conversation_id and answer are required' });
+        const result = await executeChatTool('answer_question', { conversation_id, answer }, db);
+        return res.json(result);
+      }
+
+      // Default: delegate_to_agent
       if (!agent_name || !task) return res.status(400).json({ error: 'agent_name and task are required' });
       const result = await executeChatTool('delegate_to_agent', { agent_name, task, context, conversation_id }, db);
       res.json(result);
+    } catch (err: unknown) {
+      res.status(500).json({ error: (err as Error).message });
+    }
+  });
+
+  // GET /api/chat/delegation/:id/status — Quick status check (non-blocking)
+  router.get('/delegation/:id/status', async (req: Request, res: Response) => {
+    try {
+      const { AgentConversationService } = await import('../services/agent-conversation.service.js');
+      const service = new AgentConversationService(db);
+      const conv = await service.get(param(req, 'id'));
+      if (!conv) return res.status(404).json({ error: 'Not found' });
+      if (conv.status === 'active') {
+        return res.json({ conversation_id: conv._id?.toString(), status: 'active', agent: conv.toAgent, turn_count: conv.turnCount });
+      }
+      if (conv.status === 'waiting_for_answer' && conv.pendingQuestion?.status === 'pending') {
+        return res.json({
+          conversation_id: conv._id?.toString(),
+          status: 'waiting_for_answer',
+          agent: conv.toAgent,
+          question: conv.pendingQuestion.question,
+          from_agent: conv.pendingQuestion.fromAgent,
+        });
+      }
+      res.json({
+        conversation_id: conv._id?.toString(),
+        status: conv.status,
+        agent: conv.toAgent,
+        response: conv.response ?? conv.summary ?? '',
+        summary: conv.summary,
+        cost_usd: conv.costUsd,
+        duration_ms: conv.durationMs,
+        turn_count: conv.turnCount,
+        hint: conv.status === 'completed' ? `To continue, call delegate_to_agent with conversation_id` : undefined,
+      });
     } catch (err: unknown) {
       res.status(500).json({ error: (err as Error).message });
     }
@@ -194,6 +238,62 @@ export function chatRoutes(db: Db): Router {
       const service = new AgentConversationService(db);
       const threads = await service.forSession(sessionId);
       res.json(threads);
+    } catch (err: unknown) {
+      res.status(500).json({ error: (err as Error).message });
+    }
+  });
+
+  // POST /api/chat/ask-caller — Agent asks its caller a question (blocks until answered)
+  router.post('/ask-caller', async (req: Request, res: Response) => {
+    try {
+      const { question, conversation_id } = req.body;
+      if (!question) return res.status(400).json({ error: 'question is required' });
+      // conversation_id can come from the request or from the active session context
+      const result = await executeChatTool('ask_caller', { question, _conversation_id: conversation_id }, db);
+      res.json(result);
+    } catch (err: unknown) {
+      res.status(500).json({ error: (err as Error).message });
+    }
+  });
+
+  // POST /api/chat/ask-user — Agent asks the user a question (blocks until user answers)
+  router.post('/ask-user', async (req: Request, res: Response) => {
+    try {
+      const { question } = req.body;
+      if (!question) return res.status(400).json({ error: 'question is required' });
+      const result = await executeChatTool('ask_user', { question }, db);
+      res.json(result);
+    } catch (err: unknown) {
+      res.status(500).json({ error: (err as Error).message });
+    }
+  });
+
+  // POST /api/chat/sessions/:id/agent-answer — User answers a question from an agent (ask_user)
+  router.post('/sessions/:id/agent-answer', async (req: Request, res: Response) => {
+    try {
+      const sessionId = param(req, 'id');
+      const { answer } = req.body;
+      if (!answer) return res.status(400).json({ error: 'answer is required' });
+
+      const { ObjectId } = await import('mongodb');
+      const session = await db.collection('chat_sessions').findOne({ _id: new ObjectId(sessionId) });
+      if (!session) return res.status(404).json({ error: 'Session not found' });
+      if (!session.pendingUserQuestion || session.pendingUserQuestion.status !== 'pending') {
+        return res.status(400).json({ error: 'No pending question' });
+      }
+
+      await db.collection('chat_sessions').updateOne(
+        { _id: new ObjectId(sessionId) },
+        {
+          $set: {
+            'pendingUserQuestion.status': 'answered',
+            'pendingUserQuestion.answer': answer,
+            'pendingUserQuestion.answeredAt': new Date(),
+          },
+        },
+      );
+
+      res.json({ answered: true });
     } catch (err: unknown) {
       res.status(500).json({ error: (err as Error).message });
     }

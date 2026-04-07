@@ -47,7 +47,7 @@ export async function executeCodexNode(
 
   emitter.emit({
     event: 'node_started',
-    data: { node: nodeName, role: nodeDef.agent, attempt: 1 },
+    data: { node: nodeName, agent: nodeDef.agent, attempt: 1 },
   });
 
   emitter.emit({
@@ -63,7 +63,6 @@ export async function executeCodexNode(
   });
 
   const cwd = (state.worktree_path as string) ?? (state.repo_path as string) ?? process.cwd();
-  const timeoutMs = (nodeDef.timeout ?? 600) * 1000;
 
   return new Promise<CodexResult>((resolve, reject) => {
     const args: string[] = ['exec'];
@@ -92,10 +91,6 @@ export async function executeCodexNode(
     let rawResponse = '';
     let turns = 0;
     let threadId: string | undefined = isResume ? sessionId : undefined;
-    const timer = setTimeout(() => {
-      proc.kill('SIGTERM');
-      reject(new Error(`Codex node ${nodeName} timed out after ${nodeDef.timeout ?? 600}s`));
-    }, timeoutMs);
 
     // Parse JSONL from stdout
     let lineBuffer = '';
@@ -153,7 +148,7 @@ export async function executeCodexNode(
     });
 
     proc.on('close', async (code) => {
-      clearTimeout(timer);
+
 
       // Process any remaining buffer
       if (lineBuffer.trim()) {
@@ -208,7 +203,7 @@ export async function executeCodexNode(
     });
 
     proc.on('error', (err) => {
-      clearTimeout(timer);
+
       reject(new Error(`Failed to spawn codex: ${err.message}`));
     });
   });

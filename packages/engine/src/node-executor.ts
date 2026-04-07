@@ -108,14 +108,12 @@ async function executeAgentNode(
 
   deps.emitter.emit({
     event: 'node_started',
-    data: { node: nodeName, role: nodeDef.agent, attempt: (state.retry_count as number ?? 0) + 1 },
+    data: { node: nodeName, agent: nodeDef.agent, attempt: (state.retry_count as number ?? 0) + 1 },
   });
 
   const cwd = state.worktree_path as string | undefined;
   const existingSession = sessions[nodeName];
   const resume = nodeDef.resume_on_retry && existingSession ? existingSession : undefined;
-  const timeoutMs = (nodeDef.timeout ?? 600) * 1000;
-
   let rawResponse = '';
   let sessionId: string | undefined;
   let turns = 0;
@@ -127,9 +125,6 @@ async function executeAgentNode(
 
   try {
     const { query } = await import('@anthropic-ai/claude-code');
-
-    const abortController = new AbortController();
-    const timer = setTimeout(() => abortController.abort(), timeoutMs);
 
     // Load MCP servers so agent nodes can access Linear, Postgres, etc.
     let mcpServers: Record<string, unknown> | undefined;
@@ -146,7 +141,6 @@ async function executeAgentNode(
         allowedTools: role?.tools ?? [],
         cwd,
         resume,
-        abortController,
         maxTurns: 50,
         permissionMode: 'bypassPermissions',
         ...(mcpServers && Object.keys(mcpServers).length > 0 ? { mcpServers: mcpServers as any } : {}),
@@ -204,12 +198,7 @@ async function executeAgentNode(
       });
     }
 
-    clearTimeout(timer);
   } catch (err: unknown) {
-    const errMsg = err instanceof Error ? err.message : String(err);
-    if (errMsg.includes('abort') || errMsg.includes('Abort')) {
-      throw new Error(`Agent node ${nodeName} timed out after ${nodeDef.timeout ?? 600}s`);
-    }
     throw err;
   }
 

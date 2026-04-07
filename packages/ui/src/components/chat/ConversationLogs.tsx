@@ -21,7 +21,7 @@ interface ChatLogEntry {
   _id: string;
   sessionId: string;
   messageId: string;
-  claudeSessionId?: string;
+  llmSessionId?: string;
   userMessage: string;
   assistantResponse?: string;
   model?: string;
@@ -189,7 +189,7 @@ export default function ConversationLogs({ sessionId, onClose }: ConversationLog
 
         {/* Footer */}
         <div className="px-4 py-2 border-t border-border/30 flex items-center gap-4 text-[10px] text-gray-600 font-mono">
-          <span>Session: {session?.claudeSessionId?.slice(0, 8) ?? 'n/a'}...</span>
+          <span>Session: {session?.llmSessionId?.slice(0, 8) ?? 'n/a'}...</span>
           <span>Created: {session?.createdAt ? new Date(session.createdAt).toLocaleString() : 'n/a'}</span>
         </div>
       </div>

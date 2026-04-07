@@ -1,6 +1,8 @@
 import { useRef, useCallback, useEffect } from 'react';
 import Editor, { type OnMount } from '@monaco-editor/react';
 import { registerYamlCompletions } from './yaml-schema';
+import { useSettingsStore } from '../../stores/settingsStore';
+import { getCssVarHex } from '../../lib/theme';
 
 interface Props {
   value: string;
@@ -56,26 +58,38 @@ function findLineForMessage(message: string, source: string): number {
 export default function YamlEditor({ value, onChange, errors, warnings, readOnly }: Props) {
   const editorRef = useRef<any>(null);
   const monacoRef = useRef<any>(null);
+  const colorMode = useSettingsStore((state) => state.colorMode);
+  const themeName = useSettingsStore((state) => state.themeName);
+  const customAccent = useSettingsStore((state) => state.customAccent);
+
+  const applyEditorTheme = useCallback(() => {
+    if (!monacoRef.current) return;
+
+    monacoRef.current.editor.defineTheme('flowforge-active', {
+      base: colorMode === 'dark' ? 'vs-dark' : 'vs',
+      inherit: true,
+      rules: [],
+      colors: {
+        'editor.background': getCssVarHex('--color-editor-background', colorMode === 'dark' ? '#141620' : '#ffffff'),
+        'editor.foreground': getCssVarHex('--color-text-primary', colorMode === 'dark' ? '#f8fafc' : '#0f172a'),
+        'editor.lineHighlightBackground': getCssVarHex('--color-editor-line-highlight', colorMode === 'dark' ? '#1a1d2b' : '#f8fafc'),
+        'editorGutter.background': getCssVarHex('--color-editor-gutter', colorMode === 'dark' ? '#0f1117' : '#f1f5f9'),
+        'editorLineNumber.foreground': getCssVarHex('--color-text-subtle', colorMode === 'dark' ? '#64748b' : '#64748b'),
+        'editorLineNumber.activeForeground': getCssVarHex('--color-text-secondary', colorMode === 'dark' ? '#cbd5e1' : '#334155'),
+        'editor.selectionBackground': colorMode === 'dark' ? '#2a2e4280' : '#bfdbfe66',
+        'editorCursor.foreground': getCssVarHex('--color-accent', '#00d4ff'),
+      },
+    });
+    monacoRef.current.editor.setTheme('flowforge-active');
+  }, [colorMode]);
 
   const handleMount: OnMount = useCallback((editor, monaco) => {
     editorRef.current = editor;
     monacoRef.current = monaco;
 
-    monaco.editor.defineTheme('flowforge-dark', {
-      base: 'vs-dark',
-      inherit: true,
-      rules: [],
-      colors: {
-        'editor.background': '#141620',
-        'editor.lineHighlightBackground': '#1a1d2b',
-        'editorGutter.background': '#0f1117',
-        'editor.selectionBackground': '#2a2e4280',
-      },
-    });
-    monaco.editor.setTheme('flowforge-dark');
-
     registerYamlCompletions(monaco);
-  }, []);
+    applyEditorTheme();
+  }, [applyEditorTheme]);
 
   const handleChange = useCallback((val: string | undefined) => {
     onChange(val ?? '');
@@ -118,10 +132,14 @@ export default function YamlEditor({ value, onChange, errors, warnings, readOnly
     monacoRef.current.editor.setModelMarkers(model, 'flowforge', markers);
   }, [errors, warnings, value]);
 
+  useEffect(() => {
+    applyEditorTheme();
+  }, [applyEditorTheme, colorMode, themeName, customAccent]);
+
   return (
     <div className="h-full flex flex-col">
       {((errors?.length ?? 0) > 0 || (warnings?.length ?? 0) > 0) && (
-        <div className="flex items-center gap-2 px-3 py-1.5 bg-surface-50 border-b border-border text-xs shrink-0">
+        <div className="flex items-center gap-2 px-3 py-1.5 bg-surface-50 border-b border-border text-xs shrink-0 text-theme-secondary">
           {(errors?.length ?? 0) > 0 && (
             <span className="text-red-400">{errors!.length} error{errors!.length > 1 ? 's' : ''}</span>
           )}

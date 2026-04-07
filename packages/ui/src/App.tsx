@@ -246,7 +246,7 @@ export default function App() {
         </div>
       </nav>
 
-      <main className="flex-1 overflow-auto grid-bg relative">
+      <main className="flex-1 overflow-auto bg-surface-50 relative">
         <ErrorBoundary>
           <Outlet />
         </ErrorBoundary>

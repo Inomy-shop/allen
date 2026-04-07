@@ -1,16 +1,26 @@
 /**
  * Agent Conversation Service
- * Manages agent-to-agent delegation conversations (multi-turn supported).
- * Each delegation creates a conversation record in the agent_conversations collection.
+ * Manages bidirectional agent-to-agent conversations.
+ * Each pair of agents gets ONE conversation thread — all back-and-forth happens inside it.
  */
 
 import type { Db, ObjectId } from 'mongodb';
 
 export interface AgentMessage {
   agent: string;
+  type: 'message' | 'question' | 'answer' | 'status';
   content: string;
   toolCalls?: { tool: string; args: Record<string, unknown>; result?: Record<string, unknown>; durationMs?: number }[];
   timestamp: Date;
+}
+
+export interface PendingQuestion {
+  fromAgent: string;
+  question: string;
+  status: 'pending' | 'answered';
+  answer?: string;
+  askedAt: Date;
+  answeredAt?: Date;
 }
 
 export interface AgentConversation {
@@ -21,12 +31,14 @@ export interface AgentConversation {
   toAgent: string;
   task: string;
   context?: Record<string, unknown>;
-  status: 'active' | 'completed' | 'failed' | 'timeout';
+  status: 'active' | 'waiting_for_answer' | 'completed' | 'failed';
   messages: AgentMessage[];
   summary?: string;
   response?: string;
-  /** Claude session ID for resuming multi-turn conversations */
-  agentSessionId?: string;
+  /** CLI session/thread IDs for BOTH agents (for resume) */
+  sessions: Record<string, string>;
+  /** Pending question from target agent to caller */
+  pendingQuestion?: PendingQuestion;
   costUsd: number;
   durationMs: number;
   turnCount: number;
@@ -42,6 +54,24 @@ export class AgentConversationService {
   constructor(private db: Db) {}
 
   private get col() { return this.db.collection('agent_conversations'); }
+
+  private async oid(id: string) {
+    const { ObjectId } = await import('mongodb');
+    return new ObjectId(id);
+  }
+
+  /**
+   * Find an active or waiting_for_answer conversation between two agents in a session.
+   * Returns null if no active conversation exists.
+   */
+  async findActiveConversation(chatSessionId: string, fromAgent: string, toAgent: string): Promise<AgentConversation | null> {
+    return this.col.findOne({
+      chatSessionId,
+      fromAgent,
+      toAgent,
+      status: { $in: ['active', 'waiting_for_answer'] },
+    }) as Promise<AgentConversation | null>;
+  }
 
   /**
    * Create a new agent conversation record.
@@ -65,6 +95,7 @@ export class AgentConversationService {
       context: params.context,
       status: 'active',
       messages: [],
+      sessions: {},
       costUsd: 0,
       durationMs: 0,
       turnCount: 0,
@@ -76,108 +107,120 @@ export class AgentConversationService {
     return { ...doc, _id: result.insertedId };
   }
 
-  /**
-   * Get a conversation by ID.
-   */
   async get(conversationId: string): Promise<AgentConversation | null> {
-    const { ObjectId } = await import('mongodb');
-    return this.col.findOne({ _id: new ObjectId(conversationId) }) as Promise<AgentConversation | null>;
+    return this.col.findOne({ _id: await this.oid(conversationId) }) as Promise<AgentConversation | null>;
+  }
+
+  async addMessage(conversationId: string, message: AgentMessage): Promise<void> {
+    await this.col.updateOne(
+      { _id: await this.oid(conversationId) },
+      { $push: { messages: message as any }, $inc: { turnCount: 1 } },
+    );
+  }
+
+  async saveSessionId(conversationId: string, agentName: string, sessionId: string): Promise<void> {
+    await this.col.updateOne(
+      { _id: await this.oid(conversationId) },
+      { $set: { [`sessions.${agentName}`]: sessionId } },
+    );
+  }
+
+  async addCost(conversationId: string, costUsd: number): Promise<void> {
+    await this.col.updateOne(
+      { _id: await this.oid(conversationId) },
+      { $inc: { costUsd } },
+    );
   }
 
   /**
-   * Add a message to a conversation.
+   * Target agent asks a question to the caller. Conversation pauses.
    */
-  async addMessage(conversationId: string, message: AgentMessage): Promise<void> {
-    const { ObjectId } = await import('mongodb');
+  async askQuestion(conversationId: string, fromAgent: string, question: string): Promise<void> {
     await this.col.updateOne(
-      { _id: new ObjectId(conversationId) },
+      { _id: await this.oid(conversationId) },
       {
-        $push: { messages: message as any },
+        $set: {
+          status: 'waiting_for_answer',
+          pendingQuestion: {
+            fromAgent,
+            question,
+            status: 'pending',
+            askedAt: new Date(),
+          },
+        },
+        $push: {
+          messages: {
+            agent: fromAgent,
+            type: 'question',
+            content: question,
+            timestamp: new Date(),
+          } as any,
+        },
         $inc: { turnCount: 1 },
       },
     );
   }
 
   /**
-   * Save the Claude session ID for resuming multi-turn conversations.
+   * Caller answers the pending question. Conversation resumes.
    */
-  async saveSessionId(conversationId: string, sessionId: string): Promise<void> {
-    const { ObjectId } = await import('mongodb');
+  async answerQuestion(conversationId: string, fromAgent: string, answer: string): Promise<void> {
     await this.col.updateOne(
-      { _id: new ObjectId(conversationId) },
-      { $set: { agentSessionId: sessionId } },
+      { _id: await this.oid(conversationId) },
+      {
+        $set: {
+          status: 'active',
+          'pendingQuestion.status': 'answered',
+          'pendingQuestion.answer': answer,
+          'pendingQuestion.answeredAt': new Date(),
+        },
+        $push: {
+          messages: {
+            agent: fromAgent,
+            type: 'answer',
+            content: answer,
+            timestamp: new Date(),
+          } as any,
+        },
+        $inc: { turnCount: 1 },
+      },
     );
   }
 
   /**
-   * Update cost incrementally (each turn adds cost).
+   * Check if a pending question has been answered.
    */
-  async addCost(conversationId: string, costUsd: number): Promise<void> {
-    const { ObjectId } = await import('mongodb');
-    await this.col.updateOne(
-      { _id: new ObjectId(conversationId) },
-      { $inc: { costUsd } },
-    );
+  async isQuestionAnswered(conversationId: string): Promise<{ answered: boolean; answer?: string }> {
+    const conv = await this.get(conversationId);
+    if (!conv?.pendingQuestion) return { answered: false };
+    if (conv.pendingQuestion.status === 'answered') {
+      return { answered: true, answer: conv.pendingQuestion.answer };
+    }
+    return { answered: false };
   }
 
-  /**
-   * Complete a conversation with response and summary.
-   */
   async complete(conversationId: string, response: string, summary: string, costUsd: number): Promise<void> {
-    const { ObjectId } = await import('mongodb');
-    const doc = await this.col.findOne({ _id: new ObjectId(conversationId) });
+    const doc = await this.col.findOne({ _id: await this.oid(conversationId) });
     const durationMs = doc ? Date.now() - new Date(doc.startedAt).getTime() : 0;
-
     await this.col.updateOne(
-      { _id: new ObjectId(conversationId) },
-      {
-        $set: {
-          status: 'completed',
-          response,
-          summary,
-          costUsd,
-          durationMs,
-          completedAt: new Date(),
-        },
-      },
+      { _id: await this.oid(conversationId) },
+      { $set: { status: 'completed', response, summary, costUsd, durationMs, pendingQuestion: null, completedAt: new Date() } },
     );
   }
 
-  /**
-   * Mark a conversation as failed.
-   */
   async fail(conversationId: string, error: string): Promise<void> {
-    const { ObjectId } = await import('mongodb');
-    const doc = await this.col.findOne({ _id: new ObjectId(conversationId) });
+    const doc = await this.col.findOne({ _id: await this.oid(conversationId) });
     const durationMs = doc ? Date.now() - new Date(doc.startedAt).getTime() : 0;
-
     await this.col.updateOne(
-      { _id: new ObjectId(conversationId) },
-      {
-        $set: {
-          status: 'failed',
-          summary: `Failed: ${error}`,
-          durationMs,
-          completedAt: new Date(),
-        },
-      },
+      { _id: await this.oid(conversationId) },
+      { $set: { status: 'failed', summary: `Failed: ${error}`, durationMs, pendingQuestion: null, completedAt: new Date() } },
     );
   }
 
-  /**
-   * Get conversations for a chat session.
-   */
   async forSession(chatSessionId: string): Promise<AgentConversation[]> {
-    return this.col
-      .find({ chatSessionId })
-      .sort({ startedAt: -1 })
-      .limit(50)
-      .toArray() as Promise<AgentConversation[]>;
+    return this.col.find({ chatSessionId }).sort({ startedAt: -1 }).limit(50).toArray() as Promise<AgentConversation[]>;
   }
 
-  /**
-   * Check if delegation depth is within limits.
-   */
   canDelegate(currentDepth: number): boolean {
     return currentDepth < MAX_DELEGATION_DEPTH;
   }

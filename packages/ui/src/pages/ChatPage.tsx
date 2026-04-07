@@ -33,6 +33,7 @@ export default function ChatPage() {
   const {
     sessions, activeSessionId, messages, streaming, streamText,
     thinkingText, activeToolCalls, agentThreads, agentReports, threadsByMessage,
+    pendingUserQuestion, answerUserQuestion,
     loadingSessions, loadingMessages,
     sendMessage, createSession, switchSession, cancelStream,
   } = useChat();
@@ -116,11 +117,14 @@ export default function ChatPage() {
               {PROVIDER_DISPLAY[activeProvider]?.label}
             </span>
           )}
-          {selectedAgent && (
-            <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-accent-cyan/10 text-accent-cyan border border-accent-cyan/20">
-              @{selectedAgent}
-            </span>
-          )}
+          {selectedAgent && (() => {
+            const agentInfo = teamAgents.find((a: any) => a.name === selectedAgent);
+            return (
+              <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-accent-cyan/10 text-accent-cyan border border-accent-cyan/20">
+                @{agentInfo?.displayName ?? selectedAgent}
+              </span>
+            );
+          })()}
         </div>
         <div className="flex items-center gap-2">
           {mcpCount.enabled > 0 && (
@@ -155,38 +159,45 @@ export default function ChatPage() {
           </p>
         </div>
       ) : (
-        <ChatMessageList messages={messages} streamText={streamText} thinkingText={thinkingText} streaming={streaming} activeToolCalls={activeToolCalls} agentThreads={agentThreads} agentReports={agentReports} threadsByMessage={threadsByMessage} onSuggestionClick={handleSuggestionClick} onSaveToLearnings={handleSaveToLearnings} />
+        <ChatMessageList messages={messages} streamText={streamText} thinkingText={thinkingText} streaming={streaming} activeToolCalls={activeToolCalls} agentThreads={agentThreads} agentReports={agentReports} threadsByMessage={threadsByMessage} pendingUserQuestion={pendingUserQuestion} onAnswerUserQuestion={answerUserQuestion} activeAgent={activeSession?.activeAgent} onSuggestionClick={handleSuggestionClick} onSaveToLearnings={handleSaveToLearnings} />
       )}
 
       {/* Agent selector + Input */}
       <div>
-        {teamAgents.length > 0 && (
-          <div className="px-3 pt-2 flex items-center gap-1.5 border-t border-border/30">
-            <Users className="w-3 h-3 text-gray-600" />
-            <button
-              onClick={() => setSelectedAgent(null)}
-              className={`text-[10px] font-mono px-2 py-0.5 rounded transition-colors ${
-                !selectedAgent ? 'bg-accent-blue/10 text-accent-blue border border-accent-blue/20' : 'text-gray-600 hover:text-gray-400'
-              }`}
-            >
-              Assistant
-            </button>
-            {teamAgents.map((agent: any) => (
+        {teamAgents.length > 0 && (() => {
+          // Agent is locked once the conversation has messages
+          const agentLocked = !!activeSession?.activeAgent && (activeSession?.messageCount ?? 0) > 0;
+          return (
+            <div className="px-3 pt-2 flex items-center gap-1.5 border-t border-border/30">
+              <Users className="w-3 h-3 text-gray-600" />
               <button
-                key={agent.name}
-                onClick={() => setSelectedAgent(selectedAgent === agent.name ? null : agent.name)}
-                title={agent.displayName ?? agent.name}
+                onClick={() => !agentLocked && setSelectedAgent(null)}
+                disabled={agentLocked}
                 className={`text-[10px] font-mono px-2 py-0.5 rounded transition-colors ${
-                  selectedAgent === agent.name
-                    ? 'bg-accent-cyan/10 text-accent-cyan border border-accent-cyan/20'
-                    : 'text-gray-600 hover:text-gray-400'
+                  !selectedAgent ? 'bg-accent-blue/10 text-accent-blue border border-accent-blue/20' : agentLocked ? 'text-gray-700 cursor-not-allowed' : 'text-gray-600 hover:text-gray-400'
                 }`}
               >
-                {agent.displayName ?? agent.name}
+                Assistant
               </button>
-            ))}
-          </div>
-        )}
+              {teamAgents.map((a: any) => (
+                <button
+                  key={a.name}
+                  onClick={() => !agentLocked && setSelectedAgent(selectedAgent === a.name ? null : a.name)}
+                  disabled={agentLocked}
+                  title={agentLocked ? `Agent locked for this conversation` : (a.displayName ?? a.name)}
+                  className={`text-[10px] font-mono px-2 py-0.5 rounded transition-colors ${
+                    selectedAgent === a.name
+                      ? 'bg-accent-cyan/10 text-accent-cyan border border-accent-cyan/20'
+                      : agentLocked ? 'text-gray-700 cursor-not-allowed' : 'text-gray-600 hover:text-gray-400'
+                  }`}
+                >
+                  {a.displayName ?? a.name}
+                </button>
+              ))}
+              {agentLocked && <span className="text-[9px] text-gray-700 font-mono ml-1">locked</span>}
+            </div>
+          );
+        })()}
         <ChatInput
           ref={chatInputRef} onSend={handleSend} onCancel={cancelStream} streaming={streaming} disabled={false}
           providers={providers}

@@ -1,4 +1,12 @@
 import { create } from 'zustand';
+import {
+  applyColorModeClass,
+  COLOR_MODE_TOKENS,
+  DEFAULT_COLOR_MODE,
+  hexToRgbChannels,
+  normalizeColorMode,
+  type ColorMode,
+} from '../lib/theme';
 
 /* ─── Theme Presets ─── */
 
@@ -363,6 +371,7 @@ export const AGENT_ICON_PRESETS: AgentIconPreset[] = [
 const STORAGE_KEY = 'flowforge-settings';
 
 interface PersistedSettings {
+  colorMode: ColorMode;
   themeName: string;
   fontName: string;
   customAccent: string | null;
@@ -370,36 +379,42 @@ interface PersistedSettings {
 }
 
 function loadFromStorage(): PersistedSettings {
+  const defaults: PersistedSettings = {
+    colorMode: DEFAULT_COLOR_MODE,
+    themeName: 'cyberpunk',
+    fontName: 'clean',
+    customAccent: null,
+    agentIcon: 'sparkles',
+  };
+
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (raw) {
-      return JSON.parse(raw) as PersistedSettings;
+      const parsed = JSON.parse(raw) as Partial<PersistedSettings>;
+      return {
+        ...defaults,
+        ...parsed,
+        colorMode: normalizeColorMode(parsed.colorMode),
+      };
     }
   } catch {
     // corrupted data — ignore
   }
-  return { themeName: 'cyberpunk', fontName: 'clean', customAccent: null, agentIcon: 'sparkles' };
+  return defaults;
 }
 
 function saveToStorage(s: PersistedSettings) {
   localStorage.setItem(STORAGE_KEY, JSON.stringify(s));
 }
 
-/** Convert hex (#rrggbb) to space-separated RGB channels for Tailwind */
-function hexToRgbChannels(hex: string): string {
-  const h = hex.replace('#', '');
-  const r = parseInt(h.substring(0, 2), 16);
-  const g = parseInt(h.substring(2, 4), 16);
-  const b = parseInt(h.substring(4, 6), 16);
-  return `${r} ${g} ${b}`;
-}
-
-function applyThemeColors(theme: ThemePreset, customAccent: string | null) {
+function applyThemeColors(theme: ThemePreset, customAccent: string | null, colorMode: ColorMode) {
   const root = document.documentElement.style;
-  root.setProperty('--color-surface', hexToRgbChannels(theme.colors.surface));
-  root.setProperty('--color-surface-100', hexToRgbChannels(theme.colors.surface100));
-  root.setProperty('--color-surface-200', hexToRgbChannels(theme.colors.surface200));
-  root.setProperty('--color-border', hexToRgbChannels(theme.colors.border));
+  const modeTokens = COLOR_MODE_TOKENS[colorMode];
+
+  root.setProperty('--color-surface', hexToRgbChannels(modeTokens.surface ?? theme.colors.surface));
+  root.setProperty('--color-surface-100', hexToRgbChannels(modeTokens.surface100 ?? theme.colors.surface100));
+  root.setProperty('--color-surface-200', hexToRgbChannels(modeTokens.surface200 ?? theme.colors.surface200));
+  root.setProperty('--color-border', hexToRgbChannels(modeTokens.border ?? theme.colors.border));
   const accentHex = customAccent ?? theme.colors.accent;
   root.setProperty('--color-accent', hexToRgbChannels(accentHex));
   root.setProperty('--accent-hex', accentHex);
@@ -408,6 +423,23 @@ function applyThemeColors(theme: ThemePreset, customAccent: string | null) {
   root.setProperty('--accent-red-hex', theme.colors.accentRed);
   root.setProperty('--color-accent-yellow', hexToRgbChannels(theme.colors.accentYellow));
   root.setProperty('--color-accent-purple', hexToRgbChannels(theme.colors.accentPurple));
+  root.setProperty('--color-text-primary', hexToRgbChannels(modeTokens.textPrimary));
+  root.setProperty('--color-text-secondary', hexToRgbChannels(modeTokens.textSecondary));
+  root.setProperty('--color-text-muted', hexToRgbChannels(modeTokens.textMuted));
+  root.setProperty('--color-text-subtle', hexToRgbChannels(modeTokens.textSubtle));
+  root.setProperty('--color-terminal-chrome', hexToRgbChannels(modeTokens.terminalChrome));
+  root.setProperty('--color-flow-edge-default', hexToRgbChannels(modeTokens.flowEdgeDefault));
+  root.setProperty('--color-flow-edge-conditional', hexToRgbChannels(modeTokens.flowEdgeConditional));
+  root.setProperty('--color-flow-edge-retry', hexToRgbChannels(modeTokens.flowEdgeRetry));
+  root.setProperty('--color-editor-background', hexToRgbChannels(modeTokens.editorBackground));
+  root.setProperty('--color-editor-line-highlight', hexToRgbChannels(modeTokens.editorLineHighlight));
+  root.setProperty('--color-editor-gutter', hexToRgbChannels(modeTokens.editorGutter));
+  root.setProperty('--color-mermaid-line', hexToRgbChannels(modeTokens.mermaidLine));
+  root.setProperty('--color-mermaid-node-border', hexToRgbChannels(modeTokens.mermaidNodeBorder));
+  root.setProperty('--color-mermaid-cluster-bg', hexToRgbChannels(modeTokens.mermaidClusterBg));
+  root.setProperty('--color-mermaid-main-bg', hexToRgbChannels(modeTokens.mermaidMainBg));
+  root.setProperty('--color-mermaid-edge-label-bg', hexToRgbChannels(modeTokens.mermaidEdgeLabelBg));
+  applyColorModeClass(colorMode);
 
   // Force repaint so all CSS-variable-dependent styles update immediately
   document.body.style.opacity = '0.99';
@@ -452,11 +484,13 @@ function getFont(name: string): FontPreset {
 }
 
 interface SettingsState {
+  colorMode: ColorMode;
   themeName: string;
   fontName: string;
   customAccent: string | null;
   agentIcon: string;
 
+  setColorMode: (mode: ColorMode) => void;
   setTheme: (name: string) => void;
   setFont: (name: string) => void;
   setCustomAccent: (color: string | null) => void;
@@ -466,52 +500,69 @@ interface SettingsState {
 }
 
 export const useSettingsStore = create<SettingsState>((set, get) => ({
+  colorMode: DEFAULT_COLOR_MODE,
   themeName: 'cyberpunk',
   fontName: 'clean',
   customAccent: null,
   agentIcon: 'sparkles',
 
+  setColorMode: (mode: ColorMode) => {
+    const colorMode = normalizeColorMode(mode);
+    const theme = getTheme(get().themeName);
+    applyThemeColors(theme, get().customAccent, colorMode);
+    set({ colorMode });
+    saveToStorage({
+      colorMode,
+      themeName: get().themeName,
+      fontName: get().fontName,
+      customAccent: get().customAccent,
+      agentIcon: get().agentIcon,
+    });
+  },
+
   setTheme: (name: string) => {
     const theme = getTheme(name);
-    const { customAccent } = get();
-    applyThemeColors(theme, customAccent);
+    const { customAccent, colorMode } = get();
+    applyThemeColors(theme, customAccent, colorMode);
     set({ themeName: name });
-    saveToStorage({ themeName: name, fontName: get().fontName, customAccent, agentIcon: get().agentIcon });
+    saveToStorage({ colorMode, themeName: name, fontName: get().fontName, customAccent, agentIcon: get().agentIcon });
   },
 
   setFont: (name: string) => {
     const font = getFont(name);
     applyFontPreset(font);
     set({ fontName: name });
-    saveToStorage({ themeName: get().themeName, fontName: name, customAccent: get().customAccent, agentIcon: get().agentIcon });
+    saveToStorage({ colorMode: get().colorMode, themeName: get().themeName, fontName: name, customAccent: get().customAccent, agentIcon: get().agentIcon });
   },
 
   setCustomAccent: (color: string | null) => {
-    const theme = getTheme(get().themeName);
-    applyThemeColors(theme, color);
+    const { colorMode, themeName } = get();
+    const theme = getTheme(themeName);
+    applyThemeColors(theme, color, colorMode);
     set({ customAccent: color });
-    saveToStorage({ themeName: get().themeName, fontName: get().fontName, customAccent: color, agentIcon: get().agentIcon });
+    saveToStorage({ colorMode, themeName, fontName: get().fontName, customAccent: color, agentIcon: get().agentIcon });
   },
 
   setAgentIcon: (icon: string) => {
     set({ agentIcon: icon });
-    saveToStorage({ themeName: get().themeName, fontName: get().fontName, customAccent: get().customAccent, agentIcon: icon });
+    saveToStorage({ colorMode: get().colorMode, themeName: get().themeName, fontName: get().fontName, customAccent: get().customAccent, agentIcon: icon });
   },
 
   resetToDefaults: () => {
     localStorage.removeItem(STORAGE_KEY);
+    const colorMode = DEFAULT_COLOR_MODE;
     const theme = getTheme('cyberpunk');
     const font = getFont('clean');
-    applyThemeColors(theme, null);
+    applyThemeColors(theme, null, colorMode);
     applyFontPreset(font);
-    set({ themeName: 'cyberpunk', fontName: 'clean', customAccent: null, agentIcon: 'bot' });
+    set({ colorMode, themeName: 'cyberpunk', fontName: 'clean', customAccent: null, agentIcon: 'bot' });
   },
 
   initFromLocalStorage: () => {
     const saved = loadFromStorage();
     const theme = getTheme(saved.themeName);
     const font = getFont(saved.fontName);
-    applyThemeColors(theme, saved.customAccent);
+    applyThemeColors(theme, saved.customAccent, saved.colorMode);
     applyFontPreset(font);
     set(saved);
   },

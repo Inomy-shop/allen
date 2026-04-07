@@ -21,8 +21,12 @@ export interface ActiveSessionContext {
   currentAgent?: string;
   /** Current delegation depth (0 = top-level chat, 1+ = delegated) */
   delegationDepth: number;
+  /** Current conversation ID (for tracking parent-child delegation chains) */
+  currentConversationId?: string;
   /** Broadcast SSE events to the chat listeners */
   broadcastEvent: (event: string, data: Record<string, unknown>) => void;
+  /** Number of background tasks (delegations/spawns) still running */
+  pendingBackgroundTasks: number;
 }
 
 // One active context per session (only one response at a time per session)
@@ -47,6 +51,16 @@ export function getActiveSession(sessionId: string): ActiveSessionContext | unde
 export function getAnyActiveSession(): ActiveSessionContext | undefined {
   for (const ctx of activeSessions.values()) return ctx;
   return undefined;
+}
+
+/** Wait until all background tasks for a session are complete */
+export async function waitForBackgroundTasks(sessionId: string, maxWaitMs = 3_600_000): Promise<void> {
+  const startMs = Date.now();
+  while (Date.now() - startMs < maxWaitMs) {
+    const ctx = activeSessions.get(sessionId);
+    if (!ctx || ctx.pendingBackgroundTasks <= 0) return;
+    await new Promise(r => setTimeout(r, 500));
+  }
 }
 
 // ── Tool Definition Shape ──
@@ -176,7 +190,7 @@ const runWorkflow: ChatTool = {
 
 const getExecution: ChatTool = {
   name: 'get_execution',
-  description: 'Get the current status and details of a workflow execution by its ID.',
+  description: `Get the status of a workflow or spawned agent execution. If still running, blocks up to 90 seconds waiting for completion (like get_delegation_result). If status="waiting", call again. When completed, includes the agent's response.`,
   inputSchema: {
     type: 'object',
     properties: {
@@ -185,23 +199,59 @@ const getExecution: ChatTool = {
     required: ['execution_id'],
   },
   async execute(args, db) {
+    const executionId = args.execution_id as string;
     const executionService = new ExecutionService(db);
-    const exec = await executionService.getById(args.execution_id as string);
-    if (!exec) {
-      return { error: `Execution "${args.execution_id}" not found.` };
+
+    // Long-poll: wait up to 90s for completion (under MCP 120s timeout)
+    let waitMs = 5000;
+    const maxWaitMs = 30000;
+    const deadline = Date.now() + 90_000;
+
+    while (Date.now() < deadline) {
+      const exec = await executionService.getById(executionId);
+      if (!exec) return { error: `Execution "${executionId}" not found.` };
+
+      if (exec.status !== 'running' && exec.status !== 'queued') {
+        // Completed/failed — fetch the agent response from traces
+        let response: string | undefined;
+        let sessionId: string | undefined;
+        if (exec.status === 'completed') {
+          const trace = await db.collection('execution_traces')
+            .findOne({ executionId, status: 'completed' }, { sort: { completedAt: -1 } });
+          if (trace) {
+            response = (trace.output as Record<string, unknown>)?.response as string
+              ?? trace.rawResponse as string
+              ?? undefined;
+            sessionId = (trace.output as Record<string, unknown>)?.session_id as string ?? undefined;
+          }
+        }
+
+        return {
+          id: exec.id,
+          workflow_name: exec.workflowName,
+          status: exec.status,
+          response,
+          session_id: sessionId,
+          completed_nodes: exec.completedNodes,
+          failed_node: exec.failedNode,
+          error: exec.errorMessage,
+          cost: exec.cost,
+          duration_ms: exec.durationMs,
+          started_at: exec.startedAt,
+          completed_at: exec.completedAt,
+        };
+      }
+
+      // Still running — wait
+      await new Promise(r => setTimeout(r, waitMs));
+      waitMs = Math.min(waitMs * 1.3, maxWaitMs);
     }
+
+    // Still running after 90s — return "waiting" so LLM calls again
     return {
-      id: exec.id,
-      workflow_name: exec.workflowName,
-      status: exec.status,
-      current_nodes: exec.currentNodes,
-      completed_nodes: exec.completedNodes,
-      failed_node: exec.failedNode,
-      error: exec.errorMessage,
-      cost: exec.cost,
-      duration_ms: exec.durationMs,
-      started_at: exec.startedAt,
-      completed_at: exec.completedAt,
+      id: executionId,
+      status: 'waiting',
+      message: 'Execution is still running. Call get_execution again — it will continue waiting.',
     };
   },
 };
@@ -315,7 +365,7 @@ const listAgents: ChatTool = {
 
 const spawnAgent: ChatTool = {
   name: 'spawn_agent',
-  description: 'Spawn a technical agent to perform a task. Pass session_id from a previous spawn to continue with context (the agent resumes where it left off). Use this for coding, analysis, review, and investigation tasks.',
+  description: `Spawn a technical agent in the background. Returns immediately with execution_id. The agent runs until done — use get_execution(execution_id) to check when finished (it may take minutes). Pass session_id from a previous spawn to resume with context.`,
   inputSchema: {
     type: 'object',
     properties: {
@@ -330,14 +380,12 @@ const spawnAgent: ChatTool = {
     const agentName = args.agent_name as string;
     const prompt = args.prompt as string;
     const resumeSession = args.session_id as string | undefined;
-    const startMs = Date.now();
 
     const role = await db.collection('agents').findOne({ name: agentName });
     if (!role) {
       return { error: `Agent "${agentName}" not found. Use list_agents to see available agents.` };
     }
 
-    // Create execution record
     const { randomUUID } = await import('node:crypto');
     const executionId = randomUUID();
     await db.collection('executions').insertOne({
@@ -358,131 +406,197 @@ const spawnAgent: ChatTool = {
       startedAt: new Date(),
     });
 
-    try {
-      const { query } = await import('@anthropic-ai/claude-code');
-      const provider = role.provider ?? 'claude';
+    // Run in background — return immediately so MCP doesn't timeout
+    runSpawnInBackground(db, role, agentName, prompt, executionId, resumeSession, args.repo_path as string | undefined).catch(() => {});
 
-      let response = '';
-      let costUsd = 0;
-      let sessionId: string | undefined;
-
-      if (provider === 'claude') {
-        // Load MCP servers so spawned agent can access Linear, Postgres, etc.
-        const { loadAllMcpServers } = await import('@flowforge/engine');
-        const mcpServers = await loadAllMcpServers(db);
-
-        const sdkOptions: Record<string, unknown> = {
-          model: role.model ?? 'sonnet',
-          maxTurns: 20,
-          permissionMode: 'bypassPermissions',
-          ...(Object.keys(mcpServers).length > 0 ? { mcpServers } : {}),
-        };
-
-        // Resume existing session or start new
-        if (resumeSession) {
-          sdkOptions.resume = resumeSession;
-        } else {
-          sdkOptions.customSystemPrompt = role.system as string;
-        }
-
-        const conversation = query({ prompt, options: sdkOptions as any });
-
-        for await (const msg of conversation) {
-          if ('session_id' in msg && msg.session_id) sessionId = msg.session_id as string;
-          if (msg.type === 'assistant') {
-            const blocks = msg.message.content as Array<{ type: string; text?: string }>;
-            response = blocks.filter(b => b.type === 'text').map(b => b.text || '').join('');
-          }
-          if (msg.type === 'result') {
-            costUsd = (msg as any).total_cost_usd ?? 0;
-            if ((msg as any).subtype === 'success' && (msg as any).result) {
-              response = (msg as any).result;
-            }
-            if ((msg as any).session_id) sessionId = (msg as any).session_id;
-          }
-        }
-      } else if (provider === 'codex') {
-        const { execFile } = await import('node:child_process');
-        const { promisify } = await import('node:util');
-        const execFileAsync = promisify(execFile);
-        const codexArgs = ['exec', '--json', '--full-auto', '-m', role.model ?? 'codex-mini', prompt];
-        const cwd = (args.repo_path as string) || process.cwd();
-        const { stdout } = await execFileAsync('codex', codexArgs, { cwd, timeout: 120000 });
-        for (const line of stdout.trim().split('\n')) {
-          try {
-            const evt = JSON.parse(line);
-            if (evt.type === 'item.completed' && evt.item?.type === 'agent_message') {
-              const text = evt.item.content?.filter((c: any) => c.type === 'output_text').map((c: any) => c.text).join('');
-              if (text) response = text;
-            }
-          } catch { /* skip */ }
-        }
-      } else {
-        throw new Error(`Unsupported provider: ${provider}`);
-      }
-
-      const durationMs = Date.now() - startMs;
-
-      // Update execution record as completed
-      await db.collection('executions').updateOne(
-        { id: executionId },
-        { $set: {
-          status: 'completed',
-          completedNodes: [agentName],
-          currentNodes: [],
-          cost: { actual: costUsd, estimated: costUsd },
-          durationMs,
-          completedAt: new Date(),
-        } },
-      );
-
-      // Save node trace for debugging
-      await db.collection('execution_traces').insertOne({
-        executionId,
-        node: agentName,
-        attempt: 1,
-        status: 'completed',
-        type: 'agent',
-        agent: agentName,
-        inputState: { prompt },
-        renderedPrompt: prompt,
-        rawResponse: response,
-        output: { response },
-        activity: [],
-        cost: { actual: costUsd, estimated: costUsd, model: role.model ?? 'sonnet', method: 'sdk_reported' },
-        durationMs,
-        startedAt: new Date(startMs),
-        completedAt: new Date(),
-      });
-
-      // Save session ID to execution for future reference
-      if (sessionId) {
-        await db.collection('executions').updateOne(
-          { id: executionId },
-          { $set: { [`sessions.${agentName}`]: sessionId } },
-        );
-      }
-
-      return {
-        agent_name: agentName,
-        execution_id: executionId,
-        response,
-        provider: provider as string,
-        cost_usd: costUsd,
-        duration_ms: durationMs,
-        session_id: sessionId,
-        hint: sessionId ? `To continue this agent with context, pass session_id="${sessionId}" in the next spawn_agent call.` : undefined,
-      };
-    } catch (err) {
-      const durationMs = Date.now() - startMs;
-      await db.collection('executions').updateOne(
-        { id: executionId },
-        { $set: { status: 'failed', errorMessage: (err as Error).message, durationMs, completedAt: new Date() } },
-      );
-      return { error: `Failed to spawn agent "${agentName}": ${(err as Error).message}`, execution_id: executionId };
-    }
+    return {
+      agent_name: agentName,
+      execution_id: executionId,
+      status: 'running',
+      message: `Agent "${agentName}" started. Use get_execution(execution_id="${executionId}") to poll for the result.`,
+    };
   },
 };
+
+/** Run spawn_agent in background — supports both Claude and Codex with MCP + tracing */
+async function runSpawnInBackground(
+  db: Db, role: Record<string, unknown>, agentName: string, prompt: string,
+  executionId: string, resumeSession: string | undefined, repoPath: string | undefined,
+): Promise<void> {
+  const activeCtx = getAnyActiveSession();
+  if (activeCtx) activeCtx.pendingBackgroundTasks++;
+  const startMs = Date.now();
+  const provider = role.provider ?? 'claude';
+  const model = (role.model as string) ?? 'sonnet';
+  const activity: { type: string; tool?: string; timestamp: Date }[] = [];
+
+  const MAX_SPAWN_RETRIES = 3;
+  let currentResumeSession = resumeSession;
+
+  for (let attempt = 0; attempt <= MAX_SPAWN_RETRIES; attempt++) {
+  try {
+    let response = '';
+    let costUsd = 0;
+    let sessionId: string | undefined = currentResumeSession;
+    const toolCalls: { tool: string; args: Record<string, unknown> }[] = [];
+
+    // On retry, update prompt to "continue"
+    if (attempt > 0) {
+      console.log(`[spawn] Auto-retry #${attempt} for ${agentName} (session ${currentResumeSession?.slice(0, 12)}...)`);
+      prompt = 'Continue from where you left off. Complete your task and provide the final response.';
+    }
+
+    if (provider === 'codex') {
+      // ── Codex CLI with MCP ──
+      const { spawn } = await import('node:child_process');
+      const { syncMcpToCodex } = await import('./chat-providers.js');
+      await syncMcpToCodex(db);
+
+      const args: string[] = ['exec'];
+      if (currentResumeSession) {
+        args.push('resume', '--json', '--dangerously-bypass-approvals-and-sandbox', '--skip-git-repo-check', currentResumeSession, prompt);
+      } else {
+        args.push('--json', '--dangerously-bypass-approvals-and-sandbox', '--skip-git-repo-check');
+        if (model) args.push('-c', `model="${model}"`);
+        args.push(`${(role.system as string) ?? ''}\n\n${prompt}`);
+      }
+
+      const result = await new Promise<{ text: string; threadId?: string }>((resolveP, rejectP) => {
+        const proc = spawn('codex', args, { cwd: repoPath || '/tmp', env: { ...process.env }, stdio: ['pipe', 'pipe', 'pipe'] });
+        proc.stdin.end();
+        let text = '';
+        let threadId: string | undefined = resumeSession;
+        let buf = '';
+
+        proc.stdout.on('data', (chunk: Buffer) => {
+          buf += chunk.toString();
+          const lines = buf.split('\n');
+          buf = lines.pop() ?? '';
+          for (const line of lines) {
+            if (!line.trim()) continue;
+            try {
+              const evt = JSON.parse(line);
+              if (evt.type === 'thread.started' && evt.thread_id) threadId = evt.thread_id;
+              if (evt.type === 'item.completed' && evt.item?.type === 'agent_message') {
+                const t = evt.item.text ?? evt.item.content?.filter((c: any) => c.type === 'output_text').map((c: any) => c.text).join('') ?? '';
+                if (t) text = t;
+              }
+              if (evt.type === 'item.started' && evt.item?.type === 'mcp_tool_call') {
+                const name = `mcp__${evt.item.server ?? ''}__${evt.item.tool ?? ''}`;
+                toolCalls.push({ tool: name, args: evt.item.arguments ?? {} });
+                activity.push({ type: 'tool_call', tool: name, timestamp: new Date() });
+              }
+              if (evt.type === 'item.completed' && evt.item?.type === 'mcp_tool_call') {
+                activity.push({ type: 'tool_result', tool: `mcp__${evt.item.server ?? ''}__${evt.item.tool ?? ''}`, timestamp: new Date() });
+              }
+              if (evt.type === 'item.completed' && evt.item?.type === 'function_call') {
+                toolCalls.push({ tool: evt.item.name ?? 'unknown', args: {} });
+                activity.push({ type: 'tool_call', tool: evt.item.name ?? 'unknown', timestamp: new Date() });
+              }
+              if (evt.type === 'item.completed' && evt.item?.type === 'command_execution') {
+                toolCalls.push({ tool: 'Bash', args: { command: evt.item.command ?? '' } });
+                activity.push({ type: 'tool_call', tool: 'Bash', timestamp: new Date() });
+              }
+            } catch {}
+          }
+        });
+        proc.on('close', () => resolveP({ text, threadId }));
+        proc.on('error', (err) => rejectP(err));
+      });
+
+      response = result.text;
+      sessionId = result.threadId;
+      if (sessionId) currentResumeSession = sessionId; // for retries
+
+    } else {
+      // ── Claude CLI with MCP ──
+      const { query } = await import('@anthropic-ai/claude-code');
+      const { loadAllMcpServers } = await import('@flowforge/engine');
+      const mcpServers = await loadAllMcpServers(db);
+
+      const sdkOptions: Record<string, unknown> = {
+        model, maxTurns: 50, permissionMode: 'bypassPermissions',
+        ...(Object.keys(mcpServers).length > 0 ? { mcpServers } : {}),
+      };
+      if (currentResumeSession) sdkOptions.resume = currentResumeSession;
+      else sdkOptions.customSystemPrompt = (role.system as string) ?? '';
+
+      for await (const msg of query({ prompt, options: sdkOptions as any })) {
+        if ('session_id' in msg && msg.session_id) sessionId = msg.session_id as string;
+        if (msg.type === 'assistant') {
+          const blocks = msg.message.content as Array<{ type: string; text?: string; name?: string; input?: unknown; id?: string }>;
+          const text = blocks.filter(b => b.type === 'text').map(b => b.text || '').join('');
+          if (text) response = text;
+          for (const block of blocks) {
+            if (block.type === 'tool_use' && block.name) {
+              toolCalls.push({ tool: block.name, args: (block.input as Record<string, unknown>) ?? {} });
+              activity.push({ type: 'tool_call', tool: block.name, timestamp: new Date() });
+            }
+          }
+        }
+        if (msg.type === 'result') {
+          costUsd = (msg as any).total_cost_usd ?? 0;
+          if ((msg as any).subtype === 'success' && (msg as any).result) response = (msg as any).result;
+          if ((msg as any).session_id) { sessionId = (msg as any).session_id; currentResumeSession = sessionId; }
+        }
+      }
+    }
+
+    const durationMs = Date.now() - startMs;
+
+    // Save execution as completed
+    await db.collection('executions').updateOne(
+      { id: executionId },
+      { $set: {
+        status: 'completed', completedNodes: [agentName], currentNodes: [],
+        cost: { actual: costUsd, estimated: costUsd }, durationMs, completedAt: new Date(),
+        ...(sessionId ? { [`sessions.${agentName}`]: sessionId } : {}),
+      } },
+    );
+
+    // Save full trace with response, tool calls, and activity
+    await db.collection('execution_traces').insertOne({
+      executionId, node: agentName, attempt: 1, status: 'completed', type: 'agent', agent: agentName,
+      inputState: { prompt }, renderedPrompt: prompt, rawResponse: response,
+      output: { response, session_id: sessionId },
+      toolCalls,
+      activity: activity.map(a => ({ ...a, type: a.type as any, content: a.tool ?? '' })),
+      cost: { actual: costUsd, estimated: costUsd, model, method: 'sdk_reported' as const },
+      durationMs, startedAt: new Date(startMs), completedAt: new Date(),
+    });
+    // Success — break out of retry loop
+    return;
+  } catch (err) {
+    const errorMsg = (err as Error).message ?? String(err);
+    const isTimeout = errorMsg.toLowerCase().includes('timed out') || errorMsg.toLowerCase().includes('timeout');
+
+    // If timeout and we have a session to resume, retry
+    if (isTimeout && currentResumeSession && attempt < MAX_SPAWN_RETRIES) {
+      console.log(`[spawn] ${agentName} timed out (attempt ${attempt + 1}), will retry...`);
+      continue; // next iteration
+    }
+
+    const durationMs = Date.now() - startMs;
+    await db.collection('executions').updateOne(
+      { id: executionId },
+      { $set: { status: 'failed', errorMessage: errorMsg, durationMs, completedAt: new Date() } },
+    );
+    await db.collection('execution_traces').insertOne({
+      executionId, node: agentName, attempt: attempt + 1, status: 'failed', type: 'agent', agent: agentName,
+      inputState: { prompt }, renderedPrompt: prompt, rawResponse: '',
+      output: { error: errorMsg },
+      activity: activity.map(a => ({ ...a, type: a.type as any, content: a.tool ?? '' })),
+      cost: { actual: 0, estimated: 0, model, method: 'sdk_reported' as const },
+      durationMs, startedAt: new Date(startMs), completedAt: new Date(),
+    });
+    if (activeCtx) activeCtx.pendingBackgroundTasks--;
+    return; // failed, don't retry
+  }
+  } // end retry loop
+
+  // If we exhausted retries without success or explicit return, decrement
+  if (activeCtx) activeCtx.pendingBackgroundTasks--;
+}
 
 const getLearnings: ChatTool = {
   name: 'get_learnings',
@@ -666,7 +780,7 @@ const getNodeTrace: ChatTool = {
       attempts: traces.map(t => ({
         attempt: t.attempt,
         status: t.status,
-        role: t.role,
+        agent: t.agent ?? t.role,
         prompt_preview: t.renderedPrompt ? (t.renderedPrompt as string).slice(0, 500) + '...' : null,
         response_preview: t.rawResponse ? (t.rawResponse as string).slice(0, 500) + '...' : null,
         outputs: t.output,
@@ -850,16 +964,21 @@ const saveLearning: ChatTool = {
 
 const delegateToAgent: ChatTool = {
   name: 'delegate_to_agent',
-  description: `Delegate a task to another team agent or continue an existing conversation with them. The target agent processes the task and returns their response.
+  description: `Delegate a task to another team agent. Returns immediately with a conversation_id. Then call get_delegation_result(conversation_id) which BLOCKS until the agent finishes — no polling loop needed.
 
-MULTI-TURN: To have a follow-up conversation, pass the conversation_id from a previous delegation. The target agent resumes from where they left off with full context. Use this to ask clarifying questions, request more detail, or give feedback.
+WORKFLOW:
+1. delegate_to_agent(agent_name="engineer", task="Analyze feasibility") → { conversation_id: "abc" }
+2. get_delegation_result(conversation_id="abc") → WAITS → { status: "completed", response: "..." }
+3. Optional follow-up: delegate_to_agent(agent_name="engineer", task="What about CSS?", conversation_id="abc")
+4. get_delegation_result(conversation_id="abc") → WAITS → { status: "completed", response: "..." }
 
-Example flow:
-1. delegate_to_agent(agent_name="engineer", task="Analyze feasibility of dark mode")  →  returns conversation_id
-2. delegate_to_agent(agent_name="engineer", task="What about the CSS variable approach?", conversation_id="<id from step 1>")
-3. delegate_to_agent(agent_name="engineer", task="Give me the effort estimate", conversation_id="<id from step 1>")
-
-IMPORTANT: Have the full multi-turn conversation BEFORE you synthesize and respond to the user. The user should see the complete agent thread, then your final summary.`,
+CRITICAL RULES:
+- ALWAYS call get_delegation_result after delegate_to_agent.
+- If get_delegation_result returns status="waiting", call it again immediately. Keep calling until "completed" or "failed".
+- NEVER respond to the user before ALL delegations are complete.
+- NEVER give up — the agent WILL finish. Just keep calling get_delegation_result.
+- After getting "completed", you MAY send follow-ups via delegate_to_agent(conversation_id=...) then get_delegation_result again.
+- Only after ALL delegation results are in, synthesize and respond to the user.`,
   destructive: true,
   inputSchema: {
     type: 'object',
@@ -884,7 +1003,6 @@ IMPORTANT: Have the full multi-turn conversation BEFORE you synthesize and respo
       return { error: `Agent "${targetName}" not found. Use list_agents to see available agents.` };
     }
 
-    // Read delegation context from the active session registry
     const activeCtx = getAnyActiveSession();
     const chatSessionId = activeCtx?.chatSessionId ?? 'unknown';
     const parentMessageId = activeCtx?.parentMessageId ?? 'unknown';
@@ -892,73 +1010,35 @@ IMPORTANT: Have the full multi-turn conversation BEFORE you synthesize and respo
     const currentDepth = (activeCtx?.delegationDepth ?? 0) + 1;
     const onEvent = activeCtx?.broadcastEvent;
 
-    // ── Continue existing conversation ──
-    if (continueConvId) {
-      const existing = await conversationService.get(continueConvId);
-      if (!existing) return { error: `Conversation "${continueConvId}" not found.` };
-      if (existing.toAgent !== targetName) return { error: `Conversation "${continueConvId}" is with "${existing.toAgent}", not "${targetName}".` };
+    // ── Continue existing conversation (explicit ID or auto-find) ──
+    let existingConvId = continueConvId;
+    if (!existingConvId) {
+      // Auto-find active conversation between caller and target
+      const existing = await conversationService.findActiveConversation(chatSessionId, fromAgent, targetName);
+      if (existing) existingConvId = existing._id!.toString();
+    }
 
-      // Add the follow-up message
-      await conversationService.addMessage(continueConvId, {
-        agent: fromAgent,
-        content: task,
-        timestamp: new Date(),
-      });
+    if (existingConvId) {
+      const existing = await conversationService.get(existingConvId);
+      if (!existing) return { error: `Conversation "${existingConvId}" not found.` };
 
-      if (onEvent) {
-        onEvent('agent_thread_message', {
-          conversationId: continueConvId,
-          agent: fromAgent,
-          type: 'follow_up',
-          content: task.slice(0, 200),
-        });
-      }
+      await conversationService.addMessage(existingConvId, { agent: fromAgent, type: 'message', content: task, timestamp: new Date() });
+      if (onEvent) onEvent('thread_message', { conversationId: existingConvId, agent: fromAgent, type: 'message', content: task.slice(0, 200) });
 
-      const startMs = Date.now();
-      try {
-        const result = await runAgentTurn(db, targetAgent, task, continueConvId, existing.agentSessionId, conversationService, onEvent, activeCtx, currentDepth);
+      // Get the target agent's session for resume
+      const targetSessionId = existing.sessions?.[targetName];
 
-        await conversationService.addMessage(continueConvId, {
-          agent: targetName,
-          content: result.responseText,
-          toolCalls: result.toolCalls,
-          timestamp: new Date(),
-        });
-        await conversationService.addCost(continueConvId, result.costUsd);
-        if (result.sessionId) await conversationService.saveSessionId(continueConvId, result.sessionId);
+      // Run in background — return immediately
+      runDelegationInBackground(db, targetAgent, task, existingConvId, targetSessionId, conversationService, onEvent, activeCtx, currentDepth, fromAgent, targetName).catch(() => {});
 
-        if (onEvent) {
-          onEvent('agent_thread_message', {
-            conversationId: continueConvId,
-            agent: targetName,
-            type: 'response',
-            content: result.responseText.slice(0, 200),
-          });
-        }
-
-        return {
-          agent: targetName,
-          response: result.responseText,
-          conversation_id: continueConvId,
-          cost_usd: result.costUsd,
-          duration_ms: Date.now() - startMs,
-          turn: 'continue',
-        };
-      } catch (err) {
-        return { error: `Follow-up to "${targetName}" failed: ${(err as Error).message}`, conversation_id: continueConvId };
-      }
+      return { conversation_id: existingConvId, status: 'started', turn: 'continue', message: `Message sent to ${targetName}. Use get_delegation_result to check the response.` };
     }
 
     // ── New conversation ──
-
-    // Check depth limit
     if (!conversationService.canDelegate(currentDepth - 1)) {
-      return {
-        error: `Delegation depth limit reached (max ${conversationService.maxDepth}). Cannot delegate further. Summarize what you know and respond directly.`,
-      };
+      return { error: `Delegation depth limit reached (max ${conversationService.maxDepth}). Respond directly.` };
     }
 
-    // Check delegation permission
     if (fromAgent !== 'assistant') {
       const callingAgent = await db.collection('agents').findOne({ name: fromAgent });
       if (callingAgent?.canDelegateTo && !callingAgent.canDelegateTo.includes(targetName)) {
@@ -966,63 +1046,258 @@ IMPORTANT: Have the full multi-turn conversation BEFORE you synthesize and respo
       }
     }
 
-    // Create conversation record
-    const conversation = await conversationService.create({
-      chatSessionId, parentMessageId, fromAgent, toAgent: targetName,
-      task, context, depth: currentDepth, parentConversationId: undefined,
-    });
+    const conversation = await conversationService.create({ chatSessionId, parentMessageId, fromAgent, toAgent: targetName, task, context, depth: currentDepth, parentConversationId: activeCtx?.currentConversationId });
     const convId = conversation._id!.toString();
 
-    if (onEvent) {
-      onEvent('agent_thread_start', { conversationId: convId, fromAgent, toAgent: targetName, task: task.slice(0, 200), depth: currentDepth });
-    }
+    if (onEvent) onEvent('thread_created', { conversationId: convId, fromAgent, toAgent: targetName, task: task.slice(0, 200), depth: currentDepth, parentConversationId: activeCtx?.currentConversationId });
+    await conversationService.addMessage(convId, { agent: fromAgent, type: 'message', content: task, timestamp: new Date() });
 
-    await conversationService.addMessage(convId, { agent: fromAgent, content: task, timestamp: new Date() });
+    let fullPrompt = task;
+    if (Object.keys(context).length > 0) fullPrompt = `CONTEXT:\n${JSON.stringify(context, null, 2)}\n\nTASK:\n${task}`;
 
+    // Run in background — return immediately so MCP doesn't timeout
+    runDelegationInBackground(db, targetAgent, fullPrompt, convId, undefined, conversationService, onEvent, activeCtx, currentDepth, fromAgent, targetName).catch(() => {});
+
+    return { conversation_id: convId, status: 'started', agent: targetName, depth: currentDepth, message: `Delegation started. Use get_delegation_result(conversation_id="${convId}") to get the response.` };
+  },
+};
+
+/** Run delegation in background — decoupled from MCP tool call timeout */
+async function runDelegationInBackground(
+  db: Db, targetAgent: Record<string, unknown>, prompt: string, convId: string,
+  resumeSessionId: string | undefined, conversationService: AgentConversationService,
+  onEvent: ((event: string, data: Record<string, unknown>) => void) | undefined,
+  activeCtx: ActiveSessionContext | undefined, currentDepth: number,
+  fromAgent: string, targetName: string,
+): Promise<void> {
+  if (activeCtx) activeCtx.pendingBackgroundTasks++;
+  const startMs = Date.now();
+  try {
+    const result = await runAgentTurn(db, targetAgent, prompt, convId, resumeSessionId, conversationService, onEvent, activeCtx, currentDepth);
+    await conversationService.addMessage(convId, { agent: targetName, type: 'message', content: result.responseText, toolCalls: result.toolCalls, timestamp: new Date() });
+    await conversationService.addCost(convId, result.costUsd);
+    if (result.sessionId) await conversationService.saveSessionId(convId, targetName, result.sessionId);
+
+    const durationMs = Date.now() - startMs;
+    const summary = result.responseText.split('\n').find(l => l.trim().length > 10)?.trim().slice(0, 150) ?? result.responseText.slice(0, 150);
+    await conversationService.complete(convId, result.responseText, summary, result.costUsd);
+    if (onEvent) onEvent('thread_completed', { conversationId: convId, fromAgent, toAgent: targetName, summary, costUsd: result.costUsd, durationMs });
+  } catch (err) {
+    const durationMs = Date.now() - startMs;
+    const errorMsg = (err as Error).message;
+    await conversationService.fail(convId, errorMsg);
+    if (onEvent) onEvent('thread_completed', { conversationId: convId, fromAgent, toAgent: targetName, summary: `Failed: ${errorMsg}`, costUsd: 0, durationMs, error: true });
+  } finally {
+    if (activeCtx) activeCtx.pendingBackgroundTasks--;
+  }
+}
+
+/** Wait for delegation result — handles active, waiting_for_answer, completed, failed */
+const getDelegationResult: ChatTool = {
+  name: 'get_delegation_result',
+  description: `Wait for a delegation to complete. Blocks up to 90 seconds per call.
+
+Possible return statuses:
+- "waiting" → agent still working. Call get_delegation_result again.
+- "question" → agent is asking YOU a question. Read the question, then call answer_question(conversation_id, answer).
+  After answering, call get_delegation_result again to wait for the agent to finish.
+- "completed" → agent finished. Response is in the result.
+- "failed" → agent errored.
+
+RULES:
+- If "waiting": call get_delegation_result again immediately. NEVER give up.
+- If "question": answer it via answer_question, then call get_delegation_result again.
+- If you can't answer the question yourself, use ask_caller to escalate to YOUR caller.
+- NEVER respond to the user before status is "completed" or "failed".`,
+  inputSchema: {
+    type: 'object',
+    properties: {
+      conversation_id: { type: 'string', description: 'Conversation ID from delegate_to_agent' },
+    },
+    required: ['conversation_id'],
+  },
+  async execute(args, db) {
+    const convId = args.conversation_id as string;
+    const conversationService = new AgentConversationService(db);
+    let waitMs = 5000;
+    const maxWaitMs = 30000;
+    const maxTotalMs = 90_000; // 90s per call (MCP safe)
     const startMs = Date.now();
 
-    try {
-      // Build the user prompt with context
-      let fullPrompt = task;
-      if (Object.keys(context).length > 0) {
-        fullPrompt = `CONTEXT:\n${JSON.stringify(context, null, 2)}\n\nTASK:\n${task}`;
+    while (Date.now() - startMs < maxTotalMs) {
+      const conv = await conversationService.get(convId);
+      if (!conv) return { error: `Conversation "${convId}" not found.` };
+
+      // Agent asked a question — return immediately so caller can answer
+      if (conv.status === 'waiting_for_answer' && conv.pendingQuestion?.status === 'pending') {
+        return {
+          conversation_id: convId,
+          status: 'question',
+          question: conv.pendingQuestion.question,
+          from_agent: conv.pendingQuestion.fromAgent,
+          message: `${conv.toAgent} is asking: "${conv.pendingQuestion.question}". Answer via answer_question(conversation_id, answer).`,
+        };
       }
 
-      const result = await runAgentTurn(db, targetAgent, fullPrompt, convId, undefined, conversationService, onEvent, activeCtx, currentDepth);
-
-      await conversationService.addMessage(convId, { agent: targetName, content: result.responseText, toolCalls: result.toolCalls, timestamp: new Date() });
-      if (result.sessionId) await conversationService.saveSessionId(convId, result.sessionId);
-
-      const durationMs = Date.now() - startMs;
-      const summary = result.responseText.split('\n').find(l => l.trim().length > 10)?.trim().slice(0, 150) ?? result.responseText.slice(0, 150);
-
-      // Don't auto-complete — the calling agent may want to continue
-      // Mark as completed only if the tool description says so, or caller completes it later
-      // For now: complete on first turn, caller can still continue via conversation_id
-      await conversationService.complete(convId, result.responseText, summary, result.costUsd);
-
-      if (onEvent) {
-        onEvent('agent_thread_complete', { conversationId: convId, fromAgent, toAgent: targetName, summary, costUsd: result.costUsd, durationMs });
+      // Completed or failed — return result
+      if (conv.status === 'completed' || conv.status === 'failed') {
+        return {
+          conversation_id: convId,
+          status: conv.status,
+          agent: conv.toAgent,
+          response: conv.response ?? conv.summary ?? '',
+          summary: conv.summary,
+          cost_usd: conv.costUsd,
+          duration_ms: conv.durationMs,
+          turn_count: conv.turnCount,
+          hint: conv.status === 'completed' ? `To continue, call delegate_to_agent with conversation_id="${convId}"` : undefined,
+        };
       }
 
-      return {
-        agent: targetName,
-        response: result.responseText,
-        summary,
-        conversation_id: convId,
-        cost_usd: result.costUsd,
-        duration_ms: durationMs,
-        depth: currentDepth,
-        hint: 'To continue this conversation, call delegate_to_agent again with conversation_id="' + convId + '"',
-      };
-    } catch (err) {
-      const durationMs = Date.now() - startMs;
-      const errorMsg = (err as Error).message;
-      await conversationService.fail(convId, errorMsg);
-      if (onEvent) {
-        onEvent('agent_thread_complete', { conversationId: convId, fromAgent, toAgent: targetName, summary: `Failed: ${errorMsg}`, costUsd: 0, durationMs, error: true });
+      // Still active — wait
+      await new Promise(r => setTimeout(r, waitMs));
+      waitMs = Math.min(waitMs * 1.3, maxWaitMs);
+    }
+
+    return { conversation_id: convId, status: 'waiting', message: 'Agent is still working. Call get_delegation_result again.' };
+  },
+};
+
+/** Answer a question from a delegated agent */
+const answerQuestion: ChatTool = {
+  name: 'answer_question',
+  description: 'Answer a question from an agent you delegated to. Use when get_delegation_result returns status="question". After answering, call get_delegation_result again to wait for the agent to continue.',
+  inputSchema: {
+    type: 'object',
+    properties: {
+      conversation_id: { type: 'string', description: 'Conversation ID' },
+      answer: { type: 'string', description: 'Your answer to the agent\'s question' },
+    },
+    required: ['conversation_id', 'answer'],
+  },
+  async execute(args, db) {
+    const convId = args.conversation_id as string;
+    const answer = args.answer as string;
+    const conversationService = new AgentConversationService(db);
+    const activeCtx = getAnyActiveSession();
+    const fromAgent = activeCtx?.currentAgent ?? 'assistant';
+
+    const conv = await conversationService.get(convId);
+    if (!conv) return { error: `Conversation "${convId}" not found.` };
+    if (conv.status !== 'waiting_for_answer') return { error: `Conversation is not waiting for an answer (status: ${conv.status}).` };
+
+    await conversationService.answerQuestion(convId, fromAgent, answer);
+
+    // Emit SSE
+    activeCtx?.broadcastEvent?.('thread_answer', {
+      conversationId: convId, fromAgent, answer: answer.slice(0, 200),
+    });
+
+    return { answered: true, conversation_id: convId };
+  },
+};
+
+/** Ask the caller (agent who delegated to you) a question. Blocks until they answer. */
+const askCaller: ChatTool = {
+  name: 'ask_caller',
+  description: 'Ask a question to the agent who delegated this task to you. Use when you need clarification, context, or a decision before you can proceed. Your execution pauses until they answer. Do NOT guess — ask.',
+  inputSchema: {
+    type: 'object',
+    properties: {
+      question: { type: 'string', description: 'Your question for the caller' },
+    },
+    required: ['question'],
+  },
+  async execute(args, db) {
+    const question = args.question as string;
+    const activeCtx = getAnyActiveSession();
+    const currentAgent = activeCtx?.currentAgent ?? 'unknown';
+    // Accept conversation_id from API route (when called via MCP → HTTP) or from active context
+    const convId = (args._conversation_id as string) ?? activeCtx?.currentConversationId;
+
+    if (!convId) return { error: 'No active conversation context. ask_caller can only be used by a delegated agent.' };
+
+    const conversationService = new AgentConversationService(db);
+
+    // Write question and set status to waiting_for_answer
+    await conversationService.askQuestion(convId, currentAgent, question);
+
+    // Emit SSE
+    activeCtx?.broadcastEvent?.('thread_question', {
+      conversationId: convId, fromAgent: currentAgent, question: question.slice(0, 300),
+    });
+
+    // Block: poll until the caller answers
+    let waitMs = 3000;
+    const maxWaitMs = 30000;
+    while (true) {
+      const { answered, answer } = await conversationService.isQuestionAnswered(convId);
+      if (answered && answer) {
+        return { answer };
       }
-      return { error: `Delegation to "${targetName}" failed: ${errorMsg}`, conversation_id: convId };
+      await new Promise(r => setTimeout(r, waitMs));
+      waitMs = Math.min(waitMs * 1.3, maxWaitMs);
+    }
+  },
+};
+
+/** Ask the user a question directly. Only for the top-level team agent. Blocks until user answers. */
+const askUser: ChatTool = {
+  name: 'ask_user',
+  description: 'Ask the user a question. Use when you need information, a decision, or clarification that no other agent can provide. Your execution pauses until the user responds. Only use as a last resort — try to answer from context first.',
+  inputSchema: {
+    type: 'object',
+    properties: {
+      question: { type: 'string', description: 'Your question for the user' },
+    },
+    required: ['question'],
+  },
+  async execute(args, db) {
+    const question = args.question as string;
+    const activeCtx = getAnyActiveSession();
+    const fromAgent = activeCtx?.currentAgent ?? 'assistant';
+
+    if (!activeCtx) return { error: 'No active session context.' };
+
+    const sessionId = activeCtx.chatSessionId;
+
+    // Store pending question on the chat session
+    await db.collection('chat_sessions').updateOne(
+      { _id: new (await import('mongodb')).ObjectId(sessionId) },
+      {
+        $set: {
+          pendingUserQuestion: {
+            question,
+            fromAgent,
+            status: 'pending',
+            askedAt: new Date(),
+          },
+        },
+      },
+    );
+
+    // Emit SSE so UI shows the question
+    activeCtx.broadcastEvent('user_question', { question, fromAgent });
+
+    // Block: poll until user answers
+    let waitMs = 2000;
+    const maxWaitMs = 30000;
+    while (true) {
+      const session = await db.collection('chat_sessions').findOne(
+        { _id: new (await import('mongodb')).ObjectId(sessionId) },
+      );
+      const pq = session?.pendingUserQuestion;
+      if (pq?.status === 'answered' && pq?.answer) {
+        // Clear the pending question
+        await db.collection('chat_sessions').updateOne(
+          { _id: new (await import('mongodb')).ObjectId(sessionId) },
+          { $set: { pendingUserQuestion: null } },
+        );
+        activeCtx.broadcastEvent('user_answer', { answer: pq.answer });
+        return { answer: pq.answer };
+      }
+      await new Promise(r => setTimeout(r, waitMs));
+      waitMs = Math.min(waitMs * 1.3, maxWaitMs);
     }
   },
 };
@@ -1051,87 +1326,125 @@ async function runAgentTurn(
 
   let responseText = '';
   let costUsd = 0;
-  let sessionId: string | undefined;
+  let sessionId: string | undefined = resumeSessionId;
   const toolCalls: { tool: string; args: Record<string, unknown> }[] = [];
   const activeMcpCalls = new Map<string, { tool: string; startMs: number }>();
+  const MAX_RETRIES = 3;
 
   /** Emit a thread event to the UI */
   function emit(type: string, data: Record<string, unknown>) {
-    if (onEvent) onEvent('agent_thread_message', { conversationId: convId, agent: targetName, ...data, type });
+    if (onEvent) onEvent('thread_message', { conversationId: convId, agent: targetName, ...data, type });
   }
 
-  if (provider === 'codex') {
-    const { spawn } = await import('node:child_process');
-    const systemPrompt = buildDelegationPrompt(targetAgent, fromAgent, currentDepth, conversationService.maxDepth);
-    const codexPrompt = `${systemPrompt}\n\n${prompt}`;
-    const codexArgs: readonly string[] = ['exec', '--json', '--dangerously-bypass-approvals-and-sandbox', '--skip-git-repo-check', '-m', model as string, codexPrompt];
+  // Save/restore context for nested delegation
+  const prevCtx = activeCtx ? { ...activeCtx } : undefined;
+  if (activeCtx) { activeCtx.currentAgent = targetName; activeCtx.delegationDepth = currentDepth; activeCtx.currentConversationId = convId; }
 
-    responseText = await new Promise<string>((resolvePromise, rejectPromise) => {
-      const proc = spawn('codex', codexArgs as string[]);
-      let output = '';
-      proc.stdout.on('data', (chunk: Buffer) => {
-        for (const line of chunk.toString().split('\n').filter(Boolean)) {
-          try {
-            const evt = JSON.parse(line);
-            if (evt.type === 'message' && evt.item?.text) {
-              output = evt.item.text;
-              emit('text', { content: output.slice(0, 300) });
-            }
-          } catch {}
-        }
-      });
-      proc.on('close', () => resolvePromise(output));
-      proc.on('error', (err) => rejectPromise(err));
-    });
-  } else {
-    // Claude CLI — full streaming
-    const { query } = await import('@anthropic-ai/claude-code');
-    const { resolve, dirname } = await import('node:path');
+  const systemPrompt = resumeSessionId ? undefined : buildDelegationPrompt(targetAgent, fromAgent, currentDepth, conversationService.maxDepth);
 
-    const mcpServers: Record<string, unknown> = {};
-    const serverPath = resolve(dirname(new URL(import.meta.url).pathname), 'flowforge-mcp-server.ts');
-    mcpServers.flowforge = { type: 'stdio', command: 'npx', args: ['tsx', serverPath], env: { FLOWFORGE_API_URL: `http://localhost:${process.env.PORT ?? '4023'}` } };
-    const { loadExternalMcpServers } = await import('./chat-mcp.js');
-    Object.assign(mcpServers, await loadExternalMcpServers(db));
-
-    const sdkOptions: Record<string, unknown> = {
-      model, maxTurns: 50, permissionMode: 'bypassPermissions', cwd: '/tmp', mcpServers,
-    };
-
-    if (resumeSessionId) {
-      sdkOptions.resume = resumeSessionId;
-    } else {
-      sdkOptions.customSystemPrompt = buildDelegationPrompt(targetAgent, fromAgent, currentDepth, conversationService.maxDepth);
+  // Retry loop — if CLI times out, resume the same session and continue
+  for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+    if (attempt > 0) {
+      // This is a retry — resume the session with "continue" prompt
+      const isTimeout = true; // we only retry on timeout
+      console.log(`[delegation] Auto-retry #${attempt} for ${targetName} (session ${sessionId?.slice(0, 12)}...)`);
+      emit('text', { content: `Reconnecting to ${targetName} (retry ${attempt}/${MAX_RETRIES})...` });
+      prompt = 'Continue from where you left off. Complete your task and provide the final response.';
     }
 
-    // Save/restore context for nested delegation
-    const prevCtx = activeCtx ? { ...activeCtx } : undefined;
-    if (activeCtx) { activeCtx.currentAgent = targetName; activeCtx.delegationDepth = currentDepth; }
+  try {
+    if (provider === 'codex') {
+      // ── Codex CLI with MCP ──
+      const { spawn } = await import('node:child_process');
 
-    try {
+      // Sync MCP servers so Codex can access FlowForge tools
+      const { syncMcpToCodex } = await import('./chat-providers.js');
+      await syncMcpToCodex(db);
+
+      const args: string[] = ['exec'];
+      if (resumeSessionId) {
+        args.push('resume', '--json', '--dangerously-bypass-approvals-and-sandbox', '--skip-git-repo-check', resumeSessionId, prompt);
+      } else {
+        args.push('--json', '--dangerously-bypass-approvals-and-sandbox', '--skip-git-repo-check');
+        if (model) args.push('-c', `model="${model}"`);
+        args.push(`${systemPrompt}\n\n${prompt}`);
+      }
+
+      const result = await new Promise<{ text: string; threadId?: string; costUsd: number }>((resolveP, rejectP) => {
+        const proc = spawn('codex', args, { cwd: '/tmp', env: { ...process.env }, stdio: ['pipe', 'pipe', 'pipe'] });
+        proc.stdin.end();
+        let text = '';
+        let threadId: string | undefined = resumeSessionId;
+        let buf = '';
+
+        proc.stdout.on('data', (chunk: Buffer) => {
+          buf += chunk.toString();
+          const lines = buf.split('\n');
+          buf = lines.pop() ?? '';
+          for (const line of lines) {
+            if (!line.trim()) continue;
+            try {
+              const evt = JSON.parse(line);
+              if (evt.type === 'thread.started' && evt.thread_id) threadId = evt.thread_id;
+              // Text output
+              if (evt.type === 'item.completed' && evt.item?.type === 'agent_message') {
+                const t = evt.item.text ?? evt.item.content?.filter((c: any) => c.type === 'output_text').map((c: any) => c.text).join('') ?? '';
+                if (t) { text = t; emit('text', { content: t.slice(-300) }); }
+              }
+              // MCP tool calls
+              if (evt.type === 'item.started' && evt.item?.type === 'mcp_tool_call') {
+                const fullName = `mcp__${evt.item.server ?? ''}__${evt.item.tool ?? ''}`;
+                toolCalls.push({ tool: fullName, args: evt.item.arguments ?? {} });
+                emit('tool_call', { tool: fullName });
+              }
+              if (evt.type === 'item.completed' && evt.item?.type === 'mcp_tool_call') {
+                const fullName = `mcp__${evt.item.server ?? ''}__${evt.item.tool ?? ''}`;
+                emit('tool_result', { tool: fullName });
+              }
+              // Function calls
+              if (evt.type === 'item.completed' && evt.item?.type === 'function_call') {
+                toolCalls.push({ tool: evt.item.name ?? 'unknown', args: {} });
+                emit('tool_call', { tool: evt.item.name ?? 'unknown' });
+              }
+              // Bash commands
+              if (evt.type === 'item.completed' && evt.item?.type === 'command_execution') {
+                toolCalls.push({ tool: 'Bash', args: { command: evt.item.command ?? '' } });
+                emit('tool_call', { tool: 'Bash' });
+              }
+            } catch {}
+          }
+        });
+        proc.on('close', () => resolveP({ text, threadId, costUsd: 0 }));
+        proc.on('error', (err) => rejectP(err));
+      });
+
+      responseText = result.text;
+      sessionId = result.threadId;
+      costUsd = result.costUsd;
+
+    } else {
+      // ── Claude CLI with MCP — full streaming ──
+      const { query } = await import('@anthropic-ai/claude-code');
+      const { resolve, dirname } = await import('node:path');
+
+      const mcpServers: Record<string, unknown> = {};
+      const serverPath = resolve(dirname(new URL(import.meta.url).pathname), 'flowforge-mcp-server.ts');
+      mcpServers.flowforge = { type: 'stdio', command: 'npx', args: ['tsx', serverPath], env: { FLOWFORGE_API_URL: `http://localhost:${process.env.PORT ?? '4023'}` } };
+      const { loadExternalMcpServers } = await import('./chat-mcp.js');
+      Object.assign(mcpServers, await loadExternalMcpServers(db));
+
+      const sdkOptions: Record<string, unknown> = { model, maxTurns: 50, permissionMode: 'bypassPermissions', cwd: '/tmp', mcpServers };
+      if (resumeSessionId) sdkOptions.resume = resumeSessionId;
+      else sdkOptions.customSystemPrompt = systemPrompt;
+
       for await (const message of query({ prompt, options: sdkOptions as any })) {
-        // Capture session ID
         if ('session_id' in message && message.session_id) sessionId = message.session_id as string;
-
         if (message.type === 'assistant') {
           const blocks = (message as any).message.content as Array<{ type: string; text?: string; thinking?: string; name?: string; input?: unknown; id?: string }>;
-
-          // Stream text
           const text = blocks.filter((b: any) => b.type === 'text').map((b: any) => b.text || '').join('');
-          if (text && text !== responseText) {
-            responseText = text;
-            emit('text', { content: text.slice(-300) });
-          }
-
-          // Stream thinking
+          if (text && text !== responseText) { responseText = text; emit('text', { content: text.slice(-300) }); }
           for (const block of blocks) {
-            if (block.type === 'thinking' && (block.thinking || block.text)) {
-              emit('thinking', { content: (block.thinking || block.text || '').slice(0, 200) });
-            }
-          }
-
-          // Track tool calls
-          for (const block of blocks) {
+            if (block.type === 'thinking' && (block.thinking || block.text)) emit('thinking', { content: (block.thinking || block.text || '').slice(0, 200) });
             if (block.type === 'tool_use' && block.name && block.id) {
               toolCalls.push({ tool: block.name, args: (block.input as Record<string, unknown>) ?? {} });
               activeMcpCalls.set(block.id, { tool: block.name, startMs: Date.now() });
@@ -1139,35 +1452,45 @@ async function runAgentTurn(
             }
           }
         }
-
-        // Track tool results
         if (message.type === 'user') {
           const content = (message as any).message?.content;
           if (Array.isArray(content)) {
             for (const block of content) {
               if (block.type === 'tool_result' && block.tool_use_id) {
                 const pending = activeMcpCalls.get(block.tool_use_id);
-                if (pending) {
-                  const durationMs = Date.now() - pending.startMs;
-                  emit('tool_result', { tool: pending.tool, toolUseId: block.tool_use_id, durationMs });
-                  activeMcpCalls.delete(block.tool_use_id);
-                }
+                if (pending) { emit('tool_result', { tool: pending.tool, toolUseId: block.tool_use_id, durationMs: Date.now() - pending.startMs }); activeMcpCalls.delete(block.tool_use_id); }
               }
             }
           }
         }
-
         if (message.type === 'result') {
           costUsd = (message as any).total_cost_usd ?? 0;
           if ((message as any).subtype === 'success' && (message as any).result) responseText = (message as any).result;
           if ((message as any).session_id) sessionId = (message as any).session_id;
         }
       }
-    } finally {
-      // Always restore context, even on error/abort
-      if (activeCtx && prevCtx) { activeCtx.currentAgent = prevCtx.currentAgent; activeCtx.delegationDepth = prevCtx.delegationDepth; }
     }
+  } catch (err) {
+    const errorMsg = (err as Error).message ?? String(err);
+    const isTimeout = errorMsg.toLowerCase().includes('timed out') || errorMsg.toLowerCase().includes('timeout');
+
+    // If timeout and we have a session to resume, retry
+    if (isTimeout && sessionId && attempt < MAX_RETRIES) {
+      console.log(`[delegation] ${targetName} timed out (attempt ${attempt + 1}), will retry with session ${sessionId.slice(0, 12)}...`);
+      continue; // next iteration of retry loop
+    }
+
+    // Not a timeout or out of retries — restore context and re-throw
+    if (activeCtx && prevCtx) { activeCtx.currentAgent = prevCtx.currentAgent; activeCtx.delegationDepth = prevCtx.delegationDepth; activeCtx.currentConversationId = prevCtx.currentConversationId; }
+    throw err;
   }
+
+  // Success — break out of retry loop
+  break;
+  } // end retry loop
+
+  // Restore context after success
+  if (activeCtx && prevCtx) { activeCtx.currentAgent = prevCtx.currentAgent; activeCtx.delegationDepth = prevCtx.delegationDepth; activeCtx.currentConversationId = prevCtx.currentConversationId; }
 
   return { responseText, costUsd, sessionId, toolCalls };
 }
@@ -1189,23 +1512,36 @@ function buildDelegationPrompt(
 
   parts.push(`\nYou were delegated a task by ${fromAgent}. Respond with a clear, actionable answer.`);
 
+  // ask_caller — always available to delegated agents
+  parts.push(`
+ASKING QUESTIONS:
+- If you need clarification, context, or a decision from ${fromAgent}, use ask_caller(question).
+- Your execution pauses until ${fromAgent} answers, then you continue with the answer.
+- Do NOT guess when you're unsure — ASK.`);
+
   if (canDelegateTo.length > 0 && depth < maxDepth) {
-    parts.push(`You can delegate sub-tasks to: ${canDelegateTo.join(', ')} using the delegate_to_agent tool.`);
+    parts.push(`\nYou can delegate sub-tasks to: ${canDelegateTo.join(', ')} using delegate_to_agent.
+When get_delegation_result returns "question", answer it via answer_question, then call get_delegation_result again.`);
   } else if (depth >= maxDepth) {
-    parts.push(`You are at the maximum delegation depth (${depth}/${maxDepth}). Do NOT delegate further — respond directly with what you know.`);
+    parts.push(`\nYou are at the maximum delegation depth (${depth}/${maxDepth}). Do NOT delegate further — respond directly.`);
   }
 
   if (canTrigger.length > 0) {
-    parts.push(`You can trigger these workflows: ${canTrigger.join(', ')} using the run_workflow tool.`);
+    parts.push(`You can trigger these workflows: ${canTrigger.join(', ')} using run_workflow.`);
   }
 
   // Team agents should delegate, not do hands-on work
   const agentType = (targetAgent.type as string) ?? 'technical';
   if (agentType === 'team') {
-    parts.push(`\nIMPORTANT: You are a TEAM agent. Do NOT use filesystem tools (Read, Bash, Grep, Glob) directly. Instead, use spawn_agent to dispatch technical agents (coding-planner, coding-investigator, coding-reviewer, etc.) for hands-on work. Your job is to coordinate and synthesize.`);
+    parts.push(`
+ABSOLUTE RULES FOR TEAM AGENTS:
+- NEVER use Read, Bash, Grep, Glob, or any filesystem tool directly.
+- ALWAYS use spawn_agent for technical agents, delegate_to_agent for team agents.
+- After spawn_agent, call get_execution to wait. Agents can take minutes — do NOT give up.
+- NEVER do the work yourself. Coordinate and synthesize only.`);
   }
 
-  parts.push(`\nBe concise. You are collaborating with another agent, not talking to a human. Use structured output with headers and bullets.`);
+  parts.push(`\nBe concise. You are collaborating with another agent. Use structured output with headers and bullets.`);
 
   return parts.join('\n');
 }
@@ -1253,8 +1589,12 @@ export const chatTools: ChatTool[] = [
   listAgents,
   spawnAgent,
   getLearnings,
-  // Delegation
+  // Delegation & conversation
   delegateToAgent,
+  getDelegationResult,
+  answerQuestion,
+  askCaller,
+  askUser,
   reportToUser,
   // Advanced queries
   queryDatabase,

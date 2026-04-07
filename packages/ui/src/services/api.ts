@@ -124,6 +124,8 @@ export const chat = {
     request<void>(`/chat/sessions/${id}`, { method: 'DELETE' }),
   getThreads: (id: string) =>
     request<any[]>(`/chat/sessions/${id}/threads`),
+  answerAgentQuestion: (id: string, answer: string) =>
+    request<any>(`/chat/sessions/${id}/agent-answer`, { method: 'POST', body: JSON.stringify({ answer }) }),
 };
 
 // ── Alerts ───────────────────────────────────────────────────────────────

@@ -1,9 +1,11 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { Bot, User, AlertCircle, Copy, Check, Clock, Wrench, CheckCircle, ExternalLink, Loader2, Brain,
   Sparkles, Zap, Cpu, Atom, Terminal, Code, Rocket, Shield, Hexagon, Flame,
+  ChevronDown, ChevronRight,
 } from 'lucide-react';
 import type { ChatMessage, ToolCallRecord, ActiveToolCall, AgentThread as AgentThreadType, AgentReport } from '../../hooks/useChat';
 import { AgentThread } from './AgentThread';
+import { AgentQuestionPrompt } from './AgentQuestionPrompt';
 import RoleIcon from '../common/RoleIcon';
 import { useSettingsStore } from '../../stores/settingsStore';
 
@@ -22,6 +24,11 @@ interface ChatMessageListProps {
   agentReports?: AgentReport[];
   /** Persisted threads keyed by parentMessageId — loaded from DB for historical viewing */
   threadsByMessage?: Record<string, AgentThreadType[]>;
+  /** Pending question from an agent to the user */
+  pendingUserQuestion?: { question: string; fromAgent: string } | null;
+  onAnswerUserQuestion?: (answer: string) => void;
+  /** Active agent name (for labeling assistant messages) */
+  activeAgent?: string | null;
   onSuggestionClick?: (text: string) => void;
   onSaveToLearnings?: (content: string) => void;
 }
@@ -105,7 +112,7 @@ function formatTime(dateStr?: string): string {
 /* ── Markdown rendering pipeline ─────────────────────────────────────────── */
 
 /** Top-level: split by code blocks, then render everything else as inline markdown */
-function renderMarkdown(content: string): React.ReactNode {
+export function renderMarkdown(content: string): React.ReactNode {
   const codeBlockRegex = /```(\w*)\n?([\s\S]*?)```/g;
   const parts: React.ReactNode[] = [];
   let lastIndex = 0;
@@ -573,24 +580,67 @@ function ToolCallCard({ call, active }: { call: ToolCallRecord | ActiveToolCall;
   );
 }
 
-function ToolCallsSection({ calls }: { calls?: ToolCallRecord[] }) {
+/**
+ * Completed message: threads shown inline, tool calls in a clean toggle.
+ */
+function ToolCallsSection({ calls, threads, agentMap }: { calls?: ToolCallRecord[]; threads?: AgentThreadType[]; agentMap?: Record<string, { displayName?: string; icon?: string; color?: string }> }) {
+  const [showTools, setShowTools] = useState(false);
   if (!calls || calls.length === 0) return null;
+
+  // Build thread tree from flat list, then show only root-level threads
+  const rootThreads = threads ? buildThreadTree(threads) : [];
+
+  const hasErrors = calls.some(c => (c.result as Record<string, unknown>)?.error);
+
   return (
-    <div className="mt-2 space-y-1.5">
-      {calls.map((call, i) => (
-        <ToolCallCard key={`${call.tool}-${i}`} call={call} />
+    <div className="mt-2 space-y-1">
+      {/* Threads — nested tree, primary content */}
+      {rootThreads.map(thread => (
+        <AgentThread key={thread.conversationId} thread={thread} agents={agentMap} />
       ))}
+
+      {/* Tool calls — collapsed toggle */}
+      <button onClick={() => setShowTools(!showTools)} className="flex items-center gap-1.5 text-[10px] font-mono text-gray-600 hover:text-gray-400 transition-colors py-0.5">
+        {showTools ? <ChevronDown className="w-3 h-3" /> : <ChevronRight className="w-3 h-3" />}
+        <Wrench className="w-2.5 h-2.5" />
+        <span>{calls.length} tool call{calls.length !== 1 ? 's' : ''}</span>
+        {hasErrors && <span className="text-red-400">· errors</span>}
+      </button>
+      {showTools && (
+        <div className="ml-4 pl-3 border-l border-border/10 space-y-1.5 max-h-[400px] overflow-y-auto py-1">
+          {calls.map((call, i) => <ToolCallCard key={`${call.tool}-${i}`} call={call} />)}
+        </div>
+      )}
     </div>
   );
 }
 
-function ActiveToolCallsSection({ calls }: { calls: ActiveToolCall[] }) {
-  if (calls.length === 0) return null;
+/**
+ * Streaming: threads + running indicator.
+ */
+function ActiveToolCallsSection({ calls, liveThreads, agentMap }: { calls: ActiveToolCall[]; liveThreads?: AgentThreadType[]; agentMap?: Record<string, { displayName?: string; icon?: string; color?: string }> }) {
+  if (calls.length === 0 && (!liveThreads || liveThreads.length === 0)) return null;
+
+  const rootThreads = buildThreadTree(liveThreads ?? []);
+  const runningTool = [...calls].reverse().find(c => (c as ActiveToolCall).status === 'running');
+  const completedCount = calls.filter(c => (c as ActiveToolCall).status !== 'running').length;
+
   return (
-    <div className="mt-2 space-y-1.5">
-      {calls.map((call, i) => (
-        <ToolCallCard key={`${call.tool}-${i}`} call={call} active />
+    <div className="mt-2 space-y-1">
+      {/* Live threads */}
+      {rootThreads.map(thread => (
+        <AgentThread key={thread.conversationId} thread={thread} agents={agentMap} />
       ))}
+
+      {/* Running tool indicator */}
+      {runningTool && (
+        <div className="flex items-center gap-1.5 text-[10px] font-mono text-gray-600 py-0.5">
+          <Loader2 className="w-2.5 h-2.5 text-accent-yellow animate-spin shrink-0" />
+          <Wrench className="w-2.5 h-2.5 text-accent-yellow shrink-0" />
+          <span className="text-accent-yellow/70">{TOOL_LABELS[runningTool.tool]?.label ?? runningTool.tool.replace('mcp__flowforge__', 'ff:')}</span>
+          {completedCount > 0 && <span className="text-gray-700">· {completedCount} done</span>}
+        </div>
+      )}
     </div>
   );
 }
@@ -619,19 +669,36 @@ const QUICK_ICONS: Record<string, React.ReactNode> = {
 import { Bookmark } from 'lucide-react';
 import { agents as agentsApi } from '../../services/api';
 
-export default function ChatMessageList({ messages, streamText, thinkingText, streaming, activeToolCalls = [], agentThreads = [], agentReports = [], threadsByMessage = {}, onSuggestionClick, onSaveToLearnings }: ChatMessageListProps) {
+/** Build a tree from a flat thread list using parentConversationId */
+function buildThreadTree(threads: AgentThreadType[]): AgentThreadType[] {
+  const map = new Map<string, AgentThreadType>();
+  for (const t of threads) map.set(t.conversationId, { ...t, children: [] });
+
+  const roots: AgentThreadType[] = [];
+  for (const t of map.values()) {
+    if (t.parentConversationId && map.has(t.parentConversationId)) {
+      const parent = map.get(t.parentConversationId)!;
+      if (!parent.children) parent.children = [];
+      parent.children.push(t);
+    } else {
+      roots.push(t);
+    }
+  }
+  return roots;
+}
+
+export default function ChatMessageList({ messages, streamText, thinkingText, streaming, activeToolCalls = [], agentThreads = [], agentReports = [], threadsByMessage = {}, pendingUserQuestion, onAnswerUserQuestion, activeAgent, onSuggestionClick, onSaveToLearnings }: ChatMessageListProps) {
   const agentIconName = useSettingsStore((s) => s.agentIcon);
   const [agentMap, setAgentMap] = useState<Record<string, { displayName?: string; icon?: string; color?: string }>>({});
 
-  // Load agent info for thread display
+  // Load agent info for labels, avatars, and thread display
   useEffect(() => {
-    if (agentThreads.length === 0) return;
     agentsApi.list().then(all => {
       const map: Record<string, { displayName?: string; icon?: string; color?: string }> = {};
       for (const a of all) map[a.name] = { displayName: a.displayName, icon: a.icon, color: a.color };
       setAgentMap(map);
     }).catch(() => {});
-  }, [agentThreads.length > 0]);
+  }, []);
   const AgentIcon = AGENT_ICONS[agentIconName] ?? Bot;
   const bottomRef = useRef<HTMLDivElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -693,151 +760,158 @@ export default function ChatMessageList({ messages, streamText, thinkingText, st
         <div
           className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'} ff-msg-enter`}
         >
-          <div className={`group/msg flex gap-3 ${msg.role === 'user' ? 'flex-row-reverse max-w-[75%]' : 'max-w-[85%]'}`}>
-            {/* Avatar */}
-            <div
-              className={`shrink-0 w-8 h-8 rounded-lg flex items-center justify-center mt-0.5 ${
-                msg.role === 'user'
-                  ? 'bg-accent-blue/10 border border-accent-blue/20 text-accent-blue'
-                  : msg.status === 'failed'
-                    ? 'bg-red-500/10 border border-red-500/20 text-red-400'
-                    : 'bg-surface-200/80 border border-border/40 text-gray-400'
-              }`}
-            >
-              {msg.role === 'user' ? (
+          <div className={`group/msg flex gap-3 ${msg.role === 'user' ? 'flex-row-reverse max-w-[75%]' : 'max-w-[90%]'}`}>
+            {/* Avatar — only for user messages */}
+            {msg.role === 'user' && (
+              <div className="shrink-0 w-8 h-8 rounded-lg flex items-center justify-center mt-0.5 bg-accent-blue/10 border border-accent-blue/20 text-accent-blue">
                 <User className="w-4 h-4" />
-              ) : msg.status === 'failed' ? (
-                <AlertCircle className="w-4 h-4" />
-              ) : (
-                <AgentIcon className="w-4 h-4" />
-              )}
-            </div>
+              </div>
+            )}
 
             {/* Content */}
-            <div className={`min-w-0 ${msg.role === 'user' ? 'text-right' : ''}`}>
-              {/* Header: label + meta */}
-              <div className={`flex items-center gap-2 mb-1.5 ${msg.role === 'user' ? 'justify-end' : ''}`}>
-                <span className="text-[10px] font-label uppercase tracking-widest text-gray-500">
-                  {msg.role === 'user' ? 'You' : 'FlowForge'}
-                </span>
-                {msg.createdAt && (
-                  <span className="text-[10px] font-mono text-gray-700 flex items-center gap-1">
-                    <Clock className="w-2.5 h-2.5" />
-                    {formatTime(msg.createdAt)}
-                  </span>
-                )}
-                {msg.costUsd != null && msg.costUsd > 0 && (
-                  <span className="text-[10px] font-mono text-gray-600 bg-surface-200/50 px-1.5 py-0.5 rounded">
-                    ${msg.costUsd.toFixed(4)}
-                  </span>
-                )}
-                {msg.durationMs != null && msg.durationMs > 0 && (
-                  <span className="text-[10px] font-mono text-gray-600">
-                    {(msg.durationMs / 1000).toFixed(1)}s
-                  </span>
-                )}
-              </div>
-
+            <div className={`min-w-0 flex-1 ${msg.role === 'user' ? 'text-right' : ''}`}>
               {/* Message bubble */}
               {msg.role === 'user' ? (
-                <div className="inline-block px-4 py-2.5 rounded-2xl rounded-br-sm bg-accent-blue/15 border border-accent-blue/10 text-sm font-body text-gray-200 leading-relaxed whitespace-pre-wrap break-words">
-                  {renderUserContent(msg.content)}
-                </div>
-              ) : (
                 <>
-                  {/* Tool calls (above the text bubble) */}
-                  <ToolCallsSection calls={msg.toolCalls} />
-                  {/* Text response */}
-                  {msg.content && (
-                    <div className={`${msg.toolCalls?.length ? 'mt-2 ' : ''}px-4 py-3 rounded-2xl rounded-bl-sm border text-sm font-body leading-relaxed break-words ${
-                      msg.status === 'failed'
-                        ? 'bg-red-500/5 border-red-500/20 text-red-300'
-                        : 'bg-surface-100/80 border-border/30 text-gray-300'
-                    }`}>
-                      {renderMarkdown(msg.content)}
-                    </div>
-                  )}
+                  <div className="flex items-center gap-2 mb-1.5 justify-end">
+                    <span className="text-[10px] font-label uppercase tracking-widest text-gray-500">You</span>
+                    {msg.createdAt && <span className="text-[10px] font-mono text-gray-700 flex items-center gap-1"><Clock className="w-2.5 h-2.5" />{formatTime(msg.createdAt)}</span>}
+                  </div>
+                  <div className="inline-block px-4 py-2.5 rounded-2xl rounded-br-sm bg-accent-blue/15 border border-accent-blue/10 text-sm font-body text-gray-200 leading-relaxed whitespace-pre-wrap break-words">
+                    {renderUserContent(msg.content)}
+                  </div>
                 </>
-              )}
+              ) : (() => {
+                const agentColor = activeAgent && agentMap[activeAgent]?.color ? agentMap[activeAgent].color : '#6b7280';
+                const agentInfo = activeAgent ? agentMap[activeAgent] : undefined;
+                return (
+                  <div>
+                    {/* Agent header */}
+                    <div className="flex items-center gap-2 mb-1.5">
+                      {agentInfo ? (
+                        <div className="w-5 h-5 rounded-md flex items-center justify-center shrink-0" style={{ backgroundColor: agentColor + '15', border: `1px solid ${agentColor}25` }}>
+                          <RoleIcon icon={agentInfo.icon} color={agentColor} size={13} />
+                        </div>
+                      ) : null}
+                      <span className="text-[12px] font-heading font-semibold tracking-wide" style={{ color: agentColor }}>
+                        {agentInfo?.displayName ?? 'Assistant'}
+                      </span>
+                      {msg.createdAt && <span className="text-[10px] font-mono text-gray-700 flex items-center gap-1"><Clock className="w-2.5 h-2.5" />{formatTime(msg.createdAt)}</span>}
+                      {msg.costUsd != null && msg.costUsd > 0 && <span className="text-[10px] font-mono text-gray-600">${msg.costUsd.toFixed(4)}</span>}
+                      {msg.durationMs != null && msg.durationMs > 0 && <span className="text-[10px] font-mono text-gray-600">{(msg.durationMs / 1000).toFixed(1)}s</span>}
+                    </div>
 
-              {/* Save to learnings + error */}
-              <div className="flex items-center gap-2 mt-1">
-                {msg.role === 'assistant' && msg.content && onSaveToLearnings && (
-                  <button
-                    onClick={() => onSaveToLearnings(msg.content)}
-                    className="flex items-center gap-1 text-[10px] text-gray-600 hover:text-accent-blue transition-colors opacity-0 group-hover/msg:opacity-100"
-                    title="Save to learnings"
-                  >
-                    <Bookmark className="w-3 h-3" /> Save
-                  </button>
-                )}
-              </div>
-              {msg.error && (
-                <div className="mt-1 flex items-center gap-1.5 text-xs text-red-400 font-mono bg-red-500/5 border border-red-500/10 px-2.5 py-1.5 rounded-md">
-                  <AlertCircle className="w-3 h-3 shrink-0" />
-                  {msg.error}
-                </div>
-              )}
+                    {/* Thread-line container — brighter line for main response */}
+                    <div className="ml-2 pl-3 pr-3 border-l-[3px] rounded-bl-md" style={{
+                      borderColor: msg.status === 'failed' ? '#ef4444a0' : (agentColor + '80'),
+                      backgroundColor: msg.status === 'failed' ? '#ef444408' : (agentColor + '08'),
+                    }}>
+                      {/* Tool calls + threads */}
+                      <ToolCallsSection calls={msg.toolCalls} threads={msgThreads} agentMap={agentMap} />
+
+                      {/* Text response */}
+                      {msg.content && (
+                        <div className={`${msg.toolCalls?.length ? 'mt-2 ' : ''}py-2 text-sm font-body leading-relaxed break-words ${
+                          msg.status === 'failed' ? 'text-red-300' : 'text-gray-300'
+                        }`}>
+                          {renderMarkdown(msg.content)}
+                        </div>
+                      )}
+
+                      {/* Save to learnings */}
+                      <div className="flex items-center gap-2 mt-1 pb-1">
+                        {msg.content && onSaveToLearnings && (
+                          <button
+                            onClick={() => onSaveToLearnings(msg.content)}
+                            className="flex items-center gap-1 text-[10px] text-gray-600 hover:text-accent-blue transition-colors opacity-0 group-hover/msg:opacity-100"
+                            title="Save to learnings"
+                          >
+                            <Bookmark className="w-3 h-3" /> Save
+                          </button>
+                        )}
+                      </div>
+
+                      {/* Error */}
+                      {msg.error && (
+                        <div className="mt-1 flex items-center gap-1.5 text-xs text-red-400 font-mono bg-red-500/5 border border-red-500/10 px-2.5 py-1.5 rounded-md">
+                          <AlertCircle className="w-3 h-3 shrink-0" />
+                          {msg.error}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                );
+              })()}
             </div>
           </div>
         </div>
 
-        {/* Inline threads for this assistant message */}
-        {msgThreads && msgThreads.length > 0 && (
-          <div className="ml-11 space-y-2">
-            {msgThreads.map(thread => (
-              <AgentThread
-                key={thread.conversationId}
-                thread={thread}
-                agents={agentMap}
-              />
-            ))}
-          </div>
-        )}
+        {/* Threads not linked to a tool call (fallback — render below message) */}
+        {msgThreads && msgThreads.length > 0 && (() => {
+          // Only render threads that weren't already rendered inline with tool calls
+          const toolConvIds = new Set(
+            (msg.toolCalls ?? [])
+              .map(tc => (tc.result as Record<string, unknown>)?.conversation_id as string)
+              .filter(Boolean)
+          );
+          const unlinked = msgThreads.filter(t => !toolConvIds.has(t.conversationId));
+          if (unlinked.length === 0) return null;
+          return (
+            <div className="ml-11 space-y-2">
+              {buildThreadTree(unlinked).map(thread => (
+                <AgentThread key={thread.conversationId} thread={thread} agents={agentMap} />
+              ))}
+            </div>
+          );
+        })()}
         </React.Fragment>);
       })}
 
       {/* Streaming message */}
-      {streaming && (
-        <div className="flex gap-3 ff-msg-enter">
-          <div className="shrink-0 w-8 h-8 rounded-lg flex items-center justify-center bg-accent-blue/15 border border-accent-blue/30 text-accent-blue mt-0.5">
-            <AgentIcon className="w-4 h-4 ff-agent-thinking" />
-          </div>
-          <div className="flex-1 min-w-0 max-w-[85%]">
+      {streaming && (() => {
+        const sAgentColor = activeAgent && agentMap[activeAgent]?.color ? agentMap[activeAgent].color : '#6b7280';
+        const sAgentInfo = activeAgent ? agentMap[activeAgent] : undefined;
+        return (
+          <div className="ff-msg-enter max-w-[90%]">
+            {/* Agent header */}
             <div className="flex items-center gap-2 mb-1.5">
-              <span className="text-[10px] font-label uppercase tracking-widest text-gray-500">
-                FlowForge
+              {sAgentInfo ? (
+                <div className="w-5 h-5 rounded-md flex items-center justify-center shrink-0" style={{ backgroundColor: sAgentColor + '15', border: `1px solid ${sAgentColor}25` }}>
+                  <RoleIcon icon={sAgentInfo.icon} color={sAgentColor} size={13} />
+                </div>
+              ) : null}
+              <span className="text-[12px] font-heading font-semibold tracking-wide" style={{ color: sAgentColor }}>
+                {sAgentInfo?.displayName ?? 'Assistant'}
               </span>
               <span className="text-[10px] text-accent-blue font-mono flex items-center gap-1.5">
                 <span className="w-1.5 h-1.5 rounded-full bg-accent-blue animate-pulse" />
                 generating
               </span>
             </div>
-            {/* Thinking indicator */}
-            {thinkingText && !streamText && (
-              <ThinkingBlock text={thinkingText} />
-            )}
-            {/* Active tool calls during streaming */}
-            <ActiveToolCallsSection calls={activeToolCalls} />
-            {/* Streaming text */}
-            <div className={`${activeToolCalls.length > 0 || (thinkingText && !streamText) ? 'mt-2 ' : ''}px-4 py-3 rounded-2xl rounded-bl-sm bg-surface-100/80 border border-border/30 text-sm text-gray-300 font-body leading-relaxed break-words`}>
-              {streamText ? (
-                <>
-                  {renderMarkdown(streamText)}
-                  <span className="inline-block w-0.5 h-4 bg-accent-blue/70 ml-0.5 animate-pulse align-middle" />
-                </>
-              ) : thinkingText ? (
-                <span className="text-purple-400/60 text-xs font-mono flex items-center gap-1.5">
-                  <Brain className="w-3 h-3 animate-pulse" />
-                  Processing...
-                </span>
-              ) : (
-                <TypingDots />
-              )}
+
+            {/* Thread-line container */}
+            <div className="ml-2 pl-3 pr-3 border-l-[3px] rounded-bl-md" style={{ borderColor: sAgentColor + '80', backgroundColor: sAgentColor + '08' }}>
+              {thinkingText && !streamText && <ThinkingBlock text={thinkingText} />}
+              <ActiveToolCallsSection calls={activeToolCalls} liveThreads={agentThreads} agentMap={agentMap} />
+              <div className={`${activeToolCalls.length > 0 || (thinkingText && !streamText) ? 'mt-2 ' : ''}py-2 text-sm text-gray-300 font-body leading-relaxed break-words`}>
+                {streamText ? (
+                  <>
+                    {renderMarkdown(streamText)}
+                    <span className="inline-block w-0.5 h-4 bg-accent-blue/70 ml-0.5 animate-pulse align-middle" />
+                  </>
+                ) : thinkingText ? (
+                  <span className="text-purple-400/60 text-xs font-mono flex items-center gap-1.5">
+                    <Brain className="w-3 h-3 animate-pulse" />
+                    Processing...
+                  </span>
+                ) : (
+                  <TypingDots />
+                )}
+              </div>
             </div>
           </div>
-        </div>
-      )}
+        );
+      })()}
 
       {/* Agent progress reports */}
       {agentReports.length > 0 && (
@@ -859,27 +933,30 @@ export default function ChatMessageList({ messages, streamText, thinkingText, st
         </div>
       )}
 
-      {/* Agent threads (delegation conversations) */}
-      {agentThreads.length > 0 && (
-        <div className="mx-4 space-y-2">
-          {agentThreads.map(thread => (
-            <AgentThread
-              key={thread.conversationId}
-              thread={{
-                conversationId: thread.conversationId,
-                fromAgent: thread.fromAgent,
-                toAgent: thread.toAgent,
-                task: thread.task,
-                status: thread.status as 'active' | 'completed' | 'failed',
-                summary: thread.summary,
-                costUsd: thread.costUsd,
-                durationMs: thread.durationMs,
-                depth: thread.depth,
-              }}
-              agents={agentMap}
-            />
-          ))}
-        </div>
+      {/* Agent threads — only render orphans not already shown inline with tool calls */}
+      {agentThreads.length > 0 && !streaming && (() => {
+        // During streaming, threads are rendered inline with ActiveToolCallsSection
+        // After completion, they're rendered inline with ToolCallsSection via threadsByMessage
+        // This section only catches threads that somehow aren't linked to either
+        const orphans = agentThreads.filter(t => !t.parentConversationId);
+        if (orphans.length === 0) return null;
+        return (
+          <div className="mx-4 space-y-2">
+            {buildThreadTree(orphans).map(thread => (
+              <AgentThread key={thread.conversationId} thread={thread} agents={agentMap} />
+            ))}
+          </div>
+        );
+      })()}
+
+      {/* Agent question prompt (ask_user) */}
+      {pendingUserQuestion && onAnswerUserQuestion && (
+        <AgentQuestionPrompt
+          question={pendingUserQuestion.question}
+          fromAgent={pendingUserQuestion.fromAgent}
+          agentInfo={agentMap[pendingUserQuestion.fromAgent]}
+          onAnswer={onAnswerUserQuestion}
+        />
       )}
 
       <div ref={bottomRef} />

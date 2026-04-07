@@ -9,11 +9,27 @@
     --color-surface-100: 17 23 48;
     --color-surface-200: 24 30 56;
     --color-border: 30 39 64;
+    --color-text-primary: 248 250 252;
+    --color-text-secondary: 203 213 225;
+    --color-text-muted: 148 163 184;
+    --color-text-subtle: 100 116 139;
     --color-accent: 0 212 255;
     --color-accent-green: 0 255 136;
     --color-accent-red: 255 51 102;
     --color-accent-yellow: 255 170 0;
     --color-accent-purple: 168 85 247;
+    --color-terminal-chrome: 107 114 128;
+    --color-flow-edge-default: 75 85 99;
+    --color-flow-edge-conditional: 168 85 247;
+    --color-flow-edge-retry: 234 179 8;
+    --color-editor-background: 20 22 32;
+    --color-editor-line-highlight: 26 29 43;
+    --color-editor-gutter: 15 17 23;
+    --color-mermaid-line: 75 85 99;
+    --color-mermaid-node-border: 75 85 99;
+    --color-mermaid-cluster-bg: 34 37 54;
+    --color-mermaid-main-bg: 26 29 43;
+    --color-mermaid-edge-label-bg: 26 29 43;
     /* Hex values for non-Tailwind usage (gradients, box-shadow, etc.) */
     --accent-hex: #00d4ff;
     --accent-red-hex: #ff3366;
@@ -24,7 +40,9 @@
   }
 
   body {
-    @apply bg-surface text-gray-100 font-body;
+    @apply font-body;
+    background-color: rgb(var(--color-surface));
+    color: rgb(var(--color-text-primary));
   }
 
   h1, h2, h3, h4, h5, h6 {
@@ -109,16 +127,20 @@
   }
 
   .btn-ghost {
-    @apply btn bg-transparent border-gray-600/30 text-gray-400;
-    @apply hover:border-accent-blue/40 hover:text-accent-blue hover:bg-accent-blue/5;
+    @apply btn bg-transparent;
+    border-color: rgb(var(--color-border) / 0.35);
+    color: rgb(var(--color-text-secondary));
+    @apply hover:text-accent-blue hover:bg-accent-blue/5;
+    @apply hover:border-accent-blue/40;
     @apply active:scale-[0.97];
   }
 
   /* ─── Inputs: Terminal style with bottom accent ─── */
   .input {
-    @apply bg-surface-200/80 border-0 border-b-2 border-accent-blue/30 text-gray-100 rounded-none px-3 py-2 text-sm font-body;
+    @apply bg-surface-200/80 border-0 border-b-2 border-accent-blue/30 rounded-none px-3 py-2 text-sm font-body;
     @apply focus:outline-none focus:border-accent-blue focus:shadow-glow-blue;
     @apply transition-all duration-200;
+    color: rgb(var(--color-text-primary));
   }
 
   /* ─── Selects: Themed dropdowns ─── */
@@ -187,6 +209,24 @@
   /* ─── Agent icon streaming animation ─── */
   .ff-agent-thinking {
     animation: ff-agent-glow 2s ease-in-out infinite, ff-agent-spin 3s linear infinite;
+  }
+}
+
+@layer utilities {
+  .text-theme-primary {
+    color: rgb(var(--color-text-primary));
+  }
+
+  .text-theme-secondary {
+    color: rgb(var(--color-text-secondary));
+  }
+
+  .text-theme-muted {
+    color: rgb(var(--color-text-muted));
+  }
+
+  .text-theme-subtle {
+    color: rgb(var(--color-text-subtle));
   }
 }
 

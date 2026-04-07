@@ -1,7 +1,7 @@
 /**
  * Chat Service
  * Manages chat sessions with tool-calling via Claude Code SDK (no API key needed).
- * Phase 3-4: Workflow execution + role spawning
+ * Phase 3-4: Workflow execution + agent spawning
  * Phase 5-6: Database queries, debugging, dashboard stats
  */
 
@@ -10,7 +10,7 @@ import { ObjectId } from 'mongodb';
 import type { Response } from 'express';
 import { runChatLLM, type ChatLLMMessage, type ChatProvider, PROVIDERS } from './chat-llm.js';
 import { AlertService } from './alert.service.js';
-import { registerActiveSession, unregisterActiveSession } from './chat-tools.js';
+import { registerActiveSession, unregisterActiveSession, waitForBackgroundTasks } from './chat-tools.js';
 import { searchSimilar, backfillEmbeddings } from './embedding.service.js';
 // Note: embedding.service.ts re-exports from @flowforge/engine — single implementation shared by engine + server
 
@@ -25,7 +25,7 @@ export interface ChatSession {
   totalCostUsd: number;
   provider: ChatProvider;
   model?: string;
-  claudeSessionId?: string;
+  llmSessionId?: string;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -298,7 +298,7 @@ export class ChatService {
   /**
    * Run LLM via Anthropic Messages API with native tool calling.
    */
-  private async runLLM(sessionId: string, assistantMsgId: string, content: string, entry: ActiveQuery, agent?: string): Promise<void> {
+  private async runLLM(sessionId: string, assistantMsgId: string, content: string, entry: ActiveQuery, agent?: string, retryCount = 0): Promise<void> {
     const saveInterval = setInterval(() => {
       if (entry.currentText) {
         this.messages.updateOne(
@@ -310,32 +310,34 @@ export class ChatService {
 
     const startMs = Date.now();
 
-    // Register active session so delegation tools can find the session context
-    registerActiveSession({
-      chatSessionId: sessionId,
-      parentMessageId: assistantMsgId,
-      currentAgent: agent, // Team agent name or undefined for FlowForge Assistant
-      delegationDepth: 0,
-      broadcastEvent: (event, data) => broadcastToListeners(entry, event, data),
-    });
+    // Load session state BEFORE try block so catch can access these
+    const session = await this.sessions.findOne({ _id: new ObjectId(sessionId) });
+    const provider = (session?.provider as ChatProvider) ?? 'codex';
+    const model = session?.model as string | undefined;
+    const previousAgent = (session?.activeAgent as string | undefined) ?? undefined;
+    // Agent is LOCKED to the session after first message — ignore agent param on subsequent messages
+    const effectiveAgent = previousAgent ?? agent ?? undefined;
+    const resumeSessionId = (session?.llmSessionId as string | undefined);
 
     try {
-      // Load session for provider config and resume
-      const session = await this.sessions.findOne({ _id: new ObjectId(sessionId) });
-      const provider = (session?.provider as ChatProvider) ?? 'codex';
-      const model = session?.model as string | undefined;
-      const previousAgent = (session?.activeAgent as string | undefined) ?? undefined;
-      const agentChanged = (agent ?? undefined) !== previousAgent;
-      // If agent changed, don't resume the CLI session — start fresh with new system prompt
-      const resumeSessionId = agentChanged ? undefined : (session?.claudeSessionId as string | undefined);
 
-      // Persist the active agent on the session so we can detect changes next message
-      if (agentChanged) {
+      // Set agent on first message only
+      if (!previousAgent && effectiveAgent) {
         await this.sessions.updateOne(
           { _id: new ObjectId(sessionId) },
-          { $set: { activeAgent: agent ?? null, claudeSessionId: null } },
+          { $set: { activeAgent: effectiveAgent } },
         );
       }
+
+      // Register active session with the resolved agent
+      registerActiveSession({
+        chatSessionId: sessionId,
+        parentMessageId: assistantMsgId,
+        currentAgent: effectiveAgent,
+        delegationDepth: 0,
+        broadcastEvent: (event, data) => broadcastToListeners(entry, event, data),
+        pendingBackgroundTasks: 0,
+      });
 
       // Resolve @mentions
       const mentionContext = await resolveMentions(content, this.db);
@@ -369,8 +371,8 @@ export class ChatService {
 
       // Build system prompt: team agent prompt if selected, else default assistant
       let systemPrompt: string;
-      if (agent) {
-        systemPrompt = await this.buildAgentSystemPrompt(agent, provider, content);
+      if (effectiveAgent) {
+        systemPrompt = await this.buildAgentSystemPrompt(effectiveAgent, provider, content);
       } else {
         systemPrompt = await getSystemPrompt(provider, this.db, content);
       }
@@ -396,6 +398,13 @@ export class ChatService {
           entry.toolCalls.push(record);
           broadcastToListeners(entry, 'tool_result', { tool, result: resultData, tool_use_id: toolUseId, durationMs });
         },
+        onSessionId: (sid) => {
+          // Save session ID to DB immediately so auto-retry can resume even if the process times out
+          this.sessions.updateOne(
+            { _id: new ObjectId(sessionId) },
+            { $set: { llmSessionId: sid } },
+          ).catch(() => {});
+        },
       });
 
       clearInterval(saveInterval);
@@ -411,7 +420,7 @@ export class ChatService {
       this.db.collection('chat_logs').insertOne({
         sessionId,
         messageId: assistantMsgId,
-        claudeSessionId: result.sessionId,
+        llmSessionId: result.sessionId,
         userMessage: content,
         assistantResponse: result.text.slice(0, 2000),
         model: result.model,
@@ -423,9 +432,9 @@ export class ChatService {
         timestamp: new Date(),
       }).catch(() => {});
 
-      // Save claudeSessionId for session resume on next message
+      // Save llmSessionId for session resume on next message
       const sessionUpdate: Record<string, unknown> = { updatedAt: new Date() };
-      if (result.sessionId) sessionUpdate.claudeSessionId = result.sessionId;
+      if (result.sessionId) sessionUpdate.llmSessionId = result.sessionId;
 
       await this.sessions.updateOne(
         { _id: new ObjectId(sessionId) },
@@ -466,30 +475,78 @@ export class ChatService {
     } catch (error) {
       clearInterval(saveInterval);
       const errorMsg = error instanceof Error ? error.message : String(error);
+      const isTimeout = errorMsg.toLowerCase().includes('timed out') || errorMsg.toLowerCase().includes('timeout');
       console.error('Chat LLM error:', errorMsg);
+
+      // Auto-retry on timeout: resume the session with "continue" prompt
+      // This handles Codex/Claude CLI process timeouts during long delegations
+      const savedSessionId = (await this.sessions.findOne({ _id: new ObjectId(sessionId) }))?.llmSessionId as string | undefined;
+      if (isTimeout && savedSessionId && retryCount < 3) {
+        console.log(`[chat] Auto-retrying after timeout (attempt ${retryCount + 1}/3), resuming session ${savedSessionId.slice(0, 12)}...`);
+        broadcastToListeners(entry, 'agent_report', {
+          agent: effectiveAgent ?? 'assistant',
+          message: 'Connection timed out — automatically reconnecting and continuing...',
+          status: 'in_progress',
+          timestamp: new Date().toISOString(),
+        });
+
+        // Re-run with "continue from where you left off" as the prompt
+        try {
+          const retryResult = await runChatLLM(this.db, {
+            provider,
+            model,
+            systemPrompt: effectiveAgent
+              ? await this.buildAgentSystemPrompt(effectiveAgent, provider, 'continue')
+              : await getSystemPrompt(provider, this.db, 'continue'),
+            messages: [{ role: 'user', content: 'Continue from where you left off. Complete the delegation and provide the final response.' }],
+            resumeSessionId: savedSessionId,
+            onText: (fullText) => { entry.currentText = fullText; broadcastToListeners(entry, 'message_delta', { text: fullText, messageId: assistantMsgId }); },
+            onThinking: (thinking) => { broadcastToListeners(entry, 'thinking', { text: thinking, messageId: assistantMsgId }); },
+            onToolStart: (tool, args, toolUseId) => { broadcastToListeners(entry, 'tool_start', { tool, args, tool_use_id: toolUseId }); },
+            onToolResult: (tool, resultData, toolUseId, durationMs) => {
+              entry.toolCalls.push({ tool, args: {}, result: resultData, durationMs, timestamp: new Date() });
+              broadcastToListeners(entry, 'tool_result', { tool, result: resultData, tool_use_id: toolUseId, durationMs });
+            },
+            onSessionId: (sid) => {
+              this.sessions.updateOne({ _id: new ObjectId(sessionId) }, { $set: { llmSessionId: sid } }).catch(() => {});
+            },
+          });
+
+          // Save successful retry result
+          const durationMs = Date.now() - startMs;
+          await this.messages.updateOne(
+            { _id: new ObjectId(assistantMsgId) },
+            { $set: { content: retryResult.text, status: 'completed', costUsd: retryResult.costUsd, durationMs, toolCalls: entry.toolCalls, completedAt: new Date() } },
+          );
+          if (retryResult.sessionId) {
+            await this.sessions.updateOne({ _id: new ObjectId(sessionId) }, { $set: { llmSessionId: retryResult.sessionId } });
+          }
+          broadcastToListeners(entry, 'message_complete', { messageId: assistantMsgId, text: retryResult.text, costUsd: retryResult.costUsd, durationMs, toolCalls: entry.toolCalls });
+          return; // success — skip error handling below
+        } catch (retryErr) {
+          console.error('Auto-retry also failed:', retryErr instanceof Error ? retryErr.message : retryErr);
+          // Fall through to normal error handling
+        }
+      }
 
       await this.messages.updateOne(
         { _id: new ObjectId(assistantMsgId) },
         { $set: { content: entry.currentText || '', status: 'failed', error: errorMsg, toolCalls: entry.toolCalls, completedAt: new Date() } },
       );
 
-      // Save failed trace
       this.db.collection('chat_logs').insertOne({
-        sessionId,
-        messageId: assistantMsgId,
-        userMessage: content,
-        error: errorMsg,
-        toolCalls: entry.toolCalls,
-        status: 'failed',
-        durationMs: Date.now() - startMs,
-        timestamp: new Date(),
+        sessionId, messageId: assistantMsgId, userMessage: content,
+        error: errorMsg, toolCalls: entry.toolCalls, status: 'failed',
+        durationMs: Date.now() - startMs, timestamp: new Date(),
       }).catch(() => {});
 
       broadcastToListeners(entry, 'error', { error: errorMsg, messageId: assistantMsgId });
-
-      // Fire alert
       new AlertService(this.db).onChatError(sessionId, errorMsg).catch(() => {});
     } finally {
+      // Wait for background delegations/spawns to finish before closing SSE stream
+      // Cap at 30s for cleanup — if background tasks are still running after that,
+      // they'll complete on their own but the SSE stream closes so UI isn't stuck
+      await waitForBackgroundTasks(sessionId, 30_000);
       unregisterActiveSession(sessionId);
       for (const listener of entry.listeners) { try { listener.end(); } catch {} }
       activeQueries.delete(sessionId);
@@ -521,23 +578,35 @@ export class ChatService {
     if (personality) parts.push(`\nPersonality: ${personality}`);
 
     if (canDelegateTo.length > 0) {
-      parts.push(`\nYou can delegate tasks to other agents: ${canDelegateTo.join(', ')}. Use the delegate_to_agent tool to involve them.`);
-      parts.push(`MULTI-TURN DELEGATION: When you delegate, you get back a conversation_id. Use it to have follow-up conversations with the same agent — ask clarifying questions, request more detail, give feedback. Have a real back-and-forth conversation before synthesizing your response.`);
+      parts.push(`\nYou can delegate tasks to: ${canDelegateTo.join(', ')} using delegate_to_agent.`);
     }
 
     if (canTrigger.length > 0) {
-      parts.push(`You can trigger these workflows: ${canTrigger.join(', ')} using the run_workflow tool.`);
+      parts.push(`You can trigger workflows: ${canTrigger.join(', ')} using run_workflow.`);
     }
 
     parts.push(`
+DELEGATION FLOW:
+1. delegate_to_agent(agent_name, task) → returns { conversation_id }
+2. get_delegation_result(conversation_id) → blocks up to 90s
+   - "waiting": call get_delegation_result again
+   - "question": agent is asking YOU something → answer_question(conversation_id, answer) → get_delegation_result again
+   - "completed": done, read response
+3. To follow up: delegate_to_agent(agent_name, follow_up) → reuses same conversation
+
+ASKING THE USER:
+- If you need info from the user, call ask_user(question). Blocks until user answers.
+- Only use ask_user when NO agent can answer.
+
 RULES:
 1. Before destructive actions, confirm with the user.
 2. When the user corrects you, silently call save_learning.
-3. Use delegate_to_agent to involve other agents — don't try to do everything yourself.
-4. Have MULTI-TURN conversations with agents you delegate to. Ask follow-ups, request detail, discuss approaches — just like you would with a real team member. Use the conversation_id to continue the thread.
-5. Use report_to_user for progress updates during long operations.
-6. Only respond to the user AFTER you've completed all agent conversations. The user should see the full thread, then your synthesis.
-7. Be concise. Respond in markdown.`);
+3. Delegate to agents — don't do everything yourself.
+4. When get_delegation_result returns "question", ANSWER IT via answer_question. Don't ignore your team's questions.
+5. If you don't know the answer to an agent's question, call ask_user to ask the user.
+6. NEVER respond to the user before ALL delegations are complete.
+7. Use report_to_user for progress updates.
+8. Be concise. Respond in markdown.`);
 
     // Load learnings
     try {

@@ -1,7 +1,7 @@
 /**
  * Chat LLM Router
  * Routes to the correct provider. All providers use MCP for tool access:
- * - FlowForge MCP server: our 16 built-in tools (workflows, executions, roles, etc.)
+ * - FlowForge MCP server: our built-in tools (workflows, executions, agents, etc.)
  * - External MCP servers: Linear, GitHub, etc. (configured in Settings)
  */
 
@@ -37,6 +37,7 @@ export interface ChatLLMOptions {
   onThinking?: (thinking: string) => void;
   onToolStart: (tool: string, args: Record<string, unknown>, toolUseId: string) => void;
   onToolResult: (tool: string, result: Record<string, unknown>, toolUseId: string, durationMs: number) => void;
+  onSessionId?: (sessionId: string) => void;
   skipTools?: boolean;
   signal?: AbortSignal;
 }
@@ -101,12 +102,12 @@ async function runClaudeCLI(
     Object.assign(mcpServers, external);
 
     const names = Object.keys(mcpServers);
-    systemPrompt += `\n\nYou have MCP tools from: ${names.join(', ')}. Use them directly. The "flowforge" tools provide workflow, execution, repo, role, and dashboard data.`;
+    systemPrompt += `\n\nYou have MCP tools from: ${names.join(', ')}. Use them directly. The "flowforge" tools provide workflow, execution, repo, agent, and dashboard data.`;
   }
 
   const lastUserMsg = messages.length > 0 ? messages[messages.length - 1].content : '';
   const trace: ChatTraceEvent[] = [];
-  let claudeSessionId: string | undefined = resumeSessionId;
+  let llmSessionId: string | undefined = resumeSessionId;
   const activeMcpToolCalls = new Map<string, { tool: string; args: Record<string, unknown>; startMs: number }>();
 
   const sdkOptions: Record<string, unknown> = {
@@ -125,9 +126,10 @@ async function runClaudeCLI(
   const conversation = query({ prompt: lastUserMsg, options: sdkOptions as any });
 
   for await (const message of conversation) {
-    if ('session_id' in message && message.session_id && !claudeSessionId) {
-      claudeSessionId = message.session_id as string;
-      trace.push({ timestamp: new Date(), type: 'session_start', text: claudeSessionId });
+    if ('session_id' in message && message.session_id && !llmSessionId) {
+      llmSessionId = message.session_id as string;
+      trace.push({ timestamp: new Date(), type: 'session_start', text: llmSessionId });
+      callbacks.onSessionId?.(llmSessionId);
     }
 
     if (message.type === 'assistant') {
@@ -178,11 +180,11 @@ async function runClaudeCLI(
         const rt = (message as any).result;
         if (rt !== fullText) { fullText = rt; callbacks.onText(fullText); }
       }
-      if ((message as any).session_id) claudeSessionId = (message as any).session_id;
+      if ((message as any).session_id) llmSessionId = (message as any).session_id;
     }
   }
 
-  return { text: fullText, costUsd, sessionId: claudeSessionId, trace };
+  return { text: fullText, costUsd, sessionId: llmSessionId, trace };
 }
 
 // ── Main Router ──
@@ -204,6 +206,7 @@ export async function runChatLLM(db: Db, options: ChatLLMOptions): Promise<ChatL
     onThinking: options.onThinking,
     onToolStart: options.onToolStart,
     onToolResult: options.onToolResult,
+    onSessionId: options.onSessionId,
   };
 
   let result: { text: string; costUsd: number; sessionId?: string; trace: ChatTraceEvent[] };

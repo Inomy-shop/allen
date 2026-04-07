@@ -19,7 +19,7 @@ const API_BASE = process.env.FLOWFORGE_API_URL ?? `http://localhost:${process.en
 const TOOLS = [
   { name: 'list_workflows', description: 'List all available workflows with name, description, node count, validation status', params: {} },
   { name: 'run_workflow', description: 'Start executing a workflow. Returns execution ID.', params: { workflow_name: 'string (required)', input: 'object — workflow input parameters' } },
-  { name: 'get_execution', description: 'Get status and details of a workflow execution', params: { execution_id: 'string (required)' } },
+  { name: 'get_execution', description: 'Wait for execution to complete. Blocks up to 90s. Returns response when done. If status="waiting", call again. Includes agent response from traces when completed.', params: { execution_id: 'string (required)' } },
   { name: 'list_executions', description: 'List recent executions. Filter by status or workflow name.', params: { status: 'string', workflow_name: 'string', limit: 'number' } },
   { name: 'cancel_execution', description: 'Cancel a running execution', params: { execution_id: 'string (required)' } },
   { name: 'list_repos', description: 'List registered repositories with tech stack', params: {} },
@@ -34,6 +34,10 @@ const TOOLS = [
   { name: 'submit_execution_input', description: 'Submit input to a paused workflow execution', params: { execution_id: 'string (required)', node: 'string (required)', data: 'object (required)' } },
   { name: 'save_learning', description: 'Save a learning/correction to system memory. Call silently when user corrects you or states a preference.', params: { content: 'string (required) — generalized rule', type: 'string (required) — fact, pattern, mistake, or preference' } },
   { name: 'delegate_to_agent', description: 'Delegate a task to another team agent or continue a multi-turn conversation. Pass conversation_id to continue an existing thread with follow-up questions.', params: { agent_name: 'string (required) — target agent', task: 'string (required) — task or follow-up message', context: 'object — relevant context', conversation_id: 'string — existing conversation ID to continue (for multi-turn)' } },
+  { name: 'get_delegation_result', description: 'Wait for delegation result. Blocks up to 90s. If "waiting" call again. If "question" — agent is asking you something, answer via answer_question then call this again. If "completed" — done.', params: { conversation_id: 'string (required)' } },
+  { name: 'answer_question', description: 'Answer a question from an agent you delegated to. Use when get_delegation_result returns status="question".', params: { conversation_id: 'string (required)', answer: 'string (required)' } },
+  { name: 'ask_caller', description: 'Ask a question to the agent who delegated this task to you. Blocks until they answer. Use when you need clarification.', params: { question: 'string (required)', conversation_id: 'string — conversation ID (optional, auto-detected from context)' } },
+  { name: 'ask_user', description: 'Ask the user a question directly. Blocks until user answers. Only use when no agent can answer.', params: { question: 'string (required)' } },
   { name: 'report_to_user', description: 'Send a progress update to the user during a delegation chain.', params: { message: 'string (required)', status: 'string — in_progress | completed | needs_input' } },
 ];
 
@@ -61,7 +65,35 @@ async function executeTool(name: string, args: Record<string, unknown>): Promise
       const qs = params.toString();
       return callAPI(`/api/executions${qs ? '?' + qs : ''}`);
     }
-    case 'get_execution': return callAPI(`/api/executions/${args.execution_id}`);
+    case 'get_execution': {
+      // Chunked long-poll: wait up to 90s for completion, then return
+      const execId = args.execution_id;
+      let eWait = 5000;
+      const eMaxWait = 30_000;
+      const eDeadline = Date.now() + 90_000;
+      while (Date.now() < eDeadline) {
+        const res = await fetch(`${API_BASE}/api/executions/${execId}`);
+        const data = await res.json() as Record<string, unknown>;
+        if (data.status !== 'running' && data.status !== 'queued') {
+          // Fetch trace for the response
+          try {
+            const traceRes = await fetch(`${API_BASE}/api/executions/${execId}/traces`);
+            const traces = await traceRes.json() as Array<Record<string, unknown>>;
+            const lastTrace = traces[traces.length - 1];
+            if (lastTrace) {
+              const output = lastTrace.output as Record<string, unknown> | undefined;
+              data.response = output?.response ?? lastTrace.rawResponse ?? undefined;
+              data.session_id = output?.session_id ?? undefined;
+            }
+          } catch {}
+          return data;
+        }
+        process.stderr.write(`[mcp] waiting for execution ${execId} (${Math.round(eWait / 1000)}s interval)\n`);
+        await new Promise(r => setTimeout(r, eWait));
+        eWait = Math.min(eWait * 1.3, eMaxWait);
+      }
+      return { id: execId, status: 'waiting', message: 'Execution still running. Call get_execution again.' };
+    }
     case 'cancel_execution': {
       const url = `${API_BASE}/api/executions/${args.execution_id}/cancel`;
       const res = await fetch(url, { method: 'POST' });
@@ -160,6 +192,62 @@ async function executeTool(name: string, args: Record<string, unknown>): Promise
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ agent_name: args.agent_name, task: args.task, context: args.context, conversation_id: args.conversation_id }),
+      });
+      return res.json();
+    }
+    case 'get_delegation_result': {
+      // Chunked long-poll: wait up to 90s (under MCP's 120s transport timeout), then return
+      // If still active, return { status: "waiting" } so the LLM calls again
+      const convId = args.conversation_id;
+      let waitMs = 5000;
+      const maxWait = 30_000;
+      const chunkDeadline = Date.now() + 90_000; // 90s max per call
+      while (Date.now() < chunkDeadline) {
+        const res = await fetch(`${API_BASE}/api/chat/delegation/${convId}/status`);
+        const data = await res.json() as Record<string, unknown>;
+        // Return immediately for anything except 'active' (completed, failed, waiting_for_answer)
+        if (data.status !== 'active') {
+          // Map waiting_for_answer to 'question' for the LLM
+          if (data.status === 'waiting_for_answer') data.status = 'question';
+          return data;
+        }
+        process.stderr.write(`[mcp] waiting for delegation ${convId} (${Math.round(waitMs / 1000)}s interval)\n`);
+        await new Promise(r => setTimeout(r, waitMs));
+        waitMs = Math.min(waitMs * 1.3, maxWait);
+      }
+      // Return "waiting" so the LLM calls get_delegation_result again
+      return {
+        conversation_id: convId,
+        status: 'waiting',
+        message: 'Agent is still working. Call get_delegation_result again — it will continue waiting.',
+      };
+    }
+    case 'answer_question': {
+      const url = `${API_BASE}/api/chat/delegate`;
+      const res = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ tool: 'answer_question', conversation_id: args.conversation_id, answer: args.answer }),
+      });
+      return res.json();
+    }
+    case 'ask_caller': {
+      // Blocks server-side until the caller answers
+      const url = `${API_BASE}/api/chat/ask-caller`;
+      const res = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ conversation_id: args.conversation_id, question: args.question }),
+      });
+      return res.json();
+    }
+    case 'ask_user': {
+      // Blocks server-side until the user answers
+      const url = `${API_BASE}/api/chat/ask-user`;
+      const res = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ question: args.question }),
       });
       return res.json();
     }

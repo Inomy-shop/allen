@@ -474,7 +474,7 @@ export class FlowForgeEngine {
               message: `Clarify (${clarifyAction}): ${reason}`,
             });
 
-            const humanData = await this.waitForInput(exec.id, nodeName, 86400);
+            const humanData = await this.waitForInput(exec.id, nodeName);
             this.emit({ event: 'input_received', data: { node: nodeName, data: humanData } });
             Object.assign(exec.state, humanData);
 
@@ -674,7 +674,7 @@ export class FlowForgeEngine {
           createdAt: new Date(),
         });
 
-        const humanData = await this.waitForInput(exec.id, nodeName, nodeDef.timeout);
+        const humanData = await this.waitForInput(exec.id, nodeName);
         this.emit({ event: 'input_received', data: { node: nodeName, data: humanData } });
 
         // Merge human input into state and outputs
@@ -1157,30 +1157,11 @@ export class FlowForgeEngine {
   private waitForInput(
     executionId: string,
     node: string,
-    timeoutStr?: number | string,
   ): Promise<Record<string, unknown>> {
-    return new Promise((resolve, reject) => {
+    return new Promise((resolve) => {
       const key = `${executionId}:${node}`;
       this.pendingInputResolvers.set(key, resolve);
-
-      let timeoutMs = 24 * 60 * 60 * 1000; // default 24h
-      if (typeof timeoutStr === 'number') {
-        timeoutMs = timeoutStr * 1000;
-      } else if (typeof timeoutStr === 'string') {
-        const match = timeoutStr.match(/^(\d+)(h|m|s)$/);
-        if (match) {
-          const val = parseInt(match[1]);
-          const unit = match[2];
-          timeoutMs = val * (unit === 'h' ? 3600000 : unit === 'm' ? 60000 : 1000);
-        }
-      }
-
-      setTimeout(() => {
-        if (this.pendingInputResolvers.has(key)) {
-          this.pendingInputResolvers.delete(key);
-          reject(new Error(`Human input timeout for node ${node}`));
-        }
-      }, timeoutMs);
+      // No timeout — waits indefinitely until submitted or execution is cancelled
     });
   }
 
