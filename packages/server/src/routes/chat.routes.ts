@@ -11,9 +11,9 @@ export function chatRoutes(db: Db): Router {
   // POST /api/chat/spawn-agent — Execute spawn_agent tool via API (used by FlowForge MCP server)
   router.post('/spawn-agent', async (req: Request, res: Response) => {
     try {
-      const { agent_name, prompt, repo_path } = req.body;
+      const { agent_name, prompt, repo_path, session_id } = req.body;
       if (!agent_name || !prompt) return res.status(400).json({ error: 'agent_name and prompt are required' });
-      const result = await executeChatTool('spawn_agent', { agent_name, prompt, repo_path }, db);
+      const result = await executeChatTool('spawn_agent', { agent_name, prompt, repo_path, session_id }, db);
       res.json(result);
     } catch (err: unknown) {
       res.status(500).json({ error: (err as Error).message });
@@ -23,9 +23,9 @@ export function chatRoutes(db: Db): Router {
   // POST /api/chat/delegate — Execute delegate_to_agent tool via API (used by FlowForge MCP server)
   router.post('/delegate', async (req: Request, res: Response) => {
     try {
-      const { agent_name, task, context } = req.body;
+      const { agent_name, task, context, conversation_id } = req.body;
       if (!agent_name || !task) return res.status(400).json({ error: 'agent_name and task are required' });
-      const result = await executeChatTool('delegate_to_agent', { agent_name, task, context }, db);
+      const result = await executeChatTool('delegate_to_agent', { agent_name, task, context, conversation_id }, db);
       res.json(result);
     } catch (err: unknown) {
       res.status(500).json({ error: (err as Error).message });

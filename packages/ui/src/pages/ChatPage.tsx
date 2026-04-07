@@ -32,7 +32,7 @@ export default function ChatPage() {
 
   const {
     sessions, activeSessionId, messages, streaming, streamText,
-    thinkingText, activeToolCalls, agentThreads, agentReports,
+    thinkingText, activeToolCalls, agentThreads, agentReports, threadsByMessage,
     loadingSessions, loadingMessages,
     sendMessage, createSession, switchSession, cancelStream,
   } = useChat();
@@ -53,14 +53,14 @@ export default function ChatPage() {
   const activeSession = sessions.find(s => s._id === activeSessionId);
   const activeProvider = activeSession?.provider ?? selectedProvider;
 
-  // Restore agent selector from session when switching conversations
+  // Restore agent selector from session when switching conversations or on page load
   useEffect(() => {
     if (activeSession?.activeAgent) {
       setSelectedAgent(activeSession.activeAgent);
-    } else if (activeSessionId) {
+    } else if (activeSessionId && activeSession) {
       setSelectedAgent(null);
     }
-  }, [activeSessionId]);
+  }, [activeSessionId, activeSession?.activeAgent]);
 
   useEffect(() => {
     const handler = (e: KeyboardEvent) => { if ((e.metaKey || e.ctrlKey) && e.key === 'k') { e.preventDefault(); setCmdPaletteOpen(prev => !prev); } };
@@ -155,7 +155,7 @@ export default function ChatPage() {
           </p>
         </div>
       ) : (
-        <ChatMessageList messages={messages} streamText={streamText} thinkingText={thinkingText} streaming={streaming} activeToolCalls={activeToolCalls} agentThreads={agentThreads} agentReports={agentReports} onSuggestionClick={handleSuggestionClick} onSaveToLearnings={handleSaveToLearnings} />
+        <ChatMessageList messages={messages} streamText={streamText} thinkingText={thinkingText} streaming={streaming} activeToolCalls={activeToolCalls} agentThreads={agentThreads} agentReports={agentReports} threadsByMessage={threadsByMessage} onSuggestionClick={handleSuggestionClick} onSaveToLearnings={handleSaveToLearnings} />
       )}
 
       {/* Agent selector + Input */}

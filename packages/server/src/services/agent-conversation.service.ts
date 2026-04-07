@@ -1,6 +1,6 @@
 /**
  * Agent Conversation Service
- * Manages agent-to-agent delegation conversations.
+ * Manages agent-to-agent delegation conversations (multi-turn supported).
  * Each delegation creates a conversation record in the agent_conversations collection.
  */
 
@@ -25,8 +25,11 @@ export interface AgentConversation {
   messages: AgentMessage[];
   summary?: string;
   response?: string;
+  /** Claude session ID for resuming multi-turn conversations */
+  agentSessionId?: string;
   costUsd: number;
   durationMs: number;
+  turnCount: number;
   depth: number;
   parentConversationId?: string;
   startedAt: Date;
@@ -34,7 +37,6 @@ export interface AgentConversation {
 }
 
 const MAX_DELEGATION_DEPTH = 3;
-const DELEGATION_TIMEOUT_MS = 120_000;
 
 export class AgentConversationService {
   constructor(private db: Db) {}
@@ -65,6 +67,7 @@ export class AgentConversationService {
       messages: [],
       costUsd: 0,
       durationMs: 0,
+      turnCount: 0,
       depth: params.depth,
       parentConversationId: params.parentConversationId,
       startedAt: new Date(),
@@ -74,13 +77,46 @@ export class AgentConversationService {
   }
 
   /**
+   * Get a conversation by ID.
+   */
+  async get(conversationId: string): Promise<AgentConversation | null> {
+    const { ObjectId } = await import('mongodb');
+    return this.col.findOne({ _id: new ObjectId(conversationId) }) as Promise<AgentConversation | null>;
+  }
+
+  /**
    * Add a message to a conversation.
    */
   async addMessage(conversationId: string, message: AgentMessage): Promise<void> {
     const { ObjectId } = await import('mongodb');
     await this.col.updateOne(
       { _id: new ObjectId(conversationId) },
-      { $push: { messages: message as any } },
+      {
+        $push: { messages: message as any },
+        $inc: { turnCount: 1 },
+      },
+    );
+  }
+
+  /**
+   * Save the Claude session ID for resuming multi-turn conversations.
+   */
+  async saveSessionId(conversationId: string, sessionId: string): Promise<void> {
+    const { ObjectId } = await import('mongodb');
+    await this.col.updateOne(
+      { _id: new ObjectId(conversationId) },
+      { $set: { agentSessionId: sessionId } },
+    );
+  }
+
+  /**
+   * Update cost incrementally (each turn adds cost).
+   */
+  async addCost(conversationId: string, costUsd: number): Promise<void> {
+    const { ObjectId } = await import('mongodb');
+    await this.col.updateOne(
+      { _id: new ObjectId(conversationId) },
+      { $inc: { costUsd } },
     );
   }
 
@@ -147,5 +183,4 @@ export class AgentConversationService {
   }
 
   get maxDepth(): number { return MAX_DELEGATION_DEPTH; }
-  get timeoutMs(): number { return DELEGATION_TIMEOUT_MS; }
 }

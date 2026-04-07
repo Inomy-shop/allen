@@ -522,6 +522,7 @@ export class ChatService {
 
     if (canDelegateTo.length > 0) {
       parts.push(`\nYou can delegate tasks to other agents: ${canDelegateTo.join(', ')}. Use the delegate_to_agent tool to involve them.`);
+      parts.push(`MULTI-TURN DELEGATION: When you delegate, you get back a conversation_id. Use it to have follow-up conversations with the same agent — ask clarifying questions, request more detail, give feedback. Have a real back-and-forth conversation before synthesizing your response.`);
     }
 
     if (canTrigger.length > 0) {
@@ -533,8 +534,10 @@ RULES:
 1. Before destructive actions, confirm with the user.
 2. When the user corrects you, silently call save_learning.
 3. Use delegate_to_agent to involve other agents — don't try to do everything yourself.
-4. Use report_to_user for progress updates during long operations.
-5. Be concise. Respond in markdown.`);
+4. Have MULTI-TURN conversations with agents you delegate to. Ask follow-ups, request detail, discuss approaches — just like you would with a real team member. Use the conversation_id to continue the thread.
+5. Use report_to_user for progress updates during long operations.
+6. Only respond to the user AFTER you've completed all agent conversations. The user should see the full thread, then your synthesis.
+7. Be concise. Respond in markdown.`);
 
     // Load learnings
     try {

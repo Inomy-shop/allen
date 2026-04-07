@@ -1,9 +1,10 @@
-import { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { Bot, User, AlertCircle, Copy, Check, Clock, Wrench, CheckCircle, ExternalLink, Loader2, Brain,
   Sparkles, Zap, Cpu, Atom, Terminal, Code, Rocket, Shield, Hexagon, Flame,
 } from 'lucide-react';
 import type { ChatMessage, ToolCallRecord, ActiveToolCall, AgentThread as AgentThreadType, AgentReport } from '../../hooks/useChat';
 import { AgentThread } from './AgentThread';
+import RoleIcon from '../common/RoleIcon';
 import { useSettingsStore } from '../../stores/settingsStore';
 
 const AGENT_ICONS: Record<string, React.ElementType> = {
@@ -19,6 +20,8 @@ interface ChatMessageListProps {
   activeToolCalls?: ActiveToolCall[];
   agentThreads?: AgentThreadType[];
   agentReports?: AgentReport[];
+  /** Persisted threads keyed by parentMessageId — loaded from DB for historical viewing */
+  threadsByMessage?: Record<string, AgentThreadType[]>;
   onSuggestionClick?: (text: string) => void;
   onSaveToLearnings?: (content: string) => void;
 }
@@ -614,9 +617,21 @@ const QUICK_ICONS: Record<string, React.ReactNode> = {
 };
 
 import { Bookmark } from 'lucide-react';
+import { agents as agentsApi } from '../../services/api';
 
-export default function ChatMessageList({ messages, streamText, thinkingText, streaming, activeToolCalls = [], agentThreads = [], agentReports = [], onSuggestionClick, onSaveToLearnings }: ChatMessageListProps) {
+export default function ChatMessageList({ messages, streamText, thinkingText, streaming, activeToolCalls = [], agentThreads = [], agentReports = [], threadsByMessage = {}, onSuggestionClick, onSaveToLearnings }: ChatMessageListProps) {
   const agentIconName = useSettingsStore((s) => s.agentIcon);
+  const [agentMap, setAgentMap] = useState<Record<string, { displayName?: string; icon?: string; color?: string }>>({});
+
+  // Load agent info for thread display
+  useEffect(() => {
+    if (agentThreads.length === 0) return;
+    agentsApi.list().then(all => {
+      const map: Record<string, { displayName?: string; icon?: string; color?: string }> = {};
+      for (const a of all) map[a.name] = { displayName: a.displayName, icon: a.icon, color: a.color };
+      setAgentMap(map);
+    }).catch(() => {});
+  }, [agentThreads.length > 0]);
   const AgentIcon = AGENT_ICONS[agentIconName] ?? Bot;
   const bottomRef = useRef<HTMLDivElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -672,9 +687,10 @@ export default function ChatMessageList({ messages, streamText, thinkingText, st
       )}
 
       {/* Messages */}
-      {messages.map((msg, i) => (
+      {messages.map((msg, i) => {
+        const msgThreads = msg._id ? threadsByMessage[msg._id] : undefined;
+        return (<React.Fragment key={msg._id || i}>
         <div
-          key={msg._id || i}
           className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'} ff-msg-enter`}
         >
           <div className={`group/msg flex gap-3 ${msg.role === 'user' ? 'flex-row-reverse max-w-[75%]' : 'max-w-[85%]'}`}>
@@ -765,7 +781,21 @@ export default function ChatMessageList({ messages, streamText, thinkingText, st
             </div>
           </div>
         </div>
-      ))}
+
+        {/* Inline threads for this assistant message */}
+        {msgThreads && msgThreads.length > 0 && (
+          <div className="ml-11 space-y-2">
+            {msgThreads.map(thread => (
+              <AgentThread
+                key={thread.conversationId}
+                thread={thread}
+                agents={agentMap}
+              />
+            ))}
+          </div>
+        )}
+        </React.Fragment>);
+      })}
 
       {/* Streaming message */}
       {streaming && (
@@ -809,9 +839,29 @@ export default function ChatMessageList({ messages, streamText, thinkingText, st
         </div>
       )}
 
+      {/* Agent progress reports */}
+      {agentReports.length > 0 && (
+        <div className="mx-4 space-y-1.5">
+          {agentReports.map((report, i) => {
+            const reportAgent = agentMap[report.agent];
+            return (
+              <div key={i} className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-accent-cyan/5 border border-accent-cyan/10">
+                {reportAgent && (
+                  <div className="w-4 h-4 rounded-full flex items-center justify-center shrink-0" style={{ backgroundColor: (reportAgent.color ?? '#06b6d4') + '15' }}>
+                    <RoleIcon icon={reportAgent.icon} color={reportAgent.color} size={9} />
+                  </div>
+                )}
+                <span className="text-[11px] font-mono text-accent-cyan shrink-0">{reportAgent?.displayName ?? report.agent}</span>
+                <span className="text-[11px] text-gray-400 font-body">{report.message}</span>
+              </div>
+            );
+          })}
+        </div>
+      )}
+
       {/* Agent threads (delegation conversations) */}
       {agentThreads.length > 0 && (
-        <div className="space-y-2 px-2">
+        <div className="mx-4 space-y-2">
           {agentThreads.map(thread => (
             <AgentThread
               key={thread.conversationId}
@@ -826,19 +876,8 @@ export default function ChatMessageList({ messages, streamText, thinkingText, st
                 durationMs: thread.durationMs,
                 depth: thread.depth,
               }}
+              agents={agentMap}
             />
-          ))}
-        </div>
-      )}
-
-      {/* Agent progress reports */}
-      {agentReports.length > 0 && (
-        <div className="space-y-1 px-4">
-          {agentReports.map((report, i) => (
-            <div key={i} className="flex items-start gap-2 text-[11px] text-gray-500 font-body">
-              <span className="font-mono text-accent-cyan shrink-0">{report.agent}:</span>
-              <span>{report.message}</span>
-            </div>
           ))}
         </div>
       )}

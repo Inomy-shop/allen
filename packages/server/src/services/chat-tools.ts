@@ -315,19 +315,21 @@ const listAgents: ChatTool = {
 
 const spawnAgent: ChatTool = {
   name: 'spawn_agent',
-  description: 'Spawn a one-shot agent to perform a task that requires the agent\'s capabilities (reading files, writing code, running commands). Do NOT use this for simple questions about an agent — answer those from mention context instead.',
+  description: 'Spawn a technical agent to perform a task. Pass session_id from a previous spawn to continue with context (the agent resumes where it left off). Use this for coding, analysis, review, and investigation tasks.',
   inputSchema: {
     type: 'object',
     properties: {
-      agent_name: { type: 'string', description: 'Name of the agent to spawn (e.g., "coding-reviewer", "engineer", "product-manager")' },
+      agent_name: { type: 'string', description: 'Name of the agent to spawn (e.g., "coding-reviewer", "coding-investigator", "coding-planner")' },
       prompt: { type: 'string', description: 'The task/prompt to send to the spawned agent' },
       repo_path: { type: 'string', description: 'Optional repo path for the agent to work in' },
+      session_id: { type: 'string', description: 'Session ID from a previous spawn to resume with context. The agent picks up where it left off.' },
     },
     required: ['agent_name', 'prompt'],
   },
   async execute(args, db) {
     const agentName = args.agent_name as string;
     const prompt = args.prompt as string;
+    const resumeSession = args.session_id as string | undefined;
     const startMs = Date.now();
 
     const role = await db.collection('agents').findOne({ name: agentName });
@@ -345,7 +347,7 @@ const spawnAgent: ChatTool = {
       workflowVersion: 0,
       status: 'running',
       source: 'chat',
-      input: { prompt, agent_name: agentName, repo_path: args.repo_path },
+      input: { prompt, agent_name: agentName, repo_path: args.repo_path, session_id: resumeSession },
       state: {},
       sessions: {},
       retryCounts: {},
@@ -362,24 +364,31 @@ const spawnAgent: ChatTool = {
 
       let response = '';
       let costUsd = 0;
+      let sessionId: string | undefined;
 
       if (provider === 'claude') {
-        // Load MCP servers so spawned role can access Linear, Postgres, etc.
+        // Load MCP servers so spawned agent can access Linear, Postgres, etc.
         const { loadAllMcpServers } = await import('@flowforge/engine');
         const mcpServers = await loadAllMcpServers(db);
 
-        const conversation = query({
-          prompt,
-          options: {
-            model: role.model ?? 'sonnet',
-            customSystemPrompt: role.system as string,
-            maxTurns: 20,
-            permissionMode: 'bypassPermissions',
-            ...(Object.keys(mcpServers).length > 0 ? { mcpServers } : {}),
-          } as any,
-        });
+        const sdkOptions: Record<string, unknown> = {
+          model: role.model ?? 'sonnet',
+          maxTurns: 20,
+          permissionMode: 'bypassPermissions',
+          ...(Object.keys(mcpServers).length > 0 ? { mcpServers } : {}),
+        };
+
+        // Resume existing session or start new
+        if (resumeSession) {
+          sdkOptions.resume = resumeSession;
+        } else {
+          sdkOptions.customSystemPrompt = role.system as string;
+        }
+
+        const conversation = query({ prompt, options: sdkOptions as any });
 
         for await (const msg of conversation) {
+          if ('session_id' in msg && msg.session_id) sessionId = msg.session_id as string;
           if (msg.type === 'assistant') {
             const blocks = msg.message.content as Array<{ type: string; text?: string }>;
             response = blocks.filter(b => b.type === 'text').map(b => b.text || '').join('');
@@ -389,6 +398,7 @@ const spawnAgent: ChatTool = {
             if ((msg as any).subtype === 'success' && (msg as any).result) {
               response = (msg as any).result;
             }
+            if ((msg as any).session_id) sessionId = (msg as any).session_id;
           }
         }
       } else if (provider === 'codex') {
@@ -445,6 +455,14 @@ const spawnAgent: ChatTool = {
         completedAt: new Date(),
       });
 
+      // Save session ID to execution for future reference
+      if (sessionId) {
+        await db.collection('executions').updateOne(
+          { id: executionId },
+          { $set: { [`sessions.${agentName}`]: sessionId } },
+        );
+      }
+
       return {
         agent_name: agentName,
         execution_id: executionId,
@@ -452,6 +470,8 @@ const spawnAgent: ChatTool = {
         provider: provider as string,
         cost_usd: costUsd,
         duration_ms: durationMs,
+        session_id: sessionId,
+        hint: sessionId ? `To continue this agent with context, pass session_id="${sessionId}" in the next spawn_agent call.` : undefined,
       };
     } catch (err) {
       const durationMs = Date.now() - startMs;
@@ -830,14 +850,24 @@ const saveLearning: ChatTool = {
 
 const delegateToAgent: ChatTool = {
   name: 'delegate_to_agent',
-  description: 'Delegate a task to another team agent. The target agent will process the task and return their response. Use this to involve other agents in the conversation — e.g., delegate technical analysis to Engineer, data queries to Analyst, quality review to QA.',
+  description: `Delegate a task to another team agent or continue an existing conversation with them. The target agent processes the task and returns their response.
+
+MULTI-TURN: To have a follow-up conversation, pass the conversation_id from a previous delegation. The target agent resumes from where they left off with full context. Use this to ask clarifying questions, request more detail, or give feedback.
+
+Example flow:
+1. delegate_to_agent(agent_name="engineer", task="Analyze feasibility of dark mode")  →  returns conversation_id
+2. delegate_to_agent(agent_name="engineer", task="What about the CSS variable approach?", conversation_id="<id from step 1>")
+3. delegate_to_agent(agent_name="engineer", task="Give me the effort estimate", conversation_id="<id from step 1>")
+
+IMPORTANT: Have the full multi-turn conversation BEFORE you synthesize and respond to the user. The user should see the complete agent thread, then your final summary.`,
   destructive: true,
   inputSchema: {
     type: 'object',
     properties: {
       agent_name: { type: 'string', description: 'Name of the agent to delegate to (e.g., "engineer", "qa-engineer", "data-analyst")' },
-      task: { type: 'string', description: 'The task or question for the target agent' },
+      task: { type: 'string', description: 'The task, question, or follow-up message for the target agent' },
       context: { type: 'object', description: 'Any relevant context (repo path, ticket info, etc.)', additionalProperties: true },
+      conversation_id: { type: 'string', description: 'ID of an existing conversation to continue (for multi-turn). Omit for new delegation.' },
     },
     required: ['agent_name', 'task'],
   },
@@ -845,6 +875,7 @@ const delegateToAgent: ChatTool = {
     const targetName = args.agent_name as string;
     const task = args.task as string;
     const context = (args.context as Record<string, unknown>) ?? {};
+    const continueConvId = args.conversation_id as string | undefined;
     const conversationService = new AgentConversationService(db);
 
     // Find the target agent
@@ -854,7 +885,6 @@ const delegateToAgent: ChatTool = {
     }
 
     // Read delegation context from the active session registry
-    // This works regardless of whether the tool was called in-process or via MCP → API
     const activeCtx = getAnyActiveSession();
     const chatSessionId = activeCtx?.chatSessionId ?? 'unknown';
     const parentMessageId = activeCtx?.parentMessageId ?? 'unknown';
@@ -862,239 +892,285 @@ const delegateToAgent: ChatTool = {
     const currentDepth = (activeCtx?.delegationDepth ?? 0) + 1;
     const onEvent = activeCtx?.broadcastEvent;
 
+    // ── Continue existing conversation ──
+    if (continueConvId) {
+      const existing = await conversationService.get(continueConvId);
+      if (!existing) return { error: `Conversation "${continueConvId}" not found.` };
+      if (existing.toAgent !== targetName) return { error: `Conversation "${continueConvId}" is with "${existing.toAgent}", not "${targetName}".` };
+
+      // Add the follow-up message
+      await conversationService.addMessage(continueConvId, {
+        agent: fromAgent,
+        content: task,
+        timestamp: new Date(),
+      });
+
+      if (onEvent) {
+        onEvent('agent_thread_message', {
+          conversationId: continueConvId,
+          agent: fromAgent,
+          type: 'follow_up',
+          content: task.slice(0, 200),
+        });
+      }
+
+      const startMs = Date.now();
+      try {
+        const result = await runAgentTurn(db, targetAgent, task, continueConvId, existing.agentSessionId, conversationService, onEvent, activeCtx, currentDepth);
+
+        await conversationService.addMessage(continueConvId, {
+          agent: targetName,
+          content: result.responseText,
+          toolCalls: result.toolCalls,
+          timestamp: new Date(),
+        });
+        await conversationService.addCost(continueConvId, result.costUsd);
+        if (result.sessionId) await conversationService.saveSessionId(continueConvId, result.sessionId);
+
+        if (onEvent) {
+          onEvent('agent_thread_message', {
+            conversationId: continueConvId,
+            agent: targetName,
+            type: 'response',
+            content: result.responseText.slice(0, 200),
+          });
+        }
+
+        return {
+          agent: targetName,
+          response: result.responseText,
+          conversation_id: continueConvId,
+          cost_usd: result.costUsd,
+          duration_ms: Date.now() - startMs,
+          turn: 'continue',
+        };
+      } catch (err) {
+        return { error: `Follow-up to "${targetName}" failed: ${(err as Error).message}`, conversation_id: continueConvId };
+      }
+    }
+
+    // ── New conversation ──
+
     // Check depth limit
     if (!conversationService.canDelegate(currentDepth - 1)) {
       return {
         error: `Delegation depth limit reached (max ${conversationService.maxDepth}). Cannot delegate further. Summarize what you know and respond directly.`,
-        depth: currentDepth,
-        max_depth: conversationService.maxDepth,
       };
     }
 
-    // Check the calling agent is allowed to delegate to target
+    // Check delegation permission
     if (fromAgent !== 'assistant') {
       const callingAgent = await db.collection('agents').findOne({ name: fromAgent });
       if (callingAgent?.canDelegateTo && !callingAgent.canDelegateTo.includes(targetName)) {
-        return {
-          error: `Agent "${fromAgent}" cannot delegate to "${targetName}". Allowed targets: ${(callingAgent.canDelegateTo as string[]).join(', ')}`,
-        };
+        return { error: `Agent "${fromAgent}" cannot delegate to "${targetName}". Allowed: ${(callingAgent.canDelegateTo as string[]).join(', ')}` };
       }
     }
 
     // Create conversation record
     const conversation = await conversationService.create({
-      chatSessionId,
-      parentMessageId,
-      fromAgent,
-      toAgent: targetName,
-      task,
-      context,
-      depth: currentDepth,
-      parentConversationId: undefined,
+      chatSessionId, parentMessageId, fromAgent, toAgent: targetName,
+      task, context, depth: currentDepth, parentConversationId: undefined,
     });
     const convId = conversation._id!.toString();
 
-    // Emit SSE: agent thread started
     if (onEvent) {
-      onEvent('agent_thread_start', {
-        conversationId: convId,
-        fromAgent,
-        toAgent: targetName,
-        task: task.slice(0, 200),
-        depth: currentDepth,
-      });
+      onEvent('agent_thread_start', { conversationId: convId, fromAgent, toAgent: targetName, task: task.slice(0, 200), depth: currentDepth });
     }
 
-    // Add the delegation request as a message
-    await conversationService.addMessage(convId, {
-      agent: fromAgent,
-      content: task,
-      timestamp: new Date(),
-    });
+    await conversationService.addMessage(convId, { agent: fromAgent, content: task, timestamp: new Date() });
 
     const startMs = Date.now();
 
     try {
-      // Build the system prompt for the target agent
-      const systemPrompt = buildDelegationPrompt(targetAgent, fromAgent, currentDepth, conversationService.maxDepth);
-
       // Build the user prompt with context
       let fullPrompt = task;
       if (Object.keys(context).length > 0) {
         fullPrompt = `CONTEXT:\n${JSON.stringify(context, null, 2)}\n\nTASK:\n${task}`;
       }
 
-      // Run the target agent via Claude CLI with MCP tools
-      const { query } = await import('@anthropic-ai/claude-code');
-      const { resolve, dirname } = await import('node:path');
+      const result = await runAgentTurn(db, targetAgent, fullPrompt, convId, undefined, conversationService, onEvent, activeCtx, currentDepth);
 
-      // Build MCP servers for the delegated agent
-      const mcpServers: Record<string, unknown> = {};
-      const serverPath = resolve(dirname(new URL(import.meta.url).pathname), 'flowforge-mcp-server.ts');
-      mcpServers.flowforge = {
-        type: 'stdio',
-        command: 'npx',
-        args: ['tsx', serverPath],
-        env: { FLOWFORGE_API_URL: `http://localhost:${process.env.PORT ?? '4023'}` },
-      };
-
-      // Load external MCP servers
-      const { loadExternalMcpServers } = await import('./chat-mcp.js');
-      const external = await loadExternalMcpServers(db);
-      Object.assign(mcpServers, external);
-
-      const provider = targetAgent.provider ?? 'claude';
-      const model = targetAgent.model ?? 'sonnet';
-
-      let responseText = '';
-      let costUsd = 0;
-      const toolCalls: { tool: string; args: Record<string, unknown>; result?: Record<string, unknown>; durationMs?: number }[] = [];
-
-      if (provider === 'codex') {
-        // Codex CLI
-        const { spawn } = await import('node:child_process');
-        const codexPrompt = `${systemPrompt}\n\n${fullPrompt}`;
-        const codexArgs = ['exec', '--json', '--dangerously-bypass-approvals-and-sandbox', '--skip-git-repo-check', '-m', model, codexPrompt];
-
-        responseText = await new Promise<string>((resolve, reject) => {
-          const child = spawn('codex', codexArgs, { stdio: ['pipe', 'pipe', 'pipe'] });
-          let output = '';
-          const timeout = setTimeout(() => { child.kill(); reject(new Error('Delegation timeout')); }, conversationService.timeoutMs);
-
-          child.stdout.on('data', (chunk: Buffer) => {
-            for (const line of chunk.toString().split('\n').filter(Boolean)) {
-              try {
-                const evt = JSON.parse(line);
-                if (evt.type === 'message' && evt.item?.text) output = evt.item.text;
-              } catch { /* skip non-JSON lines */ }
-            }
-          });
-          child.on('close', () => { clearTimeout(timeout); resolve(output); });
-          child.on('error', (err) => { clearTimeout(timeout); reject(err); });
-        });
-      } else {
-        // Claude CLI (default)
-        const abortController = new AbortController();
-        const sdkOptions: Record<string, unknown> = {
-          model,
-          maxTurns: 20,
-          permissionMode: 'bypassPermissions',
-          cwd: '/tmp',
-          customSystemPrompt: systemPrompt,
-          mcpServers,
-          abortSignal: abortController.signal,
-        };
-
-        const timeout = setTimeout(() => abortController.abort(), conversationService.timeoutMs);
-
-        // Update active session so nested delegate_to_agent calls get correct depth/agent
-        const prevCtx = activeCtx ? { ...activeCtx } : undefined;
-        if (activeCtx) {
-          activeCtx.currentAgent = targetName;
-          activeCtx.delegationDepth = currentDepth;
-        }
-
-        try {
-          for await (const message of query({ prompt: fullPrompt, options: sdkOptions as any })) {
-            if (message.type === 'assistant') {
-              const blocks = (message as any).message.content as Array<{ type: string; text?: string; name?: string; input?: unknown; id?: string }>;
-              const text = blocks.filter((b: any) => b.type === 'text').map((b: any) => b.text || '').join('');
-              if (text) responseText = text;
-
-              // Track tool calls for the conversation log
-              for (const block of blocks) {
-                if (block.type === 'tool_use' && block.name) {
-                  toolCalls.push({ tool: block.name, args: (block.input as Record<string, unknown>) ?? {} });
-                  if (onEvent) {
-                    onEvent('agent_thread_message', {
-                      conversationId: convId,
-                      agent: targetName,
-                      type: 'tool_call',
-                      tool: block.name,
-                    });
-                  }
-                }
-              }
-            }
-            if (message.type === 'result') {
-              costUsd = (message as any).total_cost_usd ?? 0;
-              if ((message as any).subtype === 'success' && (message as any).result) {
-                responseText = (message as any).result;
-              }
-            }
-          }
-        } finally {
-          clearTimeout(timeout);
-          // Restore previous context so the calling agent's subsequent calls use the right depth
-          if (activeCtx && prevCtx) {
-            activeCtx.currentAgent = prevCtx.currentAgent;
-            activeCtx.delegationDepth = prevCtx.delegationDepth;
-          }
-        }
-      }
+      await conversationService.addMessage(convId, { agent: targetName, content: result.responseText, toolCalls: result.toolCalls, timestamp: new Date() });
+      if (result.sessionId) await conversationService.saveSessionId(convId, result.sessionId);
 
       const durationMs = Date.now() - startMs;
+      const summary = result.responseText.split('\n').find(l => l.trim().length > 10)?.trim().slice(0, 150) ?? result.responseText.slice(0, 150);
 
-      // Add the response as a message
-      await conversationService.addMessage(convId, {
-        agent: targetName,
-        content: responseText,
-        toolCalls,
-        timestamp: new Date(),
-      });
+      // Don't auto-complete — the calling agent may want to continue
+      // Mark as completed only if the tool description says so, or caller completes it later
+      // For now: complete on first turn, caller can still continue via conversation_id
+      await conversationService.complete(convId, result.responseText, summary, result.costUsd);
 
-      // Generate a one-line summary
-      const summary = responseText.split('\n').find(l => l.trim().length > 10)?.trim().slice(0, 150) ?? responseText.slice(0, 150);
-
-      // Complete the conversation
-      await conversationService.complete(convId, responseText, summary, costUsd);
-
-      // Emit SSE: agent thread completed
       if (onEvent) {
-        onEvent('agent_thread_complete', {
-          conversationId: convId,
-          fromAgent,
-          toAgent: targetName,
-          summary,
-          costUsd,
-          durationMs,
-        });
+        onEvent('agent_thread_complete', { conversationId: convId, fromAgent, toAgent: targetName, summary, costUsd: result.costUsd, durationMs });
       }
 
       return {
         agent: targetName,
-        response: responseText,
+        response: result.responseText,
         summary,
         conversation_id: convId,
-        cost_usd: costUsd,
+        cost_usd: result.costUsd,
         duration_ms: durationMs,
         depth: currentDepth,
+        hint: 'To continue this conversation, call delegate_to_agent again with conversation_id="' + convId + '"',
       };
     } catch (err) {
       const durationMs = Date.now() - startMs;
       const errorMsg = (err as Error).message;
       await conversationService.fail(convId, errorMsg);
-
       if (onEvent) {
-        onEvent('agent_thread_complete', {
-          conversationId: convId,
-          fromAgent,
-          toAgent: targetName,
-          summary: `Failed: ${errorMsg}`,
-          costUsd: 0,
-          durationMs,
-          error: true,
-        });
+        onEvent('agent_thread_complete', { conversationId: convId, fromAgent, toAgent: targetName, summary: `Failed: ${errorMsg}`, costUsd: 0, durationMs, error: true });
       }
-
-      return {
-        error: `Delegation to "${targetName}" failed: ${errorMsg}`,
-        conversation_id: convId,
-        duration_ms: durationMs,
-      };
+      return { error: `Delegation to "${targetName}" failed: ${errorMsg}`, conversation_id: convId };
     }
   },
 };
+
+/**
+ * Run a single turn of an agent conversation.
+ * Streams thinking, text, tool calls, and tool results to the UI in real-time.
+ * No timeout — agents run until they finish.
+ */
+async function runAgentTurn(
+  db: Db,
+  targetAgent: Record<string, unknown>,
+  prompt: string,
+  convId: string,
+  resumeSessionId: string | undefined,
+  conversationService: AgentConversationService,
+  onEvent: ((event: string, data: Record<string, unknown>) => void) | undefined,
+  activeCtx: ActiveSessionContext | undefined,
+  currentDepth: number,
+): Promise<{ responseText: string; costUsd: number; sessionId?: string; toolCalls: { tool: string; args: Record<string, unknown> }[] }> {
+  const targetName = targetAgent.name as string;
+  const provider = targetAgent.provider ?? 'claude';
+  const model = targetAgent.model ?? 'sonnet';
+  // Capture fromAgent BEFORE mutating activeCtx (fixes stale context bug)
+  const fromAgent = activeCtx?.currentAgent ?? 'assistant';
+
+  let responseText = '';
+  let costUsd = 0;
+  let sessionId: string | undefined;
+  const toolCalls: { tool: string; args: Record<string, unknown> }[] = [];
+  const activeMcpCalls = new Map<string, { tool: string; startMs: number }>();
+
+  /** Emit a thread event to the UI */
+  function emit(type: string, data: Record<string, unknown>) {
+    if (onEvent) onEvent('agent_thread_message', { conversationId: convId, agent: targetName, ...data, type });
+  }
+
+  if (provider === 'codex') {
+    const { spawn } = await import('node:child_process');
+    const systemPrompt = buildDelegationPrompt(targetAgent, fromAgent, currentDepth, conversationService.maxDepth);
+    const codexPrompt = `${systemPrompt}\n\n${prompt}`;
+    const codexArgs: readonly string[] = ['exec', '--json', '--dangerously-bypass-approvals-and-sandbox', '--skip-git-repo-check', '-m', model as string, codexPrompt];
+
+    responseText = await new Promise<string>((resolvePromise, rejectPromise) => {
+      const proc = spawn('codex', codexArgs as string[]);
+      let output = '';
+      proc.stdout.on('data', (chunk: Buffer) => {
+        for (const line of chunk.toString().split('\n').filter(Boolean)) {
+          try {
+            const evt = JSON.parse(line);
+            if (evt.type === 'message' && evt.item?.text) {
+              output = evt.item.text;
+              emit('text', { content: output.slice(0, 300) });
+            }
+          } catch {}
+        }
+      });
+      proc.on('close', () => resolvePromise(output));
+      proc.on('error', (err) => rejectPromise(err));
+    });
+  } else {
+    // Claude CLI — full streaming
+    const { query } = await import('@anthropic-ai/claude-code');
+    const { resolve, dirname } = await import('node:path');
+
+    const mcpServers: Record<string, unknown> = {};
+    const serverPath = resolve(dirname(new URL(import.meta.url).pathname), 'flowforge-mcp-server.ts');
+    mcpServers.flowforge = { type: 'stdio', command: 'npx', args: ['tsx', serverPath], env: { FLOWFORGE_API_URL: `http://localhost:${process.env.PORT ?? '4023'}` } };
+    const { loadExternalMcpServers } = await import('./chat-mcp.js');
+    Object.assign(mcpServers, await loadExternalMcpServers(db));
+
+    const sdkOptions: Record<string, unknown> = {
+      model, maxTurns: 50, permissionMode: 'bypassPermissions', cwd: '/tmp', mcpServers,
+    };
+
+    if (resumeSessionId) {
+      sdkOptions.resume = resumeSessionId;
+    } else {
+      sdkOptions.customSystemPrompt = buildDelegationPrompt(targetAgent, fromAgent, currentDepth, conversationService.maxDepth);
+    }
+
+    // Save/restore context for nested delegation
+    const prevCtx = activeCtx ? { ...activeCtx } : undefined;
+    if (activeCtx) { activeCtx.currentAgent = targetName; activeCtx.delegationDepth = currentDepth; }
+
+    try {
+      for await (const message of query({ prompt, options: sdkOptions as any })) {
+        // Capture session ID
+        if ('session_id' in message && message.session_id) sessionId = message.session_id as string;
+
+        if (message.type === 'assistant') {
+          const blocks = (message as any).message.content as Array<{ type: string; text?: string; thinking?: string; name?: string; input?: unknown; id?: string }>;
+
+          // Stream text
+          const text = blocks.filter((b: any) => b.type === 'text').map((b: any) => b.text || '').join('');
+          if (text && text !== responseText) {
+            responseText = text;
+            emit('text', { content: text.slice(-300) });
+          }
+
+          // Stream thinking
+          for (const block of blocks) {
+            if (block.type === 'thinking' && (block.thinking || block.text)) {
+              emit('thinking', { content: (block.thinking || block.text || '').slice(0, 200) });
+            }
+          }
+
+          // Track tool calls
+          for (const block of blocks) {
+            if (block.type === 'tool_use' && block.name && block.id) {
+              toolCalls.push({ tool: block.name, args: (block.input as Record<string, unknown>) ?? {} });
+              activeMcpCalls.set(block.id, { tool: block.name, startMs: Date.now() });
+              emit('tool_call', { tool: block.name, toolUseId: block.id });
+            }
+          }
+        }
+
+        // Track tool results
+        if (message.type === 'user') {
+          const content = (message as any).message?.content;
+          if (Array.isArray(content)) {
+            for (const block of content) {
+              if (block.type === 'tool_result' && block.tool_use_id) {
+                const pending = activeMcpCalls.get(block.tool_use_id);
+                if (pending) {
+                  const durationMs = Date.now() - pending.startMs;
+                  emit('tool_result', { tool: pending.tool, toolUseId: block.tool_use_id, durationMs });
+                  activeMcpCalls.delete(block.tool_use_id);
+                }
+              }
+            }
+          }
+        }
+
+        if (message.type === 'result') {
+          costUsd = (message as any).total_cost_usd ?? 0;
+          if ((message as any).subtype === 'success' && (message as any).result) responseText = (message as any).result;
+          if ((message as any).session_id) sessionId = (message as any).session_id;
+        }
+      }
+    } finally {
+      // Always restore context, even on error/abort
+      if (activeCtx && prevCtx) { activeCtx.currentAgent = prevCtx.currentAgent; activeCtx.delegationDepth = prevCtx.delegationDepth; }
+    }
+  }
+
+  return { responseText, costUsd, sessionId, toolCalls };
+}
 
 function buildDelegationPrompt(
   targetAgent: Record<string, unknown>,
@@ -1123,7 +1199,13 @@ function buildDelegationPrompt(
     parts.push(`You can trigger these workflows: ${canTrigger.join(', ')} using the run_workflow tool.`);
   }
 
-  parts.push(`\nIMPORTANT: Be concise. You are collaborating with another agent, not talking to a human. Get to the point.`);
+  // Team agents should delegate, not do hands-on work
+  const agentType = (targetAgent.type as string) ?? 'technical';
+  if (agentType === 'team') {
+    parts.push(`\nIMPORTANT: You are a TEAM agent. Do NOT use filesystem tools (Read, Bash, Grep, Glob) directly. Instead, use spawn_agent to dispatch technical agents (coding-planner, coding-investigator, coding-reviewer, etc.) for hands-on work. Your job is to coordinate and synthesize.`);
+  }
+
+  parts.push(`\nBe concise. You are collaborating with another agent, not talking to a human. Use structured output with headers and bullets.`);
 
   return parts.join('\n');
 }

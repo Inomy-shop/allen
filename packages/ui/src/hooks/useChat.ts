@@ -44,6 +44,17 @@ export interface ActiveToolCall {
   durationMs?: number;
 }
 
+/** Live activity entry for an agent thread */
+export interface ThreadActivity {
+  type: 'thinking' | 'text' | 'tool_call' | 'tool_result' | 'follow_up' | 'response';
+  agent: string;
+  content?: string;
+  tool?: string;
+  toolUseId?: string;
+  durationMs?: number;
+  timestamp: number;
+}
+
 /** Agent-to-agent delegation thread (live-updated via SSE) */
 export interface AgentThread {
   conversationId: string;
@@ -52,10 +63,14 @@ export interface AgentThread {
   task: string;
   status: 'active' | 'completed' | 'failed';
   summary?: string;
+  response?: string;
+  messages?: { agent: string; content: string; toolCalls?: { tool: string }[]; timestamp: string }[];
   costUsd?: number;
   durationMs?: number;
   depth?: number;
   toolCalls?: string[];
+  /** Real-time activity feed (thinking, text, tool calls) while thread is active */
+  liveActivity?: ThreadActivity[];
 }
 
 /** Progress report from an agent */
@@ -66,6 +81,15 @@ export interface AgentReport {
   timestamp: string;
 }
 
+/** Fetch full thread data from the API to get messages/response */
+async function fetchThreadDetail(sessionId: string, conversationId: string): Promise<{ messages?: any[]; response?: string } | null> {
+  try {
+    const threads = await api.getThreads(sessionId);
+    const thread = threads.find((t: any) => t._id === conversationId);
+    return thread ? { messages: thread.messages, response: thread.response } : null;
+  } catch { return null; }
+}
+
 export function useChat() {
   const [sessions, setSessions] = useState<ChatSession[]>([]);
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
@@ -74,8 +98,10 @@ export function useChat() {
   const [streamText, setStreamText] = useState('');
   const [thinkingText, setThinkingText] = useState('');
   const [activeToolCalls, setActiveToolCalls] = useState<ActiveToolCall[]>([]);
-  const [agentThreads, setAgentThreads] = useState<AgentThread[]>([]);
+  const [agentThreads, setAgentThreads] = useState<AgentThread[]>([]); // live SSE threads
   const [agentReports, setAgentReports] = useState<AgentReport[]>([]);
+  /** Threads loaded from DB, keyed by parentMessageId */
+  const [threadsByMessage, setThreadsByMessage] = useState<Record<string, AgentThread[]>>({});
   const [loadingSessions, setLoadingSessions] = useState(true);
   const [loadingMessages, setLoadingMessages] = useState(false);
   const abortRef = useRef<AbortController | null>(null);
@@ -113,9 +139,33 @@ export function useChat() {
     (async () => {
       try {
         setLoadingMessages(true);
-        const session = await api.getSession(activeSessionId);
+        const [session, threads] = await Promise.all([
+          api.getSession(activeSessionId),
+          api.getThreads(activeSessionId).catch(() => []),
+        ]);
         if (cancelled) return;
         setMessages(session.messages || []);
+
+        // Group threads by parentMessageId so they render inline with messages
+        const grouped: Record<string, AgentThread[]> = {};
+        for (const t of threads) {
+          const key = t.parentMessageId;
+          if (!grouped[key]) grouped[key] = [];
+          grouped[key].push({
+            conversationId: t._id,
+            fromAgent: t.fromAgent,
+            toAgent: t.toAgent,
+            task: t.task,
+            status: t.status,
+            summary: t.summary,
+            response: t.response,
+            messages: t.messages,
+            costUsd: t.costUsd,
+            durationMs: t.durationMs,
+            depth: t.depth,
+          });
+        }
+        setThreadsByMessage(grouped);
 
         // Check if this session has an active streaming response
         const { streaming: isActive } = await api.isStreaming(activeSessionId);
@@ -233,13 +283,27 @@ export function useChat() {
         }]);
         break;
 
-      case 'agent_thread_message':
+      case 'agent_thread_message': {
+        const activity: ThreadActivity = {
+          type: (data.type as string) as ThreadActivity['type'],
+          agent: data.agent as string,
+          content: data.content as string | undefined,
+          tool: data.tool as string | undefined,
+          toolUseId: data.toolUseId as string | undefined,
+          durationMs: data.durationMs as number | undefined,
+          timestamp: Date.now(),
+        };
         setAgentThreads(prev => prev.map(t =>
           t.conversationId === data.conversationId
-            ? { ...t, toolCalls: [...(t.toolCalls ?? []), data.tool as string] }
+            ? {
+                ...t,
+                toolCalls: data.tool ? [...(t.toolCalls ?? []), data.tool as string] : t.toolCalls,
+                liveActivity: [...(t.liveActivity ?? []), activity],
+              }
             : t,
         ));
         break;
+      }
 
       case 'agent_thread_complete':
         setAgentThreads(prev => prev.map(t =>
@@ -247,6 +311,18 @@ export function useChat() {
             ? { ...t, status: data.error ? 'failed' : 'completed', summary: data.summary as string, costUsd: data.costUsd as number, durationMs: data.durationMs as number }
             : t,
         ));
+        // Fetch full thread data (messages, response) for the detail view
+        if (sessionId) {
+          fetchThreadDetail(sessionId, data.conversationId as string).then(detail => {
+            if (detail) {
+              setAgentThreads(prev => prev.map(t =>
+                t.conversationId === data.conversationId
+                  ? { ...t, messages: detail.messages, response: detail.response }
+                  : t,
+              ));
+            }
+          });
+        }
         break;
 
       case 'agent_report':
@@ -305,6 +381,9 @@ export function useChat() {
     setStreamText('');
     setThinkingText('');
     setActiveToolCalls([]);
+    setAgentThreads([]);
+    setAgentReports([]);
+    setThreadsByMessage({});
   }, [streaming]);
 
   const sendMessage = useCallback(async (content: string, overrideSessionId?: string, agent?: string) => {
@@ -404,11 +483,12 @@ export function useChat() {
                   break;
                 }
 
-                case 'message_complete':
+                case 'message_complete': {
+                  const msgId = data.messageId || assistantMsgId;
                   setMessages(prev => [
                     ...prev,
                     {
-                      _id: data.messageId || assistantMsgId,
+                      _id: msgId,
                       sessionId,
                       role: 'assistant',
                       content: assistantText,
@@ -422,7 +502,16 @@ export function useChat() {
                   setStreamText('');
                   setThinkingText('');
                   setActiveToolCalls([]);
+
+                  // Merge live threads into threadsByMessage for this assistant message
+                  setAgentThreads(liveThreads => {
+                    if (liveThreads.length > 0) {
+                      setThreadsByMessage(prev => ({ ...prev, [msgId]: liveThreads }));
+                    }
+                    return []; // clear live threads
+                  });
                   break;
+                }
 
                 case 'session_update':
                   if (data.title) {
@@ -445,13 +534,27 @@ export function useChat() {
                   }]);
                   break;
 
-                case 'agent_thread_message':
+                case 'agent_thread_message': {
+                  const act: ThreadActivity = {
+                    type: (data.type as string) as ThreadActivity['type'],
+                    agent: data.agent as string,
+                    content: data.content as string | undefined,
+                    tool: data.tool as string | undefined,
+                    toolUseId: data.toolUseId as string | undefined,
+                    durationMs: data.durationMs as number | undefined,
+                    timestamp: Date.now(),
+                  };
                   setAgentThreads(prev => prev.map(t =>
                     t.conversationId === data.conversationId
-                      ? { ...t, toolCalls: [...(t.toolCalls ?? []), data.tool as string] }
+                      ? {
+                          ...t,
+                          toolCalls: data.tool ? [...(t.toolCalls ?? []), data.tool as string] : t.toolCalls,
+                          liveActivity: [...(t.liveActivity ?? []), act],
+                        }
                       : t,
                   ));
                   break;
+                }
 
                 case 'agent_thread_complete':
                   setAgentThreads(prev => prev.map(t =>
@@ -459,6 +562,18 @@ export function useChat() {
                       ? { ...t, status: data.error ? 'failed' : 'completed', summary: data.summary as string, costUsd: data.costUsd as number, durationMs: data.durationMs as number }
                       : t,
                   ));
+                  // Fetch full thread data for detail view
+                  if (sessionId) {
+                    fetchThreadDetail(sessionId, data.conversationId as string).then(detail => {
+                      if (detail) {
+                        setAgentThreads(prev => prev.map(t =>
+                          t.conversationId === data.conversationId
+                            ? { ...t, messages: detail.messages, response: detail.response }
+                            : t,
+                        ));
+                      }
+                    });
+                  }
                   break;
 
                 case 'agent_report':
@@ -538,6 +653,7 @@ export function useChat() {
     activeToolCalls,
     agentThreads,
     agentReports,
+    threadsByMessage,
     loadingSessions,
     loadingMessages,
     sendMessage,

@@ -28,12 +28,12 @@ const TOOLS = [
   { name: 'get_learnings', description: 'Get learnings from the learning system', params: { workflow_name: 'string', type: 'string', limit: 'number' } },
   { name: 'get_node_trace', description: 'Get detailed trace of a node execution for debugging', params: { execution_id: 'string (required)', node_name: 'string (required)' } },
   { name: 'get_execution_logs', description: 'Get execution logs filtered by node, level, category', params: { execution_id: 'string (required)', node: 'string', level: 'string', category: 'string', limit: 'number' } },
-  { name: 'spawn_agent', description: 'Spawn a one-shot agent to perform a task. The agent runs with the agent system prompt, model, and tools.', params: { agent_name: 'string (required)', prompt: 'string (required)', repo_path: 'string — optional repo path' } },
+  { name: 'spawn_agent', description: 'Spawn a technical agent to perform a task. Pass session_id from a previous spawn to continue with context (agent resumes where it left off).', params: { agent_name: 'string (required)', prompt: 'string (required)', repo_path: 'string — optional repo path', session_id: 'string — session ID from previous spawn to resume with context' } },
   { name: 'query_database', description: 'Run a read-only query against FlowForge MongoDB. Allowed collections: workflows, executions, agents, repos, learnings, chat_sessions, execution_logs, node_traces.', params: { collection: 'string (required)', filter: 'object', projection: 'object', sort: 'object', limit: 'number (max 20)' } },
   { name: 'search_executions_advanced', description: 'Search executions with advanced filters: date range, cost, failed nodes.', params: { workflow_name: 'string', status: 'string', since_hours: 'number', min_cost: 'number', has_failed_node: 'boolean', limit: 'number' } },
   { name: 'submit_execution_input', description: 'Submit input to a paused workflow execution', params: { execution_id: 'string (required)', node: 'string (required)', data: 'object (required)' } },
   { name: 'save_learning', description: 'Save a learning/correction to system memory. Call silently when user corrects you or states a preference.', params: { content: 'string (required) — generalized rule', type: 'string (required) — fact, pattern, mistake, or preference' } },
-  { name: 'delegate_to_agent', description: 'Delegate a task to another team agent. The target agent processes the task and returns their response. Use to involve other agents (e.g., delegate technical analysis to engineer, data queries to data-analyst).', params: { agent_name: 'string (required) — target agent', task: 'string (required) — what you need from them', context: 'object — relevant context' } },
+  { name: 'delegate_to_agent', description: 'Delegate a task to another team agent or continue a multi-turn conversation. Pass conversation_id to continue an existing thread with follow-up questions.', params: { agent_name: 'string (required) — target agent', task: 'string (required) — task or follow-up message', context: 'object — relevant context', conversation_id: 'string — existing conversation ID to continue (for multi-turn)' } },
   { name: 'report_to_user', description: 'Send a progress update to the user during a delegation chain.', params: { message: 'string (required)', status: 'string — in_progress | completed | needs_input' } },
 ];
 
@@ -115,7 +115,7 @@ async function executeTool(name: string, args: Record<string, unknown>): Promise
       const res = await fetch(url, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ agent_name: args.agent_name, prompt: args.prompt, repo_path: args.repo_path }),
+        body: JSON.stringify({ agent_name: args.agent_name, prompt: args.prompt, repo_path: args.repo_path, session_id: args.session_id }),
       });
       return res.json();
     }
@@ -159,7 +159,7 @@ async function executeTool(name: string, args: Record<string, unknown>): Promise
       const res = await fetch(url, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ agent_name: args.agent_name, task: args.task, context: args.context }),
+        body: JSON.stringify({ agent_name: args.agent_name, task: args.task, context: args.context, conversation_id: args.conversation_id }),
       });
       return res.json();
     }
