@@ -2,7 +2,7 @@ import { useRef, useCallback, useEffect } from 'react';
 import Editor, { type OnMount } from '@monaco-editor/react';
 import { registerYamlCompletions } from './yaml-schema';
 import { useSettingsStore } from '../../stores/settingsStore';
-import { getCssVarHex } from '../../lib/theme';
+import { getCssVarHex, resolveColorMode } from '../../lib/theme';
 
 interface Props {
   value: string;
@@ -65,18 +65,19 @@ export default function YamlEditor({ value, onChange, errors, warnings, readOnly
   const applyEditorTheme = useCallback(() => {
     if (!monacoRef.current) return;
 
+    const resolvedMode = resolveColorMode(colorMode);
     monacoRef.current.editor.defineTheme('flowforge-active', {
-      base: colorMode === 'dark' ? 'vs-dark' : 'vs',
+      base: resolvedMode === 'dark' ? 'vs-dark' : 'vs',
       inherit: true,
       rules: [],
       colors: {
-        'editor.background': getCssVarHex('--color-editor-background', colorMode === 'dark' ? '#141620' : '#ffffff'),
-        'editor.foreground': getCssVarHex('--color-text-primary', colorMode === 'dark' ? '#f8fafc' : '#0f172a'),
-        'editor.lineHighlightBackground': getCssVarHex('--color-editor-line-highlight', colorMode === 'dark' ? '#1a1d2b' : '#f8fafc'),
-        'editorGutter.background': getCssVarHex('--color-editor-gutter', colorMode === 'dark' ? '#0f1117' : '#f1f5f9'),
-        'editorLineNumber.foreground': getCssVarHex('--color-text-subtle', colorMode === 'dark' ? '#64748b' : '#64748b'),
-        'editorLineNumber.activeForeground': getCssVarHex('--color-text-secondary', colorMode === 'dark' ? '#cbd5e1' : '#334155'),
-        'editor.selectionBackground': colorMode === 'dark' ? '#2a2e4280' : '#bfdbfe66',
+        'editor.background': getCssVarHex('--color-editor-background', resolvedMode === 'dark' ? '#141620' : '#ffffff'),
+        'editor.foreground': getCssVarHex('--color-text-primary', resolvedMode === 'dark' ? '#f8fafc' : '#0f172a'),
+        'editor.lineHighlightBackground': getCssVarHex('--color-editor-line-highlight', resolvedMode === 'dark' ? '#1a1d2b' : '#f8fafc'),
+        'editorGutter.background': getCssVarHex('--color-editor-gutter', resolvedMode === 'dark' ? '#0f1117' : '#f1f5f9'),
+        'editorLineNumber.foreground': getCssVarHex('--color-text-subtle', resolvedMode === 'dark' ? '#64748b' : '#64748b'),
+        'editorLineNumber.activeForeground': getCssVarHex('--color-text-secondary', resolvedMode === 'dark' ? '#cbd5e1' : '#334155'),
+        'editor.selectionBackground': resolvedMode === 'dark' ? '#2a2e4280' : '#bfdbfe66',
         'editorCursor.foreground': getCssVarHex('--color-accent', '#00d4ff'),
       },
     });

@@ -138,8 +138,8 @@ export default function Canvas({ nodes, edges, onNodesChange, onEdgesChange }: P
       {
         ...connection,
         type: 'default',
-        style: { stroke: '#1e2740' },
-        markerEnd: { type: MarkerType.ArrowClosed, width: 16, height: 16, color: '#1e2740' },
+        style: { stroke: 'rgb(var(--color-flow-edge-default))' },
+        markerEnd: { type: MarkerType.ArrowClosed, width: 16, height: 16, color: 'rgb(var(--color-flow-edge-default))' },
       },
       edges,
     );
@@ -232,10 +232,10 @@ function CanvasInner({
         edgeTypes={edgeTypes}
         fitView
         fitViewOptions={{ padding: 0.3, maxZoom: 1 }}
-        colorMode="dark"
+        colorMode={document.documentElement.classList.contains('dark') ? 'dark' : 'light'}
         defaultEdgeOptions={{
-          style: { stroke: '#1e2740', strokeWidth: 2 },
-          markerEnd: { type: MarkerType.ArrowClosed, width: 16, height: 16, color: '#1e2740' },
+          style: { stroke: 'rgb(var(--color-flow-edge-default))', strokeWidth: 2 },
+          markerEnd: { type: MarkerType.ArrowClosed, width: 16, height: 16, color: 'rgb(var(--color-flow-edge-default))' },
         }}
       >
         <Background variant={BackgroundVariant.Lines} gap={30} size={1} color="rgb(var(--color-border) / 0.2)" />

@@ -242,14 +242,25 @@ async function executeTool(name: string, args: Record<string, unknown>): Promise
       return res.json();
     }
     case 'ask_user': {
-      // Blocks server-side until the user answers
-      const url = `${API_BASE}/api/chat/ask-user`;
-      const res = await fetch(url, {
+      // Store the question (non-blocking)
+      await fetch(`${API_BASE}/api/chat/ask-user`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ question: args.question }),
       });
-      return res.json();
+      // Poll for answer in 90s chunks (MCP-safe)
+      let auWait = 3000;
+      const auMaxWait = 30_000;
+      const auDeadline = Date.now() + 90_000;
+      while (Date.now() < auDeadline) {
+        const statusRes = await fetch(`${API_BASE}/api/chat/ask-user/status`);
+        const statusData = await statusRes.json() as Record<string, unknown>;
+        if (statusData.status === 'answered') return { answer: statusData.answer };
+        process.stderr.write(`[mcp] waiting for user answer (${Math.round(auWait / 1000)}s)\n`);
+        await new Promise(r => setTimeout(r, auWait));
+        auWait = Math.min(auWait * 1.3, auMaxWait);
+      }
+      return { status: 'waiting_for_user', message: 'User has not answered yet. Call ask_user again to continue waiting.' };
     }
     case 'report_to_user': {
       // report_to_user is handled in-process by the chat service, not via API

@@ -69,10 +69,22 @@ export default function ChatPage() {
     return () => window.removeEventListener('keydown', handler);
   }, []);
 
-  useEffect(() => { if (urlSessionId && urlSessionId !== activeSessionId) switchSession(urlSessionId); }, [urlSessionId]);
+  // Sync URL ↔ activeSessionId (single effect to avoid race conditions)
   useEffect(() => {
-    if (activeSessionId && activeSessionId !== urlSessionId) navigate(`/chat/${activeSessionId}`, { replace: true });
-    else if (!activeSessionId && urlSessionId) navigate('/chat', { replace: true });
+    if (urlSessionId && urlSessionId !== activeSessionId) {
+      // URL has a session ID that's different from active — load it
+      switchSession(urlSessionId);
+    } else if (!urlSessionId && activeSessionId) {
+      // URL cleared (new chat button) — clear active session
+      switchSession('');
+    }
+  }, [urlSessionId]);
+
+  useEffect(() => {
+    if (activeSessionId && activeSessionId !== urlSessionId) {
+      // Active session changed (e.g., after creating a new session) — update URL
+      navigate(`/chat/${activeSessionId}`, { replace: true });
+    }
   }, [activeSessionId]);
 
   async function handleSend(content: string) {

@@ -1,7 +1,7 @@
 import { useEffect, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { RotateCcw, Check, Palette, Type, Sparkles, Server, User, Eye, Key,
-  Bot, Brain, Zap, Cpu, Atom, Terminal, Code, Rocket, Shield, Hexagon, Flame,
+  Bot, Brain, Zap, Cpu, Atom, Terminal, Code, Rocket, Shield, Hexagon, Flame, Monitor, Moon, Sun,
 } from 'lucide-react';
 import McpServerManager from '../components/settings/McpServerManager';
 import {
@@ -13,6 +13,7 @@ import {
   type ThemePreset,
   type FontPreset,
 } from '../stores/settingsStore';
+import { type ColorMode } from '../lib/theme';
 
 // Icon name → component mapping
 const ICON_MAP: Record<string, React.ElementType> = {
@@ -36,7 +37,7 @@ function SectionHeader({ icon: Icon, title }: { icon: React.ElementType; title: 
   return (
     <div className="flex items-center gap-2 mb-3">
       <Icon className="w-4 h-4 text-accent-blue" />
-      <h2 className="font-label text-xs uppercase tracking-widest text-gray-400">{title}</h2>
+      <h2 className="font-label text-xs uppercase tracking-widest text-theme-muted">{title}</h2>
     </div>
   );
 }
@@ -48,7 +49,7 @@ function ProfileTab() {
     <div className="space-y-6">
       <div>
         <h1 className="font-heading text-xl text-white tracking-wider">Profile</h1>
-        <p className="text-sm text-gray-500 font-body mt-1">Manage your FlowForge identity</p>
+        <p className="text-sm text-theme-muted font-body mt-1">Manage your FlowForge identity</p>
       </div>
       <div className="card p-6 space-y-4">
         <div className="flex items-center gap-4">
@@ -57,7 +58,7 @@ function ProfileTab() {
           </div>
           <div>
             <div className="text-lg font-heading text-white">FlowForge User</div>
-            <div className="text-sm text-gray-500 font-body">Local development environment</div>
+            <div className="text-sm text-theme-muted font-body">Local development environment</div>
           </div>
         </div>
         <div className="border-t border-border/30 pt-4 space-y-3">
@@ -114,7 +115,7 @@ function ThemeCard({ preset, isActive, onSelect }: { preset: ThemePreset; isActi
           <div key={i} className="w-6 h-6 rounded-sm" style={{ background: c }} />
         ))}
       </div>
-      <span className="text-xs font-label uppercase tracking-wider text-gray-300">{preset.label}</span>
+      <span className="text-xs font-label uppercase tracking-wider text-theme-secondary">{preset.label}</span>
       {isActive && (
         <div className="absolute top-2 right-2 w-5 h-5 rounded-full flex items-center justify-center" style={{ background: accent }}>
           <Check className="w-3 h-3 text-black" />
@@ -130,10 +131,10 @@ function FontCard({ preset, isActive, onSelect }: { preset: FontPreset; isActive
       onClick={onSelect}
       className={`relative group flex flex-col rounded-sm border p-3 transition-all duration-200 cursor-pointer text-left ${isActive ? 'border-accent-blue shadow-glow-blue bg-surface-100/80' : 'border-border/60 hover:border-border-light bg-surface-100/40'}`}
     >
-      <span className="text-xs font-label uppercase tracking-wider text-gray-500 mb-1">{preset.label}</span>
-      <span className="text-lg text-gray-100 leading-snug" style={{ fontFamily: `'${preset.heading}', sans-serif` }}>Heading Aa</span>
-      <span className="text-sm text-gray-300 mt-0.5" style={{ fontFamily: `'${preset.body}', sans-serif` }}>Body text Bb Cc 123</span>
-      <span className="text-xs text-gray-500 mt-0.5" style={{ fontFamily: `'${preset.mono}', monospace` }}>mono: 0x1F4A9</span>
+      <span className="text-xs font-label uppercase tracking-wider text-theme-muted mb-1">{preset.label}</span>
+      <span className="text-lg text-theme-primary leading-snug" style={{ fontFamily: `'${preset.heading}', sans-serif` }}>Heading Aa</span>
+      <span className="text-sm text-theme-secondary mt-0.5" style={{ fontFamily: `'${preset.body}', sans-serif` }}>Body text Bb Cc 123</span>
+      <span className="text-xs text-theme-muted mt-0.5" style={{ fontFamily: `'${preset.mono}', monospace` }}>mono: 0x1F4A9</span>
       {isActive && (
         <div className="absolute top-2 right-2 w-5 h-5 rounded-full bg-accent-blue flex items-center justify-center">
           <Check className="w-3 h-3 text-black" />
@@ -169,11 +170,21 @@ function LivePreview() {
   );
 }
 
+// ── Color Mode Options ──
+
+const COLOR_MODE_OPTIONS = [
+  { value: 'system' as ColorMode, label: 'System', icon: Monitor },
+  { value: 'light' as ColorMode, label: 'Light', icon: Sun },
+  { value: 'dark' as ColorMode, label: 'Dark', icon: Moon },
+];
+
 function ThemeTab() {
+  const colorMode = useSettingsStore((s) => s.colorMode);
   const themeName = useSettingsStore((s) => s.themeName);
   const fontName = useSettingsStore((s) => s.fontName);
   const customAccent = useSettingsStore((s) => s.customAccent);
   const agentIcon = useSettingsStore((s) => s.agentIcon);
+  const setColorMode = useSettingsStore((s) => s.setColorMode);
   const setTheme = useSettingsStore((s) => s.setTheme);
   const setFont = useSettingsStore((s) => s.setFont);
   const setCustomAccent = useSettingsStore((s) => s.setCustomAccent);
@@ -196,6 +207,31 @@ function ThemeTab() {
         <button onClick={resetToDefaults} className="btn-ghost flex items-center gap-2 text-xs">
           <RotateCcw className="w-3 h-3" /> Reset All
         </button>
+      </div>
+
+      {/* Color Mode Selector */}
+      <div>
+        <SectionHeader icon={Monitor} title="Color Mode" />
+        <div className="flex gap-2 mb-6">
+          {COLOR_MODE_OPTIONS.map((option) => {
+            const Icon = option.icon;
+            const isActive = colorMode === option.value;
+            return (
+              <button
+                key={option.value}
+                onClick={() => setColorMode(option.value)}
+                className={`flex items-center gap-2 px-3 py-2 rounded-sm border transition-all ${
+                  isActive
+                    ? 'border-accent-blue bg-accent-blue/15 text-accent-blue'
+                    : 'border-border/50 text-gray-400 hover:border-border hover:text-gray-300'
+                }`}
+              >
+                <Icon className="w-4 h-4" />
+                <span className="text-xs font-label uppercase tracking-wider">{option.label}</span>
+              </button>
+            );
+          })}
+        </div>
       </div>
 
       {/* Top row: Theme + Accent + Icon */}

@@ -77,21 +77,21 @@ function ChatSidebarSection() {
   return (
     <>
       <div className="px-4 py-2 flex items-center justify-between">
-        <span className="text-[10px] font-label uppercase tracking-[0.15em] text-gray-600">Conversations</span>
+        <span className="text-[10px] font-label uppercase tracking-[0.15em] text-theme-muted">Conversations</span>
         <button onClick={handleNew} className="w-7 h-7 flex items-center justify-center rounded-md bg-accent-blue/10 text-accent-blue hover:bg-accent-blue/20 transition-colors" title="New conversation">
           <Plus className="w-3.5 h-3.5" />
         </button>
       </div>
       <div className="flex-1 overflow-y-auto">
         {loadingSessions && sessions.length === 0 && (
-          <div className="px-4 py-4 text-center text-xs text-gray-700">Loading...</div>
+          <div className="px-4 py-4 text-center text-xs text-theme-subtle">Loading...</div>
         )}
         {!loadingSessions && sessions.length === 0 && (
-          <div className="px-4 py-4 text-center text-xs text-gray-700">No conversations yet</div>
+          <div className="px-4 py-4 text-center text-xs text-theme-subtle">No conversations yet</div>
         )}
         {sessions.map(s => {
           const isActive = s._id === activeSessionId;
-          const p = PROV[s.provider] ?? { label: s.provider, color: 'text-gray-500' };
+          const p = PROV[s.provider] ?? { label: s.provider, color: 'text-theme-muted' };
           return (
             <div
               key={s._id}
@@ -99,15 +99,15 @@ function ChatSidebarSection() {
               className={`group flex items-center gap-2 px-3 py-2 mx-2 rounded-md cursor-pointer transition-all ${isActive ? 'bg-accent-blue/10 border-l-2 border-accent-blue' : 'border-l-2 border-transparent hover:bg-surface-200/40'}`}
             >
               <div className="flex-1 min-w-0">
-                <div className="text-xs text-gray-300 font-body truncate">{s.title}</div>
+                <div className="text-xs text-theme-secondary font-body truncate">{s.title}</div>
                 <div className="flex items-center gap-2 mt-0.5">
                   <span className={`text-[9px] font-mono ${p.color}`}>{p.label}</span>
-                  <span className="text-[10px] text-gray-700 font-mono">{timeAgo(s.lastMessageAt)}</span>
+                  <span className="text-[10px] text-theme-subtle font-mono">{timeAgo(s.lastMessageAt)}</span>
                 </div>
               </div>
               <button
                 onClick={e => { e.stopPropagation(); setDeleting({ id: s._id, title: s.title }); }}
-                className="opacity-0 group-hover:opacity-100 shrink-0 w-6 h-6 flex items-center justify-center rounded-md text-gray-700 hover:text-red-400 transition-all"
+                className="opacity-0 group-hover:opacity-100 shrink-0 w-6 h-6 flex items-center justify-center rounded-md text-theme-subtle hover:text-accent-red transition-all"
                 title="Delete conversation"
               >
                 <Trash2 className="w-3 h-3" />
@@ -130,7 +130,7 @@ function SettingsSidebarSection() {
   return (
     <div className="py-2">
       <div className="px-5 py-1 mb-1">
-        <span className="text-[10px] font-label uppercase tracking-[0.15em] text-gray-600">Settings</span>
+        <span className="text-[10px] font-label uppercase tracking-[0.15em] text-theme-muted">Settings</span>
       </div>
       {SETTINGS_TABS.map(({ id, label, icon: Icon }) => (
         <NavLink
@@ -139,7 +139,7 @@ function SettingsSidebarSection() {
           className={`flex items-center gap-3 px-4 py-1.5 mx-2 rounded-md text-sm font-body transition-all ${
             activeTab === id
               ? 'bg-accent-blue/10 text-accent-blue'
-              : 'text-gray-500 hover:text-gray-300 hover:bg-surface-200/40'
+              : 'text-theme-muted hover:text-theme-secondary hover:bg-surface-200/40'
           }`}
         >
           <Icon className="w-[18px] h-[18px]" />
@@ -154,7 +154,14 @@ function SettingsSidebarSection() {
 
 export default function App() {
   const initSettings = useSettingsStore((s) => s.initFromLocalStorage);
+  const addSystemThemeListener = useSettingsStore((s) => s.addSystemThemeListener);
   useEffect(() => { initSettings(); }, [initSettings]);
+
+  // Add system theme listener
+  useEffect(() => {
+    const cleanup = addSystemThemeListener();
+    return cleanup;
+  }, [addSystemThemeListener]);
 
   const location = useLocation();
   const isChat = location.pathname.startsWith('/chat');
@@ -173,7 +180,7 @@ export default function App() {
               <Activity className="w-5 h-5 text-accent-blue" />
               <div className="absolute inset-0 blur-md bg-accent-blue/30 rounded-full" />
             </div>
-            <span className="font-heading text-[15px] font-bold text-white tracking-widest uppercase">FlowForge</span>
+            <span className="font-heading text-[15px] font-bold text-theme-primary tracking-widest uppercase">FlowForge</span>
           </NavLink>
         </div>
 
@@ -184,7 +191,7 @@ export default function App() {
               <div key={gi} className={gi > 0 ? 'mt-3' : ''}>
                 {group.label && (
                   <div className="px-5 py-1">
-                    <span className="text-[10px] font-label uppercase tracking-[0.15em] text-gray-600">{group.label}</span>
+                    <span className="text-[10px] font-label uppercase tracking-[0.15em] text-theme-muted">{group.label}</span>
                   </div>
                 )}
                 {group.items.map(item => (
@@ -196,7 +203,7 @@ export default function App() {
                       `flex items-center gap-3 px-4 py-2 mx-2 rounded-md text-sm font-body transition-all duration-200 ${
                         isActive
                           ? 'bg-accent-blue/10 text-accent-blue border-l-2 border-accent-blue'
-                          : 'text-gray-500 hover:text-gray-300 hover:bg-surface-200/40 border-l-2 border-transparent'
+                          : 'text-theme-muted hover:text-theme-secondary hover:bg-surface-200/40 border-l-2 border-transparent'
                       }`
                     }
                   >
@@ -231,7 +238,7 @@ export default function App() {
               `flex items-center gap-3 px-4 py-2 mx-2 my-1 rounded-md text-sm font-body transition-all duration-200 ${
                 isActive
                   ? 'bg-accent-blue/10 text-accent-blue border-l-2 border-accent-blue'
-                  : 'text-gray-500 hover:text-gray-300 hover:bg-surface-200/40 border-l-2 border-transparent'
+                  : 'text-theme-muted hover:text-theme-secondary hover:bg-surface-200/40 border-l-2 border-transparent'
               }`
             }
           >
@@ -240,7 +247,7 @@ export default function App() {
           </NavLink>
 
           <div className="flex items-center justify-between px-5 py-2">
-            <span className="text-[10px] text-gray-700 font-mono">v0.1.0</span>
+            <span className="text-[10px] text-theme-subtle font-mono">v0.1.0</span>
             <NotificationBell />
           </div>
         </div>

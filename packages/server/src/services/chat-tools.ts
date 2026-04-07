@@ -438,7 +438,7 @@ async function runSpawnInBackground(
     let response = '';
     let costUsd = 0;
     let sessionId: string | undefined = currentResumeSession;
-    const toolCalls: { tool: string; args: Record<string, unknown> }[] = [];
+    const toolCalls: { tool: string; args: Record<string, unknown>; result?: Record<string, unknown> }[] = [];
 
     // On retry, update prompt to "continue"
     if (attempt > 0) {
@@ -481,13 +481,18 @@ async function runSpawnInBackground(
                 const t = evt.item.text ?? evt.item.content?.filter((c: any) => c.type === 'output_text').map((c: any) => c.text).join('') ?? '';
                 if (t) text = t;
               }
-              if (evt.type === 'item.started' && evt.item?.type === 'mcp_tool_call') {
-                const name = `mcp__${evt.item.server ?? ''}__${evt.item.tool ?? ''}`;
-                toolCalls.push({ tool: name, args: evt.item.arguments ?? {} });
+              if (evt.type === 'item.started' && (evt.item?.type === 'mcp_tool_call' || evt.item?.type === 'collab_tool_call')) {
+                const server = evt.item.server ?? evt.item.serverLabel ?? '';
+                const tool = evt.item.tool ?? evt.item.name ?? '';
+                const name = server ? `mcp__${server}__${tool}` : tool;
+                toolCalls.push({ tool: name, args: evt.item.arguments ?? evt.item.input ?? {} });
                 activity.push({ type: 'tool_call', tool: name, timestamp: new Date() });
               }
-              if (evt.type === 'item.completed' && evt.item?.type === 'mcp_tool_call') {
-                activity.push({ type: 'tool_result', tool: `mcp__${evt.item.server ?? ''}__${evt.item.tool ?? ''}`, timestamp: new Date() });
+              if (evt.type === 'item.completed' && (evt.item?.type === 'mcp_tool_call' || evt.item?.type === 'collab_tool_call')) {
+                const server = evt.item.server ?? evt.item.serverLabel ?? '';
+                const tool = evt.item.tool ?? evt.item.name ?? '';
+                const name = server ? `mcp__${server}__${tool}` : tool;
+                activity.push({ type: 'tool_result', tool: name, timestamp: new Date() });
               }
               if (evt.type === 'item.completed' && evt.item?.type === 'function_call') {
                 toolCalls.push({ tool: evt.item.name ?? 'unknown', args: {} });
@@ -1074,6 +1079,7 @@ async function runDelegationInBackground(
   const startMs = Date.now();
   try {
     const result = await runAgentTurn(db, targetAgent, prompt, convId, resumeSessionId, conversationService, onEvent, activeCtx, currentDepth);
+    console.log(`[delegation] ${targetName} completed: ${result.responseText.length}ch, ${result.toolCalls.length} toolCalls`);
     await conversationService.addMessage(convId, { agent: targetName, type: 'message', content: result.responseText, toolCalls: result.toolCalls, timestamp: new Date() });
     await conversationService.addCost(convId, result.costUsd);
     if (result.sessionId) await conversationService.saveSessionId(convId, targetName, result.sessionId);
@@ -1327,7 +1333,7 @@ async function runAgentTurn(
   let responseText = '';
   let costUsd = 0;
   let sessionId: string | undefined = resumeSessionId;
-  const toolCalls: { tool: string; args: Record<string, unknown> }[] = [];
+  const toolCalls: { tool: string; args: Record<string, unknown>; result?: Record<string, unknown> }[] = [];
   const activeMcpCalls = new Map<string, { tool: string; startMs: number }>();
   const MAX_RETRIES = 3;
 
@@ -1391,14 +1397,33 @@ async function runAgentTurn(
                 const t = evt.item.text ?? evt.item.content?.filter((c: any) => c.type === 'output_text').map((c: any) => c.text).join('') ?? '';
                 if (t) { text = t; emit('text', { content: t.slice(-300) }); }
               }
-              // MCP tool calls
-              if (evt.type === 'item.started' && evt.item?.type === 'mcp_tool_call') {
-                const fullName = `mcp__${evt.item.server ?? ''}__${evt.item.tool ?? ''}`;
-                toolCalls.push({ tool: fullName, args: evt.item.arguments ?? {} });
+              // Log all event types for debugging
+              if (evt.type && evt.item?.type) {
+                console.log(`[delegation-codex] ${targetName}: evt=${evt.type} item=${evt.item.type}`);
+              }
+              // MCP / collab tool calls (Codex uses 'collab_tool_call' in exec mode)
+              if (evt.type === 'item.started' && (evt.item?.type === 'mcp_tool_call' || evt.item?.type === 'collab_tool_call')) {
+                const server = evt.item.server ?? evt.item.serverLabel ?? '';
+                const tool = evt.item.tool ?? evt.item.name ?? '';
+                const fullName = server ? `mcp__${server}__${tool}` : tool;
+                toolCalls.push({ tool: fullName, args: evt.item.arguments ?? evt.item.input ?? {} });
                 emit('tool_call', { tool: fullName });
               }
-              if (evt.type === 'item.completed' && evt.item?.type === 'mcp_tool_call') {
-                const fullName = `mcp__${evt.item.server ?? ''}__${evt.item.tool ?? ''}`;
+              if (evt.type === 'item.completed' && (evt.item?.type === 'mcp_tool_call' || evt.item?.type === 'collab_tool_call')) {
+                const server = evt.item.server ?? evt.item.serverLabel ?? '';
+                const tool = evt.item.tool ?? evt.item.name ?? '';
+                const fullName = server ? `mcp__${server}__${tool}` : tool;
+                // Capture result
+                const resultContent = evt.item.result?.content ?? evt.item.output;
+                if (resultContent) {
+                  const lastTc = [...toolCalls].reverse().find((tc: any) => tc.tool === fullName && !tc.result);
+                  if (lastTc) {
+                    try {
+                      const text = Array.isArray(resultContent) ? resultContent.filter((c: any) => c.type === 'text').map((c: any) => c.text).join('') : String(resultContent);
+                      lastTc.result = JSON.parse(text);
+                    } catch { lastTc.result = { raw: String(resultContent).slice(0, 500) }; }
+                  }
+                }
                 emit('tool_result', { tool: fullName });
               }
               // Function calls
@@ -1534,11 +1559,10 @@ When get_delegation_result returns "question", answer it via answer_question, th
   const agentType = (targetAgent.type as string) ?? 'technical';
   if (agentType === 'team') {
     parts.push(`
-ABSOLUTE RULES FOR TEAM AGENTS:
-- NEVER use Read, Bash, Grep, Glob, or any filesystem tool directly.
-- ALWAYS use spawn_agent for technical agents, delegate_to_agent for team agents.
-- After spawn_agent, call get_execution to wait. Agents can take minutes — do NOT give up.
-- NEVER do the work yourself. Coordinate and synthesize only.`);
+YOU MUST call spawn_agent before making any claims about code. You have no filesystem access.
+Available technical agents: coding-investigator, coding-planner, coding-reviewer, coding-developer, coding-tester, coding-writer, git-ops.
+Pick the right agent for each sub-task. Call spawn_agent(agent_name, prompt_with_repo_path), then get_execution to wait.
+NEVER fabricate analysis. Every technical claim must come from an agent's actual response.`);
   }
 
   parts.push(`\nBe concise. You are collaborating with another agent. Use structured output with headers and bullets.`);

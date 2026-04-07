@@ -599,17 +599,21 @@ function ToolCallsSection({ calls, threads, agentMap }: { calls?: ToolCallRecord
         <AgentThread key={thread.conversationId} thread={thread} agents={agentMap} />
       ))}
 
-      {/* Tool calls — collapsed toggle */}
-      <button onClick={() => setShowTools(!showTools)} className="flex items-center gap-1.5 text-[10px] font-mono text-gray-600 hover:text-gray-400 transition-colors py-0.5">
-        {showTools ? <ChevronDown className="w-3 h-3" /> : <ChevronRight className="w-3 h-3" />}
-        <Wrench className="w-2.5 h-2.5" />
-        <span>{calls.length} tool call{calls.length !== 1 ? 's' : ''}</span>
-        {hasErrors && <span className="text-red-400">· errors</span>}
-      </button>
-      {showTools && (
-        <div className="ml-4 pl-3 border-l border-border/10 space-y-1.5 max-h-[400px] overflow-y-auto py-1">
-          {calls.map((call, i) => <ToolCallCard key={`${call.tool}-${i}`} call={call} />)}
-        </div>
+      {/* Tool calls — only show if no threads (threads already show the conversation) */}
+      {rootThreads.length === 0 && (
+        <>
+          <button onClick={() => setShowTools(!showTools)} className="flex items-center gap-1.5 text-[10px] font-mono text-gray-600 hover:text-gray-400 transition-colors py-0.5">
+            {showTools ? <ChevronDown className="w-3 h-3" /> : <ChevronRight className="w-3 h-3" />}
+            <Wrench className="w-2.5 h-2.5" />
+            <span>{calls.length} tool call{calls.length !== 1 ? 's' : ''}</span>
+            {hasErrors && <span className="text-red-400">· errors</span>}
+          </button>
+          {showTools && (
+            <div className="ml-4 pl-3 border-l border-border/10 space-y-1.5 max-h-[400px] overflow-y-auto py-1">
+              {calls.map((call, i) => <ToolCallCard key={`${call.tool}-${i}`} call={call} />)}
+            </div>
+          )}
+        </>
       )}
     </div>
   );

@@ -11,7 +11,7 @@ export default function ConditionalEdge(props: EdgeProps) {
     <>
       <BaseEdge
         path={edgePath}
-        style={{ stroke: '#a855f7', strokeWidth: 2 }}
+        style={{ stroke: 'rgb(var(--color-flow-edge-conditional))', strokeWidth: 2 }}
         markerEnd={markerEnd ?? `url(#ff-arrow-purple)`}
       />
       {/* Custom arrow marker definition */}
@@ -26,7 +26,7 @@ export default function ConditionalEdge(props: EdgeProps) {
           orient="auto-start-reverse"
           markerUnits="strokeWidth"
         >
-          <path d="M-3,-3 L3,0 L-3,3 Z" fill="#a855f7" />
+          <path d="M-3,-3 L3,0 L-3,3 Z" fill="rgb(var(--color-flow-edge-conditional))" />
         </marker>
       </defs>
       {label && (

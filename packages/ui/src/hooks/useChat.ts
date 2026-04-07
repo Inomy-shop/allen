@@ -410,13 +410,15 @@ export function useChat() {
 
   const switchSession = useCallback((id: string) => {
     if (streaming) return;
-    setActiveSessionId(id);
+    setActiveSessionId(id || null);
+    setMessages([]);
     setStreamText('');
     setThinkingText('');
     setActiveToolCalls([]);
     setAgentThreads([]);
     setAgentReports([]);
     setThreadsByMessage({});
+    setPendingUserQuestion(null);
   }, [streaming]);
 
   const sendMessage = useCallback(async (content: string, overrideSessionId?: string, agent?: string) => {

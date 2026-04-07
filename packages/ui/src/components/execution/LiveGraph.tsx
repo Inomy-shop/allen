@@ -190,7 +190,7 @@ export default function LiveGraph({ workflow, nodeStates, selectedNode, onSelect
             target: names[i + 1],
             targetHandle: 'top',
             type: 'default',
-            style: { stroke: '#9ca3af', strokeWidth: 2 },
+            style: { stroke: 'rgb(var(--color-flow-edge-default))', strokeWidth: 2 },
           });
         }
         return rfEdges;
@@ -221,8 +221,8 @@ export default function LiveGraph({ workflow, nodeStates, selectedNode, onSelect
             targetHandle: isRetry ? retrySide : 'top',
             type: isRetry ? 'ff-retry' : edge.condition ? 'ff-conditional' : 'default',
             label: edge.condition ?? (edge.parallel ? '∥ parallel' : undefined),
-            labelStyle: { fill: '#d1d5db', fontSize: 10, fontFamily: 'var(--font-mono)' },
-            labelBgStyle: { fill: '#111730', fillOpacity: 0.95 },
+            labelStyle: { fill: 'rgb(var(--color-text-secondary))', fontSize: 10, fontFamily: 'var(--font-mono)' },
+            labelBgStyle: { fill: 'rgb(var(--color-surface-100))', fillOpacity: 0.95 },
             labelBgPadding: [8, 4] as [number, number],
             labelBgBorderRadius: 3,
             data: {
@@ -235,13 +235,13 @@ export default function LiveGraph({ workflow, nodeStates, selectedNode, onSelect
               type: MarkerType.ArrowClosed,
               width: 16,
               height: 16,
-              color: isRetry ? '#eab308' : edge.condition ? '#a855f7' : '#9ca3af',
+              color: isRetry ? 'rgb(var(--color-flow-edge-retry))' : edge.condition ? 'rgb(var(--color-flow-edge-conditional))' : 'rgb(var(--color-flow-edge-default))',
             },
             style: isRetry
-              ? { stroke: '#eab308', strokeDasharray: '8 5', strokeWidth: 2 }
+              ? { stroke: 'rgb(var(--color-flow-edge-retry))', strokeDasharray: '8 5', strokeWidth: 2 }
               : edge.condition
-                ? { stroke: '#a855f7', strokeWidth: 2 }
-                : { stroke: '#9ca3af', strokeWidth: 2 },
+                ? { stroke: 'rgb(var(--color-flow-edge-conditional))', strokeWidth: 2 }
+                : { stroke: 'rgb(var(--color-flow-edge-default))', strokeWidth: 2 },
           });
         }
       }
@@ -384,11 +384,11 @@ function LiveGraphInner({
         onNodeClick={(_e, node) => onNodeClick(node.id)}
         fitView
         fitViewOptions={{ padding: 0.3, maxZoom: 1 }}
-        colorMode="dark"
+        colorMode={document.documentElement.classList.contains('dark') ? 'dark' : 'light'}
         nodesConnectable={false}
         panOnDrag
         zoomOnScroll
-        defaultEdgeOptions={{ type: 'default', style: { stroke: '#9ca3af', strokeWidth: 2 } }}
+        defaultEdgeOptions={{ type: 'default', style: { stroke: 'rgb(var(--color-flow-edge-default))', strokeWidth: 2 } }}
       >
         <Background variant={BackgroundVariant.Lines} gap={30} size={1} color="rgb(var(--color-border) / 0.2)" />
         <Controls

@@ -256,13 +256,50 @@ export function chatRoutes(db: Db): Router {
     }
   });
 
-  // POST /api/chat/ask-user — Agent asks the user a question (blocks until user answers)
+  // POST /api/chat/ask-user — Store a question for the user (non-blocking)
   router.post('/ask-user', async (req: Request, res: Response) => {
     try {
       const { question } = req.body;
       if (!question) return res.status(400).json({ error: 'question is required' });
-      const result = await executeChatTool('ask_user', { question }, db);
-      res.json(result);
+      // Just store the question — don't block. The in-process ask_user tool handles blocking.
+      // For MCP calls, the MCP handler polls /api/chat/ask-user/status
+      const { getAnyActiveSession } = await import('../services/chat-tools.js');
+      const activeCtx = getAnyActiveSession();
+      if (!activeCtx) return res.status(400).json({ error: 'No active session' });
+      const fromAgent = activeCtx.currentAgent ?? 'assistant';
+      const sessionId = activeCtx.chatSessionId;
+      const { ObjectId } = await import('mongodb');
+      await db.collection('chat_sessions').updateOne(
+        { _id: new ObjectId(sessionId) },
+        { $set: { pendingUserQuestion: { question, fromAgent, status: 'pending', askedAt: new Date() } } },
+      );
+      activeCtx.broadcastEvent('user_question', { question, fromAgent });
+      res.json({ stored: true, message: 'Question sent to user.' });
+    } catch (err: unknown) {
+      res.status(500).json({ error: (err as Error).message });
+    }
+  });
+
+  // GET /api/chat/ask-user/status — Poll for user's answer
+  router.get('/ask-user/status', async (_req: Request, res: Response) => {
+    try {
+      const { getAnyActiveSession } = await import('../services/chat-tools.js');
+      const activeCtx = getAnyActiveSession();
+      if (!activeCtx) return res.json({ status: 'no_session' });
+      const sessionId = activeCtx.chatSessionId;
+      const { ObjectId } = await import('mongodb');
+      const session = await db.collection('chat_sessions').findOne({ _id: new ObjectId(sessionId) });
+      const pq = session?.pendingUserQuestion;
+      if (!pq) return res.json({ status: 'no_question' });
+      if (pq.status === 'answered' && pq.answer) {
+        // Clear the question
+        await db.collection('chat_sessions').updateOne(
+          { _id: new ObjectId(sessionId) },
+          { $set: { pendingUserQuestion: null } },
+        );
+        return res.json({ status: 'answered', answer: pq.answer });
+      }
+      res.json({ status: 'pending' });
     } catch (err: unknown) {
       res.status(500).json({ error: (err as Error).message });
     }

@@ -1,30 +1,47 @@
 import { useMemo, useEffect, useRef, useState } from 'react';
 import mermaid from 'mermaid';
 import { generateMermaid } from '../../lib/mermaid-generator';
+import { useSettingsStore } from '../../stores/settingsStore';
+import { resolveColorMode } from '../../lib/theme';
+import { getCssVarHex } from '../../lib/theme';
 
-// Initialize mermaid with dark theme
-mermaid.initialize({
-  startOnLoad: false,
-  theme: 'dark',
-  themeVariables: {
-    primaryColor: '#3498db',
-    primaryTextColor: '#e2e8f0',
-    primaryBorderColor: '#2c3e50',
-    lineColor: '#4b5563',
-    secondaryColor: '#2ecc71',
-    tertiaryColor: '#141620',
-    mainBkg: '#1a1d2b',
-    nodeBorder: '#4b5563',
-    clusterBkg: '#222536',
-    titleColor: '#e2e8f0',
-    edgeLabelBackground: '#1a1d2b',
-  },
-  flowchart: {
-    htmlLabels: true,
-    curve: 'basis',
-    padding: 12,
-  },
-});
+function getMermaidTheme(colorMode: 'light' | 'dark') {
+  if (colorMode === 'light') {
+    return {
+      theme: 'base',
+      themeVariables: {
+        primaryColor: getCssVarHex('--color-accent', '#3b82f6'),
+        primaryTextColor: getCssVarHex('--color-text-primary', '#0f172a'),
+        primaryBorderColor: getCssVarHex('--color-mermaid-node-border', '#94a3b8'),
+        lineColor: getCssVarHex('--color-mermaid-line', '#64748b'),
+        secondaryColor: getCssVarHex('--color-accent-green', '#10b981'),
+        tertiaryColor: getCssVarHex('--color-surface', '#ffffff'),
+        mainBkg: getCssVarHex('--color-mermaid-main-bg', '#ffffff'),
+        nodeBorder: getCssVarHex('--color-mermaid-node-border', '#94a3b8'),
+        clusterBkg: getCssVarHex('--color-mermaid-cluster-bg', '#e2e8f0'),
+        titleColor: getCssVarHex('--color-text-primary', '#0f172a'),
+        edgeLabelBackground: getCssVarHex('--color-mermaid-edge-label-bg', '#ffffff'),
+      },
+    };
+  }
+
+  return {
+    theme: 'dark',
+    themeVariables: {
+      primaryColor: getCssVarHex('--color-accent', '#00d4ff'),
+      primaryTextColor: getCssVarHex('--color-text-primary', '#e2e8f0'),
+      primaryBorderColor: getCssVarHex('--color-mermaid-node-border', '#4b5563'),
+      lineColor: getCssVarHex('--color-mermaid-line', '#4b5563'),
+      secondaryColor: getCssVarHex('--color-accent-green', '#2ecc71'),
+      tertiaryColor: getCssVarHex('--color-surface', '#141620'),
+      mainBkg: getCssVarHex('--color-mermaid-main-bg', '#1a1d2b'),
+      nodeBorder: getCssVarHex('--color-mermaid-node-border', '#4b5563'),
+      clusterBkg: getCssVarHex('--color-mermaid-cluster-bg', '#222536'),
+      titleColor: getCssVarHex('--color-text-primary', '#e2e8f0'),
+      edgeLabelBackground: getCssVarHex('--color-mermaid-edge-label-bg', '#1a1d2b'),
+    },
+  };
+}
 
 interface Props {
   workflow: any;
@@ -34,6 +51,7 @@ export default function MermaidPreview({ workflow }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const [svgHtml, setSvgHtml] = useState('');
   const [error, setError] = useState('');
+  const colorMode = useSettingsStore((s) => s.colorMode);
 
   const mermaidCode = useMemo(() => {
     if (!workflow) return '';
@@ -48,9 +66,23 @@ export default function MermaidPreview({ workflow }: Props) {
     }
 
     let cancelled = false;
+    const resolvedMode = resolveColorMode(colorMode);
 
     (async () => {
       try {
+        // Reinitialize mermaid with the current theme
+        const themeConfig = getMermaidTheme(resolvedMode);
+        mermaid.initialize({
+          startOnLoad: false,
+          theme: themeConfig.theme as any,
+          themeVariables: themeConfig.themeVariables,
+          flowchart: {
+            htmlLabels: true,
+            curve: 'basis',
+            padding: 12,
+          },
+        });
+
         const id = `mermaid-${Date.now()}`;
         const { svg } = await mermaid.render(id, mermaidCode);
         if (!cancelled) {
@@ -66,7 +98,7 @@ export default function MermaidPreview({ workflow }: Props) {
     })();
 
     return () => { cancelled = true; };
-  }, [mermaidCode]);
+  }, [mermaidCode, colorMode]);
 
   if (!mermaidCode) {
     return (

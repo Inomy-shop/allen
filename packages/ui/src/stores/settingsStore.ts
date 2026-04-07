@@ -5,6 +5,8 @@ import {
   DEFAULT_COLOR_MODE,
   hexToRgbChannels,
   normalizeColorMode,
+  resolveColorMode,
+  detectSystemThemePreference,
   type ColorMode,
 } from '../lib/theme';
 
@@ -115,6 +117,96 @@ export const THEME_PRESETS: ThemePreset[] = [
       accentRed: '#ff6b6b',
       accentYellow: '#ffd93d',
       accentPurple: '#bd93f9',
+    },
+  },
+  {
+    name: 'light-modern',
+    label: 'Light Modern',
+    colors: {
+      surface: '#ffffff',
+      surface100: '#f8fafc',
+      surface200: '#f1f5f9',
+      border: '#cbd5e1',
+      accent: '#3b82f6',
+      accentGreen: '#10b981',
+      accentRed: '#ef4444',
+      accentYellow: '#f59e0b',
+      accentPurple: '#8b5cf6',
+    },
+  },
+  {
+    name: 'light-minimal',
+    label: 'Light Minimal',
+    colors: {
+      surface: '#fefefe',
+      surface100: '#f9fafb',
+      surface200: '#f3f4f6',
+      border: '#d1d5db',
+      accent: '#6366f1',
+      accentGreen: '#059669',
+      accentRed: '#dc2626',
+      accentYellow: '#d97706',
+      accentPurple: '#7c3aed',
+    },
+  },
+  {
+    name: 'light-warm',
+    label: 'Light Warm',
+    colors: {
+      surface: '#fffbf7',
+      surface100: '#fef7f0',
+      surface200: '#fed7aa',
+      border: '#e5b887',
+      accent: '#ea580c',
+      accentGreen: '#16a34a',
+      accentRed: '#dc2626',
+      accentYellow: '#ca8a04',
+      accentPurple: '#9333ea',
+    },
+  },
+  {
+    name: 'clean-light',
+    label: 'Clean Light',
+    colors: {
+      surface: '#ffffff',
+      surface100: '#f8fafc',
+      surface200: '#f1f5f9',
+      border: '#e2e8f0',
+      accent: '#3b82f6',
+      accentGreen: '#059669',
+      accentRed: '#dc2626',
+      accentYellow: '#d97706',
+      accentPurple: '#7c3aed',
+    },
+  },
+  {
+    name: 'minimal-light',
+    label: 'Minimal Light',
+    colors: {
+      surface: '#fefefe',
+      surface100: '#f9fafb',
+      surface200: '#f3f4f6',
+      border: '#d1d5db',
+      accent: '#1f2937',
+      accentGreen: '#047857',
+      accentRed: '#b91c1c',
+      accentYellow: '#b45309',
+      accentPurple: '#6b21a8',
+    },
+  },
+  {
+    name: 'warm-light',
+    label: 'Warm Light',
+    colors: {
+      surface: '#fefdf9',
+      surface100: '#fffbeb',
+      surface200: '#fef3c7',
+      border: '#f3e8b6',
+      accent: '#d97706',
+      accentGreen: '#15803d',
+      accentRed: '#dc2626',
+      accentYellow: '#ca8a04',
+      accentPurple: '#9333ea',
     },
   },
 ];
@@ -379,9 +471,13 @@ interface PersistedSettings {
 }
 
 function loadFromStorage(): PersistedSettings {
+  // Choose default theme based on system preference
+  const systemPreference = detectSystemThemePreference();
+  const defaultTheme = systemPreference === 'light' ? 'light-modern' : 'cyberpunk';
+
   const defaults: PersistedSettings = {
     colorMode: DEFAULT_COLOR_MODE,
-    themeName: 'cyberpunk',
+    themeName: defaultTheme,
     fontName: 'clean',
     customAccent: null,
     agentIcon: 'sparkles',
@@ -409,7 +505,8 @@ function saveToStorage(s: PersistedSettings) {
 
 function applyThemeColors(theme: ThemePreset, customAccent: string | null, colorMode: ColorMode) {
   const root = document.documentElement.style;
-  const modeTokens = COLOR_MODE_TOKENS[colorMode];
+  const resolvedMode = resolveColorMode(colorMode);
+  const modeTokens = COLOR_MODE_TOKENS[resolvedMode];
 
   root.setProperty('--color-surface', hexToRgbChannels(modeTokens.surface ?? theme.colors.surface));
   root.setProperty('--color-surface-100', hexToRgbChannels(modeTokens.surface100 ?? theme.colors.surface100));
@@ -497,6 +594,7 @@ interface SettingsState {
   setAgentIcon: (icon: string) => void;
   resetToDefaults: () => void;
   initFromLocalStorage: () => void;
+  addSystemThemeListener: () => (() => void) | void;
 }
 
 export const useSettingsStore = create<SettingsState>((set, get) => ({
@@ -565,5 +663,24 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
     applyThemeColors(theme, saved.customAccent, saved.colorMode);
     applyFontPreset(font);
     set(saved);
+  },
+
+  addSystemThemeListener: () => {
+    if (typeof window === 'undefined') return;
+
+    const handleSystemThemeChange = (e: MediaQueryListEvent) => {
+      const { colorMode, themeName, customAccent } = get();
+      if (colorMode === 'system') {
+        const theme = getTheme(themeName);
+        applyThemeColors(theme, customAccent, 'system');
+      }
+    };
+
+    const mediaQuery = window.matchMedia('(prefers-color-scheme: dark)');
+    mediaQuery.addEventListener('change', handleSystemThemeChange);
+
+    return () => {
+      mediaQuery.removeEventListener('change', handleSystemThemeChange);
+    };
   },
 }));

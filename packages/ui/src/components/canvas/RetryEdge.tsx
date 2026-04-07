@@ -54,13 +54,13 @@ export default function RetryEdge(props: EdgeProps) {
           orient="auto-start-reverse"
           markerUnits="strokeWidth"
         >
-          <path d="M-3,-3 L3,0 L-3,3 Z" fill="#ffaa00" />
+          <path d="M-3,-3 L3,0 L-3,3 Z" fill="rgb(var(--color-flow-edge-retry))" />
         </marker>
       </defs>
       <BaseEdge
         path={edgePath}
         style={{
-          stroke: '#ffaa00',
+          stroke: 'rgb(var(--color-flow-edge-retry))',
           strokeWidth: 2,
           strokeDasharray: '6 3',
         }}
