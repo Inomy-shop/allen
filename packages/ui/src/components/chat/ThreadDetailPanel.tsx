@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { createPortal } from 'react-dom';
+import { renderMarkdown } from './ChatMessageList';
 import {
   X, Clock, Wrench, CheckCircle, XCircle, Loader2,
   ChevronDown, ChevronRight, Copy, Check, DollarSign,
@@ -208,7 +209,7 @@ export default function ThreadDetailPanel({ thread, agents, onClose }: ThreadDet
                   {/* Message content — full markdown rendering */}
                   <div className="px-5 pb-4 ml-10">
                     <div className="text-[13px] text-gray-300 font-body leading-relaxed">
-                      {renderContent(msg.content)}
+                      {renderMarkdown(msg.content)}
                     </div>
 
                     {/* Tool calls */}
@@ -231,7 +232,7 @@ export default function ThreadDetailPanel({ thread, agents, onClose }: ThreadDet
           ) : thread.response ? (
             <div className="px-5 py-4">
               <div className="text-[13px] text-gray-300 font-body leading-relaxed">
-                {renderContent(thread.response)}
+                {renderMarkdown(thread.response)}
               </div>
             </div>
           ) : isActive ? (

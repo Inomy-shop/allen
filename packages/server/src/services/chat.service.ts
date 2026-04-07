@@ -608,13 +608,26 @@ RULES:
 7. Use report_to_user for progress updates.
 8. Be concise. Respond in markdown.`);
 
-    // Load learnings
+    // Load learnings — agent-scoped + global
     try {
+      // 1. Agent-specific learnings
+      const agentLearnings = await this.db.collection('learnings')
+        .find({ 'scope.level': 'agent', 'scope.agentName': agentName, status: 'active' })
+        .sort({ confidence: -1, updatedAt: -1 })
+        .limit(5)
+        .toArray();
+
+      // 2. Global learnings via embedding similarity
       const { searchSimilar } = await import('./embedding.service.js');
-      const relevant = await searchSimilar(this.db, userMessage, { limit: 5, threshold: 0.25 });
-      if (relevant.length > 0) {
-        const items = relevant.map(l => `- [${l.type}] ${l.content}`).join('\n');
-        parts.push(`\n## Memory\n${items}`);
+      const globalLearnings = await searchSimilar(this.db, userMessage, { limit: 5, threshold: 0.25 });
+
+      const allLearnings = [
+        ...agentLearnings.map(l => `- [${l.type}, ${displayName}] ${l.content}`),
+        ...globalLearnings.map(l => `- [${l.type}, global] ${l.content}`),
+      ];
+
+      if (allLearnings.length > 0) {
+        parts.push(`\n## Memory from past conversations\n${allLearnings.join('\n')}`);
       }
     } catch {}
 

@@ -6,6 +6,7 @@ import RoleDialog from '../components/common/RoleDialog';
 import DeleteConfirmDialog from '../components/common/DeleteConfirmDialog';
 import { CardSkeleton } from '../components/common/Skeleton';
 import { RefreshCw, Plus, Pencil, Trash2, Sparkles, Users, Wrench } from 'lucide-react';
+import { DelegationGraph } from '../components/agents/DelegationGraph';
 
 function AgentCard({ agent, onEdit, onDelete }: {
   agent: Record<string, unknown>;
@@ -186,6 +187,13 @@ export default function RoleManagerPage() {
           </button>
         </div>
       </div>
+
+      {/* Delegation Graph */}
+      {teamAgents.length > 0 && (
+        <div className="mb-6">
+          <DelegationGraph agents={allAgents} />
+        </div>
+      )}
 
       {/* Team Agents Section */}
       <div className="mb-8">

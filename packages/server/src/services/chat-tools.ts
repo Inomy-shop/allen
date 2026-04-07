@@ -940,14 +940,21 @@ const saveLearning: ChatTool = {
   async execute(args, db) {
     const content = args.content as string;
     const type = args.type as string;
+    const activeCtx = getAnyActiveSession();
+    const agentName = activeCtx?.currentAgent;
+
+    // Auto-scope to the active agent if one is selected
+    const scope = agentName
+      ? { level: 'agent' as const, agentName }
+      : { level: 'global' as const };
 
     const result = await db.collection('learnings').insertOne({
       content,
       type,
       target: 'agent',
-      tags: ['chat', 'auto-extracted'],
-      scope: { level: 'global' },
-      source: { sourceType: 'human_correction', workflowName: 'chat', nodeName: 'chat', executionId: '', timestamp: new Date() },
+      tags: ['chat', 'auto-extracted', ...(agentName ? [`agent:${agentName}`] : [])],
+      scope,
+      source: { sourceType: 'human_correction', workflowName: 'chat', nodeName: agentName ?? 'chat', executionId: '', timestamp: new Date() },
       confidence: 0.9,
       confirmations: 1,
       contradictions: 0,
@@ -961,7 +968,7 @@ const saveLearning: ChatTool = {
     // Generate and save embedding (async, non-blocking)
     embedAndSave(db, result.insertedId.toString(), content).catch(() => {});
 
-    return { saved: true, content, type };
+    return { saved: true, content, type, scope: scope.level, agent: agentName ?? 'global' };
   },
 };
 
@@ -1346,7 +1353,25 @@ async function runAgentTurn(
   const prevCtx = activeCtx ? { ...activeCtx } : undefined;
   if (activeCtx) { activeCtx.currentAgent = targetName; activeCtx.delegationDepth = currentDepth; activeCtx.currentConversationId = convId; }
 
-  const systemPrompt = resumeSessionId ? undefined : buildDelegationPrompt(targetAgent, fromAgent, currentDepth, conversationService.maxDepth);
+  let systemPrompt = resumeSessionId ? undefined : buildDelegationPrompt(targetAgent, fromAgent, currentDepth, conversationService.maxDepth);
+
+  // Append agent-scoped learnings to the system prompt
+  if (systemPrompt) {
+    try {
+      const agentLearnings = await db.collection('learnings')
+        .find({ status: 'active', $or: [
+          { 'scope.level': 'agent', 'scope.agentName': targetName },
+          { 'scope.level': 'global' },
+        ]})
+        .sort({ confidence: -1 })
+        .limit(5)
+        .toArray();
+      if (agentLearnings.length > 0) {
+        const items = agentLearnings.map((l: any) => `- [${l.type}] ${l.content}`).join('\n');
+        systemPrompt += `\n\nMemory from past work:\n${items}`;
+      }
+    } catch {}
+  }
 
   // Retry loop — if CLI times out, resume the same session and continue
   for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
