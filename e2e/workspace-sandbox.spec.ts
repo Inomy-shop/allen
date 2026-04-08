@@ -1,7 +1,6 @@
 import { test, expect } from '@playwright/test';
 
-const API = 'http://localhost:4023';
-const UI = 'http://localhost:5173';
+import { API, UI } from './helpers';
 const FLOWFORGE_REPO_ID = '69cee6f2c841d0d60a1239ba';
 
 test.describe('Workspace Sandbox & Config', () => {

@@ -521,6 +521,20 @@ async function runSpawnInBackground(
   };
   liveLog({ type: 'started', content: `Agent ${agentName} spawned in ${repoPath || '/tmp'}` });
 
+  // Inject workspace constraint with port info
+  let workspaceConstraint = '';
+  if (repoPath && repoPath !== '/tmp') {
+    let portInfo = '';
+    try {
+      const ws = await db.collection('workspaces').findOne({ worktreePath: repoPath, status: { $nin: ['archived', 'failed'] } });
+      if (ws?.services?.length) {
+        portInfo = `\nWorkspace services:\n${(ws.services as any[]).map((s: any) => `- ${s.name}: port ${s.port}`).join('\n')}`;
+        portInfo += `\nWhen writing tests or making HTTP requests, use these ports — NOT the default ports (4023, 5173, etc.)`;
+      }
+    } catch {}
+    workspaceConstraint = `\n\nWORKSPACE CONSTRAINT:\nYour working directory is: ${repoPath}\nCRITICAL: ALL file operations (Read, Write, Edit, Grep, Glob, Bash) MUST use paths within this directory.\n- Use relative paths or absolute paths starting with "${repoPath}/"\n- NEVER read, write, or modify files outside this directory\n- If search results show paths outside this directory, replace the base with "${repoPath}/"${portInfo}\n`;
+  }
+
   const MAX_SPAWN_RETRIES = 3;
   let currentResumeSession = resumeSession;
 
@@ -549,7 +563,7 @@ async function runSpawnInBackground(
       } else {
         args.push('--json', '--dangerously-bypass-approvals-and-sandbox', '--skip-git-repo-check');
         if (model) args.push('-c', `model="${model}"`);
-        args.push(`${(role.system as string) ?? ''}\n\n${prompt}`);
+        args.push(`${(role.system as string) ?? ''}${workspaceConstraint}\n\n${prompt}`);
       }
 
       const result = await new Promise<{ text: string; threadId?: string }>((resolveP, rejectP) => {
@@ -651,7 +665,7 @@ async function runSpawnInBackground(
         ...(Object.keys(mcpServers).length > 0 ? { mcpServers } : {}),
       };
       if (currentResumeSession) sdkOptions.resume = currentResumeSession;
-      else sdkOptions.customSystemPrompt = (role.system as string) ?? '';
+      else sdkOptions.customSystemPrompt = `${(role.system as string) ?? ''}${workspaceConstraint}`;
 
       // Register abort controller for cancel support
       const abortController = new AbortController();
@@ -1532,7 +1546,7 @@ async function runAgentTurn(
   const prevCtx = activeCtx ? { ...activeCtx } : undefined;
   if (activeCtx) { activeCtx.currentAgent = targetName; activeCtx.delegationDepth = currentDepth; activeCtx.currentConversationId = convId; }
 
-  let systemPrompt = resumeSessionId ? undefined : buildDelegationPrompt(targetAgent, fromAgent, currentDepth, conversationService.maxDepth);
+  let systemPrompt = resumeSessionId ? undefined : buildDelegationPrompt(targetAgent, fromAgent, currentDepth, conversationService.maxDepth, cwd);
 
   // Append agent-scoped learnings to the system prompt
   if (systemPrompt) {
@@ -1731,6 +1745,7 @@ function buildDelegationPrompt(
   fromAgent: string,
   depth: number,
   maxDepth: number,
+  cwd?: string,
 ): string {
   const systemBase = (targetAgent.system as string) ?? '';
   const personality = (targetAgent.personality as string) ?? '';
@@ -1772,6 +1787,18 @@ NEVER fabricate analysis. Every technical claim must come from an agent's actual
   }
 
   parts.push(`\nBe concise. You are collaborating with another agent. Use structured output with headers and bullets.`);
+
+  if (cwd && cwd !== '/tmp') {
+    parts.push(`
+WORKSPACE CONSTRAINT:
+Your working directory is: ${cwd}
+CRITICAL: ALL file operations (Read, Write, Edit, Grep, Glob, Bash) MUST use paths within this directory.
+- Use relative paths (e.g., "src/app.ts") or absolute paths starting with "${cwd}/"
+- NEVER read, write, or modify files outside this directory
+- If you see paths from search results pointing elsewhere, replace the base path with "${cwd}/"
+- Example: if you find "/original/repo/src/file.ts", use "${cwd}/src/file.ts" instead
+- When writing tests or making HTTP requests, read the .env file in the workspace to get the correct PORT — do NOT use default ports like 4023 or 5173`);
+  }
 
   return parts.join('\n');
 }

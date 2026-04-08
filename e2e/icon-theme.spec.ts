@@ -1,8 +1,9 @@
 import { test } from '@playwright/test';
+import { API, UI } from './helpers';
 
 test('material icon close-up', async ({ page }) => {
   await page.setViewportSize({ width: 1400, height: 900 });
-  await page.goto('http://localhost:5173/workspaces/69d520cd51ffbb1176abcb73');
+  await page.goto(`${UI}/workspaces/69d520cd51ffbb1176abcb73`);
   await page.waitForTimeout(4000);
 
   // Expand folders to see variety

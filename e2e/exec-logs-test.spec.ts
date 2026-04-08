@@ -1,6 +1,6 @@
 import { test, expect } from '@playwright/test';
+import { API, UI } from './helpers';
 
-const UI = 'http://localhost:5173';
 
 test('execution detail shows merged logs + tool calls + metadata', async ({ page }) => {
   await page.setViewportSize({ width: 1400, height: 900 });

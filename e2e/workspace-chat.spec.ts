@@ -1,6 +1,6 @@
 import { test, expect } from '@playwright/test';
+import { API, UI } from './helpers';
 
-const UI = 'http://localhost:5173';
 
 test.describe('Workspace Embedded Chat', () => {
 

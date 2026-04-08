@@ -1,7 +1,6 @@
 import { test, expect } from '@playwright/test';
 
-const API = 'http://localhost:4023';
-const UI = 'http://localhost:5173';
+import { API, UI } from './helpers';
 
 /**
  * Full E2E test: Create workspace → Setup runs → Services start → Preview works → Commit → Push → PR → Archive

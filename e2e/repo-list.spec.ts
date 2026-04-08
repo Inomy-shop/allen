@@ -1,8 +1,9 @@
 import { test, expect } from '@playwright/test';
+import { API, UI } from './helpers';
 
 test('repo list with workspace button', async ({ page }) => {
   await page.setViewportSize({ width: 1400, height: 800 });
-  await page.goto('http://localhost:5173/repos');
+  await page.goto(`${UI}/repos`);
   await page.waitForTimeout(2000);
 
   // Hover over first repo to reveal actions

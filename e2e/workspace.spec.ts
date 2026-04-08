@@ -1,6 +1,6 @@
 import { test, expect } from '@playwright/test';
 
-const API = 'http://localhost:4023';
+import { API, UI } from './helpers';
 
 test.describe('Workspace Management', () => {
 
@@ -87,14 +87,14 @@ test.describe('Workspace Management', () => {
 
   test.describe('Vite Proxy', () => {
     test('/api proxies to backend', async ({ request }) => {
-      const res = await request.get('http://localhost:5173/api/health');
+      const res = await request.get(`${UI}/api/health`);
       expect(res.ok()).toBeTruthy();
       const body = await res.json();
       expect(body.status).toBe('ok');
     });
 
     test('/api/workspaces proxies correctly', async ({ request }) => {
-      const res = await request.get('http://localhost:5173/api/workspaces');
+      const res = await request.get(`${UI}/api/workspaces`);
       expect(res.ok()).toBeTruthy();
       const body = await res.json();
       expect(Array.isArray(body)).toBeTruthy();
