@@ -2,8 +2,8 @@ import { Router, type Request, type Response } from 'express';
 import type { Db } from 'mongodb';
 import { WorkspaceManager } from '../services/workspace.service.js';
 import { PullRequestService } from '../services/pull-request.service.js';
-import { readFileSync, writeFileSync, mkdirSync, unlinkSync, existsSync } from 'node:fs';
-import { join, dirname } from 'node:path';
+import { readFileSync, writeFileSync, mkdirSync, unlinkSync, existsSync, statSync } from 'node:fs';
+import { join, dirname, normalize, resolve } from 'node:path';
 
 function p(req: Request, name: string): string {
   const v = req.params[name];
@@ -85,12 +85,65 @@ export function workspaceRoutes(db: Db): Router {
     try {
       const ws = await manager.get(p(req, 'id'));
       if (!ws) return res.status(404).json({ error: 'Workspace not found' });
-      const filePath = (req.params as any)[0] ?? '';
-      const fullPath = join(ws.worktreePath, filePath);
-      // Security: ensure path is within worktree
-      if (!fullPath.startsWith(ws.worktreePath)) return res.status(403).json({ error: 'Path traversal blocked' });
-      const content = readFileSync(fullPath, 'utf-8');
-      res.json({ path: filePath, content });
+
+      // Decode and normalize path to prevent URL-encoded traversal attacks
+      const rawFilePath = (req.params as any)[0] ?? '';
+      const decodedPath = decodeURIComponent(rawFilePath);
+      const normalizedPath = normalize(decodedPath);
+
+      // Additional security check for traversal patterns
+      if (normalizedPath.includes('..') || normalizedPath.startsWith('/')) {
+        return res.status(403).json({ error: 'Invalid file path' });
+      }
+
+      const fullPath = resolve(join(ws.worktreePath, normalizedPath));
+      const normalizedWorktree = resolve(ws.worktreePath);
+
+      // Security: ensure resolved path is within worktree (prevents all traversal attacks)
+      if (!fullPath.startsWith(normalizedWorktree + '/') && fullPath !== normalizedWorktree) {
+        return res.status(403).json({ error: 'Path traversal blocked' });
+      }
+
+      // Check file exists and get stats for size validation
+      if (!existsSync(fullPath)) {
+        return res.status(404).json({ error: 'File not found' });
+      }
+
+      const stats = statSync(fullPath);
+      if (stats.isDirectory()) {
+        return res.status(400).json({ error: 'Path is a directory' });
+      }
+
+      // Check if file is an image based on extension (case-insensitive)
+      const ext = normalizedPath.split('.').pop()?.toLowerCase() ?? '';
+      const imageExtensions = ['png', 'jpg', 'jpeg', 'gif', 'webp', 'ico', 'svg'];
+      const isImage = imageExtensions.includes(ext);
+
+      if (isImage) {
+        // File size limit for images: 50MB to prevent memory exhaustion
+        const maxImageSize = 50 * 1024 * 1024; // 50MB in bytes
+        if (stats.size > maxImageSize) {
+          return res.status(413).json({ error: 'Image file too large (max 50MB)' });
+        }
+
+        const buffer = readFileSync(fullPath);
+        const base64 = buffer.toString('base64');
+        res.json({
+          path: rawFilePath,
+          content: base64,
+          isImage: true,
+          mimeType: `image/${ext === 'jpg' ? 'jpeg' : ext === 'svg' ? 'svg+xml' : ext}`
+        });
+      } else {
+        // File size limit for text files: 10MB to prevent memory issues
+        const maxTextSize = 10 * 1024 * 1024; // 10MB in bytes
+        if (stats.size > maxTextSize) {
+          return res.status(413).json({ error: 'Text file too large (max 10MB)' });
+        }
+
+        const content = readFileSync(fullPath, 'utf-8');
+        res.json({ path: rawFilePath, content, isImage: false });
+      }
     } catch (err: unknown) { res.status(500).json({ error: (err as Error).message }); }
   });
 

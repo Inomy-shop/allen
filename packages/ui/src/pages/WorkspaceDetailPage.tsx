@@ -278,6 +278,8 @@ export default function WorkspaceDetailPage() {
   const [fileContent, setFileContent] = useState<string>('');
   const [editedContent, setEditedContent] = useState<string>('');
   const [fileDiff, setFileDiff] = useState<string>('');
+  const [isImageFile, setIsImageFile] = useState<boolean>(false);
+  const [imageMimeType, setImageMimeType] = useState<string>('');
   const [viewMode, setViewMode] = useState<'code' | 'diff' | 'preview'>('code');
   const [dirty, setDirty] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -357,11 +359,38 @@ export default function WorkspaceDetailPage() {
     if (!id) return;
     if (dirty && !confirm('Discard unsaved changes?')) return;
     setSelectedFile(path); setDirty(false);
+
+    // Check if this is an image file
+    const ext = path.split('.').pop()?.toLowerCase() ?? '';
+    const isImage = ['png', 'jpg', 'jpeg', 'gif', 'webp', 'ico', 'svg'].includes(ext);
+
     setViewMode(path.endsWith('.md') ? 'preview' : 'code');
     try {
-      const [content, diffData] = await Promise.all([workspaces.getFile(id, path).catch(() => ({ content: '' })), workspaces.getDiff(id).catch(() => ({ files: [] }))]);
-      const c = content.content ?? '';
-      setFileContent(c); setEditedContent(c);
+      const [content, diffData] = await Promise.all([
+        workspaces.getFile(id, path).catch((err) => {
+          // Handle file size and security errors gracefully
+          if (err.message.includes('too large') || err.message.includes('Path traversal') || err.message.includes('Invalid file path')) {
+            return { content: `Error: ${err.message}`, isImage: false, error: true };
+          }
+          return { content: '', isImage: false };
+        }),
+        workspaces.getDiff(id).catch(() => ({ files: [] }))
+      ]);
+
+      if (content.error) {
+        // Show error message instead of file content
+        setFileContent(content.content);
+        setEditedContent(content.content);
+        setIsImageFile(false);
+        setImageMimeType('');
+      } else {
+        const c = content.content ?? '';
+        setFileContent(c);
+        setEditedContent(c);
+        setIsImageFile(content.isImage || false);
+        setImageMimeType(content.mimeType || '');
+      }
+
       setFileDiff(diffData.files?.find((f: any) => f.path === path)?.diff ?? '');
     } catch {}
   }
@@ -389,7 +418,7 @@ export default function WorkspaceDetailPage() {
 
   async function handleDeleteFile(path: string) {
     if (!id || !confirm(`Delete ${path}?`)) return;
-    try { await workspaces.deleteFile(id, path); if (selectedFile === path) { setSelectedFile(null); setDirty(false); } load(); } catch (err: any) { alert(err.message); }
+    try { await workspaces.deleteFile(id, path); if (selectedFile === path) { setSelectedFile(null); setDirty(false); setIsImageFile(false); setImageMimeType(''); } load(); } catch (err: any) { alert(err.message); }
   }
 
   async function handleCreatePR() {
@@ -526,48 +555,70 @@ export default function WorkspaceDetailPage() {
                   <span className="text-[11px] font-mono text-gray-300 truncate">{selectedFile}</span>
                   {dirty && <span className="w-1.5 h-1.5 rounded-full bg-amber-400 shrink-0" />}
                   <span className="flex-1" />
-                  {dirty && (
+                  {dirty && !isImageFile && (
                     <button onClick={handleSave} disabled={saving} className="text-[10px] px-2 py-0.5 rounded bg-blue-500/10 text-blue-400 hover:bg-blue-500/20 flex items-center gap-1 disabled:opacity-50">
                       <Save className="w-3 h-3" />{saving ? '...' : 'Save'} <span className="text-gray-600 text-[9px]">⌘S</span>
                     </button>
                   )}
-                  <button onClick={() => setViewMode('code')} className={`text-[10px] font-mono px-2 py-0.5 rounded ${viewMode === 'code' ? 'bg-blue-500/10 text-blue-400' : 'text-gray-500 hover:text-gray-300'}`}>Code</button>
-                  {selectedFile.endsWith('.md') && (
-                    <button onClick={() => setViewMode('preview')} className={`text-[10px] font-mono px-2 py-0.5 rounded ${viewMode === 'preview' ? 'bg-blue-500/10 text-blue-400' : 'text-gray-500 hover:text-gray-300'}`}>Preview</button>
+                  {isImageFile ? (
+                    <span className="text-[10px] text-gray-500 px-2">Image Preview</span>
+                  ) : (
+                    <>
+                      <button onClick={() => setViewMode('code')} className={`text-[10px] font-mono px-2 py-0.5 rounded ${viewMode === 'code' ? 'bg-blue-500/10 text-blue-400' : 'text-gray-500 hover:text-gray-300'}`}>Code</button>
+                      {selectedFile.endsWith('.md') && (
+                        <button onClick={() => setViewMode('preview')} className={`text-[10px] font-mono px-2 py-0.5 rounded ${viewMode === 'preview' ? 'bg-blue-500/10 text-blue-400' : 'text-gray-500 hover:text-gray-300'}`}>Preview</button>
+                      )}
+                      <button onClick={() => setViewMode('diff')} className={`text-[10px] font-mono px-2 py-0.5 rounded ${viewMode === 'diff' ? 'bg-blue-500/10 text-blue-400' : 'text-gray-500 hover:text-gray-300'}`}>Diff</button>
+                    </>
                   )}
-                  <button onClick={() => setViewMode('diff')} className={`text-[10px] font-mono px-2 py-0.5 rounded ${viewMode === 'diff' ? 'bg-blue-500/10 text-blue-400' : 'text-gray-500 hover:text-gray-300'}`}>Diff</button>
-                  <button onClick={() => { if (dirty && !confirm('Discard?')) return; setSelectedFile(null); setDirty(false); }} className="text-gray-600 hover:text-gray-300 p-0.5"><X className="w-3 h-3" /></button>
+                  <button onClick={() => { if (dirty && !confirm('Discard?')) return; setSelectedFile(null); setDirty(false); setIsImageFile(false); setImageMimeType(''); }} className="text-gray-600 hover:text-gray-300 p-0.5"><X className="w-3 h-3" /></button>
                 </div>
                 <div className="flex-1 min-h-0 overflow-hidden">
                   {viewMode === 'code' ? (
-                    <Editor
-                      height="100%"
-                      language={getLanguage(selectedFile)}
-                      value={editedContent}
-                      onChange={v => { const val = v ?? ''; setEditedContent(val); setDirty(val !== fileContent); }}
-                      onMount={handleEditorMount}
-                      theme="vs-dark"
-                      options={{
-                        fontSize: 12,
-                        fontFamily: "'JetBrains Mono', 'Fira Code', monospace",
-                        fontLigatures: true,
-                        minimap: { enabled: true, scale: 1 },
-                        scrollBeyondLastLine: false,
-                        smoothScrolling: true,
-                        cursorBlinking: 'smooth',
-                        cursorSmoothCaretAnimation: 'on',
-                        renderLineHighlight: 'all',
-                        lineNumbers: 'on',
-                        glyphMargin: false,
-                        folding: true,
-                        bracketPairColorization: { enabled: true },
-                        autoIndent: 'full',
-                        formatOnPaste: true,
-                        tabSize: 2,
-                        wordWrap: selectedFile.endsWith('.md') ? 'on' : 'off',
-                        padding: { top: 8, bottom: 8 },
-                      }}
-                    />
+                    isImageFile ? (
+                      <div className="h-full flex items-center justify-center bg-[rgb(13,17,28)] p-4">
+                        <div className="max-w-full max-h-full">
+                          <img
+                            src={`data:${imageMimeType};base64,${fileContent}`}
+                            alt={selectedFile}
+                            className="max-w-full max-h-full object-contain rounded border border-border/20"
+                            style={{ maxHeight: 'calc(100vh - 200px)' }}
+                          />
+                          <div className="text-center mt-2 text-xs text-gray-500">
+                            {selectedFile} • {imageMimeType}
+                          </div>
+                        </div>
+                      </div>
+                    ) : (
+                      <Editor
+                        height="100%"
+                        language={getLanguage(selectedFile)}
+                        value={editedContent}
+                        onChange={v => { const val = v ?? ''; setEditedContent(val); setDirty(val !== fileContent); }}
+                        onMount={handleEditorMount}
+                        theme="vs-dark"
+                        options={{
+                          fontSize: 12,
+                          fontFamily: "'JetBrains Mono', 'Fira Code', monospace",
+                          fontLigatures: true,
+                          minimap: { enabled: true, scale: 1 },
+                          scrollBeyondLastLine: false,
+                          smoothScrolling: true,
+                          cursorBlinking: 'smooth',
+                          cursorSmoothCaretAnimation: 'on',
+                          renderLineHighlight: 'all',
+                          lineNumbers: 'on',
+                          glyphMargin: false,
+                          folding: true,
+                          bracketPairColorization: { enabled: true },
+                          autoIndent: 'full',
+                          formatOnPaste: true,
+                          tabSize: 2,
+                          wordWrap: selectedFile.endsWith('.md') ? 'on' : 'off',
+                          padding: { top: 8, bottom: 8 },
+                        }}
+                      />
+                    )
                   ) : viewMode === 'preview' ? (
                     <div className="h-full overflow-auto bg-[rgb(13,17,28)] px-4 py-4">
                       <div className="w-full !max-w-none prose prose-invert prose-sm
