@@ -1883,13 +1883,17 @@ const createPullRequest: ChatTool = {
       await exec('git', ['push', '-u', 'origin', ws.branch as string], { cwd: ws.worktreePath as string });
 
       // Create PR
-      const { stdout } = await exec('gh', [
+      await exec('gh', [
         'pr', 'create', '--title', title, '--body', body,
         '--base', ws.baseBranch as string, '--head', ws.branch as string,
-        '--json', 'number,url',
       ], { cwd: ws.worktreePath as string });
 
-      const result = JSON.parse(stdout);
+      // Fetch PR details
+      const { stdout: viewOut } = await exec('gh', [
+        'pr', 'view', ws.branch as string,
+        '--json', 'number,url',
+      ], { cwd: ws.worktreePath as string });
+      const result = JSON.parse(viewOut);
 
       // Save to pull_requests collection
       await db.collection('pull_requests').insertOne({

@@ -6,11 +6,11 @@ import {
   Play, Square, ChevronRight, ChevronDown,
   Upload, GitCommit, X, GitPullRequest, FileText,
   Trash2, Save, FilePlus, Plus, SplitSquareHorizontal,
-  Settings, ExternalLink, Eye, History, PanelRightOpen, MessageSquare,
+  Settings, ExternalLink, Eye, History, PanelRightOpen, MessageSquare, GitCompareArrows,
 } from 'lucide-react';
 import { XTerminal } from '../components/workspace/XTerminal';
 import { EmbeddedChat } from '../components/workspace/EmbeddedChat';
-import Editor from '@monaco-editor/react';
+import Editor, { DiffEditor } from '@monaco-editor/react';
 import { renderMarkdown } from '../components/chat/ChatMessageList';
 
 // ── VS Code Material Icon Theme ──
@@ -289,6 +289,11 @@ export default function WorkspaceDetailPage() {
   const [pushing, setPushing] = useState(false);
   const [showNewFile, setShowNewFile] = useState(false);
   const [newFilePath, setNewFilePath] = useState('');
+  // Git diff view
+  const [showDiffView, setShowDiffView] = useState(false);
+  const [diffLoading, setDiffLoading] = useState(false);
+  const [diffFiles, setDiffFiles] = useState<{ path: string; status: string; additions: number; deletions: number; diff: string }[]>([]);
+  const [diffSelectedFile, setDiffSelectedFile] = useState<string | null>(null);
   // PR modal
   const [showPrModal, setShowPrModal] = useState(false);
   const [prTitle, setPrTitle] = useState('');
@@ -432,6 +437,21 @@ export default function WorkspaceDetailPage() {
     setCreatingPr(false);
   }
 
+  async function openDiffView() {
+    if (!id) return;
+    setShowDiffView(true);
+    setDiffLoading(true);
+    setDiffFiles([]);
+    setDiffSelectedFile(null);
+    try {
+      const diffData = await workspaces.getDiff(id);
+      const files = diffData.files ?? [];
+      setDiffFiles(files);
+      if (files.length > 0) setDiffSelectedFile(files[0].path);
+    } catch {}
+    setDiffLoading(false);
+  }
+
   function addTerminal() { const nid = `term-${termIdCounter++}`; setTerminals(p => [...p, { id: nid, label: `Terminal ${p.length + 1}` }]); setActiveTerminal(nid); }
   function runServiceInTerminal(svc: { name: string; command: string }) {
     const nid = `svc-${svc.name}-${termIdCounter++}`;
@@ -496,6 +516,10 @@ export default function WorkspaceDetailPage() {
             <button onClick={() => setShowPrModal(true)} className="btn-ghost text-[11px] py-1 px-2 flex items-center gap-1 text-blue-400">
               <GitPullRequest className="w-3.5 h-3.5" />PR
             </button>
+            <button onClick={() => { if (showDiffView) { setShowDiffView(false); } else { openDiffView(); } }} className={`btn-ghost text-[11px] py-1 px-2 flex items-center gap-1 ${showDiffView ? 'text-amber-400' : ''}`} title="View Changes">
+              <GitCompareArrows className="w-3.5 h-3.5" />Changes
+              {changedCount > 0 && !showDiffView && <span className="bg-amber-400/20 text-amber-400 text-[9px] px-1 rounded-full">{changedCount}</span>}
+            </button>
           </div>
           {/* Preview toggle — only when a service is ready */}
           {workspace.services?.some((s: any) => s.status === 'ready') && (
@@ -517,27 +541,48 @@ export default function WorkspaceDetailPage() {
 
       {/* Body — fixed, no scroll */}
       <div className="flex-1 flex overflow-hidden min-h-0">
-        {/* Sidebar */}
+        {/* Sidebar — Explorer or Changed Files */}
         <div className="shrink-0 overflow-y-auto bg-surface-50/30 flex flex-col" style={{ width: sidebar.size }}>
-          <div className="px-3 py-1.5 text-[10px] font-label uppercase tracking-wider text-gray-600 flex items-center justify-between shrink-0">
-            <span>Explorer</span>
-            <div className="flex items-center gap-1">
-              <button onClick={() => setShowNewFile(true)} className="text-gray-600 hover:text-gray-300 p-0.5" title="New File"><FilePlus className="w-3.5 h-3.5" /></button>
-              <span className="text-gray-700 text-[9px]">{allFiles.length}</span>
-            </div>
-          </div>
-          {showNewFile && (
-            <div className="px-2 pb-1 shrink-0">
-              <input value={newFilePath} onChange={e => setNewFilePath(e.target.value)}
-                onKeyDown={e => { if (e.key === 'Enter') handleNewFile(); if (e.key === 'Escape') setShowNewFile(false); }}
-                placeholder="path/to/file.ts" autoFocus
-                className="w-full bg-surface-100 border border-border/30 rounded px-2 py-0.5 text-[10px] font-mono text-gray-300 placeholder:text-gray-600 focus:outline-none focus:border-blue-500/50" />
-            </div>
+          {showDiffView ? (
+            <>
+              <div className="px-3 py-1.5 text-[10px] font-label uppercase tracking-wider text-gray-600 flex items-center justify-between shrink-0">
+                <span className="text-amber-400">Changes</span>
+                <span className="text-gray-700 text-[9px]">{diffFiles.length}</span>
+              </div>
+              <div className="flex-1 overflow-y-auto min-h-0">
+                {diffLoading ? (
+                  <div className="flex items-center justify-center py-8"><Loader2 className="w-4 h-4 animate-spin text-gray-500" /></div>
+                ) : diffFiles.length === 0 ? (
+                  <div className="px-3 py-4 text-xs text-gray-600">No changes</div>
+                ) : (() => {
+                  const diffTree = buildFileTree(diffFiles.map(f => ({ path: f.path, status: f.status })));
+                  return diffTree.map(n => <FileTreeNode key={n.path} {...n} selectedFile={diffSelectedFile ?? undefined} onSelect={(p: string) => setDiffSelectedFile(p)} onDelete={() => {}} />);
+                })()}
+              </div>
+            </>
+          ) : (
+            <>
+              <div className="px-3 py-1.5 text-[10px] font-label uppercase tracking-wider text-gray-600 flex items-center justify-between shrink-0">
+                <span>Explorer</span>
+                <div className="flex items-center gap-1">
+                  <button onClick={() => setShowNewFile(true)} className="text-gray-600 hover:text-gray-300 p-0.5" title="New File"><FilePlus className="w-3.5 h-3.5" /></button>
+                  <span className="text-gray-700 text-[9px]">{allFiles.length}</span>
+                </div>
+              </div>
+              {showNewFile && (
+                <div className="px-2 pb-1 shrink-0">
+                  <input value={newFilePath} onChange={e => setNewFilePath(e.target.value)}
+                    onKeyDown={e => { if (e.key === 'Enter') handleNewFile(); if (e.key === 'Escape') setShowNewFile(false); }}
+                    placeholder="path/to/file.ts" autoFocus
+                    className="w-full bg-surface-100 border border-border/30 rounded px-2 py-0.5 text-[10px] font-mono text-gray-300 placeholder:text-gray-600 focus:outline-none focus:border-blue-500/50" />
+                </div>
+              )}
+              <div className="flex-1 overflow-y-auto min-h-0">
+                {fileTree.length === 0 ? <div className="px-3 py-4 text-xs text-gray-600">No files</div> :
+                  fileTree.map(n => <FileTreeNode key={n.path} {...n} selectedFile={selectedFile ?? undefined} onSelect={selectFile} onDelete={handleDeleteFile} />)}
+              </div>
+            </>
           )}
-          <div className="flex-1 overflow-y-auto min-h-0">
-            {fileTree.length === 0 ? <div className="px-3 py-4 text-xs text-gray-600">No files</div> :
-              fileTree.map(n => <FileTreeNode key={n.path} {...n} selectedFile={selectedFile ?? undefined} onSelect={selectFile} onDelete={handleDeleteFile} />)}
-          </div>
         </div>
 
         {/* Sidebar resize handle */}
@@ -548,7 +593,58 @@ export default function WorkspaceDetailPage() {
           {/* Editor area (with optional split preview + activity panel) */}
           <div className="flex-1 flex overflow-hidden min-h-0">
           <div className={`flex-1 flex flex-col overflow-hidden min-h-0 ${splitPreview && showPreview ? 'w-1/2' : ''}`}>
-            {selectedFile ? (
+            {showDiffView && diffSelectedFile ? (() => {
+              const fileData = diffFiles.find(f => f.path === diffSelectedFile);
+              if (!fileData) return <div className="flex-1 flex items-center justify-center text-gray-600 text-sm">Select a file</div>;
+              const lines = fileData.diff.split('\n');
+              const origLines: string[] = [];
+              const modLines: string[] = [];
+              for (const line of lines) {
+                if (line.startsWith('@@') || line.startsWith('diff ') || line.startsWith('index ') || line.startsWith('---') || line.startsWith('+++')) continue;
+                if (line.startsWith('-')) origLines.push(line.slice(1));
+                else if (line.startsWith('+')) modLines.push(line.slice(1));
+                else { const c = line.startsWith(' ') ? line.slice(1) : line; origLines.push(c); modLines.push(c); }
+              }
+              const ext = diffSelectedFile.split('.').pop()?.toLowerCase() ?? '';
+              const langMap: Record<string, string> = { ts: 'typescript', tsx: 'typescript', js: 'javascript', jsx: 'javascript', json: 'json', md: 'markdown', css: 'css', scss: 'scss', html: 'html', yml: 'yaml', yaml: 'yaml', py: 'python', sh: 'shell' };
+              const fileName = diffSelectedFile.split('/').pop() ?? diffSelectedFile;
+              return (
+                <>
+                  <div className="flex items-center gap-1.5 px-3 py-1 border-b border-border/20 bg-surface-100/30 shrink-0">
+                    <FileIcon name={fileName} className="w-3.5 h-3.5" />
+                    <span className="text-[11px] font-mono text-gray-300 truncate">{diffSelectedFile}</span>
+                    <span className="flex-1" />
+                    <span className="text-[9px] font-mono text-gray-600">{workspace.baseBranch}</span>
+                    <span className="text-[9px] text-gray-700">↔</span>
+                    <span className="text-[9px] font-mono text-emerald-400">{workspace.branch}</span>
+                  </div>
+                  <div className="flex-1 min-h-0">
+                    <DiffEditor
+                      height="100%"
+                      language={langMap[ext] ?? 'plaintext'}
+                      original={origLines.join('\n')}
+                      modified={modLines.join('\n')}
+                      theme="vs-dark"
+                      options={{
+                        readOnly: true,
+                        fontSize: 12,
+                        fontFamily: "'JetBrains Mono', monospace",
+                        renderSideBySide: true,
+                        scrollBeyondLastLine: false,
+                        minimap: { enabled: false },
+                      }}
+                    />
+                  </div>
+                </>
+              );
+            })() : showDiffView && !diffSelectedFile ? (
+              <div className="flex-1 flex items-center justify-center text-gray-600">
+                <div className="text-center">
+                  <GitCompareArrows className="w-8 h-8 mx-auto mb-2 text-gray-700" />
+                  <p className="text-xs">Select a file to view diff</p>
+                </div>
+              </div>
+            ) : selectedFile ? (
               <>
                 <div className="flex items-center gap-1 px-3 py-1 border-b border-border/20 bg-surface-100/30 shrink-0">
                   <FileText className="w-3 h-3 text-gray-500" />

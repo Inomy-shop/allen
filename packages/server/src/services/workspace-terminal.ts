@@ -26,7 +26,10 @@ interface TerminalSession {
 
 const sessions = new Map<string, TerminalSession>();
 
-const WS_PORT = parseInt(process.env.TERMINAL_WS_PORT ?? '4024', 10);
+// Read lazily — dotenv hasn't loaded yet at import time
+function getWsPort(): number {
+  return parseInt(process.env.TERMINAL_WS_PORT ?? '4024', 10);
+}
 
 /**
  * Start a dedicated WebSocket server for terminal PTY on its own port.
@@ -75,8 +78,9 @@ export function startTerminalWebSocketServer(getWorkspacePath: (workspaceId: str
     socket.destroy();
   });
 
-  httpServer.listen(WS_PORT, () => {
-    console.log(`[terminal] WebSocket PTY server running on ws://localhost:${WS_PORT}`);
+  const port = getWsPort();
+  httpServer.listen(port, () => {
+    console.log(`[terminal] WebSocket PTY server running on ws://localhost:${port}`);
   });
 }
 
