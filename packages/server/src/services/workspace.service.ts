@@ -349,8 +349,12 @@ export class WorkspaceManager {
     const ws = await this.get(id);
     if (!ws) throw new Error('Workspace not found');
 
-    const { stdout: nameStatus } = await exec('git', ['diff', '--name-status', `${ws.baseBranch}...HEAD`], { cwd: ws.worktreePath });
-    const { stdout: numstat } = await exec('git', ['diff', '--numstat', `${ws.baseBranch}...HEAD`], { cwd: ws.worktreePath });
+    // Show current uncommitted changes (staged + unstaged) — what the developer is actively working on
+    const { stdout: nameStatus } = await exec('git', ['diff', '--name-status', 'HEAD'], { cwd: ws.worktreePath }).catch(() => ({ stdout: '' }));
+    const { stdout: numstat } = await exec('git', ['diff', '--numstat', 'HEAD'], { cwd: ws.worktreePath }).catch(() => ({ stdout: '' }));
+
+    // Also include untracked new files
+    const { stdout: untracked } = await exec('git', ['ls-files', '--others', '--exclude-standard'], { cwd: ws.worktreePath }).catch(() => ({ stdout: '' }));
 
     const statLines = numstat.trim().split('\n').filter(Boolean);
     const statusLines = nameStatus.trim().split('\n').filter(Boolean);
@@ -361,15 +365,30 @@ export class WorkspaceManager {
       const status = statusChar === 'A' ? 'added' : statusChar === 'D' ? 'deleted' : 'modified';
       const statLine = statLines[i] ?? '';
       const [add, del] = statLine.split('\t');
-
       return { path, status, additions: parseInt(add) || 0, deletions: parseInt(del) || 0, diff: '' };
     });
+
+    // Add untracked files as "added"
+    const existingPaths = new Set(files.map(f => f.path));
+    for (const f of untracked.trim().split('\n').filter(Boolean)) {
+      if (!existingPaths.has(f)) {
+        files.push({ path: f, status: 'added', additions: 0, deletions: 0, diff: '' });
+      }
+    }
 
     // Get full diff for each file
     for (const file of files) {
       try {
-        const { stdout } = await exec('git', ['diff', `${ws.baseBranch}...HEAD`, '--', file.path], { cwd: ws.worktreePath });
-        file.diff = stdout;
+        if (file.status === 'added' && !nameStatus.includes(file.path)) {
+          // Untracked file — show full content as diff
+          const { readFileSync: rf } = await import('node:fs');
+          const content = rf(join(ws.worktreePath, file.path), 'utf-8');
+          file.diff = content.split('\n').map(l => `+${l}`).join('\n');
+          file.additions = content.split('\n').length;
+        } else {
+          const { stdout } = await exec('git', ['diff', 'HEAD', '--', file.path], { cwd: ws.worktreePath });
+          file.diff = stdout;
+        }
       } catch {}
     }
 

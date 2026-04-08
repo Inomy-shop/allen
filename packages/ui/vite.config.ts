@@ -6,6 +6,8 @@ export default defineConfig(({ mode }) => {
   // Load .env from monorepo root
   const env = loadEnv(mode, resolve(__dirname, '../..'), '');
   const apiPort = env.PORT || '4000';
+  const uiPort = parseInt(env.UI_PORT || '5173', 10);
+  const wsPort = env.TERMINAL_WS_PORT || String(parseInt(apiPort) + 1);
 
   return {
     plugins: [react()],
@@ -27,14 +29,14 @@ export default defineConfig(({ mode }) => {
       },
     },
     server: {
-      port: 5173,
+      port: uiPort,
       proxy: {
         '/api': {
           target: `http://localhost:${apiPort}`,
           changeOrigin: true,
         },
         '/ws': {
-          target: `http://localhost:4024`,
+          target: `http://localhost:${wsPort}`,
           changeOrigin: true,
           ws: true,
         },

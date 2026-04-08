@@ -132,16 +132,25 @@ export class PullRequestService {
     await exec('git', ['push', '-u', 'origin', branch], { cwd: repoPath });
 
     // Create via gh CLI
-    const { stdout } = await exec('gh', [
+    const { stdout: createOut } = await exec('gh', [
       'pr', 'create',
       '--title', title,
       '--body', body,
       '--base', baseBranch,
       '--head', branch,
+    ], { cwd: repoPath });
+
+    // createOut is the PR URL, e.g. "https://github.com/user/repo/pull/42\n"
+    const prUrl = createOut.trim();
+
+    // Fetch PR details
+    const { stdout: viewOut } = await exec('gh', [
+      'pr', 'view', branch,
       '--json', 'number,url,additions,deletions,changedFiles',
     ], { cwd: repoPath });
 
-    const result = JSON.parse(stdout);
+    const result = JSON.parse(viewOut);
+    if (!result.url) result.url = prUrl;
     const doc: PullRequest = {
       repoId,
       repoName,
