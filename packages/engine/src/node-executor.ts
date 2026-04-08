@@ -46,6 +46,8 @@ export interface NodeExecutorDeps {
   executionId?: string;
   nodeContext?: string;
   db?: import('mongodb').Db;
+  /** Abort signal — set by engine on cancel, checked/used by node executors to kill processes */
+  abortSignal?: AbortSignal;
 }
 
 export interface NodeResult {
@@ -70,7 +72,7 @@ export async function executeNode(
       const role = nodeDef.agent ? deps.agents[nodeDef.agent] : undefined;
       if (role?.provider === 'codex') {
         const existingSession = sessions[nodeName];
-        return executeCodexNode(nodeName, nodeDef, state, role, deps.emitter, deps.executionId ?? '', existingSession, deps.nodeContext);
+        return executeCodexNode(nodeName, nodeDef, state, role, deps.emitter, deps.executionId ?? '', existingSession, deps.nodeContext, deps.abortSignal);
       }
       return executeAgentNode(nodeName, nodeDef, state, sessions, deps);
     }
@@ -144,6 +146,7 @@ async function executeAgentNode(
         maxTurns: 50,
         permissionMode: 'bypassPermissions',
         ...(mcpServers && Object.keys(mcpServers).length > 0 ? { mcpServers: mcpServers as any } : {}),
+        ...(deps.abortSignal ? { abortController: { signal: deps.abortSignal, abort() { /* handled by engine */ } } as any } : {}),
       },
     });
 

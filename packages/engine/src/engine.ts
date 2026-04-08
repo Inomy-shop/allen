@@ -46,6 +46,7 @@ export class FlowForgeEngine {
   private pendingInputResolvers = new Map<string, (data: Record<string, unknown>) => void>();
   private cancelledExecutions = new Set<string>();
   private pausedExecutions = new Set<string>();
+  private abortControllers = new Map<string, AbortController>();
 
   constructor(config: EngineConfig) {
     this.config = config;
@@ -324,6 +325,9 @@ export class FlowForgeEngine {
 
   cancelExecution(executionId: string): void {
     this.cancelledExecutions.add(executionId);
+    // Abort the running node's process immediately
+    const ac = this.abortControllers.get(executionId);
+    if (ac) { ac.abort(); this.abortControllers.delete(executionId); }
   }
 
   pauseExecution(executionId: string): void {
@@ -639,6 +643,10 @@ export class FlowForgeEngine {
       }
     }
 
+    // Create abort controller for this node — cancelled via cancelExecution()
+    const ac = new AbortController();
+    this.abortControllers.set(exec.id, ac);
+
     const deps: NodeExecutorDeps = {
       agents: this.config.agents,
       builtIns: this.config.builtIns,
@@ -648,6 +656,7 @@ export class FlowForgeEngine {
       executionId: exec.id,
       nodeContext,
       db: this.config.db,
+      abortSignal: ac.signal,
     };
     this.log(exec.id, {
       category: 'system',
@@ -657,6 +666,7 @@ export class FlowForgeEngine {
 
     try {
       const result = await executeNode(nodeName, nodeDef, exec.state, exec.sessions, deps);
+      this.abortControllers.delete(exec.id); // Clean up after node completes
 
       // Handle human node waiting
       if (result.outputs.__waiting_for_input) {
@@ -919,6 +929,8 @@ export class FlowForgeEngine {
         } catch { /* fire-and-forget */ }
       }
 
+      const retryAc = new AbortController();
+      this.abortControllers.set(exec.id, retryAc);
       const deps: NodeExecutorDeps = {
         agents: this.config.agents,
         builtIns: this.config.builtIns,
@@ -928,6 +940,7 @@ export class FlowForgeEngine {
         executionId: exec.id,
         nodeContext,
         db: this.config.db,
+        abortSignal: retryAc.signal,
       };
 
       // Each branch reads from the snapshot, not the live state

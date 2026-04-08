@@ -174,10 +174,16 @@ export class ExecutionService {
   }
 
   async cancel(id: string): Promise<void> {
+    // Kill workflow engine if running
     const engine = runningEngines.get(id);
     if (engine) {
       engine.cancelExecution(id);
     }
+    // Kill spawned agent process (CLI subprocess or abort SDK)
+    const { killExecutionProcess } = await import('./chat-tools.js');
+    const killed = killExecutionProcess(id);
+    if (killed) console.log(`[cancel] Killed process for execution ${id}`);
+
     await this.stateManager.updateExecution(id, {
       status: 'cancelled',
       completedAt: new Date(),

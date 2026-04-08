@@ -30,6 +30,7 @@ export async function executeCodexNode(
   executionId: string,
   sessionId?: string,
   nodeContext?: string,
+  abortSignal?: AbortSignal,
 ): Promise<CodexResult> {
   const start = Date.now();
   const model = role?.model ?? 'default';
@@ -87,6 +88,12 @@ export async function executeCodexNode(
 
     // Close stdin immediately so codex doesn't wait for input
     proc.stdin.end();
+
+    // Kill process on abort signal (cancel)
+    if (abortSignal) {
+      if (abortSignal.aborted) { proc.kill('SIGTERM'); reject(new Error('Execution cancelled')); return; }
+      abortSignal.addEventListener('abort', () => { try { proc.kill('SIGTERM'); } catch {} }, { once: true });
+    }
 
     let rawResponse = '';
     let turns = 0;

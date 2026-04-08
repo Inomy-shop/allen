@@ -27,6 +27,8 @@ export interface ActiveSessionContext {
   broadcastEvent: (event: string, data: Record<string, unknown>) => void;
   /** Number of background tasks (delegations/spawns) still running */
   pendingBackgroundTasks: number;
+  /** Resolved working directory — set by chat.service.ts, inherited by all spawned/delegated agents */
+  resolvedCwd?: string;
 }
 
 // One active context per session (only one response at a time per session)
@@ -51,6 +53,70 @@ export function getActiveSession(sessionId: string): ActiveSessionContext | unde
 export function getAnyActiveSession(): ActiveSessionContext | undefined {
   for (const ctx of activeSessions.values()) return ctx;
   return undefined;
+}
+
+// ── Process Registry — track PIDs for agent executions so they can be killed on cancel ──
+
+const runningProcesses = new Map<string, { pid: number; kill: () => void }>();
+
+/** Register a running process for an execution */
+export function registerExecutionProcess(executionId: string, pid: number, killFn: () => void): void {
+  runningProcesses.set(executionId, { pid, kill: killFn });
+}
+
+/** Kill and clean up a running execution process */
+export function killExecutionProcess(executionId: string): boolean {
+  const proc = runningProcesses.get(executionId);
+  if (proc) {
+    try { proc.kill(); } catch {}
+    runningProcesses.delete(executionId);
+    return true;
+  }
+  return false;
+}
+
+/** Build a human-readable description from tool name + args */
+function toolDescription(tool: string, args: Record<string, unknown>): string {
+  // Common Claude Code / Codex tools
+  if (tool === 'Read' || tool === 'read_file') return `Read ${args.file_path ?? args.path ?? ''}`;
+  if (tool === 'Write' || tool === 'write_file') return `Write ${args.file_path ?? args.path ?? ''}`;
+  if (tool === 'Edit' || tool === 'edit_file') return `Edit ${args.file_path ?? args.path ?? ''}`;
+  if (tool === 'Bash' || tool === 'bash' || tool === 'execute_command') return `$ ${(args.command as string ?? '').slice(0, 150)}`;
+  if (tool === 'Glob' || tool === 'glob') return `Find files: ${args.pattern ?? ''} ${args.path ? `in ${args.path}` : ''}`;
+  if (tool === 'Grep' || tool === 'grep' || tool === 'search') return `Search: ${args.pattern ?? args.query ?? ''} ${args.path ? `in ${args.path}` : ''}`;
+  if (tool === 'ListDir' || tool === 'list_directory') return `List ${args.path ?? '.'}`;
+
+  // MCP tools — extract meaningful info
+  if (tool.startsWith('mcp__')) {
+    const parts = tool.split('__');
+    const server = parts[1] ?? '';
+    const fn = parts.slice(2).join('__');
+    // FlowForge MCP tools
+    if (fn === 'list_workflows') return 'List workflows';
+    if (fn === 'list_agents') return 'List agents';
+    if (fn === 'list_repos') return 'List repos';
+    if (fn === 'get_execution') return `Get execution ${(args.execution_id as string ?? '').slice(0, 12)}`;
+    if (fn === 'spawn_agent') return `Spawn ${args.agent_name ?? 'agent'}`;
+    if (fn === 'delegate_to_agent') return `Delegate to ${args.agent_name ?? 'agent'}: ${(args.task as string ?? '').slice(0, 80)}`;
+    if (fn === 'get_delegation_result') return `Wait for delegation ${(args.conversation_id as string ?? '').slice(0, 12)}`;
+    if (fn === 'run_workflow') return `Run workflow ${args.workflow_name ?? args.workflow_id ?? ''}`;
+    if (fn === 'save_learning') return `Save learning: ${(args.content as string ?? '').slice(0, 60)}`;
+    if (fn === 'query_database') return `Query: ${(args.query as string ?? '').slice(0, 80)}`;
+    return `${server}/${fn}`;
+  }
+
+  // Generic — show first string arg
+  const firstStr = Object.values(args).find(v => typeof v === 'string') as string | undefined;
+  return firstStr ? `${tool}: ${firstStr.slice(0, 100)}` : tool;
+}
+
+/** Resolve workspace path — ONLY from explicitly linked session, no blind fallback */
+async function resolveWorkspacePath(db: Db, chatSessionId?: string): Promise<string | null> {
+  if (!chatSessionId) return null;
+  try {
+    const ws = await db.collection('workspaces').findOne({ chatSessionId, status: { $nin: ['archived', 'failed'] } });
+    return (ws?.worktreePath as string) ?? null;
+  } catch { return null; }
 }
 
 /** Wait until all background tasks for a session are complete */
@@ -386,22 +452,16 @@ const spawnAgent: ChatTool = {
       return { error: `Agent "${agentName}" not found. Use list_agents to see available agents.` };
     }
 
-    // Auto-resolve repo_path from linked workspace
+    // Resolve repo_path: explicit arg > session context cwd > workspace linked to session
     let repoPath = args.repo_path as string | undefined;
     if (!repoPath) {
       const activeCtx = getAnyActiveSession();
-      if (activeCtx?.chatSessionId) {
-        try {
-          const ws = await db.collection('workspaces').findOne({ chatSessionId: activeCtx.chatSessionId, status: { $nin: ['archived', 'failed'] } });
-          if (ws?.worktreePath) {
-            repoPath = ws.worktreePath as string;
-          }
-        } catch {}
-      }
+      repoPath = activeCtx?.resolvedCwd ?? await resolveWorkspacePath(db, activeCtx?.chatSessionId) ?? undefined;
     }
 
     const { randomUUID } = await import('node:crypto');
     const executionId = randomUUID();
+    const activeCtxForMeta = getAnyActiveSession();
     await db.collection('executions').insertOne({
       id: executionId,
       workflowName: `chat:spawn_agent/${agentName}`,
@@ -410,6 +470,15 @@ const spawnAgent: ChatTool = {
       status: 'running',
       source: 'chat',
       input: { prompt, agent_name: agentName, repo_path: repoPath, session_id: resumeSession },
+      // Execution metadata for tracing
+      meta: {
+        cwd: repoPath || '/tmp',
+        provider: (role.provider as string) ?? 'claude',
+        model: (role.model as string) ?? 'sonnet',
+        spawnedBy: activeCtxForMeta?.currentAgent ?? 'user',
+        chatSessionId: activeCtxForMeta?.chatSessionId,
+        parentMessageId: activeCtxForMeta?.parentMessageId,
+      },
       state: {},
       sessions: {},
       retryCounts: {},
@@ -445,8 +514,12 @@ async function runSpawnInBackground(
   const model = (role.model as string) ?? 'sonnet';
   const activity: { type: string; tool?: string; timestamp: Date }[] = [];
 
-  // Broadcast spawn started
+  // Broadcast spawn started + persist log
   if (onEvent) onEvent('spawn_started', { executionId, agent: agentName, prompt: prompt.slice(0, 200), provider, model });
+  const liveLog = (entry: { type: string; tool?: string; command?: string; content?: string }) => {
+    db.collection('execution_logs').insertOne({ executionId, agent: agentName, ...entry, timestamp: new Date() }).catch(() => {});
+  };
+  liveLog({ type: 'started', content: `Agent ${agentName} spawned in ${repoPath || '/tmp'}` });
 
   const MAX_SPAWN_RETRIES = 3;
   let currentResumeSession = resumeSession;
@@ -482,6 +555,11 @@ async function runSpawnInBackground(
       const result = await new Promise<{ text: string; threadId?: string }>((resolveP, rejectP) => {
         const proc = spawn('codex', args, { cwd: repoPath || '/tmp', env: { ...process.env }, stdio: ['pipe', 'pipe', 'pipe'] });
         proc.stdin.end();
+        // Register PID for cancel support
+        if (proc.pid) {
+          registerExecutionProcess(executionId, proc.pid, () => { try { proc.kill('SIGTERM'); } catch {} });
+          db.collection('executions').updateOne({ id: executionId }, { $set: { 'meta.pid': proc.pid } }).catch(() => {});
+        }
         let text = '';
         let threadId: string | undefined = resumeSession;
         let buf = '';
@@ -497,37 +575,59 @@ async function runSpawnInBackground(
               if (evt.type === 'thread.started' && evt.thread_id) threadId = evt.thread_id;
               if (evt.type === 'item.completed' && evt.item?.type === 'agent_message') {
                 const t = evt.item.text ?? evt.item.content?.filter((c: any) => c.type === 'output_text').map((c: any) => c.text).join('') ?? '';
-                if (t) text = t;
+                if (t) { text = t; liveLog({ type: 'text', content: t.slice(-300) }); }
+              }
+              // Capture reasoning/thinking
+              if (evt.type === 'item.started' && evt.item?.type === 'agent_reasoning') {
+                liveLog({ type: 'thinking' });
+              }
+              if (evt.type === 'item.completed' && evt.item?.type === 'agent_reasoning') {
+                const thought = evt.item.text ?? '';
+                if (thought) liveLog({ type: 'thinking', content: thought.slice(-300) });
               }
               if (evt.type === 'item.started' && (evt.item?.type === 'mcp_tool_call' || evt.item?.type === 'collab_tool_call')) {
                 const server = evt.item.server ?? evt.item.serverLabel ?? '';
                 const tool = evt.item.tool ?? evt.item.name ?? '';
                 const name = server ? `mcp__${server}__${tool}` : tool;
-                toolCalls.push({ tool: name, args: evt.item.arguments ?? evt.item.input ?? {} });
+                const args = evt.item.arguments ?? evt.item.input ?? {};
+                toolCalls.push({ tool: name, args });
                 activity.push({ type: 'tool_call', tool: name, timestamp: new Date() });
-                if (onEvent) onEvent('spawn_activity', { executionId, agent: agentName, type: 'tool_start', tool: name });
+                // Build description from args for readability
+                const desc = toolDescription(name, args);
+                if (onEvent) onEvent('spawn_activity', { executionId, agent: agentName, type: 'tool_start', tool: name, content: desc });
+                liveLog({ type: 'tool_start', tool: name, content: desc });
               }
               if (evt.type === 'item.completed' && (evt.item?.type === 'mcp_tool_call' || evt.item?.type === 'collab_tool_call')) {
                 const server = evt.item.server ?? evt.item.serverLabel ?? '';
                 const tool = evt.item.tool ?? evt.item.name ?? '';
                 const name = server ? `mcp__${server}__${tool}` : tool;
+                const output = evt.item.output ?? evt.item.result ?? '';
+                const outStr = typeof output === 'string' ? output.slice(0, 150) : JSON.stringify(output).slice(0, 150);
                 activity.push({ type: 'tool_result', tool: name, timestamp: new Date() });
-                if (onEvent) onEvent('spawn_activity', { executionId, agent: agentName, type: 'tool_done', tool: name });
+                if (onEvent) onEvent('spawn_activity', { executionId, agent: agentName, type: 'tool_done', tool: name, content: outStr });
+                liveLog({ type: 'tool_done', tool: name, content: outStr });
               }
               if (evt.type === 'item.completed' && evt.item?.type === 'function_call') {
                 const fn = evt.item.name ?? 'unknown';
-                toolCalls.push({ tool: fn, args: {} });
+                const fnArgs = evt.item.arguments ? JSON.parse(evt.item.arguments) : {};
+                const desc = toolDescription(fn, fnArgs);
+                toolCalls.push({ tool: fn, args: fnArgs });
                 activity.push({ type: 'tool_call', tool: fn, timestamp: new Date() });
-                if (onEvent) onEvent('spawn_activity', { executionId, agent: agentName, type: 'tool_done', tool: fn });
+                if (onEvent) onEvent('spawn_activity', { executionId, agent: agentName, type: 'tool_done', tool: fn, content: desc });
+                liveLog({ type: 'tool_done', tool: fn, content: desc });
               }
               if (evt.type === 'item.completed' && evt.item?.type === 'command_execution') {
-                toolCalls.push({ tool: 'Bash', args: { command: evt.item.command ?? '' } });
+                const cmd = (evt.item.command ?? '').slice(0, 200);
+                const exitCode = evt.item.exit_code ?? '';
+                toolCalls.push({ tool: 'Bash', args: { command: cmd } });
                 activity.push({ type: 'tool_call', tool: 'Bash', timestamp: new Date() });
-                if (onEvent) onEvent('spawn_activity', { executionId, agent: agentName, type: 'tool_done', tool: 'Bash', command: (evt.item.command ?? '').slice(0, 100) });
+                if (onEvent) onEvent('spawn_activity', { executionId, agent: agentName, type: 'tool_done', tool: 'Bash', command: cmd });
+                liveLog({ type: 'tool_done', tool: 'Bash', command: cmd, content: exitCode !== '' ? `exit ${exitCode}` : undefined });
               }
               // Broadcast thinking
               if (evt.type === 'item.started' && evt.item?.type === 'agent_reasoning') {
                 if (onEvent) onEvent('spawn_activity', { executionId, agent: agentName, type: 'thinking' });
+                liveLog({ type: 'thinking' });
               }
             } catch {}
           }
@@ -553,20 +653,45 @@ async function runSpawnInBackground(
       if (currentResumeSession) sdkOptions.resume = currentResumeSession;
       else sdkOptions.customSystemPrompt = (role.system as string) ?? '';
 
+      // Register abort controller for cancel support
+      const abortController = new AbortController();
+      sdkOptions.abortController = abortController;
+      registerExecutionProcess(executionId, process.pid, () => abortController.abort());
+
       for await (const msg of query({ prompt, options: sdkOptions as any })) {
         if ('session_id' in msg && msg.session_id) sessionId = msg.session_id as string;
+
         if (msg.type === 'assistant') {
-          const blocks = msg.message.content as Array<{ type: string; text?: string; name?: string; input?: unknown; id?: string }>;
+          const blocks = (msg as any).message?.content as Array<{ type: string; text?: string; name?: string; input?: unknown; id?: string }> ?? [];
           const text = blocks.filter(b => b.type === 'text').map(b => b.text || '').join('');
-          if (text) response = text;
+          if (text) {
+            response = text;
+            if (onEvent) onEvent('spawn_activity', { executionId, agent: agentName, type: 'text', content: text.slice(-200) });
+            liveLog({ type: 'text', content: text.slice(-200) });
+          }
           for (const block of blocks) {
             if (block.type === 'tool_use' && block.name) {
-              toolCalls.push({ tool: block.name, args: (block.input as Record<string, unknown>) ?? {} });
+              const args = (block.input as Record<string, unknown>) ?? {};
+              const desc = toolDescription(block.name, args);
+              toolCalls.push({ tool: block.name, args });
               activity.push({ type: 'tool_call', tool: block.name, timestamp: new Date() });
-              if (onEvent) onEvent('spawn_activity', { executionId, agent: agentName, type: 'tool_start', tool: block.name });
+              if (onEvent) onEvent('spawn_activity', { executionId, agent: agentName, type: 'tool_start', tool: block.name, content: desc });
+              liveLog({ type: 'tool_start', tool: block.name, content: desc });
+            }
+            if (block.type === 'thinking' && block.text) {
+              if (onEvent) onEvent('spawn_activity', { executionId, agent: agentName, type: 'thinking', content: block.text.slice(-200) });
+              liveLog({ type: 'thinking', content: block.text.slice(-200) });
             }
           }
         }
+
+        if ((msg as any).type === 'tool_result' || ((msg as any).message?.role === 'tool')) {
+          const toolName = (msg as any).tool_name ?? (msg as any).name ?? '';
+          activity.push({ type: 'tool_result', tool: toolName, timestamp: new Date() });
+          if (onEvent) onEvent('spawn_activity', { executionId, agent: agentName, type: 'tool_done', tool: toolName });
+          liveLog({ type: 'tool_done', tool: toolName });
+        }
+
         if (msg.type === 'result') {
           costUsd = (msg as any).total_cost_usd ?? 0;
           if ((msg as any).subtype === 'success' && (msg as any).result) response = (msg as any).result;
@@ -578,6 +703,9 @@ async function runSpawnInBackground(
     const durationMs = Date.now() - startMs;
 
     // Save execution as completed
+    // Clean up process registry
+    runningProcesses.delete(executionId);
+
     await db.collection('executions').updateOne(
       { id: executionId },
       { $set: {
@@ -587,8 +715,9 @@ async function runSpawnInBackground(
       } },
     );
 
-    // Broadcast completion
+    // Broadcast completion + log
     if (onEvent) onEvent('spawn_completed', { executionId, agent: agentName, durationMs, toolCount: toolCalls.length, response: response.slice(0, 300) });
+    liveLog({ type: 'completed', content: `Done in ${(durationMs/1000).toFixed(1)}s, ${toolCalls.length} tools` });
 
     // Save full trace with response, tool calls, and activity
     await db.collection('execution_traces').insertOne({
@@ -1053,6 +1182,12 @@ CRITICAL RULES:
     const currentDepth = (activeCtx?.delegationDepth ?? 0) + 1;
     const onEvent = activeCtx?.broadcastEvent;
 
+    // Resolve cwd: explicit context > session cwd > workspace linked to session
+    let delegationCwd = context.repo_path as string | undefined;
+    if (!delegationCwd) {
+      delegationCwd = activeCtx?.resolvedCwd ?? await resolveWorkspacePath(db, activeCtx?.chatSessionId) ?? undefined;
+    }
+
     // ── Continue existing conversation (explicit ID or auto-find) ──
     let existingConvId = continueConvId;
     if (!existingConvId) {
@@ -1072,7 +1207,7 @@ CRITICAL RULES:
       const targetSessionId = existing.sessions?.[targetName];
 
       // Run in background — return immediately
-      runDelegationInBackground(db, targetAgent, task, existingConvId, targetSessionId, conversationService, onEvent, activeCtx, currentDepth, fromAgent, targetName).catch(() => {});
+      runDelegationInBackground(db, targetAgent, task, existingConvId, targetSessionId, conversationService, onEvent, activeCtx, currentDepth, fromAgent, targetName, delegationCwd).catch(() => {});
 
       return { conversation_id: existingConvId, status: 'started', turn: 'continue', message: `Message sent to ${targetName}. Use get_delegation_result to check the response.` };
     }
@@ -1095,22 +1230,23 @@ CRITICAL RULES:
     if (onEvent) onEvent('thread_created', { conversationId: convId, fromAgent, toAgent: targetName, task: task.slice(0, 200), depth: currentDepth, parentConversationId: activeCtx?.currentConversationId });
     await conversationService.addMessage(convId, { agent: fromAgent, type: 'message', content: task, timestamp: new Date() });
 
-    // Auto-inject workspace context if a workspace is linked to this chat session
-    if (!context.repo_path && activeCtx?.chatSessionId) {
-      try {
-        const ws = await db.collection('workspaces').findOne({ chatSessionId: activeCtx.chatSessionId, status: { $nin: ['archived', 'failed'] } });
-        if (ws?.worktreePath) {
-          context.repo_path = ws.worktreePath as string;
-          context.workspace_branch = ws.branch as string;
-        }
-      } catch {}
+    // Auto-inject workspace context
+    if (!context.repo_path) {
+      const wsPath = await resolveWorkspacePath(db, activeCtx?.chatSessionId);
+      if (wsPath) {
+        context.repo_path = wsPath;
+        try {
+          const ws = await db.collection('workspaces').findOne({ worktreePath: wsPath, status: { $nin: ['archived', 'failed'] } });
+          if (ws?.branch) context.workspace_branch = ws.branch as string;
+        } catch {}
+      }
     }
 
     let fullPrompt = task;
     if (Object.keys(context).length > 0) fullPrompt = `CONTEXT:\n${JSON.stringify(context, null, 2)}\n\nTASK:\n${task}`;
 
     // Run in background — return immediately so MCP doesn't timeout
-    runDelegationInBackground(db, targetAgent, fullPrompt, convId, undefined, conversationService, onEvent, activeCtx, currentDepth, fromAgent, targetName).catch(() => {});
+    runDelegationInBackground(db, targetAgent, fullPrompt, convId, undefined, conversationService, onEvent, activeCtx, currentDepth, fromAgent, targetName, delegationCwd).catch(() => {});
 
     return { conversation_id: convId, status: 'started', agent: targetName, depth: currentDepth, message: `Delegation started. Use get_delegation_result(conversation_id="${convId}") to get the response.` };
   },
@@ -1122,12 +1258,12 @@ async function runDelegationInBackground(
   resumeSessionId: string | undefined, conversationService: AgentConversationService,
   onEvent: ((event: string, data: Record<string, unknown>) => void) | undefined,
   activeCtx: ActiveSessionContext | undefined, currentDepth: number,
-  fromAgent: string, targetName: string,
+  fromAgent: string, targetName: string, cwd?: string,
 ): Promise<void> {
   if (activeCtx) activeCtx.pendingBackgroundTasks++;
   const startMs = Date.now();
   try {
-    const result = await runAgentTurn(db, targetAgent, prompt, convId, resumeSessionId, conversationService, onEvent, activeCtx, currentDepth);
+    const result = await runAgentTurn(db, targetAgent, prompt, convId, resumeSessionId, conversationService, onEvent, activeCtx, currentDepth, cwd);
     console.log(`[delegation] ${targetName} completed: ${result.responseText.length}ch, ${result.toolCalls.length} toolCalls`);
     await conversationService.addMessage(convId, { agent: targetName, type: 'message', content: result.responseText, toolCalls: result.toolCalls, timestamp: new Date() });
     await conversationService.addCost(convId, result.costUsd);
@@ -1372,6 +1508,7 @@ async function runAgentTurn(
   onEvent: ((event: string, data: Record<string, unknown>) => void) | undefined,
   activeCtx: ActiveSessionContext | undefined,
   currentDepth: number,
+  cwd?: string,
 ): Promise<{ responseText: string; costUsd: number; sessionId?: string; toolCalls: { tool: string; args: Record<string, unknown> }[] }> {
   const targetName = targetAgent.name as string;
   const provider = targetAgent.provider ?? 'claude';
@@ -1444,8 +1581,12 @@ async function runAgentTurn(
       }
 
       const result = await new Promise<{ text: string; threadId?: string; costUsd: number }>((resolveP, rejectP) => {
-        const proc = spawn('codex', args, { cwd: '/tmp', env: { ...process.env }, stdio: ['pipe', 'pipe', 'pipe'] });
+        const cleanEnv = { ...process.env };
+        delete cleanEnv.PORT; // Don't leak host server port
+        const proc = spawn('codex', args, { cwd: cwd || '/tmp', env: cleanEnv, stdio: ['pipe', 'pipe', 'pipe'] });
         proc.stdin.end();
+        // Register PID for cancel — use convId as key for delegations
+        if (proc.pid) registerExecutionProcess(convId, proc.pid, () => { try { proc.kill('SIGTERM'); } catch {} });
         let text = '';
         let threadId: string | undefined = resumeSessionId;
         let buf = '';
@@ -1463,10 +1604,6 @@ async function runAgentTurn(
               if (evt.type === 'item.completed' && evt.item?.type === 'agent_message') {
                 const t = evt.item.text ?? evt.item.content?.filter((c: any) => c.type === 'output_text').map((c: any) => c.text).join('') ?? '';
                 if (t) { text = t; emit('text', { content: t.slice(-300) }); }
-              }
-              // Log all event types for debugging
-              if (evt.type && evt.item?.type) {
-                console.log(`[delegation-codex] ${targetName}: evt=${evt.type} item=${evt.item.type}`);
               }
               // MCP / collab tool calls (Codex uses 'collab_tool_call' in exec mode)
               if (evt.type === 'item.started' && (evt.item?.type === 'mcp_tool_call' || evt.item?.type === 'collab_tool_call')) {
@@ -1525,9 +1662,11 @@ async function runAgentTurn(
       const { loadExternalMcpServers } = await import('./chat-mcp.js');
       Object.assign(mcpServers, await loadExternalMcpServers(db));
 
-      const sdkOptions: Record<string, unknown> = { model, maxTurns: 50, permissionMode: 'bypassPermissions', cwd: '/tmp', mcpServers };
+      const abortController = new AbortController();
+      const sdkOptions: Record<string, unknown> = { model, maxTurns: 50, permissionMode: 'bypassPermissions', cwd: cwd || '/tmp', mcpServers, abortController };
       if (resumeSessionId) sdkOptions.resume = resumeSessionId;
       else sdkOptions.customSystemPrompt = systemPrompt;
+      registerExecutionProcess(convId, process.pid, () => abortController.abort());
 
       for await (const message of query({ prompt, options: sdkOptions as any })) {
         if ('session_id' in message && message.session_id) sessionId = message.session_id as string;
@@ -1684,10 +1823,12 @@ const createPullRequest: ChatTool = {
   },
   async execute(args, db) {
     const activeCtx = getAnyActiveSession();
-    if (!activeCtx?.chatSessionId) return { error: 'No active chat session' };
 
-    const ws = await db.collection('workspaces').findOne({ chatSessionId: activeCtx.chatSessionId, status: { $nin: ['archived', 'failed'] } });
-    if (!ws) return { error: 'No workspace linked to this chat session. Link one first with link_chat.' };
+    // Find workspace linked to this session only
+    const ws = activeCtx?.chatSessionId
+      ? await db.collection('workspaces').findOne({ chatSessionId: activeCtx.chatSessionId, status: { $nin: ['archived', 'failed'] } })
+      : null;
+    if (!ws) return { error: 'No workspace linked to this chat session. Open this chat from a workspace first.' };
 
     const title = args.title as string;
     const body = (args.body as string) ?? '';
@@ -1730,8 +1871,8 @@ const createPullRequest: ChatTool = {
         branch: ws.branch, baseBranch: ws.baseBranch,
         status: 'open', author: 'flowforge-agent',
         url: result.url, additions: 0, deletions: 0, changedFiles: 0, labels: [],
-        createdByAgent: activeCtx.currentAgent ?? 'assistant',
-        chatSessionId: activeCtx.chatSessionId,
+        createdByAgent: activeCtx?.currentAgent ?? 'assistant',
+        chatSessionId: activeCtx?.chatSessionId,
         workspaceId: ws._id?.toString(),
         createdAt: new Date(), updatedAt: new Date(),
       });

@@ -63,13 +63,14 @@ function sendSSE(res: Response, event: string, data: unknown): void {
 
 // ── Mention Resolution ──
 
-async function resolveMentions(content: string, db: Db): Promise<string> {
+async function resolveMentions(content: string, db: Db): Promise<{ context: string; repoPath?: string }> {
   const mentionRegex = /@([\w-]+)/g;
   const matches = [...content.matchAll(mentionRegex)];
-  if (matches.length === 0) return '';
+  if (matches.length === 0) return { context: '' };
 
   const names = [...new Set(matches.map(m => m[1]))];
   let context = '';
+  let repoPath: string | undefined;
 
   for (const name of names) {
     const wf = await db.collection('workflows').findOne({ name, archived: { $ne: true } });
@@ -85,6 +86,7 @@ async function resolveMentions(content: string, db: Db): Promise<string> {
     const repo = await db.collection('repos').findOne({ name });
     if (repo) {
       context += `\n[REPO: ${name}] Path: ${repo.path}\nLanguage: ${(repo.detected?.language ?? []).join(', ')}\nFramework: ${(repo.detected?.framework ?? []).join(', ')}\nBranch: ${repo.detected?.defaultBranch ?? 'unknown'}\n`;
+      if (!repoPath) repoPath = repo.path as string; // Use first mentioned repo as cwd
       continue;
     }
     const agent = await db.collection('agents').findOne({ name });
@@ -92,7 +94,7 @@ async function resolveMentions(content: string, db: Db): Promise<string> {
       context += `\n[AGENT: ${name}] Provider: ${agent.provider ?? 'claude'}\nModel: ${agent.model ?? 'default'}\nTools: ${(agent.tools ?? []).join(', ')}\nSystem: ${(agent.system ?? '').slice(0, 200)}\n`;
     }
   }
-  return context;
+  return { context, repoPath };
 }
 
 // ── System Prompt ──
@@ -145,7 +147,17 @@ IMPORTANT RULES:
 3. When the user asks to use a specific @agent — use spawn_agent (not run_workflow). spawn_agent runs a single agent with that agent's system prompt. run_workflow runs a full multi-node workflow.
 4. After starting a workflow (run_workflow) or spawning an agent (spawn_agent), monitor it to completion. Keep calling get_execution in a loop (with a few seconds between calls) until status is "completed" or "failed". Then present the final output. Do NOT stop after seeing "running" — wait for it to finish.
 5. When the user selects a team agent (PM, Engineer, QA, etc.), that agent can use delegate_to_agent to involve other team members. The delegation creates a visible thread showing agent-to-agent collaboration.
-6. Use report_to_user for progress updates during long delegations so the user knows what's happening.${learningsBlock}`;
+6. Use report_to_user for progress updates during long delegations so the user knows what's happening.
+7. Only ask "Which repo?" if the task clearly requires working with code (e.g. review, fix, investigate, build) AND the user hasn't specified one via @repo-name AND no workspace context is provided. For general questions, planning, brainstorming — just answer directly.${learningsBlock}`;
+
+  // Inject available repos
+  let reposBlock = '';
+  try {
+    const repos = await db.collection('repos').find({ status: 'active' }).toArray();
+    if (repos.length > 0) {
+      reposBlock = `\n\nAvailable repos: ${repos.map((r: any) => `${r.name} (${r.path})`).join(', ')}. User references with @repo-name.`;
+    }
+  } catch {}
 
   if (provider === 'codex') {
     return `${base}
@@ -162,7 +174,7 @@ Examples:
 - "Check execution abc123" → call flowforge get_execution with execution_id=abc123
 - "List my agents" → call flowforge list_agents
 
-For code tasks (review, investigate, plan): use flowforge spawn_agent or run_workflow with the correct repo_path from @mentions.`;
+For code tasks (review, investigate, plan): use flowforge spawn_agent or run_workflow with the correct repo_path from @mentions.${reposBlock}`;
   }
 
   // For claude-cli: tool instructions are appended by buildToolInstructions() in chat-llm.ts
@@ -180,7 +192,7 @@ Examples:
 - "Review code in @my-repo" → use list_agents to find an agent, then spawn_agent with repo_path
 - If an execution is waiting for input → present the fields, then use submit_execution_input
 
-For code tasks (review, investigate, plan): delegate to an agent via spawn_agent with the correct repo_path from @mentions.`;
+For code tasks (review, investigate, plan): delegate to an agent via spawn_agent with the correct repo_path from @mentions.${reposBlock}`;
 }
 
 // ── Active Query Tracking ──
@@ -329,7 +341,26 @@ export class ChatService {
         );
       }
 
-      // Register active session with the resolved agent
+      // Resolve @mentions (returns context text + repo path if @repo was mentioned)
+      const { context: mentionContext, repoPath: mentionRepoPath } = await resolveMentions(content, this.db);
+
+      // Resolve workspace context — ONLY if this session is explicitly linked to a workspace
+      let workspaceContext = '';
+      let resolvedCwd: string | undefined;
+      try {
+        const linkedWs = await this.db.collection('workspaces').findOne({ chatSessionId: sessionId, status: { $nin: ['archived', 'failed'] } });
+        if (linkedWs) {
+          workspaceContext = `\n[WORKSPACE: ${linkedWs.name}] Path: ${linkedWs.worktreePath}\nBranch: ${linkedWs.branch} → ${linkedWs.baseBranch}\nRepo: ${linkedWs.repoName}\nYou are working inside this workspace. All file paths are relative to: ${linkedWs.worktreePath}\n`;
+          resolvedCwd = linkedWs.worktreePath as string;
+        }
+      } catch {}
+
+      // If no workspace linked, use @repo mention path as cwd
+      if (!resolvedCwd && mentionRepoPath) {
+        resolvedCwd = mentionRepoPath;
+      }
+
+      // Register active session with resolved cwd — ALL tools in the chain read this
       registerActiveSession({
         chatSessionId: sessionId,
         parentMessageId: assistantMsgId,
@@ -337,19 +368,8 @@ export class ChatService {
         delegationDepth: 0,
         broadcastEvent: (event, data) => broadcastToListeners(entry, event, data),
         pendingBackgroundTasks: 0,
+        resolvedCwd,
       });
-
-      // Resolve @mentions
-      const mentionContext = await resolveMentions(content, this.db);
-
-      // Resolve linked workspace context (same pattern as @mentions)
-      let workspaceContext = '';
-      try {
-        const ws = await this.db.collection('workspaces').findOne({ chatSessionId: sessionId, status: { $nin: ['archived', 'failed'] } });
-        if (ws) {
-          workspaceContext = `\n[WORKSPACE: ${ws.name}] Path: ${ws.worktreePath}\nBranch: ${ws.branch} → ${ws.baseBranch}\nRepo: ${ws.repoName}\nYou are working inside this workspace. All file paths are relative to: ${ws.worktreePath}\n`;
-        }
-      } catch {}
 
       const allContext = [mentionContext, workspaceContext].filter(Boolean).join('\n');
       const enrichedContent = allContext
@@ -388,12 +408,8 @@ export class ChatService {
         systemPrompt = await getSystemPrompt(provider, this.db, content);
       }
 
-      // Resolve workspace cwd if a workspace is linked to this session
-      let workspaceCwd: string | undefined;
-      try {
-        const ws = await this.db.collection('workspaces').findOne({ chatSessionId: sessionId, status: { $nin: ['archived', 'failed'] } });
-        if (ws?.worktreePath) workspaceCwd = ws.worktreePath as string;
-      } catch {}
+      // Use already-resolved cwd (workspace path or @repo path)
+      const workspaceCwd = resolvedCwd;
 
       const result = await runChatLLM(this.db, {
         provider,
@@ -625,7 +641,17 @@ RULES:
 5. If you don't know the answer to an agent's question, call ask_user to ask the user.
 6. NEVER respond to the user before ALL delegations are complete.
 7. Use report_to_user for progress updates.
-8. Be concise. Respond in markdown.`);
+8. Be concise. Respond in markdown.
+9. Only ask "Which repo?" if the task clearly requires working with code AND the user hasn't specified one via @repo-name AND no workspace context is provided. For general questions, planning, brainstorming — just answer directly.`);
+
+    // Inject available repos so agent knows what exists
+    try {
+      const repos = await this.db.collection('repos').find({ status: 'active' }).toArray();
+      if (repos.length > 0) {
+        const repoList = repos.map((r: any) => `- ${r.name}: ${r.path} (${(r.detected?.language ?? []).join(', ')})`).join('\n');
+        parts.push(`\n## Available Repositories\n${repoList}\nUser references repos with @repo-name. Only ask which repo if the task requires code changes and it's ambiguous.`);
+      }
+    } catch {}
 
     // Load learnings — agent-scoped + global
     try {

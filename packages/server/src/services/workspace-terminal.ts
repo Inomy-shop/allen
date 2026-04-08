@@ -96,13 +96,20 @@ async function handleConnection(ws: WebSocket, workspaceId: string, terminalId: 
 
     const shell = process.platform === 'win32' ? 'powershell.exe' : (process.env.SHELL ?? 'zsh');
 
+    // Clean env for workspace terminals — remove host server's PORT and other
+    // conflicting vars so workspace services can use their own ports
+    const cleanEnv = { ...process.env };
+    delete cleanEnv.PORT;
+    delete cleanEnv.TERMINAL_WS_PORT;
+    delete cleanEnv.FILE_WATCH_WS_PORT;
+
     const term = pty!.spawn(shell, [], {
       name: 'xterm-256color',
       cols: 120,
       rows: 30,
       cwd,
       env: {
-        ...process.env,
+        ...cleanEnv,
         TERM: 'xterm-256color',
         COLORTERM: 'truecolor',
       } as Record<string, string>,

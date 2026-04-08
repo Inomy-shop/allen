@@ -21,13 +21,66 @@ function AgentExecutionView({ execution, agentName, trace, id }: {
 }) {
   const [showPrompt, setShowPrompt] = useState(false);
   const [showResponse, setShowResponse] = useState(true);
-  const [showActivity, setShowActivity] = useState(false);
+  const [showLogs, setShowLogs] = useState(true);
+  const [liveLogs, setLiveLogs] = useState<any[]>([]);
+  const logsEndRef = useRef<HTMLDivElement>(null);
 
   const prompt = trace?.renderedPrompt ?? execution.input?.prompt ?? '';
   const response = trace?.rawResponse ?? '';
   const cost = trace?.cost ?? execution.cost ?? {};
-  const activity = trace?.activity ?? [];
+  const toolCalls = trace?.toolCalls ?? [];
   const durationMs = trace?.durationMs ?? execution.durationMs ?? 0;
+  const meta = execution.meta ?? {};
+
+  // Poll live logs for running executions, merge with trace activity for completed
+  useEffect(() => {
+    if (!id) return;
+    let alive = true;
+    const poll = async () => {
+      while (alive) {
+        try {
+          const res = await fetch(`/api/executions/${id}/logs?limit=500`);
+          const logs = await res.json();
+          if (alive && Array.isArray(logs)) setLiveLogs(logs);
+        } catch {}
+        if (execution.status !== 'running') break;
+        await new Promise(r => setTimeout(r, 2000));
+      }
+    };
+    poll();
+    return () => { alive = false; };
+  }, [id, execution.status]);
+
+  // For completed executions: if live logs are sparse, merge in trace activity + tool calls
+  const allLogs = (() => {
+    // Start with persisted logs
+    const logs = [...liveLogs];
+    // If trace has activity not in logs, add them
+    const traceActivity = trace?.activity ?? [];
+    const traceTools = trace?.toolCalls ?? [];
+    if (logs.length < 3 && (traceActivity.length > 0 || traceTools.length > 0)) {
+      // Build from trace data
+      const traceLogs: any[] = [];
+      for (const tc of traceTools) {
+        traceLogs.push({ type: 'tool_call', tool: tc.tool, args: tc.args, timestamp: tc.timestamp ?? trace?.startedAt });
+      }
+      for (const a of traceActivity) {
+        traceLogs.push({ type: a.type, tool: a.tool ?? a.content, content: a.content, timestamp: a.timestamp ?? trace?.startedAt });
+      }
+      // Only add trace logs if persisted logs are sparse (less than tool call count)
+      if (logs.length < traceLogs.length + 2) {
+        // Replace with trace data since it's more complete
+        const persistedStartEnd = logs.filter(l => l.type === 'started' || l.type === 'completed');
+        return [...persistedStartEnd, ...traceLogs].sort((a, b) => new Date(a.timestamp || 0).getTime() - new Date(b.timestamp || 0).getTime());
+      }
+    }
+    return logs.sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
+  })();
+
+  // Auto-scroll logs
+  useEffect(() => {
+    logsEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  }, [allLogs.length]);
 
   return (
     <div className="flex flex-col h-full">
@@ -43,25 +96,31 @@ function AgentExecutionView({ execution, agentName, trace, id }: {
           <div>
             <h1 className="font-heading text-sm font-semibold text-white tracking-wider uppercase">{agentName}</h1>
             <div className="flex items-center gap-2 mt-0.5">
-              <span className="text-[10px] text-gray-600 font-mono bg-surface-200/40 px-1.5 py-0.5 rounded">agent execution</span>
-              <span className="text-xs text-gray-500 font-mono">{id?.slice(0, 8)}</span>
               <StatusBadge status={execution.status} />
+              <span className="text-xs text-gray-500 font-mono">{id?.slice(0, 8)}</span>
+              {meta.spawnedBy && <span className="text-[10px] text-gray-600 font-mono">by {meta.spawnedBy}</span>}
             </div>
           </div>
         </div>
         <div className="flex items-center gap-3">
+          {execution.status === 'running' && <span className="w-2 h-2 rounded-full bg-blue-400 animate-pulse" />}
           {durationMs > 0 && (
             <span className="flex items-center gap-1 text-xs text-gray-400 font-mono">
               <Clock className="w-3 h-3" /> {(durationMs / 1000).toFixed(1)}s
             </span>
           )}
           <CostDisplay cost={cost} />
+          {execution.status === 'running' && (
+            <button onClick={async () => { await api.cancel(id); window.location.reload(); }} className="flex items-center gap-1 text-xs text-red-400 hover:text-red-300 bg-red-400/10 hover:bg-red-400/20 border border-red-400/20 rounded px-2.5 py-1 font-mono transition-colors">
+              <XCircle className="w-3.5 h-3.5" /> Cancel
+            </button>
+          )}
         </div>
       </header>
 
       {/* Content */}
       <div className="flex-1 overflow-y-auto p-6 space-y-4">
-        {/* Metadata cards */}
+        {/* Metadata cards — 2 rows */}
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
           <div className="card p-3">
             <span className="text-[10px] font-label uppercase tracking-widest text-gray-500">Status</span>
@@ -69,7 +128,7 @@ function AgentExecutionView({ execution, agentName, trace, id }: {
           </div>
           <div className="card p-3">
             <span className="text-[10px] font-label uppercase tracking-widest text-gray-500">Duration</span>
-            <div className="mt-1 text-sm text-white font-mono">{(durationMs / 1000).toFixed(1)}s</div>
+            <div className="mt-1 text-sm text-white font-mono">{durationMs > 0 ? `${(durationMs / 1000).toFixed(1)}s` : execution.status === 'running' ? '...' : '—'}</div>
           </div>
           <div className="card p-3">
             <span className="text-[10px] font-label uppercase tracking-widest text-gray-500">Cost</span>
@@ -77,8 +136,72 @@ function AgentExecutionView({ execution, agentName, trace, id }: {
           </div>
           <div className="card p-3">
             <span className="text-[10px] font-label uppercase tracking-widest text-gray-500">Model</span>
-            <div className="mt-1 text-sm text-white font-mono">{cost.model ?? 'sonnet'}</div>
+            <div className="mt-1 text-sm text-white font-mono">{meta.model ?? cost.model ?? 'sonnet'}</div>
           </div>
+          <div className="card p-3">
+            <span className="text-[10px] font-label uppercase tracking-widest text-gray-500">Provider</span>
+            <div className="mt-1 text-sm text-white font-mono">{meta.provider ?? 'claude'}</div>
+          </div>
+          <div className="card p-3">
+            <span className="text-[10px] font-label uppercase tracking-widest text-gray-500">Spawned By</span>
+            <div className="mt-1 text-sm text-white font-mono">{meta.spawnedBy ?? 'user'}</div>
+          </div>
+          <div className="card p-3 col-span-2">
+            <span className="text-[10px] font-label uppercase tracking-widest text-gray-500">Working Directory</span>
+            <div className="mt-1 text-xs text-blue-400 font-mono truncate" title={meta.cwd ?? execution.input?.repo_path}>{meta.cwd ?? execution.input?.repo_path ?? '/tmp'}</div>
+          </div>
+        </div>
+
+        {/* Live Logs — shown by default for running, togglable for completed */}
+        <div className="card overflow-hidden">
+          <button title="Toggle logs" onClick={() => setShowLogs(!showLogs)} className="w-full flex items-center gap-2 px-4 py-3 hover:bg-surface-200/30 transition-colors text-left">
+            {showLogs ? <ChevronDown className="w-4 h-4 text-gray-500" /> : <ChevronRight className="w-4 h-4 text-gray-500" />}
+            <Terminal className="w-4 h-4 text-accent-cyan" />
+            <span className="text-xs font-label uppercase tracking-widest text-gray-400">Live Logs</span>
+            <span className="text-[10px] text-gray-600 font-mono ml-auto">{allLogs.length} entries</span>
+            {execution.status === 'running' && <span className="w-1.5 h-1.5 rounded-full bg-blue-400 animate-pulse" />}
+          </button>
+          {showLogs && (
+            <div className="px-4 pb-4 border-t border-border/20 max-h-[50vh] overflow-y-auto bg-[rgb(13,17,28)] rounded-b">
+              {allLogs.length === 0 && execution.status === 'running' && (
+                <div className="text-xs text-gray-600 font-mono py-3 animate-pulse">Waiting for activity...</div>
+              )}
+              {allLogs.map((log: any, i: number) => (
+                <div key={i} className="flex items-start gap-2 py-1 text-[11px] font-mono">
+                  <span className="text-gray-700 w-16 shrink-0">{log.timestamp ? new Date(log.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }) : '--:--:--'}</span>
+                  <span className={
+                    log.type === 'tool_start' ? 'text-amber-400 shrink-0' :
+                    log.type === 'tool_done' ? 'text-emerald-400 shrink-0' :
+                    log.type === 'tool_call' ? 'text-amber-400 shrink-0' :
+                    log.type === 'thinking' ? 'text-purple-400 shrink-0' :
+                    log.type === 'text' ? 'text-blue-400 shrink-0' :
+                    log.type === 'started' ? 'text-blue-400 shrink-0' :
+                    log.type === 'completed' ? 'text-emerald-400 shrink-0' :
+                    'text-gray-500 shrink-0'
+                  }>
+                    {log.type === 'tool_start' ? '⚡' : log.type === 'tool_done' ? '✓' : log.type === 'tool_call' ? '🔧' : log.type === 'thinking' ? '💭' : log.type === 'text' ? '💬' : log.type === 'started' ? '▶' : log.type === 'completed' ? '✅' : '·'}
+                  </span>
+                  <div className="flex-1 min-w-0">
+                    {(log.type === 'tool_start' || log.type === 'tool_done' || log.type === 'tool_call') ? (
+                      <>
+                        <span className="text-gray-500">{log.tool}</span>
+                        {log.content && <span className="text-gray-400 ml-1.5">{log.content}</span>}
+                        {!log.content && log.command && <span className="text-gray-400 ml-1.5">$ {log.command}</span>}
+                        {log.args && <pre className="text-gray-600 text-[9px] mt-0.5 truncate">{JSON.stringify(log.args).slice(0, 150)}</pre>}
+                      </>
+                    ) : log.type === 'thinking' ? (
+                      <span className="text-purple-400/70">{log.content ?? 'thinking...'}</span>
+                    ) : log.type === 'text' ? (
+                      <span className="text-gray-400 line-clamp-2">{log.content}</span>
+                    ) : (
+                      <span className="text-gray-400">{log.content ?? log.type}</span>
+                    )}
+                  </div>
+                </div>
+              ))}
+              <div ref={logsEndRef} />
+            </div>
+          )}
         </div>
 
         {/* Prompt */}
@@ -91,7 +214,7 @@ function AgentExecutionView({ execution, agentName, trace, id }: {
           </button>
           {showPrompt && (
             <div className="px-4 pb-4 border-t border-border/20">
-              <pre className="text-xs text-gray-400 font-mono whitespace-pre-wrap mt-2 max-h-60 overflow-auto">{prompt}</pre>
+              <pre className="text-xs text-gray-400 font-mono whitespace-pre-wrap mt-2 max-h-[40vh] overflow-y-auto">{prompt}</pre>
             </div>
           )}
         </div>
@@ -100,46 +223,45 @@ function AgentExecutionView({ execution, agentName, trace, id }: {
         <div className="card overflow-hidden">
           <button title="Toggle response" onClick={() => setShowResponse(!showResponse)} className="w-full flex items-center gap-2 px-4 py-3 hover:bg-surface-200/30 transition-colors text-left">
             {showResponse ? <ChevronDown className="w-4 h-4 text-gray-500" /> : <ChevronRight className="w-4 h-4 text-gray-500" />}
-            {execution.status === 'completed' ? <CheckCircle className="w-4 h-4 text-accent-green" /> : <AlertCircle className="w-4 h-4 text-accent-red" />}
+            {execution.status === 'completed' ? <CheckCircle className="w-4 h-4 text-accent-green" /> : execution.status === 'running' ? <Brain className="w-4 h-4 text-accent-blue animate-pulse" /> : <AlertCircle className="w-4 h-4 text-accent-red" />}
             <span className="text-xs font-label uppercase tracking-widest text-gray-400">Response</span>
             <span className="text-[10px] text-gray-600 font-mono ml-auto">{response.length} chars</span>
           </button>
           {showResponse && (
             <div className="px-4 pb-4 border-t border-border/20">
-              <div className="text-sm text-gray-300 font-body whitespace-pre-wrap mt-2 max-h-96 overflow-auto leading-relaxed">{response || execution.errorMessage || '(no response)'}</div>
+              <div className="text-sm text-gray-300 font-body whitespace-pre-wrap mt-2 leading-relaxed max-h-[50vh] overflow-y-auto">{response || (execution.status === 'running' ? 'Agent is working...' : execution.errorMessage || '(no response)')}</div>
             </div>
           )}
         </div>
 
-        {/* Activity / Tool Calls */}
-        {activity.length > 0 && (
+        {/* Tool Calls */}
+        {toolCalls.length > 0 && (
           <div className="card overflow-hidden">
-            <button title="Toggle activity" onClick={() => setShowActivity(!showActivity)} className="w-full flex items-center gap-2 px-4 py-3 hover:bg-surface-200/30 transition-colors text-left">
-              {showActivity ? <ChevronDown className="w-4 h-4 text-gray-500" /> : <ChevronRight className="w-4 h-4 text-gray-500" />}
+            <div className="flex items-center gap-2 px-4 py-3 border-b border-border/20">
               <Wrench className="w-4 h-4 text-accent-yellow" />
-              <span className="text-xs font-label uppercase tracking-widest text-gray-400">Activity</span>
-              <span className="text-[10px] text-gray-600 font-mono ml-auto">{activity.length} events</span>
-            </button>
-            {showActivity && (
-              <div className="px-4 pb-4 border-t border-border/20 max-h-80 overflow-auto">
-                {activity.map((a: any, i: number) => (
-                  <div key={i} className="flex items-start gap-2 py-1.5 border-b border-border/10 last:border-0 text-xs">
-                    <span className="text-gray-600 font-mono w-14 shrink-0">{new Date(a.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}</span>
-                    <span className={`shrink-0 ${a.type === 'tool_start' ? 'text-accent-yellow' : a.type === 'tool_error' ? 'text-accent-red' : 'text-gray-500'}`}>
-                      {a.type === 'tool_start' ? '🔧' : a.type === 'tool_complete' ? '✅' : a.type === 'tool_error' ? '❌' : '📝'}
-                    </span>
-                    <span className="text-gray-400 font-body">{a.content?.slice(0, 200)}</span>
+              <span className="text-xs font-label uppercase tracking-widest text-gray-400">Tool Calls</span>
+              <span className="text-[10px] text-gray-600 font-mono ml-auto">{toolCalls.length}</span>
+            </div>
+            <div className="max-h-[50vh] overflow-y-auto">
+              {toolCalls.map((tc: any, i: number) => (
+                <div key={i} className="px-4 py-2 border-b border-border/10 last:border-0">
+                  <div className="flex items-center gap-2">
+                    <span className="text-[11px] font-mono text-amber-400">{tc.tool}</span>
                   </div>
-                ))}
-              </div>
-            )}
+                  {tc.args && Object.keys(tc.args).length > 0 && (
+                    <pre className="text-[10px] font-mono text-gray-600 mt-1 whitespace-pre-wrap max-h-24 overflow-y-auto">{JSON.stringify(tc.args, null, 2).slice(0, 500)}</pre>
+                  )}
+                </div>
+              ))}
+            </div>
           </div>
         )}
 
         {/* Timestamps */}
-        <div className="text-[10px] text-gray-600 font-mono flex gap-4">
+        <div className="text-[10px] text-gray-600 font-mono flex gap-4 flex-wrap">
           <span>Started: {execution.startedAt ? new Date(execution.startedAt).toLocaleString() : 'n/a'}</span>
           <span>Completed: {execution.completedAt ? new Date(execution.completedAt).toLocaleString() : 'n/a'}</span>
+          {meta.chatSessionId && <a href={`/chat/${meta.chatSessionId}`} className="text-blue-400 hover:underline">Open Chat →</a>}
         </div>
       </div>
     </div>
