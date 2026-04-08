@@ -6,6 +6,7 @@ import {
   GitMerge, XCircle, FolderGit2, Clock, FileDiff,
   Plus, Minus, ArrowRight,
 } from 'lucide-react';
+import { SetupProgressDialog } from '../components/workspace/SetupProgressDialog';
 
 export default function PullRequestListPage() {
   const navigate = useNavigate();
@@ -13,6 +14,7 @@ export default function PullRequestListPage() {
   const [loading, setLoading] = useState(true);
   const [syncing, setSyncing] = useState(false);
   const [statusFilter, setStatusFilter] = useState<string>('open');
+  const [pendingWsId, setPendingWsId] = useState<string | null>(null);
   const [repos, setRepos] = useState<any[]>([]);
 
   const load = useCallback(async () => {
@@ -41,7 +43,7 @@ export default function PullRequestListPage() {
   async function handleCreateWorkspace(prId: string) {
     try {
       const ws = await pullRequests.createWorkspace(prId);
-      navigate(`/workspaces/${ws._id}`);
+      setPendingWsId(ws._id);
     } catch (err: any) { alert(err.message); }
   }
 
@@ -147,6 +149,13 @@ export default function PullRequestListPage() {
           </div>
         )}
       </div>
+      {pendingWsId && (
+        <SetupProgressDialog
+          workspaceId={pendingWsId}
+          onComplete={(ws) => { setPendingWsId(null); navigate(`/workspaces/${ws._id}`); }}
+          onFailed={() => setPendingWsId(null)}
+        />
+      )}
     </div>
   );
 }

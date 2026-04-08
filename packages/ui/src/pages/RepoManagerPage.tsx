@@ -3,8 +3,12 @@ import { repos as repoApi, workflows as wfApi } from '../services/api';
 import DeleteConfirmDialog from '../components/common/DeleteConfirmDialog';
 import {
   FolderGit2, Plus, RefreshCw, Trash2, Pencil, ScanSearch, X,
-  GitBranch, Package, Code2, Sparkles, ExternalLink, Loader2,
+  GitBranch, Package, Code2, Sparkles, ExternalLink, Loader2, Settings, Monitor,
 } from 'lucide-react';
+import { useNavigate } from 'react-router-dom';
+import { WorkspaceConfigEditor } from '../components/workspace/WorkspaceConfigEditor';
+import { workspaces as wsApi } from '../services/workspaceService';
+import { SetupProgressDialog } from '../components/workspace/SetupProgressDialog';
 
 interface Repo {
   _id: string;
@@ -292,6 +296,9 @@ export default function RepoManagerPage() {
   const [editRepo, setEditRepo] = useState<Repo | null>(null);
   const [scanningId, setScanningId] = useState<string | null>(null);
   const [deletingRepo, setDeletingRepo] = useState<{ id: string; name: string } | null>(null);
+  const [configRepoId, setConfigRepoId] = useState<string | null>(null);
+  const [wsCreateRepo, setWsCreateRepo] = useState<Repo | null>(null);
+  const navigate = useNavigate();
 
   const refresh = useCallback(async () => {
     setLoading(true);
@@ -324,21 +331,17 @@ export default function RepoManagerPage() {
   };
 
   return (
-    <div className="p-8">
+    <div className="p-6">
       {/* Header */}
-      <div className="flex items-end justify-between mb-8">
+      <div className="flex items-center justify-between mb-6">
         <div>
-          <h1 className="font-heading text-2xl font-bold text-white tracking-widest uppercase">Repositories</h1>
-          <p className="text-sm text-gray-500 mt-1 font-mono">
-            {repoList.length} repo{repoList.length !== 1 ? 's' : ''} registered
-          </p>
+          <h1 className="font-heading text-xl font-bold text-white tracking-widest uppercase">Repositories</h1>
+          <p className="text-xs text-gray-500 mt-1 font-body">{repoList.length} repo{repoList.length !== 1 ? 's' : ''} registered</p>
         </div>
-        <div className="flex items-center gap-3">
-          <button title="Refresh" onClick={refresh} className="p-2 rounded-sm text-gray-500 hover:text-accent-blue hover:bg-accent-blue/5 transition-all">
-            <RefreshCw className="w-4 h-4" />
-          </button>
-          <button onClick={() => setAddOpen(true)} className="btn-primary inline-flex items-center gap-2">
-            <Plus className="w-4 h-4" /> Add Repo
+        <div className="flex items-center gap-2">
+          <button title="Refresh" onClick={refresh} className="btn-ghost text-xs"><RefreshCw className="w-3.5 h-3.5" /></button>
+          <button onClick={() => setAddOpen(true)} className="btn-primary text-xs inline-flex items-center gap-1.5">
+            <Plus className="w-3.5 h-3.5" /> Add Repo
           </button>
         </div>
       </div>
@@ -359,132 +362,60 @@ export default function RepoManagerPage() {
           ))}
         </div>
       ) : repoList.length === 0 ? (
-        /* Empty state */
-        <div className="flex flex-col items-center justify-center py-20">
-          <div className="w-20 h-20 rounded-sm bg-surface-200 flex items-center justify-center mb-6 border border-accent-blue/20 shadow-glow-blue/20">
-            <Sparkles className="w-9 h-9 text-accent-blue/50" />
-          </div>
-          <h2 className="font-heading text-lg font-semibold text-white mb-2 tracking-wider uppercase">No repos yet</h2>
-          <p className="text-sm text-gray-500 mb-8 max-w-sm text-center font-body">
-            Register your first repository to enable auto-detection of language, framework, and smart workflow defaults.
-          </p>
-          <button onClick={() => setAddOpen(true)} className="btn-primary inline-flex items-center gap-2 px-5 py-3">
-            <Plus className="w-4 h-4" /> Add Your First Repo
-          </button>
+        <div className="text-center py-12">
+          <FolderGit2 className="w-10 h-10 text-gray-700 mx-auto mb-3" />
+          <p className="text-sm text-gray-500 font-body">No repositories yet. Add one to get started.</p>
         </div>
       ) : (
-        /* Card grid */
-        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+        <div className="space-y-3">
           {repoList.map((repo) => {
             const isScanning = scanningId === repo._id;
             const isArchived = repo.status === 'archived';
-
             return (
-              <div
-                key={repo._id}
-                className={`group relative overflow-hidden card hover:shadow-glow-blue/10 hover:border-accent-blue/30 transition-all duration-300 ${isArchived ? 'opacity-60' : ''}`}
-              >
-                <div className="h-0.5 bg-gradient-to-r from-accent-blue via-accent-cyan to-accent-green" />
-
-                <div className="p-4 flex gap-4">
-                  {/* Icon */}
-                  <div className="shrink-0 flex flex-col items-center gap-1.5">
-                    <div className="w-10 h-10 rounded-sm flex items-center justify-center border bg-accent-blue/10 border-accent-blue/30">
-                      <FolderGit2 className="w-5 h-5 text-accent-blue" />
-                    </div>
-                    {isArchived && (
-                      <span className="text-[9px] text-gray-600 font-mono uppercase">archived</span>
-                    )}
-                  </div>
-
-                  {/* Content */}
+              <div key={repo._id} className={`p-4 rounded-lg border border-border/20 bg-surface-100/20 hover:bg-surface-100/40 transition-colors group ${isArchived ? 'opacity-50' : ''}`}>
+                <div className="flex items-center gap-3">
+                  <FolderGit2 className="w-5 h-5 text-blue-400 shrink-0" />
                   <div className="flex-1 min-w-0">
-                    {/* Name */}
                     <div className="flex items-center gap-2">
-                      <h3 className="text-sm font-heading font-semibold text-white truncate tracking-wider flex-1">{repo.name}</h3>
-                      <button onClick={(e) => { e.stopPropagation(); setDeletingRepo({ id: repo._id, name: repo.name }); }}
-                        className="opacity-0 group-hover:opacity-100 p-0.5 rounded-sm text-gray-600 hover:text-accent-red transition-all shrink-0">
-                        <Trash2 className="w-3.5 h-3.5" />
-                      </button>
-                    </div>
-
-                    {/* Path */}
-                    <p className="text-[11px] text-gray-500 font-mono truncate mt-0.5" title={repo.path}>{repo.path}</p>
-
-                    {/* Description */}
-                    {repo.description && (
-                      <p className="text-xs text-gray-400 font-body truncate mt-1">{repo.description}</p>
-                    )}
-
-                    {/* Language + framework badges */}
-                    <div className="flex flex-wrap gap-1.5 mt-2.5">
+                      <span className="text-sm font-heading font-semibold text-white">{repo.name}</span>
+                      {isArchived && <span className="text-[10px] font-mono text-gray-600 bg-gray-600/10 px-1.5 py-0.5 rounded border border-gray-600/20">archived</span>}
+                      {/* Badges */}
                       {repo.detected?.language?.filter(l => l !== 'unknown').map(lang => (
                         <Badge key={lang} label={lang} colorClass={langColors[lang]} />
                       ))}
                       {repo.detected?.framework?.map(fw => (
                         <Badge key={fw} label={fw} colorClass={fwColors[fw]} />
                       ))}
-                      {repo.detected?.packageManager && repo.detected.packageManager !== 'unknown' && (
-                        <Badge label={repo.detected.packageManager} />
-                      )}
                     </div>
-
-                    {/* Tags */}
-                    {repo.tags?.length > 0 && (
-                      <div className="flex flex-wrap gap-1 mt-2">
-                        {repo.tags.map(tag => (
-                          <span key={tag} className="text-[10px] px-1.5 py-0.5 bg-surface-200/60 text-gray-500 rounded-sm font-mono uppercase border border-border/30">
-                            {tag}
-                          </span>
-                        ))}
-                      </div>
-                    )}
-
-                    {/* Branch + remote */}
-                    <div className="flex items-center gap-4 mt-2.5 text-[11px] text-gray-600 font-mono">
-                      <span className="inline-flex items-center gap-1">
-                        <GitBranch className="w-3 h-3" /> {repo.detected?.defaultBranch ?? 'main'}
-                      </span>
+                    <div className="flex items-center gap-3 mt-1 text-[10px] text-gray-500 font-mono">
+                      <span className="truncate max-w-[300px]" title={repo.path}>{repo.path}</span>
+                      <span className="flex items-center gap-1"><GitBranch className="w-3 h-3" />{repo.detected?.defaultBranch ?? 'main'}</span>
                       {repo.detected?.remoteUrl && (
-                        <span className="inline-flex items-center gap-1 truncate" title={repo.detected.remoteUrl}>
+                        <span className="flex items-center gap-1 truncate max-w-[200px]">
                           <ExternalLink className="w-3 h-3 shrink-0" />
-                          <span className="truncate max-w-[140px]">{repo.detected.remoteUrl.replace(/^https?:\/\//, '').replace(/\.git$/, '')}</span>
+                          {repo.detected.remoteUrl.replace(/^https?:\/\//, '').replace(/\.git$/, '')}
                         </span>
                       )}
+                      {repo.executionCount > 0 && <span><Package className="w-3 h-3 inline mr-0.5" />{repo.executionCount} runs</span>}
                     </div>
-
-                    {/* Stats row */}
-                    <div className="flex items-center gap-4 mt-2.5 font-mono text-xs text-gray-400">
-                      <span><Package className="w-3 h-3 inline mr-1 text-accent-blue/60" />{repo.executionCount} runs</span>
-                      {repo.lastUsedAt && (
-                        <span className="text-[10px] text-gray-600">
-                          last used {new Date(repo.lastUsedAt).toLocaleDateString()}
-                        </span>
-                      )}
-                    </div>
-
-                    {/* Context preview */}
-                    {repo.context && (
-                      <p className="text-[11px] text-gray-600 mt-2 truncate italic" title={repo.context}>
-                        {repo.context.slice(0, 100)}{repo.context.length > 100 ? '...' : ''}
-                      </p>
-                    )}
-
-                    {/* Actions */}
-                    <div className="flex items-center gap-2 mt-3">
-                      <div className="flex-1" />
-                      <button title="Scan repository" onClick={(e) => handleScan(e, repo._id)} disabled={isScanning}
-                        className="btn-ghost inline-flex items-center gap-1 text-xs px-3 py-1">
-                        {isScanning
-                          ? <><Loader2 className="w-3 h-3 animate-spin" /> Scanning</>
-                          : <><ScanSearch className="w-3 h-3" /> Scan</>
-                        }
-                      </button>
-                      <button title="Edit repository" onClick={() => setEditRepo(repo)}
-                        className="btn-ghost inline-flex items-center gap-1 text-xs px-3 py-1">
-                        <Pencil className="w-3 h-3" /> Edit
-                      </button>
-                    </div>
+                    {repo.description && <p className="text-[11px] text-gray-600 mt-1 truncate">{repo.description}</p>}
+                  </div>
+                  <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                    <button onClick={(e) => { e.stopPropagation(); setWsCreateRepo(repo); }} className="btn-ghost p-1.5 text-xs text-emerald-400" title="New Workspace">
+                      <Monitor className="w-3.5 h-3.5" />
+                    </button>
+                    <button onClick={(e) => handleScan(e, repo._id)} disabled={isScanning} className="btn-ghost p-1.5 text-xs" title="Scan">
+                      {isScanning ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <ScanSearch className="w-3.5 h-3.5" />}
+                    </button>
+                    <button onClick={(e) => { e.stopPropagation(); setConfigRepoId(repo._id); }} className="btn-ghost p-1.5 text-xs" title="Workspace Config">
+                      <Settings className="w-3.5 h-3.5" />
+                    </button>
+                    <button onClick={() => setEditRepo(repo)} className="btn-ghost p-1.5 text-xs" title="Edit">
+                      <Pencil className="w-3.5 h-3.5" />
+                    </button>
+                    <button onClick={(e) => { e.stopPropagation(); setDeletingRepo({ id: repo._id, name: repo.name }); }} className="btn-ghost p-1.5 text-xs text-red-400" title="Delete">
+                      <Trash2 className="w-3.5 h-3.5" />
+                    </button>
                   </div>
                 </div>
               </div>
@@ -503,6 +434,71 @@ export default function RepoManagerPage() {
         onConfirm={handleDelete}
         onCancel={() => setDeletingRepo(null)}
       />
+      {configRepoId && <WorkspaceConfigEditor repoId={configRepoId} onClose={() => setConfigRepoId(null)} />}
+      {wsCreateRepo && <QuickWorkspaceDialog repo={wsCreateRepo} onClose={() => setWsCreateRepo(null)} onCreated={(id) => { setWsCreateRepo(null); navigate(`/workspaces/${id}`); }} />}
+    </div>
+  );
+}
+
+function QuickWorkspaceDialog({ repo, onClose, onCreated }: { repo: Repo; onClose: () => void; onCreated: (id: string) => void }) {
+  const [branch, setBranch] = useState('');
+  const [baseBranch, setBaseBranch] = useState(repo.detected?.defaultBranch ?? 'main');
+  const [name, setName] = useState('');
+  const [creating, setCreating] = useState(false);
+  const [pendingId, setPendingId] = useState<string | null>(null);
+  const [error, setError] = useState('');
+
+  async function handleCreate() {
+    if (!branch.trim() || !name.trim()) { setError('Branch and name required'); return; }
+    setCreating(true); setError('');
+    try {
+      const ws = await wsApi.create({ repoId: repo._id, repoName: repo.name, repoPath: repo.path, branch: branch.trim(), baseBranch, name: name.trim() });
+      setPendingId(ws._id);
+    } catch (err: any) { setError(err.message); setCreating(false); }
+  }
+
+  if (pendingId) {
+    return (
+      <SetupProgressDialog
+        workspaceId={pendingId}
+        onComplete={(ws) => onCreated(ws._id)}
+        onFailed={() => { setPendingId(null); setCreating(false); setError('Setup failed'); }}
+      />
+    );
+  }
+
+  return (
+    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50" onClick={onClose}>
+      <div className="bg-surface-100 border border-border/30 rounded-lg w-[440px] p-4" onClick={e => e.stopPropagation()}>
+        <div className="flex items-center gap-2 mb-4">
+          <Monitor className="w-4 h-4 text-emerald-400" />
+          <span className="text-sm font-semibold text-white">New Workspace</span>
+          <span className="text-[10px] font-mono text-gray-500">{repo.name}</span>
+        </div>
+        {error && <div className="text-xs text-red-400 bg-red-400/10 border border-red-400/20 rounded px-3 py-1.5 mb-3">{error}</div>}
+        <div className="space-y-3">
+          <div>
+            <label className="text-[10px] font-label uppercase tracking-wider text-gray-500 block mb-1">Workspace Name</label>
+            <input value={name} onChange={e => setName(e.target.value)} placeholder="feature/my-feature" className="input w-full text-xs" autoFocus />
+          </div>
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="text-[10px] font-label uppercase tracking-wider text-gray-500 block mb-1">Branch</label>
+              <input value={branch} onChange={e => setBranch(e.target.value)} placeholder="feature/new-thing" className="input w-full text-xs" />
+            </div>
+            <div>
+              <label className="text-[10px] font-label uppercase tracking-wider text-gray-500 block mb-1">Base Branch</label>
+              <input value={baseBranch} onChange={e => setBaseBranch(e.target.value)} className="input w-full text-xs" />
+            </div>
+          </div>
+        </div>
+        <div className="flex justify-end gap-2 mt-4">
+          <button onClick={onClose} className="btn-ghost text-xs">Cancel</button>
+          <button onClick={handleCreate} disabled={creating} className="btn-primary text-xs disabled:opacity-50">
+            {creating ? 'Creating...' : 'Create Workspace'}
+          </button>
+        </div>
+      </div>
     </div>
   );
 }

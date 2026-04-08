@@ -1,0 +1,26 @@
+import { test, expect } from '@playwright/test';
+
+test('repo list with workspace button', async ({ page }) => {
+  await page.setViewportSize({ width: 1400, height: 800 });
+  await page.goto('http://localhost:5173/repos');
+  await page.waitForTimeout(2000);
+
+  // Hover over first repo to reveal actions
+  const repoCard = page.locator('.group').first();
+  await repoCard.hover();
+  await page.waitForTimeout(300);
+
+  // New Workspace button should be visible
+  const wsBtn = page.locator('button[title="New Workspace"]').first();
+  await expect(wsBtn).toBeVisible();
+
+  // Click it
+  await wsBtn.click();
+  await page.waitForTimeout(500);
+
+  // Dialog should open
+  await expect(page.locator('text=New Workspace')).toBeVisible();
+  await expect(page.locator('input[placeholder="feature/my-feature"]')).toBeVisible();
+
+  await page.screenshot({ path: '/Users/shreemantkumar/flowforge/e2e/repo-new-workspace.png', fullPage: false });
+});

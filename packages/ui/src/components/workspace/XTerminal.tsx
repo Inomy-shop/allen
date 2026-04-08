@@ -9,9 +9,11 @@ interface XTerminalProps {
   workspaceId: string;
   terminalId?: string;
   className?: string;
+  /** Command to auto-run after terminal connects */
+  initialCommand?: string;
 }
 
-export function XTerminal({ workspaceId, terminalId = 'default', className }: XTerminalProps) {
+export function XTerminal({ workspaceId, terminalId = 'default', className, initialCommand }: XTerminalProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const termRef = useRef<XTerm | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
@@ -81,6 +83,14 @@ export function XTerminal({ workspaceId, terminalId = 'default', className }: XT
       setConnected(true);
       // Send initial size
       ws.send(JSON.stringify({ type: 'resize', cols: term.cols, rows: term.rows }));
+      // Auto-run initial command if provided
+      if (initialCommand) {
+        setTimeout(() => {
+          if (ws.readyState === WebSocket.OPEN) {
+            ws.send(initialCommand + '\n');
+          }
+        }, 500);
+      }
     };
 
     ws.onmessage = (evt) => {

@@ -9,7 +9,6 @@ import {
   Settings, ExternalLink, Eye, History, PanelRightOpen, MessageSquare,
 } from 'lucide-react';
 import { XTerminal } from '../components/workspace/XTerminal';
-import { WorkspaceConfigEditor } from '../components/workspace/WorkspaceConfigEditor';
 import { EmbeddedChat } from '../components/workspace/EmbeddedChat';
 import Editor from '@monaco-editor/react';
 import { renderMarkdown } from '../components/chat/ChatMessageList';
@@ -298,8 +297,8 @@ export default function WorkspaceDetailPage() {
   const [showPreview, setShowPreview] = useState(false);
   const [previewService, setPreviewService] = useState<string>('');
 
-  // Config editor + activity
-  const [showConfig, setShowConfig] = useState(false);
+  // Workspace info panel
+  const [showInfo, setShowInfo] = useState(false);
   const [showActivity, setShowActivity] = useState(false);
   const [activity, setActivity] = useState<any[]>([]);
   const [splitPreview, setSplitPreview] = useState(false);
@@ -307,7 +306,7 @@ export default function WorkspaceDetailPage() {
   // Embedded chat
   const [showChat, setShowChat] = useState(false);
 
-  const [terminals, setTerminals] = useState<{ id: string; label: string }[]>([{ id: 'default', label: 'Terminal 1' }]);
+  const [terminals, setTerminals] = useState<{ id: string; label: string; command?: string }[]>([{ id: 'default', label: 'Terminal 1' }]);
   const [activeTerminal, setActiveTerminal] = useState('default');
   const [terminalVisible, setTerminalVisible] = useState(true);
 
@@ -405,6 +404,12 @@ export default function WorkspaceDetailPage() {
   }
 
   function addTerminal() { const nid = `term-${termIdCounter++}`; setTerminals(p => [...p, { id: nid, label: `Terminal ${p.length + 1}` }]); setActiveTerminal(nid); }
+  function runServiceInTerminal(svc: { name: string; command: string }) {
+    const nid = `svc-${svc.name}-${termIdCounter++}`;
+    setTerminals(p => [...p, { id: nid, label: svc.name, command: svc.command }]);
+    setActiveTerminal(nid);
+    setTerminalVisible(true);
+  }
   function closeTerminal(tid: string) { if (terminals.length <= 1) return; setTerminals(p => p.filter(t => t.id !== tid)); if (activeTerminal === tid) setActiveTerminal(terminals.find(t => t.id !== tid)!.id); }
 
   function getLanguage(filePath: string): string {
@@ -447,8 +452,7 @@ export default function WorkspaceDetailPage() {
             <div key={svc.name} className="flex items-center gap-1 text-[10px] font-mono">
               <span className={`w-1.5 h-1.5 rounded-full ${svc.status === 'ready' ? 'bg-emerald-400' : svc.status === 'starting' ? 'bg-amber-400 animate-pulse' : 'bg-gray-600'}`} />
               <span className="text-gray-400">{svc.name}:{svc.port}</span>
-              {svc.status === 'stopped' && <button onClick={() => workspaces.startService(id!, svc.name).then(load)} className="text-emerald-400"><Play className="w-2.5 h-2.5" /></button>}
-              {svc.status === 'ready' && <button onClick={() => workspaces.stopService(id!, svc.name).then(load)} className="text-red-400"><Square className="w-2.5 h-2.5" /></button>}
+              <button onClick={() => runServiceInTerminal(svc)} className="text-emerald-400" title={`Run ${svc.name} in terminal`}><Play className="w-2.5 h-2.5" /></button>
             </div>
           ))}
 
@@ -477,7 +481,7 @@ export default function WorkspaceDetailPage() {
           )}
           <button onClick={() => setShowChat(v => !v)} className={`btn-ghost p-1 text-xs ${showChat ? 'text-blue-400' : ''}`} title="Chat (⌘J)"><MessageSquare className="w-3.5 h-3.5" /></button>
           <button onClick={() => setShowActivity(v => !v)} className={`btn-ghost p-1 text-xs ${showActivity ? 'text-blue-400' : ''}`} title="Activity"><History className="w-3.5 h-3.5" /></button>
-          <button onClick={() => setShowConfig(true)} className="btn-ghost p-1 text-xs" title="Workspace Config"><Settings className="w-3.5 h-3.5" /></button>
+          <button onClick={() => setShowInfo(v => !v)} className={`btn-ghost p-1 text-xs ${showInfo ? 'text-blue-400' : ''}`} title="Workspace Info"><Settings className="w-3.5 h-3.5" /></button>
           <button onClick={load} className="btn-ghost p-1 text-xs" title="Refresh"><RefreshCw className="w-3.5 h-3.5" /></button>
         </div>
       </div>
@@ -669,7 +673,7 @@ export default function WorkspaceDetailPage() {
               <div className="flex-1 flex min-h-0">
                 {terminals.map(t => (
                   <div key={t.id} className={`flex-1 min-h-0 ${terminals.length > 1 ? 'border-r border-border/20 last:border-r-0' : ''} ${activeTerminal === t.id || terminals.length > 1 ? '' : 'hidden'}`}>
-                    <XTerminal workspaceId={id!} terminalId={t.id} className="h-full" />
+                    <XTerminal workspaceId={id!} terminalId={t.id} className="h-full" initialCommand={t.command} />
                   </div>
                 ))}
               </div>
@@ -729,8 +733,70 @@ export default function WorkspaceDetailPage() {
         </div>
       )}
 
-      {/* Config Editor */}
-      {showConfig && <WorkspaceConfigEditor repoId={workspace.repoId} onClose={() => { setShowConfig(false); load(); }} />}
+      {/* Workspace Info Modal (read-only) */}
+      {showInfo && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50" onClick={() => setShowInfo(false)}>
+          <div className="bg-surface-100 border border-border/30 rounded-lg w-[520px] max-h-[80vh] flex flex-col" onClick={e => e.stopPropagation()}>
+            <div className="flex items-center gap-2 px-4 py-3 border-b border-border/20 shrink-0">
+              <Settings className="w-4 h-4 text-gray-400" />
+              <span className="text-sm font-semibold text-white">Workspace Info</span>
+              <span className="flex-1" />
+              <button onClick={() => setShowInfo(false)} className="text-gray-500 hover:text-gray-300 text-xs">Close</button>
+            </div>
+            <div className="flex-1 overflow-y-auto px-4 py-3 space-y-4 text-[11px]">
+              {/* Ports */}
+              <div>
+                <span className="text-[10px] font-label uppercase tracking-wider text-gray-600 block mb-1">Assigned Ports</span>
+                <div className="bg-surface-50/50 rounded p-2 font-mono space-y-1">
+                  <div className="flex items-center gap-2"><span className="text-gray-500 w-20">Base port:</span><span className="text-emerald-400">{workspace.basePort}</span></div>
+                  {workspace.services?.map((svc: any) => (
+                    <div key={svc.name} className="flex items-center gap-2">
+                      <span className="text-gray-500 w-20">{svc.name}:</span>
+                      <span className="text-blue-400">{svc.port}</span>
+                      <span className={`text-[9px] ${svc.status === 'ready' ? 'text-emerald-400' : svc.status === 'starting' ? 'text-amber-400' : 'text-gray-600'}`}>{svc.status}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              {/* Worktree */}
+              <div>
+                <span className="text-[10px] font-label uppercase tracking-wider text-gray-600 block mb-1">Worktree Path</span>
+                <div className="bg-surface-50/50 rounded p-2 font-mono text-gray-400 break-all">{workspace.worktreePath}</div>
+              </div>
+
+              {/* Git */}
+              <div>
+                <span className="text-[10px] font-label uppercase tracking-wider text-gray-600 block mb-1">Git</span>
+                <div className="bg-surface-50/50 rounded p-2 font-mono space-y-1">
+                  <div className="flex gap-2"><span className="text-gray-500 w-16">Branch:</span><span className="text-emerald-400">{workspace.branch}</span></div>
+                  <div className="flex gap-2"><span className="text-gray-500 w-16">Base:</span><span className="text-gray-400">{workspace.baseBranch}</span></div>
+                  <div className="flex gap-2"><span className="text-gray-500 w-16">Changed:</span><span className="text-amber-400">{workspace.changedFiles} files</span></div>
+                  <div className="flex gap-2"><span className="text-gray-500 w-16">Ahead:</span><span className="text-gray-400">{workspace.ahead}</span></div>
+                  {workspace.lastCommit && <div className="flex gap-2"><span className="text-gray-500 w-16">Last:</span><span className="text-gray-400 truncate">{workspace.lastCommit.hash?.slice(0, 7)} {workspace.lastCommit.message}</span></div>}
+                </div>
+              </div>
+
+              {/* Setup log */}
+              {workspace.setupProgress?.log?.length > 0 && (
+                <div>
+                  <span className="text-[10px] font-label uppercase tracking-wider text-gray-600 block mb-1">Setup Log</span>
+                  <div className="bg-[rgb(13,17,28)] rounded p-2 font-mono text-[10px] max-h-40 overflow-y-auto space-y-0.5">
+                    {workspace.setupProgress.log.map((line: string, i: number) => (
+                      <div key={i} className={line.startsWith('✓') ? 'text-emerald-400' : line.startsWith('✗') ? 'text-red-400' : 'text-gray-500'}>{line}</div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* Repo config link */}
+              <div className="text-[10px] text-gray-600 pt-2 border-t border-border/20">
+                To edit setup scripts, services, or env files, go to <a href="/repos" className="text-blue-400 hover:underline">Repos → {workspace.repoName} → Workspace</a>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
       {workspace.setupProgress?.status === 'running' && (
         <div className="px-4 py-1.5 border-t border-border/30 bg-amber-400/5 shrink-0">

@@ -2,8 +2,10 @@ import { useState, useEffect, useCallback } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { workspaces } from '../services/workspaceService';
 import { repos as repoApi } from '../services/api';
-import { Plus, RefreshCw, GitBranch, Trash2, Terminal, FileCode, ExternalLink, Loader2 } from 'lucide-react';
+import { Plus, RefreshCw, GitBranch, Trash2, Terminal, FileCode, ExternalLink, Loader2, Settings, FolderGit2 } from 'lucide-react';
 import DeleteConfirmDialog from '../components/common/DeleteConfirmDialog';
+import { WorkspaceConfigEditor } from '../components/workspace/WorkspaceConfigEditor';
+import { SetupProgressDialog } from '../components/workspace/SetupProgressDialog';
 
 export default function WorkspaceListPage() {
   const [list, setList] = useState<any[]>([]);
@@ -14,6 +16,8 @@ export default function WorkspaceListPage() {
   const [deleting, setDeleting] = useState<{ id: string; name: string } | null>(null);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [bulkArchiving, setBulkArchiving] = useState(false);
+  const [configRepoId, setConfigRepoId] = useState<string | null>(null);
+  const [pendingWsId, setPendingWsId] = useState<string | null>(null);
   const navigate = useNavigate();
 
   const load = useCallback(async () => {
@@ -30,7 +34,8 @@ export default function WorkspaceListPage() {
     if (!form.repoId || !form.branch || !form.name) return;
     try {
       const ws = await workspaces.create(form);
-      navigate(`/workspaces/${ws._id}`);
+      setCreating(false);
+      setPendingWsId(ws._id);
     } catch (err: any) { alert(err.message); }
   }
 
@@ -109,13 +114,18 @@ export default function WorkspaceListPage() {
             </div>
           </div>
           <div className="flex justify-end gap-2">
+            {form.repoId && (
+              <button type="button" onClick={() => setConfigRepoId(form.repoId)} className="btn-ghost text-xs flex items-center gap-1">
+                <Settings className="w-3 h-3" /> Configure Workspace
+              </button>
+            )}
             <button type="button" onClick={() => setCreating(false)} className="btn-ghost text-xs">Cancel</button>
             <button type="submit" className="btn-primary text-xs">Create Workspace</button>
           </div>
         </form>
       )}
 
-      {/* Workspace list */}
+      {/* Workspace list — grouped by repo */}
       {loading ? (
         <div className="flex items-center justify-center py-12"><Loader2 className="w-5 h-5 animate-spin text-gray-500" /></div>
       ) : list.length === 0 ? (
@@ -123,39 +133,73 @@ export default function WorkspaceListPage() {
           <GitBranch className="w-10 h-10 text-gray-700 mx-auto mb-3" />
           <p className="text-sm text-gray-500 font-body">No workspaces yet. Create one to get started.</p>
         </div>
-      ) : (
-        <div className="space-y-3">
-          {list.map((ws: any) => (
-            <div key={ws._id} className="p-4 rounded-lg border border-border/20 bg-surface-100/20 hover:bg-surface-100/40 transition-colors group">
-              <div className="flex items-center gap-3">
-                <input type="checkbox" checked={selected.has(ws._id)} onChange={() => toggleSelect(ws._id)} className="rounded border-border/30 bg-surface-50 shrink-0" onClick={e => e.stopPropagation()} />
-                <GitBranch className="w-5 h-5 text-accent-green shrink-0" />
-                <div className="flex-1 min-w-0">
-                  <div className="flex items-center gap-2">
-                    <Link to={`/workspaces/${ws._id}`} className="text-sm font-heading font-semibold text-white hover:text-accent-blue transition-colors">{ws.name}</Link>
-                    <span className={`text-[10px] font-mono px-1.5 py-0.5 rounded border ${statusColors[ws.status] ?? 'text-gray-400'}`}>{ws.status}</span>
-                    {ws.source === 'pr' && <span className="text-[10px] font-mono text-accent-purple bg-accent-purple/10 px-1.5 py-0.5 rounded border border-accent-purple/20">PR #{ws.prNumber}</span>}
-                  </div>
-                  <div className="flex items-center gap-3 mt-1 text-[11px] text-gray-500 font-mono">
-                    <span>{ws.repoName}</span>
-                    <span>·</span>
-                    <span>{ws.branch} → {ws.baseBranch}</span>
-                    {ws.changedFiles > 0 && <><span>·</span><span>{ws.changedFiles} files changed</span></>}
-                    {ws.services?.some((s: any) => s.status === 'ready') && <><span>·</span><span className="text-accent-green">services running</span></>}
-                  </div>
+      ) : (() => {
+        // Group workspaces by repoId
+        const grouped = new Map<string, { repoName: string; repoId: string; workspaces: any[] }>();
+        for (const ws of list) {
+          const key = ws.repoId ?? 'unknown';
+          if (!grouped.has(key)) grouped.set(key, { repoName: ws.repoName || 'Unknown Repo', repoId: key, workspaces: [] });
+          grouped.get(key)!.workspaces.push(ws);
+        }
+        return (
+          <div className="space-y-6">
+            {Array.from(grouped.values()).map(group => (
+              <div key={group.repoId}>
+                {/* Repo header */}
+                <div className="flex items-center gap-2 mb-2 px-1">
+                  <FolderGit2 className="w-4 h-4 text-blue-400" />
+                  <span className="text-xs font-heading font-semibold text-gray-300 uppercase tracking-wider">{group.repoName}</span>
+                  <span className="text-[10px] text-gray-600 font-mono">{group.workspaces.length} workspace{group.workspaces.length !== 1 ? 's' : ''}</span>
+                  <span className="flex-1" />
+                  <button onClick={() => setConfigRepoId(group.repoId)} className="text-[10px] text-gray-600 hover:text-gray-300 flex items-center gap-1">
+                    <Settings className="w-3 h-3" /> Config
+                  </button>
                 </div>
-                <div className="flex items-center gap-1.5 opacity-0 group-hover:opacity-100 transition-opacity">
-                  <Link to={`/workspaces/${ws._id}`} className="btn-ghost p-1.5 text-xs" title="Open"><Terminal className="w-3.5 h-3.5" /></Link>
-                  <Link to={`/workspaces/${ws._id}?tab=diff`} className="btn-ghost p-1.5 text-xs" title="View diff"><FileCode className="w-3.5 h-3.5" /></Link>
-                  <button onClick={() => setDeleting({ id: ws._id, name: ws.name })} className="btn-ghost p-1.5 text-xs text-red-400" title="Archive"><Trash2 className="w-3.5 h-3.5" /></button>
+
+                {/* Workspace cards */}
+                <div className="space-y-2 pl-6 border-l-2 border-blue-500/10 ml-2">
+                  {group.workspaces.map((ws: any) => (
+                    <div key={ws._id} className="p-3 rounded-lg border border-border/20 bg-surface-100/20 hover:bg-surface-100/40 transition-colors group">
+                      <div className="flex items-center gap-3">
+                        <input type="checkbox" checked={selected.has(ws._id)} onChange={() => toggleSelect(ws._id)} className="rounded border-border/30 bg-surface-50 shrink-0" onClick={e => e.stopPropagation()} />
+                        <GitBranch className="w-4 h-4 text-emerald-400 shrink-0" />
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center gap-2">
+                            <Link to={`/workspaces/${ws._id}`} className="text-sm font-heading font-semibold text-white hover:text-blue-400 transition-colors">{ws.name}</Link>
+                            <span className={`text-[10px] font-mono px-1.5 py-0.5 rounded border ${statusColors[ws.status] ?? 'text-gray-400'}`}>{ws.status}</span>
+                            {ws.source === 'pr' && <span className="text-[10px] font-mono text-purple-400 bg-purple-400/10 px-1.5 py-0.5 rounded border border-purple-400/20">PR #{ws.prNumber}</span>}
+                          </div>
+                          <div className="flex items-center gap-3 mt-1 text-[10px] text-gray-500 font-mono">
+                            <span>{ws.branch} → {ws.baseBranch}</span>
+                            {ws.changedFiles > 0 && <span className="text-amber-400">{ws.changedFiles} changed</span>}
+                            {ws.services?.some((s: any) => s.status === 'ready') && <span className="text-emerald-400">● services</span>}
+                            {ws.basePort && <span className="text-gray-600">port {ws.basePort}</span>}
+                          </div>
+                        </div>
+                        <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                          <Link to={`/workspaces/${ws._id}`} className="btn-ghost p-1.5 text-xs" title="Open"><Terminal className="w-3.5 h-3.5" /></Link>
+                          <Link to={`/workspaces/${ws._id}?tab=diff`} className="btn-ghost p-1.5 text-xs" title="Diff"><FileCode className="w-3.5 h-3.5" /></Link>
+                          <button onClick={() => setDeleting({ id: ws._id, name: ws.name })} className="btn-ghost p-1.5 text-xs text-red-400" title="Archive"><Trash2 className="w-3.5 h-3.5" /></button>
+                        </div>
+                      </div>
+                    </div>
+                  ))}
                 </div>
               </div>
-            </div>
-          ))}
-        </div>
-      )}
+            ))}
+          </div>
+        );
+      })()}
 
       <DeleteConfirmDialog open={!!deleting} resourceType="workspace" resourceName={deleting?.name ?? ''} onConfirm={handleDelete} onCancel={() => setDeleting(null)} />
+      {configRepoId && <WorkspaceConfigEditor repoId={configRepoId} onClose={() => setConfigRepoId(null)} />}
+      {pendingWsId && (
+        <SetupProgressDialog
+          workspaceId={pendingWsId}
+          onComplete={(ws) => { setPendingWsId(null); navigate(`/workspaces/${ws._id}`); }}
+          onFailed={() => { setPendingWsId(null); load(); }}
+        />
+      )}
     </div>
   );
 }

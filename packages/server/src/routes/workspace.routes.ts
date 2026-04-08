@@ -177,7 +177,7 @@ export function workspaceRoutes(db: Db): Router {
           const run = prom(execF);
           for (const cmd of config.prePrScript) {
             try {
-              await run('sh', ['-c', cmd], { cwd: ws.worktreePath, env: { ...process.env, ...config.envVars } });
+              await run('sh', ['-c', cmd], { cwd: ws.worktreePath, env: { ...process.env } });
             } catch (err: any) {
               return res.status(422).json({ error: `Pre-PR check failed: ${cmd}`, output: err.stderr ?? err.message });
             }

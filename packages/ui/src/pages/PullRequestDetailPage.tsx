@@ -6,6 +6,7 @@ import {
   FolderGit2, Loader2, Clock, FileDiff, Plus, Minus, ArrowRight,
 } from 'lucide-react';
 import Editor, { DiffEditor } from '@monaco-editor/react';
+import { SetupProgressDialog } from '../components/workspace/SetupProgressDialog';
 
 export default function PullRequestDetailPage() {
   const { id } = useParams<{ id: string }>();
@@ -14,6 +15,7 @@ export default function PullRequestDetailPage() {
   const [loading, setLoading] = useState(true);
   const [diff, setDiff] = useState<{ diff: string; files: { path: string; diff: string }[] }>({ diff: '', files: [] });
   const [selectedFile, setSelectedFile] = useState<string | null>(null);
+  const [pendingWsId, setPendingWsId] = useState<string | null>(null);
 
   useEffect(() => {
     if (!id) return;
@@ -32,7 +34,7 @@ export default function PullRequestDetailPage() {
     if (!id) return;
     try {
       const ws = await pullRequests.createWorkspace(id);
-      navigate(`/workspaces/${ws._id}`);
+      setPendingWsId(ws._id);
     } catch (err: any) { alert(err.message); }
   }
 
@@ -141,6 +143,13 @@ export default function PullRequestDetailPage() {
           )}
         </div>
       </div>
+      {pendingWsId && (
+        <SetupProgressDialog
+          workspaceId={pendingWsId}
+          onComplete={(ws) => { setPendingWsId(null); navigate(`/workspaces/${ws._id}`); }}
+          onFailed={() => setPendingWsId(null)}
+        />
+      )}
     </div>
   );
 }

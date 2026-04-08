@@ -6,7 +6,7 @@
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { existsSync, mkdirSync } from 'node:fs';
-import { join } from 'node:path';
+import { join, dirname } from 'node:path';
 import { spawn, type ChildProcess } from 'node:child_process';
 import type { Db, ObjectId } from 'mongodb';
 import { watchWorkspace, unwatchWorkspace } from './workspace-watcher.js';
@@ -55,14 +55,19 @@ export interface Workspace {
   updatedAt: Date;
 }
 
+export interface EnvFile {
+  path: string;     // relative path in repo, e.g. ".env", "packages/server/.env"
+  content: string;  // content with {port:0}, {port:1} placeholders
+}
+
 export interface WorkspaceConfig {
   _id?: ObjectId;
   repoId: string;
+  envFiles: EnvFile[];
   setupScript: string[];
   cleanupScript: string[];
   prePrScript?: string[];
-  services: { name: string; command: string; portOffset: number; healthCheck?: string; env?: Record<string, string> }[];
-  envVars?: Record<string, string>;
+  services: { name: string; command: string; portOffset: number; healthCheck?: string }[];
   autoStart?: boolean;
   createdAt: Date;
   updatedAt: Date;
@@ -82,12 +87,29 @@ export class WorkspaceManager {
 
   // ── Port Assignment ──
 
+  private async isPortFree(port: number): Promise<boolean> {
+    const net = await import('net');
+    return new Promise(resolve => {
+      const server = net.createServer();
+      server.once('error', () => resolve(false));
+      server.once('listening', () => { server.close(); resolve(true); });
+      server.listen(port, '127.0.0.1');
+    });
+  }
+
   async assignBasePort(): Promise<number> {
     const workspaces = await this.col.find({ status: { $ne: 'archived' } }).toArray();
     const usedPorts = new Set(workspaces.map(w => w.basePort as number));
-    for (let port = PORT_RANGE_START; ; port += PORT_RANGE_PER_WORKSPACE) {
-      if (!usedPorts.has(port)) return port;
+    for (let port = PORT_RANGE_START; port < 20000; port += PORT_RANGE_PER_WORKSPACE) {
+      if (usedPorts.has(port)) continue;
+      // Check all ports in the range are free on the OS
+      let allFree = true;
+      for (let offset = 0; offset < PORT_RANGE_PER_WORKSPACE; offset++) {
+        if (!(await this.isPortFree(port + offset))) { allFree = false; break; }
+      }
+      if (allFree) return port;
     }
+    throw new Error('No free port range available');
   }
 
   // ── Workspace CRUD ──
@@ -151,33 +173,74 @@ export class WorkspaceManager {
     const oid = new ObjectId(id);
 
     try {
+      // Fetch latest from origin so worktree starts from up-to-date base
+      await exec('git', ['fetch', 'origin'], { cwd: repoPath }).catch(() => {});
+
+      // Determine base ref: prefer origin/baseBranch, fallback to local baseBranch
+      let baseRef = baseBranch;
+      try {
+        await exec('git', ['rev-parse', '--verify', `origin/${baseBranch}`], { cwd: repoPath });
+        baseRef = `origin/${baseBranch}`;
+      } catch {} // origin doesn't exist — use local
+
       // Create worktree
       if (isPr) {
-        await exec('git', ['fetch', 'origin', branch], { cwd: repoPath });
+        await exec('git', ['fetch', 'origin', branch], { cwd: repoPath }).catch(() => {});
         await exec('git', ['worktree', 'add', worktreePath, `origin/${branch}`], { cwd: repoPath });
       } else {
-        await exec('git', ['worktree', 'add', '-b', branch, worktreePath, baseBranch], { cwd: repoPath });
+        // Delete stale branch if it exists, then create fresh from base
+        await exec('git', ['branch', '-D', branch], { cwd: repoPath }).catch(() => {});
+        await exec('git', ['worktree', 'add', '-b', branch, worktreePath, baseRef], { cwd: repoPath });
       }
 
       // Load config for this repo
       const ws = await this.get(id);
       if (!ws) return;
       const config = await this.getConfig(ws.repoId);
+      const base = ws.basePort;
 
-      if (config && config.setupScript.length > 0) {
+      // Helper: replace {port:N} → basePort+N, also {port} → basePort+0
+      const resolvePortPlaceholders = (str: string): string =>
+        str.replace(/\{port:(\d+)\}/g, (_, n) => String(base + parseInt(n)))
+           .replace(/\{port\}/g, String(base));
+
+      // Step 1: Generate .env files from templates BEFORE running scripts
+      if (config?.envFiles?.length) {
+        for (const envFile of config.envFiles) {
+          const content = resolvePortPlaceholders(envFile.content);
+          const fullPath = join(worktreePath, envFile.path);
+          const dir = dirname(fullPath);
+          if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
+          const { writeFileSync: wf } = await import('node:fs');
+          wf(fullPath, content, 'utf-8');
+        }
+      }
+
+      // Step 2: Run setup scripts
+      const allSteps = [
+        ...(config?.envFiles?.length ? [`Generate ${config.envFiles.length} .env file(s)`] : []),
+        ...(config?.setupScript ?? []),
+      ];
+      const scriptSteps = config?.setupScript ?? [];
+
+      if (allSteps.length > 0) {
         await this.col.updateOne({ _id: oid }, { $set: { status: 'setting_up' } });
-
-        const totalSteps = config.setupScript.length;
         const log: string[] = [];
 
-        for (let i = 0; i < totalSteps; i++) {
-          const cmd = config.setupScript[i];
+        // Log env file generation
+        if (config?.envFiles?.length) {
+          log.push(`✓ Generated ${config.envFiles.length} .env file(s): ${config.envFiles.map(f => f.path).join(', ')}`);
+        }
+
+        for (let i = 0; i < scriptSteps.length; i++) {
+          const cmd = resolvePortPlaceholders(scriptSteps[i]);
+          const stepNum = (config?.envFiles?.length ? 1 : 0) + i + 1;
           await this.col.updateOne({ _id: oid }, {
-            $set: { setupProgress: { currentStep: i + 1, totalSteps, currentCommand: cmd, log, status: 'running' } },
+            $set: { setupProgress: { currentStep: stepNum, totalSteps: allSteps.length, currentCommand: cmd, log, status: 'running' } },
           });
 
           try {
-            const { stdout, stderr } = await exec('sh', ['-c', cmd], { cwd: worktreePath, env: { ...process.env, ...config.envVars } });
+            const { stdout } = await exec('sh', ['-c', cmd], { cwd: worktreePath, env: { ...process.env } });
             log.push(`✓ ${cmd}${stdout ? '\n' + stdout.slice(0, 500) : ''}`);
           } catch (err: any) {
             log.push(`✗ ${cmd}\n${err.stderr ?? err.message}`);
@@ -188,15 +251,15 @@ export class WorkspaceManager {
         await this.col.updateOne({ _id: oid }, { $set: { 'setupProgress.status': 'completed', 'setupProgress.log': log } });
       }
 
-      // Build service list from config
+      // Step 3: Build service list — resolve port placeholders in commands
       const services: WorkspaceService[] = [];
       if (config?.services) {
-        const wsDoc = await this.get(id);
         for (const svc of config.services) {
+          const port = base + svc.portOffset;
           services.push({
             name: svc.name,
-            command: svc.command.replace(/\{port\}/g, String((wsDoc?.basePort ?? PORT_RANGE_START) + svc.portOffset)),
-            port: (wsDoc?.basePort ?? PORT_RANGE_START) + svc.portOffset,
+            command: resolvePortPlaceholders(svc.command),
+            port,
             status: 'stopped',
             healthCheck: svc.healthCheck,
           });
@@ -317,9 +380,11 @@ export class WorkspaceManager {
     const ws = await this.get(id);
     if (!ws) throw new Error('Workspace not found');
 
-    // Get all tracked + untracked files via git ls-files
+    // Get all tracked + untracked files (including gitignored .env files)
     const { stdout: tracked } = await exec('git', ['ls-files'], { cwd: ws.worktreePath });
     const { stdout: untracked } = await exec('git', ['ls-files', '--others', '--exclude-standard'], { cwd: ws.worktreePath });
+    // Also include .env files even if gitignored — they're important for workspace config
+    const { stdout: envFiles } = await exec('sh', ['-c', 'find . -name ".env*" -not -path "*/node_modules/*" -not -path "*/.git/*" | sed "s|^\\./||"'], { cwd: ws.worktreePath }).catch(() => ({ stdout: '' }));
 
     // Get changed files for status highlighting
     const changedMap = new Map<string, string>();
@@ -335,6 +400,7 @@ export class WorkspaceManager {
     const allFiles = new Set<string>();
     for (const f of tracked.trim().split('\n').filter(Boolean)) allFiles.add(f);
     for (const f of untracked.trim().split('\n').filter(Boolean)) allFiles.add(f);
+    for (const f of envFiles.trim().split('\n').filter(Boolean)) allFiles.add(f);
 
     // Filter out common noise
     const ignored = ['.git', 'node_modules/', '.DS_Store', 'dist/', '.turbo/'];
@@ -391,9 +457,8 @@ export class WorkspaceManager {
     const svc = ws.services.find(s => s.name === serviceName);
     if (!svc) throw new Error(`Service "${serviceName}" not found`);
 
-    const config = await this.getConfig(ws.repoId);
-    const svcConfig = config?.services.find(s => s.name === serviceName);
-    const env = { ...process.env, ...config?.envVars, ...svcConfig?.env };
+    // Service runs with PORT set to its assigned port
+    const env = { ...process.env, PORT: String(svc.port) };
 
     const proc = spawn('sh', ['-c', svc.command], { cwd: ws.worktreePath, env, stdio: ['pipe', 'pipe', 'pipe'] });
     const key = `${id}:${serviceName}`;

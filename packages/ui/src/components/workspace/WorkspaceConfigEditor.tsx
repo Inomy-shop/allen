@@ -1,40 +1,36 @@
 import { useState, useEffect } from 'react';
 import { workspaces } from '../../services/workspaceService';
-import { Plus, Trash2, Save, Settings, Terminal, Play, Key, FileCode } from 'lucide-react';
+import { Plus, Trash2, Save, Settings, Terminal, Play, FileText, Info } from 'lucide-react';
 
-interface ServiceConfig {
-  name: string;
-  command: string;
-  portOffset: number;
-  healthCheck?: string;
-  env?: Record<string, string>;
-}
+interface EnvFile { path: string; content: string; }
+interface ServiceConfig { name: string; command: string; portOffset: number; healthCheck?: string; }
 
 interface WorkspaceConfig {
+  envFiles: EnvFile[];
   setupScript: string[];
   cleanupScript: string[];
   prePrScript: string[];
   services: ServiceConfig[];
-  envVars: Record<string, string>;
   autoStart: boolean;
 }
 
 export function WorkspaceConfigEditor({ repoId, onClose }: { repoId: string; onClose: () => void }) {
   const [config, setConfig] = useState<WorkspaceConfig>({
-    setupScript: [], cleanupScript: [], prePrScript: [],
-    services: [], envVars: {}, autoStart: false,
+    envFiles: [], setupScript: [], cleanupScript: [], prePrScript: [],
+    services: [], autoStart: false,
   });
   const [saving, setSaving] = useState(false);
   const [loading, setLoading] = useState(true);
+  const [activeEnvIdx, setActiveEnvIdx] = useState<number>(0);
 
   useEffect(() => {
     workspaces.getConfig(repoId).then(c => {
       if (c) setConfig({
+        envFiles: c.envFiles ?? [],
         setupScript: c.setupScript ?? [],
         cleanupScript: c.cleanupScript ?? [],
         prePrScript: c.prePrScript ?? [],
         services: c.services ?? [],
-        envVars: c.envVars ?? {},
         autoStart: c.autoStart ?? false,
       });
     }).catch(() => {}).finally(() => setLoading(false));
@@ -46,6 +42,20 @@ export function WorkspaceConfigEditor({ repoId, onClose }: { repoId: string; onC
     setSaving(false);
   }
 
+  // ── Env Files ──
+  function addEnvFile() {
+    setConfig(c => ({ ...c, envFiles: [...c.envFiles, { path: '.env', content: '# Add your env vars here\n# Use {port:0} for base port, {port:1} for base+1, etc.\n' }] }));
+    setActiveEnvIdx(config.envFiles.length);
+  }
+  function updateEnvFile(idx: number, field: 'path' | 'content', val: string) {
+    setConfig(c => ({ ...c, envFiles: c.envFiles.map((f, i) => i === idx ? { ...f, [field]: val } : f) }));
+  }
+  function removeEnvFile(idx: number) {
+    setConfig(c => ({ ...c, envFiles: c.envFiles.filter((_, i) => i !== idx) }));
+    if (activeEnvIdx >= config.envFiles.length - 1) setActiveEnvIdx(Math.max(0, config.envFiles.length - 2));
+  }
+
+  // ── Scripts ──
   function updateScript(field: 'setupScript' | 'cleanupScript' | 'prePrScript', idx: number, val: string) {
     setConfig(c => ({ ...c, [field]: c[field].map((s, i) => i === idx ? val : s) }));
   }
@@ -56,6 +66,7 @@ export function WorkspaceConfigEditor({ repoId, onClose }: { repoId: string; onC
     setConfig(c => ({ ...c, [field]: c[field].filter((_, i) => i !== idx) }));
   }
 
+  // ── Services ──
   function updateService(idx: number, key: keyof ServiceConfig, val: any) {
     setConfig(c => ({ ...c, services: c.services.map((s, i) => i === idx ? { ...s, [key]: val } : s) }));
   }
@@ -66,13 +77,12 @@ export function WorkspaceConfigEditor({ repoId, onClose }: { repoId: string; onC
     setConfig(c => ({ ...c, services: c.services.filter((_, i) => i !== idx) }));
   }
 
-  const envEntries = Object.entries(config.envVars);
-
-  if (loading) return <div className="p-4 text-gray-500 text-sm">Loading config...</div>;
+  if (loading) return <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50"><div className="text-gray-400 text-sm">Loading config...</div></div>;
 
   return (
     <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50" onClick={onClose}>
-      <div className="bg-surface-100 border border-border/30 rounded-lg w-[640px] max-h-[85vh] flex flex-col" onClick={e => e.stopPropagation()}>
+      <div className="bg-surface-100 border border-border/30 rounded-lg w-[720px] max-h-[90vh] flex flex-col" onClick={e => e.stopPropagation()}>
+        {/* Header */}
         <div className="flex items-center gap-2 px-4 py-3 border-b border-border/20 shrink-0">
           <Settings className="w-4 h-4 text-gray-400" />
           <span className="text-sm font-semibold text-white">Workspace Configuration</span>
@@ -84,8 +94,61 @@ export function WorkspaceConfigEditor({ repoId, onClose }: { repoId: string; onC
         </div>
 
         <div className="flex-1 overflow-y-auto px-4 py-3 space-y-5">
+          {/* Env Files */}
+          <div>
+            <div className="flex items-center gap-2 mb-2">
+              <FileText className="w-3.5 h-3.5 text-amber-400" />
+              <span className="text-xs font-semibold text-gray-300">Environment Files</span>
+              <span className="text-[10px] text-gray-600">Generated in worktree before setup scripts run</span>
+            </div>
+
+            <div className="bg-surface-50/50 border border-border/20 rounded-lg p-0.5 mb-2">
+              <div className="flex items-center gap-1 text-[9px] text-gray-600 px-2 py-1">
+                <Info className="w-3 h-3" />
+                Use <code className="text-amber-400 bg-surface-200/50 px-1 rounded">{'{port:0}'}</code> for base port, <code className="text-amber-400 bg-surface-200/50 px-1 rounded">{'{port:1}'}</code> for base+1, etc. Ports auto-assigned per workspace.
+              </div>
+            </div>
+
+            {/* Env file tabs */}
+            <div className="flex items-center gap-1 mb-2 flex-wrap">
+              {config.envFiles.map((f, i) => (
+                <div key={i} className={`flex items-center gap-1 text-[10px] font-mono px-2 py-1 rounded cursor-pointer ${activeEnvIdx === i ? 'bg-blue-500/10 text-blue-400 border border-blue-500/20' : 'text-gray-500 hover:text-gray-300 border border-border/20'}`}>
+                  <button onClick={() => setActiveEnvIdx(i)} className="truncate max-w-[120px]">{f.path || 'untitled'}</button>
+                  <button onClick={() => removeEnvFile(i)} className="hover:text-red-400"><Trash2 className="w-2.5 h-2.5" /></button>
+                </div>
+              ))}
+              <button onClick={addEnvFile} className="text-[10px] text-gray-500 hover:text-gray-300 flex items-center gap-0.5 px-2 py-1 border border-dashed border-border/30 rounded">
+                <Plus className="w-3 h-3" /> Add .env
+              </button>
+            </div>
+
+            {/* Active env file editor */}
+            {config.envFiles.length > 0 && config.envFiles[activeEnvIdx] && (
+              <div className="border border-border/20 rounded-lg overflow-hidden">
+                <div className="flex items-center gap-2 px-3 py-1.5 bg-surface-200/30 border-b border-border/20">
+                  <span className="text-[10px] text-gray-500">File path:</span>
+                  <input value={config.envFiles[activeEnvIdx].path}
+                    onChange={e => updateEnvFile(activeEnvIdx, 'path', e.target.value)}
+                    placeholder=".env"
+                    className="bg-transparent text-[11px] font-mono text-gray-300 outline-none flex-1 placeholder:text-gray-600" />
+                </div>
+                <textarea
+                  value={config.envFiles[activeEnvIdx].content}
+                  onChange={e => updateEnvFile(activeEnvIdx, 'content', e.target.value)}
+                  rows={8}
+                  spellCheck={false}
+                  className="w-full bg-[rgb(13,17,28)] text-[11px] font-mono text-gray-300 p-3 resize-y outline-none border-none leading-relaxed"
+                  placeholder="PORT={port:0}&#10;MONGODB_URI=mongodb://localhost:27017/mydb&#10;NODE_ENV=development" />
+              </div>
+            )}
+
+            {config.envFiles.length === 0 && (
+              <div className="text-[10px] text-gray-600 py-2">No env files. Click "Add .env" to configure environment variables with port placeholders.</div>
+            )}
+          </div>
+
           {/* Setup Script */}
-          <Section icon={<Play className="w-3.5 h-3.5 text-emerald-400" />} title="Setup Script" subtitle="Runs after worktree creation">
+          <Section icon={<Play className="w-3.5 h-3.5 text-emerald-400" />} title="Setup Script" subtitle="Runs after .env generation (e.g. npm install)">
             {config.setupScript.map((cmd, i) => (
               <ScriptRow key={i} value={cmd} onChange={v => updateScript('setupScript', i, v)} onRemove={() => removeScript('setupScript', i)} idx={i} />
             ))}
@@ -93,14 +156,17 @@ export function WorkspaceConfigEditor({ repoId, onClose }: { repoId: string; onC
           </Section>
 
           {/* Services */}
-          <Section icon={<Terminal className="w-3.5 h-3.5 text-blue-400" />} title="Services" subtitle="Full-stack services with port assignment">
+          <Section icon={<Terminal className="w-3.5 h-3.5 text-blue-400" />} title="Services" subtitle="Use {port:N} in commands — N = portOffset">
+            <div className="text-[9px] text-gray-600 mb-2 grid grid-cols-[80px_1fr_48px_80px_24px] gap-2 font-mono px-1">
+              <span>Name</span><span>Command</span><span>Offset</span><span>Health</span><span></span>
+            </div>
             {config.services.map((svc, i) => (
-              <div key={i} className="flex items-start gap-2 mb-2">
-                <input value={svc.name} onChange={e => updateService(i, 'name', e.target.value)} placeholder="name" className="input text-[11px] py-1 w-20" />
-                <input value={svc.command} onChange={e => updateService(i, 'command', e.target.value)} placeholder="npm run dev -- --port {port}" className="input text-[11px] py-1 flex-1" />
-                <input value={svc.portOffset} onChange={e => updateService(i, 'portOffset', parseInt(e.target.value) || 0)} placeholder="+0" className="input text-[11px] py-1 w-12 text-center" type="number" />
-                <input value={svc.healthCheck ?? ''} onChange={e => updateService(i, 'healthCheck', e.target.value)} placeholder="/health" className="input text-[11px] py-1 w-20" />
-                <button onClick={() => removeService(i)} className="text-gray-600 hover:text-red-400 p-1 mt-0.5"><Trash2 className="w-3 h-3" /></button>
+              <div key={i} className="grid grid-cols-[80px_1fr_48px_80px_24px] gap-2 mb-1.5 items-center">
+                <input value={svc.name} onChange={e => updateService(i, 'name', e.target.value)} placeholder="api" className="input text-[11px] py-1" />
+                <input value={svc.command} onChange={e => updateService(i, 'command', e.target.value)} placeholder="npm run dev" className="input text-[11px] py-1 font-mono" />
+                <input value={svc.portOffset} onChange={e => updateService(i, 'portOffset', parseInt(e.target.value) || 0)} className="input text-[11px] py-1 text-center" type="number" />
+                <input value={svc.healthCheck ?? ''} onChange={e => updateService(i, 'healthCheck', e.target.value)} placeholder="/health" className="input text-[11px] py-1" />
+                <button onClick={() => removeService(i)} className="text-gray-600 hover:text-red-400 p-0.5"><Trash2 className="w-3 h-3" /></button>
               </div>
             ))}
             <button onClick={addService} className="text-[10px] text-gray-500 hover:text-gray-300 flex items-center gap-1 mt-1"><Plus className="w-3 h-3" /> Add service</button>
@@ -108,13 +174,12 @@ export function WorkspaceConfigEditor({ repoId, onClose }: { repoId: string; onC
 
           {/* Auto-start */}
           <label className="flex items-center gap-2 text-xs text-gray-400 cursor-pointer">
-            <input type="checkbox" checked={config.autoStart} onChange={e => setConfig(c => ({ ...c, autoStart: e.target.checked }))}
-              className="rounded border-border/30 bg-surface-50" />
+            <input type="checkbox" checked={config.autoStart} onChange={e => setConfig(c => ({ ...c, autoStart: e.target.checked }))} className="rounded border-border/30 bg-surface-50" />
             Auto-start services when workspace opens
           </label>
 
           {/* Pre-PR Checks */}
-          <Section icon={<FileCode className="w-3.5 h-3.5 text-amber-400" />} title="Pre-PR Checks" subtitle="Must pass before creating a PR">
+          <Section icon={<FileText className="w-3.5 h-3.5 text-amber-400" />} title="Pre-PR Checks" subtitle="Must pass before creating PR">
             {config.prePrScript.map((cmd, i) => (
               <ScriptRow key={i} value={cmd} onChange={v => updateScript('prePrScript', i, v)} onRemove={() => removeScript('prePrScript', i)} idx={i} />
             ))}
@@ -122,28 +187,11 @@ export function WorkspaceConfigEditor({ repoId, onClose }: { repoId: string; onC
           </Section>
 
           {/* Cleanup Script */}
-          <Section icon={<Trash2 className="w-3.5 h-3.5 text-red-400" />} title="Cleanup Script" subtitle="Runs before archive">
+          <Section icon={<Trash2 className="w-3.5 h-3.5 text-red-400" />} title="Cleanup Script" subtitle="Runs before workspace archive">
             {config.cleanupScript.map((cmd, i) => (
               <ScriptRow key={i} value={cmd} onChange={v => updateScript('cleanupScript', i, v)} onRemove={() => removeScript('cleanupScript', i)} idx={i} />
             ))}
             <button onClick={() => addScript('cleanupScript')} className="text-[10px] text-gray-500 hover:text-gray-300 flex items-center gap-1 mt-1"><Plus className="w-3 h-3" /> Add step</button>
-          </Section>
-
-          {/* Environment Variables */}
-          <Section icon={<Key className="w-3.5 h-3.5 text-purple-400" />} title="Environment Variables" subtitle="Injected into all scripts and services">
-            {envEntries.map(([k, v], i) => (
-              <div key={i} className="flex items-center gap-2 mb-1">
-                <input value={k} onChange={e => {
-                  const newVars = { ...config.envVars };
-                  delete newVars[k];
-                  newVars[e.target.value] = v;
-                  setConfig(c => ({ ...c, envVars: newVars }));
-                }} className="input text-[11px] py-1 w-36 font-mono" placeholder="KEY" />
-                <input value={v} onChange={e => setConfig(c => ({ ...c, envVars: { ...c.envVars, [k]: e.target.value } }))} className="input text-[11px] py-1 flex-1 font-mono" placeholder="value" />
-                <button onClick={() => { const nv = { ...config.envVars }; delete nv[k]; setConfig(c => ({ ...c, envVars: nv })); }} className="text-gray-600 hover:text-red-400 p-1"><Trash2 className="w-3 h-3" /></button>
-              </div>
-            ))}
-            <button onClick={() => setConfig(c => ({ ...c, envVars: { ...c.envVars, '': '' } }))} className="text-[10px] text-gray-500 hover:text-gray-300 flex items-center gap-1 mt-1"><Plus className="w-3 h-3" /> Add variable</button>
           </Section>
         </div>
       </div>
@@ -155,8 +203,7 @@ function Section({ icon, title, subtitle, children }: { icon: React.ReactNode; t
   return (
     <div>
       <div className="flex items-center gap-2 mb-2">
-        {icon}
-        <span className="text-xs font-semibold text-gray-300">{title}</span>
+        {icon}<span className="text-xs font-semibold text-gray-300">{title}</span>
         <span className="text-[10px] text-gray-600">{subtitle}</span>
       </div>
       {children}
