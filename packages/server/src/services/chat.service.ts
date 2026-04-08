@@ -341,8 +341,19 @@ export class ChatService {
 
       // Resolve @mentions
       const mentionContext = await resolveMentions(content, this.db);
-      const enrichedContent = mentionContext
-        ? `CONTEXT FROM @MENTIONS:\n${mentionContext}\n\nUSER MESSAGE:\n${content}`
+
+      // Resolve linked workspace context (same pattern as @mentions)
+      let workspaceContext = '';
+      try {
+        const ws = await this.db.collection('workspaces').findOne({ chatSessionId: sessionId, status: { $nin: ['archived', 'failed'] } });
+        if (ws) {
+          workspaceContext = `\n[WORKSPACE: ${ws.name}] Path: ${ws.worktreePath}\nBranch: ${ws.branch} → ${ws.baseBranch}\nRepo: ${ws.repoName}\nYou are working inside this workspace. All file paths are relative to: ${ws.worktreePath}\n`;
+        }
+      } catch {}
+
+      const allContext = [mentionContext, workspaceContext].filter(Boolean).join('\n');
+      const enrichedContent = allContext
+        ? `CONTEXT:\n${allContext}\n\nUSER MESSAGE:\n${content}`
         : content;
 
       // Build message history
@@ -377,12 +388,20 @@ export class ChatService {
         systemPrompt = await getSystemPrompt(provider, this.db, content);
       }
 
+      // Resolve workspace cwd if a workspace is linked to this session
+      let workspaceCwd: string | undefined;
+      try {
+        const ws = await this.db.collection('workspaces').findOne({ chatSessionId: sessionId, status: { $nin: ['archived', 'failed'] } });
+        if (ws?.worktreePath) workspaceCwd = ws.worktreePath as string;
+      } catch {}
+
       const result = await runChatLLM(this.db, {
         provider,
         model,
         systemPrompt,
         messages: llmMessages,
         resumeSessionId: hasSessionResume ? resumeSessionId : undefined,
+        cwd: workspaceCwd,
         onText: (fullText) => {
           entry.currentText = fullText;
           broadcastToListeners(entry, 'message_delta', { text: fullText, messageId: assistantMsgId });

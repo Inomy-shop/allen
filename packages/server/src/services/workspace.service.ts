@@ -9,6 +9,7 @@ import { existsSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { spawn, type ChildProcess } from 'node:child_process';
 import type { Db, ObjectId } from 'mongodb';
+import { watchWorkspace, unwatchWorkspace } from './workspace-watcher.js';
 
 const exec = promisify(execFile);
 const WORKSPACE_BASE = process.env.WORKSPACE_BASE_DIR ?? '/tmp/flowforge-workspaces';
@@ -208,6 +209,20 @@ export class WorkspaceManager {
       await this.col.updateOne({ _id: oid }, {
         $set: { status: 'active', services, ...gitState, updatedAt: new Date() },
       });
+
+      // Start file watcher for live diff
+      watchWorkspace(id, worktreePath);
+
+      // Log activity
+      await this.logActivity(id, 'workspace_created', { branch, baseBranch });
+      if (config?.setupScript?.length) await this.logActivity(id, 'setup_completed');
+
+      // Auto-start services if configured
+      if (config?.autoStart && services.length > 0) {
+        for (const svc of services) {
+          try { await this.startService(id, svc.name); } catch {}
+        }
+      }
     } catch (err) {
       await this.col.updateOne({ _id: oid }, { $set: { status: 'failed' } });
       throw err;
@@ -220,6 +235,9 @@ export class WorkspaceManager {
     if (!ws) return;
 
     await this.col.updateOne({ _id: new ObjectId(id) }, { $set: { status: 'archiving' } });
+
+    // Stop file watcher
+    unwatchWorkspace(id);
 
     // Stop all services
     for (const svc of ws.services) {
@@ -345,6 +363,7 @@ export class WorkspaceManager {
     const gitState = await this.getGitState(ws.worktreePath, ws.baseBranch);
     const { ObjectId } = await import('mongodb');
     await this.col.updateOne({ _id: new ObjectId(id) }, { $set: { ...gitState, updatedAt: new Date() } });
+    await this.logActivity(id, 'commit', { hash: stdout.trim(), message });
     return { hash: stdout.trim() };
   }
 
@@ -352,6 +371,7 @@ export class WorkspaceManager {
     const ws = await this.get(id);
     if (!ws) throw new Error('Workspace not found');
     await exec('git', ['push', '-u', 'origin', ws.branch], { cwd: ws.worktreePath });
+    await this.logActivity(id, 'push', { branch: ws.branch });
   }
 
   async pull(id: string): Promise<void> {
@@ -456,6 +476,46 @@ export class WorkspaceManager {
   }
 
   // ── Link Chat ──
+
+  async getByChat(chatSessionId: string): Promise<Workspace | null> {
+    return this.col.findOne({ chatSessionId, status: { $nin: ['archived', 'failed'] } }) as Promise<Workspace | null>;
+  }
+
+  // ── Templates ──
+
+  private get templateCol() { return this.db.collection('workspace_templates'); }
+
+  async listTemplates(): Promise<any[]> {
+    return this.templateCol.find({}).sort({ name: 1 }).toArray();
+  }
+
+  async saveTemplate(name: string, template: { description?: string; branch: string; baseBranch: string; setupScript: string[]; services: { name: string; command: string; portOffset: number; healthCheck?: string }[]; envVars?: Record<string, string>; autoStart?: boolean }): Promise<void> {
+    await this.templateCol.updateOne({ name }, { $set: { ...template, name, updatedAt: new Date() }, $setOnInsert: { createdAt: new Date() } }, { upsert: true });
+  }
+
+  async deleteTemplate(name: string): Promise<void> {
+    await this.templateCol.deleteOne({ name });
+  }
+
+  // ── Activity Log ──
+
+  async logActivity(workspaceId: string, action: string, details?: Record<string, unknown>): Promise<void> {
+    await this.db.collection('workspace_activity').insertOne({ workspaceId, action, details, timestamp: new Date() });
+  }
+
+  async getActivity(workspaceId: string, limit = 50): Promise<any[]> {
+    return this.db.collection('workspace_activity').find({ workspaceId }).sort({ timestamp: -1 }).limit(limit).toArray();
+  }
+
+  // ── Bulk Operations ──
+
+  async bulkArchive(ids: string[]): Promise<{ archived: number }> {
+    let archived = 0;
+    for (const id of ids) {
+      try { await this.archive(id); archived++; } catch {}
+    }
+    return { archived };
+  }
 
   async linkChat(id: string, chatSessionId: string): Promise<void> {
     const { ObjectId } = await import('mongodb');

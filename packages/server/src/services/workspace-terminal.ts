@@ -47,12 +47,32 @@ export function startTerminalWebSocketServer(getWorkspacePath: (workspaceId: str
 
   httpServer.on('upgrade', (request: IncomingMessage, socket: any, head: Buffer) => {
     const url = request.url ?? '';
-    const match = url.match(/^\/ws\/workspaces\/([a-f0-9]+)\/terminal\/([a-zA-Z0-9_-]+)/);
-    if (!match) { socket.destroy(); return; }
 
-    wss.handleUpgrade(request, socket, head, (ws) => {
-      handleConnection(ws, match[1], match[2], getWorkspacePath);
-    });
+    // Terminal WebSocket
+    const termMatch = url.match(/^\/ws\/workspaces\/([a-f0-9]+)\/terminal\/([a-zA-Z0-9_-]+)/);
+    if (termMatch) {
+      wss.handleUpgrade(request, socket, head, (ws) => {
+        handleConnection(ws, termMatch[1], termMatch[2], getWorkspacePath);
+      });
+      return;
+    }
+
+    // File watch WebSocket — handled by workspace-watcher if imported
+    const watchMatch = url.match(/^\/ws\/workspaces\/([a-f0-9]+)\/watch/);
+    if (watchMatch) {
+      wss.handleUpgrade(request, socket, head, (ws) => {
+        // Register client for file change notifications
+        const wsId = watchMatch[1];
+        if (!(globalThis as any).__fileWatchClients) (globalThis as any).__fileWatchClients = new Map();
+        const clients: Map<string, Set<WebSocket>> = (globalThis as any).__fileWatchClients;
+        if (!clients.has(wsId)) clients.set(wsId, new Set());
+        clients.get(wsId)!.add(ws);
+        ws.on('close', () => { clients.get(wsId)?.delete(ws); });
+      });
+      return;
+    }
+
+    socket.destroy();
   });
 
   httpServer.listen(WS_PORT, () => {

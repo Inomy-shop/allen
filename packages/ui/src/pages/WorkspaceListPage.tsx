@@ -12,6 +12,8 @@ export default function WorkspaceListPage() {
   const [repos, setRepos] = useState<any[]>([]);
   const [form, setForm] = useState({ repoId: '', repoPath: '', repoName: '', branch: '', baseBranch: 'main', name: '' });
   const [deleting, setDeleting] = useState<{ id: string; name: string } | null>(null);
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [bulkArchiving, setBulkArchiving] = useState(false);
   const navigate = useNavigate();
 
   const load = useCallback(async () => {
@@ -37,6 +39,17 @@ export default function WorkspaceListPage() {
     try { await workspaces.archive(deleting.id); setDeleting(null); load(); } catch {}
   }
 
+  async function handleBulkArchive() {
+    if (selected.size === 0) return;
+    setBulkArchiving(true);
+    try { await workspaces.bulkArchive(Array.from(selected)); setSelected(new Set()); load(); } catch {}
+    setBulkArchiving(false);
+  }
+
+  function toggleSelect(id: string) {
+    setSelected(prev => { const next = new Set(prev); next.has(id) ? next.delete(id) : next.add(id); return next; });
+  }
+
   function selectRepo(repoId: string) {
     const repo = repos.find(r => r._id === repoId);
     setForm(f => ({ ...f, repoId, repoPath: repo?.path ?? '', repoName: repo?.name ?? '' }));
@@ -59,6 +72,11 @@ export default function WorkspaceListPage() {
           <p className="text-xs text-gray-500 mt-1 font-body">{list.length} active workspace{list.length !== 1 ? 's' : ''}</p>
         </div>
         <div className="flex items-center gap-2">
+          {selected.size > 0 && (
+            <button onClick={handleBulkArchive} disabled={bulkArchiving} className="btn-ghost text-xs text-red-400 flex items-center gap-1 disabled:opacity-50">
+              <Trash2 className="w-3.5 h-3.5" /> Archive {selected.size}
+            </button>
+          )}
           <button onClick={load} className="btn-ghost text-xs" title="Refresh"><RefreshCw className="w-3.5 h-3.5" /></button>
           <button onClick={() => setCreating(!creating)} className="btn-primary text-xs inline-flex items-center gap-1.5">
             <Plus className="w-3.5 h-3.5" /> New Workspace
@@ -110,6 +128,7 @@ export default function WorkspaceListPage() {
           {list.map((ws: any) => (
             <div key={ws._id} className="p-4 rounded-lg border border-border/20 bg-surface-100/20 hover:bg-surface-100/40 transition-colors group">
               <div className="flex items-center gap-3">
+                <input type="checkbox" checked={selected.has(ws._id)} onChange={() => toggleSelect(ws._id)} className="rounded border-border/30 bg-surface-50 shrink-0" onClick={e => e.stopPropagation()} />
                 <GitBranch className="w-5 h-5 text-accent-green shrink-0" />
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-2">

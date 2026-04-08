@@ -33,7 +33,7 @@ export default function ChatPage() {
   const {
     sessions, activeSessionId, messages, streaming, streamText,
     thinkingText, activeToolCalls, agentThreads, agentReports, threadsByMessage,
-    pendingUserQuestion, answerUserQuestion,
+    spawnedAgents, pendingUserQuestion, answerUserQuestion,
     loadingSessions, loadingMessages,
     sendMessage, createSession, switchSession, cancelStream,
   } = useChat();
@@ -171,7 +171,7 @@ export default function ChatPage() {
           </p>
         </div>
       ) : (
-        <ChatMessageList messages={messages} streamText={streamText} thinkingText={thinkingText} streaming={streaming} activeToolCalls={activeToolCalls} agentThreads={agentThreads} agentReports={agentReports} threadsByMessage={threadsByMessage} pendingUserQuestion={pendingUserQuestion} onAnswerUserQuestion={answerUserQuestion} activeAgent={activeSession?.activeAgent} onSuggestionClick={handleSuggestionClick} onSaveToLearnings={handleSaveToLearnings} />
+        <ChatMessageList messages={messages} streamText={streamText} thinkingText={thinkingText} streaming={streaming} activeToolCalls={activeToolCalls} agentThreads={agentThreads} agentReports={agentReports} threadsByMessage={threadsByMessage} spawnedAgents={spawnedAgents} pendingUserQuestion={pendingUserQuestion} onAnswerUserQuestion={answerUserQuestion} activeAgent={activeSession?.activeAgent} onSuggestionClick={handleSuggestionClick} onSaveToLearnings={handleSaveToLearnings} />
       )}
 
       {/* Agent selector + Input */}

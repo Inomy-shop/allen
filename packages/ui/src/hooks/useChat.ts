@@ -79,6 +79,18 @@ export interface AgentThread {
   children?: AgentThread[];
 }
 
+/** Spawned agent execution — live tracking */
+export interface SpawnedAgent {
+  executionId: string;
+  agent: string;
+  prompt: string;
+  status: 'running' | 'completed' | 'failed';
+  activity: { type: string; tool?: string; command?: string; timestamp: number }[];
+  durationMs?: number;
+  toolCount?: number;
+  response?: string;
+}
+
 /** Progress report from an agent */
 export interface AgentReport {
   agent: string;
@@ -110,6 +122,7 @@ export function useChat() {
   const [threadsByMessage, setThreadsByMessage] = useState<Record<string, AgentThread[]>>({});
   /** Pending question from an agent to the user (ask_user) */
   const [pendingUserQuestion, setPendingUserQuestion] = useState<{ question: string; fromAgent: string } | null>(null);
+  const [spawnedAgents, setSpawnedAgents] = useState<SpawnedAgent[]>([]);
   const [loadingSessions, setLoadingSessions] = useState(true);
   const [loadingMessages, setLoadingMessages] = useState(false);
   const abortRef = useRef<AbortController | null>(null);
@@ -367,6 +380,32 @@ export function useChat() {
         }]);
         break;
 
+      case 'spawn_started':
+        setSpawnedAgents(prev => [...prev, {
+          executionId: data.executionId as string,
+          agent: data.agent as string,
+          prompt: (data.prompt as string) ?? '',
+          status: 'running',
+          activity: [],
+        }]);
+        break;
+
+      case 'spawn_activity':
+        setSpawnedAgents(prev => prev.map(s =>
+          s.executionId === data.executionId
+            ? { ...s, activity: [...s.activity, { type: data.type as string, tool: data.tool as string | undefined, command: data.command as string | undefined, timestamp: Date.now() }] }
+            : s,
+        ));
+        break;
+
+      case 'spawn_completed':
+        setSpawnedAgents(prev => prev.map(s =>
+          s.executionId === data.executionId
+            ? { ...s, status: 'completed', durationMs: data.durationMs as number, toolCount: data.toolCount as number, response: data.response as string }
+            : s,
+        ));
+        break;
+
       case 'stream_inactive':
         setStreaming(false);
         setActiveToolCalls([]);
@@ -419,6 +458,7 @@ export function useChat() {
     setAgentReports([]);
     setThreadsByMessage({});
     setPendingUserQuestion(null);
+    setSpawnedAgents([]);
   }, [streaming]);
 
   const sendMessage = useCallback(async (content: string, overrideSessionId?: string, agent?: string) => {
@@ -741,6 +781,7 @@ export function useChat() {
     agentThreads,
     agentReports,
     threadsByMessage,
+    spawnedAgents,
     pendingUserQuestion,
     answerUserQuestion: async (answer: string) => {
       if (!activeSessionId) return;

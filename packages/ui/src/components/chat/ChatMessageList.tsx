@@ -29,6 +29,8 @@ interface ChatMessageListProps {
   onAnswerUserQuestion?: (answer: string) => void;
   /** Active agent name (for labeling assistant messages) */
   activeAgent?: string | null;
+  /** Spawned agent executions — live tracking */
+  spawnedAgents?: { executionId: string; agent: string; prompt: string; status: string; activity: { type: string; tool?: string; command?: string; timestamp: number }[]; durationMs?: number; toolCount?: number; response?: string }[];
   onSuggestionClick?: (text: string) => void;
   onSaveToLearnings?: (content: string) => void;
 }
@@ -691,7 +693,7 @@ function buildThreadTree(threads: AgentThreadType[]): AgentThreadType[] {
   return roots;
 }
 
-export default function ChatMessageList({ messages, streamText, thinkingText, streaming, activeToolCalls = [], agentThreads = [], agentReports = [], threadsByMessage = {}, pendingUserQuestion, onAnswerUserQuestion, activeAgent, onSuggestionClick, onSaveToLearnings }: ChatMessageListProps) {
+export default function ChatMessageList({ messages, streamText, thinkingText, streaming, activeToolCalls = [], agentThreads = [], agentReports = [], threadsByMessage = {}, pendingUserQuestion, onAnswerUserQuestion, activeAgent, spawnedAgents = [], onSuggestionClick, onSaveToLearnings }: ChatMessageListProps) {
   const agentIconName = useSettingsStore((s) => s.agentIcon);
   const [agentMap, setAgentMap] = useState<Record<string, { displayName?: string; icon?: string; color?: string }>>({});
 
@@ -961,6 +963,43 @@ export default function ChatMessageList({ messages, streamText, thinkingText, st
           agentInfo={agentMap[pendingUserQuestion.fromAgent]}
           onAnswer={onAnswerUserQuestion}
         />
+      )}
+
+      {/* Spawned agent executions — live cards */}
+      {spawnedAgents.length > 0 && (
+        <div className="px-4 space-y-2 my-3">
+          {spawnedAgents.map(s => (
+            <div key={s.executionId} className={`border rounded-lg p-3 ${s.status === 'running' ? 'border-blue-500/30 bg-blue-500/5' : s.status === 'completed' ? 'border-emerald-500/20 bg-emerald-500/5' : 'border-red-500/20 bg-red-500/5'}`}>
+              <div className="flex items-center gap-2 mb-1.5">
+                {s.status === 'running' && <span className="w-2 h-2 rounded-full bg-blue-400 animate-pulse" />}
+                {s.status === 'completed' && <span className="w-2 h-2 rounded-full bg-emerald-400" />}
+                {s.status === 'failed' && <span className="w-2 h-2 rounded-full bg-red-400" />}
+                <span className="text-[11px] font-mono font-bold text-gray-300">{s.agent}</span>
+                <span className="text-[9px] text-gray-600 font-mono">{s.executionId.slice(0, 8)}</span>
+                <a href={`/executions/${s.executionId}`} target="_blank" rel="noopener noreferrer" className="text-[9px] text-blue-400 hover:underline ml-auto">View Execution →</a>
+              </div>
+              <p className="text-[10px] text-gray-500 mb-1.5 truncate">{s.prompt}</p>
+              {/* Live activity feed */}
+              {s.activity.length > 0 && (
+                <div className="space-y-0.5 max-h-32 overflow-y-auto">
+                  {s.activity.map((a, i) => (
+                    <div key={i} className="flex items-center gap-1.5 text-[10px] font-mono">
+                      {a.type === 'thinking' && <span className="text-purple-400">💭 thinking...</span>}
+                      {a.type === 'tool_start' && <span className="text-amber-400">⚡ {a.tool}</span>}
+                      {a.type === 'tool_done' && <span className="text-gray-500">✓ {a.tool}{a.command ? ` (${a.command})` : ''}</span>}
+                    </div>
+                  ))}
+                </div>
+              )}
+              {s.status === 'running' && s.activity.length === 0 && (
+                <span className="text-[10px] text-blue-400 animate-pulse">Starting agent...</span>
+              )}
+              {s.status === 'completed' && s.durationMs && (
+                <div className="text-[9px] text-gray-600 mt-1">{s.toolCount} tools · {(s.durationMs / 1000).toFixed(1)}s</div>
+              )}
+            </div>
+          ))}
+        </div>
       )}
 
       <div ref={bottomRef} />

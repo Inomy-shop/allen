@@ -21,7 +21,10 @@ import { chatRoutes } from './routes/chat.routes.js';
 import { mcpRoutes } from './routes/mcp.routes.js';
 import { alertRoutes } from './routes/alert.routes.js';
 import { workspaceRoutes } from './routes/workspace.routes.js';
+import { pullRequestRoutes } from './routes/pull-request.routes.js';
 import { startTerminalWebSocketServer } from './services/workspace-terminal.js';
+import { createWorkspaceProxy } from './services/workspace-proxy.js';
+import { startFileWatchServer } from './services/workspace-watcher.js';
 import { WorkspaceManager } from './services/workspace.service.js';
 import { seedDefaultAgents, seedDefaultWorkflows } from './seed.js';
 import { setStreamDb } from './services/stream.service.js';
@@ -59,10 +62,17 @@ async function main(): Promise<void> {
   app.use('/api/mcp', mcpRoutes(db));
   app.use('/api/alerts', alertRoutes(db));
   app.use('/api/workspaces', workspaceRoutes(db));
+  app.use('/api/pull-requests', pullRequestRoutes(db));
+
+  // Preview reverse proxy — must be after json middleware but catches /api/workspaces/:id/preview/*
+  app.use('/api/workspaces/:id/preview', createWorkspaceProxy(db));
 
   app.listen(PORT, () => {
     console.log(`FlowForge server running on http://localhost:${PORT}`);
   });
+
+  // Start file watch WebSocket server on port 4025
+  startFileWatchServer();
 
   // Start dedicated WebSocket terminal server on port 4024
   const wsManager = new WorkspaceManager(db);

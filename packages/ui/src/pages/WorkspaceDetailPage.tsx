@@ -6,8 +6,11 @@ import {
   Play, Square, ChevronRight, ChevronDown,
   Upload, GitCommit, X, GitPullRequest, FileText,
   Trash2, Save, FilePlus, Plus, SplitSquareHorizontal,
+  Settings, ExternalLink, Eye, History, PanelRightOpen, MessageSquare,
 } from 'lucide-react';
 import { XTerminal } from '../components/workspace/XTerminal';
+import { WorkspaceConfigEditor } from '../components/workspace/WorkspaceConfigEditor';
+import { EmbeddedChat } from '../components/workspace/EmbeddedChat';
 import Editor from '@monaco-editor/react';
 import { renderMarkdown } from '../components/chat/ChatMessageList';
 
@@ -118,7 +121,7 @@ function FolderIcon({ name, expanded, className = 'w-4 h-4' }: { name: string; e
 
 // ── Resize Hook ──
 
-function useResizable(direction: 'horizontal' | 'vertical', initial: number, min: number, max: number) {
+function useResizable(direction: 'horizontal' | 'vertical', initial: number, min: number, max: number, invert = false) {
   const [size, setSize] = useState(initial);
   const dragging = useRef(false);
   const startPos = useRef(0);
@@ -131,9 +134,10 @@ function useResizable(direction: 'horizontal' | 'vertical', initial: number, min
     startSize.current = size;
     const onMouseMove = (ev: MouseEvent) => {
       if (!dragging.current) return;
-      const delta = direction === 'horizontal'
+      const raw = direction === 'horizontal'
         ? ev.clientX - startPos.current
         : startPos.current - ev.clientY; // inverted for bottom panel
+      const delta = invert ? -raw : raw;
       setSize(Math.min(max, Math.max(min, startSize.current + delta)));
     };
     const onMouseUp = () => { dragging.current = false; document.removeEventListener('mousemove', onMouseMove); document.removeEventListener('mouseup', onMouseUp); };
@@ -227,6 +231,42 @@ function DiffView({ diff }: { diff: string }) {
 
 // ── Main ──
 
+function PreviewBar({ id, previewService, setPreviewService, services, onClose }: {
+  id: string; previewService: string; setPreviewService: (s: string) => void; services: any[]; onClose: () => void;
+}) {
+  return (
+    <div className="flex items-center gap-2 px-3 py-1 bg-surface-100/30 border-b border-border/20 shrink-0">
+      <Eye className="w-3 h-3 text-blue-400" />
+      <span className="text-[10px] font-label uppercase tracking-wider text-gray-500">Preview</span>
+      <select value={previewService} onChange={e => setPreviewService(e.target.value)} className="bg-surface-100 border border-border/30 rounded text-[10px] font-mono text-gray-300 px-1.5 py-0.5">
+        {services?.filter((s: any) => s.status === 'ready').map((s: any) => (<option key={s.name} value={s.name}>{s.name} :{s.port}</option>))}
+      </select>
+      <a href={`/api/workspaces/${id}/preview${previewService ? `?service=${previewService}` : ''}`} target="_blank" rel="noopener noreferrer" className="text-gray-600 hover:text-gray-300 p-0.5" title="Open in new tab"><ExternalLink className="w-3 h-3" /></a>
+      <span className="flex-1" />
+      <button onClick={onClose} className="text-gray-600 hover:text-gray-300 p-0.5"><X className="w-3 h-3" /></button>
+    </div>
+  );
+}
+
+function ActivityTimeline({ activity }: { activity: any[] }) {
+  const icons: Record<string, string> = { workspace_created: '🏗️', setup_completed: '✅', commit: '📝', push: '🚀', service_started: '▶️', service_stopped: '⏹️' };
+  return (
+    <div className="p-3 space-y-2">
+      {activity.length === 0 ? <p className="text-xs text-gray-600">No activity yet</p> : activity.map((a, i) => (
+        <div key={i} className="flex items-start gap-2 text-[11px]">
+          <span className="shrink-0 mt-0.5">{icons[a.action] ?? '📌'}</span>
+          <div className="flex-1 min-w-0">
+            <span className="text-gray-300 font-mono">{a.action.replace(/_/g, ' ')}</span>
+            {a.details?.message && <span className="text-gray-500 ml-1 truncate">— {a.details.message}</span>}
+            {a.details?.hash && <span className="text-gray-600 ml-1 font-mono">{a.details.hash.slice(0, 7)}</span>}
+          </div>
+          <span className="text-[9px] text-gray-700 shrink-0">{new Date(a.timestamp).toLocaleTimeString()}</span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 let termIdCounter = 1;
 
 export default function WorkspaceDetailPage() {
@@ -248,12 +288,32 @@ export default function WorkspaceDetailPage() {
   const [pushing, setPushing] = useState(false);
   const [showNewFile, setShowNewFile] = useState(false);
   const [newFilePath, setNewFilePath] = useState('');
+  // PR modal
+  const [showPrModal, setShowPrModal] = useState(false);
+  const [prTitle, setPrTitle] = useState('');
+  const [prBody, setPrBody] = useState('');
+  const [creatingPr, setCreatingPr] = useState(false);
+
+  // Preview iframe
+  const [showPreview, setShowPreview] = useState(false);
+  const [previewService, setPreviewService] = useState<string>('');
+
+  // Config editor + activity
+  const [showConfig, setShowConfig] = useState(false);
+  const [showActivity, setShowActivity] = useState(false);
+  const [activity, setActivity] = useState<any[]>([]);
+  const [splitPreview, setSplitPreview] = useState(false);
+
+  // Embedded chat
+  const [showChat, setShowChat] = useState(false);
+
   const [terminals, setTerminals] = useState<{ id: string; label: string }[]>([{ id: 'default', label: 'Terminal 1' }]);
   const [activeTerminal, setActiveTerminal] = useState('default');
   const [terminalVisible, setTerminalVisible] = useState(true);
 
   // Resizable panels
   const sidebar = useResizable('horizontal', 240, 160, 400);
+  const chatPanel = useResizable('horizontal', 384, 280, 600, true);
   const monacoRef = useRef<any>(null);
   const termPanel = useResizable('vertical', 220, 100, 500);
 
@@ -271,6 +331,28 @@ export default function WorkspaceDetailPage() {
 
   useEffect(() => { load(); }, [load]);
   useEffect(() => { if (!id) return; const i = setInterval(async () => { try { setWorkspace(await workspaces.get(id)); } catch {} }, 15000); return () => clearInterval(i); }, [id]);
+
+  // Load activity when panel opens
+  useEffect(() => {
+    if (!showActivity || !id) return;
+    workspaces.getActivity(id).then(setActivity).catch(() => {});
+  }, [showActivity, id]);
+
+  // Keyboard shortcuts
+  useEffect(() => {
+    function onKeyDown(e: KeyboardEvent) {
+      // Ctrl/Cmd + ` → toggle terminal
+      if ((e.metaKey || e.ctrlKey) && e.key === '`') { e.preventDefault(); setTerminalVisible(v => !v); }
+      // Ctrl/Cmd + J → toggle chat
+      if ((e.metaKey || e.ctrlKey) && e.key === 'j') { e.preventDefault(); setShowChat(v => !v); }
+      // Ctrl/Cmd + B → toggle sidebar
+      if ((e.metaKey || e.ctrlKey) && e.key === 'b') { e.preventDefault(); sidebar.size > 0 ? sidebar.onMouseDown({ preventDefault: () => {}, clientX: 0, clientY: 0 } as any) : null; }
+      // Ctrl/Cmd + P → toggle preview
+      if ((e.metaKey || e.ctrlKey) && e.shiftKey && e.key === 'p') { e.preventDefault(); setShowPreview(v => !v); }
+    }
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, []);
 
   async function selectFile(path: string) {
     if (!id) return;
@@ -309,6 +391,17 @@ export default function WorkspaceDetailPage() {
   async function handleDeleteFile(path: string) {
     if (!id || !confirm(`Delete ${path}?`)) return;
     try { await workspaces.deleteFile(id, path); if (selectedFile === path) { setSelectedFile(null); setDirty(false); } load(); } catch (err: any) { alert(err.message); }
+  }
+
+  async function handleCreatePR() {
+    if (!id || !prTitle.trim()) return;
+    setCreatingPr(true);
+    try {
+      const pr = await workspaces.createPR(id, prTitle, prBody);
+      setPrTitle(''); setPrBody(''); setShowPrModal(false);
+      if (pr.url) window.open(pr.url, '_blank');
+    } catch (err: any) { alert(err.message); }
+    setCreatingPr(false);
   }
 
   function addTerminal() { const nid = `term-${termIdCounter++}`; setTerminals(p => [...p, { id: nid, label: `Terminal ${p.length + 1}` }]); setActiveTerminal(nid); }
@@ -367,11 +460,25 @@ export default function WorkspaceDetailPage() {
             <button onClick={handlePush} disabled={pushing} className="btn-ghost text-[11px] py-1 px-2 flex items-center gap-1 disabled:opacity-50">
               <Upload className="w-3.5 h-3.5" />{pushing ? '...' : 'Push'}
             </button>
-            <button className="btn-ghost text-[11px] py-1 px-2 flex items-center gap-1 text-blue-400">
+            <button onClick={() => setShowPrModal(true)} className="btn-ghost text-[11px] py-1 px-2 flex items-center gap-1 text-blue-400">
               <GitPullRequest className="w-3.5 h-3.5" />PR
             </button>
           </div>
-          <button onClick={load} className="btn-ghost p-1 text-xs"><RefreshCw className="w-3.5 h-3.5" /></button>
+          {/* Preview toggle — only when a service is ready */}
+          {workspace.services?.some((s: any) => s.status === 'ready') && (
+            <button onClick={() => setShowPreview(v => !v)} className={`btn-ghost p-1 text-xs ${showPreview ? 'text-blue-400' : ''}`} title="Toggle Preview">
+              <Eye className="w-3.5 h-3.5" />
+            </button>
+          )}
+          {showPreview && (
+            <button onClick={() => setSplitPreview(v => !v)} className={`btn-ghost p-1 text-xs ${splitPreview ? 'text-blue-400' : ''}`} title="Split Preview">
+              <PanelRightOpen className="w-3.5 h-3.5" />
+            </button>
+          )}
+          <button onClick={() => setShowChat(v => !v)} className={`btn-ghost p-1 text-xs ${showChat ? 'text-blue-400' : ''}`} title="Chat (⌘J)"><MessageSquare className="w-3.5 h-3.5" /></button>
+          <button onClick={() => setShowActivity(v => !v)} className={`btn-ghost p-1 text-xs ${showActivity ? 'text-blue-400' : ''}`} title="Activity"><History className="w-3.5 h-3.5" /></button>
+          <button onClick={() => setShowConfig(true)} className="btn-ghost p-1 text-xs" title="Workspace Config"><Settings className="w-3.5 h-3.5" /></button>
+          <button onClick={load} className="btn-ghost p-1 text-xs" title="Refresh"><RefreshCw className="w-3.5 h-3.5" /></button>
         </div>
       </div>
 
@@ -405,8 +512,9 @@ export default function WorkspaceDetailPage() {
 
         {/* Right: editor + terminal */}
         <div className="flex-1 flex flex-col min-w-0 min-h-0 overflow-hidden">
-          {/* Editor area */}
-          <div className="flex-1 flex flex-col overflow-hidden min-h-0">
+          {/* Editor area (with optional split preview + activity panel) */}
+          <div className="flex-1 flex overflow-hidden min-h-0">
+          <div className={`flex-1 flex flex-col overflow-hidden min-h-0 ${splitPreview && showPreview ? 'w-1/2' : ''}`}>
             {selectedFile ? (
               <>
                 <div className="flex items-center gap-1 px-3 py-1 border-b border-border/20 bg-surface-100/30 shrink-0">
@@ -493,6 +601,52 @@ export default function WorkspaceDetailPage() {
             )}
           </div>
 
+          {/* Split preview — side by side with editor */}
+          {showPreview && splitPreview && (
+            <div className="w-1/2 border-l border-border/20 flex flex-col overflow-hidden">
+              <PreviewBar id={id!} previewService={previewService} setPreviewService={setPreviewService} services={workspace.services} onClose={() => setShowPreview(false)} />
+              <iframe src={`/api/workspaces/${id}/preview${previewService ? `?service=${previewService}` : ''}`} className="flex-1 w-full bg-white border-none" title="Preview" />
+            </div>
+          )}
+
+          {/* Activity panel — side panel */}
+          {showActivity && !showChat && (
+            <div className="w-64 border-l border-border/20 bg-surface-50/30 overflow-y-auto flex flex-col shrink-0">
+              <div className="flex items-center gap-2 px-3 py-1.5 border-b border-border/20 shrink-0">
+                <History className="w-3 h-3 text-gray-500" />
+                <span className="text-[10px] font-label uppercase tracking-wider text-gray-500">Activity</span>
+                <span className="flex-1" />
+                <button onClick={() => setShowActivity(false)} className="text-gray-600 hover:text-gray-300 p-0.5"><X className="w-3 h-3" /></button>
+              </div>
+              <ActivityTimeline activity={activity} />
+            </div>
+          )}
+
+          {/* Chat panel — full-featured embedded chat */}
+          {showChat && (
+            <>
+            <div onMouseDown={chatPanel.onMouseDown} className="w-1 shrink-0 cursor-col-resize bg-transparent hover:bg-blue-500/30 active:bg-blue-500/50 transition-colors" />
+            <div className="border-l border-border/20 bg-surface-50/30 flex flex-col shrink-0" style={{ width: chatPanel.size }}>
+              <EmbeddedChat
+                workspaceId={id!}
+                workspaceName={workspace.name}
+                worktreePath={workspace.worktreePath}
+                linkedSessionId={workspace.chatSessionId}
+                onClose={() => setShowChat(false)}
+              />
+            </div>
+            </>
+          )}
+          </div>
+
+          {/* Preview iframe — below editor (non-split) */}
+          {showPreview && !splitPreview && (
+            <div className="shrink-0 border-t border-border/30 flex flex-col" style={{ height: 300 }}>
+              <PreviewBar id={id!} previewService={previewService} setPreviewService={setPreviewService} services={workspace.services} onClose={() => setShowPreview(false)} />
+              <iframe src={`/api/workspaces/${id}/preview${previewService ? `?service=${previewService}` : ''}`} className="flex-1 w-full bg-white border-none" title="Preview" />
+            </div>
+          )}
+
           {/* Terminal resize handle */}
           {terminalVisible && <div onMouseDown={termPanel.onMouseDown} className="h-1 shrink-0 cursor-row-resize bg-transparent hover:bg-blue-500/30 active:bg-blue-500/50 transition-colors border-t border-border/30" />}
 
@@ -550,6 +704,33 @@ export default function WorkspaceDetailPage() {
           </div>
         </div>
       )}
+
+      {/* PR Modal */}
+      {showPrModal && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50" onClick={() => setShowPrModal(false)}>
+          <div className="bg-surface-100 border border-border/30 rounded-lg w-[520px] p-4" onClick={e => e.stopPropagation()}>
+            <div className="flex items-center gap-2 mb-3">
+              <GitPullRequest className="w-4 h-4 text-blue-400" />
+              <span className="text-sm font-semibold text-white">Create Pull Request</span>
+              <span className="text-[10px] font-mono text-gray-500">{workspace.branch} → {workspace.baseBranch}</span>
+            </div>
+            <input value={prTitle} onChange={e => setPrTitle(e.target.value)} placeholder="PR title..." autoFocus
+              className="w-full bg-surface-50 border border-border/30 rounded px-3 py-2 text-sm text-gray-300 placeholder:text-gray-600 focus:outline-none focus:border-blue-500/50 mb-2" />
+            <textarea value={prBody} onChange={e => setPrBody(e.target.value)} placeholder="Description (optional)..." rows={4}
+              className="w-full bg-surface-50 border border-border/30 rounded px-3 py-2 text-sm font-mono text-gray-300 placeholder:text-gray-600 focus:outline-none focus:border-blue-500/50 resize-none" />
+            <div className="flex items-center gap-2 mt-3 justify-end">
+              <button onClick={() => setShowPrModal(false)} className="btn-ghost text-xs py-1.5 px-3">Cancel</button>
+              <button onClick={handleCreatePR} disabled={!prTitle.trim() || creatingPr} className="btn-primary text-xs py-1.5 px-4 disabled:opacity-50 flex items-center gap-1">
+                <GitPullRequest className="w-3.5 h-3.5" />
+                {creatingPr ? 'Creating...' : 'Create PR'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Config Editor */}
+      {showConfig && <WorkspaceConfigEditor repoId={workspace.repoId} onClose={() => { setShowConfig(false); load(); }} />}
 
       {workspace.setupProgress?.status === 'running' && (
         <div className="px-4 py-1.5 border-t border-border/30 bg-amber-400/5 shrink-0">

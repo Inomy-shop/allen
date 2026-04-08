@@ -1,6 +1,7 @@
 import { Router, type Request, type Response } from 'express';
 import type { Db } from 'mongodb';
 import { WorkspaceManager } from '../services/workspace.service.js';
+import { PullRequestService } from '../services/pull-request.service.js';
 import { readFileSync, writeFileSync, mkdirSync, unlinkSync, existsSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 
@@ -12,6 +13,7 @@ function p(req: Request, name: string): string {
 export function workspaceRoutes(db: Db): Router {
   const router = Router();
   const manager = new WorkspaceManager(db);
+  const prService = new PullRequestService(db);
 
   // ── Workspace CRUD ──
 
@@ -157,6 +159,38 @@ export function workspaceRoutes(db: Db): Router {
     catch (err: unknown) { res.status(500).json({ error: (err as Error).message }); }
   });
 
+  // ── Create PR from Workspace ──
+
+  router.post('/:id/create-pr', async (req: Request, res: Response) => {
+    try {
+      const ws = await manager.get(p(req, 'id'));
+      if (!ws) return res.status(404).json({ error: 'Workspace not found' });
+      const { title, body, skipChecks } = req.body;
+      if (!title) return res.status(400).json({ error: 'title is required' });
+
+      // Run pre-PR checks if configured
+      if (!skipChecks) {
+        const config = await manager.getConfig(ws.repoId);
+        if (config?.prePrScript?.length) {
+          const { execFile: execF } = await import('node:child_process');
+          const { promisify: prom } = await import('node:util');
+          const run = prom(execF);
+          for (const cmd of config.prePrScript) {
+            try {
+              await run('sh', ['-c', cmd], { cwd: ws.worktreePath, env: { ...process.env, ...config.envVars } });
+            } catch (err: any) {
+              return res.status(422).json({ error: `Pre-PR check failed: ${cmd}`, output: err.stderr ?? err.message });
+            }
+          }
+        }
+      }
+
+      await manager.push(p(req, 'id'));
+      const pr = await prService.createPR(ws.worktreePath, ws.repoId, ws.repoName, ws.branch, ws.baseBranch, title, body ?? '');
+      res.status(201).json(pr);
+    } catch (err: unknown) { res.status(500).json({ error: (err as Error).message }); }
+  });
+
   // ── Services ──
 
   router.get('/:id/services', async (req: Request, res: Response) => {
@@ -230,6 +264,45 @@ export function workspaceRoutes(db: Db): Router {
       await manager.saveConfig(p(req, 'repoId'), req.body);
       res.json({ saved: true });
     } catch (err: unknown) { res.status(500).json({ error: (err as Error).message }); }
+  });
+
+  // ── Templates ──
+
+  router.get('/templates', async (_req: Request, res: Response) => {
+    try { res.json(await manager.listTemplates()); }
+    catch (err: unknown) { res.status(500).json({ error: (err as Error).message }); }
+  });
+
+  router.post('/templates', async (req: Request, res: Response) => {
+    try {
+      const { name, ...rest } = req.body;
+      if (!name) return res.status(400).json({ error: 'name is required' });
+      await manager.saveTemplate(name, rest);
+      res.json({ saved: true });
+    } catch (err: unknown) { res.status(500).json({ error: (err as Error).message }); }
+  });
+
+  router.delete('/templates/:name', async (req: Request, res: Response) => {
+    try { await manager.deleteTemplate(p(req, 'name')); res.json({ deleted: true }); }
+    catch (err: unknown) { res.status(500).json({ error: (err as Error).message }); }
+  });
+
+  // ── Bulk Operations ──
+
+  router.post('/bulk-archive', async (req: Request, res: Response) => {
+    try {
+      const { ids } = req.body;
+      if (!Array.isArray(ids) || ids.length === 0) return res.status(400).json({ error: 'ids array is required' });
+      const result = await manager.bulkArchive(ids);
+      res.json(result);
+    } catch (err: unknown) { res.status(500).json({ error: (err as Error).message }); }
+  });
+
+  // ── Activity Timeline ──
+
+  router.get('/:id/activity', async (req: Request, res: Response) => {
+    try { res.json(await manager.getActivity(p(req, 'id'))); }
+    catch (err: unknown) { res.status(500).json({ error: (err as Error).message }); }
   });
 
   return router;

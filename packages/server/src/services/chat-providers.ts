@@ -348,6 +348,7 @@ export async function runCodexCLI(
   callbacks: ProviderCallbacks,
   resumeSessionId?: string,
   skipTools?: boolean,
+  cwd?: string,
 ): Promise<ProviderResult & { sessionId?: string }> {
   const { spawn } = await import('node:child_process');
   const trace: ChatTraceEvent[] = [];
@@ -376,7 +377,7 @@ export async function runCodexCLI(
 
   return new Promise<ProviderResult & { sessionId?: string }>((resolve, reject) => {
     const proc = spawn('codex', args, {
-      cwd: '/tmp',
+      cwd: cwd || '/tmp',
       env: { ...process.env },
       stdio: ['pipe', 'pipe', 'pipe'],
     });

@@ -40,6 +40,7 @@ export interface ChatLLMOptions {
   onSessionId?: (sessionId: string) => void;
   skipTools?: boolean;
   signal?: AbortSignal;
+  cwd?: string;
 }
 
 export interface ChatTraceEvent {
@@ -81,6 +82,7 @@ async function runClaudeCLI(
   callbacks: ProviderCallbacks,
   resumeSessionId?: string,
   skipTools?: boolean,
+  cwd?: string,
 ): Promise<{ text: string; costUsd: number; sessionId?: string; trace: ChatTraceEvent[] }> {
   const { query } = await import('@anthropic-ai/claude-code');
   const { resolve, dirname } = await import('node:path');
@@ -114,7 +116,7 @@ async function runClaudeCLI(
     model,
     maxTurns: 30,
     permissionMode: 'bypassPermissions',
-    cwd: '/tmp',
+    cwd: cwd || '/tmp',
   };
 
   if (resumeSessionId) sdkOptions.resume = resumeSessionId;
@@ -213,10 +215,10 @@ export async function runChatLLM(db: Db, options: ChatLLMOptions): Promise<ChatL
 
   switch (provider) {
     case 'codex':
-      result = await runCodexCLI(db, options.systemPrompt, options.messages, model, callbacks, options.resumeSessionId, options.skipTools);
+      result = await runCodexCLI(db, options.systemPrompt, options.messages, model, callbacks, options.resumeSessionId, options.skipTools, options.cwd);
       break;
     case 'claude-cli':
-      result = await runClaudeCLI(db, options.systemPrompt, options.messages, model, callbacks, options.resumeSessionId, options.skipTools);
+      result = await runClaudeCLI(db, options.systemPrompt, options.messages, model, callbacks, options.resumeSessionId, options.skipTools, options.cwd);
       break;
     case 'gemini':
       result = await runGemini(db, options.systemPrompt, options.messages, model, callbacks, options.skipTools);

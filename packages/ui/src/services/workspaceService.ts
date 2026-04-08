@@ -28,6 +28,31 @@ export const workspaces = {
   stopService: (id: string, name: string) => request<any>(`/workspaces/${id}/services/${name}/stop`, { method: 'POST' }),
   restartService: (id: string, name: string) => request<any>(`/workspaces/${id}/services/${name}/restart`, { method: 'POST' }),
   linkChat: (id: string, sessionId: string) => request<any>(`/workspaces/${id}/link-chat`, { method: 'POST', body: JSON.stringify({ sessionId }) }),
+  createPR: (id: string, title: string, body?: string) => request<any>(`/workspaces/${id}/create-pr`, { method: 'POST', body: JSON.stringify({ title, body }) }),
   getConfig: (repoId: string) => request<any>(`/workspaces/config/${repoId}`),
   saveConfig: (repoId: string, config: any) => request<any>(`/workspaces/config/${repoId}`, { method: 'PUT', body: JSON.stringify(config) }),
+  // Templates
+  listTemplates: () => request<any[]>('/workspaces/templates'),
+  saveTemplate: (name: string, template: any) => request<any>('/workspaces/templates', { method: 'POST', body: JSON.stringify({ name, ...template }) }),
+  deleteTemplate: (name: string) => request<any>(`/workspaces/templates/${name}`, { method: 'DELETE' }),
+  // Bulk
+  bulkArchive: (ids: string[]) => request<any>('/workspaces/bulk-archive', { method: 'POST', body: JSON.stringify({ ids }) }),
+  // Activity
+  getActivity: (id: string) => request<any[]>(`/workspaces/${id}/activity`),
+};
+
+// ── Pull Requests ──
+
+export const pullRequests = {
+  list: (filters?: { repoId?: string; status?: string }) => {
+    const params = new URLSearchParams();
+    if (filters?.repoId) params.set('repoId', filters.repoId);
+    if (filters?.status) params.set('status', filters.status);
+    return request<any[]>(`/pull-requests?${params}`);
+  },
+  get: (id: string) => request<any>(`/pull-requests/${id}`),
+  sync: (repoPath: string, repoId: string, repoName: string) =>
+    request<any>('/pull-requests/sync', { method: 'POST', body: JSON.stringify({ repoPath, repoId, repoName }) }),
+  getDiff: (id: string) => request<any>(`/pull-requests/${id}/diff`),
+  createWorkspace: (id: string) => request<any>(`/pull-requests/${id}/workspace`, { method: 'POST' }),
 };

@@ -17,6 +17,8 @@ import ChatPage from './pages/ChatPage';
 import AnalyticsPage from './pages/AnalyticsPage';
 import WorkspaceListPage from './pages/WorkspaceListPage';
 import WorkspaceDetailPage from './pages/WorkspaceDetailPage';
+import PullRequestListPage from './pages/PullRequestListPage';
+import PullRequestDetailPage from './pages/PullRequestDetailPage';
 
 const router = createBrowserRouter([
   {
@@ -36,6 +38,8 @@ const router = createBrowserRouter([
       { path: 'chat/:sessionId', element: <ChatPage /> },
       { path: 'workspaces', element: <WorkspaceListPage /> },
       { path: 'workspaces/:id', element: <WorkspaceDetailPage /> },
+      { path: 'pull-requests', element: <PullRequestListPage /> },
+      { path: 'pull-requests/:id', element: <PullRequestDetailPage /> },
       { path: 'analytics', element: <AnalyticsPage /> },
       { path: 'settings', element: <SettingsPage /> },
       { path: 'settings/:tab', element: <SettingsPage /> },
