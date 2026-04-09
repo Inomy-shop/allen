@@ -12,6 +12,7 @@ import { ensureIndexes } from './database/indexes.js';
 import { workflowRoutes } from './routes/workflow.routes.js';
 import { executionRoutes } from './routes/execution.routes.js';
 import { agentRoutes } from './routes/agent.routes.js';
+import { teamRoutes } from './routes/team.routes.js';
 import { streamRoutes } from './routes/stream.routes.js';
 import { secretRoutes } from './routes/secret.routes.js';
 import { dashboardRoutes } from './routes/dashboard.routes.js';
@@ -32,6 +33,7 @@ import { setStreamDb } from './services/stream.service.js';
 import { SecretService } from './services/secret.service.js';
 import { McpService } from './services/mcp.service.js';
 import { startMcpHealthMonitor } from './services/mcp-health.service.js';
+import { TeamSeedService } from './services/team-seed.service.js';
 
 const PORT = parseInt(process.env.PORT ?? '4000', 10);
 
@@ -44,6 +46,12 @@ async function main(): Promise<void> {
   await mcpSvc.migrateGhCliServersToSecret();
   await mcpSvc.syncPresetDescriptions();
   await seedDefaultAgents(db);
+  // Phase 1: build the org chart — seed teams + meta agents, backfill memberships.
+  // ORDER DEPENDENCY: must run AFTER seedDefaultAgents() because migrate()
+  // backfills teamName/teamRole onto the seeded default agents and sets the
+  // default agents as team leads. Reordering will cause "lead agent not found"
+  // warnings on first startup.
+  await new TeamSeedService(db).migrate();
   await seedDefaultWorkflows(db);
   setStreamDb(db);
 
@@ -67,6 +75,7 @@ async function main(): Promise<void> {
   app.use('/api/executions', executionRoutes(db));
   app.use('/api/executions', streamRoutes());
   app.use('/api/agents', agentRoutes(db));
+  app.use('/api/teams', teamRoutes(db));
   app.use('/api/secrets', secretRoutes(db));
   app.use('/api/dashboard', dashboardRoutes(db));
   app.use('/api/repos', repoRoutes(db));

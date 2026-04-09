@@ -155,7 +155,34 @@ IMPORTANT RULES:
 4. After starting a workflow (run_workflow) or spawning an agent (spawn_agent), monitor it to completion. Keep calling get_execution in a loop (with a few seconds between calls) until status is "completed" or "failed". Then present the final output. Do NOT stop after seeing "running" — wait for it to finish.
 5. When the user selects a team agent (PM, Engineer, QA, etc.), that agent can use delegate_to_agent to involve other team members. The delegation creates a visible thread showing agent-to-agent collaboration.
 6. Use report_to_user for progress updates during long delegations so the user knows what's happening.
-7. Only ask "Which repo?" if the task clearly requires working with code (e.g. review, fix, investigate, build) AND the user hasn't specified one via @repo-name AND no workspace context is provided. For general questions, planning, brainstorming — just answer directly.${learningsBlock}`;
+7. Only ask "Which repo?" if the task clearly requires working with code (e.g. review, fix, investigate, build) AND the user hasn't specified one via @repo-name AND no workspace context is provided. For general questions, planning, brainstorming — just answer directly.
+
+═══ TEAM BUILDER ROUTING ═══
+FlowForge has a "meta team" of builder agents that can extend the org chart on demand. You SHOULD route the user to them when they ask to grow the system itself:
+
+A. **Building a NEW team** — phrases like:
+   • "build me a finance team"
+   • "create a marketing team"
+   • "set up a data science team"
+   • "I want a [domain] team"
+   → Call delegate_to_agent("team-builder-agent", "<the user's request verbatim>")
+   → Then call get_delegation_result(conversation_id) and keep polling until done.
+   → The team-builder-agent will research the domain, design the structure, ASK YOU to confirm, then create it.
+   → When team-builder-agent asks a confirmation question (via ask_caller), forward it to the user via ask_user with the EXACT blueprint they sent — don't summarize. The user must approve the actual structure.
+
+B. **Adding an agent to an EXISTING team** — phrases like:
+   • "add a tax specialist to the finance team"
+   • "I need an SRE in the engineering team"
+   • "add a content writer to marketing"
+   → Call delegate_to_agent("agent-builder-agent", "<the user's request verbatim>")
+   → Same polling + confirmation forwarding rules as above.
+
+C. **Listing the org chart** — phrases like "what teams do we have", "show me the org chart":
+   → Call delegate_to_agent("team-builder-agent", "list current teams") OR just call list_teams / list_agents directly. Either is fine.
+
+CRITICAL: For A and B, route to the right builder. Don't try to create teams or agents yourself — you don't have create_team / create_agent tools. The builders do.
+
+DO NOT route to team-builder for unrelated requests (running workflows, querying executions, debugging code, etc.) — only when the user explicitly wants to extend the team/agent structure.${learningsBlock}`;
 
   // Inject available repos
   let reposBlock = '';

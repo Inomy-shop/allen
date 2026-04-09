@@ -1,5 +1,5 @@
 import { useEffect, useState, useRef } from 'react';
-import { useParams, useNavigate } from 'react-router-dom';
+import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
 import { useChat } from '../hooks/useChat';
 import ChatInput from '../components/chat/ChatInput';
 import ChatMessageList from '../components/chat/ChatMessageList';
@@ -18,6 +18,7 @@ const PROVIDER_DISPLAY: Record<string, { label: string; color: string }> = {
 export default function ChatPage() {
   const { sessionId: urlSessionId } = useParams<{ sessionId?: string }>();
   const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
   const [cmdPaletteOpen, setCmdPaletteOpen] = useState(false);
   const [logsOpen, setLogsOpen] = useState(false);
   const [mcpCount, setMcpCount] = useState<{ enabled: number; connected: number }>({ enabled: 0, connected: 0 });
@@ -84,6 +85,30 @@ export default function ChatPage() {
       navigate(`/chat/${activeSessionId}`, { replace: true });
     }
   }, [activeSessionId]);
+
+  // Deep-link support: ?agent=NAME&prompt=PREFILL
+  // Used by the "Build Team with AI" / "Add Agent with AI" buttons in TeamManagerPage.
+  // We preselect the agent and prefill the input, then strip the query params
+  // so a refresh doesn't re-apply them. The user must click Send themselves
+  // — no auto-submit, so they can review/edit the proposed prompt first.
+  useEffect(() => {
+    const wantedAgent = searchParams.get('agent');
+    const wantedPrompt = searchParams.get('prompt');
+    if (!wantedAgent && !wantedPrompt) return;
+
+    if (wantedAgent) setSelectedAgent(wantedAgent);
+    if (wantedPrompt) {
+      // setValue is exposed by ChatInput's forwardRef. Defer to next tick so
+      // the input is mounted.
+      setTimeout(() => chatInputRef.current?.setValue(wantedPrompt), 0);
+    }
+
+    // Strip the params so refresh doesn't re-trigger this effect
+    const next = new URLSearchParams(searchParams);
+    next.delete('agent');
+    next.delete('prompt');
+    setSearchParams(next, { replace: true });
+  }, [searchParams]);
 
   async function handleSend(content: string) {
     if (!activeSessionId) {

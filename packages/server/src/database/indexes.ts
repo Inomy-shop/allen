@@ -57,6 +57,28 @@ export async function ensureIndexes(db: Db): Promise<void> {
   await db.collection('agent_conversations').createIndex({ fromAgent: 1, toAgent: 1 });
   await db.collection('agent_conversations').createIndex({ status: 1 });
 
+  // Teams (org-chart grouping for agents — phase 1 of teams architecture)
+  await db.collection('teams').createIndex({ name: 1 }, { unique: true });
+  await db.collection('teams').createIndex({ parentTeamName: 1 });
+  await db.collection('teams').createIndex({ leadAgentName: 1 });
+  // Also index agents.teamName so listMembers / lookups are fast
+  await db.collection('agents').createIndex({ teamName: 1 });
+  // Hard guarantee: only ONE lead per team. Partial unique index gives the
+  // database itself the responsibility — no race window. The application also
+  // checks before insert so callers get a friendly error message.
+  // EXPLICIT NAME REQUIRED: there's already a non-unique index on { teamName: 1 }
+  // a few lines above. MongoDB auto-generates the same name `teamName_1` for
+  // both, causing IndexKeySpecsConflict. Naming this one explicitly avoids
+  // the collision.
+  await db.collection('agents').createIndex(
+    { teamName: 1 },
+    {
+      unique: true,
+      partialFilterExpression: { teamRole: 'lead' },
+      name: 'teamName_lead_unique',
+    },
+  );
+
   // Slack Thread Mappings (Slack thread → FlowForge chat session)
   await db.collection('slack_thread_mappings').createIndex(
     { slackTeamId: 1, slackChannelId: 1, slackThreadTs: 1 },

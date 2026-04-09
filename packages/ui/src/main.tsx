@@ -10,6 +10,7 @@ import ExecutionListPage from './pages/ExecutionListPage';
 import ExecutionDetailPage from './pages/ExecutionDetailPage';
 import DashboardPage from './pages/DashboardPage';
 import RoleManagerPage from './pages/RoleManagerPage';
+import TeamManagerPage from './pages/TeamManagerPage';
 import RepoManagerPage from './pages/RepoManagerPage';
 import SettingsPage from './pages/SettingsPage';
 import LearningsPage from './pages/LearningsPage';
@@ -34,6 +35,7 @@ const router = createBrowserRouter([
       { path: 'executions', element: <ExecutionListPage /> },
       { path: 'executions/:id', element: <ExecutionDetailPage /> },
       { path: 'agents', element: <RoleManagerPage /> },
+      { path: 'teams', element: <TeamManagerPage /> },
       { path: 'chat', element: <ChatPage /> },
       { path: 'chat/:sessionId', element: <ChatPage /> },
       { path: 'workspaces', element: <WorkspaceListPage /> },

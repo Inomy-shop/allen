@@ -45,9 +45,13 @@ export interface HealthCheckResult {
  * Spawn an MCP stdio server, do the JSON-RPC initialize + tools/list handshake,
  * then tear it down. Resolves with the result regardless of success/failure.
  */
+// finish() adds durationMs from the closure, so its callers pass everything except that.
+type PartialResult = Omit<HealthCheckResult, 'durationMs'>;
+
 async function checkStdioServer(server: McpServerRecord, db: Db): Promise<HealthCheckResult> {
   const startMs = Date.now();
-  if (!server.command) {
+  const command = server.command;
+  if (!command) {
     return { ok: false, error: 'No command configured', durationMs: 0 };
   }
 
@@ -63,7 +67,7 @@ async function checkStdioServer(server: McpServerRecord, db: Db): Promise<Health
     let settled = false;
     const pending = new Map<string | number, (msg: any) => void>();
 
-    const finish = (result: HealthCheckResult) => {
+    const finish = (result: PartialResult) => {
       if (settled) return;
       settled = true;
       try { proc?.kill('SIGKILL'); } catch { /* ignore */ }
@@ -75,7 +79,7 @@ async function checkStdioServer(server: McpServerRecord, db: Db): Promise<Health
     }, SPAWN_TIMEOUT_MS);
 
     try {
-      proc = spawn(server.command, args, {
+      proc = spawn(command, args, {
         env: { ...process.env, ...env },
         stdio: ['pipe', 'pipe', 'pipe'],
       });
@@ -85,12 +89,15 @@ async function checkStdioServer(server: McpServerRecord, db: Db): Promise<Health
       return;
     }
 
-    proc.on('error', (err) => {
+    // Narrow `proc` to a non-null local for the rest of this scope
+    const childProc = proc;
+
+    childProc.on('error', (err) => {
       clearTimeout(overallTimeout);
       finish({ ok: false, error: `process error: ${err.message}` });
     });
 
-    proc.on('exit', (code, signal) => {
+    childProc.on('exit', (code, signal) => {
       if (settled) return;
       // Process died before handshake completed
       clearTimeout(overallTimeout);
@@ -100,7 +107,7 @@ async function checkStdioServer(server: McpServerRecord, db: Db): Promise<Health
       });
     });
 
-    proc.stdout?.on('data', (data: Buffer) => {
+    childProc.stdout?.on('data', (data: Buffer) => {
       buffer += data.toString();
       const lines = buffer.split('\n');
       buffer = lines.pop() ?? '';
@@ -118,7 +125,7 @@ async function checkStdioServer(server: McpServerRecord, db: Db): Promise<Health
     });
 
     // We don't need stderr output, but we drain it so the pipe doesn't fill up
-    proc.stderr?.on('data', () => { /* drain */ });
+    childProc.stderr?.on('data', () => { /* drain */ });
 
     const sendRpc = (method: string, params?: unknown): Promise<any> => {
       const id = randomUUID();
@@ -133,7 +140,7 @@ async function checkStdioServer(server: McpServerRecord, db: Db): Promise<Health
           else rpcResolve(msg.result);
         });
         try {
-          proc!.stdin?.write(JSON.stringify({ jsonrpc: '2.0', id, method, params: params ?? {} }) + '\n');
+          childProc.stdin?.write(JSON.stringify({ jsonrpc: '2.0', id, method, params: params ?? {} }) + '\n');
         } catch (err) {
           clearTimeout(t);
           pending.delete(id);

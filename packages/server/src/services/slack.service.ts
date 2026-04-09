@@ -275,13 +275,16 @@ export class SlackService {
   }
 
   /**
-   * Post a message to a Slack thread. Splits long messages into chunks (Slack limit ~40k chars,
-   * but we use 3500 as a comfortable boundary that doesn't break markdown rendering).
+   * Post a message to a Slack thread. The agent's response is GitHub-flavored
+   * markdown — we convert it to Slack mrkdwn first so bold/italic/links/code/
+   * tables/etc. render properly. Long messages are split into chunks (Slack
+   * limit ~40k chars, we use 3500 as a comfortable boundary).
    */
   private async postToSlack(channelId: string, threadTs: string, text: string): Promise<void> {
     const token = await this.getBotToken();
     if (!token) throw new Error('SLACK_BOT_TOKEN not configured');
-    const chunks = splitMessage(text, 3500);
+    const slackText = markdownToSlack(text);
+    const chunks = splitMessage(slackText, 3500);
     for (const chunk of chunks) {
       const resp = await fetch(`${SLACK_API}/chat.postMessage`, {
         method: 'POST',
@@ -355,4 +358,112 @@ function splitMessage(text: string, maxLen: number): string[] {
 
   if (remaining.length > 0) chunks.push(remaining);
   return chunks;
+}
+
+/**
+ * Convert GitHub-flavored markdown (what the agent emits) to Slack mrkdwn
+ * (what Slack actually renders). The two dialects disagree on bold, italic,
+ * links, headers, and tables — without this conversion you see literal `**`s
+ * and broken layouts in Slack threads.
+ *
+ * Conversions:
+ *   **bold** / __bold__   → *bold*           (Slack uses single asterisks)
+ *   *italic* / _italic_   → _italic_         (Slack uses underscores)
+ *   # / ## / ### headers  → *bold*           (Slack has no native heading)
+ *   [text](url)           → <url|text>       (Slack link syntax)
+ *   <https://...>         → <https://...>    (auto-links work in both)
+ *   ~~strike~~            → ~strike~         (single tilde)
+ *   - item / * item       → • item           (bullet character)
+ *   `inline`              → `inline`         (preserved)
+ *   ```lang code ```      → ``` code ```     (language hint stripped)
+ *   GFM tables            → ``` block ```    (monospace preserves alignment)
+ *
+ * Also escapes literal `<`, `>`, `&` outside protected segments so the agent's
+ * `if x < 5` doesn't get parsed as a malformed tag by Slack.
+ */
+function markdownToSlack(input: string): string {
+  // ── 1. Tables → monospace code blocks (do BEFORE link conversion since
+  //       table cells contain pipes that would confuse the link regex) ──
+  let text = input.replace(
+    /(^|\n)(\|[^\n]+\|)\n(\|[\s\-:|]+\|)\n((?:\|[^\n]+\|(?:\n|$))+)/g,
+    (_full, lead, header, _align, rows) =>
+      `${lead}\`\`\`\n${header}\n${(rows as string).trimEnd()}\n\`\`\``,
+  );
+
+  // ── 2. Protect fenced code blocks (strip optional language hint) ──
+  const codeBlocks: string[] = [];
+  text = text.replace(/```[a-zA-Z0-9_+-]*\n?([\s\S]*?)```/g, (_m, code) => {
+    codeBlocks.push('```\n' + (code as string).replace(/^\n+|\n+$/g, '') + '\n```');
+    return `\u0000CB${codeBlocks.length - 1}\u0000`;
+  });
+
+  // ── 3. Protect inline code ──
+  const inlineCode: string[] = [];
+  text = text.replace(/`([^`\n]+)`/g, (_m, code) => {
+    inlineCode.push('`' + code + '`');
+    return `\u0000IC${inlineCode.length - 1}\u0000`;
+  });
+
+  // ── 4. Headers: # / ## / ### / ... → *bold line* ──
+  text = text.replace(/^[ \t]*#{1,6}[ \t]+(.+?)[ \t]*#*[ \t]*$/gm, '*$1*');
+
+  // ── 5. Links: [text](url) → <url|text>. Strip optional "title" attribute. ──
+  text = text.replace(
+    /\[([^\]\n]+)\]\(([^)\s]+)(?:\s+"[^"]*")?\)/g,
+    '<$2|$1>',
+  );
+
+  // ── 6. Protect Slack-style tags so the escape pass below doesn't mangle them.
+  //       Covers: <https://url>, <https://url|text>, <@U…>, <#C…>, <!cmd> ──
+  const slackTags: string[] = [];
+  text = text.replace(
+    /<(?:https?:\/\/[^|>\s]+(?:\|[^>\n]+)?|[@#!][^>\s]+)>/g,
+    (m) => {
+      slackTags.push(m);
+      return `\u0000ST${slackTags.length - 1}\u0000`;
+    },
+  );
+
+  // ── 7. Bold: stash **…** and __…__ first, so the italic regex below can't
+  //       eat their asterisks. ──
+  const bolds: string[] = [];
+  text = text.replace(/\*\*([^*\n]+)\*\*/g, (_m, t) => {
+    bolds.push(`*${t}*`);
+    return `\u0000BD${bolds.length - 1}\u0000`;
+  });
+  text = text.replace(/__([^_\n]+)__/g, (_m, t) => {
+    bolds.push(`*${t}*`);
+    return `\u0000BD${bolds.length - 1}\u0000`;
+  });
+
+  // ── 8. Italic: single *text* → _text_ — only when delimited by non-word
+  //       chars on both sides, so `5 * 3` and `a*b*c` aren't false-positives. ──
+  text = text.replace(
+    /(^|[\s(])\*([^*\n]+?)\*($|[\s).,;:!?])/g,
+    '$1_$2_$3',
+  );
+
+  // ── 9. Restore bolds ──
+  text = text.replace(/\u0000BD(\d+)\u0000/g, (_m, idx) => bolds[parseInt(idx, 10)]);
+
+  // ── 10. Strikethrough: ~~text~~ → ~text~ ──
+  text = text.replace(/~~([^~\n]+)~~/g, '~$1~');
+
+  // ── 11. Bullet lists: leading "- " / "* " → "• " (preserves indentation) ──
+  text = text.replace(/^([ \t]*)[-*][ \t]+/gm, '$1• ');
+
+  // ── 12. Escape Slack special chars in plain text. Placeholders use \u0000
+  //       and contain none of <>&, so they're untouched. & must come first
+  //       to avoid double-escaping. ──
+  text = text
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
+
+  // ── 13. Restore protected segments in reverse order ──
+  text = text.replace(/\u0000ST(\d+)\u0000/g, (_m, idx) => slackTags[parseInt(idx, 10)]);
+  text = text.replace(/\u0000IC(\d+)\u0000/g, (_m, idx) => inlineCode[parseInt(idx, 10)]);
+  text = text.replace(/\u0000CB(\d+)\u0000/g, (_m, idx) => codeBlocks[parseInt(idx, 10)]);
+
+  return text;
 }

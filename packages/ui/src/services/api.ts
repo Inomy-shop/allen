@@ -73,6 +73,20 @@ export const agents = {
     request<void>(`/agents/${name}`, { method: 'DELETE' }),
 };
 
+// ── Teams ──────────────────────────────────────────────────────────────────
+export const teams = {
+  list: () => request<any[]>('/teams'),
+  get: (name: string) => request<any>(`/teams/${name}`),
+  members: (name: string) => request<any[]>(`/teams/${name}/members`),
+  blueprint: (name: string) => request<any>(`/teams/${name}/blueprint`),
+  create: (team: any) =>
+    request<any>('/teams', { method: 'POST', body: JSON.stringify(team) }),
+  update: (name: string, team: any) =>
+    request<any>(`/teams/${name}`, { method: 'PUT', body: JSON.stringify(team) }),
+  delete: (name: string) =>
+    request<void>(`/teams/${name}`, { method: 'DELETE' }),
+};
+
 // ── Secrets ────────────────────────────────────────────────────────────────
 export const secrets = {
   list: () => request<string[]>('/secrets'),

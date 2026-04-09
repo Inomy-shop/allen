@@ -14,6 +14,26 @@
 
 const API_BASE = process.env.FLOWFORGE_API_URL ?? `http://localhost:${process.env.PORT ?? '4023'}`;
 
+// ── Helpers ──
+
+/**
+ * Map a parameter description string to its JSON Schema type.
+ * The TOOLS array uses prose descriptions like "boolean (required) — must be true";
+ * we look at the first word to pick the right JSON type.
+ *
+ * Without 'boolean' support, claude-cli would coerce booleans to strings and
+ * the model would send `confirm: "true"` instead of `confirm: true` — failing
+ * strict equality checks server-side.
+ */
+function paramJsonType(desc: string): string {
+  if (typeof desc !== 'string') return 'string';
+  const lower = desc.toLowerCase();
+  if (lower.startsWith('object') || lower.startsWith('array')) return 'object';
+  if (lower.startsWith('number') || lower.startsWith('integer')) return 'number';
+  if (lower.startsWith('boolean') || lower.startsWith('bool')) return 'boolean';
+  return 'string';
+}
+
 // ── Tool Definitions ──
 
 const TOOLS = [
@@ -39,6 +59,26 @@ const TOOLS = [
   { name: 'ask_caller', description: 'Ask a question to the agent who delegated this task to you. Blocks until they answer. Use when you need clarification.', params: { question: 'string (required)', conversation_id: 'string — conversation ID (optional, auto-detected from context)' } },
   { name: 'ask_user', description: 'Ask the user a question directly. Blocks until user answers. Only use when no agent can answer.', params: { question: 'string (required)' } },
   { name: 'report_to_user', description: 'Send a progress update to the user during a delegation chain.', params: { message: 'string (required)', status: 'string — in_progress | completed | needs_input' } },
+
+  // ── Meta team tools (phase 4) — gated server-side by per-agent allow-list.
+  // Only team-builder-agent and agent-builder-agent can call these; calls
+  // from any other agent return a "Permission denied" error.
+
+  // ── Self-introspection (any agent can call) ──
+  { name: 'get_my_session_history', description: 'Return the message history of the top-level chat session you are running in. Use this to re-read the user\'s original request, see your prior responses, and self-diagnose when you are confused about what was asked. Returns up to `limit` messages (default 30). Each message includes role, content, and toolCalls with summarized results.', params: { limit: 'number — max messages to return (default 30, max 100)' } },
+  { name: 'get_my_delegation_thread', description: 'Return the messages and tool results in your CURRENT delegation thread (the multi-turn conversation between you and the agent that delegated to you). Use this when you have been called multiple times and want to see what you have already done. Only works for delegated agents — returns an error if called from a top-level chat.', params: {} },
+
+  { name: 'list_teams', description: 'List all teams in the FlowForge org chart. Returns name, displayName, mission, leadAgentName, parentTeamName, isBuiltIn for each. Read-only — no permission required.', params: {} },
+  { name: 'list_team_members', description: 'List all agents in a specific team. Returns each member with name, displayName, teamRole, capabilities, tools, canDelegateTo.', params: { team_name: 'string (required) — team slug' } },
+  { name: 'get_team_blueprint', description: 'Return a team\'s full blueprint: team metadata, all members with system prompts, and internal delegation edges. Use this BEFORE adding a new agent so your blueprint integrates with existing members.', params: { team_name: 'string (required) — team slug' } },
+
+  { name: 'create_team', description: 'Create a new team in the org chart. ONLY team-builder-agent can call this. The lead agent must already exist (call create_agent for the lead first, then create_team).', params: { name: 'string (required) — lowercase slug', displayName: 'string (required) — human-readable name', description: 'string', mission: 'string — 2-3 sentence mission used in agent system prompts', leadAgentName: 'string (required) — name of the team lead agent', parentTeamName: 'string — optional parent team' } },
+  { name: 'update_team', description: 'Update a team\'s description, mission, or parent. ONLY team-builder-agent. Built-in teams cannot be updated.', params: { name: 'string (required)', displayName: 'string', description: 'string', mission: 'string', parentTeamName: 'string' } },
+  { name: 'delete_team', description: 'Delete a team. ONLY team-builder-agent. Refuses if team has members. Refuses built-in teams. Requires confirm=true.', params: { name: 'string (required)', confirm: 'boolean (required) — must be true' } },
+
+  { name: 'create_agent', description: 'Create a new agent in an existing team. team-builder-agent and agent-builder-agent can call this. Team must exist. Agent slug must be unique system-wide.', params: { name: 'string (required) — lowercase slug', displayName: 'string (required)', teamName: 'string (required) — existing team slug', teamRole: 'string (required) — "lead" or "member"', system: 'string (required) — full system prompt', provider: 'string (required) — "claude-cli" or "codex"', model: 'string', tools: 'object — array of tool names', capabilities: 'object — array of capability tags', canDelegateTo: 'object — array of agent names this agent can delegate to', personality: 'string', icon: 'string', color: 'string' } },
+  { name: 'update_agent', description: 'Update an existing non-built-in agent. team-builder-agent has full update access; agent-builder-agent can ONLY update canDelegateTo.', params: { name: 'string (required)', displayName: 'string', system: 'string', tools: 'object', capabilities: 'object', canDelegateTo: 'object', personality: 'string', model: 'string', provider: 'string' } },
+  { name: 'delete_agent', description: 'Delete an agent. Both builders can call this. Refuses built-in agents. Refuses to leave a non-built-in team leaderless. Requires confirm=true.', params: { name: 'string (required)', confirm: 'boolean (required) — must be true' } },
 ];
 
 // ── API Call Helper ──
@@ -267,7 +307,29 @@ async function executeTool(name: string, args: Record<string, unknown>): Promise
       // When called through MCP, it's a no-op that returns success
       return { reported: true, message: args.message, status: args.status ?? 'in_progress' };
     }
-    default: return { error: `Unknown tool: ${name}` };
+    default: {
+      // Fallback dispatcher: forward any tool not handled above to the generic
+      // /api/chat/tools/:toolName endpoint, which dispatches via executeChatTool().
+      // This is how the phase-4 meta tools (create_team, create_agent, etc.)
+      // become callable from spawned agents — they're registered in chatTools[]
+      // server-side, the generic endpoint picks them up automatically, and we
+      // don't need a hardcoded case here for every new tool.
+      try {
+        const url = `${API_BASE}/api/chat/tools/${encodeURIComponent(name)}`;
+        const res = await fetch(url, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(args),
+        });
+        if (!res.ok) {
+          const text = await res.text().catch(() => '');
+          return { error: `Tool "${name}" failed: HTTP ${res.status} ${text}` };
+        }
+        return await res.json();
+      } catch (err) {
+        return { error: `Tool "${name}" call failed: ${(err as Error).message}` };
+      }
+    }
   }
 }
 
@@ -297,7 +359,7 @@ async function handleMessage(msg: { jsonrpc: string; id: string | number; method
             type: 'object',
             properties: Object.fromEntries(
               Object.entries(t.params).map(([k, v]) => [k, {
-                type: typeof v === 'string' && v.startsWith('object') ? 'object' : typeof v === 'string' && v.startsWith('number') ? 'number' : 'string',
+                type: paramJsonType(v as string),
                 description: v,
               }]),
             ),

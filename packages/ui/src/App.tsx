@@ -20,6 +20,7 @@ const NAV_GROUPS = [
   ]},
   { label: 'Build', items: [
     { to: '/workflows', icon: GitBranch, label: 'Agent Workflows' },
+    { to: '/teams', icon: Users, label: 'Teams' },
     { to: '/agents', icon: Users, label: 'Agents' },
     { to: '/repos', icon: FolderGit2, label: 'Repos' },
   ]},

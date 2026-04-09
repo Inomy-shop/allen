@@ -8,6 +8,7 @@ import type { Db, ObjectId } from 'mongodb';
 import { ExecutionService } from './execution.service.js';
 import { embedAndSave, invalidateCache } from './embedding.service.js';
 import { AgentConversationService } from './agent-conversation.service.js';
+import { metaChatTools, META_DESTRUCTIVE_TOOLS } from './chat-tools-meta.js';
 
 // ── Active Session Registry ──────────────────────────────────────────────────
 // When chat.service starts processing a message, it registers the session context.
@@ -147,6 +148,8 @@ export const DESTRUCTIVE_TOOLS = new Set([
   'mcp__linear__linear_create_issue', 'mcp__linear__linear_edit_issue',
   'mcp__linear__linear_delete_issue', 'mcp__linear__linear_create_comment',
   'mcp__linear__linear_bulk_update_issues',
+  // Meta team tools (phase 4 — team-builder / agent-builder)
+  ...META_DESTRUCTIVE_TOOLS,
 ]);
 
 // ── Helpers ──
@@ -1233,8 +1236,23 @@ CRITICAL RULES:
 
     if (fromAgent !== 'assistant') {
       const callingAgent = await db.collection('agents').findOne({ name: fromAgent });
+
+      // (a) Static canDelegateTo allow-list (if set on the calling agent)
       if (callingAgent?.canDelegateTo && !callingAgent.canDelegateTo.includes(targetName)) {
         return { error: `Agent "${fromAgent}" cannot delegate to "${targetName}". Allowed: ${(callingAgent.canDelegateTo as string[]).join(', ')}` };
+      }
+
+      // (b) Phase 2: team isolation rules (independent of canDelegateTo).
+      // Even if the calling agent's canDelegateTo lists the target, the team
+      // structure must permit the delegation. Same team is always OK; cross-team
+      // requires lead-to-lead.
+      const { TeamService } = await import('./team.service.js');
+      const teamCheck = await new TeamService(db).canDelegate(fromAgent, targetName);
+      if (!teamCheck.allowed) {
+        return {
+          error: teamCheck.reason ?? `Cross-team delegation blocked: "${fromAgent}" → "${targetName}"`,
+          hint: teamCheck.hint,
+        };
       }
     }
 
@@ -1950,6 +1968,8 @@ export const chatTools: ChatTool[] = [
   saveLearning,
   // Workspace actions
   createPullRequest,
+  // Meta team tools (phase 4 — team-builder / agent-builder)
+  ...metaChatTools,
 ];
 
 /**
