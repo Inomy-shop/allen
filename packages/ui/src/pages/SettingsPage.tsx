@@ -1,9 +1,11 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState, useCallback } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { RotateCcw, Check, Palette, Type, Sparkles, Server, User, Eye, Key,
   Bot, Brain, Zap, Cpu, Atom, Terminal, Code, Rocket, Shield, Hexagon, Flame, Monitor, Moon, Sun,
+  Plus, Pencil, Trash2, X, Lock, AlertCircle,
 } from 'lucide-react';
 import McpServerManager from '../components/settings/McpServerManager';
+import { secrets as secretsApi } from '../services/api';
 import {
   useSettingsStore,
   THEME_PRESETS,
@@ -325,19 +327,314 @@ function McpTab() {
 
 // ── Secrets Tab ──
 
+type SecretDialogMode =
+  | { type: 'closed' }
+  | { type: 'create' }
+  | { type: 'edit'; key: string }
+  | { type: 'delete'; key: string };
+
+function SecretDialog({
+  mode,
+  existingKeys,
+  onClose,
+  onSubmit,
+}: {
+  mode: SecretDialogMode;
+  existingKeys: string[];
+  onClose: () => void;
+  onSubmit: (key: string, value: string) => Promise<void>;
+}) {
+  const [keyInput, setKeyInput] = useState('');
+  const [valueInput, setValueInput] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const valueInputRef = useRef<HTMLInputElement>(null);
+
+  // Reset state when the dialog opens for a new operation
+  useEffect(() => {
+    if (mode.type === 'closed') return;
+    setKeyInput(mode.type === 'edit' ? mode.key : '');
+    setValueInput('');
+    setError(null);
+    setBusy(false);
+    // Auto-focus the value field — both create and edit need a fresh value
+    setTimeout(() => valueInputRef.current?.focus(), 50);
+  }, [mode]);
+
+  if (mode.type === 'closed' || mode.type === 'delete') return null;
+
+  const isEdit = mode.type === 'edit';
+  const title = isEdit ? `Replace value for ${mode.key}` : 'Add Secret';
+
+  const handleSubmit = async () => {
+    setError(null);
+    const trimmedKey = keyInput.trim();
+    const trimmedValue = valueInput; // don't trim — secrets may have leading/trailing whitespace
+    if (!trimmedKey) {
+      setError('Key is required');
+      return;
+    }
+    if (!isEdit && !/^[A-Z0-9_]+$/.test(trimmedKey)) {
+      setError('Key must contain only uppercase letters, digits, and underscores');
+      return;
+    }
+    if (!isEdit && existingKeys.includes(trimmedKey)) {
+      setError(`A secret named "${trimmedKey}" already exists`);
+      return;
+    }
+    if (!trimmedValue) {
+      setError('Value is required');
+      return;
+    }
+    setBusy(true);
+    try {
+      await onSubmit(trimmedKey, trimmedValue);
+      onClose();
+    } catch (err) {
+      setError((err as Error).message ?? String(err));
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm">
+      <div className="card w-full max-w-md mx-4 p-6 space-y-4">
+        <div className="flex items-start justify-between">
+          <div>
+            <h3 className="font-heading text-lg text-white tracking-wide">{title}</h3>
+            <p className="text-xs text-theme-muted font-body mt-1">
+              {isEdit
+                ? 'For your safety the saved value is never shown. Enter the new value to replace it.'
+                : 'Stored encrypted (AES-256-GCM) at rest. Only server-side code can read the plaintext.'}
+            </p>
+          </div>
+          <button onClick={onClose} className="text-gray-500 hover:text-gray-300 transition-colors">
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+
+        <div className="space-y-3">
+          <div>
+            <label className="text-[10px] font-label uppercase tracking-widest text-theme-muted block mb-1">
+              Key
+            </label>
+            <input
+              type="text"
+              value={keyInput}
+              onChange={(e) => setKeyInput(e.target.value.toUpperCase())}
+              disabled={isEdit}
+              placeholder="e.g. SLACK_BOT_TOKEN"
+              className="w-full bg-surface-200/50 border border-border/30 rounded-md px-3 py-2 text-sm font-mono text-white placeholder-gray-600 focus:outline-none focus:border-accent-blue/50 disabled:opacity-60 disabled:cursor-not-allowed"
+            />
+          </div>
+
+          <div>
+            <label className="text-[10px] font-label uppercase tracking-widest text-theme-muted block mb-1">
+              {isEdit ? 'New Value' : 'Value'}
+            </label>
+            <input
+              ref={valueInputRef}
+              type="password"
+              value={valueInput}
+              onChange={(e) => setValueInput(e.target.value)}
+              onKeyDown={(e) => { if (e.key === 'Enter') handleSubmit(); }}
+              placeholder={isEdit ? 'Enter new value to replace the saved one' : 'Paste the secret value'}
+              autoComplete="new-password"
+              className="w-full bg-surface-200/50 border border-border/30 rounded-md px-3 py-2 text-sm font-mono text-white placeholder-gray-600 focus:outline-none focus:border-accent-blue/50"
+            />
+          </div>
+
+          {error && (
+            <div className="flex items-start gap-2 px-3 py-2 rounded-md border border-red-500/30 bg-red-500/10 text-xs text-red-400 font-body">
+              <AlertCircle className="w-3.5 h-3.5 mt-0.5 shrink-0" />
+              <span>{error}</span>
+            </div>
+          )}
+        </div>
+
+        <div className="flex items-center justify-end gap-2 pt-2">
+          <button onClick={onClose} disabled={busy} className="btn-ghost text-xs">
+            Cancel
+          </button>
+          <button onClick={handleSubmit} disabled={busy} className="btn-primary text-xs">
+            {busy ? 'Saving…' : isEdit ? 'Replace' : 'Save'}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function DeleteConfirmDialog({
+  secretKey,
+  onCancel,
+  onConfirm,
+}: {
+  secretKey: string | null;
+  onCancel: () => void;
+  onConfirm: () => Promise<void>;
+}) {
+  const [busy, setBusy] = useState(false);
+  if (!secretKey) return null;
+
+  const handleConfirm = async () => {
+    setBusy(true);
+    try {
+      await onConfirm();
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm">
+      <div className="card w-full max-w-md mx-4 p-6 space-y-4">
+        <div>
+          <h3 className="font-heading text-lg text-white tracking-wide">Delete secret?</h3>
+          <p className="text-xs text-theme-muted font-body mt-1">
+            This will permanently remove <span className="font-mono text-accent-red">{secretKey}</span> from
+            the database. Any code that depends on it will start failing immediately.
+          </p>
+        </div>
+        <div className="flex items-center justify-end gap-2 pt-2">
+          <button onClick={onCancel} disabled={busy} className="btn-ghost text-xs">
+            Cancel
+          </button>
+          <button onClick={handleConfirm} disabled={busy} className="btn-danger text-xs">
+            {busy ? 'Deleting…' : 'Delete'}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function SecretsTab() {
+  const [keys, setKeys] = useState<string[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [dialog, setDialog] = useState<SecretDialogMode>({ type: 'closed' });
+
+  const refresh = useCallback(async () => {
+    setLoading(true);
+    setLoadError(null);
+    try {
+      const list = await secretsApi.list();
+      setKeys((list ?? []).slice().sort((a, b) => a.localeCompare(b)));
+    } catch (err) {
+      setLoadError((err as Error).message ?? String(err));
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => { void refresh(); }, [refresh]);
+
+  const handleSubmit = useCallback(async (key: string, value: string) => {
+    if (dialog.type === 'edit') {
+      await secretsApi.update(key, value);
+    } else {
+      await secretsApi.create(key, value);
+    }
+    await refresh();
+  }, [dialog, refresh]);
+
+  const handleDelete = useCallback(async () => {
+    if (dialog.type !== 'delete') return;
+    await secretsApi.delete(dialog.key);
+    setDialog({ type: 'closed' });
+    await refresh();
+  }, [dialog, refresh]);
+
   return (
     <div className="space-y-6">
-      <div>
-        <h1 className="font-heading text-xl text-white tracking-wider">Secrets</h1>
-        <p className="text-sm text-gray-500 font-body mt-1">Manage API keys and credentials</p>
+      <div className="flex items-start justify-between gap-4">
+        <div>
+          <h1 className="font-heading text-xl text-white tracking-wider">Secrets</h1>
+          <p className="text-sm text-theme-muted font-body mt-1">
+            API keys and credentials used by chat tools, workflows, and integrations.
+          </p>
+        </div>
+        <button onClick={() => setDialog({ type: 'create' })} className="btn-primary flex items-center gap-2 text-xs shrink-0">
+          <Plus className="w-3.5 h-3.5" />
+          Add Secret
+        </button>
       </div>
-      <div className="card p-6">
-        <p className="text-xs text-gray-500 font-body">
-          Secrets are stored securely in the database and used by workflows and chat tools.
-          API keys for MCP servers are managed in the MCP Servers tab.
-        </p>
+
+      <div className="card p-4 flex items-start gap-3 border border-accent-blue/20 bg-accent-blue/5">
+        <Lock className="w-4 h-4 text-accent-blue mt-0.5 shrink-0" />
+        <div className="text-xs text-theme-secondary font-body leading-relaxed">
+          Secrets are encrypted at rest with AES-256-GCM. Saved values are never displayed in this UI or
+          returned by the API — to update a secret, you must enter the new value. The master key lives
+          outside the database (in <span className="font-mono text-theme-primary">FLOWFORGE_MASTER_KEY</span>),
+          so even direct database access only reveals ciphertext.
+        </div>
       </div>
+
+      {loadError && (
+        <div className="flex items-start gap-2 px-3 py-2 rounded-md border border-red-500/30 bg-red-500/10 text-xs text-red-400 font-body">
+          <AlertCircle className="w-3.5 h-3.5 mt-0.5 shrink-0" />
+          <span>Failed to load secrets: {loadError}</span>
+        </div>
+      )}
+
+      <div className="card overflow-hidden">
+        {loading ? (
+          <div className="p-6 text-xs text-theme-muted font-mono text-center">Loading…</div>
+        ) : keys.length === 0 ? (
+          <div className="p-8 text-center space-y-2">
+            <Key className="w-8 h-8 text-theme-muted/50 mx-auto" />
+            <p className="text-sm text-theme-muted font-body">No secrets stored yet</p>
+            <p className="text-xs text-theme-muted/70 font-body">
+              Click "Add Secret" to store an API key like <span className="font-mono">SLACK_BOT_TOKEN</span>.
+            </p>
+          </div>
+        ) : (
+          <div className="divide-y divide-border/30">
+            {keys.map((key) => (
+              <div key={key} className="flex items-center justify-between px-4 py-3 hover:bg-surface-100/30 transition-colors">
+                <div className="flex items-center gap-3 min-w-0">
+                  <div className="w-8 h-8 rounded-md bg-accent-blue/10 border border-accent-blue/20 flex items-center justify-center shrink-0">
+                    <Key className="w-3.5 h-3.5 text-accent-blue" />
+                  </div>
+                  <div className="min-w-0">
+                    <div className="text-sm font-mono text-white truncate">{key}</div>
+                    <div className="text-[10px] font-mono text-theme-muted">••••••••••••••••</div>
+                  </div>
+                </div>
+                <div className="flex items-center gap-1 shrink-0">
+                  <button
+                    onClick={() => setDialog({ type: 'edit', key })}
+                    title="Replace value"
+                    className="w-7 h-7 flex items-center justify-center rounded-md text-gray-500 hover:text-accent-blue hover:bg-accent-blue/10 transition-colors"
+                  >
+                    <Pencil className="w-3.5 h-3.5" />
+                  </button>
+                  <button
+                    onClick={() => setDialog({ type: 'delete', key })}
+                    title="Delete secret"
+                    className="w-7 h-7 flex items-center justify-center rounded-md text-gray-500 hover:text-red-400 hover:bg-red-500/10 transition-colors"
+                  >
+                    <Trash2 className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      <SecretDialog
+        mode={dialog}
+        existingKeys={keys}
+        onClose={() => setDialog({ type: 'closed' })}
+        onSubmit={handleSubmit}
+      />
+      <DeleteConfirmDialog
+        secretKey={dialog.type === 'delete' ? dialog.key : null}
+        onCancel={() => setDialog({ type: 'closed' })}
+        onConfirm={handleDelete}
+      />
     </div>
   );
 }

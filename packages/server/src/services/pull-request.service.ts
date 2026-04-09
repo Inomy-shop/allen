@@ -6,6 +6,7 @@
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import type { Db, ObjectId } from 'mongodb';
+import { buildGhEnv } from './github-auth.js';
 
 const exec = promisify(execFile);
 
@@ -55,7 +56,8 @@ export class PullRequestService {
   }
 
   async syncFromGitHub(repoPath: string, repoId: string, repoName: string): Promise<{ synced: number; total: number }> {
-    // Use gh CLI to list PRs
+    // Use gh CLI to list PRs (auth via stored secret if present, else local gh auth)
+    const ghEnv = await buildGhEnv(this.db);
     let prList: any[];
     try {
       const { stdout } = await exec('gh', [
@@ -63,7 +65,7 @@ export class PullRequestService {
         'number,title,body,headRefName,baseRefName,state,author,url,additions,deletions,changedFiles,labels,createdAt,updatedAt,mergedAt',
         '--limit', '50',
         '--state', 'all',
-      ], { cwd: repoPath });
+      ], { cwd: repoPath, env: ghEnv });
       prList = JSON.parse(stdout);
     } catch (err: any) {
       throw new Error(`Failed to fetch PRs: ${err.message}`);
@@ -128,17 +130,18 @@ export class PullRequestService {
     title: string,
     body: string,
   ): Promise<PullRequest> {
-    // Push first
+    // Push first (uses git's own credential helper, not gh)
     await exec('git', ['push', '-u', 'origin', branch], { cwd: repoPath });
 
-    // Create via gh CLI
+    // Create via gh CLI (auth via stored secret if present, else local gh auth)
+    const ghEnv = await buildGhEnv(this.db);
     const { stdout: createOut } = await exec('gh', [
       'pr', 'create',
       '--title', title,
       '--body', body,
       '--base', baseBranch,
       '--head', branch,
-    ], { cwd: repoPath });
+    ], { cwd: repoPath, env: ghEnv });
 
     // createOut is the PR URL, e.g. "https://github.com/user/repo/pull/42\n"
     const prUrl = createOut.trim();
@@ -147,7 +150,7 @@ export class PullRequestService {
     const { stdout: viewOut } = await exec('gh', [
       'pr', 'view', branch,
       '--json', 'number,url,additions,deletions,changedFiles',
-    ], { cwd: repoPath });
+    ], { cwd: repoPath, env: ghEnv });
 
     const result = JSON.parse(viewOut);
     if (!result.url) result.url = prUrl;

@@ -19,6 +19,8 @@ interface ChatInputProps {
   onCancel?: () => void;
   streaming: boolean;
   disabled?: boolean;
+  /** When set, shows a banner above the input explaining why it's disabled (e.g. Slack-managed sessions). */
+  disabledReason?: string;
   providers?: ProviderInfo[];
   selectedProvider?: string;
   selectedModel?: string;
@@ -29,12 +31,10 @@ interface ChatInputProps {
 const PROVIDER_COLORS: Record<string, string> = {
   codex: 'text-accent-green',
   'claude-cli': 'text-accent-blue',
-  gemini: 'text-accent-yellow',
-  'anthropic-api': 'text-accent-purple',
 };
 
 const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function ChatInput(
-  { onSend, onCancel, streaming, disabled, providers, selectedProvider, selectedModel, modelLocked, onProviderChange },
+  { onSend, onCancel, streaming, disabled, disabledReason, providers, selectedProvider, selectedModel, modelLocked, onProviderChange },
   ref,
 ) {
   const [value, setValue] = useState('');
@@ -117,6 +117,12 @@ const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function ChatInput
   return (
     <div className="relative border-t border-border/50 bg-surface-50 p-3">
       <MentionAutocomplete query={mentionQuery} visible={mentionVisible} onSelect={handleMentionSelect} onDismiss={() => setMentionVisible(false)} />
+
+      {disabled && disabledReason && (
+        <div className="mb-2 px-3 py-2 rounded-md border border-border/30 bg-surface-100/50 text-[11px] font-mono text-gray-400">
+          {disabledReason}
+        </div>
+      )}
 
       {/* Input container with model selector inside */}
       <div className="relative bg-surface-200/50 border border-border/30 rounded-lg focus-within:border-accent-blue/50 transition-colors">

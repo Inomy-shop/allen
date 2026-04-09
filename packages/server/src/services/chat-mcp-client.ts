@@ -1,13 +1,13 @@
 /**
- * MCP Client for non-Claude-CLI providers.
+ * MCP Client for the Codex CLI provider.
  * Spawns MCP server processes, discovers tools, and executes tool calls.
- * Used by Codex, Gemini, and Anthropic API providers.
+ * (Claude CLI handles its own MCP wiring via the @anthropic-ai/claude-code SDK.)
  */
 
 import { spawn, type ChildProcess } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import type { Db } from 'mongodb';
-import { McpService, type McpServerRecord } from './mcp.service.js';
+import { McpService, type McpServerRecord, resolveEnvSecrets, resolveArgSecrets } from './mcp.service.js';
 
 // ── Types ──
 
@@ -70,7 +70,7 @@ function handleStdout(conn: McpConnection, data: string): void {
 
 // ── Connection Management ──
 
-async function connectServer(server: McpServerRecord): Promise<McpConnection> {
+async function connectServer(server: McpServerRecord, db: Db): Promise<McpConnection> {
   // Check if already connected
   const existing = connections.get(server.name);
   if (existing && !existing.process.killed) return existing;
@@ -79,8 +79,15 @@ async function connectServer(server: McpServerRecord): Promise<McpConnection> {
     throw new Error(`MCP client only supports stdio servers, got: ${server.type}`);
   }
 
-  const proc = spawn(server.command!, server.args ?? [], {
-    env: { ...process.env, ...(server.env ?? {}) },
+  // Resolve any @secret: references in both env and args from the encrypted
+  // secrets store before passing them to the spawned process.
+  const [resolvedEnv, resolvedArgs] = await Promise.all([
+    resolveEnvSecrets(server.env, db),
+    resolveArgSecrets(server.args, db),
+  ]);
+
+  const proc = spawn(server.command!, resolvedArgs, {
+    env: { ...process.env, ...resolvedEnv },
     stdio: ['pipe', 'pipe', 'pipe'],
   });
 
@@ -139,7 +146,7 @@ export async function loadMcpTools(db: Db): Promise<McpTool[]> {
   const allTools: McpTool[] = [];
   for (const server of servers) {
     try {
-      const conn = await connectServer(server);
+      const conn = await connectServer(server, db);
       allTools.push(...conn.tools);
     } catch (err) {
       console.error(`\x1b[31m[mcp]\x1b[0m Failed to connect to ${server.name}:`, (err as Error).message);
@@ -187,42 +194,6 @@ export async function executeMcpTool(
   } catch (err) {
     return { error: `MCP tool ${fullName} failed: ${(err as Error).message}` };
   }
-}
-
-/**
- * Convert MCP tools to OpenAI function calling format.
- */
-export function mcpToolsToOpenAI(tools: McpTool[]): Array<{ type: 'function'; function: { name: string; description: string; parameters: Record<string, unknown> } }> {
-  return tools.map(t => ({
-    type: 'function' as const,
-    function: {
-      name: t.fullName,
-      description: `[${t.serverName}] ${t.description}`,
-      parameters: t.inputSchema,
-    },
-  }));
-}
-
-/**
- * Convert MCP tools to Anthropic tool format.
- */
-export function mcpToolsToAnthropic(tools: McpTool[]): Array<{ name: string; description: string; input_schema: Record<string, unknown> }> {
-  return tools.map(t => ({
-    name: t.fullName,
-    description: `[${t.serverName}] ${t.description}`,
-    input_schema: t.inputSchema,
-  }));
-}
-
-/**
- * Convert MCP tools to Gemini function declaration format.
- */
-export function mcpToolsToGemini(tools: McpTool[]): Array<{ name: string; description: string; parameters: Record<string, unknown> }> {
-  return tools.map(t => ({
-    name: t.fullName,
-    description: `[${t.serverName}] ${t.description}`,
-    parameters: t.inputSchema,
-  }));
 }
 
 /**

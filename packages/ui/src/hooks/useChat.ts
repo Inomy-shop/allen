@@ -12,6 +12,14 @@ export interface ChatSession {
   model?: string;
   llmSessionId?: string;
   activeAgent?: string | null;
+  /** Where the session was created from. Slack-sourced sessions are read-only in the UI. */
+  source?: 'ui' | 'slack';
+  /** Slack thread metadata for sessions sourced from Slack. */
+  slackContext?: {
+    channelId: string;
+    threadTs: string;
+    teamId: string;
+  };
 }
 
 export interface ToolCallRecord {

@@ -45,8 +45,6 @@ const SETTINGS_TABS = [
 const PROV: Record<string, { label: string; color: string }> = {
   codex: { label: 'Codex', color: 'text-accent-green' },
   'claude-cli': { label: 'Claude', color: 'text-accent-blue' },
-  gemini: { label: 'Gemini', color: 'text-accent-yellow' },
-  'anthropic-api': { label: 'API', color: 'text-accent-purple' },
 };
 
 function timeAgo(dateStr: string): string {

@@ -1879,20 +1879,24 @@ const createPullRequest: ChatTool = {
         }
       }
 
-      // Push
+      // Push (git uses its own credential helper, not gh)
       await exec('git', ['push', '-u', 'origin', ws.branch as string], { cwd: ws.worktreePath as string });
+
+      // Build gh env with token from secrets store (falls back to local gh auth)
+      const { buildGhEnv } = await import('./github-auth.js');
+      const ghEnv = await buildGhEnv(db);
 
       // Create PR
       await exec('gh', [
         'pr', 'create', '--title', title, '--body', body,
         '--base', ws.baseBranch as string, '--head', ws.branch as string,
-      ], { cwd: ws.worktreePath as string });
+      ], { cwd: ws.worktreePath as string, env: ghEnv });
 
       // Fetch PR details
       const { stdout: viewOut } = await exec('gh', [
         'pr', 'view', ws.branch as string,
         '--json', 'number,url',
-      ], { cwd: ws.worktreePath as string });
+      ], { cwd: ws.worktreePath as string, env: ghEnv });
       const result = JSON.parse(viewOut);
 
       // Save to pull_requests collection

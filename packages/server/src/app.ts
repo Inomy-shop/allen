@@ -22,18 +22,27 @@ import { mcpRoutes } from './routes/mcp.routes.js';
 import { alertRoutes } from './routes/alert.routes.js';
 import { workspaceRoutes } from './routes/workspace.routes.js';
 import { pullRequestRoutes } from './routes/pull-request.routes.js';
+import { slackRoutes } from './routes/slack.routes.js';
 import { startTerminalWebSocketServer } from './services/workspace-terminal.js';
 import { createWorkspaceProxy } from './services/workspace-proxy.js';
 import { startFileWatchServer } from './services/workspace-watcher.js';
 import { WorkspaceManager } from './services/workspace.service.js';
 import { seedDefaultAgents, seedDefaultWorkflows } from './seed.js';
 import { setStreamDb } from './services/stream.service.js';
+import { SecretService } from './services/secret.service.js';
+import { McpService } from './services/mcp.service.js';
+import { startMcpHealthMonitor } from './services/mcp-health.service.js';
 
 const PORT = parseInt(process.env.PORT ?? '4000', 10);
 
 async function main(): Promise<void> {
   const db = await connectDB();
   await ensureIndexes(db);
+  await new SecretService(db).migrateLegacyPlaintext();
+  const mcpSvc = new McpService(db);
+  await mcpSvc.migrateLegacyEnvLiterals();
+  await mcpSvc.migrateGhCliServersToSecret();
+  await mcpSvc.syncPresetDescriptions();
   await seedDefaultAgents(db);
   await seedDefaultWorkflows(db);
   setStreamDb(db);
@@ -41,6 +50,11 @@ async function main(): Promise<void> {
   const app = express();
 
   app.use(cors());
+
+  // Slack webhook needs the raw body for HMAC signature verification.
+  // Mount BEFORE express.json() so the body isn't pre-parsed.
+  app.use('/api/slack', express.raw({ type: 'application/json', limit: '5mb' }), slackRoutes(db));
+
   app.use(express.json({ limit: '10mb' }));
 
   // Health check
@@ -70,6 +84,9 @@ async function main(): Promise<void> {
   app.listen(PORT, () => {
     console.log(`FlowForge server running on http://localhost:${PORT}`);
   });
+
+  // Start the MCP server health monitor (5-min background loop, alerts on outages)
+  startMcpHealthMonitor(db);
 
   // Start file watch WebSocket server on port 4025
   startFileWatchServer();

@@ -13,8 +13,6 @@ import { chat as chatApi, mcp as mcpApi, learnings as learningsApi, agents as ag
 const PROVIDER_DISPLAY: Record<string, { label: string; color: string }> = {
   codex: { label: 'Codex', color: 'text-accent-green' },
   'claude-cli': { label: 'Claude CLI', color: 'text-accent-blue' },
-  gemini: { label: 'Gemini', color: 'text-accent-yellow' },
-  'anthropic-api': { label: 'Claude API', color: 'text-accent-purple' },
 };
 
 export default function ChatPage() {
@@ -211,7 +209,9 @@ export default function ChatPage() {
           );
         })()}
         <ChatInput
-          ref={chatInputRef} onSend={handleSend} onCancel={cancelStream} streaming={streaming} disabled={false}
+          ref={chatInputRef} onSend={handleSend} onCancel={cancelStream} streaming={streaming}
+          disabled={activeSession?.source === 'slack'}
+          disabledReason={activeSession?.source === 'slack' ? 'This conversation is managed via Slack. Reply in the Slack thread to continue.' : undefined}
           providers={providers}
           selectedProvider={activeSession?.provider ?? selectedProvider}
           selectedModel={activeSession?.model ?? selectedModel}

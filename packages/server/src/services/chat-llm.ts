@@ -11,9 +11,6 @@ import {
   type ProviderCallbacks,
   PROVIDERS,
   runCodexCLI,
-  runOpenAI,
-  runAnthropicAPI,
-  runGemini,
 } from './chat-providers.js';
 import { loadExternalMcpServers } from './chat-mcp.js';
 
@@ -219,12 +216,6 @@ export async function runChatLLM(db: Db, options: ChatLLMOptions): Promise<ChatL
       break;
     case 'claude-cli':
       result = await runClaudeCLI(db, options.systemPrompt, options.messages, model, callbacks, options.resumeSessionId, options.skipTools, options.cwd);
-      break;
-    case 'gemini':
-      result = await runGemini(db, options.systemPrompt, options.messages, model, callbacks, options.skipTools);
-      break;
-    case 'anthropic-api':
-      result = await runAnthropicAPI(db, options.systemPrompt, options.messages, model, callbacks, options.skipTools);
       break;
     default:
       throw new Error(`Unknown provider: ${provider}`);

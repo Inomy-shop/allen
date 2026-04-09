@@ -57,5 +57,19 @@ export async function ensureIndexes(db: Db): Promise<void> {
   await db.collection('agent_conversations').createIndex({ fromAgent: 1, toAgent: 1 });
   await db.collection('agent_conversations').createIndex({ status: 1 });
 
+  // Slack Thread Mappings (Slack thread → FlowForge chat session)
+  await db.collection('slack_thread_mappings').createIndex(
+    { slackTeamId: 1, slackChannelId: 1, slackThreadTs: 1 },
+    { unique: true },
+  );
+  await db.collection('slack_thread_mappings').createIndex({ chatSessionId: 1 });
+
+  // Slack Processed Events (idempotency for Slack event retries)
+  await db.collection('slack_processed_events').createIndex({ eventId: 1 }, { unique: true });
+  await db.collection('slack_processed_events').createIndex(
+    { processedAt: 1 },
+    { expireAfterSeconds: 86400 }, // 24h TTL
+  );
+
   console.log('Database indexes ensured');
 }
