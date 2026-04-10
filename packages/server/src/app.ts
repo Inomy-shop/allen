@@ -34,6 +34,7 @@ import { SecretService } from './services/secret.service.js';
 import { McpService } from './services/mcp.service.js';
 import { startMcpHealthMonitor } from './services/mcp-health.service.js';
 import { TeamSeedService } from './services/team-seed.service.js';
+import { OrgSeedService } from './services/org-seed.js';
 import { CronService } from './services/cron.service.js';
 import { seedCronJobs } from './services/cron-seed.service.js';
 import { createRepoScanIfChangedAction } from './services/repo-context-scanner.service.js';
@@ -49,13 +50,15 @@ async function main(): Promise<void> {
   await mcpSvc.migrateLegacyEnvLiterals();
   await mcpSvc.migrateGhCliServersToSecret();
   await mcpSvc.syncPresetDescriptions();
-  await seedDefaultAgents(db);
-  // Phase 1: build the org chart — seed teams + meta agents, backfill memberships.
-  // ORDER DEPENDENCY: must run AFTER seedDefaultAgents() because migrate()
-  // backfills teamName/teamRole onto the seeded default agents and sets the
-  // default agents as team leads. Reordering will cause "lead agent not found"
-  // warnings on first startup.
-  await new TeamSeedService(db).migrate();
+  // Build the full 10-team org chart. Runs BEFORE legacy seeds to avoid
+  // duplicate key conflicts on the teamName_lead_unique index.
+  await new OrgSeedService(db).seed();
+  // Legacy seeds disabled — the new OrgSeedService replaces both.
+  // seedDefaultAgents and TeamSeedService.migrate are no longer needed since
+  // org-seed creates ALL teams and agents from scratch with the new structure.
+  // Keeping the imports for now in case we need to revert.
+  // await seedDefaultAgents(db);
+  // await new TeamSeedService(db).migrate();
   await seedDefaultWorkflows(db);
   await seedCronJobs(db);
   setStreamDb(db);

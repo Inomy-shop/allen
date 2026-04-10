@@ -54,8 +54,15 @@ export async function seedDefaultAgents(db: Db): Promise<void> {
  */
 export async function seedDefaultWorkflows(db: Db): Promise<void> {
   const col = db.collection('workflows');
-  const agents = loadAgents();
+  const yamlAgents = loadAgents();
   const builtInNames = Object.keys(getBuiltIns());
+
+  // Merge DB agents (source of truth) with YAML agents for validation
+  const dbAgents = await db.collection('agents').find({}, { projection: { name: 1, system: 1 } }).toArray();
+  const agents: Record<string, any> = { ...yamlAgents };
+  for (const a of dbAgents) {
+    agents[a.name as string] = { system: (a.system as string) ?? '' };
+  }
 
   // Locate the engine's workflows directory
   const possiblePaths = [

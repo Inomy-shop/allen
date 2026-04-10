@@ -342,7 +342,7 @@ export default function ExecutionDetailPage() {
     prevStatusRef.current = status;
   }, [execution?.status, execution?.failedNode, execution?.completedNodes, latestInputEvent, nodeStates]);
 
-  const { size: rightWidth, handleMouseDown: rightResizeStart } = useResizable({ direction: 'horizontal', initialSize: 384, minSize: 280, maxSize: 600 });
+  const { size: rightWidth, handleMouseDown: rightResizeStart } = useResizable({ direction: 'horizontal', initialSize: 40, minSize: 20, maxSize: 60, unit: 'percent' });
   const { size: bottomHeight, handleMouseDown: bottomResizeStart } = useResizable({ direction: 'vertical', initialSize: 200, minSize: 120, maxSize: 500 });
   const { size: logsPct, handleMouseDown: logsResizeStart } = useResizable({ direction: 'horizontal', initialSize: 60, minSize: 25, maxSize: 85, side: 'start', unit: 'percent' });
 
@@ -536,7 +536,7 @@ export default function ExecutionDetailPage() {
           {/* Right: Node detail + inline human input — resizable */}
           <div
             className="overflow-hidden shrink-0 bg-surface border-l-2 border-border/50 hover:border-accent-blue/50 transition-colors relative"
-            style={{ width: rightWidth }}
+            style={{ width: `${rightWidth}%` }}
           >
             {/* Invisible resize grab zone on the left edge */}
             <div

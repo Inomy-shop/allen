@@ -10,9 +10,21 @@ import {
   type ExecutionState,
 } from '@flowforge/engine';
 import { createSSEEmitter } from './stream.service.js';
+import type { AgentDef } from '@flowforge/engine';
 
 // Track running engines by executionId
 const runningEngines = new Map<string, FlowForgeEngine>();
+
+/** Load agents from YAML + database (DB is source of truth, YAML is fallback). */
+async function loadAllAgents(db: Db): Promise<Record<string, AgentDef>> {
+  const yamlAgents = loadAgents();
+  const dbAgents = await db.collection('agents').find({}, { projection: { name: 1, system: 1, model: 1, provider: 1, tools: 1, type: 1 } }).toArray();
+  const merged: Record<string, AgentDef> = { ...yamlAgents };
+  for (const a of dbAgents) {
+    merged[a.name as string] = { system: (a.system as string) ?? '', model: a.model as string, provider: a.provider as any, tools: a.tools as string[] };
+  }
+  return merged;
+}
 
 export class ExecutionService {
   private db: Db;
@@ -89,7 +101,7 @@ export class ExecutionService {
 
     const config: EngineConfig = {
       db: this.db,
-      agents: loadAgents(),
+      agents: await loadAllAgents(this.db),
       builtIns: getBuiltIns(),
       workflows,
       emitter,
@@ -234,7 +246,7 @@ export class ExecutionService {
 
     const config: EngineConfig = {
       db: this.db,
-      agents: loadAgents(),
+      agents: await loadAllAgents(this.db),
       builtIns: getBuiltIns(),
       workflows,
       emitter,
