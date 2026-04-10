@@ -73,6 +73,20 @@ export const agents = {
     request<void>(`/agents/${name}`, { method: 'DELETE' }),
 };
 
+// ── Teams ──────────────────────────────────────────────────────────────────
+export const teams = {
+  list: () => request<any[]>('/teams'),
+  get: (name: string) => request<any>(`/teams/${name}`),
+  members: (name: string) => request<any[]>(`/teams/${name}/members`),
+  blueprint: (name: string) => request<any>(`/teams/${name}/blueprint`),
+  create: (team: any) =>
+    request<any>('/teams', { method: 'POST', body: JSON.stringify(team) }),
+  update: (name: string, team: any) =>
+    request<any>(`/teams/${name}`, { method: 'PUT', body: JSON.stringify(team) }),
+  delete: (name: string) =>
+    request<void>(`/teams/${name}`, { method: 'DELETE' }),
+};
+
 // ── Secrets ────────────────────────────────────────────────────────────────
 export const secrets = {
   list: () => request<string[]>('/secrets'),
@@ -181,4 +195,28 @@ export const learnings = {
     request<any>(`/learnings/evolve/${agentName}/preview`),
   evolve: (agentName: string, newPrompt: string) =>
     request<any>(`/learnings/evolve/${agentName}`, { method: 'POST', body: JSON.stringify({ newPrompt }) }),
+};
+
+// ── Cron Jobs ──────────────────────────────────────────────────────────────
+export const crons = {
+  list: () => request<any[]>('/crons'),
+  get: (id: string) => request<any>(`/crons/${id}`),
+  create: (body: any) =>
+    request<any>('/crons', { method: 'POST', body: JSON.stringify(body) }),
+  update: (id: string, body: any) =>
+    request<any>(`/crons/${id}`, { method: 'PUT', body: JSON.stringify(body) }),
+  delete: (id: string) =>
+    request<void>(`/crons/${id}`, { method: 'DELETE' }),
+  enable: (id: string) =>
+    request<any>(`/crons/${id}/enable`, { method: 'POST' }),
+  disable: (id: string) =>
+    request<any>(`/crons/${id}/disable`, { method: 'POST' }),
+  runNow: (id: string) =>
+    request<any>(`/crons/${id}/run-now`, { method: 'POST' }),
+  runs: (id: string, limit = 50) =>
+    request<any[]>(`/crons/${id}/runs?limit=${limit}`),
+  previewSchedule: (cron: string, n = 5, timezone = 'UTC') =>
+    request<any>(`/crons/preview-schedule?cron=${encodeURIComponent(cron)}&n=${n}&timezone=${encodeURIComponent(timezone)}`),
+  systemActions: () =>
+    request<any[]>('/crons/system-actions'),
 };

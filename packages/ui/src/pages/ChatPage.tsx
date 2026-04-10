@@ -1,5 +1,5 @@
 import { useEffect, useState, useRef } from 'react';
-import { useParams, useNavigate } from 'react-router-dom';
+import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
 import { useChat } from '../hooks/useChat';
 import ChatInput from '../components/chat/ChatInput';
 import ChatMessageList from '../components/chat/ChatMessageList';
@@ -13,13 +13,12 @@ import { chat as chatApi, mcp as mcpApi, learnings as learningsApi, agents as ag
 const PROVIDER_DISPLAY: Record<string, { label: string; color: string }> = {
   codex: { label: 'Codex', color: 'text-accent-green' },
   'claude-cli': { label: 'Claude CLI', color: 'text-accent-blue' },
-  gemini: { label: 'Gemini', color: 'text-accent-yellow' },
-  'anthropic-api': { label: 'Claude API', color: 'text-accent-purple' },
 };
 
 export default function ChatPage() {
   const { sessionId: urlSessionId } = useParams<{ sessionId?: string }>();
   const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
   const [cmdPaletteOpen, setCmdPaletteOpen] = useState(false);
   const [logsOpen, setLogsOpen] = useState(false);
   const [mcpCount, setMcpCount] = useState<{ enabled: number; connected: number }>({ enabled: 0, connected: 0 });
@@ -87,6 +86,30 @@ export default function ChatPage() {
     }
   }, [activeSessionId]);
 
+  // Deep-link support: ?agent=NAME&prompt=PREFILL
+  // Used by the "Build Team with AI" / "Add Agent with AI" buttons in TeamManagerPage.
+  // We preselect the agent and prefill the input, then strip the query params
+  // so a refresh doesn't re-apply them. The user must click Send themselves
+  // — no auto-submit, so they can review/edit the proposed prompt first.
+  useEffect(() => {
+    const wantedAgent = searchParams.get('agent');
+    const wantedPrompt = searchParams.get('prompt');
+    if (!wantedAgent && !wantedPrompt) return;
+
+    if (wantedAgent) setSelectedAgent(wantedAgent);
+    if (wantedPrompt) {
+      // setValue is exposed by ChatInput's forwardRef. Defer to next tick so
+      // the input is mounted.
+      setTimeout(() => chatInputRef.current?.setValue(wantedPrompt), 0);
+    }
+
+    // Strip the params so refresh doesn't re-trigger this effect
+    const next = new URLSearchParams(searchParams);
+    next.delete('agent');
+    next.delete('prompt');
+    setSearchParams(next, { replace: true });
+  }, [searchParams]);
+
   async function handleSend(content: string) {
     if (!activeSessionId) {
       const session = await createSession(selectedProvider, selectedModel || undefined);
@@ -121,11 +144,11 @@ export default function ChatPage() {
       <div className="px-4 py-2.5 border-b border-border/50 flex items-center justify-between bg-surface-50/50 shrink-0">
         <div className="flex items-center gap-2">
           <MessageSquare className="w-4 h-4 text-accent-blue" />
-          <span className="font-heading text-sm font-bold text-white tracking-wider">
+          <span className="font-heading text-sm font-bold text-theme-primary tracking-wider">
             {activeSessionId ? activeSession?.title ?? 'Chat' : 'FlowForge Chat'}
           </span>
           {activeSessionId && activeProvider && (
-            <span className={`text-[10px] font-mono px-1.5 py-0.5 rounded bg-surface-200/40 ${PROVIDER_DISPLAY[activeProvider]?.color ?? 'text-gray-500'}`}>
+            <span className={`text-[10px] font-mono px-1.5 py-0.5 rounded bg-surface-200/40 ${PROVIDER_DISPLAY[activeProvider]?.color ?? 'text-theme-muted'}`}>
               {PROVIDER_DISPLAY[activeProvider]?.label}
             </span>
           )}
@@ -140,20 +163,20 @@ export default function ChatPage() {
         </div>
         <div className="flex items-center gap-2">
           {mcpCount.enabled > 0 && (
-            <span className="text-[10px] font-mono flex items-center gap-1 text-gray-600" title={`${mcpCount.connected}/${mcpCount.enabled} MCP`}>
+            <span className="text-[10px] font-mono flex items-center gap-1 text-theme-subtle" title={`${mcpCount.connected}/${mcpCount.enabled} MCP`}>
               <Server className="w-3 h-3" />
               <span className={mcpCount.connected > 0 ? 'text-accent-green' : ''}>{mcpCount.connected}/{mcpCount.enabled}</span>
             </span>
           )}
           {activeSessionId && activeSession?.totalCostUsd != null && (
-            <span className="text-[10px] text-gray-600 font-mono">${activeSession.totalCostUsd.toFixed(2)}</span>
+            <span className="text-[10px] text-theme-subtle font-mono">${activeSession.totalCostUsd.toFixed(2)}</span>
           )}
           {activeSessionId && (
-            <button onClick={() => setLogsOpen(true)} className="p-1.5 rounded-md bg-surface-200/30 hover:bg-surface-200/60 text-gray-500 hover:text-gray-300 transition-all" title="Logs">
+            <button onClick={() => setLogsOpen(true)} className="p-1.5 rounded-md bg-surface-200/30 hover:bg-surface-200/60 text-theme-muted hover:text-theme-secondary transition-all" title="Logs">
               <ScrollText className="w-3.5 h-3.5" />
             </button>
           )}
-          <button onClick={() => setCmdPaletteOpen(true)} className="p-1.5 rounded-md bg-surface-200/30 hover:bg-surface-200/60 text-gray-500 hover:text-gray-300 transition-all" title="Commands">
+          <button onClick={() => setCmdPaletteOpen(true)} className="p-1.5 rounded-md bg-surface-200/30 hover:bg-surface-200/60 text-theme-muted hover:text-theme-secondary transition-all" title="Commands">
             <Command className="w-3.5 h-3.5" />
           </button>
         </div>
@@ -161,12 +184,12 @@ export default function ChatPage() {
 
       {/* Messages */}
       {loadingMessages && messages.length === 0 && !streaming ? (
-        <div className="flex-1 flex items-center justify-center"><div className="text-xs text-gray-600 animate-pulse">Loading...</div></div>
+        <div className="flex-1 flex items-center justify-center"><div className="text-xs text-theme-subtle animate-pulse">Loading...</div></div>
       ) : messages.length === 0 && !activeSessionId && !streaming ? (
         <div className="flex-1 flex flex-col items-center justify-center text-center px-8">
           <MessageSquare className="w-12 h-12 text-accent-blue/20 mb-4" />
-          <h2 className="font-heading text-lg text-white tracking-wider mb-2">FlowForge Chat</h2>
-          <p className="text-sm text-gray-500 font-body max-w-md">
+          <h2 className="font-heading text-lg text-theme-primary tracking-wider mb-2">FlowForge Chat</h2>
+          <p className="text-sm text-theme-muted font-body max-w-md">
             Ask anything about your workflows, repos, and executions. Use <span className="text-accent-blue font-mono">@name</span> to reference resources.
           </p>
         </div>
@@ -181,12 +204,12 @@ export default function ChatPage() {
           const agentLocked = !!activeSession?.activeAgent && (activeSession?.messageCount ?? 0) > 0;
           return (
             <div className="px-3 pt-2 flex items-center gap-1.5 border-t border-border/30">
-              <Users className="w-3 h-3 text-gray-600" />
+              <Users className="w-3 h-3 text-theme-subtle" />
               <button
                 onClick={() => !agentLocked && setSelectedAgent(null)}
                 disabled={agentLocked}
                 className={`text-[10px] font-mono px-2 py-0.5 rounded transition-colors ${
-                  !selectedAgent ? 'bg-accent-blue/10 text-accent-blue border border-accent-blue/20' : agentLocked ? 'text-gray-700 cursor-not-allowed' : 'text-gray-600 hover:text-gray-400'
+                  !selectedAgent ? 'bg-accent-blue/10 text-accent-blue border border-accent-blue/20' : agentLocked ? 'text-theme-subtle cursor-not-allowed' : 'text-theme-subtle hover:text-theme-secondary'
                 }`}
               >
                 Assistant
@@ -200,18 +223,20 @@ export default function ChatPage() {
                   className={`text-[10px] font-mono px-2 py-0.5 rounded transition-colors ${
                     selectedAgent === a.name
                       ? 'bg-accent-cyan/10 text-accent-cyan border border-accent-cyan/20'
-                      : agentLocked ? 'text-gray-700 cursor-not-allowed' : 'text-gray-600 hover:text-gray-400'
+                      : agentLocked ? 'text-theme-subtle cursor-not-allowed' : 'text-theme-subtle hover:text-theme-secondary'
                   }`}
                 >
                   {a.displayName ?? a.name}
                 </button>
               ))}
-              {agentLocked && <span className="text-[9px] text-gray-700 font-mono ml-1">locked</span>}
+              {agentLocked && <span className="text-[9px] text-theme-subtle font-mono ml-1">locked</span>}
             </div>
           );
         })()}
         <ChatInput
-          ref={chatInputRef} onSend={handleSend} onCancel={cancelStream} streaming={streaming} disabled={false}
+          ref={chatInputRef} onSend={handleSend} onCancel={cancelStream} streaming={streaming}
+          disabled={activeSession?.source === 'slack'}
+          disabledReason={activeSession?.source === 'slack' ? 'This conversation is managed via Slack. Reply in the Slack thread to continue.' : undefined}
           providers={providers}
           selectedProvider={activeSession?.provider ?? selectedProvider}
           selectedModel={activeSession?.model ?? selectedModel}

@@ -24,16 +24,16 @@ export default function DeleteConfirmDialog({ open, resourceType, resourceName, 
             <AlertTriangle className="w-5 h-5 text-accent-red" />
           </div>
           <div className="flex-1">
-            <h2 className="font-heading text-sm font-bold text-white tracking-wider uppercase">Delete {resourceType}</h2>
-            <p className="text-xs text-gray-400 font-body mt-0.5">This action cannot be undone</p>
+            <h2 className="font-heading text-sm font-bold text-theme-primary tracking-wider uppercase">Delete {resourceType}</h2>
+            <p className="text-xs text-theme-secondary font-body mt-0.5">This action cannot be undone</p>
           </div>
-          <button title="Close" onClick={onCancel} className="text-gray-400 hover:text-white shrink-0">
+          <button title="Close" onClick={onCancel} className="text-theme-secondary hover:text-theme-primary shrink-0">
             <X className="w-4 h-4" />
           </button>
         </div>
 
         <div className="px-5 py-4">
-          <p className="text-sm text-gray-300 font-body mb-4">
+          <p className="text-sm text-theme-secondary font-body mb-4">
             To confirm, type <span className="font-mono text-accent-red font-semibold">{resourceName}</span> below:
           </p>
           <input

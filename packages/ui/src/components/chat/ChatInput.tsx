@@ -19,6 +19,8 @@ interface ChatInputProps {
   onCancel?: () => void;
   streaming: boolean;
   disabled?: boolean;
+  /** When set, shows a banner above the input explaining why it's disabled (e.g. Slack-managed sessions). */
+  disabledReason?: string;
   providers?: ProviderInfo[];
   selectedProvider?: string;
   selectedModel?: string;
@@ -29,12 +31,10 @@ interface ChatInputProps {
 const PROVIDER_COLORS: Record<string, string> = {
   codex: 'text-accent-green',
   'claude-cli': 'text-accent-blue',
-  gemini: 'text-accent-yellow',
-  'anthropic-api': 'text-accent-purple',
 };
 
 const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function ChatInput(
-  { onSend, onCancel, streaming, disabled, providers, selectedProvider, selectedModel, modelLocked, onProviderChange },
+  { onSend, onCancel, streaming, disabled, disabledReason, providers, selectedProvider, selectedModel, modelLocked, onProviderChange },
   ref,
 ) {
   const [value, setValue] = useState('');
@@ -118,6 +118,12 @@ const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function ChatInput
     <div className="relative border-t border-border/50 bg-surface-50 p-3">
       <MentionAutocomplete query={mentionQuery} visible={mentionVisible} onSelect={handleMentionSelect} onDismiss={() => setMentionVisible(false)} />
 
+      {disabled && disabledReason && (
+        <div className="mb-2 px-3 py-2 rounded-md border border-border/30 bg-surface-100/50 text-[11px] font-mono text-theme-secondary">
+          {disabledReason}
+        </div>
+      )}
+
       {/* Input container with model selector inside */}
       <div className="relative bg-surface-200/50 border border-border/30 rounded-lg focus-within:border-accent-blue/50 transition-colors">
         {/* Textarea */}
@@ -129,7 +135,7 @@ const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function ChatInput
           placeholder="Message FlowForge..."
           disabled={streaming || disabled}
           rows={1}
-          className="w-full resize-none bg-transparent px-3 pt-2.5 pb-10 text-sm text-white placeholder-gray-600 font-body focus:outline-none disabled:opacity-50 disabled:cursor-not-allowed"
+          className="w-full resize-none bg-transparent px-3 pt-2.5 pb-10 text-sm text-theme-primary placeholder-gray-600 font-body focus:outline-none disabled:opacity-50 disabled:cursor-not-allowed"
           style={{ minHeight: '44px', maxHeight: '160px' }}
         />
 
@@ -144,16 +150,16 @@ const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function ChatInput
                 title={modelLocked ? 'Model locked for this conversation' : 'Select model'}
                 className={`flex items-center gap-1 px-2 py-0.5 rounded-md text-[11px] font-mono transition-all ${
                   modelLocked
-                    ? 'text-gray-700 cursor-default'
-                    : 'text-gray-500 hover:text-gray-300 hover:bg-surface-100/50 cursor-pointer'
+                    ? 'text-theme-subtle cursor-default'
+                    : 'text-theme-muted hover:text-theme-secondary hover:bg-surface-100/50 cursor-pointer'
                 }`}
               >
-                <span className={PROVIDER_COLORS[selectedProvider ?? ''] ?? 'text-gray-500'}>
+                <span className={PROVIDER_COLORS[selectedProvider ?? ''] ?? 'text-theme-muted'}>
                   {currentProvider?.label ?? selectedProvider}
                 </span>
-                <span className="text-gray-700">/</span>
+                <span className="text-theme-subtle">/</span>
                 <span>{selectedModel}</span>
-                {!modelLocked && <ChevronDown className="w-2.5 h-2.5 text-gray-600 ml-0.5" />}
+                {!modelLocked && <ChevronDown className="w-2.5 h-2.5 text-theme-subtle ml-0.5" />}
               </button>
             )}
 
@@ -163,14 +169,14 @@ const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function ChatInput
                 {providers?.map(p => (
                   <div key={p.provider}>
                     <div className="px-3 py-1 bg-surface-200/30 border-b border-border/20">
-                      <span className={`text-[10px] font-label uppercase tracking-widest ${PROVIDER_COLORS[p.provider] ?? 'text-gray-500'}`}>{p.label}</span>
+                      <span className={`text-[10px] font-label uppercase tracking-widest ${PROVIDER_COLORS[p.provider] ?? 'text-theme-muted'}`}>{p.label}</span>
                     </div>
                     {p.models.map(m => (
                       <button
                         key={`${p.provider}-${m}`}
                         onClick={() => { onProviderChange?.(p.provider, m); setShowModelPicker(false); }}
                         className={`w-full text-left px-3 py-1.5 text-xs font-mono hover:bg-surface-200/50 transition-colors ${
-                          selectedProvider === p.provider && selectedModel === m ? 'text-accent-blue bg-accent-blue/5' : 'text-gray-400'
+                          selectedProvider === p.provider && selectedModel === m ? 'text-accent-blue bg-accent-blue/5' : 'text-theme-secondary'
                         }`}
                       >
                         {m}
@@ -183,7 +189,7 @@ const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function ChatInput
           </div>
 
           {/* Hint */}
-          <span className="text-[10px] text-gray-700 font-mono hidden sm:inline">shift+enter for new line</span>
+          <span className="text-[10px] text-theme-subtle font-mono hidden sm:inline">shift+enter for new line</span>
 
           {/* Send / Stop button (right side) */}
           {streaming ? (

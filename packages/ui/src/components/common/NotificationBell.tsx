@@ -66,7 +66,7 @@ export default function NotificationBell() {
         ref={buttonRef}
         onClick={() => { setOpen(!open); if (!open) loadAlerts(); }}
         className={`relative p-2 rounded-sm transition-all duration-200 ${
-          open ? 'text-accent-blue bg-accent-blue/10' : 'text-gray-500 hover:text-gray-300 hover:bg-surface-200/40'
+          open ? 'text-accent-blue bg-accent-blue/10' : 'text-theme-muted hover:text-theme-secondary hover:bg-surface-200/40'
         }`}
         title="Notifications"
       >
@@ -92,13 +92,13 @@ export default function NotificationBell() {
             <div className="flex items-center justify-between px-4 py-2.5 border-b border-border/30 bg-surface-50">
               <div className="flex items-center gap-2">
                 <Bell className="w-3.5 h-3.5 text-accent-blue" />
-                <span className="text-xs font-heading text-white tracking-wider">Notifications</span>
+                <span className="text-xs font-heading text-theme-primary tracking-wider">Notifications</span>
                 {unreadCount > 0 && (
                   <span className="text-[9px] font-mono text-accent-blue bg-accent-blue/10 px-1.5 py-0.5 rounded-full">{unreadCount}</span>
                 )}
               </div>
               {unreadCount > 0 && (
-                <button onClick={handleMarkAllRead} className="text-[10px] text-gray-500 hover:text-accent-blue flex items-center gap-1 transition-colors" title="Mark all as read">
+                <button onClick={handleMarkAllRead} className="text-[10px] text-theme-muted hover:text-accent-blue flex items-center gap-1 transition-colors" title="Mark all as read">
                   <CheckCheck className="w-3 h-3" /> Read all
                 </button>
               )}
@@ -108,8 +108,8 @@ export default function NotificationBell() {
             <div className="max-h-80 overflow-y-auto">
               {alertsList.length === 0 && (
                 <div className="px-4 py-8 text-center">
-                  <Bell className="w-6 h-6 text-gray-700 mx-auto mb-2" />
-                  <span className="text-xs text-gray-600 font-body">No notifications</span>
+                  <Bell className="w-6 h-6 text-theme-subtle mx-auto mb-2" />
+                  <span className="text-xs text-theme-subtle font-body">No notifications</span>
                 </div>
               )}
               {alertsList.map(alert => {
@@ -127,10 +127,10 @@ export default function NotificationBell() {
                     </div>
                     <div className="flex-1 min-w-0">
                       <div className="flex items-center gap-2">
-                        <span className="text-xs text-white font-body truncate flex-1">{alert.title}</span>
-                        <span className="text-[9px] text-gray-600 font-mono shrink-0">{timeAgo(alert.createdAt)}</span>
+                        <span className="text-xs text-theme-primary font-body truncate flex-1">{alert.title}</span>
+                        <span className="text-[9px] text-theme-subtle font-mono shrink-0">{timeAgo(alert.createdAt)}</span>
                       </div>
-                      <div className="text-[11px] text-gray-500 font-body mt-0.5 line-clamp-2">{alert.message}</div>
+                      <div className="text-[11px] text-theme-muted font-body mt-0.5 line-clamp-2">{alert.message}</div>
                       {alert.link && (
                         <a href={alert.link} onClick={() => setOpen(false)} className="inline-flex items-center gap-1 text-[10px] text-accent-blue hover:text-accent-blue/80 mt-1.5 transition-colors">
                           <ExternalLink className="w-2.5 h-2.5" /> View details
@@ -139,7 +139,7 @@ export default function NotificationBell() {
                     </div>
                     <button
                       onClick={() => handleDismiss(alert._id)}
-                      className="shrink-0 opacity-0 group-hover:opacity-100 text-gray-600 hover:text-gray-400 transition-all p-0.5"
+                      className="shrink-0 opacity-0 group-hover:opacity-100 text-theme-subtle hover:text-theme-secondary transition-all p-0.5"
                       title="Dismiss"
                     >
                       <X className="w-3 h-3" />

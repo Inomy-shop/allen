@@ -32,6 +32,23 @@ export async function ensureIndexes(db: Db): Promise<void> {
   await db.collection('repos').createIndex({ tags: 1 });
   await db.collection('repos').createIndex({ status: 1, lastUsedAt: -1 });
 
+  // Repo Contexts (deep agent-generated markdown context)
+  // Lookup by repoId is hot — every agent spawn into a registered repo hits this.
+  await db.collection('repo_contexts').createIndex({ repoId: 1 }, { unique: true });
+
+  // Cron Jobs — generic scheduler for agents/workflows/system actions
+  await db.collection('cron_jobs').createIndex({ name: 1 }, { unique: true });
+  // Hot path: every tick queries `enabled: true, nextRunAt <= now`
+  await db.collection('cron_jobs').createIndex({ enabled: 1, nextRunAt: 1 });
+
+  // Cron Runs — per-execution history
+  await db.collection('cron_runs').createIndex({ cronJobId: 1, startedAt: -1 });
+  // 90-day TTL on run history
+  await db.collection('cron_runs').createIndex(
+    { startedAt: 1 },
+    { expireAfterSeconds: 90 * 24 * 60 * 60 },
+  );
+
   // Execution Logs
   await db.collection('execution_logs').createIndex({ executionId: 1, timestamp: 1 });
   await db.collection('execution_logs').createIndex({ executionId: 1, node: 1, timestamp: 1 });
@@ -56,6 +73,42 @@ export async function ensureIndexes(db: Db): Promise<void> {
   await db.collection('agent_conversations').createIndex({ chatSessionId: 1, startedAt: -1 });
   await db.collection('agent_conversations').createIndex({ fromAgent: 1, toAgent: 1 });
   await db.collection('agent_conversations').createIndex({ status: 1 });
+
+  // Teams (org-chart grouping for agents — phase 1 of teams architecture)
+  await db.collection('teams').createIndex({ name: 1 }, { unique: true });
+  await db.collection('teams').createIndex({ parentTeamName: 1 });
+  await db.collection('teams').createIndex({ leadAgentName: 1 });
+  // Also index agents.teamName so listMembers / lookups are fast
+  await db.collection('agents').createIndex({ teamName: 1 });
+  // Hard guarantee: only ONE lead per team. Partial unique index gives the
+  // database itself the responsibility — no race window. The application also
+  // checks before insert so callers get a friendly error message.
+  // EXPLICIT NAME REQUIRED: there's already a non-unique index on { teamName: 1 }
+  // a few lines above. MongoDB auto-generates the same name `teamName_1` for
+  // both, causing IndexKeySpecsConflict. Naming this one explicitly avoids
+  // the collision.
+  await db.collection('agents').createIndex(
+    { teamName: 1 },
+    {
+      unique: true,
+      partialFilterExpression: { teamRole: 'lead' },
+      name: 'teamName_lead_unique',
+    },
+  );
+
+  // Slack Thread Mappings (Slack thread → FlowForge chat session)
+  await db.collection('slack_thread_mappings').createIndex(
+    { slackTeamId: 1, slackChannelId: 1, slackThreadTs: 1 },
+    { unique: true },
+  );
+  await db.collection('slack_thread_mappings').createIndex({ chatSessionId: 1 });
+
+  // Slack Processed Events (idempotency for Slack event retries)
+  await db.collection('slack_processed_events').createIndex({ eventId: 1 }, { unique: true });
+  await db.collection('slack_processed_events').createIndex(
+    { processedAt: 1 },
+    { expireAfterSeconds: 86400 }, // 24h TTL
+  );
 
   console.log('Database indexes ensured');
 }

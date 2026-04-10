@@ -159,7 +159,7 @@ export default function MentionAutocomplete({
         const Icon = ICON_MAP[type] || Users;
         return (
           <div key={type}>
-            <div className="px-3 py-1.5 text-[10px] font-label uppercase tracking-widest text-gray-500 border-b border-border/30">
+            <div className="px-3 py-1.5 text-[10px] font-label uppercase tracking-widest text-theme-muted border-b border-border/30">
               {LABEL_MAP[type] || type}
             </div>
             {items.map(item => {
@@ -171,8 +171,8 @@ export default function MentionAutocomplete({
                   data-mention-item
                   className={`w-full flex items-center gap-2.5 px-3 py-2 text-left text-sm transition-colors ${
                     isSelected
-                      ? 'bg-accent-blue/10 text-white'
-                      : 'text-gray-400 hover:bg-surface-200/50 hover:text-gray-200'
+                      ? 'bg-accent-blue/10 text-theme-primary'
+                      : 'text-theme-secondary hover:bg-surface-200/50 hover:text-theme-primary'
                   }`}
                   onMouseDown={e => {
                     e.preventDefault(); // Prevent blur
@@ -180,10 +180,10 @@ export default function MentionAutocomplete({
                   }}
                   onMouseEnter={() => setSelectedIndex(idx)}
                 >
-                  <Icon className={`w-3.5 h-3.5 ${COLOR_MAP[type] || 'text-gray-500'}`} />
+                  <Icon className={`w-3.5 h-3.5 ${COLOR_MAP[type] || 'text-theme-muted'}`} />
                   <span className="font-mono text-xs">{item.name}</span>
                   {item.description && (
-                    <span className="text-[10px] text-gray-600 truncate ml-auto">
+                    <span className="text-[10px] text-theme-subtle truncate ml-auto">
                       {item.description}
                     </span>
                   )}

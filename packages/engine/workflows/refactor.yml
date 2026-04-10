@@ -1,0 +1,221 @@
+name: refactor
+description: >
+  Safe code refactoring workflow. Tech Debt Analyst assesses, Codebase Navigator
+  maps dependencies, Unit Test Writer creates safety baseline, API Developer
+  refactors, Regression Analyst verifies zero regressions, Code Reviewer approves,
+  Documentation Writer updates docs, Release Manager creates PR. You merge manually.
+version: 2
+
+context:
+  requires: [repo]
+  tools: [filesystem, git, terminal]
+  concurrency: 1
+
+input:
+  target: { type: string, required: true }
+  repo_path: { type: string, required: true }
+
+nodes:
+  # ── Phase 1: Assess (Platform + DevEx Teams) ──
+  analyse-debt:
+    agent: tech-debt-analyst
+    prompt: |
+      Assess this refactoring target:
+      {{target}}
+
+      Produce:
+      1. Current responsibilities (what does it do?)
+      2. Risk level: high/medium/low
+      3. Effort estimate
+      4. Proposed refactoring strategy
+    outputs: [analysis, risk_level, refactor_plan]
+
+  map-dependencies:
+    agent: codebase-navigator
+    prompt: |
+      Map ALL dependencies of the refactoring target:
+      {{target}}
+
+      1. Who imports/uses this? (grep across codebase)
+      2. What does it depend on?
+      3. Public API surface (exports, function signatures)
+      4. Existing test coverage
+
+      This is critical — missing a dependency means the refactor breaks things.
+    outputs: [public_api, dependents, dependencies, existing_tests]
+
+  # ── Phase 2: User approval for high risk ──
+  approve:
+    type: human
+    prompt: |
+      Refactoring assessment:
+
+      TARGET: {{target}}
+      RISK: {{risk_level}}
+      PLAN: {{refactor_plan}}
+      DEPENDENTS: {{dependents}}
+      ANALYSIS: {{analysis}}
+
+      Approve?
+    fields:
+      - { name: decision, type: select, options: [proceed, abort, modify], label: "Decision" }
+      - { name: notes, type: text, required: false, label: "Modifications" }
+    outputs: [decision, notes]
+
+  # ── Phase 3: Safety baseline (QA Team) ──
+  create-branch:
+    type: code
+    function: git-create-branch
+    outputs: [worktree_path, branch_name]
+
+  baseline-tests:
+    agent: unit-test-writer
+    prompt: |
+      Create a test safety net BEFORE refactoring in {{worktree_path}}:
+
+      TARGET: {{target}}
+      PUBLIC API: {{public_api}}
+      EXISTING TESTS: {{existing_tests}}
+
+      1. If tests exist, run them and record the baseline
+      2. If tests are missing, write contract tests for the public API
+      3. Run the FULL test suite — record passing count
+
+      We need GREEN baseline before touching anything.
+    outputs: [baseline_passed, baseline_count, baseline_output]
+
+  # ── Phase 4: Refactor ──
+  refactor:
+    agent: api-developer
+    prompt: |
+      Refactor in {{worktree_path}} following this plan:
+
+      PLAN: {{refactor_plan}}
+      {{#if notes}}USER NOTES: {{notes}}{{/if}}
+      PUBLIC API (preserve!): {{public_api}}
+      DEPENDENTS (update imports!): {{dependents}}
+
+      {{#if retry_context}}PREVIOUS ATTEMPT BROKE SOMETHING:\n{{retry_context}}{{/if}}
+
+      RULES:
+      - NO behaviour changes. Same inputs → same outputs.
+      - Update ALL imports across the codebase.
+      - Preserve the public API surface.
+      - Run build after changes.
+    outputs: [changed_files, refactor_summary]
+    resume_on_retry: true
+
+  # ── Phase 5: Verify (QA Team, parallel) ──
+  verify-tests:
+    agent: regression-analyst
+    prompt: |
+      Run ALL tests in {{worktree_path}} after refactoring:
+
+      BASELINE: {{baseline_count}} tests passing before refactor
+      CHANGED: {{changed_files}}
+
+      Compare with baseline:
+      - Same or more tests passing?
+      - Zero new failures?
+
+      Classify any failure: REAL REGRESSION, FLAKY, or TEST-ENV.
+      test_passed = true ONLY if zero real regressions.
+    outputs: [test_passed, test_output, regression_count]
+
+  verify-build:
+    type: code
+    function: run-build
+    retries: 1
+    outputs: [build_passed, build_errors]
+
+  # ── Phase 6: Contract check ──
+  contract-check:
+    agent: api-contract-validator
+    prompt: |
+      Verify the refactor didn't break the public API in {{worktree_path}}:
+
+      ORIGINAL PUBLIC API: {{public_api}}
+      CHANGED: {{changed_files}}
+
+      Check: same exports, same function signatures, same behaviour.
+      Verdict: COMPATIBLE or BREAKING.
+    outputs: [contract_verdict, contract_feedback]
+
+  # ── Phase 7: Code review ──
+  review:
+    agent: backend-code-reviewer
+    prompt: |
+      Review refactoring in {{worktree_path}} on {{branch_name}}:
+
+      PLAN: {{refactor_plan}}
+      CHANGED: {{changed_files}}
+      SUMMARY: {{refactor_summary}}
+
+      Check:
+      - Follows the plan?
+      - No behaviour changes?
+      - All imports updated?
+      - No dead code left?
+      - Clean file boundaries?
+
+      Verdict: APPROVED or REQUEST_CHANGES.
+    outputs: [review_verdict, review_feedback]
+
+  # ── Phase 8: Document + PR ──
+  document:
+    agent: documentation-writer
+    prompt: |
+      Update docs in {{worktree_path}} for the refactoring:
+
+      What changed: {{changed_files}}
+      Summary: {{refactor_summary}}
+
+      Update architecture docs, file references, import examples.
+    outputs: [docs_updated]
+
+  create-pr:
+    agent: release-manager
+    prompt: |
+      Create a refactoring PR from {{branch_name}} in {{worktree_path}}:
+
+      Title: refactor: {{refactor_summary}}
+      Body:
+      - Target: {{target}}
+      - What changed: {{refactor_summary}}
+      - Files: {{changed_files}}
+      - Tests: baseline {{baseline_count}}, zero regressions
+      - API contract: {{contract_verdict}}
+
+      Stage, commit, push, create PR.
+    outputs: [pr_url]
+
+edges:
+  # Phase 1: Analyse + map in parallel
+  - { from: START, to: [analyse-debt, map-dependencies], parallel: true, join: wait-all }
+
+  # High risk → user approval. Low/medium → proceed directly.
+  - { from: [analyse-debt, map-dependencies], to: approve, condition: "risk_level == 'high'" }
+  - { from: [analyse-debt, map-dependencies], to: create-branch, condition: "risk_level != 'high'" }
+  - { from: approve, to: create-branch, condition: "decision == 'proceed'" }
+  - { from: approve, to: [analyse-debt, map-dependencies], condition: "decision == 'modify'", max_retries: 1 }
+
+  # Branch → baseline → refactor
+  - { from: create-branch, to: baseline-tests }
+  - { from: baseline-tests, to: refactor, condition: "baseline_passed" }
+
+  # Verify: tests + build + contract (parallel)
+  - { from: refactor, to: [verify-tests, verify-build, contract-check], parallel: true, join: wait-all }
+
+  # Fail → retry refactor
+  - { from: [verify-tests, verify-build, contract-check], to: refactor, condition: "NOT test_passed OR NOT build_passed OR contract_verdict == 'BREAKING'", max_retries: 3, retry_context: "Regressions ({{regression_count}}):\n{{test_output}}\nBuild:\n{{build_errors}}\nContract:\n{{contract_feedback}}" }
+
+  # Pass → review
+  - { from: [verify-tests, verify-build, contract-check], to: review, condition: "test_passed AND build_passed AND contract_verdict != 'BREAKING'" }
+
+  # Review fail → retry
+  - { from: review, to: refactor, condition: "review_verdict == 'REQUEST_CHANGES'", max_retries: 2, retry_context: "{{review_feedback}}" }
+
+  # Pass → document → PR
+  - { from: review, to: document, condition: "review_verdict == 'APPROVED'" }
+  - { from: document, to: create-pr }
+  - { from: create-pr, to: END }

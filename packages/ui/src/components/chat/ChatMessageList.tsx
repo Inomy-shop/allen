@@ -56,8 +56,8 @@ function CopyButton({ text }: { text: string }) {
         </>
       ) : (
         <>
-          <Copy className="w-3 h-3 text-gray-500" />
-          <span className="text-gray-500">Copy</span>
+          <Copy className="w-3 h-3 text-theme-muted" />
+          <span className="text-theme-muted">Copy</span>
         </>
       )}
     </button>
@@ -78,14 +78,14 @@ function ThinkingBlock({ text }: { text: string }) {
       >
         <Brain className="w-3 h-3 animate-pulse" />
         <span>Thinking</span>
-        <span className="text-gray-600">{expanded ? '(collapse)' : '(expand)'}</span>
+        <span className="text-theme-subtle">{expanded ? '(collapse)' : '(expand)'}</span>
       </button>
       {expanded ? (
-        <div className="mt-1.5 px-3 py-2 rounded-md bg-purple-500/5 border border-purple-500/10 text-xs text-gray-500 font-body leading-relaxed whitespace-pre-wrap max-h-48 overflow-auto">
+        <div className="mt-1.5 px-3 py-2 rounded-md bg-purple-500/5 border border-purple-500/10 text-xs text-theme-muted font-body leading-relaxed whitespace-pre-wrap max-h-48 overflow-auto">
           {text}
         </div>
       ) : (
-        <div className="mt-1 text-[11px] text-gray-600 font-body italic truncate max-w-[400px]">
+        <div className="mt-1 text-[11px] text-theme-subtle font-body italic truncate max-w-[400px]">
           {preview}
         </div>
       )}
@@ -130,15 +130,15 @@ export function renderMarkdown(content: string): React.ReactNode {
     const lang = match[1] || '';
     const code = match[2].replace(/\n$/, '');
     parts.push(
-      <div key={key++} className="group/code relative my-3 rounded-md overflow-hidden border border-border/40 bg-[rgb(13,17,28)]">
+      <div key={key++} className="group/code relative my-3 rounded-md overflow-hidden border border-border/40 bg-[rgb(var(--color-editor-background))]">
         <div className="flex items-center justify-between px-3 py-1.5 bg-surface-200/60 border-b border-border/30">
-          <span className="text-[10px] font-mono text-gray-500 uppercase tracking-wider">
+          <span className="text-[10px] font-mono text-theme-muted uppercase tracking-wider">
             {lang || 'code'}
           </span>
           <CopyButton text={code} />
         </div>
         <pre className="px-4 py-3 overflow-x-auto text-[13px] leading-relaxed font-mono">
-          <code className="text-gray-300">{highlightCode(code, lang)}</code>
+          <code className="text-theme-secondary">{highlightCode(code, lang)}</code>
         </pre>
       </div>,
     );
@@ -190,7 +190,7 @@ function highlightCode(code: string, lang: string): React.ReactNode {
       }
       if (m[1]) {
         // Comment
-        tokens.push(<span key={tk++} className="text-gray-600 italic">{m[0]}</span>);
+        tokens.push(<span key={tk++} className="text-theme-subtle italic">{m[0]}</span>);
       } else if (m[0].match(/^["'`]/)) {
         // String
         tokens.push(<span key={tk++} className="text-green-400/80">{m[0]}</span>);
@@ -259,7 +259,7 @@ function renderBlocks(text: string): React.ReactNode {
       }
       elements.push(
         <div key={i} className="border-l-2 border-accent-blue/40 pl-3 my-2 py-1">
-          <div className="text-gray-400 italic text-sm">
+          <div className="text-theme-secondary italic text-sm">
             {quoteLines.map((ql, qi) => (
               <div key={qi}>{renderInline(ql)}</div>
             ))}
@@ -272,7 +272,7 @@ function renderBlocks(text: string): React.ReactNode {
     // Headers
     if (line.startsWith('### ')) {
       elements.push(
-        <h4 key={i} className="text-sm font-bold text-white mt-4 mb-1.5 font-heading tracking-wide">
+        <h4 key={i} className="text-sm font-bold text-theme-primary mt-4 mb-1.5 font-heading tracking-wide">
           {renderInline(line.slice(4))}
         </h4>,
       );
@@ -281,7 +281,7 @@ function renderBlocks(text: string): React.ReactNode {
     }
     if (line.startsWith('## ')) {
       elements.push(
-        <h3 key={i} className="text-[15px] font-bold text-white mt-5 mb-2 font-heading tracking-wide">
+        <h3 key={i} className="text-[15px] font-bold text-theme-primary mt-5 mb-2 font-heading tracking-wide">
           {renderInline(line.slice(3))}
         </h3>,
       );
@@ -290,7 +290,7 @@ function renderBlocks(text: string): React.ReactNode {
     }
     if (line.startsWith('# ')) {
       elements.push(
-        <h2 key={i} className="text-base font-bold text-white mt-5 mb-2 font-heading tracking-wide">
+        <h2 key={i} className="text-base font-bold text-theme-primary mt-5 mb-2 font-heading tracking-wide">
           {renderInline(line.slice(2))}
         </h2>,
       );
@@ -371,7 +371,7 @@ function renderTable(lines: string[]): React.ReactNode {
         <thead>
           <tr className="bg-surface-200/60">
             {headers.map((h, i) => (
-              <th key={i} className="px-3 py-2 text-left text-xs font-label uppercase tracking-wider text-gray-400 border-b border-border/40">
+              <th key={i} className="px-3 py-2 text-left text-xs font-label uppercase tracking-wider text-theme-secondary border-b border-border/40">
                 {renderInline(h)}
               </th>
             ))}
@@ -381,7 +381,7 @@ function renderTable(lines: string[]): React.ReactNode {
           {rows.map((row, ri) => (
             <tr key={ri} className="border-b border-border/20 last:border-0 hover:bg-surface-200/30 transition-colors">
               {row.map((cell, ci) => (
-                <td key={ci} className="px-3 py-1.5 text-gray-300">
+                <td key={ci} className="px-3 py-1.5 text-theme-secondary">
                   {renderInline(cell)}
                 </td>
               ))}
@@ -416,28 +416,28 @@ function renderInline(text: string): React.ReactNode {
     } else if (m[2]) {
       // bold **text**
       parts.push(
-        <strong key={k++} className="text-white font-semibold">
+        <strong key={k++} className="text-theme-primary font-semibold">
           {m[2].slice(2, -2)}
         </strong>,
       );
     } else if (m[3]) {
       // italic *text*
       parts.push(
-        <em key={k++} className="text-gray-300 italic">
+        <em key={k++} className="text-theme-secondary italic">
           {m[3].slice(1, -1)}
         </em>,
       );
     } else if (m[4]) {
       // italic _text_
       parts.push(
-        <em key={k++} className="text-gray-300 italic">
+        <em key={k++} className="text-theme-secondary italic">
           {m[4].slice(1, -1)}
         </em>,
       );
     } else if (m[5]) {
       // strikethrough ~~text~~
       parts.push(
-        <del key={k++} className="text-gray-500 line-through">
+        <del key={k++} className="text-theme-muted line-through">
           {m[5].slice(2, -2)}
         </del>,
       );
@@ -521,7 +521,7 @@ const TOOL_LABELS: Record<string, { label: string; color: string }> = {
 
 function ToolCallCard({ call, active }: { call: ToolCallRecord | ActiveToolCall; active?: boolean }) {
   const [expanded, setExpanded] = useState(false);
-  const meta = TOOL_LABELS[call.tool] ?? { label: call.tool, color: 'text-gray-400' };
+  const meta = TOOL_LABELS[call.tool] ?? { label: call.tool, color: 'text-theme-secondary' };
   const isRunning = active && (call as ActiveToolCall).status === 'running';
   const result = 'result' in call ? call.result : undefined;
   const duration = 'durationMs' in call ? call.durationMs : undefined;
@@ -548,7 +548,7 @@ function ToolCallCard({ call, active }: { call: ToolCallRecord | ActiveToolCall;
 
         {/* Key args summary */}
         {call.args && Object.keys(call.args).length > 0 && (
-          <span className="text-[10px] text-gray-600 font-mono truncate max-w-[200px]">
+          <span className="text-[10px] text-theme-subtle font-mono truncate max-w-[200px]">
             {Object.entries(call.args).slice(0, 2).map(([k, v]) => `${k}=${typeof v === 'string' ? v : JSON.stringify(v)}`).join(', ')}
           </span>
         )}
@@ -556,7 +556,7 @@ function ToolCallCard({ call, active }: { call: ToolCallRecord | ActiveToolCall;
         <span className="flex-1" />
 
         {duration != null && (
-          <span className="text-[10px] text-gray-600 font-mono">{duration}ms</span>
+          <span className="text-[10px] text-theme-subtle font-mono">{duration}ms</span>
         )}
 
         {executionId && (
@@ -572,8 +572,8 @@ function ToolCallCard({ call, active }: { call: ToolCallRecord | ActiveToolCall;
       </button>
 
       {expanded && result && (
-        <div className="border-t border-border/20 px-3 py-2 bg-[rgb(13,17,28)] max-h-48 overflow-auto">
-          <pre className="text-[11px] font-mono text-gray-400 whitespace-pre-wrap">
+        <div className="border-t border-border/20 px-3 py-2 bg-[rgb(var(--color-editor-background))] max-h-48 overflow-auto">
+          <pre className="text-[11px] font-mono text-theme-secondary whitespace-pre-wrap">
             {JSON.stringify(result, null, 2)}
           </pre>
         </div>
@@ -604,7 +604,7 @@ function ToolCallsSection({ calls, threads, agentMap }: { calls?: ToolCallRecord
       {/* Tool calls — only show if no threads (threads already show the conversation) */}
       {rootThreads.length === 0 && (
         <>
-          <button onClick={() => setShowTools(!showTools)} className="flex items-center gap-1.5 text-[10px] font-mono text-gray-600 hover:text-gray-400 transition-colors py-0.5">
+          <button onClick={() => setShowTools(!showTools)} className="flex items-center gap-1.5 text-[10px] font-mono text-theme-subtle hover:text-theme-secondary transition-colors py-0.5">
             {showTools ? <ChevronDown className="w-3 h-3" /> : <ChevronRight className="w-3 h-3" />}
             <Wrench className="w-2.5 h-2.5" />
             <span>{calls.length} tool call{calls.length !== 1 ? 's' : ''}</span>
@@ -640,11 +640,11 @@ function ActiveToolCallsSection({ calls, liveThreads, agentMap }: { calls: Activ
 
       {/* Running tool indicator */}
       {runningTool && (
-        <div className="flex items-center gap-1.5 text-[10px] font-mono text-gray-600 py-0.5">
+        <div className="flex items-center gap-1.5 text-[10px] font-mono text-theme-subtle py-0.5">
           <Loader2 className="w-2.5 h-2.5 text-accent-yellow animate-spin shrink-0" />
           <Wrench className="w-2.5 h-2.5 text-accent-yellow shrink-0" />
           <span className="text-accent-yellow/70">{TOOL_LABELS[runningTool.tool]?.label ?? runningTool.tool.replace('mcp__flowforge__', 'ff:')}</span>
-          {completedCount > 0 && <span className="text-gray-700">· {completedCount} done</span>}
+          {completedCount > 0 && <span className="text-theme-subtle">· {completedCount} done</span>}
         </div>
       )}
     </div>
@@ -666,7 +666,7 @@ import { BarChart3, FolderOpen, AlertTriangle } from 'lucide-react';
 const QUICK_ICONS: Record<string, React.ReactNode> = {
   zap: <Zap className="w-3.5 h-3.5 text-accent-blue" />,
   chart: <BarChart3 className="w-3.5 h-3.5 text-accent-green" />,
-  terminal: <Terminal className="w-3.5 h-3.5 text-gray-400" />,
+  terminal: <Terminal className="w-3.5 h-3.5 text-theme-secondary" />,
   folder: <FolderOpen className="w-3.5 h-3.5 text-accent-yellow" />,
   alert: <AlertTriangle className="w-3.5 h-3.5 text-accent-red" />,
   bot: <Bot className="w-3.5 h-3.5 text-accent-purple" />,
@@ -735,10 +735,10 @@ export default function ChatMessageList({ messages, streamText, thinkingText, st
           <div className="w-14 h-14 rounded-lg bg-accent-blue/10 border border-accent-blue/20 flex items-center justify-center mb-4">
             <AgentIcon className="w-7 h-7 text-accent-blue/50" />
           </div>
-          <p className="text-sm text-gray-400 font-body">
+          <p className="text-sm text-theme-secondary font-body">
             Start a conversation with FlowForge Assistant.
           </p>
-          <p className="text-xs text-gray-600 mt-2 font-body max-w-xs">
+          <p className="text-xs text-theme-subtle mt-2 font-body max-w-xs">
             Use <span className="text-accent-blue font-mono">@mentions</span> to reference workflows, repos, and agents.
           </p>
           {onSuggestionClick && (
@@ -751,7 +751,7 @@ export default function ChatMessageList({ messages, streamText, thinkingText, st
                   title={action.prompt}
                 >
                   {QUICK_ICONS[action.icon]}
-                  <span className="text-xs text-gray-400 group-hover:text-gray-300 font-body">{action.label}</span>
+                  <span className="text-xs text-theme-secondary group-hover:text-theme-secondary font-body">{action.label}</span>
                 </button>
               ))}
             </div>
@@ -780,10 +780,10 @@ export default function ChatMessageList({ messages, streamText, thinkingText, st
               {msg.role === 'user' ? (
                 <>
                   <div className="flex items-center gap-2 mb-1.5 justify-end">
-                    <span className="text-[10px] font-label uppercase tracking-widest text-gray-500">You</span>
-                    {msg.createdAt && <span className="text-[10px] font-mono text-gray-700 flex items-center gap-1"><Clock className="w-2.5 h-2.5" />{formatTime(msg.createdAt)}</span>}
+                    <span className="text-[10px] font-label uppercase tracking-widest text-theme-muted">You</span>
+                    {msg.createdAt && <span className="text-[10px] font-mono text-theme-subtle flex items-center gap-1"><Clock className="w-2.5 h-2.5" />{formatTime(msg.createdAt)}</span>}
                   </div>
-                  <div className="inline-block px-4 py-2.5 rounded-2xl rounded-br-sm bg-accent-blue/15 border border-accent-blue/10 text-sm font-body text-gray-200 leading-relaxed whitespace-pre-wrap break-words">
+                  <div className="inline-block px-4 py-2.5 rounded-2xl rounded-br-sm bg-accent-blue/15 border border-accent-blue/10 text-sm font-body text-theme-secondary leading-relaxed whitespace-pre-wrap break-words">
                     {renderUserContent(msg.content)}
                   </div>
                 </>
@@ -802,9 +802,9 @@ export default function ChatMessageList({ messages, streamText, thinkingText, st
                       <span className="text-[12px] font-heading font-semibold tracking-wide" style={{ color: agentColor }}>
                         {agentInfo?.displayName ?? 'Assistant'}
                       </span>
-                      {msg.createdAt && <span className="text-[10px] font-mono text-gray-700 flex items-center gap-1"><Clock className="w-2.5 h-2.5" />{formatTime(msg.createdAt)}</span>}
-                      {msg.costUsd != null && msg.costUsd > 0 && <span className="text-[10px] font-mono text-gray-600">${msg.costUsd.toFixed(4)}</span>}
-                      {msg.durationMs != null && msg.durationMs > 0 && <span className="text-[10px] font-mono text-gray-600">{(msg.durationMs / 1000).toFixed(1)}s</span>}
+                      {msg.createdAt && <span className="text-[10px] font-mono text-theme-subtle flex items-center gap-1"><Clock className="w-2.5 h-2.5" />{formatTime(msg.createdAt)}</span>}
+                      {msg.costUsd != null && msg.costUsd > 0 && <span className="text-[10px] font-mono text-theme-subtle">${msg.costUsd.toFixed(4)}</span>}
+                      {msg.durationMs != null && msg.durationMs > 0 && <span className="text-[10px] font-mono text-theme-subtle">{(msg.durationMs / 1000).toFixed(1)}s</span>}
                     </div>
 
                     {/* Thread-line container — brighter line for main response */}
@@ -818,7 +818,7 @@ export default function ChatMessageList({ messages, streamText, thinkingText, st
                       {/* Text response */}
                       {msg.content && (
                         <div className={`${msg.toolCalls?.length ? 'mt-2 ' : ''}py-2 text-sm font-body leading-relaxed break-words ${
-                          msg.status === 'failed' ? 'text-red-300' : 'text-gray-300'
+                          msg.status === 'failed' ? 'text-red-300' : 'text-theme-secondary'
                         }`}>
                           {renderMarkdown(msg.content)}
                         </div>
@@ -829,7 +829,7 @@ export default function ChatMessageList({ messages, streamText, thinkingText, st
                         {msg.content && onSaveToLearnings && (
                           <button
                             onClick={() => onSaveToLearnings(msg.content)}
-                            className="flex items-center gap-1 text-[10px] text-gray-600 hover:text-accent-blue transition-colors opacity-0 group-hover/msg:opacity-100"
+                            className="flex items-center gap-1 text-[10px] text-theme-subtle hover:text-accent-blue transition-colors opacity-0 group-hover/msg:opacity-100"
                             title="Save to learnings"
                           >
                             <Bookmark className="w-3 h-3" /> Save
@@ -899,7 +899,7 @@ export default function ChatMessageList({ messages, streamText, thinkingText, st
             <div className="ml-2 pl-3 pr-3 border-l-[3px] rounded-bl-md" style={{ borderColor: sAgentColor + '80', backgroundColor: sAgentColor + '08' }}>
               {thinkingText && !streamText && <ThinkingBlock text={thinkingText} />}
               <ActiveToolCallsSection calls={activeToolCalls} liveThreads={agentThreads} agentMap={agentMap} />
-              <div className={`${activeToolCalls.length > 0 || (thinkingText && !streamText) ? 'mt-2 ' : ''}py-2 text-sm text-gray-300 font-body leading-relaxed break-words`}>
+              <div className={`${activeToolCalls.length > 0 || (thinkingText && !streamText) ? 'mt-2 ' : ''}py-2 text-sm text-theme-secondary font-body leading-relaxed break-words`}>
                 {streamText ? (
                   <>
                     {renderMarkdown(streamText)}
@@ -932,7 +932,7 @@ export default function ChatMessageList({ messages, streamText, thinkingText, st
                   </div>
                 )}
                 <span className="text-[11px] font-mono text-accent-cyan shrink-0">{reportAgent?.displayName ?? report.agent}</span>
-                <span className="text-[11px] text-gray-400 font-body">{report.message}</span>
+                <span className="text-[11px] text-theme-secondary font-body">{report.message}</span>
               </div>
             );
           })}
@@ -974,11 +974,11 @@ export default function ChatMessageList({ messages, streamText, thinkingText, st
                 {s.status === 'running' && <span className="w-2 h-2 rounded-full bg-blue-400 animate-pulse" />}
                 {s.status === 'completed' && <span className="w-2 h-2 rounded-full bg-emerald-400" />}
                 {s.status === 'failed' && <span className="w-2 h-2 rounded-full bg-red-400" />}
-                <span className="text-[11px] font-mono font-bold text-gray-300">{s.agent}</span>
-                <span className="text-[9px] text-gray-600 font-mono">{s.executionId.slice(0, 8)}</span>
+                <span className="text-[11px] font-mono font-bold text-theme-secondary">{s.agent}</span>
+                <span className="text-[9px] text-theme-subtle font-mono">{s.executionId.slice(0, 8)}</span>
                 <a href={`/executions/${s.executionId}`} target="_blank" rel="noopener noreferrer" className="text-[9px] text-blue-400 hover:underline ml-auto">View Execution →</a>
               </div>
-              <p className="text-[10px] text-gray-500 mb-1.5 truncate">{s.prompt}</p>
+              <p className="text-[10px] text-theme-muted mb-1.5 truncate">{s.prompt}</p>
               {/* Live activity feed */}
               {s.activity.length > 0 && (
                 <div className="space-y-0.5 max-h-32 overflow-y-auto">
@@ -986,7 +986,7 @@ export default function ChatMessageList({ messages, streamText, thinkingText, st
                     <div key={i} className="flex items-center gap-1.5 text-[10px] font-mono">
                       {a.type === 'thinking' && <span className="text-purple-400">💭 thinking...</span>}
                       {a.type === 'tool_start' && <span className="text-amber-400">⚡ {a.tool}</span>}
-                      {a.type === 'tool_done' && <span className="text-gray-500">✓ {a.tool}{a.command ? ` (${a.command})` : ''}</span>}
+                      {a.type === 'tool_done' && <span className="text-theme-muted">✓ {a.tool}{a.command ? ` (${a.command})` : ''}</span>}
                     </div>
                   ))}
                 </div>
@@ -995,7 +995,7 @@ export default function ChatMessageList({ messages, streamText, thinkingText, st
                 <span className="text-[10px] text-blue-400 animate-pulse">Starting agent...</span>
               )}
               {s.status === 'completed' && s.durationMs && (
-                <div className="text-[9px] text-gray-600 mt-1">{s.toolCount} tools · {(s.durationMs / 1000).toFixed(1)}s</div>
+                <div className="text-[9px] text-theme-subtle mt-1">{s.toolCount} tools · {(s.durationMs / 1000).toFixed(1)}s</div>
               )}
             </div>
           ))}

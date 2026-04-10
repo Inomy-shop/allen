@@ -42,7 +42,7 @@ export class WorkflowService {
       throw new Error('Either yaml or parsed must be provided');
     }
 
-    const validation = this.validate(parsed);
+    const validation = await this.validate(parsed);
 
     const doc = {
       name: parsed.name,
@@ -75,14 +75,14 @@ export class WorkflowService {
       updates.parsed = parsed;
       updates.name = parsed.name;
       updates.description = parsed.description ?? '';
-      updates.validation = this.validate(parsed);
+      updates.validation = await this.validate(parsed);
       updates.version = (existing.version as number ?? 0) + 1;
     } else if (body.parsed) {
       updates.parsed = body.parsed;
       updates.yaml = yaml.dump(body.parsed);
       updates.name = body.parsed.name;
       updates.description = body.parsed.description ?? '';
-      updates.validation = this.validate(body.parsed);
+      updates.validation = await this.validate(body.parsed);
       updates.version = (existing.version as number ?? 0) + 1;
     }
 
@@ -99,10 +99,23 @@ export class WorkflowService {
     await this.col.deleteOne({ _id: new ObjectId(id) });
   }
 
-  validate(workflow: WorkflowDef): ValidationResult {
-    const agents = loadAgents();
+  /**
+   * Validate a workflow against known agents (YAML file + database).
+   * The YAML file has the old default agents; the database has the new org agents.
+   * Both are merged so all agent references are resolved.
+   */
+  async validate(workflow: WorkflowDef): Promise<ValidationResult> {
+    const yamlAgents = loadAgents();
+
+    // Also load agents from the database (the new org agents live here)
+    const dbAgents = await this.db.collection('agents').find({}, { projection: { name: 1, system: 1, model: 1, provider: 1, tools: 1 } }).toArray();
+    const merged = { ...yamlAgents };
+    for (const a of dbAgents) {
+      merged[a.name as string] = { system: (a.system as string) ?? '' };
+    }
+
     const builtIns = getBuiltIns();
-    return validateWorkflow(workflow, agents, Object.keys(builtIns));
+    return validateWorkflow(workflow, merged, Object.keys(builtIns));
   }
 
   async validateById(id: string): Promise<ValidationResult> {

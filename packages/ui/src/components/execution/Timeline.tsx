@@ -4,7 +4,7 @@ import Select from '../common/Select';
 import { Search, ArrowDown } from 'lucide-react';
 
 const categoryColors: Record<string, string> = {
-  system: 'text-gray-400 bg-gray-500/10',
+  system: 'text-theme-secondary bg-surface-200/40',
   agent: 'text-accent-blue bg-accent-blue/10',
   tool: 'text-accent-cyan bg-accent-cyan/10',
   condition: 'text-accent-yellow bg-accent-yellow/10',
@@ -66,7 +66,7 @@ export default function Timeline({ logs, nodeFilter, onNodeFilterChange, workflo
     <div className="flex flex-col h-full relative">
       {/* Header with filter and search */}
       <div className="px-3 py-1.5 border-b border-border/50 sticky top-0 bg-surface-50 z-10 flex items-center gap-2">
-        <h2 className="font-heading text-[10px] font-semibold text-gray-400 uppercase tracking-widest shrink-0">Logs</h2>
+        <h2 className="font-heading text-[10px] font-semibold text-theme-secondary uppercase tracking-widest shrink-0">Logs</h2>
         <Select
           value={nodeFilter ?? '__all__'}
           onChange={(v) => onNodeFilterChange(v === '__all__' ? null : v)}
@@ -75,13 +75,13 @@ export default function Timeline({ logs, nodeFilter, onNodeFilterChange, workflo
           className="w-36"
         />
         <div className="flex items-center gap-1 flex-1 min-w-0">
-          <Search className="w-3 h-3 text-gray-500 shrink-0" />
+          <Search className="w-3 h-3 text-theme-muted shrink-0" />
           <input
             type="text"
             value={search}
             onChange={e => setSearch(e.target.value)}
             placeholder="Search logs..."
-            className="bg-transparent text-xs text-gray-300 placeholder-gray-600 outline-none w-full font-mono"
+            className="bg-transparent text-xs text-theme-secondary placeholder-gray-600 outline-none w-full font-mono"
           />
         </div>
       </div>
@@ -93,13 +93,13 @@ export default function Timeline({ logs, nodeFilter, onNodeFilterChange, workflo
         onScroll={handleScroll}
       >
         {filtered.length === 0 ? (
-          <div className="p-4 text-sm text-gray-500 font-mono">
+          <div className="p-4 text-sm text-theme-muted font-mono">
             {logs.length === 0 ? 'WAITING FOR LOGS...' : 'NO MATCHING LOGS'}
           </div>
         ) : (
           filtered.map((log, i) => {
             const isError = log.level === 'error';
-            const catClass = isError ? 'text-accent-red bg-accent-red/10' : (categoryColors[log.category] ?? 'text-gray-400 bg-gray-500/10');
+            const catClass = isError ? 'text-accent-red bg-accent-red/10' : (categoryColors[log.category] ?? 'text-theme-secondary bg-surface-200/40');
 
             return (
               <div
@@ -107,7 +107,7 @@ export default function Timeline({ logs, nodeFilter, onNodeFilterChange, workflo
                 className={`flex items-start gap-1.5 px-3 py-0.5 hover:bg-accent-blue/5 text-xs transition-colors ${isError ? 'bg-accent-red/5' : ''}`}
               >
                 {/* Timestamp */}
-                <span className="text-[10px] text-gray-500 font-mono mt-px shrink-0 w-28 tabular-nums">
+                <span className="text-[10px] text-theme-muted font-mono mt-px shrink-0 w-28 tabular-nums">
                   {formatTime(new Date(log.timestamp))}
                 </span>
 
@@ -126,7 +126,7 @@ export default function Timeline({ logs, nodeFilter, onNodeFilterChange, workflo
                 )}
 
                 {/* Message */}
-                <span className={`font-mono text-gray-300 min-w-0 break-words ${isError ? 'text-accent-red' : ''}`}>
+                <span className={`font-mono text-theme-secondary min-w-0 break-words ${isError ? 'text-accent-red' : ''}`}>
                   {log.message}
                 </span>
               </div>

@@ -19,7 +19,7 @@ function CopyBtn({ text }: { text: string }) {
   return (
     <button
       onClick={() => { navigator.clipboard.writeText(text); setCopied(true); setTimeout(() => setCopied(false), 1500); }}
-      className="p-1 rounded hover:bg-surface-200/50 text-gray-600 hover:text-gray-400 transition-colors"
+      className="p-1 rounded hover:bg-surface-200/50 text-theme-subtle hover:text-theme-secondary transition-colors"
       title="Copy"
     >
       {copied ? <Check className="w-3 h-3 text-accent-green" /> : <Copy className="w-3 h-3" />}
@@ -42,12 +42,12 @@ function renderContent(text: string) {
     const lang = match[1] || 'code';
     const code = match[2].replace(/\n$/, '');
     parts.push(
-      <div key={key++} className="group relative my-3 rounded-md overflow-hidden border border-border/40 bg-[rgb(13,17,28)]">
+      <div key={key++} className="group relative my-3 rounded-md overflow-hidden border border-border/40 bg-[rgb(var(--color-editor-background))]">
         <div className="flex items-center justify-between px-3 py-1.5 bg-surface-200/60 border-b border-border/30">
-          <span className="text-[10px] font-mono text-gray-500 uppercase tracking-wider">{lang}</span>
+          <span className="text-[10px] font-mono text-theme-muted uppercase tracking-wider">{lang}</span>
           <CopyBtn text={code} />
         </div>
-        <pre className="px-4 py-3 overflow-x-auto text-[12px] leading-relaxed font-mono text-gray-300">
+        <pre className="px-4 py-3 overflow-x-auto text-[12px] leading-relaxed font-mono text-theme-secondary">
           {code}
         </pre>
       </div>,
@@ -66,14 +66,14 @@ function renderInline(text: string) {
   const lines = text.split('\n');
   return lines.map((line, i) => {
     // Headers
-    if (line.startsWith('### ')) return <h4 key={i} className="text-[13px] font-heading font-semibold text-gray-200 mt-3 mb-1">{renderSpan(line.slice(4))}</h4>;
-    if (line.startsWith('## ')) return <h3 key={i} className="text-sm font-heading font-semibold text-gray-200 mt-4 mb-1.5 uppercase tracking-wider">{renderSpan(line.slice(3))}</h3>;
-    if (line.startsWith('# ')) return <h2 key={i} className="text-base font-heading font-bold text-white mt-4 mb-2">{renderSpan(line.slice(2))}</h2>;
+    if (line.startsWith('### ')) return <h4 key={i} className="text-[13px] font-heading font-semibold text-theme-secondary mt-3 mb-1">{renderSpan(line.slice(4))}</h4>;
+    if (line.startsWith('## ')) return <h3 key={i} className="text-sm font-heading font-semibold text-theme-secondary mt-4 mb-1.5 uppercase tracking-wider">{renderSpan(line.slice(3))}</h3>;
+    if (line.startsWith('# ')) return <h2 key={i} className="text-base font-heading font-bold text-theme-primary mt-4 mb-2">{renderSpan(line.slice(2))}</h2>;
     // List items
-    if (line.startsWith('- ')) return <div key={i} className="flex gap-2 ml-2"><span className="text-gray-600 shrink-0">•</span><span>{renderSpan(line.slice(2))}</span></div>;
+    if (line.startsWith('- ')) return <div key={i} className="flex gap-2 ml-2"><span className="text-theme-subtle shrink-0">•</span><span>{renderSpan(line.slice(2))}</span></div>;
     if (/^\d+\.\s/.test(line)) {
       const num = line.match(/^(\d+)\.\s/)?.[1] ?? '';
-      return <div key={i} className="flex gap-2 ml-2"><span className="text-gray-600 shrink-0 font-mono text-[11px]">{num}.</span><span>{renderSpan(line.replace(/^\d+\.\s/, ''))}</span></div>;
+      return <div key={i} className="flex gap-2 ml-2"><span className="text-theme-subtle shrink-0 font-mono text-[11px]">{num}.</span><span>{renderSpan(line.replace(/^\d+\.\s/, ''))}</span></div>;
     }
     // Empty line
     if (!line.trim()) return <div key={i} className="h-2" />;
@@ -86,9 +86,9 @@ function renderSpan(text: string): React.ReactNode {
   // Bold, inline code, italic
   const parts = text.split(/(\*\*.*?\*\*|`[^`]+`|_[^_]+_)/g);
   return parts.map((part, i) => {
-    if (part.startsWith('**') && part.endsWith('**')) return <strong key={i} className="text-gray-200 font-semibold">{part.slice(2, -2)}</strong>;
+    if (part.startsWith('**') && part.endsWith('**')) return <strong key={i} className="text-theme-secondary font-semibold">{part.slice(2, -2)}</strong>;
     if (part.startsWith('`') && part.endsWith('`')) return <code key={i} className="text-accent-blue/80 bg-surface-200/50 px-1 py-0.5 rounded text-[11px] font-mono">{part.slice(1, -1)}</code>;
-    if (part.startsWith('_') && part.endsWith('_')) return <em key={i} className="text-gray-400 italic">{part.slice(1, -1)}</em>;
+    if (part.startsWith('_') && part.endsWith('_')) return <em key={i} className="text-theme-secondary italic">{part.slice(1, -1)}</em>;
     return <span key={i}>{part}</span>;
   });
 }
@@ -101,8 +101,8 @@ function ToolCallBadge({ tool }: { tool: string }) {
     .replace('mcp__mongodb__', 'mongo:');
 
   return (
-    <span className="inline-flex items-center gap-1 text-[10px] font-mono px-2 py-0.5 rounded bg-surface-200/50 text-gray-500 border border-border/20">
-      <Wrench className="w-2.5 h-2.5 text-gray-600" />
+    <span className="inline-flex items-center gap-1 text-[10px] font-mono px-2 py-0.5 rounded bg-surface-200/50 text-theme-muted border border-border/20">
+      <Wrench className="w-2.5 h-2.5 text-theme-subtle" />
       {shortName}
     </span>
   );
@@ -136,7 +136,7 @@ export default function ThreadDetailPanel({ thread, agents, onClose }: ThreadDet
               <span className="text-xs font-heading font-semibold tracking-wider" style={{ color: fromColor }}>{fromName}</span>
             </div>
 
-            <span className="text-gray-600 text-sm">→</span>
+            <span className="text-theme-subtle text-sm">→</span>
 
             {/* To agent */}
             <div className="flex items-center gap-2">
@@ -165,16 +165,16 @@ export default function ThreadDetailPanel({ thread, agents, onClose }: ThreadDet
           <div className="flex items-center gap-3">
             {/* Stats */}
             {thread.durationMs != null && thread.durationMs > 0 && (
-              <span className="text-[10px] font-mono text-gray-500 flex items-center gap-1">
+              <span className="text-[10px] font-mono text-theme-muted flex items-center gap-1">
                 <Clock className="w-3 h-3" /> {(thread.durationMs / 1000).toFixed(1)}s
               </span>
             )}
             {thread.costUsd != null && thread.costUsd > 0 && (
-              <span className="text-[10px] font-mono text-gray-500 flex items-center gap-1">
+              <span className="text-[10px] font-mono text-theme-muted flex items-center gap-1">
                 <DollarSign className="w-3 h-3" /> {thread.costUsd.toFixed(3)}
               </span>
             )}
-            <button onClick={onClose} className="p-1.5 rounded-md hover:bg-surface-200 text-gray-500 hover:text-gray-300 transition-colors" title="Close">
+            <button onClick={onClose} className="p-1.5 rounded-md hover:bg-surface-200 text-theme-muted hover:text-theme-secondary transition-colors" title="Close">
               <X className="w-4 h-4" />
             </button>
           </div>
@@ -200,7 +200,7 @@ export default function ThreadDetailPanel({ thread, agents, onClose }: ThreadDet
                       <span className="text-sm font-heading font-semibold tracking-wider" style={{ color: agentColor }}>
                         {agentName}
                       </span>
-                      <span className="text-[10px] text-gray-600 font-mono ml-2">
+                      <span className="text-[10px] text-theme-subtle font-mono ml-2">
                         {isFrom ? 'delegated task' : 'response'}
                       </span>
                     </div>
@@ -208,14 +208,14 @@ export default function ThreadDetailPanel({ thread, agents, onClose }: ThreadDet
 
                   {/* Message content — full markdown rendering */}
                   <div className="px-5 pb-4 ml-10">
-                    <div className="text-[13px] text-gray-300 font-body leading-relaxed">
+                    <div className="text-[13px] text-theme-secondary font-body leading-relaxed">
                       {renderMarkdown(msg.content)}
                     </div>
 
                     {/* Tool calls */}
                     {msg.toolCalls && msg.toolCalls.length > 0 && (
                       <div className="mt-3 pt-3 border-t border-border/10">
-                        <span className="text-[10px] font-label uppercase tracking-wider text-gray-600 mb-1.5 block">
+                        <span className="text-[10px] font-label uppercase tracking-wider text-theme-subtle mb-1.5 block">
                           Tools used ({msg.toolCalls.length})
                         </span>
                         <div className="flex flex-wrap gap-1.5">
@@ -231,12 +231,12 @@ export default function ThreadDetailPanel({ thread, agents, onClose }: ThreadDet
             })
           ) : thread.response ? (
             <div className="px-5 py-4">
-              <div className="text-[13px] text-gray-300 font-body leading-relaxed">
+              <div className="text-[13px] text-theme-secondary font-body leading-relaxed">
                 {renderMarkdown(thread.response)}
               </div>
             </div>
           ) : isActive ? (
-            <div className="px-5 py-8 flex flex-col items-center gap-2 text-gray-500">
+            <div className="px-5 py-8 flex flex-col items-center gap-2 text-theme-muted">
               <Loader2 className="w-6 h-6 animate-spin text-accent-cyan" />
               <span className="text-sm font-body">{toName} is working on this...</span>
             </div>
@@ -245,8 +245,8 @@ export default function ThreadDetailPanel({ thread, agents, onClose }: ThreadDet
 
         {/* Footer with task summary */}
         <div className="border-t border-border/50 px-5 py-3 bg-surface-100/30 shrink-0">
-          <span className="text-[10px] font-label uppercase tracking-wider text-gray-600 block mb-1">Task</span>
-          <p className="text-[12px] text-gray-400 font-body leading-relaxed">{thread.task}</p>
+          <span className="text-[10px] font-label uppercase tracking-wider text-theme-subtle block mb-1">Task</span>
+          <p className="text-[12px] text-theme-secondary font-body leading-relaxed">{thread.task}</p>
         </div>
       </div>
     </div>

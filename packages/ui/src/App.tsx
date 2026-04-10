@@ -5,7 +5,7 @@ import NotificationBell from './components/common/NotificationBell';
 import {
   LayoutDashboard, GitBranch, Play, Users, Activity, Settings,
   FolderGit2, Brain, MessageSquare, BarChart3, Plus, Trash2,
-  Server, Palette, Key, User, ChevronRight, GitPullRequest,
+  Server, Palette, Key, User, ChevronRight, GitPullRequest, Clock,
 } from 'lucide-react';
 import { useSettingsStore } from './stores/settingsStore';
 import { useChat, type ChatSession } from './hooks/useChat';
@@ -20,6 +20,7 @@ const NAV_GROUPS = [
   ]},
   { label: 'Build', items: [
     { to: '/workflows', icon: GitBranch, label: 'Agent Workflows' },
+    { to: '/teams', icon: Users, label: 'Teams' },
     { to: '/agents', icon: Users, label: 'Agents' },
     { to: '/repos', icon: FolderGit2, label: 'Repos' },
   ]},
@@ -31,6 +32,7 @@ const NAV_GROUPS = [
     { to: '/executions', icon: Play, label: 'Executions' },
     { to: '/analytics', icon: BarChart3, label: 'Analytics' },
     { to: '/learnings', icon: Brain, label: 'Learnings' },
+    { to: '/crons', icon: Clock, label: 'Scheduled Jobs' },
   ]},
 ];
 
@@ -45,8 +47,6 @@ const SETTINGS_TABS = [
 const PROV: Record<string, { label: string; color: string }> = {
   codex: { label: 'Codex', color: 'text-accent-green' },
   'claude-cli': { label: 'Claude', color: 'text-accent-blue' },
-  gemini: { label: 'Gemini', color: 'text-accent-yellow' },
-  'anthropic-api': { label: 'API', color: 'text-accent-purple' },
 };
 
 function timeAgo(dateStr: string): string {

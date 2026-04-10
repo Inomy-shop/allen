@@ -26,10 +26,12 @@ export const COLOR_MODE_TOKENS = {
     mermaidEdgeLabelBg: '#1a1d2b',
   },
   light: {
-    surface: '#f8fafc',
-    surface100: '#ffffff',
-    surface200: '#eef2ff',
-    border: '#cbd5e1',
+    // Surface & border are null so each theme preset controls its own colors.
+    // Only text/editor/flow tokens are overridden to ensure dark-on-light contrast.
+    surface: null,
+    surface100: null,
+    surface200: null,
+    border: null,
     textPrimary: '#0f172a', // 4.5:1 contrast on white (WCAG AA)
     textSecondary: '#1e293b', // 4.6:1 contrast on white (WCAG AA)
     textMuted: '#374151', // 4.5:1 contrast on white (WCAG AA)

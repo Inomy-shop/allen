@@ -1,8 +1,9 @@
 import { useState, useEffect } from 'react';
-import { mcp as api } from '../../services/api';
+import { mcp as api, secrets as secretsApi } from '../../services/api';
 import {
   Server, Plus, Trash2, RefreshCw, Power, PowerOff,
   CheckCircle, XCircle, HelpCircle, ExternalLink, ChevronDown, ChevronRight, Wrench,
+  Lock, Pencil,
 } from 'lucide-react';
 
 interface McpServer {
@@ -30,6 +31,12 @@ interface McpPreset {
   command?: string;
   args?: string[];
   envKeys: string[];
+  /**
+   * Map secret-key → actual env var name passed to the spawned child process.
+   * Used when a single shared secret needs to appear under a different env var
+   * name for one consumer (e.g. GITHUB_PERSONAL_ACCESS_TOKEN → GH_TOKEN for `gh`).
+   */
+  envVarOverrides?: Record<string, string>;
   argKeys?: string[];
   docsUrl: string;
 }
@@ -37,8 +44,8 @@ interface McpPreset {
 const STATUS_STYLES: Record<string, { icon: React.ReactNode; color: string; label: string }> = {
   connected: { icon: <CheckCircle className="w-3.5 h-3.5" />, color: 'text-accent-green', label: 'Connected' },
   failed: { icon: <XCircle className="w-3.5 h-3.5" />, color: 'text-accent-red', label: 'Failed' },
-  untested: { icon: <HelpCircle className="w-3.5 h-3.5" />, color: 'text-gray-500', label: 'Untested' },
-  disabled: { icon: <PowerOff className="w-3.5 h-3.5" />, color: 'text-gray-600', label: 'Disabled' },
+  untested: { icon: <HelpCircle className="w-3.5 h-3.5" />, color: 'text-theme-muted', label: 'Untested' },
+  disabled: { icon: <PowerOff className="w-3.5 h-3.5" />, color: 'text-theme-subtle', label: 'Disabled' },
 };
 
 function StatusBadge({ status }: { status: string }) {
@@ -60,42 +67,42 @@ function ServerCard({
   return (
     <div className={`border rounded-lg overflow-hidden transition-colors ${server.enabled ? 'border-border/40 bg-surface-100/60' : 'border-border/20 bg-surface-100/30 opacity-60'}`}>
       <div className="flex items-center gap-3 px-4 py-3">
-        <button onClick={() => setExpanded(!expanded)} className="text-gray-500 hover:text-gray-300" title={expanded ? 'Collapse details' : 'Expand details'}>
+        <button onClick={() => setExpanded(!expanded)} className="text-theme-muted hover:text-theme-secondary" title={expanded ? 'Collapse details' : 'Expand details'}>
           {expanded ? <ChevronDown className="w-4 h-4" /> : <ChevronRight className="w-4 h-4" />}
         </button>
-        <Server className={`w-4 h-4 shrink-0 ${server.enabled ? 'text-accent-blue' : 'text-gray-600'}`} />
+        <Server className={`w-4 h-4 shrink-0 ${server.enabled ? 'text-accent-blue' : 'text-theme-subtle'}`} />
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2">
-            <span className="text-sm font-body text-white">{server.name}</span>
-            <span className="text-[10px] font-mono text-gray-600 bg-surface-200/50 px-1.5 py-0.5 rounded">{server.type}</span>
+            <span className="text-sm font-body text-theme-primary">{server.name}</span>
+            <span className="text-[10px] font-mono text-theme-subtle bg-surface-200/50 px-1.5 py-0.5 rounded">{server.type}</span>
             {server.toolCount != null && server.toolCount > 0 && (
-              <span className="text-[10px] font-mono text-gray-600 flex items-center gap-0.5">
+              <span className="text-[10px] font-mono text-theme-subtle flex items-center gap-0.5">
                 <Wrench className="w-2.5 h-2.5" />{server.toolCount} tools
               </span>
             )}
           </div>
-          <div className="text-[11px] text-gray-500 font-body truncate">{server.description}</div>
+          <div className="text-[11px] text-theme-muted font-body truncate">{server.description}</div>
         </div>
         <StatusBadge status={server.status} />
         <div className="flex items-center gap-1">
           <button
             onClick={onTest}
             disabled={!server.enabled || testing}
-            className="p-1.5 rounded-md hover:bg-surface-200/60 text-gray-500 hover:text-accent-blue disabled:opacity-30 transition-colors"
+            className="p-1.5 rounded-md hover:bg-surface-200/60 text-theme-muted hover:text-accent-blue disabled:opacity-30 transition-colors"
             title="Test connection"
           >
             <RefreshCw className={`w-3.5 h-3.5 ${testing ? 'animate-spin' : ''}`} />
           </button>
           <button
             onClick={onToggle}
-            className="p-1.5 rounded-md hover:bg-surface-200/60 text-gray-500 hover:text-accent-yellow transition-colors"
+            className="p-1.5 rounded-md hover:bg-surface-200/60 text-theme-muted hover:text-accent-yellow transition-colors"
             title={server.enabled ? 'Disable' : 'Enable'}
           >
             {server.enabled ? <Power className="w-3.5 h-3.5" /> : <PowerOff className="w-3.5 h-3.5" />}
           </button>
           <button
             onClick={onDelete}
-            className="p-1.5 rounded-md hover:bg-red-500/10 text-gray-500 hover:text-red-400 transition-colors"
+            className="p-1.5 rounded-md hover:bg-red-500/10 text-theme-muted hover:text-red-400 transition-colors"
             title="Delete"
           >
             <Trash2 className="w-3.5 h-3.5" />
@@ -107,23 +114,23 @@ function ServerCard({
         <div className="px-4 py-3 border-t border-border/20 bg-surface-200/20 space-y-2 text-xs">
           {server.type === 'stdio' && (
             <>
-              <div><span className="text-gray-500">Command:</span> <span className="text-gray-300 font-mono">{server.command} {(server.args ?? []).join(' ')}</span></div>
+              <div><span className="text-theme-muted">Command:</span> <span className="text-theme-secondary font-mono">{server.command} {(server.args ?? []).join(' ')}</span></div>
               {server.env && Object.keys(server.env).length > 0 && (
-                <div><span className="text-gray-500">Env vars:</span> <span className="text-gray-300 font-mono">{Object.keys(server.env).join(', ')}</span></div>
+                <div><span className="text-theme-muted">Env vars:</span> <span className="text-theme-secondary font-mono">{Object.keys(server.env).join(', ')}</span></div>
               )}
             </>
           )}
           {(server.type === 'sse' || server.type === 'http') && (
-            <div><span className="text-gray-500">URL:</span> <span className="text-gray-300 font-mono">{server.url}</span></div>
+            <div><span className="text-theme-muted">URL:</span> <span className="text-theme-secondary font-mono">{server.url}</span></div>
           )}
           {server.serverInfo && (
-            <div><span className="text-gray-500">Server:</span> <span className="text-gray-300">{server.serverInfo.name} v{server.serverInfo.version}</span></div>
+            <div><span className="text-theme-muted">Server:</span> <span className="text-theme-secondary">{server.serverInfo.name} v{server.serverInfo.version}</span></div>
           )}
           {server.lastError && (
             <div className="text-red-400 font-mono">{server.lastError}</div>
           )}
           {server.lastTestedAt && (
-            <div className="text-gray-600">Last tested: {new Date(server.lastTestedAt).toLocaleString()}</div>
+            <div className="text-theme-subtle">Last tested: {new Date(server.lastTestedAt).toLocaleString()}</div>
           )}
         </div>
       )}
@@ -131,10 +138,105 @@ function ServerCard({
   );
 }
 
-function AddFromPreset({ presets, onAdd }: { presets: McpPreset[]; onAdd: (preset: McpPreset, env: Record<string, string>, extraArgs: Record<string, string>) => void }) {
+/** Sentinel used in env/arg values to indicate "look up this secret at spawn time" */
+const SECRET_REF_PREFIX = '@secret:';
+
+/**
+ * One field in the preset form. Can either be linked to an existing secret
+ * (auto-detected by name) or hold a literal value the user is typing.
+ */
+type FieldMode = 'use-existing' | 'enter-new';
+type FieldState = { mode: FieldMode; value: string };
+
+function PresetField({
+  fieldKey, state, hasExistingSecret, placeholder, secret, onChange,
+}: {
+  fieldKey: string;
+  state: FieldState;
+  hasExistingSecret: boolean;
+  placeholder?: string;
+  secret: boolean; // password input vs text
+  onChange: (next: FieldState) => void;
+}) {
+  // Auto-link mode: there's already a secret with this exact name in the store
+  if (state.mode === 'use-existing') {
+    return (
+      <div>
+        <label className="text-[10px] font-label uppercase tracking-wider text-theme-muted mb-1 block">{fieldKey}</label>
+        <div className="flex items-center gap-2 bg-accent-green/5 border border-accent-green/30 rounded-sm px-3 py-1.5">
+          <Lock className="w-3 h-3 text-accent-green shrink-0" />
+          <span className="text-xs font-mono text-accent-green flex-1">Using saved secret <span className="text-theme-primary">{fieldKey}</span></span>
+          <button
+            onClick={() => onChange({ mode: 'enter-new', value: '' })}
+            className="text-[10px] text-theme-muted hover:text-theme-secondary flex items-center gap-0.5"
+            title="Replace with a new value"
+            type="button"
+          >
+            <Pencil className="w-2.5 h-2.5" /> Replace
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  // Manual entry mode (no existing secret, OR user clicked Replace)
+  return (
+    <div>
+      <label className="text-[10px] font-label uppercase tracking-wider text-theme-muted mb-1 block">
+        {fieldKey}
+        {hasExistingSecret && (
+          <button
+            onClick={() => onChange({ mode: 'use-existing', value: '' })}
+            className="ml-2 text-[10px] normal-case tracking-normal text-accent-blue hover:text-accent-blue/80"
+            type="button"
+          >
+            ← use saved secret
+          </button>
+        )}
+      </label>
+      <input
+        type={secret ? 'password' : 'text'}
+        value={state.value}
+        onChange={e => onChange({ mode: 'enter-new', value: e.target.value })}
+        placeholder={placeholder ?? `Enter ${fieldKey}...`}
+        autoComplete="new-password"
+        className="w-full bg-surface-200/50 border border-border/30 rounded-sm px-3 py-1.5 text-sm text-theme-primary font-mono placeholder-gray-600 focus:outline-none focus:border-accent-blue/50"
+      />
+    </div>
+  );
+}
+
+function AddFromPreset({
+  presets, existingSecretKeys, onAdd,
+}: {
+  presets: McpPreset[];
+  existingSecretKeys: Set<string>;
+  onAdd: (preset: McpPreset, envFields: Record<string, FieldState>, argFields: Record<string, FieldState>) => void;
+}) {
   const [selected, setSelected] = useState<McpPreset | null>(null);
-  const [envValues, setEnvValues] = useState<Record<string, string>>({});
-  const [argValues, setArgValues] = useState<Record<string, string>>({});
+  const [envFields, setEnvFields] = useState<Record<string, FieldState>>({});
+  const [argFields, setArgFields] = useState<Record<string, FieldState>>({});
+
+  // Initialize fields when a preset is picked. If a secret with the same name
+  // already exists in the store, default to "use existing"; otherwise prompt
+  // the user to enter a new value.
+  const choosePreset = (p: McpPreset) => {
+    const initEnv: Record<string, FieldState> = {};
+    for (const k of p.envKeys) {
+      initEnv[k] = existingSecretKeys.has(k)
+        ? { mode: 'use-existing', value: '' }
+        : { mode: 'enter-new', value: '' };
+    }
+    const initArgs: Record<string, FieldState> = {};
+    for (const k of (p.argKeys ?? [])) {
+      initArgs[k] = existingSecretKeys.has(k)
+        ? { mode: 'use-existing', value: '' }
+        : { mode: 'enter-new', value: '' };
+    }
+    setSelected(p);
+    setEnvFields(initEnv);
+    setArgFields(initArgs);
+  };
 
   if (!selected) {
     return (
@@ -142,56 +244,63 @@ function AddFromPreset({ presets, onAdd }: { presets: McpPreset[]; onAdd: (prese
         {presets.map(p => (
           <button
             key={p.name}
-            onClick={() => { setSelected(p); setEnvValues({}); setArgValues({}); }}
+            onClick={() => choosePreset(p)}
             className="flex flex-col gap-1 px-3 py-2.5 rounded-lg bg-surface-200/30 border border-border/30 hover:bg-surface-200/60 hover:border-accent-blue/30 transition-all text-left"
           >
-            <span className="text-sm font-body text-white">{p.name}</span>
-            <span className="text-[10px] text-gray-500 font-body">{p.description}</span>
+            <span className="text-sm font-body text-theme-primary">{p.name}</span>
+            <span className="text-[10px] text-theme-muted font-body">{p.description}</span>
           </button>
         ))}
       </div>
     );
   }
 
-  const allEnvFilled = selected.envKeys.every(k => envValues[k]);
-  const allArgsFilled = (selected.argKeys ?? []).every(k => argValues[k]);
+  // A field is "filled" if it's linked to an existing secret OR has a non-empty value
+  const isFilled = (s?: FieldState) => !!s && (s.mode === 'use-existing' || s.value.length > 0);
+  const allEnvFilled = selected.envKeys.every(k => isFilled(envFields[k]));
+  const allArgsFilled = (selected.argKeys ?? []).every(k => isFilled(argFields[k]));
+
+  const ARG_PLACEHOLDERS: Record<string, string> = {
+    POSTGRES_CONNECTION_STRING: 'postgresql://user:pass@host:5432/db?sslmode=require',
+    MONGODB_CONNECTION_STRING: 'mongodb://user:pass@host:27017/db',
+  };
 
   return (
     <div className="border border-border/40 rounded-lg p-4 bg-surface-200/20 space-y-3">
       <div className="flex items-center justify-between">
-        <h4 className="text-sm font-body text-white">Configure {selected.name}</h4>
-        <button onClick={() => setSelected(null)} className="text-xs text-gray-500 hover:text-gray-300">Cancel</button>
+        <h4 className="text-sm font-body text-theme-primary">Configure {selected.name}</h4>
+        <button onClick={() => setSelected(null)} className="text-xs text-theme-muted hover:text-theme-secondary">Cancel</button>
       </div>
-      <p className="text-[11px] text-gray-500">{selected.description}</p>
-      {/* Connection strings / args */}
+      <p className="text-[11px] text-theme-muted">{selected.description}</p>
+
+      {/* Connection strings (positional args) */}
       {(selected.argKeys ?? []).map(key => (
-        <div key={key}>
-          <label className="text-[10px] font-label uppercase tracking-wider text-gray-500 mb-1 block">{key}</label>
-          <input
-            type="text"
-            value={argValues[key] ?? ''}
-            onChange={e => setArgValues(prev => ({ ...prev, [key]: e.target.value }))}
-            placeholder={key === 'POSTGRES_CONNECTION_STRING' ? 'postgresql://user:pass@host:5432/db?sslmode=require' : key === 'MONGODB_CONNECTION_STRING' ? 'mongodb://user:pass@host:27017/db' : `Enter ${key}...`}
-            className="w-full bg-surface-200/50 border border-border/30 rounded-sm px-3 py-1.5 text-sm text-white font-mono placeholder-gray-600 focus:outline-none focus:border-accent-blue/50"
-          />
-        </div>
+        <PresetField
+          key={key}
+          fieldKey={key}
+          state={argFields[key] ?? { mode: 'enter-new', value: '' }}
+          hasExistingSecret={existingSecretKeys.has(key)}
+          placeholder={ARG_PLACEHOLDERS[key]}
+          secret={false}
+          onChange={next => setArgFields(prev => ({ ...prev, [key]: next }))}
+        />
       ))}
-      {/* Env vars (API keys, secrets) */}
+
+      {/* Env vars (API keys, tokens) */}
       {selected.envKeys.map(key => (
-        <div key={key}>
-          <label className="text-[10px] font-label uppercase tracking-wider text-gray-500 mb-1 block">{key}</label>
-          <input
-            type="password"
-            value={envValues[key] ?? ''}
-            onChange={e => setEnvValues(prev => ({ ...prev, [key]: e.target.value }))}
-            placeholder={`Enter ${key}...`}
-            className="w-full bg-surface-200/50 border border-border/30 rounded-sm px-3 py-1.5 text-sm text-white font-mono placeholder-gray-600 focus:outline-none focus:border-accent-blue/50"
-          />
-        </div>
+        <PresetField
+          key={key}
+          fieldKey={key}
+          state={envFields[key] ?? { mode: 'enter-new', value: '' }}
+          hasExistingSecret={existingSecretKeys.has(key)}
+          secret={true}
+          onChange={next => setEnvFields(prev => ({ ...prev, [key]: next }))}
+        />
       ))}
+
       <div className="flex items-center gap-2">
         <button
-          onClick={() => { onAdd(selected, envValues, argValues); setSelected(null); }}
+          onClick={() => { onAdd(selected, envFields, argFields); setSelected(null); }}
           disabled={!allEnvFilled || !allArgsFilled}
           className="btn-primary text-xs px-3 py-1.5 disabled:opacity-30"
         >
@@ -208,15 +317,21 @@ function AddFromPreset({ presets, onAdd }: { presets: McpPreset[]; onAdd: (prese
 export default function McpServerManager() {
   const [servers, setServers] = useState<McpServer[]>([]);
   const [presets, setPresets] = useState<McpPreset[]>([]);
+  const [secretKeys, setSecretKeys] = useState<Set<string>>(new Set());
   const [loading, setLoading] = useState(true);
   const [showAdd, setShowAdd] = useState(false);
   const [testingId, setTestingId] = useState<string | null>(null);
 
   const loadServers = async () => {
     try {
-      const [s, p] = await Promise.all([api.list(), api.presets()]);
+      const [s, p, secretsList] = await Promise.all([
+        api.list(),
+        api.presets(),
+        secretsApi.list().catch(() => [] as string[]),
+      ]);
       setServers(s);
       setPresets(p);
+      setSecretKeys(new Set(secretsList ?? []));
     } catch (e) {
       console.error('Failed to load MCP servers:', e);
     } finally {
@@ -226,13 +341,49 @@ export default function McpServerManager() {
 
   useEffect(() => { loadServers(); }, []);
 
-  const handleAddPreset = async (preset: McpPreset, env: Record<string, string>, extraArgs: Record<string, string>) => {
+  const handleAddPreset = async (
+    preset: McpPreset,
+    envFields: Record<string, FieldState>,
+    argFields: Record<string, FieldState>,
+  ) => {
     try {
-      // Append user-provided args (connection strings) to the preset args
-      const args = [...(preset.args ?? [])];
-      for (const key of (preset.argKeys ?? [])) {
-        if (extraArgs[key]) args.push(extraArgs[key]);
+      // For any field where the user typed a NEW value, first store it as a
+      // secret under the secret KEY name (which may differ from the env var
+      // name — see envVarOverrides). This way the secret is named after what
+      // it IS (e.g. GITHUB_PERSONAL_ACCESS_TOKEN), not where it's used
+      // (e.g. GH_TOKEN). After this step, every field is a `@secret:` reference.
+      const newlyCreatedKeys: string[] = [];
+      for (const secretKey of preset.envKeys) {
+        const f = envFields[secretKey];
+        if (!f || f.mode !== 'enter-new' || !f.value) continue;
+        await secretsApi.create(secretKey, f.value);
+        newlyCreatedKeys.push(secretKey);
       }
+      for (const secretKey of (preset.argKeys ?? [])) {
+        const f = argFields[secretKey];
+        if (!f || f.mode !== 'enter-new' || !f.value) continue;
+        await secretsApi.create(secretKey, f.value);
+        newlyCreatedKeys.push(secretKey);
+      }
+
+      // Build env. Each entry is `<envVarName>: '@secret:<secretKey>'`. The
+      // env var name is the override target if specified, else the secret key.
+      const env: Record<string, string> = {};
+      for (const secretKey of preset.envKeys) {
+        const f = envFields[secretKey];
+        if (!f) continue;
+        const envVarName = preset.envVarOverrides?.[secretKey] ?? secretKey;
+        env[envVarName] = `${SECRET_REF_PREFIX}${secretKey}`;
+      }
+
+      // Build args. Positional args are appended in the order presets define.
+      const args = [...(preset.args ?? [])];
+      for (const secretKey of (preset.argKeys ?? [])) {
+        const f = argFields[secretKey];
+        if (!f) continue;
+        args.push(`${SECRET_REF_PREFIX}${secretKey}`);
+      }
+
       await api.create({
         name: preset.name,
         description: preset.description,
@@ -243,7 +394,15 @@ export default function McpServerManager() {
         env,
       });
       setShowAdd(false);
-      loadServers();
+      // Refresh both server list AND secrets list (we may have just created some)
+      void loadServers();
+      if (newlyCreatedKeys.length > 0) {
+        setSecretKeys(prev => {
+          const next = new Set(prev);
+          for (const k of newlyCreatedKeys) next.add(k);
+          return next;
+        });
+      }
     } catch (e) {
       console.error('Failed to add MCP server:', e);
     }
@@ -271,13 +430,13 @@ export default function McpServerManager() {
   // Filter presets that aren't already added
   const availablePresets = presets.filter(p => !servers.some(s => s.name === p.name));
 
-  if (loading) return <div className="text-xs text-gray-600 animate-pulse py-4">Loading MCP servers...</div>;
+  if (loading) return <div className="text-xs text-theme-subtle animate-pulse py-4">Loading MCP servers...</div>;
 
   return (
     <div className="space-y-4">
       {/* Server list */}
       {servers.length === 0 && !showAdd && (
-        <div className="text-center py-6 text-xs text-gray-600">
+        <div className="text-center py-6 text-xs text-theme-subtle">
           No MCP servers configured. Add one to give the chat agent access to external tools.
         </div>
       )}
@@ -299,19 +458,19 @@ export default function McpServerManager() {
       {showAdd ? (
         <div className="space-y-3">
           <div className="flex items-center justify-between">
-            <h3 className="text-xs font-label uppercase tracking-widest text-gray-400">Add MCP Server</h3>
-            <button onClick={() => setShowAdd(false)} className="text-xs text-gray-500 hover:text-gray-300">Cancel</button>
+            <h3 className="text-xs font-label uppercase tracking-widest text-theme-secondary">Add MCP Server</h3>
+            <button onClick={() => setShowAdd(false)} className="text-xs text-theme-muted hover:text-theme-secondary">Cancel</button>
           </div>
           {availablePresets.length > 0 ? (
-            <AddFromPreset presets={availablePresets} onAdd={handleAddPreset} />
+            <AddFromPreset presets={availablePresets} existingSecretKeys={secretKeys} onAdd={handleAddPreset} />
           ) : (
-            <div className="text-xs text-gray-600">All preset servers have been added.</div>
+            <div className="text-xs text-theme-subtle">All preset servers have been added.</div>
           )}
         </div>
       ) : (
         <button
           title="Add MCP server"
-          className="flex items-center gap-2 px-3 py-2 rounded-lg border border-dashed border-border/40 hover:border-accent-blue/30 hover:bg-surface-200/30 transition-all text-gray-500 hover:text-gray-300 w-full"
+          className="flex items-center gap-2 px-3 py-2 rounded-lg border border-dashed border-border/40 hover:border-accent-blue/30 hover:bg-surface-200/30 transition-all text-theme-muted hover:text-theme-secondary w-full"
         >
           <Plus className="w-4 h-4" />
           <span className="text-xs font-body">Add MCP Server</span>

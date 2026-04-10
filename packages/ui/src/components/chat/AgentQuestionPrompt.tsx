@@ -29,13 +29,13 @@ export function AgentQuestionPrompt({ question, fromAgent, agentInfo, onAnswer }
           <RoleIcon icon={agentInfo?.icon} color={agentColor} size={13} />
         </div>
         <span className="text-[12px] font-heading font-semibold tracking-wider" style={{ color: agentColor }}>{agentName}</span>
-        <span className="text-[11px] text-gray-500 font-mono">is asking you:</span>
+        <span className="text-[11px] text-theme-muted font-mono">is asking you:</span>
         <HelpCircle className="w-3.5 h-3.5 text-accent-cyan/60 ml-auto shrink-0" />
       </div>
 
       {/* Question */}
       <div className="px-4 py-3">
-        <p className="text-[13px] text-gray-200 font-body leading-relaxed">{question}</p>
+        <p className="text-[13px] text-theme-secondary font-body leading-relaxed">{question}</p>
       </div>
 
       {/* Answer input */}
@@ -48,10 +48,10 @@ export function AgentQuestionPrompt({ question, fromAgent, agentInfo, onAnswer }
           autoFocus
           rows={3}
           disabled={submitting}
-          className="w-full bg-surface-200/50 border border-border/30 rounded-md px-3 py-2 text-sm text-white placeholder-gray-600 font-body resize-y focus:outline-none focus:border-accent-cyan/50 disabled:opacity-50"
+          className="w-full bg-surface-200/50 border border-border/30 rounded-md px-3 py-2 text-sm text-theme-primary placeholder-gray-600 font-body resize-y focus:outline-none focus:border-accent-cyan/50 disabled:opacity-50"
         />
         <div className="flex items-center justify-between">
-          <span className="text-[10px] text-gray-700 font-mono">shift+enter for new line</span>
+          <span className="text-[10px] text-theme-subtle font-mono">shift+enter for new line</span>
           <button
             onClick={handleSubmit}
             disabled={!answer.trim() || submitting}

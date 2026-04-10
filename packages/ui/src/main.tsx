@@ -10,6 +10,7 @@ import ExecutionListPage from './pages/ExecutionListPage';
 import ExecutionDetailPage from './pages/ExecutionDetailPage';
 import DashboardPage from './pages/DashboardPage';
 import RoleManagerPage from './pages/RoleManagerPage';
+import TeamManagerPage from './pages/TeamManagerPage';
 import RepoManagerPage from './pages/RepoManagerPage';
 import SettingsPage from './pages/SettingsPage';
 import LearningsPage from './pages/LearningsPage';
@@ -19,6 +20,8 @@ import WorkspaceListPage from './pages/WorkspaceListPage';
 import WorkspaceDetailPage from './pages/WorkspaceDetailPage';
 import PullRequestListPage from './pages/PullRequestListPage';
 import PullRequestDetailPage from './pages/PullRequestDetailPage';
+import CronManagerPage from './pages/CronManagerPage';
+import { ToastProvider } from './components/common/Toast';
 
 const router = createBrowserRouter([
   {
@@ -34,6 +37,7 @@ const router = createBrowserRouter([
       { path: 'executions', element: <ExecutionListPage /> },
       { path: 'executions/:id', element: <ExecutionDetailPage /> },
       { path: 'agents', element: <RoleManagerPage /> },
+      { path: 'teams', element: <TeamManagerPage /> },
       { path: 'chat', element: <ChatPage /> },
       { path: 'chat/:sessionId', element: <ChatPage /> },
       { path: 'workspaces', element: <WorkspaceListPage /> },
@@ -41,6 +45,7 @@ const router = createBrowserRouter([
       { path: 'pull-requests', element: <PullRequestListPage /> },
       { path: 'pull-requests/:id', element: <PullRequestDetailPage /> },
       { path: 'analytics', element: <AnalyticsPage /> },
+      { path: 'crons', element: <CronManagerPage /> },
       { path: 'settings', element: <SettingsPage /> },
       { path: 'settings/:tab', element: <SettingsPage /> },
     ],
@@ -49,6 +54,8 @@ const router = createBrowserRouter([
 
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>
-    <RouterProvider router={router} />
+    <ToastProvider>
+      <RouterProvider router={router} />
+    </ToastProvider>
   </React.StrictMode>,
 );

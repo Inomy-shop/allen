@@ -16,6 +16,12 @@ import { searchSimilar, backfillEmbeddings } from './embedding.service.js';
 
 // ── Types ──
 
+export interface SlackContext {
+  channelId: string;
+  threadTs: string;
+  teamId: string;
+}
+
 export interface ChatSession {
   _id?: ObjectId;
   title: string;
@@ -26,6 +32,8 @@ export interface ChatSession {
   provider: ChatProvider;
   model?: string;
   llmSessionId?: string;
+  source?: 'ui' | 'slack';
+  slackContext?: SlackContext;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -105,7 +113,6 @@ const API_PORT = process.env.PORT ?? '4023';
  * System prompt varies by provider:
  * - claude-cli: uses <tool_call> protocol (appended by chat-llm.ts)
  * - codex: uses bash + curl against local API
- * - gemini/anthropic-api: uses native function calling (tools registered at API level)
  */
 async function getSystemPrompt(provider: ChatProvider, db: Db, userMessage?: string): Promise<string> {
   // Load relevant learnings using embedding similarity search
@@ -148,7 +155,34 @@ IMPORTANT RULES:
 4. After starting a workflow (run_workflow) or spawning an agent (spawn_agent), monitor it to completion. Keep calling get_execution in a loop (with a few seconds between calls) until status is "completed" or "failed". Then present the final output. Do NOT stop after seeing "running" — wait for it to finish.
 5. When the user selects a team agent (PM, Engineer, QA, etc.), that agent can use delegate_to_agent to involve other team members. The delegation creates a visible thread showing agent-to-agent collaboration.
 6. Use report_to_user for progress updates during long delegations so the user knows what's happening.
-7. Only ask "Which repo?" if the task clearly requires working with code (e.g. review, fix, investigate, build) AND the user hasn't specified one via @repo-name AND no workspace context is provided. For general questions, planning, brainstorming — just answer directly.${learningsBlock}`;
+7. Only ask "Which repo?" if the task clearly requires working with code (e.g. review, fix, investigate, build) AND the user hasn't specified one via @repo-name AND no workspace context is provided. For general questions, planning, brainstorming — just answer directly.
+
+═══ TEAM BUILDER ROUTING ═══
+FlowForge has a "meta team" of builder agents that can extend the org chart on demand. You SHOULD route the user to them when they ask to grow the system itself:
+
+A. **Building a NEW team** — phrases like:
+   • "build me a finance team"
+   • "create a marketing team"
+   • "set up a data science team"
+   • "I want a [domain] team"
+   → Call delegate_to_agent("team-builder-agent", "<the user's request verbatim>")
+   → Then call get_delegation_result(conversation_id) and keep polling until done.
+   → The team-builder-agent will research the domain, design the structure, ASK YOU to confirm, then create it.
+   → When team-builder-agent asks a confirmation question (via ask_caller), forward it to the user via ask_user with the EXACT blueprint they sent — don't summarize. The user must approve the actual structure.
+
+B. **Adding an agent to an EXISTING team** — phrases like:
+   • "add a tax specialist to the finance team"
+   • "I need an SRE in the engineering team"
+   • "add a content writer to marketing"
+   → Call delegate_to_agent("agent-builder-agent", "<the user's request verbatim>")
+   → Same polling + confirmation forwarding rules as above.
+
+C. **Listing the org chart** — phrases like "what teams do we have", "show me the org chart":
+   → Call delegate_to_agent("team-builder-agent", "list current teams") OR just call list_teams / list_agents directly. Either is fine.
+
+CRITICAL: For A and B, route to the right builder. Don't try to create teams or agents yourself — you don't have create_team / create_agent tools. The builders do.
+
+DO NOT route to team-builder for unrelated requests (running workflows, querying executions, debugging code, etc.) — only when the user explicitly wants to extend the team/agent structure.${learningsBlock}`;
 
   // Inject available repos
   let reposBlock = '';
@@ -178,7 +212,6 @@ For code tasks (review, investigate, plan): use flowforge spawn_agent or run_wor
   }
 
   // For claude-cli: tool instructions are appended by buildToolInstructions() in chat-llm.ts
-  // For gemini/anthropic-api: tools are registered natively, just need guidance
   return `${base}
 
 You have tools to interact with the system. When a user asks to run a workflow, check status, query data, or debug — use the appropriate tool. Don't describe what you would do; actually do it.
@@ -229,11 +262,18 @@ export class ChatService {
 
   getProviders() { return PROVIDERS; }
 
-  async createSession(provider: ChatProvider = 'codex', model?: string): Promise<ChatSession> {
+  async createSession(
+    provider: ChatProvider = 'codex',
+    model?: string,
+    source: 'ui' | 'slack' = 'ui',
+    slackContext?: SlackContext,
+  ): Promise<ChatSession> {
     const now = new Date();
     const doc: ChatSession = {
       title: 'New Conversation', status: 'active', messageCount: 0,
       lastMessageAt: now, totalCostUsd: 0, provider, model,
+      source,
+      ...(slackContext ? { slackContext } : {}),
       createdAt: now, updatedAt: now,
     };
     const result = await this.sessions.insertOne(doc);
@@ -290,6 +330,58 @@ export class ChatService {
     res.on('close', () => { entry.listeners.delete(res); });
 
     this.runLLM(sessionId, assistantMsgId, content, entry, agent).catch(() => {});
+  }
+
+  /**
+   * Send a message and await the final result without an HTTP Response.
+   * Used by the Slack integration: agent runs the same pipeline as sendMessage(),
+   * but instead of streaming SSE the caller gets a Promise with the final text.
+   * UI users can still watch progress by subscribing to /sessions/:id/stream.
+   */
+  async sendMessageForSlack(
+    sessionId: string,
+    content: string,
+    agent?: string,
+  ): Promise<{ text: string; costUsd: number; durationMs: number }> {
+    const session = await this.sessions.findOne({ _id: new ObjectId(sessionId) });
+    if (!session) throw new Error('Session not found');
+    if (activeQueries.has(sessionId)) throw new Error('Session busy');
+
+    const now = new Date();
+    await this.messages.insertOne({
+      sessionId, role: 'user', content, status: 'completed', createdAt: now, completedAt: now,
+    });
+    const assistantResult = await this.messages.insertOne({
+      sessionId, role: 'assistant', content: '', status: 'streaming', createdAt: new Date(),
+    });
+    const assistantMsgId = assistantResult.insertedId.toString();
+
+    await this.sessions.updateOne(
+      { _id: new ObjectId(sessionId) },
+      { $set: { lastMessageAt: new Date(), updatedAt: new Date() }, $inc: { messageCount: 2 } },
+    );
+
+    // ActiveQuery with no SSE listeners — UI can still subscribe via GET /stream
+    const entry: ActiveQuery = {
+      sessionId, messageId: assistantMsgId, currentText: '', toolCalls: [],
+      listeners: new Set(), aborted: false,
+    };
+    activeQueries.set(sessionId, entry);
+
+    // runLLM handles all DB updates, error logging, and active session cleanup
+    await this.runLLM(sessionId, assistantMsgId, content, entry, agent);
+
+    // Read the final result from DB (runLLM has already saved it)
+    const msg = await this.messages.findOne({ _id: new ObjectId(assistantMsgId) });
+    if (!msg) throw new Error('Assistant message not found after runLLM');
+    if (msg.status === 'failed') {
+      throw new Error((msg.error as string) || 'Agent failed to respond');
+    }
+    return {
+      text: (msg.content as string) ?? '',
+      costUsd: (msg.costUsd as number) ?? 0,
+      durationMs: (msg.durationMs as number) ?? 0,
+    };
   }
 
   subscribeToStream(sessionId: string, res: Response): void {

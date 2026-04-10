@@ -183,7 +183,7 @@ export default function WorkflowBuilderPage() {
   }, [id, navigate]);
 
   if (loading) {
-    return <div className="flex items-center justify-center h-full text-gray-500 font-mono text-sm">LOADING...</div>;
+    return <div className="flex items-center justify-center h-full text-theme-muted font-mono text-sm">LOADING...</div>;
   }
 
   return (
@@ -191,14 +191,14 @@ export default function WorkflowBuilderPage() {
       {/* Top bar */}
       <header className="flex items-center justify-between px-4 py-2 border-b border-border/50 bg-surface-50 shrink-0">
         <div className="flex items-center gap-3">
-          <button onClick={() => navigate('/workflows')} className="text-gray-400 hover:text-accent-blue transition-colors" title="Back to workflows">
+          <button onClick={() => navigate('/workflows')} className="text-theme-secondary hover:text-accent-blue transition-colors" title="Back to workflows">
             <ArrowLeft className="w-4 h-4" />
           </button>
-          <span className="font-heading text-sm font-semibold text-white tracking-wider uppercase">
+          <span className="font-heading text-sm font-semibold text-theme-primary tracking-wider uppercase">
             {workflowMeta.name ?? 'New Workflow'}
           </span>
           {workflowMeta.version && (
-            <span className="text-xs text-gray-500 font-mono">v{workflowMeta.version}</span>
+            <span className="text-xs text-theme-muted font-mono">v{workflowMeta.version}</span>
           )}
         </div>
 
@@ -209,7 +209,7 @@ export default function WorkflowBuilderPage() {
               onClick={() => handleModeSwitch('visual')}
               title="Visual editor"
               className={`flex items-center gap-1.5 px-3 py-1.5 rounded-sm text-xs font-label uppercase tracking-wider transition-all ${
-                mode === 'visual' ? 'bg-accent-blue/15 text-accent-blue border border-accent-blue/30' : 'text-gray-400 hover:text-gray-200 border border-transparent'
+                mode === 'visual' ? 'bg-accent-blue/15 text-accent-blue border border-accent-blue/30' : 'text-theme-secondary hover:text-gray-200 border border-transparent'
               }`}
             >
               <Eye className="w-3.5 h-3.5" /> Visual
@@ -218,7 +218,7 @@ export default function WorkflowBuilderPage() {
               onClick={() => handleModeSwitch('yaml')}
               title="YAML editor"
               className={`flex items-center gap-1.5 px-3 py-1.5 rounded-sm text-xs font-label uppercase tracking-wider transition-all ${
-                mode === 'yaml' ? 'bg-accent-blue/15 text-accent-blue border border-accent-blue/30' : 'text-gray-400 hover:text-gray-200 border border-transparent'
+                mode === 'yaml' ? 'bg-accent-blue/15 text-accent-blue border border-accent-blue/30' : 'text-theme-secondary hover:text-gray-200 border border-transparent'
               }`}
             >
               <Code2 className="w-3.5 h-3.5" /> YAML
@@ -252,8 +252,8 @@ export default function WorkflowBuilderPage() {
                 <div className="absolute right-0 top-full mt-2 w-96 max-h-80 overflow-auto z-50 bg-surface-100 border border-border rounded-sm shadow-lg">
                   {/* Header */}
                   <div className="flex items-center justify-between px-3 py-2 border-b border-border/50 sticky top-0 bg-surface-100">
-                    <span className="text-xs font-label uppercase tracking-wider text-gray-400">Validation Issues</span>
-                    <button onClick={() => setShowValidation(false)} className="text-gray-500 hover:text-white" title="Close">
+                    <span className="text-xs font-label uppercase tracking-wider text-theme-secondary">Validation Issues</span>
+                    <button onClick={() => setShowValidation(false)} className="text-theme-muted hover:text-theme-primary" title="Close">
                       <X className="w-3.5 h-3.5" />
                     </button>
                   </div>
@@ -265,7 +265,7 @@ export default function WorkflowBuilderPage() {
                       {validation.errors.map((err, i) => (
                         <div key={`err-${i}`} className="flex items-start gap-2 py-1.5 border-b border-border/20 last:border-0">
                           <XCircle className="w-3.5 h-3.5 text-accent-red shrink-0 mt-0.5" />
-                          <span className="text-xs text-gray-300 font-mono leading-relaxed">{err}</span>
+                          <span className="text-xs text-theme-secondary font-mono leading-relaxed">{err}</span>
                         </div>
                       ))}
                     </div>
@@ -278,7 +278,7 @@ export default function WorkflowBuilderPage() {
                       {validation.warnings.map((warn, i) => (
                         <div key={`warn-${i}`} className="flex items-start gap-2 py-1.5 border-b border-border/20 last:border-0">
                           <AlertTriangle className="w-3.5 h-3.5 text-accent-yellow shrink-0 mt-0.5" />
-                          <span className="text-xs text-gray-300 font-mono leading-relaxed">{warn}</span>
+                          <span className="text-xs text-theme-secondary font-mono leading-relaxed">{warn}</span>
                         </div>
                       ))}
                     </div>

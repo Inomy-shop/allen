@@ -10,19 +10,19 @@
     "lint": "tsc --noEmit"
   },
   "dependencies": {
-    "@anthropic-ai/sdk": "^0.82.0",
     "@flowforge/engine": "*",
-    "@google/generative-ai": "^0.24.1",
+    "@types/node-cron": "^3.0.11",
     "@xenova/transformers": "^2.17.2",
     "cors": "^2.8.5",
+    "cron-parser": "^5.5.0",
     "dotenv": "^17.4.0",
     "express": "^4.21.0",
     "http-proxy-middleware": "^3.0.5",
     "js-yaml": "^4.1.0",
     "mongodb": "^6.12.0",
     "multer": "^1.4.5-lts.1",
+    "node-cron": "^4.2.1",
     "node-pty": "^1.1.0",
-    "openai": "^6.33.0",
     "ws": "^8.20.0",
     "zod": "^3.25.76"
   },

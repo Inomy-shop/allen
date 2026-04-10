@@ -84,11 +84,11 @@ export default function Select({ value, onChange, options, placeholder = 'Select
         }`}
       >
         {selected ? (
-          <span className="truncate text-gray-100 text-sm">{selected.label}</span>
+          <span className="truncate text-theme-primary text-sm">{selected.label}</span>
         ) : (
-          <span className="truncate text-gray-500 text-sm">{placeholder}</span>
+          <span className="truncate text-theme-muted text-sm">{placeholder}</span>
         )}
-        <ChevronDown className={`w-3.5 h-3.5 text-gray-500 shrink-0 transition-transform ${open ? 'rotate-180 text-accent-blue' : ''}`} />
+        <ChevronDown className={`w-3.5 h-3.5 text-theme-muted shrink-0 transition-transform ${open ? 'rotate-180 text-accent-blue' : ''}`} />
       </button>
 
       {/* Dropdown — portaled to body, positioned fixed relative to viewport */}
@@ -111,17 +111,17 @@ export default function Select({ value, onChange, options, placeholder = 'Select
               className={`w-full text-left px-3 py-2 text-sm transition-colors cursor-pointer flex flex-col ${
                 opt.value === value
                   ? 'bg-accent-blue/10 text-accent-blue'
-                  : 'text-gray-300 hover:bg-surface-200 hover:text-white'
+                  : 'text-theme-secondary hover:bg-surface-200 hover:text-theme-primary'
               }`}
             >
               <span className="font-body truncate">{opt.label}</span>
               {opt.sublabel && (
-                <span className="text-[10px] font-mono text-gray-500 truncate">{opt.sublabel}</span>
+                <span className="text-[10px] font-mono text-theme-muted truncate">{opt.sublabel}</span>
               )}
             </button>
           ))}
           {options.length === 0 && (
-            <div className="px-3 py-3 text-xs text-gray-500 text-center font-mono">No options</div>
+            <div className="px-3 py-3 text-xs text-theme-muted text-center font-mono">No options</div>
           )}
         </div>,
         document.body,

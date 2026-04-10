@@ -50,13 +50,13 @@ export default function AnalyticsPage() {
   // Errors
   const errors = logs.filter(l => l.status === 'failed');
 
-  if (loading) return <div className="p-6 text-xs text-gray-600 animate-pulse">Loading analytics...</div>;
+  if (loading) return <div className="p-6 text-xs text-theme-subtle animate-pulse">Loading analytics...</div>;
 
   return (
     <div className="p-6 space-y-6">
       <div>
-        <h1 className="font-heading text-2xl text-white tracking-wider">Analytics</h1>
-        <p className="text-sm text-gray-500 font-body mt-1">Chat agent performance and tool usage</p>
+        <h1 className="font-heading text-2xl text-theme-primary tracking-wider">Analytics</h1>
+        <p className="text-sm text-theme-muted font-body mt-1">Chat agent performance and tool usage</p>
       </div>
 
       {/* Stats cards */}
@@ -64,47 +64,47 @@ export default function AnalyticsPage() {
         <div className="card p-4">
           <div className="flex items-center gap-2 mb-2">
             <MessageSquare className="w-4 h-4 text-accent-blue" />
-            <span className="text-[10px] font-label uppercase tracking-widest text-gray-500">Messages</span>
+            <span className="text-[10px] font-label uppercase tracking-widest text-theme-muted">Messages</span>
           </div>
-          <div className="text-2xl font-heading text-white">{totalMessages}</div>
-          <div className="text-[10px] text-gray-600 font-mono">{totalConversations} conversations</div>
+          <div className="text-2xl font-heading text-theme-primary">{totalMessages}</div>
+          <div className="text-[10px] text-theme-subtle font-mono">{totalConversations} conversations</div>
         </div>
 
         <div className="card p-4">
           <div className="flex items-center gap-2 mb-2">
             <DollarSign className="w-4 h-4 text-accent-green" />
-            <span className="text-[10px] font-label uppercase tracking-widest text-gray-500">Total Cost</span>
+            <span className="text-[10px] font-label uppercase tracking-widest text-theme-muted">Total Cost</span>
           </div>
-          <div className="text-2xl font-heading text-white">${totalCost.toFixed(2)}</div>
-          <div className="text-[10px] text-gray-600 font-mono">${totalMessages > 0 ? (totalCost / totalMessages).toFixed(4) : '0'}/msg</div>
+          <div className="text-2xl font-heading text-theme-primary">${totalCost.toFixed(2)}</div>
+          <div className="text-[10px] text-theme-subtle font-mono">${totalMessages > 0 ? (totalCost / totalMessages).toFixed(4) : '0'}/msg</div>
         </div>
 
         <div className="card p-4">
           <div className="flex items-center gap-2 mb-2">
             <Clock className="w-4 h-4 text-accent-yellow" />
-            <span className="text-[10px] font-label uppercase tracking-widest text-gray-500">Avg Response</span>
+            <span className="text-[10px] font-label uppercase tracking-widest text-theme-muted">Avg Response</span>
           </div>
-          <div className="text-2xl font-heading text-white">{(avgDuration / 1000).toFixed(1)}s</div>
-          <div className="text-[10px] text-gray-600 font-mono">per message</div>
+          <div className="text-2xl font-heading text-theme-primary">{(avgDuration / 1000).toFixed(1)}s</div>
+          <div className="text-[10px] text-theme-subtle font-mono">per message</div>
         </div>
 
         <div className="card p-4">
           <div className="flex items-center gap-2 mb-2">
             <Wrench className="w-4 h-4 text-accent-purple" />
-            <span className="text-[10px] font-label uppercase tracking-widest text-gray-500">Tool Calls</span>
+            <span className="text-[10px] font-label uppercase tracking-widest text-theme-muted">Tool Calls</span>
           </div>
-          <div className="text-2xl font-heading text-white">{Object.values(toolCounts).reduce((a, b) => a + b, 0)}</div>
-          <div className="text-[10px] text-gray-600 font-mono">{Object.keys(toolCounts).length} unique tools</div>
+          <div className="text-2xl font-heading text-theme-primary">{Object.values(toolCounts).reduce((a, b) => a + b, 0)}</div>
+          <div className="text-[10px] text-theme-subtle font-mono">{Object.keys(toolCounts).length} unique tools</div>
         </div>
       </div>
 
       {/* Tool usage */}
       <div className="card p-5">
-        <h3 className="font-heading text-sm text-white tracking-wider mb-4 flex items-center gap-2">
+        <h3 className="font-heading text-sm text-theme-primary tracking-wider mb-4 flex items-center gap-2">
           <TrendingUp className="w-4 h-4 text-accent-blue" /> Top Tools
         </h3>
         {topTools.length === 0 ? (
-          <div className="text-xs text-gray-600">No tool calls recorded yet.</div>
+          <div className="text-xs text-theme-subtle">No tool calls recorded yet.</div>
         ) : (
           <div className="space-y-2">
             {topTools.map(([tool, count]) => {
@@ -113,11 +113,11 @@ export default function AnalyticsPage() {
               const name = tool.replace('mcp__flowforge__', 'ff:').replace('mcp__linear__', 'linear:');
               return (
                 <div key={tool} className="flex items-center gap-3">
-                  <span className="text-xs font-mono text-gray-400 w-40 truncate" title={tool}>{name}</span>
+                  <span className="text-xs font-mono text-theme-secondary w-40 truncate" title={tool}>{name}</span>
                   <div className="flex-1 h-2 bg-surface-200/50 rounded-full overflow-hidden">
                     <div className="h-full bg-accent-blue/50 rounded-full transition-all" style={{ width: `${pct}%` }} />
                   </div>
-                  <span className="text-xs font-mono text-gray-500 w-8 text-right">{count}</span>
+                  <span className="text-xs font-mono text-theme-muted w-8 text-right">{count}</span>
                 </div>
               );
             })}
@@ -128,13 +128,13 @@ export default function AnalyticsPage() {
       {/* Recent errors */}
       {errors.length > 0 && (
         <div className="card p-5">
-          <h3 className="font-heading text-sm text-white tracking-wider mb-4 flex items-center gap-2">
+          <h3 className="font-heading text-sm text-theme-primary tracking-wider mb-4 flex items-center gap-2">
             <BarChart3 className="w-4 h-4 text-accent-red" /> Recent Errors ({errors.length})
           </h3>
           <div className="space-y-2">
             {errors.slice(0, 5).map(e => (
               <div key={e._id} className="flex items-center gap-3 text-xs">
-                <span className="text-gray-600 font-mono w-20 shrink-0">{new Date(e.timestamp).toLocaleDateString()}</span>
+                <span className="text-theme-subtle font-mono w-20 shrink-0">{new Date(e.timestamp).toLocaleDateString()}</span>
                 <span className="text-red-400 truncate">{e.userMessage?.slice(0, 50)}</span>
               </div>
             ))}
@@ -144,7 +144,7 @@ export default function AnalyticsPage() {
 
       {/* Recent messages log */}
       <div className="card p-5">
-        <h3 className="font-heading text-sm text-white tracking-wider mb-4">Recent Messages</h3>
+        <h3 className="font-heading text-sm text-theme-primary tracking-wider mb-4">Recent Messages</h3>
         <div className="space-y-1 max-h-80 overflow-y-auto">
           {logs.slice(0, 30).map(log => (
             <button
@@ -153,9 +153,9 @@ export default function AnalyticsPage() {
               className="w-full flex items-center gap-3 py-1.5 border-b border-border/20 last:border-0 text-xs hover:bg-surface-200/30 transition-colors text-left"
             >
               <span className={`w-2 h-2 rounded-full shrink-0 ${log.status === 'completed' ? 'bg-accent-green' : 'bg-accent-red'}`} />
-              <span className="text-gray-600 font-mono w-16 shrink-0">{(log.durationMs / 1000).toFixed(1)}s</span>
-              <span className="text-gray-400 font-body truncate flex-1">{log.userMessage?.slice(0, 60)}</span>
-              <span className="text-gray-600 font-mono shrink-0">{(log.trace ?? []).filter(t => t.type === 'tool_call').length} tools</span>
+              <span className="text-theme-subtle font-mono w-16 shrink-0">{(log.durationMs / 1000).toFixed(1)}s</span>
+              <span className="text-theme-secondary font-body truncate flex-1">{log.userMessage?.slice(0, 60)}</span>
+              <span className="text-theme-subtle font-mono shrink-0">{(log.trace ?? []).filter(t => t.type === 'tool_call').length} tools</span>
             </button>
           ))}
         </div>

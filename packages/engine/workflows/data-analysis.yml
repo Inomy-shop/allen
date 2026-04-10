@@ -1,34 +1,59 @@
 name: data-analysis
-description: Analyze data and generate a report
-version: 1
+description: Analyse data, run queries, and produce an insight report.
+version: 2
 
 context:
-  requires: []
+  requires: [repo]
   tools: [filesystem, terminal, database]
 
 input:
   question: { type: string, required: true }
-  repo_path: { type: string, required: false }
+  repo_path: { type: string, required: true }
 
 nodes:
   plan:
-    agent: analyst
-    prompt: "Plan analysis for: {{question}}"
-    outputs: [analysis_plan, data_sources]
+    agent: metrics-analyst
+    prompt: |
+      Plan the data analysis for this question:
+      {{question}}
+
+      1. What data do we need?
+      2. Where does it live? (which DB collections, files, APIs)
+      3. What queries should we run?
+      4. What metrics should we compute?
+    outputs: [plan, data_sources]
 
   query:
-    agent: analyst
-    prompt: "Execute queries:\n{{analysis_plan}}"
-    outputs: [raw_results, anomalies]
+    agent: pipeline-engineer
+    prompt: |
+      Execute the data queries:
+      {{plan}}
+      Data sources: {{data_sources}}
+
+      Run the queries and collect raw results.
+    outputs: [raw_results, query_log]
 
   synthesize:
-    agent: analyst
-    prompt: "Synthesize:\nResults: {{raw_results}}\nAnomalies: {{anomalies}}"
-    outputs: [summary, insights, recommendations]
+    agent: metrics-analyst
+    prompt: |
+      Analyse the results and answer the question:
+      {{question}}
+
+      Raw data: {{raw_results}}
+      Queries run: {{query_log}}
+
+      Produce insights with specific numbers.
+    outputs: [insights, metrics]
 
   report:
-    agent: writer
-    prompt: "Write report:\n{{summary}}\n{{insights}}\n{{recommendations}}"
+    agent: documentation-writer
+    prompt: |
+      Write a data analysis report:
+      Question: {{question}}
+      Insights: {{insights}}
+      Metrics: {{metrics}}
+
+      Format with clear sections, tables, and recommendations.
     outputs: [report]
 
 edges:

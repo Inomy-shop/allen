@@ -2,13 +2,19 @@ import { Router, type Request, type Response } from 'express';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { param } from '../types.js';
-import { McpService, type McpServerRecord } from '../services/mcp.service.js';
+import {
+  McpService,
+  resolveEnvSecrets,
+  resolveArgSecrets,
+  storeEnvLiteralsAsSecrets,
+  storeArgLiteralsAsSecretsForPreset,
+} from '../services/mcp.service.js';
 import type { Db } from 'mongodb';
 
 const execFileAsync = promisify(execFile);
 
 /** Sync all enabled MCP servers to Codex CLI config */
-async function syncAllToCodex(service: McpService): Promise<void> {
+async function syncAllToCodex(service: McpService, db: Db): Promise<void> {
   try {
     const servers = await service.list();
     let existing = '';
@@ -17,12 +23,17 @@ async function syncAllToCodex(service: McpService): Promise<void> {
     for (const s of servers) {
       if (s.type !== 'stdio') continue;
       const isRegistered = existing.includes(s.name);
+      // Resolve @secret: references in both env and args — Codex needs plaintext
+      const [env, serverArgs] = await Promise.all([
+        resolveEnvSecrets(s.env, db),
+        resolveArgSecrets(s.args, db),
+      ]);
 
       if (s.enabled && !isRegistered) {
         // Add
         const args = ['mcp', 'add', s.name];
-        if (s.env) { for (const [k, v] of Object.entries(s.env)) args.push('--env', `${k}=${v}`); }
-        args.push('--', s.command!, ...(s.args ?? []));
+        for (const [k, v] of Object.entries(env)) args.push('--env', `${k}=${v}`);
+        args.push('--', s.command!, ...serverArgs);
         await execFileAsync('codex', args, { timeout: 10000 });
       } else if (!s.enabled && isRegistered) {
         // Remove
@@ -31,8 +42,8 @@ async function syncAllToCodex(service: McpService): Promise<void> {
         // Update: remove + re-add
         await execFileAsync('codex', ['mcp', 'remove', s.name], { timeout: 5000 });
         const args = ['mcp', 'add', s.name];
-        if (s.env) { for (const [k, v] of Object.entries(s.env)) args.push('--env', `${k}=${v}`); }
-        args.push('--', s.command!, ...(s.args ?? []));
+        for (const [k, v] of Object.entries(env)) args.push('--env', `${k}=${v}`);
+        args.push('--', s.command!, ...serverArgs);
         await execFileAsync('codex', args, { timeout: 10000 });
       }
     }
@@ -79,11 +90,19 @@ export function mcpRoutes(db: Db): Router {
       const existing = await service.getByName(name);
       if (existing) return res.status(409).json({ error: `MCP server "${name}" already exists` });
 
+      // Move any literal env values AND preset-defined sensitive args into the
+      // encrypted secrets store, replacing them with `@secret:` references
+      // before persisting the MCP config.
+      const [envWithRefs, argsWithRefs] = await Promise.all([
+        storeEnvLiteralsAsSecrets(env, db),
+        storeArgLiteralsAsSecretsForPreset(name, args, db),
+      ]);
+
       const server = await service.create({
         name, description: description ?? '', type, enabled: enabled ?? true,
-        command, args, env, url, headers,
+        command, args: argsWithRefs, env: envWithRefs, url, headers,
       });
-      syncAllToCodex(service).catch(() => {});
+      syncAllToCodex(service, db).catch(() => {});
       res.status(201).json(server);
     } catch (err: unknown) {
       res.status(500).json({ error: (err as Error).message });
@@ -94,9 +113,20 @@ export function mcpRoutes(db: Db): Router {
   router.put('/servers/:id', async (req: Request, res: Response) => {
     try {
       const id = param(req, 'id');
-      const server = await service.update(id, req.body);
+      // If env or args are being updated, run literals through the secrets store first.
+      const update = { ...req.body };
+      if (update.env !== undefined) {
+        update.env = await storeEnvLiteralsAsSecrets(update.env, db);
+      }
+      if (update.args !== undefined) {
+        // Need the server name to look up the preset's argKeys
+        const existing = await service.getById(id);
+        const presetName = update.name ?? existing?.name;
+        update.args = await storeArgLiteralsAsSecretsForPreset(presetName, update.args, db);
+      }
+      const server = await service.update(id, update);
       if (!server) return res.status(404).json({ error: 'MCP server not found' });
-      syncAllToCodex(service).catch(() => {});
+      syncAllToCodex(service, db).catch(() => {});
       res.json(server);
     } catch (err: unknown) {
       res.status(500).json({ error: (err as Error).message });
@@ -109,7 +139,7 @@ export function mcpRoutes(db: Db): Router {
       const id = param(req, 'id');
       const server = await service.toggle(id);
       if (!server) return res.status(404).json({ error: 'MCP server not found' });
-      syncAllToCodex(service).catch(() => {});
+      syncAllToCodex(service, db).catch(() => {});
       res.json(server);
     } catch (err: unknown) {
       res.status(500).json({ error: (err as Error).message });
@@ -121,7 +151,7 @@ export function mcpRoutes(db: Db): Router {
     try {
       const id = param(req, 'id');
       await service.delete(id);
-      syncAllToCodex(service).catch(() => {});
+      syncAllToCodex(service, db).catch(() => {});
       res.status(204).send();
     } catch (err: unknown) {
       res.status(500).json({ error: (err as Error).message });
@@ -135,10 +165,15 @@ export function mcpRoutes(db: Db): Router {
       const server = await service.getById(id);
       if (!server) return res.status(404).json({ error: 'MCP server not found' });
 
-      // Build config for this single server
+      // Build config for this single server. Resolve any @secret: references
+      // (in env AND args) so claude-code receives plaintext values.
       const mcpConfig: Record<string, unknown> = {};
       if (server.type === 'stdio') {
-        mcpConfig[server.name] = { type: 'stdio', command: server.command, args: server.args ?? [], env: server.env ?? {} };
+        const [env, args] = await Promise.all([
+          resolveEnvSecrets(server.env, db),
+          resolveArgSecrets(server.args, db),
+        ]);
+        mcpConfig[server.name] = { type: 'stdio', command: server.command, args, env };
       } else if (server.type === 'sse') {
         mcpConfig[server.name] = { type: 'sse', url: server.url, headers: server.headers ?? {} };
       } else {

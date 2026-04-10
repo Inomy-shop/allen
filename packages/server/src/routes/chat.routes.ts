@@ -20,6 +20,24 @@ export function chatRoutes(db: Db): Router {
     }
   });
 
+  // POST /api/chat/tools/:toolName — Generic chat-tool dispatcher.
+  // The FlowForge MCP server forwards unknown tool calls here, so any tool
+  // registered in chatTools[] (including the phase-4 meta tools like
+  // create_team, create_agent, etc.) is auto-callable from spawned agents
+  // without needing a hardcoded case in flowforge-mcp-server.ts.
+  // Permission gating happens INSIDE each tool's execute() function — meta
+  // tools check the active session's currentAgent against an allow-list.
+  router.post('/tools/:toolName', async (req: Request, res: Response) => {
+    try {
+      const toolName = param(req, 'toolName');
+      const args = (req.body ?? {}) as Record<string, unknown>;
+      const result = await executeChatTool(toolName, args, db);
+      res.json(result);
+    } catch (err: unknown) {
+      res.status(500).json({ error: (err as Error).message });
+    }
+  });
+
   // POST /api/chat/delegate — Execute delegation tools via API (used by FlowForge MCP server)
   router.post('/delegate', async (req: Request, res: Response) => {
     try {

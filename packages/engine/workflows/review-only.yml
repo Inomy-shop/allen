@@ -1,6 +1,6 @@
 name: review-only
-description: Review code without making changes
-version: 1
+description: Review code without making changes. Produces a detailed review report.
+version: 2
 
 context:
   requires: [repo]
@@ -12,12 +12,12 @@ input:
 
 nodes:
   review:
-    agent: reviewer
+    agent: backend-code-reviewer
     prompt: "Review the codebase at your CWD for: {{task}}"
     outputs: [review_verdict, review_feedback, issues]
 
   report:
-    agent: writer
+    agent: documentation-writer
     prompt: |
       Write a code review report:
       Verdict: {{review_verdict}}

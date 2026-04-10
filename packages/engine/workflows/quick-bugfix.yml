@@ -1,0 +1,179 @@
+name: quick-bugfix
+description: >
+  Fast bug fix workflow. Codebase Navigator finds relevant code, Incident Responder
+  identifies root cause, API/Page Developer fixes, Unit Test Writer adds regression
+  test, Code Reviewer reviews, Release Manager creates PR. You merge manually.
+version: 2
+
+context:
+  requires: [repo]
+  tools: [filesystem, git, terminal]
+
+input:
+  bug: { type: string, required: true }
+  repo_path: { type: string, required: true }
+
+nodes:
+  # ── Phase 1: Locate relevant code (DevEx Team) ──
+  locate:
+    agent: codebase-navigator
+    prompt: |
+      A bug has been reported:
+      {{bug}}
+
+      Find the relevant code:
+      1. Search the codebase for related files, functions, routes
+      2. Trace the affected flow end-to-end
+      3. Map the key files involved
+      4. Note any recent changes to these files (git log)
+    outputs: [relevant_files, code_context, recent_changes]
+
+  # ── Phase 2: Root cause analysis (Operations Team) ──
+  investigate:
+    agent: incident-responder
+    prompt: |
+      Investigate this bug:
+      {{bug}}
+
+      Relevant files: {{relevant_files}}
+      Code context: {{code_context}}
+      Recent changes: {{recent_changes}}
+
+      Steps:
+      1. Read the relevant files
+      2. Form 2-3 hypotheses about the root cause
+      3. Verify each by tracing the logic
+      4. Identify the EXACT root cause with file:line
+      5. Propose a specific minimal fix
+    outputs: [root_cause, affected_files, fix_proposal, is_backend, is_frontend]
+
+  # ── Phase 3: Branch ──
+  create-branch:
+    type: code
+    function: git-create-branch
+    outputs: [worktree_path, branch_name]
+
+  # ── Phase 4: Fix (route to right specialist) ──
+  fix-backend:
+    agent: api-developer
+    prompt: |
+      Fix this bug in {{worktree_path}}:
+
+      ROOT CAUSE: {{root_cause}}
+      AFFECTED FILES: {{affected_files}}
+      PROPOSED FIX: {{fix_proposal}}
+
+      {{#if retry_context}}PREVIOUS ATTEMPT FAILED:\n{{retry_context}}{{/if}}
+
+      Apply the MINIMAL fix. Don't refactor unrelated code. Run build after.
+    outputs: [changed_files, fix_summary]
+    resume_on_retry: true
+
+  fix-frontend:
+    agent: page-developer
+    prompt: |
+      Fix this UI bug in {{worktree_path}}:
+
+      ROOT CAUSE: {{root_cause}}
+      AFFECTED FILES: {{affected_files}}
+      PROPOSED FIX: {{fix_proposal}}
+
+      {{#if retry_context}}PREVIOUS ATTEMPT FAILED:\n{{retry_context}}{{/if}}
+
+      Apply the MINIMAL fix. Match existing styles and patterns. Run build after.
+    outputs: [changed_files, fix_summary]
+    resume_on_retry: true
+
+  # ── Phase 5: Regression test (QA Team) ──
+  regression-test:
+    agent: unit-test-writer
+    prompt: |
+      Write a regression test for the bug fix in {{worktree_path}}:
+
+      BUG: {{bug}}
+      ROOT CAUSE: {{root_cause}}
+      FIX: {{fix_summary}}
+      CHANGED: {{changed_files}}
+
+      Write a test that:
+      1. Would have FAILED before the fix
+      2. PASSES after the fix
+      3. Covers the specific edge case
+
+      Then run ALL tests to catch regressions.
+    outputs: [test_passed, test_output]
+
+  # ── Phase 6: Security quick-check ──
+  security-check:
+    agent: code-security-reviewer
+    prompt: |
+      Quick security check of the bugfix in {{worktree_path}} on {{branch_name}}:
+
+      Changed: {{changed_files}}
+      Fix: {{fix_summary}}
+
+      Focus on: does the fix introduce any auth/injection/data exposure issues?
+      Verdict: APPROVED or REQUEST_CHANGES.
+    outputs: [security_verdict, security_feedback]
+
+  # ── Phase 7: Code review ──
+  review:
+    agent: backend-code-reviewer
+    prompt: |
+      Quick review of bugfix in {{worktree_path}} on {{branch_name}}:
+
+      BUG: {{bug}}
+      ROOT CAUSE: {{root_cause}}
+      FIX: {{fix_summary}}
+      CHANGED: {{changed_files}}
+
+      Check: does it fix the root cause? Side effects? Minimal and safe?
+      Verdict: APPROVED or REQUEST_CHANGES.
+    outputs: [review_verdict, review_feedback]
+
+  # ── Phase 8: Create PR ──
+  create-pr:
+    agent: release-manager
+    prompt: |
+      Create a bugfix PR from {{branch_name}} in {{worktree_path}}:
+
+      Title: fix: {{fix_summary}}
+      Body:
+      - Bug: {{bug}}
+      - Root cause: {{root_cause}}
+      - Fix: {{fix_summary}}
+      - Regression test added
+
+      Stage all, commit, push, create PR.
+    outputs: [pr_url]
+
+edges:
+  # Locate → investigate → branch
+  - { from: START, to: locate }
+  - { from: locate, to: investigate }
+  - { from: investigate, to: create-branch }
+
+  # Route fix to backend or frontend specialist
+  - { from: create-branch, to: fix-backend, condition: "is_backend" }
+  - { from: create-branch, to: fix-frontend, condition: "is_frontend AND NOT is_backend" }
+  # If both, default to backend (it can handle full-stack)
+  - { from: create-branch, to: fix-backend, condition: "NOT is_backend AND NOT is_frontend" }
+
+  # Fix → regression test
+  - { from: fix-backend, to: regression-test }
+  - { from: fix-frontend, to: regression-test }
+
+  # Test fail → retry fix
+  - { from: regression-test, to: fix-backend, condition: "NOT test_passed AND is_backend", max_retries: 3, retry_context: "{{test_output}}" }
+  - { from: regression-test, to: fix-frontend, condition: "NOT test_passed AND is_frontend AND NOT is_backend", max_retries: 3, retry_context: "{{test_output}}" }
+
+  # Test pass → security + review (parallel)
+  - { from: regression-test, to: [security-check, review], condition: "test_passed", parallel: true, join: wait-all }
+
+  # Review fail → retry fix
+  - { from: [security-check, review], to: fix-backend, condition: "(security_verdict == 'REQUEST_CHANGES' OR review_verdict == 'REQUEST_CHANGES') AND is_backend", max_retries: 2, retry_context: "Security:\n{{security_feedback}}\nReview:\n{{review_feedback}}" }
+  - { from: [security-check, review], to: fix-frontend, condition: "(security_verdict == 'REQUEST_CHANGES' OR review_verdict == 'REQUEST_CHANGES') AND is_frontend AND NOT is_backend", max_retries: 2, retry_context: "Security:\n{{security_feedback}}\nReview:\n{{review_feedback}}" }
+
+  # All pass → PR
+  - { from: [security-check, review], to: create-pr, condition: "security_verdict == 'APPROVED' AND review_verdict == 'APPROVED'" }
+  - { from: create-pr, to: END }

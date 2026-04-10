@@ -24,8 +24,8 @@ export default function StreamOutput({ text, isLive }: Props) {
           </span>
         </div>
       )}
-      <pre className="p-3 whitespace-pre-wrap text-gray-300 leading-relaxed">
-        {text || <span className="text-gray-500 italic">No output yet...</span>}
+      <pre className="p-3 whitespace-pre-wrap text-theme-secondary leading-relaxed">
+        {text || <span className="text-theme-muted italic">No output yet...</span>}
       </pre>
       <div ref={endRef} />
     </div>

@@ -49,7 +49,7 @@ export default function PullRequestDetailPage() {
     return status === 'merged' ? 'text-purple-400' : status === 'closed' ? 'text-red-400' : 'text-emerald-400';
   }
 
-  if (loading || !pr) return <div className="flex items-center justify-center h-full"><Loader2 className="w-6 h-6 animate-spin text-gray-500" /></div>;
+  if (loading || !pr) return <div className="flex items-center justify-center h-full"><Loader2 className="w-6 h-6 animate-spin text-theme-muted" /></div>;
 
   const selectedDiff = diff.files.find(f => f.path === selectedFile);
 
@@ -74,10 +74,10 @@ export default function PullRequestDetailPage() {
       {/* Header */}
       <div className="px-6 py-3 border-b border-border/30 bg-surface-50/50 shrink-0">
         <div className="flex items-center gap-3">
-          <Link to="/pull-requests" className="text-gray-400 hover:text-white"><ArrowLeft className="w-4 h-4" /></Link>
+          <Link to="/pull-requests" className="text-theme-secondary hover:text-theme-primary"><ArrowLeft className="w-4 h-4" /></Link>
           {pr.status === 'merged' ? <GitMerge className="w-4 h-4 text-purple-400" /> : pr.status === 'closed' ? <XCircle className="w-4 h-4 text-red-400" /> : <GitPullRequest className="w-4 h-4 text-emerald-400" />}
-          <span className="text-sm font-semibold text-white">#{pr.number}</span>
-          <span className="text-sm text-gray-300">{pr.title}</span>
+          <span className="text-sm font-semibold text-theme-primary">#{pr.number}</span>
+          <span className="text-sm text-theme-secondary">{pr.title}</span>
           <span className={`text-[10px] font-mono px-2 py-0.5 rounded-full border ${statusColor(pr.status)} border-current/20 bg-current/5`}>{pr.status}</span>
           <span className="flex-1" />
           {pr.status === 'open' && (
@@ -91,7 +91,7 @@ export default function PullRequestDetailPage() {
             </a>
           )}
         </div>
-        <div className="flex items-center gap-4 mt-2 text-[11px] font-mono text-gray-500">
+        <div className="flex items-center gap-4 mt-2 text-[11px] font-mono text-theme-muted">
           <span>{pr.repoName}</span>
           <span className="flex items-center gap-1">{pr.branch} <ArrowRight className="w-3 h-3" /> {pr.baseBranch}</span>
           <span>by {pr.author}</span>
@@ -100,21 +100,21 @@ export default function PullRequestDetailPage() {
           <span className="text-emerald-400"><Plus className="w-3 h-3 inline" />{pr.additions}</span>
           <span className="text-red-400"><Minus className="w-3 h-3 inline" />{pr.deletions}</span>
         </div>
-        {pr.description && <p className="mt-2 text-xs text-gray-500 line-clamp-2">{pr.description}</p>}
+        {pr.description && <p className="mt-2 text-xs text-theme-muted line-clamp-2">{pr.description}</p>}
       </div>
 
       {/* Body: file list + diff */}
       <div className="flex-1 flex overflow-hidden min-h-0">
         {/* File list */}
         <div className="w-64 border-r border-border/20 bg-surface-50/30 overflow-y-auto shrink-0">
-          <div className="px-3 py-2 text-[10px] font-label uppercase tracking-wider text-gray-600">Changed Files ({diff.files.length})</div>
+          <div className="px-3 py-2 text-[10px] font-label uppercase tracking-wider text-theme-subtle">Changed Files ({diff.files.length})</div>
           {diff.files.map(f => (
             <button key={f.path} onClick={() => setSelectedFile(f.path)}
-              className={`w-full text-left px-3 py-1.5 text-[11px] font-mono truncate ${selectedFile === f.path ? 'bg-blue-500/10 text-blue-400' : 'text-gray-400 hover:bg-white/5'}`}>
+              className={`w-full text-left px-3 py-1.5 text-[11px] font-mono truncate ${selectedFile === f.path ? 'bg-blue-500/10 text-blue-400' : 'text-theme-secondary hover:bg-surface-100/5'}`}>
               {f.path}
             </button>
           ))}
-          {diff.files.length === 0 && <div className="px-3 py-4 text-xs text-gray-600">No diff available</div>}
+          {diff.files.length === 0 && <div className="px-3 py-4 text-xs text-theme-subtle">No diff available</div>}
         </div>
 
         {/* Diff viewer */}
@@ -139,7 +139,7 @@ export default function PullRequestDetailPage() {
               />
             );
           })() : (
-            <div className="flex items-center justify-center h-full text-gray-600 text-sm">Select a file to view diff</div>
+            <div className="flex items-center justify-center h-full text-theme-subtle text-sm">Select a file to view diff</div>
           )}
         </div>
       </div>

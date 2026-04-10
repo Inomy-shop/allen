@@ -9,6 +9,7 @@ import { useNavigate } from 'react-router-dom';
 import { WorkspaceConfigEditor } from '../components/workspace/WorkspaceConfigEditor';
 import { workspaces as wsApi } from '../services/workspaceService';
 import { SetupProgressDialog } from '../components/workspace/SetupProgressDialog';
+import { useToast } from '../components/common/Toast';
 
 interface Repo {
   _id: string;
@@ -76,11 +77,11 @@ function AddRepoDialog({ open, onClose, onCreated }: { open: boolean; onClose: (
                 <Plus className="w-5 h-5 text-accent-blue" />
               </div>
               <div>
-                <h2 className="font-heading text-sm font-bold text-white tracking-wider uppercase">Add Repository</h2>
-                <p className="text-[11px] text-gray-500 font-mono">Auto-detects language, framework, and more</p>
+                <h2 className="font-heading text-sm font-bold text-theme-primary tracking-wider uppercase">Add Repository</h2>
+                <p className="text-[11px] text-theme-muted font-mono">Auto-detects language, framework, and more</p>
               </div>
             </div>
-            <button onClick={onClose} className="p-2 rounded-sm hover:bg-surface-200 text-gray-500 hover:text-gray-300 transition-colors" title="Close">
+            <button onClick={onClose} className="p-2 rounded-sm hover:bg-surface-200 text-theme-muted hover:text-theme-secondary transition-colors" title="Close">
               <X className="w-4 h-4" />
             </button>
           </div>
@@ -92,24 +93,24 @@ function AddRepoDialog({ open, onClose, onCreated }: { open: boolean; onClose: (
             <div className="text-xs text-accent-red bg-accent-red/10 border border-accent-red/20 rounded-sm px-3 py-2">{error}</div>
           )}
           <div>
-            <label className="flex items-center gap-1 text-xs font-label font-semibold text-gray-400 mb-2 uppercase tracking-widest">
+            <label className="flex items-center gap-1 text-xs font-label font-semibold text-theme-secondary mb-2 uppercase tracking-widest">
               Path <span className="text-accent-red normal-case text-[10px]">*</span>
             </label>
             <input type="text" value={path} onChange={e => setPath(e.target.value)}
               placeholder="/path/to/your/project" className="input w-full font-mono text-sm" />
           </div>
           <div>
-            <label className="text-xs font-label font-semibold text-gray-400 mb-2 uppercase tracking-widest block">Name</label>
+            <label className="text-xs font-label font-semibold text-theme-secondary mb-2 uppercase tracking-widest block">Name</label>
             <input type="text" value={name} onChange={e => setName(e.target.value)}
               placeholder="Auto-derived from directory name" className="input w-full text-sm" />
           </div>
           <div>
-            <label className="text-xs font-label font-semibold text-gray-400 mb-2 uppercase tracking-widest block">Description</label>
+            <label className="text-xs font-label font-semibold text-theme-secondary mb-2 uppercase tracking-widest block">Description</label>
             <input type="text" value={description} onChange={e => setDescription(e.target.value)}
               placeholder="Brief description" className="input w-full text-sm" />
           </div>
           <div>
-            <label className="text-xs font-label font-semibold text-gray-400 mb-2 uppercase tracking-widest block">Tags</label>
+            <label className="text-xs font-label font-semibold text-theme-secondary mb-2 uppercase tracking-widest block">Tags</label>
             <input type="text" value={tags} onChange={e => setTags(e.target.value)}
               placeholder="Comma-separated, e.g. backend, api" className="input w-full text-sm font-mono" />
           </div>
@@ -188,11 +189,11 @@ function EditRepoDialog({ repo, open, onClose, onUpdated }: { repo: Repo | null;
                 <Pencil className="w-5 h-5 text-accent-blue" />
               </div>
               <div>
-                <h2 className="font-heading text-sm font-bold text-white tracking-wider uppercase">Edit Repository</h2>
-                <p className="text-[11px] text-gray-500 font-mono">{repo.path}</p>
+                <h2 className="font-heading text-sm font-bold text-theme-primary tracking-wider uppercase">Edit Repository</h2>
+                <p className="text-[11px] text-theme-muted font-mono">{repo.path}</p>
               </div>
             </div>
-            <button onClick={onClose} className="p-2 rounded-sm hover:bg-surface-200 text-gray-500 hover:text-gray-300 transition-colors" title="Close">
+            <button onClick={onClose} className="p-2 rounded-sm hover:bg-surface-200 text-theme-muted hover:text-theme-secondary transition-colors" title="Close">
               <X className="w-4 h-4" />
             </button>
           </div>
@@ -203,25 +204,25 @@ function EditRepoDialog({ repo, open, onClose, onUpdated }: { repo: Repo | null;
             <div className="text-xs text-accent-red bg-accent-red/10 border border-accent-red/20 rounded-sm px-3 py-2">{error}</div>
           )}
           <div>
-            <label className="text-xs font-label font-semibold text-gray-400 mb-2 uppercase tracking-widest block">Name</label>
+            <label className="text-xs font-label font-semibold text-theme-secondary mb-2 uppercase tracking-widest block">Name</label>
             <input type="text" value={name} onChange={e => setName(e.target.value)} className="input w-full text-sm" />
           </div>
           <div>
-            <label className="text-xs font-label font-semibold text-gray-400 mb-2 uppercase tracking-widest block">Description</label>
+            <label className="text-xs font-label font-semibold text-theme-secondary mb-2 uppercase tracking-widest block">Description</label>
             <input type="text" value={description} onChange={e => setDescription(e.target.value)} className="input w-full text-sm" />
           </div>
           <div>
-            <label className="text-xs font-label font-semibold text-gray-400 mb-2 uppercase tracking-widest block">Tags</label>
+            <label className="text-xs font-label font-semibold text-theme-secondary mb-2 uppercase tracking-widest block">Tags</label>
             <input type="text" value={tags} onChange={e => setTags(e.target.value)}
               placeholder="Comma-separated" className="input w-full text-sm font-mono" />
           </div>
           <div>
-            <label className="text-xs font-label font-semibold text-gray-400 mb-2 uppercase tracking-widest block">Context</label>
+            <label className="text-xs font-label font-semibold text-theme-secondary mb-2 uppercase tracking-widest block">Context</label>
             <textarea value={context} onChange={e => setContext(e.target.value)}
               rows={3} className="input w-full text-sm resize-none" placeholder="Brief context for chat agent" />
           </div>
           <div>
-            <label className="text-xs font-label font-semibold text-gray-400 mb-2 uppercase tracking-widest block">Default Workflow</label>
+            <label className="text-xs font-label font-semibold text-theme-secondary mb-2 uppercase tracking-widest block">Default Workflow</label>
             <select value={defaultWorkflow} onChange={e => setDefaultWorkflow(e.target.value)} className="input w-full text-sm">
               <option value="">None</option>
               {workflows.map((wf: any) => (
@@ -230,17 +231,17 @@ function EditRepoDialog({ repo, open, onClose, onUpdated }: { repo: Repo | null;
             </select>
           </div>
           <div>
-            <label className="text-xs font-label font-semibold text-gray-400 mb-2 uppercase tracking-widest block">Status</label>
+            <label className="text-xs font-label font-semibold text-theme-secondary mb-2 uppercase tracking-widest block">Status</label>
             <div className="flex items-center gap-4">
               <label className="flex items-center gap-2 cursor-pointer">
                 <input type="radio" name="status" value="active" checked={status === 'active'}
                   onChange={() => setStatus('active')} className="accent-accent-blue" />
-                <span className="text-sm text-gray-300">Active</span>
+                <span className="text-sm text-theme-secondary">Active</span>
               </label>
               <label className="flex items-center gap-2 cursor-pointer">
                 <input type="radio" name="status" value="archived" checked={status === 'archived'}
                   onChange={() => setStatus('archived')} className="accent-gray-500" />
-                <span className="text-sm text-gray-300">Archived</span>
+                <span className="text-sm text-theme-secondary">Archived</span>
               </label>
             </div>
           </div>
@@ -272,14 +273,14 @@ const langColors: Record<string, string> = {
 const fwColors: Record<string, string> = {
   react: 'bg-accent-cyan/15 text-accent-cyan border-accent-cyan/30',
   express: 'bg-accent-green/15 text-accent-green border-accent-green/30',
-  next: 'bg-white/10 text-white border-white/20',
+  next: 'bg-surface-100/10 text-theme-primary border-border/30',
   vite: 'bg-accent-purple/15 text-accent-purple border-accent-purple/30',
   vue: 'bg-accent-green/15 text-accent-green border-accent-green/30',
   tailwind: 'bg-accent-cyan/15 text-accent-cyan border-accent-cyan/30',
 };
 
 function Badge({ label, colorClass }: { label: string; colorClass?: string }) {
-  const cls = colorClass ?? 'bg-surface-200/60 text-gray-500 border-border/30';
+  const cls = colorClass ?? 'bg-surface-200/60 text-theme-muted border-border/30';
   return (
     <span className={`text-[10px] px-1.5 py-0.5 rounded-sm font-mono uppercase border ${cls}`}>
       {label}
@@ -318,14 +319,24 @@ export default function RepoManagerPage() {
     refresh();
   };
 
+  const toast = useToast();
+
   const handleScan = async (e: React.MouseEvent, id: string) => {
     e.stopPropagation();
     setScanningId(id);
     try {
-      await repoApi.scan(id);
+      const result = await repoApi.scan(id);
+      const deepScan = (result as any)?.deepScan;
+      if (deepScan?.scheduled) {
+        toast.success('Deep scan started. Check Executions page for progress.');
+      } else if (deepScan?.reason) {
+        toast.info(`Scan: ${deepScan.reason}`);
+      } else {
+        toast.success('Scan complete.');
+      }
       refresh();
     } catch (err: any) {
-      alert(err.message);
+      toast.error(err.message ?? 'Scan failed');
     }
     setScanningId(null);
   };
@@ -335,8 +346,8 @@ export default function RepoManagerPage() {
       {/* Header */}
       <div className="flex items-center justify-between mb-6">
         <div>
-          <h1 className="font-heading text-xl font-bold text-white tracking-widest uppercase">Repositories</h1>
-          <p className="text-xs text-gray-500 mt-1 font-body">{repoList.length} repo{repoList.length !== 1 ? 's' : ''} registered</p>
+          <h1 className="font-heading text-xl font-bold text-theme-primary tracking-widest uppercase">Repositories</h1>
+          <p className="text-xs text-theme-muted mt-1 font-body">{repoList.length} repo{repoList.length !== 1 ? 's' : ''} registered</p>
         </div>
         <div className="flex items-center gap-2">
           <button title="Refresh" onClick={refresh} className="btn-ghost text-xs"><RefreshCw className="w-3.5 h-3.5" /></button>
@@ -363,8 +374,8 @@ export default function RepoManagerPage() {
         </div>
       ) : repoList.length === 0 ? (
         <div className="text-center py-12">
-          <FolderGit2 className="w-10 h-10 text-gray-700 mx-auto mb-3" />
-          <p className="text-sm text-gray-500 font-body">No repositories yet. Add one to get started.</p>
+          <FolderGit2 className="w-10 h-10 text-theme-subtle mx-auto mb-3" />
+          <p className="text-sm text-theme-muted font-body">No repositories yet. Add one to get started.</p>
         </div>
       ) : (
         <div className="space-y-3">
@@ -377,8 +388,8 @@ export default function RepoManagerPage() {
                   <FolderGit2 className="w-5 h-5 text-blue-400 shrink-0" />
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-2">
-                      <span className="text-sm font-heading font-semibold text-white">{repo.name}</span>
-                      {isArchived && <span className="text-[10px] font-mono text-gray-600 bg-gray-600/10 px-1.5 py-0.5 rounded border border-gray-600/20">archived</span>}
+                      <span className="text-sm font-heading font-semibold text-theme-primary">{repo.name}</span>
+                      {isArchived && <span className="text-[10px] font-mono text-theme-subtle bg-surface-200/40 px-1.5 py-0.5 rounded border border-border/20">archived</span>}
                       {/* Badges */}
                       {repo.detected?.language?.filter(l => l !== 'unknown').map(lang => (
                         <Badge key={lang} label={lang} colorClass={langColors[lang]} />
@@ -387,7 +398,7 @@ export default function RepoManagerPage() {
                         <Badge key={fw} label={fw} colorClass={fwColors[fw]} />
                       ))}
                     </div>
-                    <div className="flex items-center gap-3 mt-1 text-[10px] text-gray-500 font-mono">
+                    <div className="flex items-center gap-3 mt-1 text-[10px] text-theme-muted font-mono">
                       <span className="truncate max-w-[300px]" title={repo.path}>{repo.path}</span>
                       <span className="flex items-center gap-1"><GitBranch className="w-3 h-3" />{repo.detected?.defaultBranch ?? 'main'}</span>
                       {repo.detected?.remoteUrl && (
@@ -398,7 +409,7 @@ export default function RepoManagerPage() {
                       )}
                       {repo.executionCount > 0 && <span><Package className="w-3 h-3 inline mr-0.5" />{repo.executionCount} runs</span>}
                     </div>
-                    {repo.description && <p className="text-[11px] text-gray-600 mt-1 truncate">{repo.description}</p>}
+                    {repo.description && <p className="text-[11px] text-theme-subtle mt-1 truncate">{repo.description}</p>}
                   </div>
                   <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
                     <button onClick={(e) => { e.stopPropagation(); setWsCreateRepo(repo); }} className="btn-ghost p-1.5 text-xs text-emerald-400" title="New Workspace">
@@ -472,22 +483,22 @@ function QuickWorkspaceDialog({ repo, onClose, onCreated }: { repo: Repo; onClos
       <div className="bg-surface-100 border border-border/30 rounded-lg w-[440px] p-4" onClick={e => e.stopPropagation()}>
         <div className="flex items-center gap-2 mb-4">
           <Monitor className="w-4 h-4 text-emerald-400" />
-          <span className="text-sm font-semibold text-white">New Workspace</span>
-          <span className="text-[10px] font-mono text-gray-500">{repo.name}</span>
+          <span className="text-sm font-semibold text-theme-primary">New Workspace</span>
+          <span className="text-[10px] font-mono text-theme-muted">{repo.name}</span>
         </div>
         {error && <div className="text-xs text-red-400 bg-red-400/10 border border-red-400/20 rounded px-3 py-1.5 mb-3">{error}</div>}
         <div className="space-y-3">
           <div>
-            <label className="text-[10px] font-label uppercase tracking-wider text-gray-500 block mb-1">Workspace Name</label>
+            <label className="text-[10px] font-label uppercase tracking-wider text-theme-muted block mb-1">Workspace Name</label>
             <input value={name} onChange={e => setName(e.target.value)} placeholder="feature/my-feature" className="input w-full text-xs" autoFocus />
           </div>
           <div className="grid grid-cols-2 gap-3">
             <div>
-              <label className="text-[10px] font-label uppercase tracking-wider text-gray-500 block mb-1">Branch</label>
+              <label className="text-[10px] font-label uppercase tracking-wider text-theme-muted block mb-1">Branch</label>
               <input value={branch} onChange={e => setBranch(e.target.value)} placeholder="feature/new-thing" className="input w-full text-xs" />
             </div>
             <div>
-              <label className="text-[10px] font-label uppercase tracking-wider text-gray-500 block mb-1">Base Branch</label>
+              <label className="text-[10px] font-label uppercase tracking-wider text-theme-muted block mb-1">Base Branch</label>
               <input value={baseBranch} onChange={e => setBaseBranch(e.target.value)} className="input w-full text-xs" />
             </div>
           </div>

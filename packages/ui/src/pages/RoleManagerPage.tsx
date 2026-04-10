@@ -1,266 +1,432 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { useAgents } from '../hooks/useAgents';
-import { agents as agentsApi } from '../services/api';
+import { agents as agentsApi, teams as teamsApi } from '../services/api';
 import RoleIcon from '../components/common/RoleIcon';
 import RoleDialog from '../components/common/RoleDialog';
 import DeleteConfirmDialog from '../components/common/DeleteConfirmDialog';
-import { CardSkeleton } from '../components/common/Skeleton';
-import { RefreshCw, Plus, Pencil, Trash2, Sparkles, Users, Wrench } from 'lucide-react';
+import { useToast } from '../components/common/Toast';
+import { renderMarkdown } from '../components/chat/ChatMessageList';
+import {
+  RefreshCw, Sparkles, Pencil, Trash2, Users, Crown,
+  Search, Play, ArrowRight, X, Eye,
+} from 'lucide-react';
 import { DelegationGraph } from '../components/agents/DelegationGraph';
 
-function AgentCard({ agent, onEdit, onDelete }: {
-  agent: Record<string, unknown>;
-  onEdit: (agent: Record<string, unknown>) => void;
-  onDelete: (name: string) => void;
-}) {
-  return (
-    <div className="card p-4 hover:shadow-glow-blue/10 transition-shadow duration-300 group relative">
-      {/* Action buttons — visible on hover */}
-      <div className="absolute top-3 right-3 flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-        <button
-          onClick={() => onEdit(agent)}
-          className="btn-ghost p-1.5 text-gray-400 hover:text-accent-blue"
-          title="Edit agent"
-        >
-          <Pencil className="w-3.5 h-3.5" />
-        </button>
-        <button
-          onClick={() => onDelete(agent.name as string)}
-          className="btn-ghost p-1.5 text-gray-400 hover:text-red-400"
-          title="Delete agent"
-        >
-          <Trash2 className="w-3.5 h-3.5" />
-        </button>
-      </div>
+interface TeamSummary {
+  name: string;
+  displayName: string;
+  description: string;
+  mission?: string;
+  leadAgentName: string;
+  parentTeamName?: string;
+  isBuiltIn: boolean;
+}
 
-      {/* Header: icon + name */}
-      <div className="flex items-center gap-3 mb-3">
-        <div
-          className="w-9 h-9 rounded-sm flex items-center justify-center border border-border/40"
-          style={{ backgroundColor: ((agent.color as string) ?? '#666') + '15' }}
-        >
-          <RoleIcon icon={agent.icon as string} color={agent.color as string} size={20} />
-        </div>
-        <div className="min-w-0 flex-1">
-          <h3 className="font-heading text-sm font-semibold text-white tracking-wider truncate">
-            {(agent.displayName as string) ?? (agent.name as string)}
-          </h3>
-          <div className="flex items-center gap-1.5 flex-wrap mt-0.5">
-            {!!agent.provider && (
-              <span className={`inline-flex items-center px-2 py-0.5 rounded-sm text-[10px] font-mono border ${
-                agent.provider === 'codex'
-                  ? 'bg-green-500/10 text-green-400 border-green-500/20'
-                  : 'bg-blue-500/10 text-blue-400 border-blue-500/20'
-              }`}>
-                {String(agent.provider)}
-              </span>
-            )}
-            <span className="inline-flex items-center px-2 py-0.5 rounded-sm text-[10px] font-mono bg-surface-200 text-gray-400 border border-border/40">
-              {String(agent.model ?? 'sonnet')}
-            </span>
-            {!!agent.isBuiltIn && (
-              <span className="inline-flex items-center px-2 py-0.5 rounded-sm text-[10px] font-mono bg-surface-200 text-gray-500 border border-border/40">
-                built-in
-              </span>
-            )}
-            {!!agent.previousSystemPrompt && (
-              <span className="inline-flex items-center gap-0.5 px-2 py-0.5 rounded-sm text-[10px] font-mono bg-yellow-500/10 text-yellow-400 border border-yellow-500/20">
-                <Sparkles className="w-2.5 h-2.5" />
-                evolved
-              </span>
-            )}
+// ── Agent Detail Panel (markdown viewer for instructions) ────────────────────
+
+function AgentDetailPanel({ agent, onClose }: { agent: Record<string, unknown>; onClose: () => void }) {
+  const system = (agent.system as string) ?? '';
+  const capabilities = (agent.capabilities as string[] | undefined) ?? [];
+  const delegateTargets = (agent.canDelegateTo as string[] | undefined) ?? [];
+  const tools = (agent.tools as string[] | undefined) ?? [];
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-md" onClick={onClose}>
+      <div className="card w-full max-w-3xl max-h-[90vh] overflow-hidden shadow-glow-blue/20 animate-in fade-in zoom-in-95 duration-200 flex flex-col" onClick={e => e.stopPropagation()}>
+        {/* Header */}
+        <div className="px-6 py-5 border-b border-border/60 shrink-0">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-3">
+              <div
+                className="w-10 h-10 rounded-lg flex items-center justify-center border border-border/30"
+                style={{ backgroundColor: ((agent.color as string) ?? '#666') + '15' }}
+              >
+                <RoleIcon icon={agent.icon as string} color={agent.color as string} size={22} />
+              </div>
+              <div>
+                <h2 className="font-heading text-sm font-bold text-theme-primary tracking-wider uppercase">
+                  {(agent.displayName as string) ?? (agent.name as string)}
+                </h2>
+                <div className="flex items-center gap-2 mt-0.5">
+                  <span className="text-[10px] text-theme-subtle font-mono">{agent.name as string}</span>
+                  <span className={`text-[9px] font-mono px-1.5 py-0.5 rounded border ${
+                    agent.provider === 'codex' ? 'bg-green-500/10 text-green-500 border-green-500/20' : 'bg-blue-500/10 text-blue-500 border-blue-500/20'
+                  }`}>{String(agent.provider ?? 'claude')}</span>
+                  <span className="text-[9px] font-mono text-theme-subtle">{String(agent.model ?? 'sonnet')}</span>
+                  {agent.teamRole === 'lead' && <Crown className="w-3 h-3 text-accent-yellow" />}
+                </div>
+              </div>
+            </div>
+            <button onClick={onClose} className="p-2 rounded-sm hover:bg-surface-200 text-theme-muted hover:text-theme-secondary transition-colors">
+              <X className="w-4 h-4" />
+            </button>
           </div>
         </div>
-      </div>
 
-      {/* Capabilities (for team agents) */}
-      {(agent.capabilities as string[])?.length > 0 && (
-        <div className="flex flex-wrap gap-1 mb-2">
-          {(agent.capabilities as string[]).slice(0, 4).map((cap: string) => (
-            <span key={cap} className="badge bg-accent-blue/5 text-accent-blue/60 text-[9px] border border-accent-blue/15">
-              {cap}
-            </span>
-          ))}
-          {(agent.capabilities as string[]).length > 4 && (
-            <span className="badge bg-surface-200 text-gray-500 text-[9px] border border-border/30">
-              +{(agent.capabilities as string[]).length - 4}
-            </span>
+        {/* Metadata bar */}
+        <div className="px-6 py-3 border-b border-border/30 flex items-center gap-4 flex-wrap shrink-0 bg-surface-200/15">
+          {agent.teamName ? (
+            <div className="text-[10px]">
+              <span className="text-theme-subtle">Team:</span>{' '}
+              <span className="text-theme-secondary font-mono">{String(agent.teamName)}</span>
+            </div>
+          ) : null}
+          {capabilities.length > 0 && (
+            <div className="flex items-center gap-1 flex-wrap">
+              {capabilities.map(cap => (
+                <span key={cap} className="text-[8px] font-mono px-1.5 py-0.5 rounded bg-accent-purple/8 text-accent-purple/70 border border-accent-purple/15">{cap}</span>
+              ))}
+            </div>
+          )}
+          {tools.length > 0 && (
+            <div className="text-[10px]">
+              <span className="text-theme-subtle">Tools:</span>{' '}
+              <span className="text-theme-secondary font-mono">{tools.join(', ')}</span>
+            </div>
+          )}
+          {delegateTargets.length > 0 && (
+            <div className="text-[10px]">
+              <span className="text-theme-subtle">Delegates to:</span>{' '}
+              <span className="text-theme-secondary font-mono">{delegateTargets.join(', ')}</span>
+            </div>
           )}
         </div>
-      )}
 
-      {/* System prompt preview */}
-      <p className="text-xs text-gray-400 line-clamp-2 mb-3 font-body">
-        {(agent.system as string)?.slice(0, 120)}
-      </p>
-
-      {/* Tools */}
-      {(agent.tools as string[])?.length > 0 && (
-        <div className="flex flex-wrap gap-1">
-          {(agent.tools as string[]).map((tool: string) => (
-            <span key={tool} className="badge bg-surface-200 text-accent-blue/70 text-[10px] border border-accent-blue/20">
-              {tool}
-            </span>
-          ))}
+        {/* System prompt — rendered as markdown */}
+        <div className="flex-1 overflow-y-auto px-6 py-5">
+          <div className="text-[10px] font-label uppercase tracking-widest text-theme-subtle mb-3">System Instructions</div>
+          <div className="text-sm text-theme-secondary leading-relaxed prose-flowforge">
+            {system ? renderMarkdown(system) : <span className="text-theme-muted italic">No system prompt defined.</span>}
+          </div>
         </div>
-      )}
 
-      {/* Delegation info (for team agents) */}
-      {(agent.canDelegateTo as string[])?.length > 0 && (
-        <div className="mt-2 pt-2 border-t border-border/20">
-          <span className="text-[10px] text-gray-600 font-mono">
-            delegates to: {(agent.canDelegateTo as string[]).join(', ')}
-          </span>
+        {/* Footer */}
+        <div className="px-6 py-4 border-t border-border/60 bg-surface-200/10 shrink-0">
+          <button onClick={onClose} className="btn-ghost text-xs">Close</button>
         </div>
-      )}
+      </div>
     </div>
   );
 }
 
+// ── Agent Row ────────────────────────────────────────────────────────────────
+
+function AgentRow({ agent, onEdit, onDelete, onRun, onView }: {
+  agent: Record<string, unknown>;
+  onEdit: (agent: Record<string, unknown>) => void;
+  onDelete: (name: string) => void;
+  onRun: (agent: Record<string, unknown>) => void;
+  onView: (agent: Record<string, unknown>) => void;
+}) {
+  const isLead = agent.teamRole === 'lead';
+  const capabilities = (agent.capabilities as string[] | undefined) ?? [];
+  const delegateTargets = (agent.canDelegateTo as string[] | undefined) ?? [];
+
+  return (
+    <div className={`flex items-center gap-4 px-4 py-3 border-b border-border/10 hover:bg-surface-200/10 transition-colors ${
+      isLead ? 'bg-accent-yellow/[0.02]' : ''
+    }`}>
+      {/* Icon with colored bg */}
+      <button
+        onClick={() => onView(agent)}
+        className="w-8 h-8 rounded-lg flex items-center justify-center shrink-0 hover:opacity-80 transition-opacity"
+        style={{ backgroundColor: ((agent.color as string) ?? '#666') + '15' }}
+        title="View instructions"
+      >
+        <RoleIcon icon={agent.icon as string} color={agent.color as string} size={16} />
+      </button>
+
+      {/* Name */}
+      <button onClick={() => onView(agent)} className="w-48 min-w-0 text-left shrink-0">
+        <div className="flex items-center gap-1.5">
+          <span className="text-[13px] text-theme-primary font-body font-medium truncate">{(agent.displayName as string) ?? (agent.name as string)}</span>
+          {isLead && <Crown className="w-3 h-3 text-accent-yellow shrink-0" />}
+        </div>
+        <span className="text-[10px] text-theme-subtle font-mono block truncate">{agent.name as string}</span>
+      </button>
+
+      {/* Provider badge */}
+      <span className={`text-[9px] font-mono px-2 py-0.5 rounded-full shrink-0 ${
+        agent.provider === 'codex' ? 'bg-accent-green/10 text-accent-green' : 'bg-accent-blue/10 text-accent-blue'
+      }`}>{String(agent.provider ?? 'claude')}</span>
+
+      {/* Model badge */}
+      <span className="text-[9px] font-mono px-2 py-0.5 rounded-full bg-surface-200/50 text-theme-muted shrink-0">
+        {String(agent.model ?? 'sonnet')}
+      </span>
+
+      {/* Capabilities tags */}
+      <div className="flex-1 min-w-0 flex items-center gap-1 flex-wrap">
+        {capabilities.slice(0, 3).map(cap => (
+          <span key={cap} className="text-[8px] font-mono px-1.5 py-0.5 rounded-full bg-accent-purple/8 text-accent-purple/60 border border-accent-purple/10">{cap}</span>
+        ))}
+        {capabilities.length > 3 && <span className="text-[8px] text-theme-subtle">+{capabilities.length - 3}</span>}
+      </div>
+
+      {/* Delegation count stat */}
+      {delegateTargets.length > 0 && (
+        <div className="flex items-center gap-1 text-[10px] font-mono text-theme-muted shrink-0">
+          <ArrowRight className="w-3 h-3 text-accent-blue" /> {delegateTargets.length}
+        </div>
+      )}
+
+      {/* Action buttons — always visible */}
+      <div className="flex items-center gap-1.5 shrink-0">
+        <button onClick={() => onView(agent)} className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[10px] font-mono bg-accent-blue/10 text-accent-blue hover:bg-accent-blue/20 transition-colors">
+          <Eye className="w-3 h-3" /> View
+        </button>
+        <button onClick={() => onRun(agent)} className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[10px] font-mono bg-accent-green/10 text-accent-green hover:bg-accent-green/20 transition-colors">
+          <Play className="w-3 h-3" /> Run
+        </button>
+        <button onClick={() => onEdit(agent)} className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[10px] font-mono bg-accent-yellow/10 text-accent-yellow hover:bg-accent-yellow/20 transition-colors">
+          <Pencil className="w-3 h-3" /> Edit
+        </button>
+        {!agent.isBuiltIn && (
+          <button onClick={() => onDelete(agent.name as string)} className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[10px] font-mono bg-accent-red/10 text-accent-red hover:bg-accent-red/20 transition-colors">
+            <Trash2 className="w-3 h-3" /> Delete
+          </button>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ── Loading Row Skeleton ────────────────────────────────────────────────────
+
+function RowSkeleton() {
+  return (
+    <div className="flex items-center gap-4 px-4 py-3 border-b border-border/10 animate-pulse">
+      <div className="w-8 h-8 rounded-lg bg-surface-200/50" />
+      <div className="w-48 space-y-1.5">
+        <div className="h-3.5 w-32 bg-surface-200/50 rounded" />
+        <div className="h-2.5 w-20 bg-surface-200/30 rounded" />
+      </div>
+      <div className="h-4 w-12 bg-surface-200/30 rounded-full" />
+      <div className="h-4 w-12 bg-surface-200/30 rounded-full" />
+      <div className="flex-1 flex gap-1">
+        <div className="h-4 w-16 bg-surface-200/20 rounded-full" />
+        <div className="h-4 w-16 bg-surface-200/20 rounded-full" />
+      </div>
+      <div className="flex gap-1.5">
+        <div className="h-6 w-14 bg-surface-200/30 rounded-full" />
+        <div className="h-6 w-14 bg-surface-200/30 rounded-full" />
+        <div className="h-6 w-14 bg-surface-200/30 rounded-full" />
+      </div>
+    </div>
+  );
+}
+
+// ── Main Page ────────────────────────────────────────────────────────────────
+
 export default function RoleManagerPage() {
+  const navigate = useNavigate();
   const { agents: allAgents, loading, refresh } = useAgents();
+  const [allTeams, setAllTeams] = useState<TeamSummary[]>([]);
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editingRole, setEditingRole] = useState<Record<string, unknown> | null>(null);
   const [deletingRole, setDeletingRole] = useState<string | null>(null);
+  const [viewingAgent, setViewingAgent] = useState<Record<string, unknown> | null>(null);
+  const [searchQuery, setSearchQuery] = useState('');
+  const toast = useToast();
+
+  useEffect(() => {
+    teamsApi.list()
+      .then((t: TeamSummary[]) => setAllTeams((t ?? []).slice().sort((a, b) => a.name.localeCompare(b.name))))
+      .catch(() => setAllTeams([]));
+  }, [allAgents]);
 
   function handleCreate() {
-    setEditingRole(null);
-    setDialogOpen(true);
+    const teamList = allTeams.length > 0 ? allTeams.map(t => t.name).join(', ') : '(no teams yet)';
+    navigate(`/chat?${new URLSearchParams({ agent: 'agent-builder-agent', prompt: `Add a new agent. Available teams: ${teamList}` }).toString()}`);
   }
 
-  function handleEdit(role: Record<string, unknown>) {
-    setEditingRole(role);
-    setDialogOpen(true);
+  function handleRun(agent: Record<string, unknown>) {
+    navigate(`/chat?${new URLSearchParams({ agent: agent.name as string }).toString()}`);
   }
+
+  function handleEdit(role: Record<string, unknown>) { setEditingRole(role); setDialogOpen(true); }
 
   async function handleDelete() {
     if (!deletingRole) return;
     try {
       await agentsApi.delete(deletingRole);
+      toast.success(`Agent "${deletingRole}" deleted.`);
       setDeletingRole(null);
       refresh();
-    } catch (err: unknown) {
-      alert(err instanceof Error ? err.message : 'Failed to delete agent');
-    }
+    } catch (err: unknown) { toast.error(err instanceof Error ? err.message : 'Failed to delete'); }
   }
 
   async function handleSave(data: Record<string, unknown>) {
-    if (editingRole) {
-      await agentsApi.update(data.name as string, data);
-    } else {
-      await agentsApi.create(data);
-    }
+    if (!editingRole) return;
+    await agentsApi.update(data.name as string, data);
+    toast.success('Agent updated.');
     refresh();
   }
 
-  const teamAgents = allAgents.filter((r: any) => r.type === 'team');
-  const technicalAgents = allAgents.filter((r: any) => r.type !== 'team');
+  // Group by team
+  const agentsByTeam = new Map<string, any[]>();
+  const unassigned: any[] = [];
+  for (const a of allAgents) {
+    const tn = (a as any).teamName as string | undefined;
+    if (!tn) { unassigned.push(a); continue; }
+    (agentsByTeam.get(tn) ?? (agentsByTeam.set(tn, []), agentsByTeam.get(tn)!)).push(a);
+  }
+  for (const list of agentsByTeam.values()) {
+    list.sort((x: any, y: any) => {
+      if (x.teamRole === 'lead' && y.teamRole !== 'lead') return -1;
+      if (x.teamRole !== 'lead' && y.teamRole === 'lead') return 1;
+      return ((x.displayName ?? x.name) as string).localeCompare((y.displayName ?? y.name) as string);
+    });
+  }
+
+  // Search
+  const q = searchQuery.trim().toLowerCase();
+  const filteredAgents = q
+    ? allAgents.filter((a: any) =>
+        (a.name as string).toLowerCase().includes(q)
+        || (a.displayName as string)?.toLowerCase().includes(q)
+        || (a.teamName as string)?.toLowerCase().includes(q))
+    : null;
+
+  const total = allAgents.length;
 
   if (loading) {
     return (
       <div className="p-6">
-        <div className="flex items-center justify-between mb-6">
-          <h1 className="font-heading text-xl font-bold text-white tracking-widest uppercase">Agents</h1>
-        </div>
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-          {Array.from({ length: 9 }).map((_, i) => <CardSkeleton key={i} />)}
-        </div>
+        <h1 className="font-heading text-xl font-bold text-theme-primary tracking-widest uppercase mb-6">Agents</h1>
+        <div>{Array.from({ length: 6 }).map((_, i) => <RowSkeleton key={i} />)}</div>
       </div>
     );
   }
 
   return (
     <div className="p-6">
-      <div className="flex items-center justify-between mb-6">
-        <div>
-          <h1 className="font-heading text-xl font-bold text-white tracking-widest uppercase">Agents</h1>
-          <p className="text-xs text-gray-500 mt-1 font-body">
-            {teamAgents.length} team agents, {technicalAgents.length} technical agents
-          </p>
+      {/* Header */}
+      <div className="flex items-center justify-between mb-5">
+        <div className="flex items-center gap-4">
+          <h1 className="font-heading text-xl font-bold text-theme-primary tracking-widest uppercase">Agents</h1>
+          <div className="flex items-center gap-3">
+            <div className="flex items-center gap-1 text-[10px] font-mono text-theme-muted">
+              <Users className="w-3 h-3 text-accent-blue" /> {total} agents
+            </div>
+            <div className="flex items-center gap-1 text-[10px] font-mono text-theme-muted">
+              <Users className="w-3 h-3 text-accent-purple" /> {allTeams.length} teams
+            </div>
+          </div>
         </div>
         <div className="flex items-center gap-2">
-          <button title="Refresh agents" onClick={refresh} className="btn-ghost text-xs">
-            <RefreshCw className="w-3.5 h-3.5" />
+          <div className="relative">
+            <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-theme-subtle" />
+            <input type="text" value={searchQuery} onChange={e => setSearchQuery(e.target.value)}
+              placeholder="Search agents..." className="input text-xs pl-8 pr-3 py-1.5 w-44" />
+          </div>
+          <button title="Refresh" onClick={refresh} className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[10px] font-mono bg-surface-200/30 text-theme-muted hover:bg-surface-200/50 transition-colors">
+            <RefreshCw className="w-3 h-3" />
           </button>
-          <button title="Create new agent" onClick={handleCreate} className="btn-primary text-xs inline-flex items-center gap-1.5 whitespace-nowrap">
-            <Plus className="w-3.5 h-3.5" /> Create Agent
+          <button onClick={handleCreate} className="inline-flex items-center gap-1 px-3 py-1.5 rounded-full text-[10px] font-mono bg-accent-blue/10 text-accent-blue hover:bg-accent-blue/20 transition-colors">
+            <Sparkles className="w-3 h-3" /> Create Agent
           </button>
         </div>
       </div>
 
-      {/* Delegation Graph */}
-      {teamAgents.length > 0 && (
+      {/* Org Chart */}
+      {!searchQuery && allAgents.length > 0 && (
+        <div className="mb-6"><DelegationGraph agents={allAgents} /></div>
+      )}
+
+      {/* Search results */}
+      {filteredAgents && (
         <div className="mb-6">
-          <DelegationGraph agents={allAgents} />
+          <span className="text-[10px] text-theme-muted font-mono block mb-2">{filteredAgents.length} result{filteredAgents.length !== 1 ? 's' : ''}</span>
+          {/* Column headers */}
+          <div className="flex items-center gap-4 px-4 py-2 border-b border-border/20 text-[10px] font-label uppercase tracking-widest text-theme-subtle">
+            <span className="w-8" />
+            <span className="w-48">Name</span>
+            <span className="w-16">Provider</span>
+            <span className="w-16">Model</span>
+            <span className="flex-1">Capabilities</span>
+            <span className="w-12 text-right">Deleg.</span>
+            <span className="text-right">Actions</span>
+          </div>
+          {filteredAgents.map((agent: any) => (
+            <AgentRow key={agent.name} agent={agent} onEdit={handleEdit} onDelete={setDeletingRole} onRun={handleRun} onView={setViewingAgent} />
+          ))}
         </div>
       )}
 
-      {/* Team Agents Section */}
-      <div className="mb-8">
-        <div className="flex items-center gap-2 mb-4">
-          <Users className="w-4 h-4 text-accent-blue" />
-          <h2 className="font-heading text-sm font-semibold text-gray-300 tracking-wider uppercase">Team Agents</h2>
-          <span className="text-[10px] font-mono text-gray-600 bg-surface-200 px-2 py-0.5 rounded-sm">{teamAgents.length}</span>
+      {/* Team list */}
+      {!searchQuery && (
+        <div>
+          {allTeams.map(team => {
+            const members = agentsByTeam.get(team.name) ?? [];
+            if (members.length === 0) return null;
+            return (
+              <div key={team.name}>
+                {/* Team section header */}
+                <div className="flex items-center gap-3 px-4 py-3 mt-4 first:mt-0">
+                  <div className="w-8 h-8 rounded-lg bg-accent-blue/10 flex items-center justify-center">
+                    <Users className="w-4 h-4 text-accent-blue" />
+                  </div>
+                  <span className="text-sm font-heading font-semibold text-theme-primary tracking-wide">{team.displayName}</span>
+                  <div className="flex items-center gap-1 text-[10px] font-mono text-theme-muted">
+                    <Users className="w-3 h-3 text-accent-blue" /> {members.length}
+                  </div>
+                  {team.description && (
+                    <span className="text-[11px] text-theme-muted font-body truncate">{team.description}</span>
+                  )}
+                </div>
+                {/* Column headers */}
+                <div className="flex items-center gap-4 px-4 py-2 border-b border-border/20 text-[10px] font-label uppercase tracking-widest text-theme-subtle">
+                  <span className="w-8" />
+                  <span className="w-48">Name</span>
+                  <span className="w-16">Provider</span>
+                  <span className="w-16">Model</span>
+                  <span className="flex-1">Capabilities</span>
+                  <span className="w-12 text-right">Deleg.</span>
+                  <span className="text-right">Actions</span>
+                </div>
+                {/* Agent rows */}
+                {members.map((agent: any) => (
+                  <AgentRow key={agent.name} agent={agent} onEdit={handleEdit} onDelete={setDeletingRole} onRun={handleRun} onView={setViewingAgent} />
+                ))}
+              </div>
+            );
+          })}
+          {unassigned.length > 0 && (
+            <div>
+              <div className="flex items-center gap-3 px-4 py-3 mt-4">
+                <div className="w-8 h-8 rounded-lg bg-surface-200/30 flex items-center justify-center">
+                  <Users className="w-4 h-4 text-theme-muted" />
+                </div>
+                <span className="text-sm font-heading font-semibold text-theme-muted tracking-wide">Unassigned</span>
+                <div className="flex items-center gap-1 text-[10px] font-mono text-theme-muted">
+                  <Users className="w-3 h-3 text-theme-subtle" /> {unassigned.length}
+                </div>
+              </div>
+              <div className="flex items-center gap-4 px-4 py-2 border-b border-border/20 text-[10px] font-label uppercase tracking-widest text-theme-subtle">
+                <span className="w-8" />
+                <span className="w-48">Name</span>
+                <span className="w-16">Provider</span>
+                <span className="w-16">Model</span>
+                <span className="flex-1">Capabilities</span>
+                <span className="w-12 text-right">Deleg.</span>
+                <span className="text-right">Actions</span>
+              </div>
+              {unassigned.map((agent: any) => (
+                <AgentRow key={agent.name} agent={agent} onEdit={handleEdit} onDelete={setDeletingRole} onRun={handleRun} onView={setViewingAgent} />
+              ))}
+            </div>
+          )}
         </div>
-        <p className="text-[11px] text-gray-600 mb-3 font-body">
-          High-level agents that communicate, delegate, and coordinate work across the team.
-        </p>
-        {teamAgents.length === 0 ? (
-          <div className="text-xs text-gray-600 font-body py-4">No team agents defined yet.</div>
-        ) : (
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-            {teamAgents.map((agent: any) => (
-              <AgentCard
-                key={agent.name}
-                agent={agent}
-                onEdit={handleEdit}
-                onDelete={setDeletingRole}
-              />
-            ))}
-          </div>
-        )}
-      </div>
+      )}
 
-      {/* Technical Agents Section */}
-      <div>
-        <div className="flex items-center gap-2 mb-4">
-          <Wrench className="w-4 h-4 text-accent-green" />
-          <h2 className="font-heading text-sm font-semibold text-gray-300 tracking-wider uppercase">Technical Agents</h2>
-          <span className="text-[10px] font-mono text-gray-600 bg-surface-200 px-2 py-0.5 rounded-sm">{technicalAgents.length}</span>
-        </div>
-        <p className="text-[11px] text-gray-600 mb-3 font-body">
-          Specialized execution agents that perform specific tasks like coding, testing, and reviewing.
-        </p>
-        {technicalAgents.length === 0 ? (
-          <div className="text-xs text-gray-600 font-body py-4">No technical agents defined yet.</div>
-        ) : (
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-            {technicalAgents.map((agent: any) => (
-              <AgentCard
-                key={agent.name}
-                agent={agent}
-                onEdit={handleEdit}
-                onDelete={setDeletingRole}
-              />
-            ))}
-          </div>
-        )}
-      </div>
+      {/* Agent detail viewer (markdown) */}
+      {viewingAgent && <AgentDetailPanel agent={viewingAgent} onClose={() => setViewingAgent(null)} />}
 
-      <RoleDialog
-        open={dialogOpen}
-        onClose={() => setDialogOpen(false)}
-        onSave={handleSave}
-        role={editingRole}
-      />
-
-      <DeleteConfirmDialog
-        open={!!deletingRole}
-        resourceType="agent"
-        resourceName={deletingRole ?? ''}
-        onConfirm={handleDelete}
-        onCancel={() => setDeletingRole(null)}
-      />
+      {/* Dialogs */}
+      <RoleDialog open={dialogOpen} onClose={() => setDialogOpen(false)} onSave={handleSave} role={editingRole} />
+      <DeleteConfirmDialog open={!!deletingRole} resourceType="agent" resourceName={deletingRole ?? ''} onConfirm={handleDelete} onCancel={() => setDeletingRole(null)} />
     </div>
   );
 }

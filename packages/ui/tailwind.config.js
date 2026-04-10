@@ -28,7 +28,7 @@ export default {
           red: 'rgb(var(--color-accent-red) / <alpha-value>)',
           yellow: 'rgb(var(--color-accent-yellow) / <alpha-value>)',
           purple: 'rgb(var(--color-accent-purple) / <alpha-value>)',
-          orange: '#f97316',
+          orange: 'rgb(var(--color-accent-orange, 249 115 22) / <alpha-value>)',
           cyan: 'rgb(var(--color-accent) / <alpha-value>)',
         },
       },

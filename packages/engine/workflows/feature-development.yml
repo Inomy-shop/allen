@@ -1,0 +1,305 @@
+name: feature-development
+description: >
+  Full feature development lifecycle using the complete org chart.
+  Product → Plan → Implement (backend + frontend parallel) → Test → Security Review
+  → Code Review → Document → Create PR. You merge the PR manually.
+version: 2
+
+context:
+  requires: [repo]
+  tools: [filesystem, git, terminal]
+  concurrency: 1
+
+input:
+  feature: { type: string, required: true }
+  repo_path: { type: string, required: true }
+
+nodes:
+  # ── Phase 1: Requirements (Product Team) ──
+  requirements:
+    agent: requirements-analyst
+    prompt: |
+      Break down this feature into user stories with acceptance criteria:
+      {{feature}}
+
+      Produce:
+      1. User stories (As a [role], I want [action], so that [benefit])
+      2. Acceptance criteria for each story (Given/When/Then)
+      3. Edge cases: empty states, error states, permission boundaries
+      4. Out-of-scope items
+      5. Open questions (if none, say "none")
+    outputs: [requirements, acceptance_criteria, edge_cases, open_questions]
+
+  ux-spec:
+    agent: ux-spec-writer
+    prompt: |
+      Specify the UI interaction flows for this feature:
+      {{feature}}
+
+      Requirements: {{requirements}}
+
+      For each screen/view:
+      - Layout and components
+      - All states: loading, loaded, error, empty
+      - User interactions
+      - Responsive behaviour
+      - Accessibility requirements
+    outputs: [ux_spec, has_ui_changes]
+
+  # Ask user if open questions exist
+  clarify:
+    type: human
+    prompt: |
+      Requirements ready. Open questions:
+      {{open_questions}}
+
+      Requirements: {{requirements}}
+      UX Spec: {{ux_spec}}
+    fields:
+      - { name: answers, type: text, label: "Your answers (or 'proceed')" }
+      - { name: approved, type: select, options: [proceed, revise], label: "Approve?" }
+    outputs: [answers, approved]
+
+  # ── Phase 2: Threat Model (Security Team) ──
+  threat-model:
+    agent: threat-modeller
+    prompt: |
+      Threat model this feature before implementation:
+      {{feature}}
+
+      Requirements: {{requirements}}
+      {{#if has_ui_changes}}UX: {{ux_spec}}{{/if}}
+
+      Map trust boundaries, data flows, and STRIDE threats.
+      Output: threats with mitigations that developers must implement.
+    outputs: [threat_model, security_requirements]
+
+  # ── Phase 3: Plan (Backend + Frontend) ──
+  backend-plan:
+    agent: database-engineer
+    prompt: |
+      Design the database changes for this feature:
+      {{feature}}
+
+      Requirements: {{requirements}}
+      Security requirements: {{security_requirements}}
+      {{#if answers}}Clarifications: {{answers}}{{/if}}
+
+      Produce: schema changes, indexes needed, migration plan.
+    outputs: [db_plan, has_db_changes]
+
+  api-plan:
+    agent: api-developer
+    prompt: |
+      Design the API endpoints for this feature:
+      {{feature}}
+
+      Requirements: {{requirements}}
+      DB plan: {{db_plan}}
+      Security requirements: {{security_requirements}}
+
+      Produce: endpoint list (method, path, request/response shapes, auth).
+    outputs: [api_plan, has_api_changes]
+
+  # ── Phase 4: Branch ──
+  create-branch:
+    type: code
+    function: git-create-branch
+    outputs: [worktree_path, branch_name]
+
+  # ── Phase 5: Implement (parallel backend + frontend) ──
+  implement-backend:
+    agent: api-developer
+    prompt: |
+      Implement the backend in {{worktree_path}}:
+
+      API PLAN: {{api_plan}}
+      DB PLAN: {{db_plan}}
+      SECURITY: {{security_requirements}}
+      REQUIREMENTS: {{requirements}}
+
+      {{#if retry_context}}FIX THESE ISSUES:\n{{retry_context}}{{/if}}
+
+      Steps: migrations first, then services, then routes. Run build after.
+    outputs: [backend_files, backend_summary]
+    resume_on_retry: true
+
+  implement-frontend:
+    agent: page-developer
+    prompt: |
+      Implement the frontend in {{worktree_path}}:
+
+      UX SPEC: {{ux_spec}}
+      API ENDPOINTS: {{api_plan}}
+      REQUIREMENTS: {{requirements}}
+
+      {{#if retry_context}}FIX THESE ISSUES:\n{{retry_context}}{{/if}}
+
+      Use existing components. Handle loading/error/empty states. Match theme.
+    outputs: [frontend_files, frontend_summary]
+    resume_on_retry: true
+
+  # ── Phase 6: Test (QA Team) ──
+  test-plan:
+    agent: test-planner
+    prompt: |
+      Create test plan for:
+      {{feature}}
+
+      Acceptance criteria: {{acceptance_criteria}}
+      Edge cases: {{edge_cases}}
+      Backend changes: {{backend_files}}
+      Frontend changes: {{frontend_files}}
+    outputs: [test_plan]
+
+  unit-tests:
+    agent: unit-test-writer
+    prompt: |
+      Write unit tests in {{worktree_path}} based on this plan:
+      {{test_plan}}
+
+      Cover: new services, functions, utilities.
+      Run all tests after writing.
+    outputs: [unit_test_passed, unit_test_output]
+
+  integration-tests:
+    agent: integration-test-writer
+    prompt: |
+      Write integration tests in {{worktree_path}}:
+      {{test_plan}}
+
+      Test: API endpoints, auth, validation, DB side effects.
+      Run all tests.
+    outputs: [integration_test_passed, integration_test_output]
+
+  build:
+    type: code
+    function: run-build
+    retries: 1
+    outputs: [build_passed, build_errors]
+
+  # ── Phase 7: Review (parallel security + code) ──
+  security-review:
+    agent: code-security-reviewer
+    prompt: |
+      Security review of {{worktree_path}} on branch {{branch_name}}:
+
+      Threat model: {{threat_model}}
+      Security requirements: {{security_requirements}}
+      Changed files: {{backend_files}}, {{frontend_files}}
+
+      Check OWASP top 10. Verdict: APPROVED or REQUEST_CHANGES.
+    outputs: [security_verdict, security_feedback]
+
+  backend-review:
+    agent: backend-code-reviewer
+    prompt: |
+      Review backend code in {{worktree_path}} on {{branch_name}}:
+
+      Requirements: {{requirements}}
+      Changed: {{backend_files}}
+
+      Check: correctness, error handling, performance, types, tests.
+      Verdict: APPROVED or REQUEST_CHANGES.
+    outputs: [backend_review_verdict, backend_review_feedback]
+
+  frontend-review:
+    agent: frontend-code-reviewer
+    prompt: |
+      Review frontend code in {{worktree_path}} on {{branch_name}}:
+
+      UX spec: {{ux_spec}}
+      Changed: {{frontend_files}}
+
+      Check: consistency, theme, states, responsive, accessibility, types.
+      Verdict: APPROVED or REQUEST_CHANGES.
+    outputs: [frontend_review_verdict, frontend_review_feedback]
+
+  # ── Phase 8: Acceptance Test (Product Team) ──
+  acceptance-test:
+    agent: acceptance-tester
+    prompt: |
+      Validate the implementation in {{worktree_path}} against the spec:
+
+      Requirements: {{requirements}}
+      Acceptance criteria: {{acceptance_criteria}}
+
+      For each criterion: PASS or FAIL with evidence.
+    outputs: [acceptance_verdict, acceptance_feedback]
+
+  # ── Phase 9: API Contract Validation ──
+  api-contract-check:
+    agent: api-contract-validator
+    prompt: |
+      Check for breaking API changes in {{worktree_path}} on {{branch_name}}:
+
+      New/changed endpoints: {{api_plan}}
+
+      Verdict: COMPATIBLE or BREAKING.
+    outputs: [contract_verdict, contract_feedback]
+
+  # ── Phase 10: Document (DevEx Team) ──
+  document:
+    agent: documentation-writer
+    prompt: |
+      Update documentation in {{worktree_path}}:
+
+      What changed: {{backend_summary}}, {{frontend_summary}}
+      {{#if has_api_changes}}New API endpoints — document request/response.{{/if}}
+      {{#if has_db_changes}}Database changes — document collections/fields.{{/if}}
+
+      Update: README, API docs, CHANGELOG, inline comments.
+    outputs: [docs_updated]
+
+  # ── Phase 11: Create PR ──
+  create-pr:
+    agent: release-manager
+    prompt: |
+      Create a PR from branch {{branch_name}} in {{worktree_path}}:
+
+      Title: feat: {{backend_summary}}
+      Body:
+      - Feature: {{feature}}
+      - Backend: {{backend_summary}}
+      - Frontend: {{frontend_summary}}
+      - Tests: unit + integration
+      - Docs: {{docs_updated}}
+      - Security: reviewed, threat model applied
+
+      Stage all, commit, push, create PR.
+    outputs: [pr_url]
+
+edges:
+  # Phase 1: Requirements + UX (parallel)
+  - { from: START, to: [requirements, ux-spec], parallel: true, join: wait-all }
+
+  # Clarify if needed
+  - { from: [requirements, ux-spec], to: clarify, condition: "open_questions != 'none'" }
+  - { from: [requirements, ux-spec], to: threat-model, condition: "open_questions == 'none'" }
+  - { from: clarify, to: requirements, condition: "approved == 'revise'", max_retries: 2 }
+  - { from: clarify, to: threat-model, condition: "approved == 'proceed'" }
+
+  # Phase 2: Threat model → Phase 3: Plan (parallel DB + API)
+  - { from: threat-model, to: [backend-plan, api-plan], parallel: true, join: wait-all }
+
+  # Phase 4: Branch → Phase 5: Implement (parallel backend + frontend)
+  - { from: [backend-plan, api-plan], to: create-branch }
+  - { from: create-branch, to: [implement-backend, implement-frontend], parallel: true, join: wait-all }
+
+  # Phase 6: Test plan → tests + build (parallel)
+  - { from: [implement-backend, implement-frontend], to: test-plan }
+  - { from: test-plan, to: [unit-tests, integration-tests, build], parallel: true, join: wait-all }
+
+  # If tests or build fail → retry implementation
+  - { from: [unit-tests, integration-tests, build], to: [implement-backend, implement-frontend], condition: "NOT unit_test_passed OR NOT integration_test_passed OR NOT build_passed", max_retries: 3, retry_context: "Unit:\n{{unit_test_output}}\nIntegration:\n{{integration_test_output}}\nBuild:\n{{build_errors}}" }
+
+  # Phase 7: Reviews (all parallel)
+  - { from: [unit-tests, integration-tests, build], to: [security-review, backend-review, frontend-review, acceptance-test, api-contract-check], condition: "unit_test_passed AND integration_test_passed AND build_passed", parallel: true, join: wait-all }
+
+  # If any review fails → retry implementation
+  - { from: [security-review, backend-review, frontend-review, acceptance-test, api-contract-check], to: [implement-backend, implement-frontend], condition: "security_verdict == 'REQUEST_CHANGES' OR backend_review_verdict == 'REQUEST_CHANGES' OR frontend_review_verdict == 'REQUEST_CHANGES' OR acceptance_verdict == 'FAIL' OR contract_verdict == 'BREAKING'", max_retries: 3, retry_context: "Security:\n{{security_feedback}}\nBackend review:\n{{backend_review_feedback}}\nFrontend review:\n{{frontend_review_feedback}}\nAcceptance:\n{{acceptance_feedback}}\nContract:\n{{contract_feedback}}" }
+
+  # Phase 10-11: Document → PR
+  - { from: [security-review, backend-review, frontend-review, acceptance-test, api-contract-check], to: document, condition: "security_verdict == 'APPROVED' AND backend_review_verdict == 'APPROVED' AND frontend_review_verdict == 'APPROVED' AND acceptance_verdict != 'FAIL' AND contract_verdict != 'BREAKING'" }
+  - { from: document, to: create-pr }
+  - { from: create-pr, to: END }

@@ -21,7 +21,7 @@ import { Handle, Position, type NodeProps } from '@xyflow/react';
 
 // ── Status-aware border/glow styles ──
 const statusBorder: Record<string, string> = {
-  pending: 'border-gray-600/40',
+  pending: 'border-theme-subtle/40',
   running: 'border-accent-blue shadow-glow-blue',
   completed: 'border-accent-green',
   failed: 'border-accent-red shadow-glow-red',
@@ -65,7 +65,7 @@ function ExecutionNode({ data, selected }: NodeProps) {
       <div className="flex items-center gap-2">
         <RoleIcon icon={d.icon} color={d.color} size={16} />
         <div>
-          <div className="text-xs font-label font-medium text-gray-100">{d.label}</div>
+          <div className="text-xs font-label font-medium text-theme-primary">{d.label}</div>
           <div className={`text-[10px] font-mono uppercase text-${accent}/70`}>
             {type === 'agent' ? (d.role ?? 'agent') : type === 'code' ? (d.function ?? 'code') : type}
           </div>
@@ -79,11 +79,11 @@ function ExecutionNode({ data, selected }: NodeProps) {
           status === 'completed' ? 'bg-accent-green' :
           status === 'failed' ? 'bg-accent-red' :
           status === 'waiting_for_input' ? 'bg-accent-yellow animate-pulse' :
-          'bg-gray-600'
+          'bg-theme-subtle'
         }`} />
-        <span className="text-[9px] font-mono text-gray-400 uppercase">{status}</span>
+        <span className="text-[9px] font-mono text-theme-secondary uppercase">{status}</span>
         {d.__durationMs != null && (
-          <span className="text-[9px] font-mono text-gray-500">{(d.__durationMs / 1000).toFixed(1)}s</span>
+          <span className="text-[9px] font-mono text-theme-muted">{(d.__durationMs / 1000).toFixed(1)}s</span>
         )}
       </div>
 
@@ -334,7 +334,7 @@ export default function LiveGraph({ workflow, nodeStates, selectedNode, onSelect
 
   if (nodes.length === 0) {
     return (
-      <div className="flex items-center justify-center h-full text-gray-500 text-sm font-mono">
+      <div className="flex items-center justify-center h-full text-theme-muted text-sm font-mono">
         WAITING FOR NODES...
       </div>
     );
@@ -393,7 +393,7 @@ function LiveGraphInner({
         <Background variant={BackgroundVariant.Lines} gap={30} size={1} color="rgb(var(--color-border) / 0.2)" />
         <Controls
           showInteractive={false}
-          className="!bg-surface-100 !border-border/50 !shadow-lg [&>button]:!bg-surface-200 [&>button]:!border-border/50 [&>button]:!text-gray-400 [&>button:hover]:!bg-surface-300 [&>button:hover]:!text-accent-blue"
+          className="!bg-surface-100 !border-border/50 !shadow-lg [&>button]:!bg-surface-200 [&>button]:!border-border/50 [&>button]:!text-theme-secondary [&>button:hover]:!bg-surface-300 [&>button:hover]:!text-accent-blue"
         />
       </ReactFlow>
 

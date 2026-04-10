@@ -10,6 +10,7 @@ import { useResizable } from '../hooks/useResizable';
 import { executions as api } from '../services/api';
 import StatusBadge from '../components/common/StatusBadge';
 import CostDisplay from '../components/common/CostDisplay';
+import { renderMarkdown } from '../components/chat/ChatMessageList';
 import LiveGraph from '../components/execution/LiveGraph';
 import Timeline from '../components/execution/Timeline';
 import NodeDetail from '../components/execution/NodeDetail';
@@ -87,25 +88,25 @@ function AgentExecutionView({ execution, agentName, trace, id }: {
       {/* Header */}
       <header className="flex items-center justify-between px-6 py-3 border-b border-border/50 bg-surface-50 shrink-0">
         <div className="flex items-center gap-3">
-          <Link to="/executions" className="text-gray-400 hover:text-accent-blue transition-colors">
+          <Link to="/executions" className="text-theme-secondary hover:text-accent-blue transition-colors">
             <ArrowLeft className="w-4 h-4" />
           </Link>
           <div className="w-9 h-9 rounded-lg bg-accent-purple/10 border border-accent-purple/20 flex items-center justify-center">
             <Bot className="w-5 h-5 text-accent-purple" />
           </div>
           <div>
-            <h1 className="font-heading text-sm font-semibold text-white tracking-wider uppercase">{agentName}</h1>
+            <h1 className="font-heading text-sm font-semibold text-theme-primary tracking-wider uppercase">{agentName}</h1>
             <div className="flex items-center gap-2 mt-0.5">
               <StatusBadge status={execution.status} />
-              <span className="text-xs text-gray-500 font-mono">{id?.slice(0, 8)}</span>
-              {meta.spawnedBy && <span className="text-[10px] text-gray-600 font-mono">by {meta.spawnedBy}</span>}
+              <span className="text-xs text-theme-muted font-mono">{id?.slice(0, 8)}</span>
+              {meta.spawnedBy && <span className="text-[10px] text-theme-subtle font-mono">by {meta.spawnedBy}</span>}
             </div>
           </div>
         </div>
         <div className="flex items-center gap-3">
           {execution.status === 'running' && <span className="w-2 h-2 rounded-full bg-blue-400 animate-pulse" />}
           {durationMs > 0 && (
-            <span className="flex items-center gap-1 text-xs text-gray-400 font-mono">
+            <span className="flex items-center gap-1 text-xs text-theme-secondary font-mono">
               <Clock className="w-3 h-3" /> {(durationMs / 1000).toFixed(1)}s
             </span>
           )}
@@ -123,31 +124,31 @@ function AgentExecutionView({ execution, agentName, trace, id }: {
         {/* Metadata cards — 2 rows */}
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
           <div className="card p-3">
-            <span className="text-[10px] font-label uppercase tracking-widest text-gray-500">Status</span>
+            <span className="text-[10px] font-label uppercase tracking-widest text-theme-muted">Status</span>
             <div className="mt-1"><StatusBadge status={execution.status} /></div>
           </div>
           <div className="card p-3">
-            <span className="text-[10px] font-label uppercase tracking-widest text-gray-500">Duration</span>
-            <div className="mt-1 text-sm text-white font-mono">{durationMs > 0 ? `${(durationMs / 1000).toFixed(1)}s` : execution.status === 'running' ? '...' : '—'}</div>
+            <span className="text-[10px] font-label uppercase tracking-widest text-theme-muted">Duration</span>
+            <div className="mt-1 text-sm text-theme-primary font-mono">{durationMs > 0 ? `${(durationMs / 1000).toFixed(1)}s` : execution.status === 'running' ? '...' : '—'}</div>
           </div>
           <div className="card p-3">
-            <span className="text-[10px] font-label uppercase tracking-widest text-gray-500">Cost</span>
-            <div className="mt-1 text-sm text-white font-mono">${(cost.actual ?? cost.estimated ?? 0).toFixed(4)}</div>
+            <span className="text-[10px] font-label uppercase tracking-widest text-theme-muted">Cost</span>
+            <div className="mt-1 text-sm text-theme-primary font-mono">${(cost.actual ?? cost.estimated ?? 0).toFixed(4)}</div>
           </div>
           <div className="card p-3">
-            <span className="text-[10px] font-label uppercase tracking-widest text-gray-500">Model</span>
-            <div className="mt-1 text-sm text-white font-mono">{meta.model ?? cost.model ?? 'sonnet'}</div>
+            <span className="text-[10px] font-label uppercase tracking-widest text-theme-muted">Model</span>
+            <div className="mt-1 text-sm text-theme-primary font-mono">{meta.model ?? cost.model ?? 'sonnet'}</div>
           </div>
           <div className="card p-3">
-            <span className="text-[10px] font-label uppercase tracking-widest text-gray-500">Provider</span>
-            <div className="mt-1 text-sm text-white font-mono">{meta.provider ?? 'claude'}</div>
+            <span className="text-[10px] font-label uppercase tracking-widest text-theme-muted">Provider</span>
+            <div className="mt-1 text-sm text-theme-primary font-mono">{meta.provider ?? 'claude'}</div>
           </div>
           <div className="card p-3">
-            <span className="text-[10px] font-label uppercase tracking-widest text-gray-500">Spawned By</span>
-            <div className="mt-1 text-sm text-white font-mono">{meta.spawnedBy ?? 'user'}</div>
+            <span className="text-[10px] font-label uppercase tracking-widest text-theme-muted">Spawned By</span>
+            <div className="mt-1 text-sm text-theme-primary font-mono">{meta.spawnedBy ?? 'user'}</div>
           </div>
           <div className="card p-3 col-span-2">
-            <span className="text-[10px] font-label uppercase tracking-widest text-gray-500">Working Directory</span>
+            <span className="text-[10px] font-label uppercase tracking-widest text-theme-muted">Working Directory</span>
             <div className="mt-1 text-xs text-blue-400 font-mono truncate" title={meta.cwd ?? execution.input?.repo_path}>{meta.cwd ?? execution.input?.repo_path ?? '/tmp'}</div>
           </div>
         </div>
@@ -155,20 +156,20 @@ function AgentExecutionView({ execution, agentName, trace, id }: {
         {/* Live Logs — shown by default for running, togglable for completed */}
         <div className="card overflow-hidden">
           <button title="Toggle logs" onClick={() => setShowLogs(!showLogs)} className="w-full flex items-center gap-2 px-4 py-3 hover:bg-surface-200/30 transition-colors text-left">
-            {showLogs ? <ChevronDown className="w-4 h-4 text-gray-500" /> : <ChevronRight className="w-4 h-4 text-gray-500" />}
+            {showLogs ? <ChevronDown className="w-4 h-4 text-theme-muted" /> : <ChevronRight className="w-4 h-4 text-theme-muted" />}
             <Terminal className="w-4 h-4 text-accent-cyan" />
-            <span className="text-xs font-label uppercase tracking-widest text-gray-400">Live Logs</span>
-            <span className="text-[10px] text-gray-600 font-mono ml-auto">{allLogs.length} entries</span>
+            <span className="text-xs font-label uppercase tracking-widest text-theme-secondary">Live Logs</span>
+            <span className="text-[10px] text-theme-subtle font-mono ml-auto">{allLogs.length} entries</span>
             {execution.status === 'running' && <span className="w-1.5 h-1.5 rounded-full bg-blue-400 animate-pulse" />}
           </button>
           {showLogs && (
-            <div className="px-4 pb-4 border-t border-border/20 max-h-[50vh] overflow-y-auto bg-[rgb(13,17,28)] rounded-b">
+            <div className="px-4 pb-4 border-t border-border/20 max-h-[50vh] overflow-y-auto bg-[rgb(var(--color-editor-background))] rounded-b">
               {allLogs.length === 0 && execution.status === 'running' && (
-                <div className="text-xs text-gray-600 font-mono py-3 animate-pulse">Waiting for activity...</div>
+                <div className="text-xs text-theme-subtle font-mono py-3 animate-pulse">Waiting for activity...</div>
               )}
               {allLogs.map((log: any, i: number) => (
                 <div key={i} className="flex items-start gap-2 py-1 text-[11px] font-mono">
-                  <span className="text-gray-700 w-16 shrink-0">{log.timestamp ? new Date(log.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }) : '--:--:--'}</span>
+                  <span className="text-theme-subtle w-16 shrink-0">{log.timestamp ? new Date(log.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }) : '--:--:--'}</span>
                   <span className={
                     log.type === 'tool_start' ? 'text-amber-400 shrink-0' :
                     log.type === 'tool_done' ? 'text-emerald-400 shrink-0' :
@@ -177,24 +178,24 @@ function AgentExecutionView({ execution, agentName, trace, id }: {
                     log.type === 'text' ? 'text-blue-400 shrink-0' :
                     log.type === 'started' ? 'text-blue-400 shrink-0' :
                     log.type === 'completed' ? 'text-emerald-400 shrink-0' :
-                    'text-gray-500 shrink-0'
+                    'text-theme-muted shrink-0'
                   }>
                     {log.type === 'tool_start' ? '⚡' : log.type === 'tool_done' ? '✓' : log.type === 'tool_call' ? '🔧' : log.type === 'thinking' ? '💭' : log.type === 'text' ? '💬' : log.type === 'started' ? '▶' : log.type === 'completed' ? '✅' : '·'}
                   </span>
                   <div className="flex-1 min-w-0">
                     {(log.type === 'tool_start' || log.type === 'tool_done' || log.type === 'tool_call') ? (
                       <>
-                        <span className="text-gray-500">{log.tool}</span>
-                        {log.content && <span className="text-gray-400 ml-1.5">{log.content}</span>}
-                        {!log.content && log.command && <span className="text-gray-400 ml-1.5">$ {log.command}</span>}
-                        {log.args && <pre className="text-gray-600 text-[9px] mt-0.5 truncate">{JSON.stringify(log.args).slice(0, 150)}</pre>}
+                        <span className="text-theme-muted">{log.tool}</span>
+                        {log.content && <span className="text-theme-secondary ml-1.5">{log.content}</span>}
+                        {!log.content && log.command && <span className="text-theme-secondary ml-1.5">$ {log.command}</span>}
+                        {log.args && <pre className="text-theme-subtle text-[9px] mt-0.5 truncate">{JSON.stringify(log.args).slice(0, 150)}</pre>}
                       </>
                     ) : log.type === 'thinking' ? (
                       <span className="text-purple-400/70">{log.content ?? 'thinking...'}</span>
                     ) : log.type === 'text' ? (
-                      <span className="text-gray-400 line-clamp-2">{log.content}</span>
+                      <span className="text-theme-secondary line-clamp-2">{log.content}</span>
                     ) : (
-                      <span className="text-gray-400">{log.content ?? log.type}</span>
+                      <span className="text-theme-secondary">{log.content ?? log.type}</span>
                     )}
                   </div>
                 </div>
@@ -207,14 +208,14 @@ function AgentExecutionView({ execution, agentName, trace, id }: {
         {/* Prompt */}
         <div className="card overflow-hidden">
           <button title="Toggle prompt" onClick={() => setShowPrompt(!showPrompt)} className="w-full flex items-center gap-2 px-4 py-3 hover:bg-surface-200/30 transition-colors text-left">
-            {showPrompt ? <ChevronDown className="w-4 h-4 text-gray-500" /> : <ChevronRight className="w-4 h-4 text-gray-500" />}
+            {showPrompt ? <ChevronDown className="w-4 h-4 text-theme-muted" /> : <ChevronRight className="w-4 h-4 text-theme-muted" />}
             <Terminal className="w-4 h-4 text-accent-blue" />
-            <span className="text-xs font-label uppercase tracking-widest text-gray-400">Prompt</span>
-            <span className="text-[10px] text-gray-600 font-mono ml-auto">{prompt.length} chars</span>
+            <span className="text-xs font-label uppercase tracking-widest text-theme-secondary">Prompt</span>
+            <span className="text-[10px] text-theme-subtle font-mono ml-auto">{prompt.length} chars</span>
           </button>
           {showPrompt && (
             <div className="px-4 pb-4 border-t border-border/20">
-              <pre className="text-xs text-gray-400 font-mono whitespace-pre-wrap mt-2 max-h-[40vh] overflow-y-auto">{prompt}</pre>
+              <pre className="text-xs text-theme-secondary font-mono whitespace-pre-wrap mt-2 max-h-[40vh] overflow-y-auto">{prompt}</pre>
             </div>
           )}
         </div>
@@ -222,14 +223,19 @@ function AgentExecutionView({ execution, agentName, trace, id }: {
         {/* Response */}
         <div className="card overflow-hidden">
           <button title="Toggle response" onClick={() => setShowResponse(!showResponse)} className="w-full flex items-center gap-2 px-4 py-3 hover:bg-surface-200/30 transition-colors text-left">
-            {showResponse ? <ChevronDown className="w-4 h-4 text-gray-500" /> : <ChevronRight className="w-4 h-4 text-gray-500" />}
+            {showResponse ? <ChevronDown className="w-4 h-4 text-theme-muted" /> : <ChevronRight className="w-4 h-4 text-theme-muted" />}
             {execution.status === 'completed' ? <CheckCircle className="w-4 h-4 text-accent-green" /> : execution.status === 'running' ? <Brain className="w-4 h-4 text-accent-blue animate-pulse" /> : <AlertCircle className="w-4 h-4 text-accent-red" />}
-            <span className="text-xs font-label uppercase tracking-widest text-gray-400">Response</span>
-            <span className="text-[10px] text-gray-600 font-mono ml-auto">{response.length} chars</span>
+            <span className="text-xs font-label uppercase tracking-widest text-theme-secondary">Response</span>
+            <span className="text-[10px] text-theme-subtle font-mono ml-auto">{response.length} chars</span>
           </button>
           {showResponse && (
             <div className="px-4 pb-4 border-t border-border/20">
-              <div className="text-sm text-gray-300 font-body whitespace-pre-wrap mt-2 leading-relaxed max-h-[50vh] overflow-y-auto">{response || (execution.status === 'running' ? 'Agent is working...' : execution.errorMessage || '(no response)')}</div>
+              <div className="text-sm text-theme-secondary font-body mt-2 leading-relaxed max-h-[60vh] overflow-y-auto prose-flowforge">
+                {response
+                  ? renderMarkdown(response)
+                  : <span className="text-theme-muted">{execution.status === 'running' ? 'Agent is working...' : execution.errorMessage || '(no response)'}</span>
+                }
+              </div>
             </div>
           )}
         </div>
@@ -239,8 +245,8 @@ function AgentExecutionView({ execution, agentName, trace, id }: {
           <div className="card overflow-hidden">
             <div className="flex items-center gap-2 px-4 py-3 border-b border-border/20">
               <Wrench className="w-4 h-4 text-accent-yellow" />
-              <span className="text-xs font-label uppercase tracking-widest text-gray-400">Tool Calls</span>
-              <span className="text-[10px] text-gray-600 font-mono ml-auto">{toolCalls.length}</span>
+              <span className="text-xs font-label uppercase tracking-widest text-theme-secondary">Tool Calls</span>
+              <span className="text-[10px] text-theme-subtle font-mono ml-auto">{toolCalls.length}</span>
             </div>
             <div className="max-h-[50vh] overflow-y-auto">
               {toolCalls.map((tc: any, i: number) => (
@@ -249,7 +255,7 @@ function AgentExecutionView({ execution, agentName, trace, id }: {
                     <span className="text-[11px] font-mono text-amber-400">{tc.tool}</span>
                   </div>
                   {tc.args && Object.keys(tc.args).length > 0 && (
-                    <pre className="text-[10px] font-mono text-gray-600 mt-1 whitespace-pre-wrap max-h-24 overflow-y-auto">{JSON.stringify(tc.args, null, 2).slice(0, 500)}</pre>
+                    <pre className="text-[10px] font-mono text-theme-subtle mt-1 whitespace-pre-wrap max-h-24 overflow-y-auto">{JSON.stringify(tc.args, null, 2).slice(0, 500)}</pre>
                   )}
                 </div>
               ))}
@@ -258,7 +264,7 @@ function AgentExecutionView({ execution, agentName, trace, id }: {
         )}
 
         {/* Timestamps */}
-        <div className="text-[10px] text-gray-600 font-mono flex gap-4 flex-wrap">
+        <div className="text-[10px] text-theme-subtle font-mono flex gap-4 flex-wrap">
           <span>Started: {execution.startedAt ? new Date(execution.startedAt).toLocaleString() : 'n/a'}</span>
           <span>Completed: {execution.completedAt ? new Date(execution.completedAt).toLocaleString() : 'n/a'}</span>
           {meta.chatSessionId && <a href={`/chat/${meta.chatSessionId}`} className="text-blue-400 hover:underline">Open Chat →</a>}
@@ -336,7 +342,7 @@ export default function ExecutionDetailPage() {
     prevStatusRef.current = status;
   }, [execution?.status, execution?.failedNode, execution?.completedNodes, latestInputEvent, nodeStates]);
 
-  const { size: rightWidth, handleMouseDown: rightResizeStart } = useResizable({ direction: 'horizontal', initialSize: 384, minSize: 280, maxSize: 600 });
+  const { size: rightWidth, handleMouseDown: rightResizeStart } = useResizable({ direction: 'horizontal', initialSize: 40, minSize: 20, maxSize: 60, unit: 'percent' });
   const { size: bottomHeight, handleMouseDown: bottomResizeStart } = useResizable({ direction: 'vertical', initialSize: 200, minSize: 120, maxSize: 500 });
   const { size: logsPct, handleMouseDown: logsResizeStart } = useResizable({ direction: 'horizontal', initialSize: 60, minSize: 25, maxSize: 85, side: 'start', unit: 'percent' });
 
@@ -381,11 +387,11 @@ export default function ExecutionDetailPage() {
   }, [id]);
 
   if (loading) {
-    return <div className="flex items-center justify-center h-full text-gray-500 font-mono text-sm">LOADING...</div>;
+    return <div className="flex items-center justify-center h-full text-theme-muted font-mono text-sm">LOADING...</div>;
   }
 
   if (!execution) {
-    return <div className="flex items-center justify-center h-full text-gray-500 font-mono text-sm">EXECUTION NOT FOUND</div>;
+    return <div className="flex items-center justify-center h-full text-theme-muted font-mono text-sm">EXECUTION NOT FOUND</div>;
   }
 
   // Role execution — simplified single-node view
@@ -441,13 +447,13 @@ export default function ExecutionDetailPage() {
       {/* Top bar */}
       <header className="flex items-center justify-between px-6 py-3 border-b border-border/50 bg-surface-50 shrink-0">
         <div className="flex items-center gap-3">
-          <Link to="/executions" className="text-gray-400 hover:text-accent-blue transition-colors">
+          <Link to="/executions" className="text-theme-secondary hover:text-accent-blue transition-colors">
             <ArrowLeft className="w-4 h-4" />
           </Link>
           <div>
-            <h1 className="font-heading text-sm font-semibold text-white tracking-wider uppercase">{execution.workflowName}</h1>
+            <h1 className="font-heading text-sm font-semibold text-theme-primary tracking-wider uppercase">{execution.workflowName}</h1>
             <div className="flex items-center gap-2 mt-0.5">
-              <span className="text-xs text-gray-500 font-mono">{id?.slice(0, 8)}</span>
+              <span className="text-xs text-theme-muted font-mono">{id?.slice(0, 8)}</span>
               <StatusBadge status={execution.status} />
               {isPaused && (
                 <span className="badge bg-accent-orange/10 text-accent-orange gap-1">
@@ -465,7 +471,7 @@ export default function ExecutionDetailPage() {
 
         <div className="flex items-center gap-2">
           {execution.durationMs != null && (
-            <span className="text-xs text-gray-400 font-mono">{(execution.durationMs / 1000).toFixed(1)}s</span>
+            <span className="text-xs text-theme-secondary font-mono">{(execution.durationMs / 1000).toFixed(1)}s</span>
           )}
           <CostDisplay cost={liveCost} />
           {(learningCounts.injected > 0 || learningCounts.extracted > 0) && (
@@ -530,7 +536,7 @@ export default function ExecutionDetailPage() {
           {/* Right: Node detail + inline human input — resizable */}
           <div
             className="overflow-hidden shrink-0 bg-surface border-l-2 border-border/50 hover:border-accent-blue/50 transition-colors relative"
-            style={{ width: rightWidth }}
+            style={{ width: `${rightWidth}%` }}
           >
             {/* Invisible resize grab zone on the left edge */}
             <div
@@ -584,7 +590,7 @@ export default function ExecutionDetailPage() {
           <div className="flex-1 overflow-auto">
             <table className="w-full text-xs font-body">
               <thead className="sticky top-0 z-10">
-                <tr className="text-gray-500 bg-surface-50 font-label uppercase tracking-wider">
+                <tr className="text-theme-muted bg-surface-50 font-label uppercase tracking-wider">
                   <th className="text-left px-4 py-1.5 font-medium">Node</th>
                   <th className="text-left px-4 py-1.5 font-medium">Status</th>
                   <th className="text-left px-4 py-1.5 font-medium">Attempt</th>
@@ -623,8 +629,8 @@ export default function ExecutionDetailPage() {
                     >
                       <td className="px-4 py-1.5 font-mono text-gray-200">{name}</td>
                       <td className="px-4 py-1.5"><StatusBadge status={state.status} /></td>
-                      <td className="px-4 py-1.5 text-gray-400 tabular-nums font-mono">{state.attempt}</td>
-                      <td className="px-4 py-1.5 text-gray-400 tabular-nums font-mono">
+                      <td className="px-4 py-1.5 text-theme-secondary tabular-nums font-mono">{state.attempt}</td>
+                      <td className="px-4 py-1.5 text-theme-secondary tabular-nums font-mono">
                         {totalDuration != null ? `${(totalDuration / 1000).toFixed(1)}s` : '-'}
                       </td>
                       <td className="px-4 py-1.5"><CostDisplay cost={totalCost} /></td>
