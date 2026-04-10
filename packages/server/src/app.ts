@@ -34,6 +34,10 @@ import { SecretService } from './services/secret.service.js';
 import { McpService } from './services/mcp.service.js';
 import { startMcpHealthMonitor } from './services/mcp-health.service.js';
 import { TeamSeedService } from './services/team-seed.service.js';
+import { CronService } from './services/cron.service.js';
+import { seedCronJobs } from './services/cron-seed.service.js';
+import { createRepoScanIfChangedAction } from './services/repo-context-scanner.service.js';
+import { cronRoutes } from './routes/cron.routes.js';
 
 const PORT = parseInt(process.env.PORT ?? '4000', 10);
 
@@ -53,7 +57,13 @@ async function main(): Promise<void> {
   // warnings on first startup.
   await new TeamSeedService(db).migrate();
   await seedDefaultWorkflows(db);
+  await seedCronJobs(db);
   setStreamDb(db);
+
+  // Boot the cron scheduler + register system actions
+  const cronService = new CronService(db);
+  cronService.registerSystemAction(createRepoScanIfChangedAction(db));
+  await cronService.start();
 
   const app = express();
 
@@ -86,6 +96,7 @@ async function main(): Promise<void> {
   app.use('/api/alerts', alertRoutes(db));
   app.use('/api/workspaces', workspaceRoutes(db));
   app.use('/api/pull-requests', pullRequestRoutes(db));
+  app.use('/api/crons', cronRoutes(db, cronService));
 
   // Preview reverse proxy — must be after json middleware but catches /api/workspaces/:id/preview/*
   app.use('/api/workspaces/:id/preview', createWorkspaceProxy(db));

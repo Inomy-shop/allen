@@ -27,6 +27,21 @@ export function repoRoutes(db: Db): Router {
     }
   });
 
+  // GET /api/repos/context?path=... — path-based context lookup (used by MCP tool)
+  // MUST be registered BEFORE GET /:id, otherwise Express matches /:id first with
+  // id="context" and the ObjectId() call throws.
+  router.get('/context', async (req: Request, res: Response) => {
+    try {
+      const path = String(req.query.path ?? '');
+      if (!path) return res.status(400).json({ error: 'path query param is required' });
+      const ctx = await service.getContextByPath(path);
+      if (!ctx) return res.status(404).json({ error: 'No context found for that path' });
+      res.json(ctx);
+    } catch (err: unknown) {
+      res.status(500).json({ error: (err as Error).message });
+    }
+  });
+
   // GET /api/repos/:id
   router.get('/:id', async (req: Request, res: Response) => {
     try {
@@ -58,13 +73,34 @@ export function repoRoutes(db: Db): Router {
     }
   });
 
-  // POST /api/repos/:id/scan
+  // POST /api/repos/:id/scan — shallow rescan (existing)
   router.post('/:id/scan', async (req: Request, res: Response) => {
     try {
       const repo = await service.scan(param(req, 'id'));
       res.json(repo);
     } catch (err: unknown) {
       res.status(400).json({ error: (err as Error).message });
+    }
+  });
+
+  // POST /api/repos/:id/rescan-context — deep agent-driven context rescan (async, returns 202)
+  router.post('/:id/rescan-context', async (req: Request, res: Response) => {
+    try {
+      const result = await service.rescanContext(param(req, 'id'));
+      res.status(result.scheduled ? 202 : 409).json(result);
+    } catch (err: unknown) {
+      res.status(400).json({ error: (err as Error).message });
+    }
+  });
+
+  // GET /api/repos/:id/context — fetch the stored deep context doc
+  router.get('/:id/context', async (req: Request, res: Response) => {
+    try {
+      const ctx = await service.getContext(param(req, 'id'));
+      if (!ctx) return res.status(404).json({ error: 'No context found for that repo' });
+      res.json(ctx);
+    } catch (err: unknown) {
+      res.status(500).json({ error: (err as Error).message });
     }
   });
 

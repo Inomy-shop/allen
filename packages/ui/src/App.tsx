@@ -5,7 +5,7 @@ import NotificationBell from './components/common/NotificationBell';
 import {
   LayoutDashboard, GitBranch, Play, Users, Activity, Settings,
   FolderGit2, Brain, MessageSquare, BarChart3, Plus, Trash2,
-  Server, Palette, Key, User, ChevronRight, GitPullRequest,
+  Server, Palette, Key, User, ChevronRight, GitPullRequest, Clock,
 } from 'lucide-react';
 import { useSettingsStore } from './stores/settingsStore';
 import { useChat, type ChatSession } from './hooks/useChat';
@@ -32,6 +32,7 @@ const NAV_GROUPS = [
     { to: '/executions', icon: Play, label: 'Executions' },
     { to: '/analytics', icon: BarChart3, label: 'Analytics' },
     { to: '/learnings', icon: Brain, label: 'Learnings' },
+    { to: '/crons', icon: Clock, label: 'Scheduled Jobs' },
   ]},
 ];
 

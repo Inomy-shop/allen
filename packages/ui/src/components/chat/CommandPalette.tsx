@@ -107,28 +107,28 @@ export default function CommandPalette({ open, onClose, onSelect }: CommandPalet
       >
         {/* Search input */}
         <div className="flex items-center gap-3 px-4 py-3 border-b border-border/40">
-          <Search className="w-4 h-4 text-gray-500 shrink-0" />
+          <Search className="w-4 h-4 text-theme-muted shrink-0" />
           <input
             ref={inputRef}
             value={query}
             onChange={e => setQuery(e.target.value)}
             onKeyDown={handleKeyDown}
             placeholder="Type a command..."
-            className="flex-1 bg-transparent text-sm text-white placeholder-gray-600 outline-none font-body"
+            className="flex-1 bg-transparent text-sm text-theme-primary placeholder-gray-600 outline-none font-body"
           />
-          <kbd className="text-[10px] text-gray-600 font-mono bg-surface-200/60 px-1.5 py-0.5 rounded border border-border/30">ESC</kbd>
+          <kbd className="text-[10px] text-theme-subtle font-mono bg-surface-200/60 px-1.5 py-0.5 rounded border border-border/30">ESC</kbd>
         </div>
 
         {/* Results */}
         <div className="max-h-80 overflow-y-auto py-2">
           {flatItems.length === 0 && (
-            <div className="px-4 py-6 text-center text-xs text-gray-600">No matching commands</div>
+            <div className="px-4 py-6 text-center text-xs text-theme-subtle">No matching commands</div>
           )}
 
           {grouped.map(group => (
             <div key={group.category}>
               <div className="px-4 py-1.5">
-                <span className="text-[10px] font-label uppercase tracking-widest text-gray-600">
+                <span className="text-[10px] font-label uppercase tracking-widest text-theme-subtle">
                   {CATEGORY_LABELS[group.category]}
                 </span>
               </div>
@@ -139,7 +139,7 @@ export default function CommandPalette({ open, onClose, onSelect }: CommandPalet
                   <button
                     key={item.id}
                     className={`w-full flex items-center gap-3 px-4 py-2 text-left transition-colors ${
-                      isSelected ? 'bg-accent-blue/10 text-white' : 'text-gray-400 hover:bg-surface-200/50'
+                      isSelected ? 'bg-accent-blue/10 text-theme-primary' : 'text-theme-secondary hover:bg-surface-200/50'
                     }`}
                     onClick={() => {
                       const isPartial = item.prompt.endsWith(' ');
@@ -148,13 +148,13 @@ export default function CommandPalette({ open, onClose, onSelect }: CommandPalet
                     }}
                     onMouseEnter={() => setSelectedIdx(idx)}
                   >
-                    <span className={isSelected ? 'text-accent-blue' : 'text-gray-500'}>{item.icon}</span>
+                    <span className={isSelected ? 'text-accent-blue' : 'text-theme-muted'}>{item.icon}</span>
                     <div className="flex-1 min-w-0">
                       <div className="text-sm font-body">{item.label}</div>
-                      <div className="text-[11px] text-gray-600 truncate">{item.description}</div>
+                      <div className="text-[11px] text-theme-subtle truncate">{item.description}</div>
                     </div>
                     {item.prompt.endsWith(' ') && (
-                      <span className="text-[10px] text-gray-600 font-mono bg-surface-200/40 px-1.5 py-0.5 rounded">fill in →</span>
+                      <span className="text-[10px] text-theme-subtle font-mono bg-surface-200/40 px-1.5 py-0.5 rounded">fill in →</span>
                     )}
                   </button>
                 );
@@ -165,13 +165,13 @@ export default function CommandPalette({ open, onClose, onSelect }: CommandPalet
 
         {/* Footer */}
         <div className="px-4 py-2 border-t border-border/30 flex items-center gap-4">
-          <span className="text-[10px] text-gray-600 flex items-center gap-1">
+          <span className="text-[10px] text-theme-subtle flex items-center gap-1">
             <kbd className="font-mono bg-surface-200/60 px-1 py-0.5 rounded border border-border/30">↑↓</kbd> navigate
           </span>
-          <span className="text-[10px] text-gray-600 flex items-center gap-1">
+          <span className="text-[10px] text-theme-subtle flex items-center gap-1">
             <kbd className="font-mono bg-surface-200/60 px-1 py-0.5 rounded border border-border/30">↵</kbd> select
           </span>
-          <span className="text-[10px] text-gray-600 flex items-center gap-1">
+          <span className="text-[10px] text-theme-subtle flex items-center gap-1">
             <kbd className="font-mono bg-surface-200/60 px-1 py-0.5 rounded border border-border/30">esc</kbd> close
           </span>
         </div>

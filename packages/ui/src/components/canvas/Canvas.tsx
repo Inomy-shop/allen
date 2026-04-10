@@ -241,7 +241,7 @@ function CanvasInner({
         <Background variant={BackgroundVariant.Lines} gap={30} size={1} color="rgb(var(--color-border) / 0.2)" />
         <Controls
           showInteractive={false}
-          className="!bg-surface-100 !border-border/50 !shadow-lg [&>button]:!bg-surface-200 [&>button]:!border-border/50 [&>button]:!text-gray-400 [&>button:hover]:!bg-surface-300 [&>button:hover]:!text-accent-blue"
+          className="!bg-surface-100 !border-border/50 !shadow-lg [&>button]:!bg-surface-200 [&>button]:!border-border/50 [&>button]:!text-theme-secondary [&>button:hover]:!bg-surface-300 [&>button:hover]:!text-accent-blue"
         />
       </ReactFlow>
 

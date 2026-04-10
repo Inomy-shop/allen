@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Crown } from 'lucide-react';
+import { Crown, ChevronDown, ChevronRight } from 'lucide-react';
 import RoleIcon from '../common/RoleIcon';
 import { teams as teamsApi } from '../../services/api';
 
@@ -12,7 +12,9 @@ interface Agent {
   teamName?: string;
   teamRole?: 'lead' | 'member';
   canDelegateTo?: string[];
-  canTrigger?: string[];
+  model?: string;
+  provider?: string;
+  capabilities?: string[];
 }
 
 interface Team {
@@ -25,260 +27,190 @@ interface Team {
   isBuiltIn: boolean;
 }
 
-interface DelegationGraphProps {
+interface Props {
   agents: Agent[];
 }
 
 /**
- * Visual org chart grouped by team. Each team renders as a bordered box
- * containing its members; cross-team delegation edges are listed below the
- * boxes (since they always go through team leads, drawing them as lines
- * between boxes would be visually noisy with many teams).
+ * Organisation chart that mirrors a real company hierarchy.
  *
- * Falls back to a flat layout if the teams API isn't available (e.g. server
- * not yet migrated).
+ * Structure:
+ *   Executive (top)
+ *     ├─ Product
+ *     ├─ Engineering
+ *     │    ├─ Quality
+ *     │    ├─ Operations
+ *     │    └─ Coding Specialists
+ *     ├─ Data
+ *     └─ Meta
+ *
+ * Each team shows a lead at the top (the "head") and specialists below.
+ * Child teams are nested with indentation and tree lines.
  */
-export function DelegationGraph({ agents }: DelegationGraphProps) {
+export function DelegationGraph({ agents }: Props) {
   const [allTeams, setAllTeams] = useState<Team[] | null>(null);
+  const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
 
   useEffect(() => {
-    teamsApi.list()
-      .then((t: Team[]) => setAllTeams(t ?? []))
-      .catch(() => setAllTeams([]));
+    teamsApi.list().then((t: Team[]) => setAllTeams(t ?? [])).catch(() => setAllTeams([]));
   }, [agents]);
 
-  if (agents.length === 0) return null;
+  if (!allTeams || agents.length === 0) return null;
 
-  // Group agents by teamName. Agents without a teamName fall into "Unassigned".
+  // Lookups
   const byTeam = new Map<string, Agent[]>();
-  const unassigned: Agent[] = [];
   for (const a of agents) {
-    if (!a.teamName) { unassigned.push(a); continue; }
-    const list = byTeam.get(a.teamName) ?? [];
-    list.push(a);
-    byTeam.set(a.teamName, list);
+    if (!a.teamName) continue;
+    (byTeam.get(a.teamName) ?? (byTeam.set(a.teamName, []), byTeam.get(a.teamName)!)).push(a);
   }
+  const teamMap = new Map(allTeams.map(t => [t.name, t]));
 
-  // Sort each team's members: lead first, then alphabetical
-  for (const list of byTeam.values()) {
-    list.sort((x, y) => {
-      if (x.teamRole === 'lead' && y.teamRole !== 'lead') return -1;
-      if (x.teamRole !== 'lead' && y.teamRole === 'lead') return 1;
-      return ((x.displayName ?? x.name) as string).localeCompare((y.displayName ?? y.name) as string);
-    });
-  }
+  // Build tree: find root teams (no parent or parent not in list)
+  const childrenOf = (parent: string) =>
+    allTeams.filter(t => t.parentTeamName === parent && (byTeam.get(t.name)?.length ?? 0) > 0);
+  const roots = allTeams.filter(t =>
+    (!t.parentTeamName || !teamMap.has(t.parentTeamName)) && (byTeam.get(t.name)?.length ?? 0) > 0
+  );
 
-  // Build a quick lookup for the team a given agent belongs to
-  const agentTeam = new Map<string, string | undefined>();
-  for (const a of agents) agentTeam.set(a.name, a.teamName);
-
-  // Categorize delegation edges:
-  //   intra-team:  caller and target are in the same team
-  //   cross-team:  different teams (always lead-to-lead per phase 2 rules)
-  //   external:    caller is in a team but target isn't, or vice versa
-  interface Edge { from: Agent; to: Agent; }
-  const intraTeamEdges: Edge[] = [];
-  const crossTeamEdges: Edge[] = [];
-  const externalEdges: Edge[] = [];
-  for (const a of agents) {
-    for (const targetName of a.canDelegateTo ?? []) {
-      const target = agents.find(x => x.name === targetName);
-      if (!target) continue;
-      const aTeam = agentTeam.get(a.name);
-      const tTeam = agentTeam.get(target.name);
-      if (aTeam && tTeam && aTeam === tTeam) intraTeamEdges.push({ from: a, to: target });
-      else if (aTeam && tTeam) crossTeamEdges.push({ from: a, to: target });
-      else externalEdges.push({ from: a, to: target });
-    }
-  }
-
-  // Display order for teams: parent-first via topological sort approximation,
-  // but for simplicity just sort by parent depth then name. Top-level (no parent) first.
-  const orderedTeams: Team[] = (() => {
-    if (!allTeams) return [];
-    const depth = (t: Team): number => {
-      let d = 0;
-      let cur: Team | undefined = t;
-      const seen = new Set<string>();
-      while (cur?.parentTeamName) {
-        if (seen.has(cur.name)) break;
-        seen.add(cur.name);
-        cur = allTeams.find(p => p.name === cur!.parentTeamName);
-        d++;
-        if (d > 10) break;
-      }
-      return d;
-    };
-    return [...allTeams].sort((a, b) => {
-      const da = depth(a);
-      const db = depth(b);
-      if (da !== db) return da - db;
-      return a.name.localeCompare(b.name);
-    });
-  })();
-
-  // Teams that have at least one member
-  const teamsToRender = orderedTeams.filter(t => (byTeam.get(t.name)?.length ?? 0) > 0);
-
-  // Orphan teams: agents reference a team that doesn't exist in the teams collection
-  const knownNames = new Set(orderedTeams.map(t => t.name));
-  const orphanNames = Array.from(byTeam.keys()).filter(n => !knownNames.has(n));
+  const toggle = (name: string) => setCollapsed(prev => {
+    const next = new Set(prev);
+    next.has(name) ? next.delete(name) : next.add(name);
+    return next;
+  });
 
   return (
-    <div className="rounded-lg border border-border/20 bg-surface-100/30 p-4 space-y-4">
-      <div className="flex items-center justify-between">
-        <h3 className="text-[11px] font-label uppercase tracking-widest text-gray-500">Org Chart</h3>
-        <span className="text-[10px] font-mono text-gray-600">
-          {teamsToRender.length} teams · {agents.length} agents · {intraTeamEdges.length + crossTeamEdges.length} delegations
-        </span>
+    <div className="rounded-lg border border-border/15 bg-surface-100/30 overflow-hidden">
+      {/* Title bar */}
+      <div className="px-4 py-2.5 border-b border-border/10 bg-surface-200/15 flex items-center justify-between">
+        <span className="text-[11px] font-label uppercase tracking-widest text-theme-secondary">Organisation</span>
+        <span className="text-[10px] font-mono text-theme-subtle">{allTeams.filter(t => (byTeam.get(t.name)?.length ?? 0) > 0).length} departments · {agents.length} people</span>
       </div>
 
-      {/* Team boxes */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
-        {teamsToRender.map(team => (
-          <TeamBox key={team.name} team={team} members={byTeam.get(team.name) ?? []} />
-        ))}
-
-        {orphanNames.map(name => (
-          <TeamBox
-            key={name}
-            team={{ name, displayName: name, description: '(team document missing)', leadAgentName: '', isBuiltIn: false }}
-            members={byTeam.get(name) ?? []}
-            isOrphan
+      <div className="p-4">
+        {roots.map((team, i) => (
+          <OrgNode
+            key={team.name}
+            team={team}
+            members={byTeam.get(team.name) ?? []}
+            childrenOf={childrenOf}
+            byTeam={byTeam}
+            collapsed={collapsed}
+            onToggle={toggle}
+            depth={0}
+            isLast={i === roots.length - 1}
           />
         ))}
-
-        {unassigned.length > 0 && (
-          <TeamBox
-            team={{ name: 'unassigned', displayName: 'Unassigned', description: 'No team membership', leadAgentName: '', isBuiltIn: false }}
-            members={unassigned}
-            isOrphan
-          />
-        )}
       </div>
-
-      {/* Cross-team delegation edges */}
-      {crossTeamEdges.length > 0 && (
-        <div className="pt-3 border-t border-border/15">
-          <span className="text-[10px] font-label uppercase tracking-widest text-gray-600 block mb-2">
-            Cross-team delegations ({crossTeamEdges.length}) — lead-to-lead only
-          </span>
-          <div className="space-y-1">
-            {crossTeamEdges.map((e, i) => (
-              <EdgeRow key={`x${i}`} edge={e} />
-            ))}
-          </div>
-        </div>
-      )}
-
-      {/* External / dangling edges */}
-      {externalEdges.length > 0 && (
-        <div className="pt-3 border-t border-border/15">
-          <span className="text-[10px] font-label uppercase tracking-widest text-yellow-600 block mb-2">
-            ⚠ External delegations ({externalEdges.length}) — one or both agents have no team
-          </span>
-          <div className="space-y-1">
-            {externalEdges.map((e, i) => (
-              <EdgeRow key={`e${i}`} edge={e} />
-            ))}
-          </div>
-        </div>
-      )}
-
-      {/* Loading state for teams API */}
-      {allTeams === null && (
-        <div className="text-[10px] text-gray-600 font-mono italic">Loading team boundaries…</div>
-      )}
     </div>
   );
 }
 
-// ── Team Box ──────────────────────────────────────────────────────────────────
+// ── Org Node (recursive) ─────────────────────────────────────────────────────
 
-function TeamBox({
-  team, members, isOrphan,
+function OrgNode({
+  team, members, childrenOf, byTeam, collapsed, onToggle, depth, isLast,
 }: {
   team: Team;
   members: Agent[];
-  isOrphan?: boolean;
+  childrenOf: (parent: string) => Team[];
+  byTeam: Map<string, Agent[]>;
+  collapsed: Set<string>;
+  onToggle: (name: string) => void;
+  depth: number;
+  isLast: boolean;
 }) {
+  const isCollapsed = collapsed.has(team.name);
+  const children = childrenOf(team.name);
+  const lead = members.find(m => m.teamRole === 'lead');
+  const specialists = members.filter(m => m.teamRole !== 'lead');
+  const hasContent = specialists.length > 0 || children.length > 0;
+
   return (
-    <div
-      className={`rounded-md border p-3 ${
-        isOrphan
-          ? 'border-yellow-500/30 bg-yellow-500/5'
-          : 'border-accent-blue/20 bg-surface-200/20'
-      }`}
-    >
-      <div className="flex items-center justify-between mb-2">
-        <div className="min-w-0">
-          <div className="flex items-center gap-1.5">
-            <span className="text-[11px] font-heading font-semibold text-white tracking-wide truncate">
-              {team.displayName}
-            </span>
-            {isOrphan && (
-              <span className="text-[8px] font-mono text-yellow-500">orphan</span>
-            )}
-          </div>
-          {team.parentTeamName && (
-            <div className="text-[9px] text-gray-600 font-mono">↳ {team.parentTeamName}</div>
-          )}
+    <div className={depth > 0 ? 'ml-6' : ''}>
+      {/* Tree connector for nested teams */}
+      {depth > 0 && (
+        <div className="flex items-center gap-0 -ml-6 mb-0">
+          <div className={`w-6 border-l-2 border-b-2 border-border/20 h-4 rounded-bl-md ${isLast ? '' : ''}`} />
         </div>
-        <span className="text-[9px] font-mono text-gray-600 shrink-0">{members.length}</span>
-      </div>
+      )}
 
-      <div className="space-y-1">
-        {members.map(agent => (
-          <div key={agent.name} className="flex items-center gap-1.5 px-1.5 py-0.5 rounded">
-            <div
-              className="w-4 h-4 rounded flex items-center justify-center shrink-0"
-              style={{ backgroundColor: (agent.color ?? '#666') + '20' }}
-            >
-              <RoleIcon icon={agent.icon} color={agent.color} size={10} />
-            </div>
-            <span
-              className="text-[10px] font-mono truncate flex-1"
-              style={{ color: agent.color }}
-            >
-              {agent.displayName ?? agent.name}
+      {/* Team card */}
+      <div className={`rounded-lg border border-border/15 bg-surface-100/40 overflow-hidden mb-3 ${depth === 0 ? '' : ''}`}>
+        {/* Team header — clickable to collapse */}
+        <button
+          onClick={() => hasContent && onToggle(team.name)}
+          className="w-full flex items-center gap-2.5 px-3.5 py-2.5 text-left hover:bg-surface-200/15 transition-colors"
+        >
+          {/* Expand/collapse indicator */}
+          {hasContent ? (
+            <span className="shrink-0 text-theme-subtle">
+              {isCollapsed ? <ChevronRight className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
             </span>
-            {agent.teamRole === 'lead' && (
-              <Crown className="w-2.5 h-2.5 text-accent-yellow shrink-0" />
+          ) : (
+            <span className="w-3.5 shrink-0" />
+          )}
+
+          {/* Team name */}
+          <div className="flex-1 min-w-0">
+            <span className="text-[12px] font-heading font-semibold text-theme-primary tracking-wide">{team.displayName}</span>
+            {team.description && (
+              <span className="text-[10px] text-theme-subtle ml-2 hidden md:inline">{team.description}</span>
             )}
           </div>
-        ))}
-      </div>
-    </div>
-  );
-}
 
-// ── Edge Row (used for cross-team & external delegation lists) ───────────────
+          {/* Lead badge */}
+          {lead && (
+            <div className="flex items-center gap-1.5 shrink-0 px-2 py-1 rounded-md bg-accent-yellow/5 border border-accent-yellow/15">
+              <div className="w-5 h-5 rounded flex items-center justify-center" style={{ backgroundColor: (lead.color ?? '#666') + '20' }}>
+                <RoleIcon icon={lead.icon} color={lead.color} size={11} />
+              </div>
+              <span className="text-[10px] font-body text-theme-primary font-medium">{lead.displayName ?? lead.name}</span>
+              <Crown className="w-3 h-3 text-accent-yellow" />
+            </div>
+          )}
 
-function EdgeRow({ edge }: { edge: { from: Agent; to: Agent } }) {
-  return (
-    <div className="flex items-center gap-2 px-2 py-0.5 rounded hover:bg-surface-200/20">
-      <div
-        className="w-3.5 h-3.5 rounded flex items-center justify-center shrink-0"
-        style={{ backgroundColor: (edge.from.color ?? '#666') + '20' }}
-      >
-        <RoleIcon icon={edge.from.icon} color={edge.from.color} size={9} />
+          <span className="text-[9px] font-mono text-theme-subtle shrink-0">{members.length}</span>
+        </button>
+
+        {/* Specialists — the ground-level workers */}
+        {!isCollapsed && specialists.length > 0 && (
+          <div className="border-t border-border/10 px-3.5 py-2 bg-surface-200/8">
+            <div className="flex flex-wrap gap-1.5">
+              {specialists.map(agent => (
+                <div
+                  key={agent.name}
+                  className="inline-flex items-center gap-1.5 px-2 py-1 rounded-md border border-border/15 bg-surface-100/50 hover:bg-surface-100/80 transition-colors"
+                >
+                  <div className="w-4.5 h-4.5 rounded flex items-center justify-center shrink-0"
+                    style={{ backgroundColor: (agent.color ?? '#666') + '18' }}>
+                    <RoleIcon icon={agent.icon} color={agent.color} size={10} />
+                  </div>
+                  <span className="text-[10px] font-body text-theme-secondary">{agent.displayName ?? agent.name}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
       </div>
-      <span className="text-[10px] font-mono" style={{ color: edge.from.color }}>
-        {edge.from.displayName ?? edge.from.name}
-      </span>
-      <span className="text-[10px] text-gray-600">→</span>
-      <div
-        className="w-3.5 h-3.5 rounded flex items-center justify-center shrink-0"
-        style={{ backgroundColor: (edge.to.color ?? '#666') + '20' }}
-      >
-        <RoleIcon icon={edge.to.icon} color={edge.to.color} size={9} />
-      </div>
-      <span className="text-[10px] font-mono" style={{ color: edge.to.color }}>
-        {edge.to.displayName ?? edge.to.name}
-      </span>
-      <span className="text-[9px] text-gray-600 ml-auto font-mono">
-        {edge.from.teamName ?? '?'} → {edge.to.teamName ?? '?'}
-      </span>
+
+      {/* Child teams — nested recursively with tree lines */}
+      {!isCollapsed && children.length > 0 && (
+        <div className={`${depth > 0 ? 'border-l-2 border-border/15 ml-1' : 'ml-1'}`}>
+          {children.map((child, i) => (
+            <OrgNode
+              key={child.name}
+              team={child}
+              members={byTeam.get(child.name) ?? []}
+              childrenOf={childrenOf}
+              byTeam={byTeam}
+              collapsed={collapsed}
+              onToggle={onToggle}
+              depth={depth + 1}
+              isLast={i === children.length - 1}
+            />
+          ))}
+        </div>
+      )}
     </div>
   );
 }

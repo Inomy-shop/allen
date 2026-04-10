@@ -35,7 +35,7 @@ export default function NodeDetail({ nodeName, nodeState, trace, allTraces = [],
 
   if (!nodeState && !trace && !isWaitingNode) {
     return (
-      <div className="p-4 text-gray-500 text-sm font-mono">
+      <div className="p-4 text-theme-muted text-sm font-mono">
         SELECT A NODE TO VIEW DETAILS
       </div>
     );
@@ -93,14 +93,14 @@ export default function NodeDetail({ nodeName, nodeState, trace, allTraces = [],
       {/* Header */}
       <div className="flex items-center justify-between px-4 py-3 border-b border-border/50 shrink-0">
         <div>
-          <h3 className="font-heading text-sm font-semibold text-white tracking-wider">{nodeName}</h3>
+          <h3 className="font-heading text-sm font-semibold text-theme-primary tracking-wider">{nodeName}</h3>
           <div className="flex items-center gap-3 mt-1">
             <StatusBadge status={status} />
             {nodeState?.attempt && nodeState.attempt > 1 && (
               <span className="text-xs text-accent-yellow font-mono">attempt #{viewAttempt ?? nodeState.attempt}</span>
             )}
             {durationMs != null && (
-              <span className="text-xs text-gray-400 font-mono">{(durationMs / 1000).toFixed(1)}s</span>
+              <span className="text-xs text-theme-secondary font-mono">{(durationMs / 1000).toFixed(1)}s</span>
             )}
             <CostDisplay cost={cost} />
           </div>
@@ -117,14 +117,14 @@ export default function NodeDetail({ nodeName, nodeState, trace, allTraces = [],
           <span className="font-label uppercase tracking-wider font-semibold">
             {output.__action === 'stop' ? '⛔ STOPPED' : output.__action === 'skip' ? '⏭ SKIPPED' : '❓ CLARIFY'}
           </span>
-          {output.__reason && <span className="text-gray-300">— {String(output.__reason)}</span>}
+          {output.__reason && <span className="text-theme-secondary">— {String(output.__reason)}</span>}
         </div>
       )}
 
       {/* Attempt tabs — shown when node has multiple attempts */}
       {hasMultipleAttempts && (
         <div className="flex items-center gap-1 px-4 py-2 border-b border-border/50 shrink-0 bg-surface-50/50">
-          <span className="text-[10px] font-label uppercase tracking-wider text-gray-500 mr-2">Attempt:</span>
+          <span className="text-[10px] font-label uppercase tracking-wider text-theme-muted mr-2">Attempt:</span>
           {dedupedTraces.map(t => (
             <button
               key={t.attempt}
@@ -135,7 +135,7 @@ export default function NodeDetail({ nodeName, nodeState, trace, allTraces = [],
                   ? 'border-accent-blue bg-accent-blue/10 text-accent-blue'
                   : t.status === 'failed'
                     ? 'border-accent-red/30 text-accent-red/70 hover:bg-accent-red/5'
-                    : 'border-border text-gray-400 hover:bg-surface-200'
+                    : 'border-border text-theme-secondary hover:bg-surface-200'
               }`}
             >
               #{t.attempt}
@@ -155,11 +155,11 @@ export default function NodeDetail({ nodeName, nodeState, trace, allTraces = [],
               <MessageSquare className="w-4 h-4 text-accent-yellow" />
               <h4 className="font-heading text-xs font-semibold text-accent-yellow uppercase tracking-widest">Input Required</h4>
             </div>
-            <p className="text-xs text-gray-300 font-body mb-4 whitespace-pre-wrap">{waitingInput.prompt}</p>
+            <p className="text-xs text-theme-secondary font-body mb-4 whitespace-pre-wrap">{waitingInput.prompt}</p>
             <div className="space-y-3">
               {waitingInput.fields.map((field) => (
                 <div key={field.name}>
-                  <label className="block text-[11px] font-label uppercase tracking-wider text-gray-400 mb-1">
+                  <label className="block text-[11px] font-label uppercase tracking-wider text-theme-secondary mb-1">
                     {field.label ?? field.name}
                     {field.required !== false && <span className="text-accent-red ml-0.5">*</span>}
                   </label>
@@ -180,11 +180,11 @@ export default function NodeDetail({ nodeName, nodeState, trace, allTraces = [],
                         onChange={e => setFormData(p => ({ ...p, [field.name]: e.target.checked }))}
                         className="w-4 h-4 rounded-sm accent-accent-blue"
                       />
-                      <span className="text-xs text-gray-300 font-body">{field.label ?? field.name}</span>
+                      <span className="text-xs text-theme-secondary font-body">{field.label ?? field.name}</span>
                     </label>
                   ) : field.type === 'text' ? (
                     <textarea
-                      className="w-full text-xs resize-none bg-surface-200 border border-accent-blue/30 rounded-sm px-3 py-2 text-gray-100 font-body focus:outline-none focus:border-accent-blue focus:shadow-glow-blue transition-all"
+                      className="w-full text-xs resize-none bg-surface-200 border border-accent-blue/30 rounded-sm px-3 py-2 text-theme-primary font-body focus:outline-none focus:border-accent-blue focus:shadow-glow-blue transition-all"
                       rows={3}
                       placeholder={field.placeholder ?? `Enter ${field.label ?? field.name}...`}
                       value={(formData[field.name] as string) ?? ''}
@@ -210,8 +210,8 @@ export default function NodeDetail({ nodeName, nodeState, trace, allTraces = [],
         {/* Rendered prompt */}
         {prompt && (
           <section className="p-4 border-b border-border/50">
-            <h4 className="font-heading text-xs font-semibold text-gray-400 uppercase mb-2 tracking-widest">Prompt</h4>
-            <pre className="text-xs text-gray-300 bg-surface-200/80 rounded-sm p-3 whitespace-pre-wrap max-h-40 overflow-auto font-mono border border-border/30">
+            <h4 className="font-heading text-xs font-semibold text-theme-secondary uppercase mb-2 tracking-widest">Prompt</h4>
+            <pre className="text-xs text-theme-secondary bg-surface-200/80 rounded-sm p-3 whitespace-pre-wrap max-h-40 overflow-auto font-mono border border-border/30">
               {prompt}
             </pre>
           </section>
@@ -220,7 +220,7 @@ export default function NodeDetail({ nodeName, nodeState, trace, allTraces = [],
         {/* Live stream output */}
         {streamText && (
           <section className="p-4 border-b border-border/50">
-            <h4 className="font-heading text-xs font-semibold text-gray-400 uppercase mb-2 tracking-widest">
+            <h4 className="font-heading text-xs font-semibold text-theme-secondary uppercase mb-2 tracking-widest">
               {status === 'running' ? 'Live Output' : 'Response'}
             </h4>
             <StreamOutput text={streamText} isLive={status === 'running'} />
@@ -230,7 +230,7 @@ export default function NodeDetail({ nodeName, nodeState, trace, allTraces = [],
         {/* Activity log */}
         {activity.length > 0 && (
           <section className="p-4 border-b border-border/50">
-            <h4 className="font-heading text-xs font-semibold text-gray-400 uppercase mb-2 tracking-widest">
+            <h4 className="font-heading text-xs font-semibold text-theme-secondary uppercase mb-2 tracking-widest">
               Activity Log ({activity.length})
             </h4>
             <div className="space-y-1.5 max-h-48 overflow-auto">
@@ -245,7 +245,7 @@ export default function NodeDetail({ nodeName, nodeState, trace, allTraces = [],
                     {entry.tool && (
                       <span className="font-mono text-accent-cyan mr-1">{entry.tool}</span>
                     )}
-                    <span className="text-gray-400 font-body">{entry.content}</span>
+                    <span className="text-theme-secondary font-body">{entry.content}</span>
                   </div>
                 </div>
               ))}
@@ -256,8 +256,8 @@ export default function NodeDetail({ nodeName, nodeState, trace, allTraces = [],
         {/* Extracted outputs */}
         {output && Object.keys(output).length > 0 && (
           <section className="p-4 border-b border-border/50">
-            <h4 className="font-heading text-xs font-semibold text-gray-400 uppercase mb-2 tracking-widest">Outputs</h4>
-            <pre className="text-xs text-gray-300 bg-surface-200/80 rounded-sm p-3 whitespace-pre-wrap max-h-60 overflow-auto font-mono border border-border/30">
+            <h4 className="font-heading text-xs font-semibold text-theme-secondary uppercase mb-2 tracking-widest">Outputs</h4>
+            <pre className="text-xs text-theme-secondary bg-surface-200/80 rounded-sm p-3 whitespace-pre-wrap max-h-60 overflow-auto font-mono border border-border/30">
               {JSON.stringify(output, null, 2)}
             </pre>
           </section>
@@ -266,8 +266,8 @@ export default function NodeDetail({ nodeName, nodeState, trace, allTraces = [],
         {/* Input state */}
         {trace?.inputState && (
           <section className="p-4">
-            <h4 className="font-heading text-xs font-semibold text-gray-400 uppercase mb-2 tracking-widest">Input State</h4>
-            <pre className="text-xs text-gray-300 bg-surface-200/80 rounded-sm p-3 whitespace-pre-wrap max-h-40 overflow-auto font-mono border border-border/30">
+            <h4 className="font-heading text-xs font-semibold text-theme-secondary uppercase mb-2 tracking-widest">Input State</h4>
+            <pre className="text-xs text-theme-secondary bg-surface-200/80 rounded-sm p-3 whitespace-pre-wrap max-h-40 overflow-auto font-mono border border-border/30">
               {JSON.stringify(trace.inputState, null, 2)}
             </pre>
           </section>

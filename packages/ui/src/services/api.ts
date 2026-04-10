@@ -196,3 +196,27 @@ export const learnings = {
   evolve: (agentName: string, newPrompt: string) =>
     request<any>(`/learnings/evolve/${agentName}`, { method: 'POST', body: JSON.stringify({ newPrompt }) }),
 };
+
+// ── Cron Jobs ──────────────────────────────────────────────────────────────
+export const crons = {
+  list: () => request<any[]>('/crons'),
+  get: (id: string) => request<any>(`/crons/${id}`),
+  create: (body: any) =>
+    request<any>('/crons', { method: 'POST', body: JSON.stringify(body) }),
+  update: (id: string, body: any) =>
+    request<any>(`/crons/${id}`, { method: 'PUT', body: JSON.stringify(body) }),
+  delete: (id: string) =>
+    request<void>(`/crons/${id}`, { method: 'DELETE' }),
+  enable: (id: string) =>
+    request<any>(`/crons/${id}/enable`, { method: 'POST' }),
+  disable: (id: string) =>
+    request<any>(`/crons/${id}/disable`, { method: 'POST' }),
+  runNow: (id: string) =>
+    request<any>(`/crons/${id}/run-now`, { method: 'POST' }),
+  runs: (id: string, limit = 50) =>
+    request<any[]>(`/crons/${id}/runs?limit=${limit}`),
+  previewSchedule: (cron: string, n = 5, timezone = 'UTC') =>
+    request<any>(`/crons/preview-schedule?cron=${encodeURIComponent(cron)}&n=${n}&timezone=${encodeURIComponent(timezone)}`),
+  systemActions: () =>
+    request<any[]>('/crons/system-actions'),
+};

@@ -74,7 +74,7 @@ export default function PullRequestListPage() {
       <div className="px-6 py-4 border-b border-border/30 bg-surface-50/50 shrink-0">
         <div className="flex items-center gap-3">
           <GitPullRequest className="w-5 h-5 text-blue-400" />
-          <h1 className="text-lg font-heading font-semibold text-white">Pull Requests</h1>
+          <h1 className="text-lg font-heading font-semibold text-theme-primary">Pull Requests</h1>
           <span className="flex-1" />
           <button onClick={handleSync} disabled={syncing} className="btn-ghost text-xs py-1.5 px-3 flex items-center gap-1.5 disabled:opacity-50">
             <RefreshCw className={`w-3.5 h-3.5 ${syncing ? 'animate-spin' : ''}`} />
@@ -88,23 +88,23 @@ export default function PullRequestListPage() {
             <button key={s} onClick={() => setStatusFilter(s)}
               className={`text-[11px] font-mono px-3 py-1 rounded-full border ${statusFilter === s
                 ? 'bg-blue-500/10 text-blue-400 border-blue-500/30'
-                : 'text-gray-500 border-border/20 hover:text-gray-300'}`}>
+                : 'text-theme-muted border-border/20 hover:text-theme-secondary'}`}>
               {s || 'All'}
             </button>
           ))}
-          <span className="text-[10px] text-gray-600 ml-2">{prs.length} results</span>
+          <span className="text-[10px] text-theme-subtle ml-2">{prs.length} results</span>
         </div>
       </div>
 
       {/* List */}
       <div className="flex-1 overflow-y-auto px-6 py-4">
         {loading ? (
-          <div className="flex justify-center py-12"><Loader2 className="w-6 h-6 animate-spin text-gray-500" /></div>
+          <div className="flex justify-center py-12"><Loader2 className="w-6 h-6 animate-spin text-theme-muted" /></div>
         ) : prs.length === 0 ? (
-          <div className="text-center py-12 text-gray-600">
-            <GitPullRequest className="w-10 h-10 mx-auto mb-3 text-gray-700" />
+          <div className="text-center py-12 text-theme-subtle">
+            <GitPullRequest className="w-10 h-10 mx-auto mb-3 text-theme-subtle" />
             <p className="text-sm">No pull requests found</p>
-            <p className="text-xs text-gray-700 mt-1">Click "Sync from GitHub" to import PRs</p>
+            <p className="text-xs text-theme-subtle mt-1">Click "Sync from GitHub" to import PRs</p>
           </div>
         ) : (
           <div className="space-y-3">
@@ -114,17 +114,17 @@ export default function PullRequestListPage() {
                   {statusIcon(pr.status)}
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-2">
-                      <span className="text-sm font-semibold text-white">#{pr.number}</span>
-                      <span className="text-sm text-gray-300 truncate">{pr.title}</span>
+                      <span className="text-sm font-semibold text-theme-primary">#{pr.number}</span>
+                      <span className="text-sm text-theme-secondary truncate">{pr.title}</span>
                       {statusBadge(pr.status)}
                     </div>
-                    <div className="flex items-center gap-3 mt-1.5 text-[11px] text-gray-500 font-mono">
+                    <div className="flex items-center gap-3 mt-1.5 text-[11px] text-theme-muted font-mono">
                       <span>{pr.repoName}</span>
                       <span className="flex items-center gap-1">{pr.branch} <ArrowRight className="w-3 h-3" /> {pr.baseBranch}</span>
                       <span>by {pr.author}</span>
                       {pr.createdByAgent && <span className="text-blue-400">🤖 {pr.createdByAgent}</span>}
                     </div>
-                    <div className="flex items-center gap-3 mt-1.5 text-[10px] text-gray-600">
+                    <div className="flex items-center gap-3 mt-1.5 text-[10px] text-theme-subtle">
                       <span className="flex items-center gap-1"><Clock className="w-3 h-3" />{timeAgo(pr.updatedAt)}</span>
                       <span className="flex items-center gap-1"><FileDiff className="w-3 h-3" />{pr.changedFiles} files</span>
                       <span className="text-emerald-400 flex items-center gap-0.5"><Plus className="w-3 h-3" />{pr.additions}</span>

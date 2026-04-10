@@ -18,7 +18,7 @@ const TYPE_COLORS: Record<string, string> = {
 };
 
 const SCOPE_COLORS: Record<string, string> = {
-  global: 'bg-gray-500/10 text-gray-400 border-gray-500/20',
+  global: 'bg-gray-500/10 text-theme-secondary border-gray-500/20',
   workflow: 'bg-accent-blue/10 text-accent-blue border-accent-blue/20',
   context: 'bg-purple-500/10 text-purple-400 border-purple-500/20',
   agent: 'bg-accent-green/10 text-accent-green border-accent-green/20',
@@ -206,7 +206,7 @@ export default function LearningsPage() {
       <div className="flex items-center justify-between mb-6">
         <div className="flex items-center gap-3">
           <Brain className="w-6 h-6 text-accent-blue" />
-          <h1 className="font-heading text-xl font-bold text-white tracking-widest uppercase">Learnings</h1>
+          <h1 className="font-heading text-xl font-bold text-theme-primary tracking-widest uppercase">Learnings</h1>
         </div>
         <div className="flex items-center gap-2">
           <button title="Add learning" onClick={() => setShowAdd(!showAdd)} className="btn-primary text-xs inline-flex items-center gap-1.5 whitespace-nowrap">
@@ -229,7 +229,7 @@ export default function LearningsPage() {
           className={`px-4 py-1.5 text-xs font-heading uppercase tracking-wider rounded-t-sm transition-colors ${
             activeTab === 'learnings'
               ? 'text-accent-blue border-b-2 border-accent-blue'
-              : 'text-gray-500 hover:text-gray-300'
+              : 'text-theme-muted hover:text-theme-secondary'
           }`}
         >
           Learnings
@@ -240,7 +240,7 @@ export default function LearningsPage() {
           className={`px-4 py-1.5 text-xs font-heading uppercase tracking-wider rounded-t-sm transition-colors flex items-center gap-1.5 ${
             activeTab === 'evolution'
               ? 'text-accent-blue border-b-2 border-accent-blue'
-              : 'text-gray-500 hover:text-gray-300'
+              : 'text-theme-muted hover:text-theme-secondary'
           }`}
         >
           <Sparkles className="w-3 h-3" /> Evolution
@@ -254,7 +254,7 @@ export default function LearningsPage() {
           {previewData && (
             <div className="card p-5 border border-accent-blue/30 space-y-4">
               <div className="flex items-center justify-between">
-                <h3 className="font-heading text-sm text-white tracking-wider uppercase">
+                <h3 className="font-heading text-sm text-theme-primary tracking-wider uppercase">
                   Evolution Preview: {previewData.agentName}
                 </h3>
                 <button onClick={() => setPreviewData(null)} className="btn-ghost text-xs">
@@ -263,20 +263,20 @@ export default function LearningsPage() {
               </div>
 
               <div>
-                <div className="text-[10px] text-gray-500 font-label uppercase tracking-wider mb-1">Current Prompt</div>
-                <div className="bg-surface-200 border border-border/30 rounded-sm p-3 text-xs text-gray-300 font-mono whitespace-pre-wrap max-h-48 overflow-y-auto">
+                <div className="text-[10px] text-theme-muted font-label uppercase tracking-wider mb-1">Current Prompt</div>
+                <div className="bg-surface-200 border border-border/30 rounded-sm p-3 text-xs text-theme-secondary font-mono whitespace-pre-wrap max-h-48 overflow-y-auto">
                   {previewData.currentPrompt || '(empty)'}
                 </div>
               </div>
 
               <div>
-                <div className="text-[10px] text-gray-500 font-label uppercase tracking-wider mb-1">Evolved Prompt</div>
+                <div className="text-[10px] text-theme-muted font-label uppercase tracking-wider mb-1">Evolved Prompt</div>
                 <div className="bg-surface-200 border border-accent-green/20 rounded-sm p-3 text-xs text-gray-200 font-mono whitespace-pre-wrap max-h-48 overflow-y-auto">
                   {previewData.newPrompt || '(LLM returned empty — try again)'}
                 </div>
               </div>
 
-              <div className="text-[10px] text-gray-500 font-mono">
+              <div className="text-[10px] text-theme-muted font-mono">
                 {previewData.learnings?.length ?? 0} learnings will be marked as "evolved"
               </div>
 
@@ -296,11 +296,11 @@ export default function LearningsPage() {
 
           {/* Candidates list */}
           {evolutionLoading ? (
-            <div className="text-center text-gray-500 font-mono text-sm py-12">LOADING...</div>
+            <div className="text-center text-theme-muted font-mono text-sm py-12">LOADING...</div>
           ) : evolutionCandidates.length === 0 ? (
-            <div className="text-center text-gray-500 font-mono text-sm py-12">
+            <div className="text-center text-theme-muted font-mono text-sm py-12">
               NO EVOLUTION CANDIDATES FOUND
-              <div className="text-[10px] mt-1 text-gray-600">
+              <div className="text-[10px] mt-1 text-theme-subtle">
                 Learnings need confidence &ge; 0.8 and 3+ confirmations
               </div>
             </div>
@@ -310,7 +310,7 @@ export default function LearningsPage() {
                 <div key={candidate.agentName} className="card p-4">
                   <div className="flex items-center justify-between mb-3">
                     <div className="flex items-center gap-2">
-                      <span className="font-heading text-sm text-white tracking-wider">{candidate.agentName}</span>
+                      <span className="font-heading text-sm text-theme-primary tracking-wider">{candidate.agentName}</span>
                       <span className="badge text-[10px] border bg-accent-green/10 text-accent-green border-accent-green/20">
                         {candidate.learningCount} ready
                       </span>
@@ -328,13 +328,13 @@ export default function LearningsPage() {
                   </div>
                   <div className="space-y-1">
                     {candidate.learnings.slice(0, 5).map((l: any, i: number) => (
-                      <div key={i} className="flex items-start gap-2 text-xs text-gray-300">
+                      <div key={i} className="flex items-start gap-2 text-xs text-theme-secondary">
                         <Check className="w-3 h-3 text-accent-green mt-0.5 flex-shrink-0" />
                         <span className="font-body">{l.content}</span>
                       </div>
                     ))}
                     {candidate.learnings.length > 5 && (
-                      <div className="text-[10px] text-gray-500 font-mono pl-5">
+                      <div className="text-[10px] text-theme-muted font-mono pl-5">
                         +{candidate.learnings.length - 5} more
                       </div>
                     )}
@@ -346,12 +346,12 @@ export default function LearningsPage() {
               {evolutionCandidates.find(c => c.agentName === '__global__') && (
                 <div className="card p-4 border-dashed">
                   <div className="flex items-center gap-2 mb-2">
-                    <span className="font-heading text-sm text-gray-400 tracking-wider">Global Learnings</span>
-                    <span className="badge text-[10px] border bg-gray-500/10 text-gray-400 border-gray-500/20">
+                    <span className="font-heading text-sm text-theme-secondary tracking-wider">Global Learnings</span>
+                    <span className="badge text-[10px] border bg-gray-500/10 text-theme-secondary border-gray-500/20">
                       {evolutionCandidates.find(c => c.agentName === '__global__')?.learningCount ?? 0} available
                     </span>
                   </div>
-                  <p className="text-[10px] text-gray-500 font-body">
+                  <p className="text-[10px] text-theme-muted font-body">
                     Global learnings are included when evolving any agent.
                   </p>
                 </div>
@@ -367,25 +367,25 @@ export default function LearningsPage() {
       {showStats && stats && (
         <div className="card p-4 mb-4 grid grid-cols-4 gap-4 text-xs">
           <div>
-            <div className="text-gray-500 font-label uppercase tracking-wider mb-1">Total</div>
-            <div className="text-lg font-mono text-white">{stats.total}</div>
+            <div className="text-theme-muted font-label uppercase tracking-wider mb-1">Total</div>
+            <div className="text-lg font-mono text-theme-primary">{stats.total}</div>
           </div>
           <div>
-            <div className="text-gray-500 font-label uppercase tracking-wider mb-1">Active</div>
+            <div className="text-theme-muted font-label uppercase tracking-wider mb-1">Active</div>
             <div className="text-lg font-mono text-accent-green">{stats.active}</div>
           </div>
           <div>
-            <div className="text-gray-500 font-label uppercase tracking-wider mb-1">Archived</div>
-            <div className="text-lg font-mono text-gray-400">{stats.archived}</div>
+            <div className="text-theme-muted font-label uppercase tracking-wider mb-1">Archived</div>
+            <div className="text-lg font-mono text-theme-secondary">{stats.archived}</div>
           </div>
           <div>
-            <div className="text-gray-500 font-label uppercase tracking-wider mb-1">Superseded</div>
+            <div className="text-theme-muted font-label uppercase tracking-wider mb-1">Superseded</div>
             <div className="text-lg font-mono text-accent-orange">{stats.superseded}</div>
           </div>
           {stats.byType && (
             <div className="col-span-4 flex gap-3 flex-wrap">
               {Object.entries(stats.byType).map(([type, count]) => (
-                <span key={type} className={`badge text-[10px] border ${TYPE_COLORS[type] ?? 'bg-gray-500/10 text-gray-400'}`}>
+                <span key={type} className={`badge text-[10px] border ${TYPE_COLORS[type] ?? 'bg-gray-500/10 text-theme-secondary'}`}>
                   {type}: {String(count)}
                 </span>
               ))}
@@ -399,14 +399,14 @@ export default function LearningsPage() {
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm">
           <div className="bg-surface-100 border border-border rounded-sm w-full max-w-lg shadow-lg">
             <div className="flex items-center justify-between px-5 py-4 border-b border-border/50">
-              <h3 className="font-heading text-sm text-white tracking-wider uppercase">Add Learning</h3>
-              <button onClick={() => setShowAdd(false)} className="text-gray-400 hover:text-white" title="Close">
+              <h3 className="font-heading text-sm text-theme-primary tracking-wider uppercase">Add Learning</h3>
+              <button onClick={() => setShowAdd(false)} className="text-theme-secondary hover:text-theme-primary" title="Close">
                 <X className="w-4 h-4" />
               </button>
             </div>
             <div className="px-5 py-4 space-y-3 max-h-[60vh] overflow-auto">
               <div>
-                <label className="block text-[11px] text-gray-500 font-label uppercase tracking-wider mb-1">Content *</label>
+                <label className="block text-[11px] text-theme-muted font-label uppercase tracking-wider mb-1">Content *</label>
                 <textarea
                   value={addContent}
                   onChange={e => setAddContent(e.target.value)}
@@ -417,19 +417,19 @@ export default function LearningsPage() {
               </div>
               <div className="grid grid-cols-3 gap-3">
                 <div>
-                  <label className="block text-[11px] text-gray-500 font-label uppercase tracking-wider mb-1">Type</label>
+                  <label className="block text-[11px] text-theme-muted font-label uppercase tracking-wider mb-1">Type</label>
                   <select value={addType} onChange={e => setAddType(e.target.value)} className="input text-xs w-full">
                     {TYPES.map(t => <option key={t} value={t}>{t}</option>)}
                   </select>
                 </div>
                 <div>
-                  <label className="block text-[11px] text-gray-500 font-label uppercase tracking-wider mb-1">Scope</label>
+                  <label className="block text-[11px] text-theme-muted font-label uppercase tracking-wider mb-1">Scope</label>
                   <select value={addScope} onChange={e => setAddScope(e.target.value)} className="input text-xs w-full">
                     {SCOPES.map(s => <option key={s} value={s}>{s}</option>)}
                   </select>
                 </div>
                 <div>
-                  <label className="block text-[11px] text-gray-500 font-label uppercase tracking-wider mb-1">Tags</label>
+                  <label className="block text-[11px] text-theme-muted font-label uppercase tracking-wider mb-1">Tags</label>
                   <input
                     value={addTags}
                     onChange={e => setAddTags(e.target.value)}
@@ -440,19 +440,19 @@ export default function LearningsPage() {
               </div>
               {addScope === 'workflow' && (
                 <div>
-                  <label className="block text-[11px] text-gray-500 font-label uppercase tracking-wider mb-1">Workflow Name</label>
+                  <label className="block text-[11px] text-theme-muted font-label uppercase tracking-wider mb-1">Workflow Name</label>
                   <input value={addWorkflow} onChange={e => setAddWorkflow(e.target.value)} placeholder="e.g., sdlc" className="input text-xs w-full" />
                 </div>
               )}
               {addScope === 'context' && (
                 <div>
-                  <label className="block text-[11px] text-gray-500 font-label uppercase tracking-wider mb-1">Context Tags</label>
+                  <label className="block text-[11px] text-theme-muted font-label uppercase tracking-wider mb-1">Context Tags</label>
                   <input value={addContextTags} onChange={e => setAddContextTags(e.target.value)} placeholder="repo:/path, language:typescript" className="input text-xs w-full" />
                 </div>
               )}
               {addScope === 'agent' && (
                 <div>
-                  <label className="block text-[11px] text-gray-500 font-label uppercase tracking-wider mb-1">Agent Name</label>
+                  <label className="block text-[11px] text-theme-muted font-label uppercase tracking-wider mb-1">Agent Name</label>
                   <input value={addAgentName} onChange={e => setAddAgentName(e.target.value)} placeholder="e.g., codex-researcher" className="input text-xs w-full" />
                 </div>
               )}
@@ -486,7 +486,7 @@ export default function LearningsPage() {
           className="w-36"
         />
         <div className="flex-1 min-w-[200px] relative">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-gray-500" />
+          <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-theme-muted" />
           <input
             type="text"
             value={search}
@@ -499,9 +499,9 @@ export default function LearningsPage() {
 
       {/* Learning cards */}
       {loading ? (
-        <div className="text-center text-gray-500 font-mono text-sm py-12">LOADING...</div>
+        <div className="text-center text-theme-muted font-mono text-sm py-12">LOADING...</div>
       ) : items.length === 0 ? (
-        <div className="text-center text-gray-500 font-mono text-sm py-12">NO LEARNINGS FOUND</div>
+        <div className="text-center text-theme-muted font-mono text-sm py-12">NO LEARNINGS FOUND</div>
       ) : (
         <div className="space-y-3">
           {items.map((item: any) => (
@@ -549,8 +549,8 @@ function LearningCard({ item, isEditing, editContent, editType, editTags, onEdit
   onReject: () => void;
   onDelete: () => void;
 }) {
-  const typeBadge = TYPE_COLORS[item.type] ?? 'bg-gray-500/10 text-gray-400';
-  const scopeBadge = SCOPE_COLORS[item.scope?.level] ?? 'bg-gray-500/10 text-gray-400';
+  const typeBadge = TYPE_COLORS[item.type] ?? 'bg-gray-500/10 text-theme-secondary';
+  const scopeBadge = SCOPE_COLORS[item.scope?.level] ?? 'bg-gray-500/10 text-theme-secondary';
 
   return (
     <div className="card p-4 hover:shadow-glow-blue/5 transition-shadow">
@@ -560,7 +560,7 @@ function LearningCard({ item, isEditing, editContent, editType, editTags, onEdit
           <span className={`badge text-[10px] border ${typeBadge}`}>{item.type}</span>
           <span className={`badge text-[10px] border ${scopeBadge}`}>{item.scope?.level}</span>
           {item.status !== 'active' && (
-            <span className="badge text-[10px] bg-gray-600/10 text-gray-500 border border-gray-600/20">{item.status}</span>
+            <span className="badge text-[10px] bg-surface-200/40 text-theme-muted border border-border/20">{item.status}</span>
           )}
         </div>
         <div className="flex items-center gap-1.5">
@@ -575,7 +575,7 @@ function LearningCard({ item, isEditing, editContent, editType, editTags, onEdit
               }}
             />
           </div>
-          <span className="text-[10px] font-mono text-gray-400">{(item.confidence ?? 0).toFixed(2)}</span>
+          <span className="text-[10px] font-mono text-theme-secondary">{(item.confidence ?? 0).toFixed(2)}</span>
         </div>
       </div>
 
@@ -612,7 +612,7 @@ function LearningCard({ item, isEditing, editContent, editType, editTags, onEdit
       {item.tags?.length > 0 && !isEditing && (
         <div className="flex flex-wrap gap-1 mb-2">
           {item.tags.map((tag: string, i: number) => (
-            <span key={i} className="text-[10px] px-1.5 py-0.5 rounded-sm bg-surface-200 text-gray-500 font-mono">
+            <span key={i} className="text-[10px] px-1.5 py-0.5 rounded-sm bg-surface-200 text-theme-muted font-mono">
               {tag}
             </span>
           ))}
@@ -622,7 +622,7 @@ function LearningCard({ item, isEditing, editContent, editType, editTags, onEdit
       {/* Source info + actions */}
       {!isEditing && (
         <div className="flex items-center justify-between mt-2 pt-2 border-t border-border/30">
-          <div className="text-[10px] text-gray-600 font-mono flex items-center gap-2 flex-wrap">
+          <div className="text-[10px] text-theme-subtle font-mono flex items-center gap-2 flex-wrap">
             <span>{item.source?.sourceType}</span>
             {item.source?.workflowName && <span>{item.source.workflowName} run</span>}
             <span>{item.confirmations ?? 0} confirms</span>
@@ -639,10 +639,10 @@ function LearningCard({ item, isEditing, editContent, editType, editTags, onEdit
                 </button>
               </>
             )}
-            <button onClick={onStartEdit} className="btn-ghost text-[10px] text-gray-400 px-1.5 py-0.5" title="Edit">
+            <button onClick={onStartEdit} className="btn-ghost text-[10px] text-theme-secondary px-1.5 py-0.5" title="Edit">
               <Pencil className="w-3 h-3" />
             </button>
-            <button onClick={onDelete} className="btn-ghost text-[10px] text-gray-500 px-1.5 py-0.5" title="Archive">
+            <button onClick={onDelete} className="btn-ghost text-[10px] text-theme-muted px-1.5 py-0.5" title="Archive">
               <Trash2 className="w-3 h-3" />
             </button>
           </div>

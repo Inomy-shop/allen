@@ -40,21 +40,21 @@ export default function HumanInputDialog({ node, prompt, fields, onSubmit, onCan
         <div className="flex items-center gap-2 px-5 py-4 border-b border-border">
           <MessageSquare className="w-5 h-5 text-orange-400" />
           <div>
-            <h2 className="text-sm font-semibold text-white">Input Required</h2>
-            <p className="text-xs text-gray-400">Node: {node}</p>
+            <h2 className="text-sm font-semibold text-theme-primary">Input Required</h2>
+            <p className="text-xs text-theme-secondary">Node: {node}</p>
           </div>
         </div>
 
         {prompt && (
           <div className="px-5 py-3 border-b border-border">
-            <p className="text-sm text-gray-300">{prompt}</p>
+            <p className="text-sm text-theme-secondary">{prompt}</p>
           </div>
         )}
 
         <form onSubmit={handleSubmit} className="p-5 space-y-4">
           {fields.map(field => (
             <div key={field.name}>
-              <label className="block text-xs font-medium text-gray-400 mb-1">
+              <label className="block text-xs font-medium text-theme-secondary mb-1">
                 {field.label ?? field.name}
                 {field.required && <span className="text-red-400 ml-0.5">*</span>}
               </label>
@@ -67,7 +67,7 @@ export default function HumanInputDialog({ node, prompt, fields, onSubmit, onCan
                     onChange={e => setValues(v => ({ ...v, [field.name]: e.target.checked }))}
                     className="w-4 h-4 rounded bg-surface-200 border-border text-accent-blue focus:ring-accent-blue"
                   />
-                  <span className="text-sm text-gray-300">Yes</span>
+                  <span className="text-sm text-theme-secondary">Yes</span>
                 </label>
               ) : field.type === 'select' ? (
                 <select

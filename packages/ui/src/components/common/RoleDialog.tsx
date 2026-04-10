@@ -142,7 +142,7 @@ export default function RoleDialog({ open, onClose, onSave, role }: RoleDialogPr
         onClick={e => e.stopPropagation()}
       >
         <div className="flex items-center justify-between p-4 border-b border-border">
-          <h2 className="font-heading text-sm font-bold text-white tracking-widest uppercase">
+          <h2 className="font-heading text-sm font-bold text-theme-primary tracking-widest uppercase">
             {isEdit ? 'Edit Agent' : 'Create Agent'}
           </h2>
           <button type="button" onClick={onClose} className="btn-ghost p-1" title="Close">
@@ -159,14 +159,14 @@ export default function RoleDialog({ open, onClose, onSave, role }: RoleDialogPr
 
           {/* Agent Type */}
           <div>
-            <label className="font-label text-xs text-gray-400 mb-1 block">Agent Type</label>
+            <label className="font-label text-xs text-theme-secondary mb-1 block">Agent Type</label>
             <Select value={agentType} onChange={setAgentType} options={typeOptions} />
           </div>
 
           {/* Name & Display Name */}
           <div className="grid grid-cols-2 gap-3">
             <div>
-              <label className="font-label text-xs text-gray-400 mb-1 block">Name (kebab-case)</label>
+              <label className="font-label text-xs text-theme-secondary mb-1 block">Name (kebab-case)</label>
               <input
                 type="text"
                 value={name}
@@ -177,7 +177,7 @@ export default function RoleDialog({ open, onClose, onSave, role }: RoleDialogPr
               />
             </div>
             <div>
-              <label className="font-label text-xs text-gray-400 mb-1 block">Display Name</label>
+              <label className="font-label text-xs text-theme-secondary mb-1 block">Display Name</label>
               <input
                 type="text"
                 value={displayName}
@@ -190,7 +190,7 @@ export default function RoleDialog({ open, onClose, onSave, role }: RoleDialogPr
 
           {/* System Prompt */}
           <div>
-            <label className="font-label text-xs text-gray-400 mb-1 block">System Prompt</label>
+            <label className="font-label text-xs text-theme-secondary mb-1 block">System Prompt</label>
             <textarea
               value={system}
               onChange={e => setSystem(e.target.value)}
@@ -213,7 +213,7 @@ export default function RoleDialog({ open, onClose, onSave, role }: RoleDialogPr
               </button>
               {showPreviousPrompt && (
                 <div className="mt-2 space-y-2">
-                  <pre className="text-xs text-gray-500 bg-surface-200 border border-border rounded-sm p-3 max-h-40 overflow-y-auto whitespace-pre-wrap font-mono">
+                  <pre className="text-xs text-theme-muted bg-surface-200 border border-border rounded-sm p-3 max-h-40 overflow-y-auto whitespace-pre-wrap font-mono">
                     {role.previousSystemPrompt as string}
                   </pre>
                   <button
@@ -232,11 +232,11 @@ export default function RoleDialog({ open, onClose, onSave, role }: RoleDialogPr
           {/* Provider & Model */}
           <div className="grid grid-cols-2 gap-3">
             <div>
-              <label className="font-label text-xs text-gray-400 mb-1 block">Provider</label>
+              <label className="font-label text-xs text-theme-secondary mb-1 block">Provider</label>
               <Select value={provider} onChange={handleProviderChange} options={providerOptions} />
             </div>
             <div>
-              <label className="font-label text-xs text-gray-400 mb-1 block">Model</label>
+              <label className="font-label text-xs text-theme-secondary mb-1 block">Model</label>
               <Select value={model} onChange={setModel} options={modelOptions} />
             </div>
           </div>
@@ -244,7 +244,7 @@ export default function RoleDialog({ open, onClose, onSave, role }: RoleDialogPr
           {/* Icon & Color */}
           <div className="grid grid-cols-2 gap-3">
             <div>
-              <label className="font-label text-xs text-gray-400 mb-1 block">Icon</label>
+              <label className="font-label text-xs text-theme-secondary mb-1 block">Icon</label>
               <div className="flex items-center gap-2">
                 <Select value={icon} onChange={setIcon} options={iconOptions} className="flex-1" />
                 <div
@@ -256,7 +256,7 @@ export default function RoleDialog({ open, onClose, onSave, role }: RoleDialogPr
               </div>
             </div>
             <div>
-              <label className="font-label text-xs text-gray-400 mb-1 block">Color</label>
+              <label className="font-label text-xs text-theme-secondary mb-1 block">Color</label>
               <div className="flex items-center gap-2">
                 <input
                   type="color"
@@ -277,10 +277,10 @@ export default function RoleDialog({ open, onClose, onSave, role }: RoleDialogPr
 
           {/* Tools */}
           <div>
-            <label className="font-label text-xs text-gray-400 mb-1 block">Tools</label>
+            <label className="font-label text-xs text-theme-secondary mb-1 block">Tools</label>
             <div className="grid grid-cols-3 gap-2">
               {TOOLS.map(tool => (
-                <label key={tool} className="flex items-center gap-2 text-xs text-gray-300 cursor-pointer">
+                <label key={tool} className="flex items-center gap-2 text-xs text-theme-secondary cursor-pointer">
                   <input
                     type="checkbox"
                     checked={tools.includes(tool)}

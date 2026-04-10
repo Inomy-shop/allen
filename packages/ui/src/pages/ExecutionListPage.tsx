@@ -104,7 +104,7 @@ export default function ExecutionListPage() {
   return (
     <div className="p-6">
       <div className="flex items-center justify-between mb-6">
-        <h1 className="font-heading text-xl font-bold text-white tracking-widest uppercase">Executions</h1>
+        <h1 className="font-heading text-xl font-bold text-theme-primary tracking-widest uppercase">Executions</h1>
         <div className="flex items-center gap-3">
           <select
             value={filter}
@@ -125,7 +125,7 @@ export default function ExecutionListPage() {
         <div className="card overflow-hidden">
           <table className="w-full text-sm">
             <thead>
-              <tr className="text-gray-500 bg-surface-50 text-xs font-label uppercase tracking-wider">
+              <tr className="text-theme-muted bg-surface-50 text-xs font-label uppercase tracking-wider">
                 <th className="text-left px-4 py-3 font-medium">ID</th>
                 <th className="text-left px-4 py-3 font-medium">Workflow</th>
                 <th className="text-left px-4 py-3 font-medium">Status</th>
@@ -142,15 +142,15 @@ export default function ExecutionListPage() {
         </div>
       ) : data.length === 0 ? (
         <div className="card p-8 text-center">
-          <Play className="w-8 h-8 text-gray-600 mx-auto mb-3" />
-          <p className="text-gray-400 text-sm font-body">No executions yet</p>
-          <p className="text-gray-600 text-xs mt-1 font-mono">START A WORKFLOW TO SEE EXECUTIONS HERE</p>
+          <Play className="w-8 h-8 text-theme-subtle mx-auto mb-3" />
+          <p className="text-theme-secondary text-sm font-body">No executions yet</p>
+          <p className="text-theme-subtle text-xs mt-1 font-mono">START A WORKFLOW TO SEE EXECUTIONS HERE</p>
         </div>
       ) : (
         <div className="card overflow-hidden">
           <table className="w-full text-sm font-body">
             <thead>
-              <tr className="text-gray-500 bg-surface-50 text-xs font-label uppercase tracking-wider">
+              <tr className="text-theme-muted bg-surface-50 text-xs font-label uppercase tracking-wider">
                 <th className="text-left px-4 py-3 font-medium">ID</th>
                 <th
                   className="text-left px-4 py-3 font-medium cursor-pointer hover:text-accent-blue transition-colors"
@@ -193,11 +193,11 @@ export default function ExecutionListPage() {
                   </td>
                   <td className="px-4 py-3 text-gray-200">{exec.workflowName}</td>
                   <td className="px-4 py-3"><StatusBadge status={exec.status} /></td>
-                  <td className="px-4 py-3 text-gray-400 text-xs tabular-nums font-mono">
+                  <td className="px-4 py-3 text-theme-secondary text-xs tabular-nums font-mono">
                     {exec.durationMs != null ? `${(exec.durationMs / 1000).toFixed(1)}s` : '-'}
                   </td>
                   <td className="px-4 py-3"><CostDisplay cost={exec.cost} /></td>
-                  <td className="px-4 py-3 text-gray-400 text-xs font-mono">
+                  <td className="px-4 py-3 text-theme-secondary text-xs font-mono">
                     {exec.startedAt ? new Date(exec.startedAt).toLocaleString() : '-'}
                   </td>
                   <td className="px-4 py-3">

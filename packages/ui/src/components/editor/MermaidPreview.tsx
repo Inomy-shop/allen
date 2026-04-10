@@ -102,7 +102,7 @@ export default function MermaidPreview({ workflow }: Props) {
 
   if (!mermaidCode) {
     return (
-      <div className="flex items-center justify-center h-full text-gray-500 text-sm">
+      <div className="flex items-center justify-center h-full text-theme-muted text-sm">
         Write a valid workflow to see the diagram
       </div>
     );
@@ -111,7 +111,7 @@ export default function MermaidPreview({ workflow }: Props) {
   return (
     <div className="h-full flex flex-col overflow-hidden">
       <div className="px-3 py-2 border-b border-border bg-surface-50 shrink-0">
-        <span className="text-xs font-semibold text-gray-400 uppercase">Mermaid Preview</span>
+        <span className="text-xs font-semibold text-theme-secondary uppercase">Mermaid Preview</span>
       </div>
 
       <div className="flex-1 overflow-auto p-3">
@@ -126,15 +126,15 @@ export default function MermaidPreview({ workflow }: Props) {
             dangerouslySetInnerHTML={{ __html: svgHtml }}
           />
         ) : (
-          <div className="text-xs text-gray-500">Rendering...</div>
+          <div className="text-xs text-theme-muted">Rendering...</div>
         )}
 
         {/* Raw Mermaid code */}
         <details className="mt-4">
-          <summary className="text-xs text-gray-500 cursor-pointer hover:text-gray-300">
+          <summary className="text-xs text-theme-muted cursor-pointer hover:text-theme-secondary">
             Raw Mermaid code
           </summary>
-          <pre className="mt-2 p-3 bg-surface-200 rounded text-xs text-gray-400 font-mono whitespace-pre-wrap overflow-auto max-h-60">
+          <pre className="mt-2 p-3 bg-surface-200 rounded text-xs text-theme-secondary font-mono whitespace-pre-wrap overflow-auto max-h-60">
             {mermaidCode}
           </pre>
         </details>

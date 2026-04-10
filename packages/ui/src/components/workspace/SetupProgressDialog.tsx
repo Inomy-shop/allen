@@ -42,17 +42,17 @@ export function SetupProgressDialog({ workspaceId, onComplete, onFailed }: Props
           ) : (
             <Loader2 className="w-4 h-4 text-blue-400 animate-spin" />
           )}
-          <span className="text-sm font-semibold text-white">
+          <span className="text-sm font-semibold text-theme-primary">
             {ws?.status === 'failed' ? 'Setup Failed' : 'Setting up workspace...'}
           </span>
-          <span className="text-[10px] font-mono text-gray-500">{ws?.name}</span>
+          <span className="text-[10px] font-mono text-theme-muted">{ws?.name}</span>
         </div>
 
         {/* Progress */}
         <div className="px-4 py-3">
           {progress && (
             <div className="mb-3">
-              <div className="flex items-center justify-between text-[10px] text-gray-500 mb-1">
+              <div className="flex items-center justify-between text-[10px] text-theme-muted mb-1">
                 <span>Step {progress.currentStep}/{progress.totalSteps}</span>
                 <span className="font-mono">{progress.currentCommand}</span>
               </div>
@@ -66,12 +66,12 @@ export function SetupProgressDialog({ workspaceId, onComplete, onFailed }: Props
           )}
 
           {/* Log */}
-          <div className="bg-[rgb(13,17,28)] rounded p-3 max-h-48 overflow-y-auto font-mono text-[10px] space-y-1">
+          <div className="bg-[rgb(var(--color-editor-background))] rounded p-3 max-h-48 overflow-y-auto font-mono text-[10px] space-y-1">
             {log.length === 0 && ws?.status !== 'failed' && (
-              <div className="text-gray-600 animate-pulse">Initializing workspace...</div>
+              <div className="text-theme-subtle animate-pulse">Initializing workspace...</div>
             )}
             {log.map((line: string, i: number) => (
-              <div key={i} className={line.startsWith('✓') ? 'text-emerald-400' : line.startsWith('✗') ? 'text-red-400' : 'text-gray-500'}>
+              <div key={i} className={line.startsWith('✓') ? 'text-emerald-400' : line.startsWith('✗') ? 'text-red-400' : 'text-theme-muted'}>
                 {line.split('\n')[0]}
               </div>
             ))}

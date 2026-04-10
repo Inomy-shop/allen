@@ -32,6 +32,23 @@ export async function ensureIndexes(db: Db): Promise<void> {
   await db.collection('repos').createIndex({ tags: 1 });
   await db.collection('repos').createIndex({ status: 1, lastUsedAt: -1 });
 
+  // Repo Contexts (deep agent-generated markdown context)
+  // Lookup by repoId is hot — every agent spawn into a registered repo hits this.
+  await db.collection('repo_contexts').createIndex({ repoId: 1 }, { unique: true });
+
+  // Cron Jobs — generic scheduler for agents/workflows/system actions
+  await db.collection('cron_jobs').createIndex({ name: 1 }, { unique: true });
+  // Hot path: every tick queries `enabled: true, nextRunAt <= now`
+  await db.collection('cron_jobs').createIndex({ enabled: 1, nextRunAt: 1 });
+
+  // Cron Runs — per-execution history
+  await db.collection('cron_runs').createIndex({ cronJobId: 1, startedAt: -1 });
+  // 90-day TTL on run history
+  await db.collection('cron_runs').createIndex(
+    { startedAt: 1 },
+    { expireAfterSeconds: 90 * 24 * 60 * 60 },
+  );
+
   // Execution Logs
   await db.collection('execution_logs').createIndex({ executionId: 1, timestamp: 1 });
   await db.collection('execution_logs').createIndex({ executionId: 1, node: 1, timestamp: 1 });

@@ -15,6 +15,8 @@ import {
 export interface ThemePreset {
   name: string;
   label: string;
+  /** When set, selecting this theme auto-switches the color mode. */
+  preferredColorMode?: 'dark' | 'light';
   colors: {
     surface: string;
     surface100: string;
@@ -25,6 +27,7 @@ export interface ThemePreset {
     accentRed: string;
     accentYellow: string;
     accentPurple: string;
+    accentOrange?: string;
   };
 }
 
@@ -32,6 +35,7 @@ export const THEME_PRESETS: ThemePreset[] = [
   {
     name: 'cyberpunk',
     label: 'Cyberpunk',
+    preferredColorMode: 'dark',
     colors: {
       surface: '#0a0e1a',
       surface100: '#111730',
@@ -47,6 +51,7 @@ export const THEME_PRESETS: ThemePreset[] = [
   {
     name: 'terminal',
     label: 'Terminal',
+    preferredColorMode: 'dark',
     colors: {
       surface: '#000000',
       surface100: '#0a0f0a',
@@ -62,6 +67,7 @@ export const THEME_PRESETS: ThemePreset[] = [
   {
     name: 'midnight',
     label: 'Midnight',
+    preferredColorMode: 'dark',
     colors: {
       surface: '#0d0a1a',
       surface100: '#15112b',
@@ -77,6 +83,7 @@ export const THEME_PRESETS: ThemePreset[] = [
   {
     name: 'arctic',
     label: 'Arctic',
+    preferredColorMode: 'dark',
     colors: {
       surface: '#0f1520',
       surface100: '#151d2e',
@@ -92,6 +99,7 @@ export const THEME_PRESETS: ThemePreset[] = [
   {
     name: 'ember',
     label: 'Ember',
+    preferredColorMode: 'dark',
     colors: {
       surface: '#120a0a',
       surface100: '#1c1010',
@@ -107,6 +115,7 @@ export const THEME_PRESETS: ThemePreset[] = [
   {
     name: 'deep-ocean',
     label: 'Deep Ocean',
+    preferredColorMode: 'dark',
     colors: {
       surface: '#020c1b',
       surface100: '#0a192f',
@@ -122,6 +131,7 @@ export const THEME_PRESETS: ThemePreset[] = [
   {
     name: 'light-modern',
     label: 'Light Modern',
+    preferredColorMode: 'light',
     colors: {
       surface: '#ffffff',
       surface100: '#f8fafc',
@@ -137,6 +147,7 @@ export const THEME_PRESETS: ThemePreset[] = [
   {
     name: 'light-minimal',
     label: 'Light Minimal',
+    preferredColorMode: 'light',
     colors: {
       surface: '#fefefe',
       surface100: '#f9fafb',
@@ -152,6 +163,7 @@ export const THEME_PRESETS: ThemePreset[] = [
   {
     name: 'light-warm',
     label: 'Light Warm',
+    preferredColorMode: 'light',
     colors: {
       surface: '#fffbf7',
       surface100: '#fef7f0',
@@ -167,6 +179,7 @@ export const THEME_PRESETS: ThemePreset[] = [
   {
     name: 'clean-light',
     label: 'Clean Light',
+    preferredColorMode: 'light',
     colors: {
       surface: '#ffffff',
       surface100: '#f8fafc',
@@ -182,6 +195,7 @@ export const THEME_PRESETS: ThemePreset[] = [
   {
     name: 'minimal-light',
     label: 'Minimal Light',
+    preferredColorMode: 'light',
     colors: {
       surface: '#fefefe',
       surface100: '#f9fafb',
@@ -197,6 +211,7 @@ export const THEME_PRESETS: ThemePreset[] = [
   {
     name: 'warm-light',
     label: 'Warm Light',
+    preferredColorMode: 'light',
     colors: {
       surface: '#fefdf9',
       surface100: '#fffbeb',
@@ -207,6 +222,23 @@ export const THEME_PRESETS: ThemePreset[] = [
       accentRed: '#dc2626',
       accentYellow: '#ca8a04',
       accentPurple: '#9333ea',
+    },
+  },
+  {
+    name: 'claude',
+    label: 'Claude',
+    preferredColorMode: 'light',
+    colors: {
+      surface: '#f4f3ee',
+      surface100: '#f4f3ee',
+      surface200: '#edeae3',
+      border: '#ddd9d0',
+      accent: '#c15f3c',
+      accentGreen: '#2d8659',
+      accentRed: '#c4362c',
+      accentYellow: '#b58318',
+      accentPurple: '#7c5fc4',
+      accentOrange: '#b8531a',
     },
   },
 ];
@@ -424,7 +456,7 @@ export interface AccentOption {
   color: string;
 }
 
-export const ACCENT_OPTIONS: AccentOption[] = [
+export const ACCENT_OPTIONS_DARK: AccentOption[] = [
   { name: 'cyan', label: 'Cyan', color: '#00d4ff' },
   { name: 'blue', label: 'Blue', color: '#3b82f6' },
   { name: 'green', label: 'Green', color: '#22c55e' },
@@ -434,6 +466,27 @@ export const ACCENT_OPTIONS: AccentOption[] = [
   { name: 'pink', label: 'Pink', color: '#ec4899' },
   { name: 'yellow', label: 'Yellow', color: '#eab308' },
 ];
+
+export const ACCENT_OPTIONS_LIGHT: AccentOption[] = [
+  { name: 'blue', label: 'Blue', color: '#2563eb' },
+  { name: 'indigo', label: 'Indigo', color: '#4f46e5' },
+  { name: 'green', label: 'Green', color: '#16a34a' },
+  { name: 'purple', label: 'Purple', color: '#7c3aed' },
+  { name: 'orange', label: 'Orange', color: '#c2410c' },
+  { name: 'red', label: 'Red', color: '#dc2626' },
+  { name: 'pink', label: 'Pink', color: '#db2777' },
+  { name: 'teal', label: 'Teal', color: '#0d9488' },
+  { name: 'terracotta', label: 'Terracotta', color: '#c15f3c' },
+];
+
+/** Get the accent options appropriate for the current resolved color mode. */
+export function getAccentOptions(colorMode: ColorMode): AccentOption[] {
+  const resolved = resolveColorMode(colorMode);
+  return resolved === 'light' ? ACCENT_OPTIONS_LIGHT : ACCENT_OPTIONS_DARK;
+}
+
+/** @deprecated Use getAccentOptions(colorMode) instead. */
+export const ACCENT_OPTIONS = ACCENT_OPTIONS_DARK;
 
 /* ─── Agent Icon Presets ─── */
 
@@ -520,6 +573,7 @@ function applyThemeColors(theme: ThemePreset, customAccent: string | null, color
   root.setProperty('--accent-red-hex', theme.colors.accentRed);
   root.setProperty('--color-accent-yellow', hexToRgbChannels(theme.colors.accentYellow));
   root.setProperty('--color-accent-purple', hexToRgbChannels(theme.colors.accentPurple));
+  root.setProperty('--color-accent-orange', hexToRgbChannels(theme.colors.accentOrange ?? '#f97316'));
   root.setProperty('--color-text-primary', hexToRgbChannels(modeTokens.textPrimary));
   root.setProperty('--color-text-secondary', hexToRgbChannels(modeTokens.textSecondary));
   root.setProperty('--color-text-muted', hexToRgbChannels(modeTokens.textMuted));
@@ -620,9 +674,13 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
 
   setTheme: (name: string) => {
     const theme = getTheme(name);
-    const { customAccent, colorMode } = get();
+    // Auto-switch color mode to match the theme's preferred mode (dark/light)
+    const colorMode = theme.preferredColorMode ?? get().colorMode;
+    // Reset custom accent so the theme's built-in accent takes effect.
+    // Prevents a bright-on-dark accent from persisting onto a light theme.
+    const customAccent = null;
     applyThemeColors(theme, customAccent, colorMode);
-    set({ themeName: name });
+    set({ themeName: name, colorMode, customAccent });
     saveToStorage({ colorMode, themeName: name, fontName: get().fontName, customAccent, agentIcon: get().agentIcon });
   },
 

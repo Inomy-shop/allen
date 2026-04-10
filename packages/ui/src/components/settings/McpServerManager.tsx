@@ -44,8 +44,8 @@ interface McpPreset {
 const STATUS_STYLES: Record<string, { icon: React.ReactNode; color: string; label: string }> = {
   connected: { icon: <CheckCircle className="w-3.5 h-3.5" />, color: 'text-accent-green', label: 'Connected' },
   failed: { icon: <XCircle className="w-3.5 h-3.5" />, color: 'text-accent-red', label: 'Failed' },
-  untested: { icon: <HelpCircle className="w-3.5 h-3.5" />, color: 'text-gray-500', label: 'Untested' },
-  disabled: { icon: <PowerOff className="w-3.5 h-3.5" />, color: 'text-gray-600', label: 'Disabled' },
+  untested: { icon: <HelpCircle className="w-3.5 h-3.5" />, color: 'text-theme-muted', label: 'Untested' },
+  disabled: { icon: <PowerOff className="w-3.5 h-3.5" />, color: 'text-theme-subtle', label: 'Disabled' },
 };
 
 function StatusBadge({ status }: { status: string }) {
@@ -67,42 +67,42 @@ function ServerCard({
   return (
     <div className={`border rounded-lg overflow-hidden transition-colors ${server.enabled ? 'border-border/40 bg-surface-100/60' : 'border-border/20 bg-surface-100/30 opacity-60'}`}>
       <div className="flex items-center gap-3 px-4 py-3">
-        <button onClick={() => setExpanded(!expanded)} className="text-gray-500 hover:text-gray-300" title={expanded ? 'Collapse details' : 'Expand details'}>
+        <button onClick={() => setExpanded(!expanded)} className="text-theme-muted hover:text-theme-secondary" title={expanded ? 'Collapse details' : 'Expand details'}>
           {expanded ? <ChevronDown className="w-4 h-4" /> : <ChevronRight className="w-4 h-4" />}
         </button>
-        <Server className={`w-4 h-4 shrink-0 ${server.enabled ? 'text-accent-blue' : 'text-gray-600'}`} />
+        <Server className={`w-4 h-4 shrink-0 ${server.enabled ? 'text-accent-blue' : 'text-theme-subtle'}`} />
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2">
-            <span className="text-sm font-body text-white">{server.name}</span>
-            <span className="text-[10px] font-mono text-gray-600 bg-surface-200/50 px-1.5 py-0.5 rounded">{server.type}</span>
+            <span className="text-sm font-body text-theme-primary">{server.name}</span>
+            <span className="text-[10px] font-mono text-theme-subtle bg-surface-200/50 px-1.5 py-0.5 rounded">{server.type}</span>
             {server.toolCount != null && server.toolCount > 0 && (
-              <span className="text-[10px] font-mono text-gray-600 flex items-center gap-0.5">
+              <span className="text-[10px] font-mono text-theme-subtle flex items-center gap-0.5">
                 <Wrench className="w-2.5 h-2.5" />{server.toolCount} tools
               </span>
             )}
           </div>
-          <div className="text-[11px] text-gray-500 font-body truncate">{server.description}</div>
+          <div className="text-[11px] text-theme-muted font-body truncate">{server.description}</div>
         </div>
         <StatusBadge status={server.status} />
         <div className="flex items-center gap-1">
           <button
             onClick={onTest}
             disabled={!server.enabled || testing}
-            className="p-1.5 rounded-md hover:bg-surface-200/60 text-gray-500 hover:text-accent-blue disabled:opacity-30 transition-colors"
+            className="p-1.5 rounded-md hover:bg-surface-200/60 text-theme-muted hover:text-accent-blue disabled:opacity-30 transition-colors"
             title="Test connection"
           >
             <RefreshCw className={`w-3.5 h-3.5 ${testing ? 'animate-spin' : ''}`} />
           </button>
           <button
             onClick={onToggle}
-            className="p-1.5 rounded-md hover:bg-surface-200/60 text-gray-500 hover:text-accent-yellow transition-colors"
+            className="p-1.5 rounded-md hover:bg-surface-200/60 text-theme-muted hover:text-accent-yellow transition-colors"
             title={server.enabled ? 'Disable' : 'Enable'}
           >
             {server.enabled ? <Power className="w-3.5 h-3.5" /> : <PowerOff className="w-3.5 h-3.5" />}
           </button>
           <button
             onClick={onDelete}
-            className="p-1.5 rounded-md hover:bg-red-500/10 text-gray-500 hover:text-red-400 transition-colors"
+            className="p-1.5 rounded-md hover:bg-red-500/10 text-theme-muted hover:text-red-400 transition-colors"
             title="Delete"
           >
             <Trash2 className="w-3.5 h-3.5" />
@@ -114,23 +114,23 @@ function ServerCard({
         <div className="px-4 py-3 border-t border-border/20 bg-surface-200/20 space-y-2 text-xs">
           {server.type === 'stdio' && (
             <>
-              <div><span className="text-gray-500">Command:</span> <span className="text-gray-300 font-mono">{server.command} {(server.args ?? []).join(' ')}</span></div>
+              <div><span className="text-theme-muted">Command:</span> <span className="text-theme-secondary font-mono">{server.command} {(server.args ?? []).join(' ')}</span></div>
               {server.env && Object.keys(server.env).length > 0 && (
-                <div><span className="text-gray-500">Env vars:</span> <span className="text-gray-300 font-mono">{Object.keys(server.env).join(', ')}</span></div>
+                <div><span className="text-theme-muted">Env vars:</span> <span className="text-theme-secondary font-mono">{Object.keys(server.env).join(', ')}</span></div>
               )}
             </>
           )}
           {(server.type === 'sse' || server.type === 'http') && (
-            <div><span className="text-gray-500">URL:</span> <span className="text-gray-300 font-mono">{server.url}</span></div>
+            <div><span className="text-theme-muted">URL:</span> <span className="text-theme-secondary font-mono">{server.url}</span></div>
           )}
           {server.serverInfo && (
-            <div><span className="text-gray-500">Server:</span> <span className="text-gray-300">{server.serverInfo.name} v{server.serverInfo.version}</span></div>
+            <div><span className="text-theme-muted">Server:</span> <span className="text-theme-secondary">{server.serverInfo.name} v{server.serverInfo.version}</span></div>
           )}
           {server.lastError && (
             <div className="text-red-400 font-mono">{server.lastError}</div>
           )}
           {server.lastTestedAt && (
-            <div className="text-gray-600">Last tested: {new Date(server.lastTestedAt).toLocaleString()}</div>
+            <div className="text-theme-subtle">Last tested: {new Date(server.lastTestedAt).toLocaleString()}</div>
           )}
         </div>
       )}
@@ -162,13 +162,13 @@ function PresetField({
   if (state.mode === 'use-existing') {
     return (
       <div>
-        <label className="text-[10px] font-label uppercase tracking-wider text-gray-500 mb-1 block">{fieldKey}</label>
+        <label className="text-[10px] font-label uppercase tracking-wider text-theme-muted mb-1 block">{fieldKey}</label>
         <div className="flex items-center gap-2 bg-accent-green/5 border border-accent-green/30 rounded-sm px-3 py-1.5">
           <Lock className="w-3 h-3 text-accent-green shrink-0" />
-          <span className="text-xs font-mono text-accent-green flex-1">Using saved secret <span className="text-white">{fieldKey}</span></span>
+          <span className="text-xs font-mono text-accent-green flex-1">Using saved secret <span className="text-theme-primary">{fieldKey}</span></span>
           <button
             onClick={() => onChange({ mode: 'enter-new', value: '' })}
-            className="text-[10px] text-gray-500 hover:text-gray-300 flex items-center gap-0.5"
+            className="text-[10px] text-theme-muted hover:text-theme-secondary flex items-center gap-0.5"
             title="Replace with a new value"
             type="button"
           >
@@ -182,7 +182,7 @@ function PresetField({
   // Manual entry mode (no existing secret, OR user clicked Replace)
   return (
     <div>
-      <label className="text-[10px] font-label uppercase tracking-wider text-gray-500 mb-1 block">
+      <label className="text-[10px] font-label uppercase tracking-wider text-theme-muted mb-1 block">
         {fieldKey}
         {hasExistingSecret && (
           <button
@@ -200,7 +200,7 @@ function PresetField({
         onChange={e => onChange({ mode: 'enter-new', value: e.target.value })}
         placeholder={placeholder ?? `Enter ${fieldKey}...`}
         autoComplete="new-password"
-        className="w-full bg-surface-200/50 border border-border/30 rounded-sm px-3 py-1.5 text-sm text-white font-mono placeholder-gray-600 focus:outline-none focus:border-accent-blue/50"
+        className="w-full bg-surface-200/50 border border-border/30 rounded-sm px-3 py-1.5 text-sm text-theme-primary font-mono placeholder-gray-600 focus:outline-none focus:border-accent-blue/50"
       />
     </div>
   );
@@ -247,8 +247,8 @@ function AddFromPreset({
             onClick={() => choosePreset(p)}
             className="flex flex-col gap-1 px-3 py-2.5 rounded-lg bg-surface-200/30 border border-border/30 hover:bg-surface-200/60 hover:border-accent-blue/30 transition-all text-left"
           >
-            <span className="text-sm font-body text-white">{p.name}</span>
-            <span className="text-[10px] text-gray-500 font-body">{p.description}</span>
+            <span className="text-sm font-body text-theme-primary">{p.name}</span>
+            <span className="text-[10px] text-theme-muted font-body">{p.description}</span>
           </button>
         ))}
       </div>
@@ -268,10 +268,10 @@ function AddFromPreset({
   return (
     <div className="border border-border/40 rounded-lg p-4 bg-surface-200/20 space-y-3">
       <div className="flex items-center justify-between">
-        <h4 className="text-sm font-body text-white">Configure {selected.name}</h4>
-        <button onClick={() => setSelected(null)} className="text-xs text-gray-500 hover:text-gray-300">Cancel</button>
+        <h4 className="text-sm font-body text-theme-primary">Configure {selected.name}</h4>
+        <button onClick={() => setSelected(null)} className="text-xs text-theme-muted hover:text-theme-secondary">Cancel</button>
       </div>
-      <p className="text-[11px] text-gray-500">{selected.description}</p>
+      <p className="text-[11px] text-theme-muted">{selected.description}</p>
 
       {/* Connection strings (positional args) */}
       {(selected.argKeys ?? []).map(key => (
@@ -430,13 +430,13 @@ export default function McpServerManager() {
   // Filter presets that aren't already added
   const availablePresets = presets.filter(p => !servers.some(s => s.name === p.name));
 
-  if (loading) return <div className="text-xs text-gray-600 animate-pulse py-4">Loading MCP servers...</div>;
+  if (loading) return <div className="text-xs text-theme-subtle animate-pulse py-4">Loading MCP servers...</div>;
 
   return (
     <div className="space-y-4">
       {/* Server list */}
       {servers.length === 0 && !showAdd && (
-        <div className="text-center py-6 text-xs text-gray-600">
+        <div className="text-center py-6 text-xs text-theme-subtle">
           No MCP servers configured. Add one to give the chat agent access to external tools.
         </div>
       )}
@@ -458,19 +458,19 @@ export default function McpServerManager() {
       {showAdd ? (
         <div className="space-y-3">
           <div className="flex items-center justify-between">
-            <h3 className="text-xs font-label uppercase tracking-widest text-gray-400">Add MCP Server</h3>
-            <button onClick={() => setShowAdd(false)} className="text-xs text-gray-500 hover:text-gray-300">Cancel</button>
+            <h3 className="text-xs font-label uppercase tracking-widest text-theme-secondary">Add MCP Server</h3>
+            <button onClick={() => setShowAdd(false)} className="text-xs text-theme-muted hover:text-theme-secondary">Cancel</button>
           </div>
           {availablePresets.length > 0 ? (
             <AddFromPreset presets={availablePresets} existingSecretKeys={secretKeys} onAdd={handleAddPreset} />
           ) : (
-            <div className="text-xs text-gray-600">All preset servers have been added.</div>
+            <div className="text-xs text-theme-subtle">All preset servers have been added.</div>
           )}
         </div>
       ) : (
         <button
           title="Add MCP server"
-          className="flex items-center gap-2 px-3 py-2 rounded-lg border border-dashed border-border/40 hover:border-accent-blue/30 hover:bg-surface-200/30 transition-all text-gray-500 hover:text-gray-300 w-full"
+          className="flex items-center gap-2 px-3 py-2 rounded-lg border border-dashed border-border/40 hover:border-accent-blue/30 hover:bg-surface-200/30 transition-all text-theme-muted hover:text-theme-secondary w-full"
         >
           <Plus className="w-4 h-4" />
           <span className="text-xs font-body">Add MCP Server</span>

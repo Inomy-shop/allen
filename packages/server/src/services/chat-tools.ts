@@ -9,6 +9,7 @@ import { ExecutionService } from './execution.service.js';
 import { embedAndSave, invalidateCache } from './embedding.service.js';
 import { AgentConversationService } from './agent-conversation.service.js';
 import { metaChatTools, META_DESTRUCTIVE_TOOLS } from './chat-tools-meta.js';
+import { buildRepoContextBlock } from './repo-context-builder.js';
 
 // ── Active Session Registry ──────────────────────────────────────────────────
 // When chat.service starts processing a message, it registers the session context.
@@ -538,6 +539,19 @@ async function runSpawnInBackground(
     workspaceConstraint = `\n\nWORKSPACE CONSTRAINT:\nYour working directory is: ${repoPath}\nCRITICAL: ALL file operations (Read, Write, Edit, Grep, Glob, Bash) MUST use paths within this directory.\n- Use relative paths or absolute paths starting with "${repoPath}/"\n- NEVER read, write, or modify files outside this directory\n- If search results show paths outside this directory, replace the base with "${repoPath}/"${portInfo}\n`;
   }
 
+  // Inject the deep repo context block (skip for the scanner itself to avoid circularity)
+  let repoContextBlock = '';
+  if (repoPath && agentName !== 'repo-scanner') {
+    try {
+      repoContextBlock = await buildRepoContextBlock(db, repoPath);
+      if (repoContextBlock) {
+        liveLog({ type: 'started', content: `Injected repo context (${repoContextBlock.length} chars)` });
+      }
+    } catch (err) {
+      console.error('[spawn] failed to build repo context block:', err);
+    }
+  }
+
   const MAX_SPAWN_RETRIES = 3;
   let currentResumeSession = resumeSession;
 
@@ -566,7 +580,7 @@ async function runSpawnInBackground(
       } else {
         args.push('--json', '--dangerously-bypass-approvals-and-sandbox', '--skip-git-repo-check');
         if (model) args.push('-c', `model="${model}"`);
-        args.push(`${(role.system as string) ?? ''}${workspaceConstraint}\n\n${prompt}`);
+        args.push(`${(role.system as string) ?? ''}${repoContextBlock}${workspaceConstraint}\n\n${prompt}`);
       }
 
       const result = await new Promise<{ text: string; threadId?: string }>((resolveP, rejectP) => {
@@ -668,7 +682,7 @@ async function runSpawnInBackground(
         ...(Object.keys(mcpServers).length > 0 ? { mcpServers } : {}),
       };
       if (currentResumeSession) sdkOptions.resume = currentResumeSession;
-      else sdkOptions.customSystemPrompt = `${(role.system as string) ?? ''}${workspaceConstraint}`;
+      else sdkOptions.customSystemPrompt = `${(role.system as string) ?? ''}${repoContextBlock}${workspaceConstraint}`;
 
       // Register abort controller for cancel support
       const abortController = new AbortController();
@@ -1565,6 +1579,27 @@ async function runAgentTurn(
   if (activeCtx) { activeCtx.currentAgent = targetName; activeCtx.delegationDepth = currentDepth; activeCtx.currentConversationId = convId; }
 
   let systemPrompt = resumeSessionId ? undefined : buildDelegationPrompt(targetAgent, fromAgent, currentDepth, conversationService.maxDepth, cwd);
+
+  // Inject the deep repo context block (skip for the scanner itself).
+  // buildDelegationPrompt already appended the WORKSPACE CONSTRAINT section at the
+  // tail when cwd is set, so we splice the repo context in right before it to
+  // preserve ordering: base → repoContext → workspaceConstraint.
+  if (systemPrompt && cwd && targetName !== 'repo-scanner') {
+    try {
+      const repoContextBlock = await buildRepoContextBlock(db, cwd);
+      if (repoContextBlock) {
+        const wcMarker = '\nWORKSPACE CONSTRAINT:';
+        const wcIdx = systemPrompt.indexOf(wcMarker);
+        if (wcIdx !== -1) {
+          systemPrompt = systemPrompt.slice(0, wcIdx) + repoContextBlock + systemPrompt.slice(wcIdx);
+        } else {
+          systemPrompt += repoContextBlock;
+        }
+      }
+    } catch (err) {
+      console.error('[delegation] failed to build repo context block:', err);
+    }
+  }
 
   // Append agent-scoped learnings to the system prompt
   if (systemPrompt) {

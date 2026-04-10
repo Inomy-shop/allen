@@ -110,7 +110,7 @@ function TeamDialog({
       <div className="card w-full max-w-lg mx-4 p-6 space-y-4 max-h-[90vh] overflow-y-auto">
         <div className="flex items-start justify-between">
           <div>
-            <h3 className="font-heading text-lg text-white tracking-wide">
+            <h3 className="font-heading text-lg text-theme-primary tracking-wide">
               {isEdit ? `Edit ${mode.team.displayName}` : 'New Team'}
             </h3>
             <p className="text-xs text-theme-muted font-body mt-1">
@@ -119,7 +119,7 @@ function TeamDialog({
                 : 'Create a new team in the org chart. The lead agent must already exist.'}
             </p>
           </div>
-          <button onClick={onClose} className="text-gray-500 hover:text-gray-300 transition-colors">
+          <button onClick={onClose} className="text-theme-muted hover:text-theme-secondary transition-colors">
             <X className="w-4 h-4" />
           </button>
         </div>
@@ -135,7 +135,7 @@ function TeamDialog({
               onChange={(e) => setName(e.target.value.toLowerCase())}
               disabled={isEdit}
               placeholder="finance"
-              className="w-full bg-surface-200/50 border border-border/30 rounded-md px-3 py-2 text-sm font-mono text-white placeholder-gray-600 focus:outline-none focus:border-accent-blue/50 disabled:opacity-60 disabled:cursor-not-allowed"
+              className="w-full bg-surface-200/50 border border-border/30 rounded-md px-3 py-2 text-sm font-mono text-theme-primary placeholder-theme-subtle focus:outline-none focus:border-accent-blue/50 disabled:opacity-60 disabled:cursor-not-allowed"
             />
           </div>
 
@@ -148,7 +148,7 @@ function TeamDialog({
               value={displayName}
               onChange={(e) => setDisplayName(e.target.value)}
               placeholder="Finance Team"
-              className="w-full bg-surface-200/50 border border-border/30 rounded-md px-3 py-2 text-sm text-white placeholder-gray-600 focus:outline-none focus:border-accent-blue/50"
+              className="w-full bg-surface-200/50 border border-border/30 rounded-md px-3 py-2 text-sm text-theme-primary placeholder-theme-subtle focus:outline-none focus:border-accent-blue/50"
             />
           </div>
 
@@ -161,7 +161,7 @@ function TeamDialog({
               value={description}
               onChange={(e) => setDescription(e.target.value)}
               placeholder="Manages financial planning, accounting, and reporting"
-              className="w-full bg-surface-200/50 border border-border/30 rounded-md px-3 py-2 text-sm text-white placeholder-gray-600 focus:outline-none focus:border-accent-blue/50"
+              className="w-full bg-surface-200/50 border border-border/30 rounded-md px-3 py-2 text-sm text-theme-primary placeholder-theme-subtle focus:outline-none focus:border-accent-blue/50"
             />
           </div>
 
@@ -174,7 +174,7 @@ function TeamDialog({
               onChange={(e) => setMission(e.target.value)}
               rows={3}
               placeholder="The Finance team is responsible for..."
-              className="w-full bg-surface-200/50 border border-border/30 rounded-md px-3 py-2 text-sm text-white placeholder-gray-600 focus:outline-none focus:border-accent-blue/50 resize-none"
+              className="w-full bg-surface-200/50 border border-border/30 rounded-md px-3 py-2 text-sm text-theme-primary placeholder-theme-subtle focus:outline-none focus:border-accent-blue/50 resize-none"
             />
           </div>
 
@@ -186,7 +186,7 @@ function TeamDialog({
               value={leadAgentName}
               onChange={(e) => setLeadAgentName(e.target.value)}
               disabled={isEdit}
-              className="w-full bg-surface-200/50 border border-border/30 rounded-md px-3 py-2 text-sm text-white focus:outline-none focus:border-accent-blue/50 disabled:opacity-60"
+              className="w-full bg-surface-200/50 border border-border/30 rounded-md px-3 py-2 text-sm text-theme-primary focus:outline-none focus:border-accent-blue/50 disabled:opacity-60"
             >
               <option value="">— pick an agent —</option>
               {allAgents.map((a) => (
@@ -204,7 +204,7 @@ function TeamDialog({
             <select
               value={parentTeamName}
               onChange={(e) => setParentTeamName(e.target.value)}
-              className="w-full bg-surface-200/50 border border-border/30 rounded-md px-3 py-2 text-sm text-white focus:outline-none focus:border-accent-blue/50"
+              className="w-full bg-surface-200/50 border border-border/30 rounded-md px-3 py-2 text-sm text-theme-primary focus:outline-none focus:border-accent-blue/50"
             >
               <option value="">— top-level (no parent) —</option>
               {allTeams.map((t) => (
@@ -258,7 +258,7 @@ function TeamCard({
         {canAddAgentWithAi && (
           <button
             onClick={() => onAddAgentWithAi(team)}
-            className="btn-ghost p-1.5 text-gray-400 hover:text-accent-purple"
+            className="btn-ghost p-1.5 text-theme-secondary hover:text-accent-purple"
             title="Add an agent to this team using the AI agent-builder"
           >
             <Sparkles className="w-3.5 h-3.5" />
@@ -268,14 +268,14 @@ function TeamCard({
           <>
             <button
               onClick={() => onEdit(team)}
-              className="btn-ghost p-1.5 text-gray-400 hover:text-accent-blue"
+              className="btn-ghost p-1.5 text-theme-secondary hover:text-accent-blue"
               title="Edit team"
             >
               <Pencil className="w-3.5 h-3.5" />
             </button>
             <button
               onClick={() => onDelete(team)}
-              className="btn-ghost p-1.5 text-gray-400 hover:text-red-400"
+              className="btn-ghost p-1.5 text-theme-secondary hover:text-red-400"
               title="Delete team"
             >
               <Trash2 className="w-3.5 h-3.5" />
@@ -290,11 +290,11 @@ function TeamCard({
         </div>
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2 flex-wrap">
-            <h3 className="font-heading text-base text-white tracking-wide truncate">
+            <h3 className="font-heading text-base text-theme-primary tracking-wide truncate">
               {team.displayName}
             </h3>
             {team.isBuiltIn && (
-              <span className="text-[10px] font-mono px-1.5 py-0.5 rounded-sm bg-surface-200 text-gray-500 border border-border/40">
+              <span className="text-[10px] font-mono px-1.5 py-0.5 rounded-sm bg-surface-200 text-theme-muted border border-border/40">
                 built-in
               </span>
             )}
@@ -309,7 +309,7 @@ function TeamCard({
       </div>
 
       {team.mission && (
-        <p className="text-xs text-gray-500 italic mb-3 font-body line-clamp-2">{team.mission}</p>
+        <p className="text-xs text-theme-muted italic mb-3 font-body line-clamp-2">{team.mission}</p>
       )}
 
       <div className="space-y-1.5">
@@ -323,7 +323,7 @@ function TeamCard({
         {otherMembers.map((m) => (
           <div key={m.name} className="flex items-center gap-2 text-xs pl-5">
             <div className="w-1 h-1 rounded-full bg-theme-muted" />
-            <span className="font-mono text-gray-400">{m.displayName ?? m.name}</span>
+            <span className="font-mono text-theme-secondary">{m.displayName ?? m.name}</span>
           </div>
         ))}
         {members.length === 0 && (
@@ -354,7 +354,7 @@ function DeleteConfirm({
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm">
       <div className="card w-full max-w-md mx-4 p-6 space-y-4">
-        <h3 className="font-heading text-lg text-white tracking-wide">Delete team?</h3>
+        <h3 className="font-heading text-lg text-theme-primary tracking-wide">Delete team?</h3>
         {memberCount > 0 ? (
           <div className="text-xs text-yellow-400 font-body">
             <strong>Cannot delete:</strong> "{team.displayName}" still has {memberCount} agent(s).
@@ -362,7 +362,7 @@ function DeleteConfirm({
           </div>
         ) : (
           <p className="text-xs text-theme-muted font-body">
-            This will permanently remove <span className="font-mono text-white">{team.name}</span> from
+            This will permanently remove <span className="font-mono text-theme-primary">{team.name}</span> from
             the org chart. This cannot be undone.
           </p>
         )}
@@ -459,7 +459,7 @@ export default function TeamManagerPage() {
     <div className="p-6 space-y-6">
       <div className="flex items-start justify-between gap-4">
         <div>
-          <h1 className="font-heading text-xl font-bold text-white tracking-widest uppercase">Teams</h1>
+          <h1 className="font-heading text-xl font-bold text-theme-primary tracking-widest uppercase">Teams</h1>
           <p className="text-xs text-theme-muted mt-1 font-body">
             Org chart for agents. {allTeams.length} team{allTeams.length === 1 ? '' : 's'},{' '}
             {allAgents.filter((a) => a.teamName).length} member{allAgents.filter((a) => a.teamName).length === 1 ? '' : 's'}.

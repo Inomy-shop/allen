@@ -48,7 +48,7 @@ function CopyBtn({ text }: { text: string }) {
   const [copied, setCopied] = useState(false);
   return (
     <button onClick={(e) => { e.stopPropagation(); navigator.clipboard.writeText(text); setCopied(true); setTimeout(() => setCopied(false), 1500); }}
-      className="p-0.5 rounded hover:bg-surface-200/50 text-gray-700 hover:text-gray-400 transition-colors" title="Copy">
+      className="p-0.5 rounded hover:bg-surface-200/50 text-theme-subtle hover:text-theme-secondary transition-colors" title="Copy">
       {copied ? <Check className="w-3 h-3 text-accent-green" /> : <Copy className="w-3 h-3" />}
     </button>
   );
@@ -69,21 +69,21 @@ function ToolItem({ tc }: { tc: { tool: string; args?: Record<string, unknown>; 
 
   return (
     <div className="text-[11px] font-mono">
-      <button onClick={() => hasDetail && setOpen(!open)} className={`flex items-center gap-1.5 ${hasDetail ? 'hover:text-gray-300 cursor-pointer' : ''}`}>
+      <button onClick={() => hasDetail && setOpen(!open)} className={`flex items-center gap-1.5 ${hasDetail ? 'hover:text-theme-secondary cursor-pointer' : ''}`}>
         {isErr ? <AlertCircle className="w-2.5 h-2.5 text-red-400 shrink-0" /> : <CheckCircle className="w-2.5 h-2.5 text-accent-green/40 shrink-0" />}
-        <span className="text-gray-500">{short}</span>
-        {tc.durationMs != null && <span className="text-gray-700">{tc.durationMs}ms</span>}
-        {hasDetail && (open ? <ChevronDown className="w-2.5 h-2.5 text-gray-700" /> : <ChevronRight className="w-2.5 h-2.5 text-gray-700" />)}
+        <span className="text-theme-muted">{short}</span>
+        {tc.durationMs != null && <span className="text-theme-subtle">{tc.durationMs}ms</span>}
+        {hasDetail && (open ? <ChevronDown className="w-2.5 h-2.5 text-theme-subtle" /> : <ChevronRight className="w-2.5 h-2.5 text-theme-subtle" />)}
       </button>
       {open && (
         <div className="ml-4 mt-1 border-l border-border/15 pl-2 space-y-1">
           {tc.args && Object.keys(tc.args).length > 0 && (
-            <div><div className="flex items-center gap-1 text-gray-600 text-[9px] uppercase tracking-wider">Input <CopyBtn text={JSON.stringify(tc.args, null, 2)} /></div>
-              <pre className="text-[10px] text-gray-500 whitespace-pre-wrap max-h-20 overflow-auto">{JSON.stringify(tc.args, null, 2)}</pre></div>
+            <div><div className="flex items-center gap-1 text-theme-subtle text-[9px] uppercase tracking-wider">Input <CopyBtn text={JSON.stringify(tc.args, null, 2)} /></div>
+              <pre className="text-[10px] text-theme-muted whitespace-pre-wrap max-h-20 overflow-auto">{JSON.stringify(tc.args, null, 2)}</pre></div>
           )}
           {tc.result && Object.keys(tc.result).length > 0 && (
-            <div><div className="flex items-center gap-1 text-gray-600 text-[9px] uppercase tracking-wider">Output <CopyBtn text={JSON.stringify(tc.result, null, 2)} /></div>
-              <pre className={`text-[10px] whitespace-pre-wrap max-h-24 overflow-auto ${isErr ? 'text-red-400/80' : 'text-gray-500'}`}>{JSON.stringify(tc.result, null, 2)}</pre></div>
+            <div><div className="flex items-center gap-1 text-theme-subtle text-[9px] uppercase tracking-wider">Output <CopyBtn text={JSON.stringify(tc.result, null, 2)} /></div>
+              <pre className={`text-[10px] whitespace-pre-wrap max-h-24 overflow-auto ${isErr ? 'text-red-400/80' : 'text-theme-muted'}`}>{JSON.stringify(tc.result, null, 2)}</pre></div>
           )}
         </div>
       )}
@@ -123,7 +123,7 @@ function ThreadMsg({ msg, agentInfo, collapsed: initCollapsed }: {
         {isQ && <span className="text-[10px] font-mono text-amber-400/70 bg-amber-400/10 px-1.5 py-0.5 rounded">asking</span>}
         {isA && <span className="text-[10px] font-mono text-accent-green/70 bg-accent-green/10 px-1.5 py-0.5 rounded">answered</span>}
         {isLong && (
-          <button onClick={() => setCollapsed(!collapsed)} className="p-0.5 rounded text-gray-600 hover:text-gray-400 hover:bg-surface-200/30 ml-auto transition-colors" title={collapsed ? 'Expand' : 'Collapse'}>
+          <button onClick={() => setCollapsed(!collapsed)} className="p-0.5 rounded text-theme-subtle hover:text-theme-secondary hover:bg-surface-200/30 ml-auto transition-colors" title={collapsed ? 'Expand' : 'Collapse'}>
             {collapsed ? <ChevronRight className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
           </button>
         )}
@@ -131,9 +131,9 @@ function ThreadMsg({ msg, agentInfo, collapsed: initCollapsed }: {
 
       {/* Content — same rendering as main chat */}
       {collapsed ? (
-        <div className="text-[12px] text-gray-500 font-body pl-5">{msg.content.slice(0, 150).replace(/\n/g, ' ')}...</div>
+        <div className="text-[12px] text-theme-muted font-body pl-5">{msg.content.slice(0, 150).replace(/\n/g, ' ')}...</div>
       ) : (
-        <div className="text-sm text-gray-300 font-body leading-relaxed pl-5">
+        <div className="text-sm text-theme-secondary font-body leading-relaxed pl-5">
           {renderMarkdown(msg.content)}
         </div>
       )}
@@ -152,7 +152,7 @@ function ToolsToggle({ tools }: { tools: { tool: string; args?: Record<string, u
   const [open, setOpen] = useState(false);
   return (
     <div className="pl-5 mt-1">
-      <button onClick={() => setOpen(!open)} className="flex items-center gap-1 text-[10px] font-mono text-gray-600 hover:text-gray-400">
+      <button onClick={() => setOpen(!open)} className="flex items-center gap-1 text-[10px] font-mono text-theme-subtle hover:text-theme-secondary">
         {open ? <ChevronDown className="w-2.5 h-2.5" /> : <ChevronRight className="w-2.5 h-2.5" />}
         <Wrench className="w-2.5 h-2.5" />
         <span>{tools.length} tool{tools.length !== 1 ? 's' : ''}</span>
@@ -177,9 +177,9 @@ function LiveFeed({ activity, agentName }: { activity: ThreadActivityItem[]; age
       {activity.slice(-12).map((act, i) => (
         <div key={i} className="flex items-center gap-1.5 text-[10px] font-mono animate-in fade-in duration-200">
           {act.type === 'thinking' && <><Brain className="w-2.5 h-2.5 text-purple-400 animate-pulse shrink-0" /><span className="text-purple-400/60 truncate">{act.content?.slice(0, 80)}</span></>}
-          {act.type === 'text' && <><span className="w-1 h-1 rounded-full bg-gray-500 shrink-0" /><span className="text-gray-500 truncate">{act.content?.slice(0, 100)}</span></>}
+          {act.type === 'text' && <><span className="w-1 h-1 rounded-full bg-theme-muted shrink-0" /><span className="text-theme-muted truncate">{act.content?.slice(0, 100)}</span></>}
           {act.type === 'tool_call' && <><Loader2 className="w-2.5 h-2.5 text-accent-yellow animate-spin shrink-0" /><span className="text-accent-yellow/70">{act.tool?.replace('mcp__flowforge__', 'ff:')}</span></>}
-          {act.type === 'tool_result' && <><CheckCircle className="w-2.5 h-2.5 text-accent-green/40 shrink-0" /><span className="text-gray-600">{act.tool?.replace('mcp__flowforge__', 'ff:')}</span></>}
+          {act.type === 'tool_result' && <><CheckCircle className="w-2.5 h-2.5 text-accent-green/40 shrink-0" /><span className="text-theme-subtle">{act.tool?.replace('mcp__flowforge__', 'ff:')}</span></>}
         </div>
       ))}
       <div className="flex items-center gap-1.5 text-[10px] text-accent-cyan">
@@ -211,7 +211,7 @@ export function AgentThread({ thread, agents }: AgentThreadProps) {
     <div className="my-1.5">
       {/* Toggle header */}
       <button onClick={() => setExpanded(!expanded)} className="w-full flex items-center gap-2 py-1.5 px-2 -mx-2 text-left group/th hover:bg-surface-100/30 rounded-md transition-colors">
-        {expanded ? <ChevronDown className="w-3.5 h-3.5 text-gray-500 shrink-0" /> : <ChevronRight className="w-3.5 h-3.5 text-gray-500 shrink-0" />}
+        {expanded ? <ChevronDown className="w-3.5 h-3.5 text-theme-muted shrink-0" /> : <ChevronRight className="w-3.5 h-3.5 text-theme-muted shrink-0" />}
 
         {/* From agent avatar */}
         <div className="w-6 h-6 rounded-md flex items-center justify-center shrink-0" style={{ backgroundColor: fromColor + '20', border: `1px solid ${fromColor}35` }}>
@@ -219,7 +219,7 @@ export function AgentThread({ thread, agents }: AgentThreadProps) {
         </div>
         <span className="text-[12px] font-heading font-semibold tracking-wide" style={{ color: fromColor }}>{fromName}</span>
 
-        <span className="text-gray-600 text-xs">→</span>
+        <span className="text-theme-subtle text-xs">→</span>
 
         {/* To agent avatar */}
         <div className="w-6 h-6 rounded-md flex items-center justify-center shrink-0" style={{ backgroundColor: toColor + '20', border: `1px solid ${toColor}35` }}>
@@ -236,7 +236,7 @@ export function AgentThread({ thread, agents }: AgentThreadProps) {
         <span className="flex-1" />
 
         {/* Stats — always visible */}
-        <span className="text-[10px] text-gray-600 font-mono flex items-center gap-2">
+        <span className="text-[10px] text-theme-subtle font-mono flex items-center gap-2">
           {msgCount > 0 && <span>{msgCount} msg{msgCount !== 1 ? 's' : ''}</span>}
           {thread.durationMs != null && thread.durationMs > 0 && <span>{formatDuration(thread.durationMs)}</span>}
           {thread.costUsd != null && thread.costUsd > 0 && <span>${thread.costUsd.toFixed(2)}</span>}
@@ -244,7 +244,7 @@ export function AgentThread({ thread, agents }: AgentThreadProps) {
 
         {!isActive && (
           <button onClick={(e) => { e.stopPropagation(); setDetailOpen(true); }}
-            className="p-1 rounded text-gray-600 hover:text-accent-blue hover:bg-accent-blue/10 transition-all shrink-0" title="Open full view">
+            className="p-1 rounded text-theme-subtle hover:text-accent-blue hover:bg-accent-blue/10 transition-all shrink-0" title="Open full view">
             <Maximize2 className="w-3.5 h-3.5" />
           </button>
         )}
@@ -274,7 +274,7 @@ export function AgentThread({ thread, agents }: AgentThreadProps) {
                 <span className="text-[11px] font-heading text-amber-400">{agents?.[thread.pendingQuestion.fromAgent]?.displayName ?? thread.pendingQuestion.fromAgent}</span>
                 <span className="text-[10px] text-amber-400/60">waiting for answer</span>
               </div>
-              <div className="text-[12px] text-gray-300 font-body pl-5">{thread.pendingQuestion.question}</div>
+              <div className="text-[12px] text-theme-secondary font-body pl-5">{thread.pendingQuestion.question}</div>
             </div>
           )}
 

@@ -65,7 +65,7 @@ export default function WorkspaceListPage() {
     setting_up: 'text-accent-yellow bg-accent-yellow/10 border-accent-yellow/20',
     active: 'text-accent-green bg-accent-green/10 border-accent-green/20',
     running: 'text-accent-blue bg-accent-blue/10 border-accent-blue/20',
-    archiving: 'text-gray-400 bg-gray-400/10 border-gray-400/20',
+    archiving: 'text-theme-secondary bg-gray-400/10 border-gray-400/20',
     failed: 'text-red-400 bg-red-400/10 border-red-400/20',
   };
 
@@ -73,8 +73,8 @@ export default function WorkspaceListPage() {
     <div className="p-6">
       <div className="flex items-center justify-between mb-6">
         <div>
-          <h1 className="font-heading text-xl font-bold text-white tracking-widest uppercase">Workspaces</h1>
-          <p className="text-xs text-gray-500 mt-1 font-body">{list.length} active workspace{list.length !== 1 ? 's' : ''}</p>
+          <h1 className="font-heading text-xl font-bold text-theme-primary tracking-widest uppercase">Workspaces</h1>
+          <p className="text-xs text-theme-muted mt-1 font-body">{list.length} active workspace{list.length !== 1 ? 's' : ''}</p>
         </div>
         <div className="flex items-center gap-2">
           {selected.size > 0 && (
@@ -94,22 +94,22 @@ export default function WorkspaceListPage() {
         <form onSubmit={handleCreate} className="mb-6 p-4 rounded-lg border border-border/20 bg-surface-100/30 space-y-3">
           <div className="grid grid-cols-2 gap-3">
             <div>
-              <label className="text-[10px] font-label uppercase tracking-wider text-gray-500 block mb-1">Repository</label>
+              <label className="text-[10px] font-label uppercase tracking-wider text-theme-muted block mb-1">Repository</label>
               <select value={form.repoId} onChange={e => selectRepo(e.target.value)} className="input w-full text-xs">
                 <option value="">Select repo...</option>
                 {repos.map(r => <option key={r._id} value={r._id}>{r.name}</option>)}
               </select>
             </div>
             <div>
-              <label className="text-[10px] font-label uppercase tracking-wider text-gray-500 block mb-1">Workspace Name</label>
+              <label className="text-[10px] font-label uppercase tracking-wider text-theme-muted block mb-1">Workspace Name</label>
               <input value={form.name} onChange={e => setForm(f => ({ ...f, name: e.target.value }))} placeholder="feature/light-theme" className="input w-full text-xs" />
             </div>
             <div>
-              <label className="text-[10px] font-label uppercase tracking-wider text-gray-500 block mb-1">Branch Name</label>
+              <label className="text-[10px] font-label uppercase tracking-wider text-theme-muted block mb-1">Branch Name</label>
               <input value={form.branch} onChange={e => setForm(f => ({ ...f, branch: e.target.value }))} placeholder="feature/my-feature" className="input w-full text-xs" />
             </div>
             <div>
-              <label className="text-[10px] font-label uppercase tracking-wider text-gray-500 block mb-1">Base Branch</label>
+              <label className="text-[10px] font-label uppercase tracking-wider text-theme-muted block mb-1">Base Branch</label>
               <input value={form.baseBranch} onChange={e => setForm(f => ({ ...f, baseBranch: e.target.value }))} placeholder="main" className="input w-full text-xs" />
             </div>
           </div>
@@ -127,11 +127,11 @@ export default function WorkspaceListPage() {
 
       {/* Workspace list — grouped by repo */}
       {loading ? (
-        <div className="flex items-center justify-center py-12"><Loader2 className="w-5 h-5 animate-spin text-gray-500" /></div>
+        <div className="flex items-center justify-center py-12"><Loader2 className="w-5 h-5 animate-spin text-theme-muted" /></div>
       ) : list.length === 0 ? (
         <div className="text-center py-12">
-          <GitBranch className="w-10 h-10 text-gray-700 mx-auto mb-3" />
-          <p className="text-sm text-gray-500 font-body">No workspaces yet. Create one to get started.</p>
+          <GitBranch className="w-10 h-10 text-theme-subtle mx-auto mb-3" />
+          <p className="text-sm text-theme-muted font-body">No workspaces yet. Create one to get started.</p>
         </div>
       ) : (() => {
         // Group workspaces by repoId
@@ -148,10 +148,10 @@ export default function WorkspaceListPage() {
                 {/* Repo header */}
                 <div className="flex items-center gap-2 mb-2 px-1">
                   <FolderGit2 className="w-4 h-4 text-blue-400" />
-                  <span className="text-xs font-heading font-semibold text-gray-300 uppercase tracking-wider">{group.repoName}</span>
-                  <span className="text-[10px] text-gray-600 font-mono">{group.workspaces.length} workspace{group.workspaces.length !== 1 ? 's' : ''}</span>
+                  <span className="text-xs font-heading font-semibold text-theme-secondary uppercase tracking-wider">{group.repoName}</span>
+                  <span className="text-[10px] text-theme-subtle font-mono">{group.workspaces.length} workspace{group.workspaces.length !== 1 ? 's' : ''}</span>
                   <span className="flex-1" />
-                  <button onClick={() => setConfigRepoId(group.repoId)} className="text-[10px] text-gray-600 hover:text-gray-300 flex items-center gap-1">
+                  <button onClick={() => setConfigRepoId(group.repoId)} className="text-[10px] text-theme-subtle hover:text-theme-secondary flex items-center gap-1">
                     <Settings className="w-3 h-3" /> Config
                   </button>
                 </div>
@@ -165,15 +165,15 @@ export default function WorkspaceListPage() {
                         <GitBranch className="w-4 h-4 text-emerald-400 shrink-0" />
                         <div className="flex-1 min-w-0">
                           <div className="flex items-center gap-2">
-                            <Link to={`/workspaces/${ws._id}`} className="text-sm font-heading font-semibold text-white hover:text-blue-400 transition-colors">{ws.name}</Link>
-                            <span className={`text-[10px] font-mono px-1.5 py-0.5 rounded border ${statusColors[ws.status] ?? 'text-gray-400'}`}>{ws.status}</span>
+                            <Link to={`/workspaces/${ws._id}`} className="text-sm font-heading font-semibold text-theme-primary hover:text-blue-400 transition-colors">{ws.name}</Link>
+                            <span className={`text-[10px] font-mono px-1.5 py-0.5 rounded border ${statusColors[ws.status] ?? 'text-theme-secondary'}`}>{ws.status}</span>
                             {ws.source === 'pr' && <span className="text-[10px] font-mono text-purple-400 bg-purple-400/10 px-1.5 py-0.5 rounded border border-purple-400/20">PR #{ws.prNumber}</span>}
                           </div>
-                          <div className="flex items-center gap-3 mt-1 text-[10px] text-gray-500 font-mono">
+                          <div className="flex items-center gap-3 mt-1 text-[10px] text-theme-muted font-mono">
                             <span>{ws.branch} → {ws.baseBranch}</span>
                             {ws.changedFiles > 0 && <span className="text-amber-400">{ws.changedFiles} changed</span>}
                             {ws.services?.some((s: any) => s.status === 'ready') && <span className="text-emerald-400">● services</span>}
-                            {ws.basePort && <span className="text-gray-600">port {ws.basePort}</span>}
+                            {ws.basePort && <span className="text-theme-subtle">port {ws.basePort}</span>}
                           </div>
                         </div>
                         <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">

@@ -69,7 +69,7 @@ export default function NodePalette({ onAdd }: Props) {
             title={`Add ${item.label} Node`}
           >
             <Icon className={`w-3.5 h-3.5 shrink-0 ${item.color}`} />
-            <span className="text-[10px] text-gray-300 font-label uppercase tracking-wider">{item.label}</span>
+            <span className="text-[10px] text-theme-secondary font-label uppercase tracking-wider">{item.label}</span>
           </button>
         );
       })}

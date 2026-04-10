@@ -43,6 +43,7 @@ const TOOLS = [
   { name: 'list_executions', description: 'List recent executions. Filter by status or workflow name.', params: { status: 'string', workflow_name: 'string', limit: 'number' } },
   { name: 'cancel_execution', description: 'Cancel a running execution', params: { execution_id: 'string (required)' } },
   { name: 'list_repos', description: 'List registered repositories with tech stack', params: {} },
+  { name: 'get_repo_context', description: 'Fetch the deep agent-generated context document for a registered repo (markdown describing each module). Use this to preview what gets injected into spawned/delegated agents working in that repo.', params: { repo_path: 'string (required) — absolute path of a registered repo or a workspace worktree path' } },
   { name: 'list_agents', description: 'List all available agents with provider, model, and tools', params: {} },
   { name: 'get_dashboard_stats', description: 'Get dashboard statistics: workflow count, executions, success rate, agent count', params: {} },
   { name: 'get_learnings', description: 'Get learnings from the learning system', params: { workflow_name: 'string', type: 'string', limit: 'number' } },
@@ -153,6 +154,17 @@ async function executeTool(name: string, args: Record<string, unknown>): Promise
       return res.json();
     }
     case 'list_repos': return callAPI('/api/repos');
+    case 'get_repo_context': {
+      const path = String(args.repo_path ?? '');
+      if (!path) return { error: 'repo_path is required' };
+      const url = `${API_BASE}/api/repos/context?path=${encodeURIComponent(path)}`;
+      const res = await fetch(url);
+      if (!res.ok) {
+        if (res.status === 404) return { error: `No context found for path: ${path}. Either the repo isn't registered or its first scan hasn't completed yet.` };
+        return { error: `API ${res.status}: ${await res.text().catch(() => 'unknown')}` };
+      }
+      return res.json();
+    }
     case 'list_agents': return callAPI('/api/agents');
     case 'get_dashboard_stats': return callAPI('/api/dashboard/stats');
     case 'get_learnings': {
