@@ -1,0 +1,15 @@
+[Unit]
+Description=FlowForge Server
+After=network.target
+
+[Service]
+Type=simple
+User=ubuntu
+WorkingDirectory=/opt/flowforge/packages/server
+EnvironmentFile=/opt/flowforge/.env.production
+ExecStart=/usr/bin/node dist/app.js
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
