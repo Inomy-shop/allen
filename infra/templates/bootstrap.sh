@@ -82,10 +82,15 @@ fi
 echo "=== [5/8] iptables ==="
 if ! sudo iptables -C INPUT -p tcp --dport 15000:20000 ! -s 127.0.0.1 -j DROP 2>/dev/null; then
   sudo iptables -A INPUT -p tcp --dport 15000:20000 ! -s 127.0.0.1 -j DROP
-  sudo iptables-save | sudo tee /etc/iptables/rules.v4 > /dev/null
   echo "  rule added: block 15000-20000 from non-localhost"
 else
   echo "  rule already exists"
+fi
+# Persist if iptables-persistent is installed
+if command -v iptables-save &>/dev/null && [ -d /etc/iptables ]; then
+  sudo iptables-save | sudo tee /etc/iptables/rules.v4 > /dev/null
+elif command -v netfilter-persistent &>/dev/null; then
+  sudo netfilter-persistent save 2>/dev/null || true
 fi
 
 # ── 6. Install dependencies ────────────────────────────────────────────────
