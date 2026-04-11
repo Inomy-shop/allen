@@ -3,9 +3,10 @@ import { repos as repoApi, workflows as wfApi } from '../services/api';
 import DeleteConfirmDialog from '../components/common/DeleteConfirmDialog';
 import {
   FolderGit2, Plus, RefreshCw, Trash2, Pencil, ScanSearch, X,
-  GitBranch, Package, Code2, Sparkles, ExternalLink, Loader2, Settings, Monitor,
+  GitBranch, Package, Code2, Sparkles, ExternalLink, Loader2, Settings, Monitor, FileText,
 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
+import { renderMarkdown } from '../components/chat/ChatMessageList';
 import { WorkspaceConfigEditor } from '../components/workspace/WorkspaceConfigEditor';
 import { workspaces as wsApi } from '../services/workspaceService';
 import { SetupProgressDialog } from '../components/workspace/SetupProgressDialog';
@@ -36,7 +37,8 @@ interface Repo {
 /* ── Add Dialog ─────────────────────────────────────────────────────────── */
 
 function AddRepoDialog({ open, onClose, onCreated }: { open: boolean; onClose: () => void; onCreated: () => void }) {
-  const [path, setPath] = useState('');
+  const [url, setUrl] = useState('');
+  const [branch, setBranch] = useState('main');
   const [name, setName] = useState('');
   const [description, setDescription] = useState('');
   const [tags, setTags] = useState('');
@@ -44,17 +46,18 @@ function AddRepoDialog({ open, onClose, onCreated }: { open: boolean; onClose: (
   const [error, setError] = useState('');
 
   const handleSubmit = async () => {
-    if (!path.trim()) { setError('Path is required'); return; }
+    if (!url.trim()) { setError('Repository URL is required'); return; }
     setSaving(true);
     setError('');
     try {
-      await repoApi.create({
-        path: path.trim(),
+      await repoApi.clone({
+        url: url.trim(),
+        branch: branch.trim() || 'main',
         name: name.trim() || undefined,
         description: description.trim() || undefined,
         tags: tags.trim() ? tags.split(',').map(t => t.trim()).filter(Boolean) : [],
       });
-      setPath(''); setName(''); setDescription(''); setTags('');
+      setUrl(''); setBranch('main'); setName(''); setDescription(''); setTags('');
       onCreated();
       onClose();
     } catch (e: any) {
@@ -78,7 +81,7 @@ function AddRepoDialog({ open, onClose, onCreated }: { open: boolean; onClose: (
               </div>
               <div>
                 <h2 className="font-heading text-sm font-bold text-theme-primary tracking-wider uppercase">Add Repository</h2>
-                <p className="text-[11px] text-theme-muted font-mono">Auto-detects language, framework, and more</p>
+                <p className="text-[11px] text-theme-muted font-mono">Clone from GitHub &middot; auto-detects language, framework</p>
               </div>
             </div>
             <button onClick={onClose} className="p-2 rounded-sm hover:bg-surface-200 text-theme-muted hover:text-theme-secondary transition-colors" title="Close">
@@ -94,15 +97,24 @@ function AddRepoDialog({ open, onClose, onCreated }: { open: boolean; onClose: (
           )}
           <div>
             <label className="flex items-center gap-1 text-xs font-label font-semibold text-theme-secondary mb-2 uppercase tracking-widest">
-              Path <span className="text-accent-red normal-case text-[10px]">*</span>
+              Repository URL <span className="text-accent-red normal-case text-[10px]">*</span>
             </label>
-            <input type="text" value={path} onChange={e => setPath(e.target.value)}
-              placeholder="/path/to/your/project" className="input w-full font-mono text-sm" />
+            <input type="text" value={url} onChange={e => setUrl(e.target.value)}
+              placeholder="https://github.com/owner/repo or git@github.com:owner/repo.git" className="input w-full font-mono text-sm" />
+            <p className="text-[10px] text-theme-muted mt-1">HTTPS or SSH URL. Clones via SSH to /tmp/repositories/&lt;repo-name&gt;</p>
+          </div>
+          <div>
+            <label className="flex items-center gap-1 text-xs font-label font-semibold text-theme-secondary mb-2 uppercase tracking-widest">
+              Branch <span className="text-accent-red normal-case text-[10px]">*</span>
+            </label>
+            <input type="text" value={branch} onChange={e => setBranch(e.target.value)}
+              placeholder="main" className="input w-full font-mono text-sm" />
+            <p className="text-[10px] text-theme-muted mt-1">Branch to checkout after cloning. Scanning runs on this branch.</p>
           </div>
           <div>
             <label className="text-xs font-label font-semibold text-theme-secondary mb-2 uppercase tracking-widest block">Name</label>
             <input type="text" value={name} onChange={e => setName(e.target.value)}
-              placeholder="Auto-derived from directory name" className="input w-full text-sm" />
+              placeholder="Auto-derived from repo name" className="input w-full text-sm" />
           </div>
           <div>
             <label className="text-xs font-label font-semibold text-theme-secondary mb-2 uppercase tracking-widest block">Description</label>
@@ -120,8 +132,8 @@ function AddRepoDialog({ open, onClose, onCreated }: { open: boolean; onClose: (
         <div className="flex items-center gap-3 px-6 py-5 border-t border-border/60 bg-surface-50/50">
           <button onClick={onClose} className="flex-1 btn-ghost">Cancel</button>
           <button onClick={handleSubmit} disabled={saving} className="flex-1 btn-primary inline-flex items-center justify-center gap-2">
-            {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Plus className="w-4 h-4" />}
-            {saving ? 'Adding...' : 'Add Repo'}
+            {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : <FolderGit2 className="w-4 h-4" />}
+            {saving ? 'Cloning...' : 'Clone & Add'}
           </button>
         </div>
       </div>
@@ -299,6 +311,7 @@ export default function RepoManagerPage() {
   const [deletingRepo, setDeletingRepo] = useState<{ id: string; name: string } | null>(null);
   const [configRepoId, setConfigRepoId] = useState<string | null>(null);
   const [wsCreateRepo, setWsCreateRepo] = useState<Repo | null>(null);
+  const [contextRepo, setContextRepo] = useState<Repo | null>(null);
   const navigate = useNavigate();
 
   const refresh = useCallback(async () => {
@@ -412,6 +425,9 @@ export default function RepoManagerPage() {
                     {repo.description && <p className="text-[11px] text-theme-subtle mt-1 truncate">{repo.description}</p>}
                   </div>
                   <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                    <button onClick={(e) => { e.stopPropagation(); setContextRepo(repo); }} className="btn-ghost p-1.5 text-xs text-accent-blue" title="View Context">
+                      <FileText className="w-3.5 h-3.5" />
+                    </button>
                     <button onClick={(e) => { e.stopPropagation(); setWsCreateRepo(repo); }} className="btn-ghost p-1.5 text-xs text-emerald-400" title="New Workspace">
                       <Monitor className="w-3.5 h-3.5" />
                     </button>
@@ -447,6 +463,104 @@ export default function RepoManagerPage() {
       />
       {configRepoId && <WorkspaceConfigEditor repoId={configRepoId} onClose={() => setConfigRepoId(null)} />}
       {wsCreateRepo && <QuickWorkspaceDialog repo={wsCreateRepo} onClose={() => setWsCreateRepo(null)} onCreated={(id) => { setWsCreateRepo(null); navigate(`/workspaces/${id}`); }} />}
+      {contextRepo && <RepoContextViewer repoId={contextRepo._id} repoName={contextRepo.name} onClose={() => setContextRepo(null)} />}
+    </div>
+  );
+}
+
+/* ── Repo Context Viewer ──────────────────────────────────────────────── */
+
+function RepoContextViewer({ repoId, repoName, onClose }: { repoId: string; repoName: string; onClose: () => void }) {
+  const [context, setContext] = useState<any>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
+  const [rescanning, setRescanning] = useState(false);
+  const toast = useToast();
+
+  useEffect(() => {
+    setLoading(true);
+    setError('');
+    repoApi.context(repoId)
+      .then((ctx) => setContext(ctx))
+      .catch((err) => setError(err.message ?? 'Failed to load context'))
+      .finally(() => setLoading(false));
+  }, [repoId]);
+
+  const handleRescan = async () => {
+    setRescanning(true);
+    try {
+      await repoApi.rescanContext(repoId);
+      toast.success('Deep scan started — this runs in the background and may take a few minutes.');
+    } catch (err: any) {
+      toast.error(err.message ?? 'Failed to start rescan');
+    } finally {
+      setRescanning(false);
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-md" onClick={onClose}>
+      <div className="card w-full max-w-4xl max-h-[90vh] overflow-hidden shadow-glow-blue/20 animate-in fade-in zoom-in-95 duration-200 flex flex-col" onClick={e => e.stopPropagation()}>
+        {/* Header */}
+        <div className="px-6 py-4 border-b border-border/60 shrink-0 flex items-center justify-between">
+          <div className="flex items-center gap-3">
+            <FileText className="w-5 h-5 text-accent-blue" />
+            <div>
+              <h2 className="font-heading text-sm font-bold text-theme-primary tracking-wider uppercase">Repo Context</h2>
+              <p className="text-[10px] text-theme-muted font-mono">{repoName} — agent-generated codebase analysis</p>
+            </div>
+          </div>
+          <div className="flex items-center gap-2">
+            <button onClick={handleRescan} disabled={rescanning} className="btn-ghost text-xs inline-flex items-center gap-1" title="Trigger a fresh deep scan">
+              {rescanning ? <Loader2 className="w-3 h-3 animate-spin" /> : <RefreshCw className="w-3 h-3" />}
+              Rescan
+            </button>
+            <button onClick={onClose} className="p-2 rounded-sm hover:bg-surface-200 text-theme-muted hover:text-theme-secondary transition-colors">
+              <X className="w-4 h-4" />
+            </button>
+          </div>
+        </div>
+
+        {/* Content */}
+        <div className="flex-1 overflow-y-auto px-6 py-5">
+          {loading ? (
+            <div className="text-xs text-theme-muted animate-pulse">Loading context...</div>
+          ) : error ? (
+            <div className="space-y-3">
+              <div className="text-xs text-theme-muted">{error}</div>
+              <p className="text-[11px] text-theme-subtle">
+                No context available yet. Click "Rescan" to trigger a deep scan — the repo-scanner agent will explore the codebase and generate a comprehensive analysis. This runs in the background and typically takes 2-5 minutes.
+              </p>
+              <button onClick={handleRescan} disabled={rescanning} className="btn-primary text-xs inline-flex items-center gap-1.5">
+                {rescanning ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <ScanSearch className="w-3.5 h-3.5" />}
+                {rescanning ? 'Starting...' : 'Generate Context'}
+              </button>
+            </div>
+          ) : context?.contextMarkdown ? (
+            <div className="space-y-3">
+              {/* Metadata bar */}
+              <div className="flex items-center gap-4 text-[10px] text-theme-muted font-mono flex-wrap">
+                {context.branch && <span>Branch: <span className="text-theme-secondary">{context.branch}</span></span>}
+                {context.headSha && <span>SHA: <span className="text-theme-secondary">{context.headSha?.slice(0, 8)}</span></span>}
+                {context.scannedAt && <span>Scanned: <span className="text-theme-secondary">{new Date(context.scannedAt).toLocaleString()}</span></span>}
+                {context.scanDurationMs && <span>Duration: <span className="text-theme-secondary">{(context.scanDurationMs / 1000).toFixed(1)}s</span></span>}
+                {context.scanCostUsd != null && <span>Cost: <span className="text-theme-secondary">${context.scanCostUsd.toFixed(4)}</span></span>}
+              </div>
+              {/* Rendered markdown */}
+              <div className="prose-flowforge text-sm text-theme-secondary leading-relaxed">
+                {renderMarkdown(context.contextMarkdown)}
+              </div>
+            </div>
+          ) : (
+            <div className="text-xs text-theme-muted">Context exists but is empty. Try rescanning.</div>
+          )}
+        </div>
+
+        {/* Footer */}
+        <div className="px-6 py-3 border-t border-border/60 bg-surface-50/50 shrink-0">
+          <button onClick={onClose} className="btn-ghost text-xs">Close</button>
+        </div>
+      </div>
     </div>
   );
 }

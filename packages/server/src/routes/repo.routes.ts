@@ -17,10 +17,22 @@ export function repoRoutes(db: Db): Router {
     }
   });
 
-  // POST /api/repos
+  // POST /api/repos — create from local path (legacy)
   router.post('/', async (req: Request, res: Response) => {
     try {
       const repo = await service.create(req.body);
+      res.status(201).json(repo);
+    } catch (err: unknown) {
+      res.status(400).json({ error: (err as Error).message });
+    }
+  });
+
+  // POST /api/repos/clone — clone from GitHub URL and register
+  router.post('/clone', async (req: Request, res: Response) => {
+    try {
+      const { url, branch, name, description, tags } = req.body;
+      if (!url) return res.status(400).json({ error: 'url is required' });
+      const repo = await service.createFromUrl({ url, branch, name, description, tags });
       res.status(201).json(repo);
     } catch (err: unknown) {
       res.status(400).json({ error: (err as Error).message });

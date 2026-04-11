@@ -1,8 +1,42 @@
-import { existsSync, statSync } from 'node:fs';
-import { basename } from 'node:path';
+import { existsSync, statSync, mkdirSync } from 'node:fs';
+import { basename, join } from 'node:path';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
 import type { Collection, Db } from 'mongodb';
 import { scanRepo } from './repo-scanner.js';
 import { RepoContextScannerService } from './repo-context-scanner.service.js';
+
+const exec = promisify(execFile);
+
+const CLONE_BASE_DIR = '/tmp/repositories';
+
+/**
+ * Parse a GitHub URL (HTTPS or SSH) into { sshUrl, repoName }.
+ * Accepts:
+ *   https://github.com/owner/repo
+ *   https://github.com/owner/repo.git
+ *   github.com/owner/repo
+ *   git@github.com:owner/repo.git
+ */
+function parseGitHubUrl(input: string): { sshUrl: string; repoName: string } {
+  const trimmed = input.trim().replace(/\/$/, '');
+
+  // Already SSH: git@github.com:owner/repo.git
+  const sshMatch = trimmed.match(/^git@([^:]+):([^/]+)\/([^/]+?)(?:\.git)?$/);
+  if (sshMatch) {
+    const [, host, owner, repo] = sshMatch;
+    return { sshUrl: `git@${host}:${owner}/${repo}.git`, repoName: repo };
+  }
+
+  // HTTPS: https://github.com/owner/repo or github.com/owner/repo
+  const httpsMatch = trimmed.match(/^(?:https?:\/\/)?([^/]+)\/([^/]+)\/([^/]+?)(?:\.git)?$/);
+  if (httpsMatch) {
+    const [, host, owner, repo] = httpsMatch;
+    return { sshUrl: `git@${host}:${owner}/${repo}.git`, repoName: repo };
+  }
+
+  throw new Error(`Invalid repository URL: "${input}". Expected GitHub HTTPS or SSH URL.`);
+}
 
 export class RepoService {
   private db: Db;
@@ -69,6 +103,99 @@ export class RepoService {
     const result = await this.col.insertOne(doc);
 
     // Fire deep context scan in the background — don't await, don't fail create
+    this.contextScanner.scheduleScan(String(result.insertedId)).catch((err) => {
+      console.error(`[repos] failed to schedule deep scan for ${result.insertedId}:`, err);
+    });
+
+    return { ...doc, _id: result.insertedId };
+  }
+
+  /**
+   * Clone a repo from a GitHub URL and register it.
+   * 1. Parse URL → SSH clone URL + repo name
+   * 2. Check for duplicates (name in DB + directory on disk)
+   * 3. git clone via SSH to /tmp/repositories/<repo-name>
+   * 4. git checkout the specified branch
+   * 5. Scan the repo
+   * 6. Save to DB
+   */
+  async createFromUrl(body: {
+    url: string;
+    branch?: string;
+    name?: string;
+    description?: string;
+    tags?: string[];
+  }): Promise<Record<string, unknown>> {
+    const { sshUrl, repoName: parsedName } = parseGitHubUrl(body.url);
+    const repoName = body.name?.trim() || parsedName;
+    const branch = body.branch?.trim() || 'main';
+    const clonePath = join(CLONE_BASE_DIR, repoName);
+
+    // Check if repo with same name already exists in DB
+    const existingByName = await this.col.findOne({ name: repoName });
+    if (existingByName) {
+      throw new Error(`A repo named "${repoName}" already exists`);
+    }
+
+    // Check if path already exists in DB
+    const existingByPath = await this.col.findOne({ path: clonePath });
+    if (existingByPath) {
+      throw new Error(`A repo is already registered at path: ${clonePath}`);
+    }
+
+    // Check if directory already exists on disk
+    if (existsSync(clonePath)) {
+      throw new Error(`Directory already exists at ${clonePath}. Delete it first or use a different name.`);
+    }
+
+    // Ensure base directory exists
+    if (!existsSync(CLONE_BASE_DIR)) {
+      mkdirSync(CLONE_BASE_DIR, { recursive: true });
+    }
+
+    // Clone
+    try {
+      await exec('git', ['clone', sshUrl, clonePath], { timeout: 120_000 });
+    } catch (err: any) {
+      throw new Error(`Failed to clone ${sshUrl}: ${err.stderr || err.message}`);
+    }
+
+    // Checkout the specified branch
+    try {
+      await exec('git', ['checkout', branch], { cwd: clonePath, timeout: 30_000 });
+    } catch (err: any) {
+      throw new Error(`Failed to checkout branch "${branch}": ${err.stderr || err.message}`);
+    }
+
+    // Scan
+    const scanResult = await scanRepo(clonePath);
+
+    const doc = {
+      name: repoName,
+      path: clonePath,
+      url: sshUrl,
+      description: body.description?.trim() || '',
+      detected: {
+        language: scanResult.language,
+        framework: scanResult.framework,
+        packageManager: scanResult.packageManager,
+        defaultBranch: branch,
+        remoteUrl: sshUrl,
+      },
+      tags: body.tags ?? [],
+      defaultWorkflow: undefined,
+      context: scanResult.context,
+      status: 'active' as const,
+      lastUsedAt: undefined,
+      executionCount: 0,
+      contextScan: { status: 'pending' as const, scannedAt: null },
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    };
+
+    const result = await this.col.insertOne(doc);
+
+    // Fire deep context scan in the background
     this.contextScanner.scheduleScan(String(result.insertedId)).catch((err) => {
       console.error(`[repos] failed to schedule deep scan for ${result.insertedId}:`, err);
     });

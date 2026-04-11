@@ -469,6 +469,7 @@ export default function McpServerManager() {
         </div>
       ) : (
         <button
+          onClick={() => setShowAdd(true)}
           title="Add MCP server"
           className="flex items-center gap-2 px-3 py-2 rounded-lg border border-dashed border-border/40 hover:border-accent-blue/30 hover:bg-surface-200/30 transition-all text-theme-muted hover:text-theme-secondary w-full"
         >

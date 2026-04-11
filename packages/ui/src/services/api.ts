@@ -104,12 +104,18 @@ export const repos = {
   get: (id: string) => request<any>(`/repos/${id}`),
   create: (body: any) =>
     request<any>('/repos', { method: 'POST', body: JSON.stringify(body) }),
+  clone: (body: { url: string; branch?: string; name?: string; description?: string; tags?: string[] }) =>
+    request<any>('/repos/clone', { method: 'POST', body: JSON.stringify(body) }),
   update: (id: string, body: any) =>
     request<any>(`/repos/${id}`, { method: 'PUT', body: JSON.stringify(body) }),
   delete: (id: string) =>
     request<void>(`/repos/${id}`, { method: 'DELETE' }),
   scan: (id: string) =>
     request<any>(`/repos/${id}/scan`, { method: 'POST' }),
+  context: (id: string) =>
+    request<any>(`/repos/${id}/context`),
+  rescanContext: (id: string) =>
+    request<any>(`/repos/${id}/rescan-context`, { method: 'POST' }),
 };
 
 // ── Dashboard ──────────────────────────────────────────────────────────────
