@@ -3,7 +3,7 @@ import { repos as repoApi, workflows as wfApi } from '../services/api';
 import DeleteConfirmDialog from '../components/common/DeleteConfirmDialog';
 import {
   FolderGit2, Plus, RefreshCw, Trash2, Pencil, ScanSearch, X,
-  GitBranch, Package, Code2, Sparkles, ExternalLink, Loader2, Settings, Monitor, FileText,
+  GitBranch, Package, Code2, Sparkles, ExternalLink, Loader2, Settings, Monitor, FileText, Download,
 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { renderMarkdown } from '../components/chat/ChatMessageList';
@@ -308,6 +308,7 @@ export default function RepoManagerPage() {
   const [addOpen, setAddOpen] = useState(false);
   const [editRepo, setEditRepo] = useState<Repo | null>(null);
   const [scanningId, setScanningId] = useState<string | null>(null);
+  const [pullingId, setPullingId] = useState<string | null>(null);
   const [deletingRepo, setDeletingRepo] = useState<{ id: string; name: string } | null>(null);
   const [configRepoId, setConfigRepoId] = useState<string | null>(null);
   const [wsCreateRepo, setWsCreateRepo] = useState<Repo | null>(null);
@@ -352,6 +353,23 @@ export default function RepoManagerPage() {
       toast.error(err.message ?? 'Scan failed');
     }
     setScanningId(null);
+  };
+
+  const handlePull = async (e: React.MouseEvent, id: string) => {
+    e.stopPropagation();
+    setPullingId(id);
+    try {
+      const result = await repoApi.pull(id, true);
+      if (result.updated) {
+        toast.success(`Pulled ${result.commits.length} new commit${result.commits.length !== 1 ? 's' : ''} on ${result.branch}. Rescan started.`);
+      } else {
+        toast.info(`Already up to date on ${result.branch}.`);
+      }
+      refresh();
+    } catch (err: any) {
+      toast.error(err.message ?? 'Pull failed');
+    }
+    setPullingId(null);
   };
 
   return (
@@ -414,12 +432,17 @@ export default function RepoManagerPage() {
                     <div className="flex items-center gap-3 mt-1 text-[10px] text-theme-muted font-mono">
                       <span className="truncate max-w-[300px]" title={repo.path}>{repo.path}</span>
                       <span className="flex items-center gap-1"><GitBranch className="w-3 h-3" />{repo.detected?.defaultBranch ?? 'main'}</span>
-                      {repo.detected?.remoteUrl && (
-                        <span className="flex items-center gap-1 truncate max-w-[200px]">
-                          <ExternalLink className="w-3 h-3 shrink-0" />
-                          {repo.detected.remoteUrl.replace(/^https?:\/\//, '').replace(/\.git$/, '')}
-                        </span>
-                      )}
+                      {repo.detected?.remoteUrl && (() => {
+                        const sshMatch = repo.detected.remoteUrl.match(/^git@([^:]+):(.+?)(?:\.git)?$/);
+                        const httpsUrl = sshMatch ? `https://${sshMatch[1]}/${sshMatch[2]}` : repo.detected.remoteUrl.replace(/\.git$/, '');
+                        const display = repo.detected.remoteUrl.replace(/^git@([^:]+):/, '$1/').replace(/^https?:\/\//, '').replace(/\.git$/, '');
+                        return (
+                          <a href={httpsUrl} target="_blank" rel="noopener noreferrer" onClick={e => e.stopPropagation()} className="flex items-center gap-1 truncate max-w-[200px] hover:text-blue-400 transition-colors">
+                            <ExternalLink className="w-3 h-3 shrink-0" />
+                            {display}
+                          </a>
+                        );
+                      })()}
                       {repo.executionCount > 0 && <span><Package className="w-3 h-3 inline mr-0.5" />{repo.executionCount} runs</span>}
                     </div>
                     {repo.description && <p className="text-[11px] text-theme-subtle mt-1 truncate">{repo.description}</p>}
@@ -430,6 +453,9 @@ export default function RepoManagerPage() {
                     </button>
                     <button onClick={(e) => { e.stopPropagation(); setWsCreateRepo(repo); }} className="btn-ghost p-1.5 text-xs text-emerald-400" title="New Workspace">
                       <Monitor className="w-3.5 h-3.5" />
+                    </button>
+                    <button onClick={(e) => handlePull(e, repo._id)} disabled={pullingId === repo._id} className="btn-ghost p-1.5 text-xs" title="Pull Latest">
+                      {pullingId === repo._id ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Download className="w-3.5 h-3.5" />}
                     </button>
                     <button onClick={(e) => handleScan(e, repo._id)} disabled={isScanning} className="btn-ghost p-1.5 text-xs" title="Scan">
                       {isScanning ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <ScanSearch className="w-3.5 h-3.5" />}

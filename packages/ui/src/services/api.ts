@@ -112,6 +112,8 @@ export const repos = {
     request<void>(`/repos/${id}`, { method: 'DELETE' }),
   scan: (id: string) =>
     request<any>(`/repos/${id}/scan`, { method: 'POST' }),
+  pull: (id: string, rescan = false) =>
+    request<any>(`/repos/${id}/pull`, { method: 'POST', body: JSON.stringify({ rescan }) }),
   context: (id: string) =>
     request<any>(`/repos/${id}/context`),
   rescanContext: (id: string) =>

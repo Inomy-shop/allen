@@ -23,6 +23,7 @@ import { mcpRoutes } from './routes/mcp.routes.js';
 import { alertRoutes } from './routes/alert.routes.js';
 import { workspaceRoutes } from './routes/workspace.routes.js';
 import { pullRequestRoutes } from './routes/pull-request.routes.js';
+import { fileRoutes } from './routes/file.routes.js';
 import { slackRoutes } from './routes/slack.routes.js';
 import { startTerminalWebSocketServer } from './services/workspace-terminal.js';
 import { createWorkspaceProxy } from './services/workspace-proxy.js';
@@ -38,6 +39,7 @@ import { OrgSeedService } from './services/org-seed.js';
 import { CronService } from './services/cron.service.js';
 import { seedCronJobs } from './services/cron-seed.service.js';
 import { createRepoScanIfChangedAction } from './services/repo-context-scanner.service.js';
+import { createRepoPullAllAction } from './services/repo.service.js';
 import { cronRoutes } from './routes/cron.routes.js';
 
 const PORT = parseInt(process.env.PORT ?? '4000', 10);
@@ -66,6 +68,7 @@ async function main(): Promise<void> {
   // Boot the cron scheduler + register system actions
   const cronService = new CronService(db);
   cronService.registerSystemAction(createRepoScanIfChangedAction(db));
+  cronService.registerSystemAction(createRepoPullAllAction(db));
   await cronService.start();
 
   const app = express();
@@ -120,6 +123,7 @@ async function main(): Promise<void> {
   app.use('/api/workspaces', workspaceRoutes(db));
   app.use('/api/pull-requests', pullRequestRoutes(db));
   app.use('/api/crons', cronRoutes(db, cronService));
+  app.use('/api/files', fileRoutes());
 
   // Preview reverse proxy — must be after json middleware but catches /api/workspaces/:id/preview/*
   app.use('/api/workspaces/:id/preview', createWorkspaceProxy(db));

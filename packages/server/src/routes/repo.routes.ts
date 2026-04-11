@@ -85,6 +85,17 @@ export function repoRoutes(db: Db): Router {
     }
   });
 
+  // POST /api/repos/:id/pull — pull latest from origin
+  router.post('/:id/pull', async (req: Request, res: Response) => {
+    try {
+      const rescan = req.query.rescan === 'true' || req.body?.rescan === true;
+      const result = await service.pull(param(req, 'id'), { rescan });
+      res.json(result);
+    } catch (err: unknown) {
+      res.status(400).json({ error: (err as Error).message });
+    }
+  });
+
   // POST /api/repos/:id/scan — shallow rescan (existing)
   router.post('/:id/scan', async (req: Request, res: Response) => {
     try {

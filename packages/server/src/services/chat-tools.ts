@@ -476,7 +476,7 @@ const spawnAgent: ChatTool = {
       input: { prompt, agent_name: agentName, repo_path: repoPath, session_id: resumeSession },
       // Execution metadata for tracing
       meta: {
-        cwd: repoPath || '/tmp/flowforge',
+        cwd: repoPath || process.cwd(),
         provider: (role.provider as string) ?? 'claude',
         model: (role.model as string) ?? 'sonnet',
         spawnedBy: activeCtxForMeta?.currentAgent ?? 'user',
@@ -584,7 +584,8 @@ async function runSpawnInBackground(
       }
 
       const result = await new Promise<{ text: string; threadId?: string }>((resolveP, rejectP) => {
-        const proc = spawn('codex', args, { cwd: repoPath || '/tmp/flowforge', env: { ...process.env }, stdio: ['pipe', 'pipe', 'pipe'] });
+        const proc = spawn('codex', args, { cwd: repoPath || process.cwd(), env: { ...process.env }, stdio: ['pipe', 'pipe', 'pipe'] });
+        proc.on('error', (err) => { rejectP(new Error(`Failed to spawn codex: ${err.message}. Is codex CLI installed?`)); });
         proc.stdin.end();
         // Register PID for cancel support
         if (proc.pid) {
@@ -1650,7 +1651,8 @@ async function runAgentTurn(
       const result = await new Promise<{ text: string; threadId?: string; costUsd: number }>((resolveP, rejectP) => {
         const cleanEnv = { ...process.env };
         delete cleanEnv.PORT; // Don't leak host server port
-        const proc = spawn('codex', args, { cwd: cwd || '/tmp/flowforge', env: cleanEnv, stdio: ['pipe', 'pipe', 'pipe'] });
+        const proc = spawn('codex', args, { cwd: cwd || process.cwd(), env: cleanEnv, stdio: ['pipe', 'pipe', 'pipe'] });
+        proc.on('error', (err) => { rejectP(new Error(`Failed to spawn codex: ${err.message}. Is codex CLI installed?`)); });
         proc.stdin.end();
         // Register PID for cancel — use convId as key for delegations
         if (proc.pid) registerExecutionProcess(convId, proc.pid, () => { try { proc.kill('SIGTERM'); } catch {} });
@@ -1730,7 +1732,7 @@ async function runAgentTurn(
       Object.assign(mcpServers, await loadExternalMcpServers(db));
 
       const abortController = new AbortController();
-      const sdkOptions: Record<string, unknown> = { model, maxTurns: 50, permissionMode: 'bypassPermissions', cwd: cwd || '/tmp/flowforge', mcpServers, abortController };
+      const sdkOptions: Record<string, unknown> = { model, maxTurns: 50, permissionMode: 'bypassPermissions', cwd: cwd || process.cwd(), mcpServers, abortController };
       if (resumeSessionId) sdkOptions.resume = resumeSessionId;
       else sdkOptions.customSystemPrompt = systemPrompt;
       registerExecutionProcess(convId, process.pid, () => abortController.abort());

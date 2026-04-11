@@ -1,5 +1,5 @@
 import { useState, useRef, useCallback, useEffect, forwardRef, useImperativeHandle } from 'react';
-import { Send, Square, ChevronDown } from 'lucide-react';
+import { Send, Square, ChevronDown, Paperclip, Loader2, X } from 'lucide-react';
 import MentionAutocomplete, { type MentionOption } from './MentionAutocomplete';
 
 export interface ChatInputHandle {
@@ -41,8 +41,12 @@ const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function ChatInput
   const [mentionVisible, setMentionVisible] = useState(false);
   const [mentionQuery, setMentionQuery] = useState('');
   const [showModelPicker, setShowModelPicker] = useState(false);
+  const [attachments, setAttachments] = useState<{ name: string; url: string }[]>([]);
+  const [uploading, setUploading] = useState(false);
+  const [dragOver, setDragOver] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const pickerRef = useRef<HTMLDivElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   useImperativeHandle(ref, () => ({
     setValue: (v: string) => {
@@ -54,6 +58,42 @@ const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function ChatInput
     },
     focus: () => textareaRef.current?.focus(),
   }));
+
+  // ── File upload ──
+  const uploadFiles = useCallback(async (files: FileList | File[]) => {
+    setUploading(true);
+    const newAttachments: { name: string; url: string }[] = [];
+    for (const file of Array.from(files)) {
+      try {
+        const form = new FormData();
+        form.append('file', file);
+        const res = await fetch('/api/files', { method: 'POST', body: form });
+        if (!res.ok) continue;
+        const data = await res.json();
+        const fullUrl = `${window.location.origin}${data.url}`;
+        newAttachments.push({ name: data.originalName, url: fullUrl });
+      } catch {}
+    }
+    setAttachments(prev => [...prev, ...newAttachments]);
+    setUploading(false);
+  }, []);
+
+  const handleDrop = useCallback((e: React.DragEvent) => {
+    e.preventDefault();
+    setDragOver(false);
+    if (e.dataTransfer.files.length) uploadFiles(e.dataTransfer.files);
+  }, [uploadFiles]);
+
+  const handlePaste = useCallback((e: React.ClipboardEvent) => {
+    const files = Array.from(e.clipboardData.items)
+      .filter(item => item.kind === 'file')
+      .map(item => item.getAsFile())
+      .filter(Boolean) as File[];
+    if (files.length) {
+      e.preventDefault();
+      uploadFiles(files);
+    }
+  }, [uploadFiles]);
 
   // Close picker on outside click
   useEffect(() => {
@@ -107,10 +147,16 @@ const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function ChatInput
 
   const handleSend = useCallback(() => {
     const trimmed = value.trim();
-    if (!trimmed || streaming || disabled) return;
-    onSend(trimmed); setValue(''); setMentionVisible(false);
+    if ((!trimmed && attachments.length === 0) || streaming || disabled) return;
+    // Append file URLs to message so the agent sees them
+    let message = trimmed;
+    if (attachments.length > 0) {
+      const fileLinks = attachments.map(a => `[${a.name}](${a.url})`).join('\n');
+      message = message ? `${message}\n\nAttached files:\n${fileLinks}` : `Attached files:\n${fileLinks}`;
+    }
+    onSend(message); setValue(''); setAttachments([]); setMentionVisible(false);
     if (textareaRef.current) textareaRef.current.style.height = 'auto';
-  }, [value, streaming, disabled, onSend]);
+  }, [value, attachments, streaming, disabled, onSend]);
 
   const currentProvider = providers?.find(p => p.provider === selectedProvider);
 
@@ -124,14 +170,41 @@ const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function ChatInput
         </div>
       )}
 
+      {/* Hidden file input */}
+      <input ref={fileInputRef} type="file" multiple className="hidden" onChange={e => { if (e.target.files?.length) uploadFiles(e.target.files); e.target.value = ''; }} />
+
+      {/* Attachment preview */}
+      {attachments.length > 0 && (
+        <div className="flex flex-wrap gap-1.5 mb-2">
+          {attachments.map((a, i) => (
+            <div key={i} className="flex items-center gap-1 bg-surface-200/50 border border-border/30 rounded px-2 py-0.5 text-[10px] font-mono text-theme-secondary">
+              <Paperclip className="w-2.5 h-2.5 text-theme-muted" />
+              <span className="truncate max-w-[150px]">{a.name}</span>
+              <button onClick={() => setAttachments(prev => prev.filter((_, j) => j !== i))} className="text-theme-subtle hover:text-red-400"><X className="w-2.5 h-2.5" /></button>
+            </div>
+          ))}
+        </div>
+      )}
+
       {/* Input container with model selector inside */}
-      <div className="relative bg-surface-200/50 border border-border/30 rounded-lg focus-within:border-accent-blue/50 transition-colors">
+      <div
+        className={`relative bg-surface-200/50 border rounded-lg focus-within:border-accent-blue/50 transition-colors ${dragOver ? 'border-accent-blue border-dashed bg-accent-blue/5' : 'border-border/30'}`}
+        onDragOver={e => { e.preventDefault(); setDragOver(true); }}
+        onDragLeave={() => setDragOver(false)}
+        onDrop={handleDrop}
+      >
+        {dragOver && (
+          <div className="absolute inset-0 flex items-center justify-center z-10 pointer-events-none">
+            <span className="text-xs text-accent-blue font-mono">Drop files to attach</span>
+          </div>
+        )}
         {/* Textarea */}
         <textarea
           ref={textareaRef}
           value={value}
           onChange={handleChange}
           onKeyDown={handleKeyDown}
+          onPaste={handlePaste}
           placeholder="Message FlowForge..."
           disabled={streaming || disabled}
           rows={1}
@@ -187,6 +260,12 @@ const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function ChatInput
               </div>
             )}
           </div>
+
+          {/* Attach button */}
+          <button onClick={() => fileInputRef.current?.click()} disabled={uploading || disabled}
+            className="p-1 text-theme-muted hover:text-theme-secondary rounded transition-colors disabled:opacity-30" title="Attach file">
+            {uploading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Paperclip className="w-3.5 h-3.5" />}
+          </button>
 
           {/* Hint */}
           <span className="text-[10px] text-theme-subtle font-mono hidden sm:inline">shift+enter for new line</span>

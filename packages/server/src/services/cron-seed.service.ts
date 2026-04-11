@@ -28,6 +28,21 @@ const SEED_JOBS: Omit<CronJob, '_id' | 'nextRunAt' | 'lastRunAt' | 'lastRunStatu
     isBuiltIn: true,
     createdBy: 'seed',
   },
+  {
+    name: 'repo-pull-30min',
+    displayName: 'Repo Pull (every 30 min)',
+    description:
+      'Pulls the latest changes from origin for all active repos every 30 minutes so code stays up to date.',
+    enabled: true,
+    schedule: '*/30 * * * *',
+    timezone: 'UTC',
+    target: {
+      type: 'system',
+      systemAction: 'repo-pull-all',
+    },
+    isBuiltIn: true,
+    createdBy: 'seed',
+  },
 ];
 
 export async function seedCronJobs(db: Db): Promise<number> {

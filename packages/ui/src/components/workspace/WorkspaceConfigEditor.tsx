@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { workspaces } from '../../services/workspaceService';
-import { Plus, Trash2, Save, Settings, Terminal, Play, FileText, Info } from 'lucide-react';
+import { Plus, Trash2, Save, Settings, Terminal, Play, FileText, Info, Copy, Check } from 'lucide-react';
+import Editor from '@monaco-editor/react';
 
 interface EnvFile { path: string; content: string; }
 interface ServiceConfig { name: string; command: string; portOffset: number; healthCheck?: string; }
@@ -81,7 +82,7 @@ export function WorkspaceConfigEditor({ repoId, onClose }: { repoId: string; onC
 
   return (
     <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50" onClick={onClose}>
-      <div className="bg-surface-100 border border-border/30 rounded-lg w-[720px] max-h-[90vh] flex flex-col" onClick={e => e.stopPropagation()}>
+      <div className="bg-surface-100 border border-border/30 rounded-lg w-[900px] max-h-[92vh] flex flex-col" onClick={e => e.stopPropagation()}>
         {/* Header */}
         <div className="flex items-center gap-2 px-4 py-3 border-b border-border/20 shrink-0">
           <Settings className="w-4 h-4 text-theme-secondary" />
@@ -131,14 +132,28 @@ export function WorkspaceConfigEditor({ repoId, onClose }: { repoId: string; onC
                     onChange={e => updateEnvFile(activeEnvIdx, 'path', e.target.value)}
                     placeholder=".env"
                     className="bg-transparent text-[11px] font-mono text-theme-secondary outline-none flex-1 placeholder:text-theme-subtle" />
+                  <CopyButton text={config.envFiles[activeEnvIdx].content} />
                 </div>
-                <textarea
+                <Editor
+                  height="220px"
+                  language="ini"
                   value={config.envFiles[activeEnvIdx].content}
-                  onChange={e => updateEnvFile(activeEnvIdx, 'content', e.target.value)}
-                  rows={8}
-                  spellCheck={false}
-                  className="w-full bg-[rgb(var(--color-editor-background))] text-[11px] font-mono text-theme-secondary p-3 resize-y outline-none border-none leading-relaxed"
-                  placeholder="PORT={port:0}&#10;MONGODB_URI=mongodb://localhost:27017/mydb&#10;NODE_ENV=development" />
+                  onChange={v => updateEnvFile(activeEnvIdx, 'content', v ?? '')}
+                  theme="vs-dark"
+                  options={{
+                    fontSize: 12,
+                    fontFamily: "'JetBrains Mono', monospace",
+                    minimap: { enabled: false },
+                    scrollBeyondLastLine: false,
+                    lineNumbers: 'on',
+                    glyphMargin: false,
+                    folding: false,
+                    renderLineHighlight: 'line',
+                    tabSize: 2,
+                    padding: { top: 6, bottom: 6 },
+                    wordWrap: 'on',
+                  }}
+                />
               </div>
             )}
 
@@ -216,7 +231,23 @@ function ScriptRow({ value, onChange, onRemove, idx }: { value: string; onChange
     <div className="flex items-center gap-2 mb-1">
       <span className="text-[10px] text-theme-subtle w-4 text-right shrink-0">{idx + 1}.</span>
       <input value={value} onChange={e => onChange(e.target.value)} className="input text-[11px] py-1 flex-1 font-mono" placeholder="command..." />
+      <CopyButton text={value} />
       <button onClick={onRemove} className="text-theme-subtle hover:text-red-400 p-1"><Trash2 className="w-3 h-3" /></button>
     </div>
+  );
+}
+
+function CopyButton({ text }: { text: string }) {
+  const [copied, setCopied] = useState(false);
+  const handleCopy = () => {
+    navigator.clipboard.writeText(text).then(() => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    });
+  };
+  return (
+    <button onClick={handleCopy} className="text-theme-subtle hover:text-theme-secondary p-1 shrink-0" title="Copy">
+      {copied ? <Check className="w-3 h-3 text-emerald-400" /> : <Copy className="w-3 h-3" />}
+    </button>
   );
 }

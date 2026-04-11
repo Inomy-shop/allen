@@ -192,11 +192,17 @@ export async function runCodexCLI(
   log(`Spawning codex: ${args.slice(0, 4).join(' ')}...`);
 
   return new Promise<ProviderResult & { sessionId?: string }>((resolve, reject) => {
+    const fallbackCwd = cwd || process.cwd();
     const proc = spawn('codex', args, {
-      cwd: cwd || '/tmp/flowforge',
+      cwd: fallbackCwd,
       env: { ...process.env },
       stdio: ['pipe', 'pipe', 'pipe'],
     });
+
+    proc.on('error', (err) => {
+      reject(new Error(`Failed to spawn codex: ${err.message}. Is codex CLI installed?`));
+    });
+
     proc.stdin.end();
 
     let rawResponse = '';

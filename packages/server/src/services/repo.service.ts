@@ -222,6 +222,55 @@ export class RepoService {
     return ctx as unknown as Record<string, unknown> | null;
   }
 
+  /**
+   * Pull latest changes from origin for the repo's default branch.
+   * Fetches from origin, checks out the branch, and pulls.
+   * Optionally triggers a rescan after pull.
+   */
+  async pull(id: string, options?: { rescan?: boolean }): Promise<{ updated: boolean; branch: string; behind: number; commits: string[] }> {
+    const { ObjectId } = await import('mongodb');
+    const repo = await this.col.findOne({ _id: new ObjectId(id) });
+    if (!repo) throw new Error('Repo not found');
+
+    const repoPath = repo.path as string;
+    if (!existsSync(repoPath)) throw new Error(`Repo path does not exist: ${repoPath}`);
+
+    const branch = (repo.detected as any)?.defaultBranch || 'main';
+
+    // Get current HEAD before pull
+    const { stdout: beforeHash } = await exec('git', ['rev-parse', 'HEAD'], { cwd: repoPath });
+
+    // Fetch + checkout + pull
+    await exec('git', ['fetch', 'origin'], { cwd: repoPath, timeout: 60_000 });
+    await exec('git', ['checkout', branch], { cwd: repoPath, timeout: 10_000 }).catch(() => {});
+    await exec('git', ['pull', 'origin', branch], { cwd: repoPath, timeout: 60_000 });
+
+    // Get new HEAD after pull
+    const { stdout: afterHash } = await exec('git', ['rev-parse', 'HEAD'], { cwd: repoPath });
+
+    const updated = beforeHash.trim() !== afterHash.trim();
+
+    // Get list of new commits
+    let commits: string[] = [];
+    if (updated) {
+      const { stdout: log } = await exec('git', ['log', '--oneline', `${beforeHash.trim()}..${afterHash.trim()}`], { cwd: repoPath }).catch(() => ({ stdout: '' }));
+      commits = log.trim().split('\n').filter(Boolean);
+    }
+
+    // Count how many commits behind origin (should be 0 after pull)
+    const { stdout: revList } = await exec('git', ['rev-list', '--count', `HEAD..origin/${branch}`], { cwd: repoPath }).catch(() => ({ stdout: '0' }));
+    const behind = parseInt(revList.trim()) || 0;
+
+    await this.col.updateOne({ _id: new ObjectId(id) }, { $set: { updatedAt: new Date() } });
+
+    // Optionally rescan after pull
+    if (options?.rescan && updated) {
+      this.scan(id).catch(err => console.error(`[repos] post-pull rescan failed for ${id}:`, err));
+    }
+
+    return { updated, branch, behind, commits };
+  }
+
   async update(id: string, body: {
     name?: string;
     description?: string;
@@ -286,4 +335,43 @@ export class RepoService {
 
     return { ...existing, ...updates, deepScan: deepResult };
   }
+}
+
+/**
+ * Factory for the "repo-pull-all" system action. Iterates all active repos
+ * and pulls the latest from origin on their default branch.
+ * Runs every 30 min via cron to keep repos from going stale.
+ */
+export function createRepoPullAllAction(db: Db): { name: string; description: string; run: () => Promise<string> } {
+  return {
+    name: 'repo-pull-all',
+    description: 'Pull latest changes from origin for all active repos.',
+    async run() {
+      const service = new RepoService(db);
+      const repos = await db.collection('repos').find({ status: 'active' }).toArray();
+      const pulled: string[] = [];
+      const upToDate: string[] = [];
+      const errors: string[] = [];
+
+      for (const repo of repos) {
+        try {
+          const result = await service.pull(String(repo._id));
+          if (result.updated) {
+            pulled.push(`${repo.name}: ${result.commits.length} new commit(s)`);
+          } else {
+            upToDate.push(repo.name as string);
+          }
+        } catch (err) {
+          errors.push(`${repo.name}: ${(err as Error).message}`);
+        }
+      }
+
+      const parts = [
+        pulled.length ? `Pulled: ${pulled.join('; ')}` : null,
+        upToDate.length ? `Up to date: ${upToDate.join(', ')}` : null,
+        errors.length ? `Errors: ${errors.join('; ')}` : null,
+      ].filter(Boolean);
+      return parts.join(' | ') || 'No active repos found';
+    },
+  };
 }

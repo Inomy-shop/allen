@@ -80,6 +80,9 @@ const TOOLS = [
   { name: 'create_agent', description: 'Create a new agent in an existing team. team-builder-agent and agent-builder-agent can call this. Team must exist. Agent slug must be unique system-wide.', params: { name: 'string (required) — lowercase slug', displayName: 'string (required)', teamName: 'string (required) — existing team slug', teamRole: 'string (required) — "lead" or "member"', system: 'string (required) — full system prompt', provider: 'string (required) — "claude-cli" or "codex"', model: 'string', tools: 'object — array of tool names', capabilities: 'object — array of capability tags', canDelegateTo: 'object — array of agent names this agent can delegate to', personality: 'string', icon: 'string', color: 'string' } },
   { name: 'update_agent', description: 'Update an existing non-built-in agent. team-builder-agent has full update access; agent-builder-agent can ONLY update canDelegateTo.', params: { name: 'string (required)', displayName: 'string', system: 'string', tools: 'object', capabilities: 'object', canDelegateTo: 'object', personality: 'string', model: 'string', provider: 'string' } },
   { name: 'delete_agent', description: 'Delete an agent. Both builders can call this. Refuses built-in agents. Refuses to leave a non-built-in team leaderless. Requires confirm=true.', params: { name: 'string (required)', confirm: 'boolean (required) — must be true' } },
+
+  // ── File upload ──
+  { name: 'upload_file', description: 'Upload a file to FlowForge storage. Returns a public URL that can be shared with users. Use this when generating plans, documents, reports, CSVs, or any artifact that should be downloadable. The URL is permanent and publicly accessible.', params: { content: 'string (required) — file content (text)', filename: 'string (required) — desired filename with extension (e.g. "deployment-plan.md", "report.csv")', mime_type: 'string — MIME type (default: text/plain)' } },
 ];
 
 // ── API Call Helper ──
@@ -318,6 +321,20 @@ async function executeTool(name: string, args: Record<string, unknown>): Promise
       // report_to_user is handled in-process by the chat service, not via API
       // When called through MCP, it's a no-op that returns success
       return { reported: true, message: args.message, status: args.status ?? 'in_progress' };
+    }
+    case 'upload_file': {
+      const url = `${API_BASE}/api/files/from-content`;
+      const res = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ content: args.content, filename: args.filename, mimeType: args.mime_type }),
+      });
+      const data = await res.json() as Record<string, unknown>;
+      if (data.url) {
+        // Return full public URL so agents can share it
+        data.publicUrl = `${API_BASE}${data.url}`;
+      }
+      return data;
     }
     default: {
       // Fallback dispatcher: forward any tool not handled above to the generic
