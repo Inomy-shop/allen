@@ -88,11 +88,18 @@ async function runClaudeCLI(
   const mcpServers: Record<string, unknown> = {};
   if (!skipTools) {
     // FlowForge MCP server (our built-in tools)
-    const serverPath = resolve(dirname(new URL(import.meta.url).pathname), 'flowforge-mcp-server.ts');
+    // Resolve relative to THIS file — works in both dev (src/) and prod (dist/)
+    const thisDir = dirname(new URL(import.meta.url).pathname);
+    const tsPath = resolve(thisDir, 'flowforge-mcp-server.ts');
+    const jsPath = resolve(thisDir, 'flowforge-mcp-server.js');
+    const { existsSync } = await import('node:fs');
+    // Dev: .ts file → run with npx tsx. Prod: .js file → run with node.
+    const serverPath = existsSync(tsPath) ? tsPath : jsPath;
+    const runner = serverPath.endsWith('.ts') ? { command: 'npx', args: ['tsx', serverPath] } : { command: 'node', args: [serverPath] };
     mcpServers.flowforge = {
       type: 'stdio',
-      command: 'npx',
-      args: ['tsx', serverPath],
+      command: runner.command,
+      args: runner.args,
       env: { FLOWFORGE_API_URL: `http://localhost:${process.env.PORT ?? '4023'}` },
     };
 
