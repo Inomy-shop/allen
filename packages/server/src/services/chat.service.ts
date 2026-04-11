@@ -501,7 +501,7 @@ export class ChatService {
       }
 
       // Inject workspace path constraint into system prompt
-      if (resolvedCwd && resolvedCwd !== '/tmp') {
+      if (resolvedCwd && resolvedCwd !== '/tmp/flowforge') {
         systemPrompt += `\n\nWORKSPACE CONSTRAINT:\nYour working directory is: ${resolvedCwd}\nCRITICAL: ALL file operations (Read, Write, Edit, Grep, Glob, Bash) MUST use paths within this directory.\n- Use relative paths or paths starting with "${resolvedCwd}/"\n- NEVER read, write, or modify files outside this directory\n- If search results show paths outside this directory, replace the base with "${resolvedCwd}/"`;
       }
 

@@ -89,7 +89,8 @@ function log(msg: string, data?: unknown): void {
 
 /** Path to the FlowForge MCP server script.
  * Uses import.meta.url to resolve relative to THIS file — works regardless of
- * process.cwd() (which varies between dev, systemd, SSM, etc.). */
+ * process.cwd(). App is deployed under ~/flowforge/ so snap-installed codex
+ * can access it (snap has home dir access). */
 function getFlowForgeMcpServerPath(): string {
   const thisDir = dirname(fileURLToPath(import.meta.url));
   // In dev (tsx): thisDir = .../src/services, script is in the same dir
@@ -192,7 +193,7 @@ export async function runCodexCLI(
 
   return new Promise<ProviderResult & { sessionId?: string }>((resolve, reject) => {
     const proc = spawn('codex', args, {
-      cwd: cwd || '/tmp',
+      cwd: cwd || '/tmp/flowforge',
       env: { ...process.env },
       stdio: ['pipe', 'pipe', 'pipe'],
     });

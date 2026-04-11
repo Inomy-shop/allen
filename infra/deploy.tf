@@ -60,10 +60,10 @@ resource "null_resource" "deploy_app" {
           "aws ssm get-parameter --name /flowforge/${var.environment}/nginx-config --query Parameter.Value --output text > /tmp/flowforge-nginx.conf",
           "aws ssm get-parameter --name /flowforge/${var.environment}/env-production --with-decryption --query Parameter.Value --output text > /tmp/flowforge-env",
           "echo === Cloning repo if needed ===",
-          "if [ ! -d /opt/flowforge/.git ]; then sudo mkdir -p /opt/flowforge && sudo chown ubuntu:ubuntu /opt/flowforge && sudo -u ubuntu git clone ${var.repo_url} /opt/flowforge; fi",
-          "cd /opt/flowforge && sudo -u ubuntu git fetch origin && sudo -u ubuntu git checkout ${var.repo_branch} && sudo -u ubuntu git reset --hard origin/${var.repo_branch}",
+          "if [ ! -d /home/ubuntu/flowforge/.git ]; then sudo mkdir -p /home/ubuntu/flowforge && sudo chown ubuntu:ubuntu /home/ubuntu/flowforge && sudo -u ubuntu git clone ${var.repo_url} /home/ubuntu/flowforge; fi",
+          "cd /home/ubuntu/flowforge && sudo -u ubuntu git fetch origin && sudo -u ubuntu git checkout ${var.repo_branch} && sudo -u ubuntu git reset --hard origin/${var.repo_branch}",
           "echo === Running bootstrap ===",
-          "cd /opt/flowforge && export REPO_URL=${var.repo_url} && export BRANCH=${var.repo_branch} && sudo -u ubuntu -E bash infra/templates/bootstrap.sh 2>&1 | tee /tmp/flowforge-deploy.log"
+          "cd /home/ubuntu/flowforge && export REPO_URL=${var.repo_url} && export BRANCH=${var.repo_branch} && sudo -u ubuntu -E bash infra/templates/bootstrap.sh 2>&1 | tee /tmp/flowforge-deploy.log"
         ]' \
         --query 'Command.CommandId' --output text)
 

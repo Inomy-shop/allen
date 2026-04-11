@@ -30,7 +30,7 @@ import { RepoContextScannerService } from './repo-context-scanner.service.js';
  *                  or any subdirectory of one of those.
  */
 export async function buildRepoContextBlock(db: Db, pathHint: string | undefined): Promise<string> {
-  if (!pathHint || pathHint === '/tmp') return '';
+  if (!pathHint || pathHint === '/tmp' || pathHint === '/tmp/flowforge') return '';
 
   const repo = await resolveRepoFromPath(db, pathHint);
   if (!repo) return '';

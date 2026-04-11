@@ -4,7 +4,7 @@
 # Called by Terraform's null_resource.deploy_app via SSM send-command.
 set -euo pipefail
 
-REPO_DIR=/opt/flowforge
+REPO_DIR=/home/ubuntu/flowforge
 REPO_URL="${REPO_URL:-https://github.com/Kalpai-poc/flowforge.git}"
 BRANCH="${BRANCH:-main}"
 
@@ -79,6 +79,11 @@ if [ ! -f "$REPO_DIR/rds-combined-ca-bundle.pem" ]; then
 else
   echo "  already exists"
 fi
+
+# ── 4b. Create /tmp/flowforge working dir (used as default cwd for agents) ──
+sudo mkdir -p /tmp/flowforge
+sudo chown ubuntu:ubuntu /tmp/flowforge
+
 
 # ── 5. iptables — restrict workspace ports 15000-20000 to localhost ────────
 echo "=== [5/8] iptables ==="

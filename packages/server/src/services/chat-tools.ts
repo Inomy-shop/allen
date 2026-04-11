@@ -476,7 +476,7 @@ const spawnAgent: ChatTool = {
       input: { prompt, agent_name: agentName, repo_path: repoPath, session_id: resumeSession },
       // Execution metadata for tracing
       meta: {
-        cwd: repoPath || '/tmp',
+        cwd: repoPath || '/tmp/flowforge',
         provider: (role.provider as string) ?? 'claude',
         model: (role.model as string) ?? 'sonnet',
         spawnedBy: activeCtxForMeta?.currentAgent ?? 'user',
@@ -523,11 +523,11 @@ async function runSpawnInBackground(
   const liveLog = (entry: { type: string; tool?: string; command?: string; content?: string }) => {
     db.collection('execution_logs').insertOne({ executionId, agent: agentName, ...entry, timestamp: new Date() }).catch(() => {});
   };
-  liveLog({ type: 'started', content: `Agent ${agentName} spawned in ${repoPath || '/tmp'}` });
+  liveLog({ type: 'started', content: `Agent ${agentName} spawned in ${repoPath || '/tmp/flowforge'}` });
 
   // Inject workspace constraint with port info
   let workspaceConstraint = '';
-  if (repoPath && repoPath !== '/tmp') {
+  if (repoPath && repoPath !== '/tmp/flowforge') {
     let portInfo = '';
     try {
       const ws = await db.collection('workspaces').findOne({ worktreePath: repoPath, status: { $nin: ['archived', 'failed'] } });
@@ -584,7 +584,7 @@ async function runSpawnInBackground(
       }
 
       const result = await new Promise<{ text: string; threadId?: string }>((resolveP, rejectP) => {
-        const proc = spawn('codex', args, { cwd: repoPath || '/tmp', env: { ...process.env }, stdio: ['pipe', 'pipe', 'pipe'] });
+        const proc = spawn('codex', args, { cwd: repoPath || '/tmp/flowforge', env: { ...process.env }, stdio: ['pipe', 'pipe', 'pipe'] });
         proc.stdin.end();
         // Register PID for cancel support
         if (proc.pid) {
@@ -1650,7 +1650,7 @@ async function runAgentTurn(
       const result = await new Promise<{ text: string; threadId?: string; costUsd: number }>((resolveP, rejectP) => {
         const cleanEnv = { ...process.env };
         delete cleanEnv.PORT; // Don't leak host server port
-        const proc = spawn('codex', args, { cwd: cwd || '/tmp', env: cleanEnv, stdio: ['pipe', 'pipe', 'pipe'] });
+        const proc = spawn('codex', args, { cwd: cwd || '/tmp/flowforge', env: cleanEnv, stdio: ['pipe', 'pipe', 'pipe'] });
         proc.stdin.end();
         // Register PID for cancel — use convId as key for delegations
         if (proc.pid) registerExecutionProcess(convId, proc.pid, () => { try { proc.kill('SIGTERM'); } catch {} });
@@ -1730,7 +1730,7 @@ async function runAgentTurn(
       Object.assign(mcpServers, await loadExternalMcpServers(db));
 
       const abortController = new AbortController();
-      const sdkOptions: Record<string, unknown> = { model, maxTurns: 50, permissionMode: 'bypassPermissions', cwd: cwd || '/tmp', mcpServers, abortController };
+      const sdkOptions: Record<string, unknown> = { model, maxTurns: 50, permissionMode: 'bypassPermissions', cwd: cwd || '/tmp/flowforge', mcpServers, abortController };
       if (resumeSessionId) sdkOptions.resume = resumeSessionId;
       else sdkOptions.customSystemPrompt = systemPrompt;
       registerExecutionProcess(convId, process.pid, () => abortController.abort());
@@ -1841,7 +1841,7 @@ NEVER fabricate analysis. Every technical claim must come from an agent's actual
 
   parts.push(`\nBe concise. You are collaborating with another agent. Use structured output with headers and bullets.`);
 
-  if (cwd && cwd !== '/tmp') {
+  if (cwd && cwd !== '/tmp/flowforge') {
     parts.push(`
 WORKSPACE CONSTRAINT:
 Your working directory is: ${cwd}

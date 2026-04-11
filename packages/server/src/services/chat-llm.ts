@@ -113,7 +113,7 @@ async function runClaudeCLI(
     model,
     maxTurns: 30,
     permissionMode: 'bypassPermissions',
-    cwd: cwd || '/tmp',
+    cwd: cwd || '/tmp/flowforge',
   };
 
   if (resumeSessionId) sdkOptions.resume = resumeSessionId;
