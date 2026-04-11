@@ -72,15 +72,9 @@ async function main(): Promise<void> {
 
   app.use(cors());
 
-  // Slack webhook needs the raw body for HMAC signature verification.
-  // Mount BEFORE express.json() so the body isn't pre-parsed.
-  app.use('/api/slack', express.raw({ type: 'application/json', limit: '5mb' }), slackRoutes(db));
-
-  app.use(express.json({ limit: '10mb' }));
-
-  // Workspace subdomain proxy — MUST be before API routes so that requests
-  // to <service>-<wsid>.flowforge.inomy.shop are proxied to the workspace
-  // service instead of being handled by the main API routes.
+  // Workspace subdomain proxy — MUST be before express.json() and API routes.
+  // express.json() consumes the request body stream; if it runs first, the
+  // proxy forwards an empty body and POST/PUT/PATCH requests hang or fail.
   const WORKSPACE_SUBDOMAIN_REGEX = /^([a-z][a-z0-9_-]*)-([a-f0-9]{10,})\./;
   const subdomainProxy = createWorkspaceProxy(db);
 
@@ -90,11 +84,19 @@ async function main(): Promise<void> {
     if (!match) return next();
 
     const [, serviceName, wsId] = match;
-    console.log(`[subdomain-proxy] ${req.method} ${host}${req.url} → service=${serviceName} wsId=${wsId}`);
+    if (req.url.startsWith('/api/') || req.url.startsWith('/ws/')) {
+      console.log(`[subdomain-proxy] ${req.method} ${host}${req.url} → service=${serviceName} wsId=${wsId}`);
+    }
     (req.query as Record<string, string>).service = serviceName;
     req.params = { ...req.params, id: wsId };
     return subdomainProxy(req, res, next);
   });
+
+  // Slack webhook needs the raw body for HMAC signature verification.
+  // Mount BEFORE express.json() so the body isn't pre-parsed.
+  app.use('/api/slack', express.raw({ type: 'application/json', limit: '5mb' }), slackRoutes(db));
+
+  app.use(express.json({ limit: '10mb' }));
 
   // Health check
   app.get('/api/health', (_req, res) => {
