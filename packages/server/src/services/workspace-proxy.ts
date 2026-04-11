@@ -20,6 +20,8 @@ export function createWorkspaceProxy(db: Db) {
     const ws = await manager.get(wsId);
     if (!ws) return res.status(404).json({ error: 'Workspace not found' });
 
+    // Each service gets its own subdomain — no smart routing.
+    // e.g. ui-<wsid>.domain, backend-<wsid>.domain, backend2-<wsid>.domain
     const svc = serviceName
       ? ws.services.find((s: any) => s.name === serviceName)
       : ws.services.find((s: any) => s.status === 'ready');
@@ -33,7 +35,7 @@ export function createWorkspaceProxy(db: Db) {
 
     if (!proxy) {
       proxy = createProxyMiddleware({
-        target: `http://localhost:${svc.port}`,
+        target: `http://127.0.0.1:${svc.port}`,
         changeOrigin: true,
         ws: true,
         pathRewrite: (path) => {
