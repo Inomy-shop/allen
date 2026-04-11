@@ -566,11 +566,19 @@ export class WorkspaceManager {
     const ports = this.extractPorts(svc.command, svc.port);
     await this.killPortUsers(ports);
 
-    // Don't inject PORT into the env — the service command already contains
-    // the resolved port (e.g. PORT=15010 or --port 15011). Setting PORT here
-    // would pollute Vite's loadEnv() and make it proxy to itself.
+    // Strip all FlowForge app env vars so the workspace's own .env takes
+    // full control via dotenv.config(). Prevents main server's DB URI,
+    // master key, tokens, ports, etc. from leaking into workspace services.
+    const STRIP = [
+      'PORT', 'MONGODB_URI', 'FLOWFORGE_MASTER_KEY', 'FLOWFORGE_API_URL',
+      'TERMINAL_WS_PORT', 'WORKSPACE_BASE_DIR',
+      'SLACK_BOT_TOKEN', 'SLACK_SIGNING_SECRET',
+      'GH_TOKEN', 'GITHUB_TOKEN', 'GITHUB_PERSONAL_ACCESS_TOKEN',
+      'API_PORT', 'UI_PORT',
+      'NODE_ENV',
+    ];
     const env = { ...process.env };
-    delete env.PORT; // remove the main server's PORT so it doesn't leak
+    for (const key of STRIP) delete env[key];
 
     const proc = spawn('sh', ['-c', svc.command], { cwd: ws.worktreePath, env, stdio: ['pipe', 'pipe', 'pipe'], detached: true });
     const key = `${id}:${serviceName}`;
