@@ -30,6 +30,7 @@ export default defineConfig(({ mode }) => {
     },
     server: {
       port: uiPort,
+      hmr: uiPort !== 5173 ? false : undefined,
       proxy: {
         '/api': {
           target: `http://127.0.0.1:${apiPort}`,
