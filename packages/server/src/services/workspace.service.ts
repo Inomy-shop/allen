@@ -15,6 +15,30 @@ const exec = promisify(execFile);
 const WORKSPACE_BASE = process.env.WORKSPACE_BASE_DIR ?? '/tmp/flowforge-workspaces';
 const PORT_RANGE_START = 15000;
 const PORT_RANGE_PER_WORKSPACE = 10;
+const LOG_RING_SIZE = 2000; // max lines per service
+
+// ── Log Ring Buffer ──
+
+export interface LogLine {
+  ts: number;      // epoch ms
+  stream: 'stdout' | 'stderr';
+  text: string;
+}
+
+class LogRingBuffer {
+  private buf: LogLine[] = [];
+  private listeners = new Set<(line: LogLine) => void>();
+
+  push(line: LogLine) {
+    this.buf.push(line);
+    if (this.buf.length > LOG_RING_SIZE) this.buf.shift();
+    for (const fn of this.listeners) fn(line);
+  }
+
+  snapshot(): LogLine[] { return [...this.buf]; }
+  subscribe(fn: (line: LogLine) => void) { this.listeners.add(fn); return () => { this.listeners.delete(fn); }; }
+  clear() { this.buf = []; }
+}
 
 // ── Types ──
 
@@ -77,9 +101,38 @@ export interface WorkspaceConfig {
 
 export class WorkspaceManager {
   private runningProcesses = new Map<string, ChildProcess>(); // key: workspaceId:serviceName
+  private serviceLogs = new Map<string, LogRingBuffer>();     // key: workspaceId:serviceName
 
   constructor(private db: Db) {
     if (!existsSync(WORKSPACE_BASE)) mkdirSync(WORKSPACE_BASE, { recursive: true });
+  }
+
+  // ── Log access ──
+
+  getLogBuffer(workspaceId: string, serviceName: string): LogRingBuffer {
+    const key = `${workspaceId}:${serviceName}`;
+    if (!this.serviceLogs.has(key)) this.serviceLogs.set(key, new LogRingBuffer());
+    return this.serviceLogs.get(key)!;
+  }
+
+  // ── Stale PID cleanup (call once on boot) ──
+
+  async cleanupStalePids(): Promise<void> {
+    const active = await this.col.find({ status: { $in: ['active', 'running'] } }).toArray();
+    for (const ws of active) {
+      for (const svc of (ws.services ?? []) as WorkspaceService[]) {
+        if (svc.status === 'ready' || svc.status === 'starting') {
+          const key = `${ws._id!.toString()}:${svc.name}`;
+          if (!this.runningProcesses.has(key)) {
+            // Process is not tracked in memory — mark stopped
+            await this.col.updateOne(
+              { _id: ws._id, 'services.name': svc.name },
+              { $set: { 'services.$.status': 'stopped', 'services.$.pid': null } },
+            );
+          }
+        }
+      }
+    }
   }
 
   private get col() { return this.db.collection('workspaces'); }
@@ -470,18 +523,79 @@ export class WorkspaceManager {
 
   // ── Service Management ──
 
+  /** Extract all port numbers mentioned in a service command string */
+  private extractPorts(command: string, assignedPort: number): number[] {
+    const ports = new Set<number>([assignedPort]);
+    // Match patterns like PORT=15010, --port 15011, --port=15011, WS_PORT=15012
+    const patterns = [
+      /(?:PORT|port)[=\s]+(\d{4,5})/g,
+      /--port[=\s]+(\d{4,5})/g,
+    ];
+    for (const re of patterns) {
+      let m;
+      while ((m = re.exec(command)) !== null) {
+        const p = parseInt(m[1]);
+        if (p >= 1024 && p <= 65535) ports.add(p);
+      }
+    }
+    return [...ports];
+  }
+
+  /** Kill any process occupying the given ports */
+  private async killPortUsers(ports: number[]): Promise<void> {
+    for (const port of ports) {
+      try {
+        const { stdout } = await exec('lsof', ['-ti', `:${port}`]);
+        const pids = stdout.trim().split('\n').filter(Boolean);
+        for (const pid of pids) {
+          try { process.kill(parseInt(pid), 'SIGKILL'); } catch {}
+        }
+      } catch {} // lsof returns exit 1 if no matches
+    }
+    // Brief pause so the OS releases the ports
+    await new Promise(r => setTimeout(r, 300));
+  }
+
   async startService(id: string, serviceName: string): Promise<void> {
     const ws = await this.get(id);
     if (!ws) throw new Error('Workspace not found');
     const svc = ws.services.find(s => s.name === serviceName);
     if (!svc) throw new Error(`Service "${serviceName}" not found`);
 
-    // Service runs with PORT set to its assigned port
-    const env = { ...process.env, PORT: String(svc.port) };
+    // Kill any stale processes occupying the ports this service needs
+    const ports = this.extractPorts(svc.command, svc.port);
+    await this.killPortUsers(ports);
 
-    const proc = spawn('sh', ['-c', svc.command], { cwd: ws.worktreePath, env, stdio: ['pipe', 'pipe', 'pipe'] });
+    // Don't inject PORT into the env — the service command already contains
+    // the resolved port (e.g. PORT=15010 or --port 15011). Setting PORT here
+    // would pollute Vite's loadEnv() and make it proxy to itself.
+    const env = { ...process.env };
+    delete env.PORT; // remove the main server's PORT so it doesn't leak
+
+    const proc = spawn('sh', ['-c', svc.command], { cwd: ws.worktreePath, env, stdio: ['pipe', 'pipe', 'pipe'], detached: true });
     const key = `${id}:${serviceName}`;
     this.runningProcesses.set(key, proc);
+
+    // Set up log capture
+    const logBuf = this.getLogBuffer(id, serviceName);
+    logBuf.clear();
+
+    const pipeLogs = (stream: NodeJS.ReadableStream, name: 'stdout' | 'stderr') => {
+      let partial = '';
+      stream.on('data', (chunk: Buffer) => {
+        partial += chunk.toString();
+        const lines = partial.split('\n');
+        partial = lines.pop() ?? '';
+        for (const text of lines) {
+          logBuf.push({ ts: Date.now(), stream: name, text });
+        }
+      });
+      stream.on('end', () => {
+        if (partial) logBuf.push({ ts: Date.now(), stream: name, text: partial });
+      });
+    };
+    if (proc.stdout) pipeLogs(proc.stdout, 'stdout');
+    if (proc.stderr) pipeLogs(proc.stderr, 'stderr');
 
     const { ObjectId } = await import('mongodb');
     await this.col.updateOne(
@@ -489,8 +603,9 @@ export class WorkspaceManager {
       { $set: { 'services.$.status': 'starting', 'services.$.pid': proc.pid, 'services.$.startedAt': new Date(), status: 'running' } },
     );
 
-    proc.on('close', () => {
+    proc.on('close', (code) => {
       this.runningProcesses.delete(key);
+      logBuf.push({ ts: Date.now(), stream: 'stderr', text: `[process exited with code ${code}]` });
       this.col.updateOne(
         { _id: new ObjectId(id), 'services.name': serviceName },
         { $set: { 'services.$.status': 'stopped', 'services.$.pid': null } },
@@ -512,9 +627,25 @@ export class WorkspaceManager {
   }
 
   async stopService(id: string, serviceName: string): Promise<void> {
+    const ws = await this.get(id);
+    const svc = ws?.services.find(s => s.name === serviceName);
     const key = `${id}:${serviceName}`;
     const proc = this.runningProcesses.get(key);
-    if (proc) { proc.kill('SIGTERM'); this.runningProcesses.delete(key); }
+
+    if (proc && proc.pid) {
+      // Kill the entire process group (sh + child processes like node/vite)
+      try { process.kill(-proc.pid, 'SIGTERM'); } catch {}
+      // Fallback: also kill the shell process directly
+      try { proc.kill('SIGTERM'); } catch {}
+      this.runningProcesses.delete(key);
+    }
+
+    // Fallback: kill any process still occupying this service's ports
+    if (svc) {
+      const ports = this.extractPorts(svc.command, svc.port);
+      await this.killPortUsers(ports);
+    }
+
     const { ObjectId } = await import('mongodb');
     await this.col.updateOne(
       { _id: new ObjectId(id), 'services.name': serviceName },

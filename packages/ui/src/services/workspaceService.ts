@@ -27,6 +27,7 @@ export const workspaces = {
   startService: (id: string, name: string) => request<any>(`/workspaces/${id}/services/${name}/start`, { method: 'POST' }),
   stopService: (id: string, name: string) => request<any>(`/workspaces/${id}/services/${name}/stop`, { method: 'POST' }),
   restartService: (id: string, name: string) => request<any>(`/workspaces/${id}/services/${name}/restart`, { method: 'POST' }),
+  serviceLogsUrl: (id: string, name: string) => `${BASE}/workspaces/${id}/services/${name}/logs`,
   linkChat: (id: string, sessionId: string) => request<any>(`/workspaces/${id}/link-chat`, { method: 'POST', body: JSON.stringify({ sessionId }) }),
   createPR: (id: string, title: string, body?: string) => request<any>(`/workspaces/${id}/create-pr`, { method: 'POST', body: JSON.stringify({ title, body }) }),
   getConfig: (repoId: string) => request<any>(`/workspaces/config/${repoId}`),

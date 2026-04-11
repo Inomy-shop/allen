@@ -272,6 +272,33 @@ export function workspaceRoutes(db: Db): Router {
     } catch (err: unknown) { res.status(500).json({ error: (err as Error).message }); }
   });
 
+  // SSE log stream for a service
+  router.get('/:id/services/:name/logs', (req: Request, res: Response) => {
+    try {
+      const logBuf = manager.getLogBuffer(p(req, 'id'), p(req, 'name'));
+
+      res.writeHead(200, {
+        'Content-Type': 'text/event-stream',
+        'Cache-Control': 'no-cache',
+        Connection: 'keep-alive',
+        'X-Accel-Buffering': 'no',
+      });
+
+      // Send existing lines as a snapshot
+      const snapshot = logBuf.snapshot();
+      for (const line of snapshot) {
+        res.write(`data: ${JSON.stringify(line)}\n\n`);
+      }
+
+      // Stream new lines
+      const unsub = logBuf.subscribe(line => {
+        res.write(`data: ${JSON.stringify(line)}\n\n`);
+      });
+
+      req.on('close', unsub);
+    } catch (err: unknown) { res.status(500).json({ error: (err as Error).message }); }
+  });
+
   // ── Chat Link ──
 
   router.post('/:id/link-chat', async (req: Request, res: Response) => {

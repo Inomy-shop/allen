@@ -32,11 +32,11 @@ export default defineConfig(({ mode }) => {
       port: uiPort,
       proxy: {
         '/api': {
-          target: `http://localhost:${apiPort}`,
+          target: `http://127.0.0.1:${apiPort}`,
           changeOrigin: true,
         },
         '/ws': {
-          target: `http://localhost:${wsPort}`,
+          target: `http://127.0.0.1:${wsPort}`,
           changeOrigin: true,
           ws: true,
         },

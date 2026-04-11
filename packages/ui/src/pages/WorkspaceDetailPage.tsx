@@ -7,6 +7,7 @@ import {
   Upload, GitCommit, X, GitPullRequest, FileText,
   Trash2, Save, FilePlus, Plus, SplitSquareHorizontal,
   Settings, ExternalLink, Eye, History, PanelRightOpen, MessageSquare, GitCompareArrows,
+  RotateCw, ScrollText, Server,
 } from 'lucide-react';
 import { XTerminal } from '../components/workspace/XTerminal';
 import { EmbeddedChat } from '../components/workspace/EmbeddedChat';
@@ -266,6 +267,151 @@ function ActivityTimeline({ activity }: { activity: any[] }) {
   );
 }
 
+// ── Service Log Viewer ──
+
+function ServiceLogViewer({ workspaceId, serviceName, onClose }: { workspaceId: string; serviceName: string; onClose: () => void }) {
+  const containerRef = useRef<HTMLDivElement>(null);
+  const [lines, setLines] = useState<{ ts: number; stream: string; text: string }[]>([]);
+  const [autoScroll, setAutoScroll] = useState(true);
+
+  useEffect(() => {
+    const url = workspaces.serviceLogsUrl(workspaceId, serviceName);
+    const es = new EventSource(url);
+    es.onmessage = (e) => {
+      try {
+        const line = JSON.parse(e.data);
+        setLines(prev => {
+          const next = [...prev, line];
+          return next.length > 2000 ? next.slice(-2000) : next;
+        });
+      } catch {}
+    };
+    return () => es.close();
+  }, [workspaceId, serviceName]);
+
+  useEffect(() => {
+    if (autoScroll && containerRef.current) {
+      containerRef.current.scrollTop = containerRef.current.scrollHeight;
+    }
+  }, [lines, autoScroll]);
+
+  return (
+    <div className="flex flex-col h-full">
+      <div className="flex items-center gap-2 px-3 py-1 border-b border-border/20 bg-surface-100/30 shrink-0">
+        <ScrollText className="w-3 h-3 text-theme-muted" />
+        <span className="text-[10px] font-label uppercase tracking-wider text-theme-muted">Logs — {serviceName}</span>
+        <span className="flex-1" />
+        <label className="flex items-center gap-1 text-[9px] text-theme-subtle cursor-pointer">
+          <input type="checkbox" checked={autoScroll} onChange={e => setAutoScroll(e.target.checked)} className="w-3 h-3" />
+          Auto-scroll
+        </label>
+        <button onClick={onClose} className="text-theme-subtle hover:text-theme-secondary p-0.5"><X className="w-3 h-3" /></button>
+      </div>
+      <div ref={containerRef} className="flex-1 overflow-auto bg-[rgb(var(--color-editor-background))] p-2 font-mono text-[10px] leading-relaxed"
+        onScroll={() => {
+          if (!containerRef.current) return;
+          const { scrollTop, scrollHeight, clientHeight } = containerRef.current;
+          setAutoScroll(scrollHeight - scrollTop - clientHeight < 40);
+        }}>
+        {lines.length === 0 ? (
+          <span className="text-theme-subtle">Waiting for logs...</span>
+        ) : lines.map((l, i) => (
+          <div key={i} className={l.stream === 'stderr' ? 'text-red-400' : 'text-theme-secondary'}>
+            <span className="text-theme-subtle mr-2 select-none">{new Date(l.ts).toLocaleTimeString()}</span>
+            {l.text}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// ── Services Panel ──
+
+function ServicesPanel({ workspaceId, services, domain, onRefresh }: {
+  workspaceId: string; services: any[]; domain: string; onRefresh: () => void;
+}) {
+  const [actionLoading, setActionLoading] = useState<string | null>(null);
+  const [logService, setLogService] = useState<string | null>(null);
+
+  async function doAction(name: string, action: 'start' | 'stop' | 'restart') {
+    setActionLoading(`${name}:${action}`);
+    try {
+      if (action === 'start') await workspaces.startService(workspaceId, name);
+      else if (action === 'stop') await workspaces.stopService(workspaceId, name);
+      else {
+        await workspaces.restartService(workspaceId, name);
+      }
+      onRefresh();
+    } catch (err: any) { alert(err.message); }
+    setActionLoading(null);
+  }
+
+  function openPreview(svc: any) {
+    const host = window.location.hostname;
+    // On production (subdomain routing via nginx), use the subdomain URL.
+    // On localhost/dev, open the service directly on its port.
+    const previewUrl = host.includes(domain)
+      ? `https://${svc.name}-${workspaceId}.${domain}`
+      : `http://${host}:${svc.port}`;
+    window.open(previewUrl, '_blank');
+  }
+
+  if (logService) {
+    return <ServiceLogViewer workspaceId={workspaceId} serviceName={logService} onClose={() => setLogService(null)} />;
+  }
+
+  return (
+    <div className="p-2 space-y-1">
+      {services.length === 0 ? (
+        <p className="text-xs text-theme-subtle px-1">No services configured. Go to Repos to configure workspace services.</p>
+      ) : services.map((svc: any) => {
+        const isRunning = svc.status === 'ready' || svc.status === 'starting';
+        const statusColor = svc.status === 'ready' ? 'bg-emerald-400' : svc.status === 'starting' ? 'bg-amber-400 animate-pulse' : svc.status === 'failed' ? 'bg-red-400' : 'bg-surface-200';
+        return (
+          <div key={svc.name} className="flex items-center gap-2 px-2 py-1.5 rounded bg-surface-100/30 hover:bg-surface-100/50 transition-colors">
+            <span className={`w-2 h-2 rounded-full ${statusColor} shrink-0`} />
+            <span className="text-[11px] font-mono text-theme-secondary flex-1 min-w-0 truncate">{svc.name}</span>
+            <span className="text-[9px] font-mono text-theme-subtle">:{svc.port}</span>
+            <span className={`text-[9px] px-1.5 py-0.5 rounded ${svc.status === 'ready' ? 'bg-emerald-400/10 text-emerald-400' : svc.status === 'starting' ? 'bg-amber-400/10 text-amber-400' : svc.status === 'failed' ? 'bg-red-400/10 text-red-400' : 'bg-surface-200/30 text-theme-subtle'}`}>
+              {svc.status}
+            </span>
+            <div className="flex items-center gap-0.5 ml-1">
+              {!isRunning ? (
+                <button onClick={() => doAction(svc.name, 'start')} disabled={actionLoading === `${svc.name}:start`}
+                  className="p-1 text-emerald-400 hover:bg-emerald-400/10 rounded disabled:opacity-50" title="Start">
+                  {actionLoading === `${svc.name}:start` ? <Loader2 className="w-3 h-3 animate-spin" /> : <Play className="w-3 h-3" />}
+                </button>
+              ) : (
+                <>
+                  <button onClick={() => doAction(svc.name, 'restart')} disabled={!!actionLoading}
+                    className="p-1 text-amber-400 hover:bg-amber-400/10 rounded disabled:opacity-50" title="Restart">
+                    {actionLoading === `${svc.name}:restart` ? <Loader2 className="w-3 h-3 animate-spin" /> : <RotateCw className="w-3 h-3" />}
+                  </button>
+                  <button onClick={() => doAction(svc.name, 'stop')} disabled={!!actionLoading}
+                    className="p-1 text-red-400 hover:bg-red-400/10 rounded disabled:opacity-50" title="Stop">
+                    {actionLoading === `${svc.name}:stop` ? <Loader2 className="w-3 h-3 animate-spin" /> : <Square className="w-3 h-3" />}
+                  </button>
+                </>
+              )}
+              <button onClick={() => setLogService(svc.name)}
+                className="p-1 text-theme-muted hover:text-theme-secondary hover:bg-white/5 rounded" title="View Logs">
+                <ScrollText className="w-3 h-3" />
+              </button>
+              {svc.status === 'ready' && (
+                <button onClick={() => openPreview(svc)}
+                  className="p-1 text-blue-400 hover:bg-blue-400/10 rounded" title="Open Preview in New Window">
+                  <ExternalLink className="w-3 h-3" />
+                </button>
+              )}
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 let termIdCounter = 1;
 
 export default function WorkspaceDetailPage() {
@@ -313,6 +459,9 @@ export default function WorkspaceDetailPage() {
   // Embedded chat
   const [showChat, setShowChat] = useState(false);
 
+  // Services panel
+  const [showServices, setShowServices] = useState(false);
+
   const [terminals, setTerminals] = useState<{ id: string; label: string; command?: string }[]>([{ id: 'default', label: 'Terminal 1' }]);
   const [activeTerminal, setActiveTerminal] = useState('default');
   const [terminalVisible, setTerminalVisible] = useState(true);
@@ -335,8 +484,14 @@ export default function WorkspaceDetailPage() {
     setLoading(false);
   }, [id]);
 
+  // Lightweight refresh — only updates workspace state (services, git info), no loading spinner
+  const refreshWorkspace = useCallback(async () => {
+    if (!id) return;
+    try { setWorkspace(await workspaces.get(id)); } catch {}
+  }, [id]);
+
   useEffect(() => { load(); }, [load]);
-  useEffect(() => { if (!id) return; const i = setInterval(async () => { try { setWorkspace(await workspaces.get(id)); } catch {} }, 15000); return () => clearInterval(i); }, [id]);
+  useEffect(() => { if (!id) return; const i = setInterval(refreshWorkspace, 15000); return () => clearInterval(i); }, [id, refreshWorkspace]);
 
   // Load activity when panel opens
   useEffect(() => {
@@ -366,9 +521,6 @@ export default function WorkspaceDetailPage() {
     setSelectedFile(path); setDirty(false);
 
     // Check if this is an image file
-    const ext = path.split('.').pop()?.toLowerCase() ?? '';
-    const isImage = ['png', 'jpg', 'jpeg', 'gif', 'webp', 'ico', 'svg'].includes(ext);
-
     setViewMode(path.endsWith('.md') ? 'preview' : 'code');
     try {
       const [content, diffData] = await Promise.all([
@@ -453,12 +605,6 @@ export default function WorkspaceDetailPage() {
   }
 
   function addTerminal() { const nid = `term-${termIdCounter++}`; setTerminals(p => [...p, { id: nid, label: `Terminal ${p.length + 1}` }]); setActiveTerminal(nid); }
-  function runServiceInTerminal(svc: { name: string; command: string }) {
-    const nid = `svc-${svc.name}-${termIdCounter++}`;
-    setTerminals(p => [...p, { id: nid, label: svc.name, command: svc.command }]);
-    setActiveTerminal(nid);
-    setTerminalVisible(true);
-  }
   function closeTerminal(tid: string) { if (terminals.length <= 1) return; setTerminals(p => p.filter(t => t.id !== tid)); if (activeTerminal === tid) setActiveTerminal(terminals.find(t => t.id !== tid)!.id); }
 
   function getLanguage(filePath: string): string {
@@ -497,13 +643,14 @@ export default function WorkspaceDetailPage() {
           <span className="text-[10px] font-mono text-theme-muted">{workspace.branch} → {workspace.baseBranch}</span>
           <span className="flex-1" />
 
-          {workspace.services?.map((svc: any) => (
-            <div key={svc.name} className="flex items-center gap-1 text-[10px] font-mono">
-              <span className={`w-1.5 h-1.5 rounded-full ${svc.status === 'ready' ? 'bg-emerald-400' : svc.status === 'starting' ? 'bg-amber-400 animate-pulse' : 'bg-surface-200'}`} />
-              <span className="text-theme-secondary">{svc.name}:{svc.port}</span>
-              <button onClick={() => runServiceInTerminal(svc)} className="text-emerald-400" title={`Run ${svc.name} in terminal`}><Play className="w-2.5 h-2.5" /></button>
-            </div>
-          ))}
+          {workspace.services?.length > 0 && (
+            <button onClick={() => setShowServices(v => !v)}
+              className={`flex items-center gap-1.5 text-[10px] font-mono px-2 py-0.5 rounded hover:bg-white/5 ${showServices ? 'text-blue-400' : 'text-theme-secondary'}`}
+              title="Toggle Services Panel">
+              <Server className="w-3 h-3" />
+              {workspace.services.filter((s: any) => s.status === 'ready').length}/{workspace.services.length} running
+            </button>
+          )}
 
           <div className="flex items-center gap-1 border-l border-border/20 pl-3 ml-2">
             <button onClick={() => setShowCommitModal(true)} className="btn-ghost text-[11px] py-1 px-2 flex items-center gap-1" title="Commit">
@@ -761,7 +908,27 @@ export default function WorkspaceDetailPage() {
           )}
 
           {/* Activity panel — side panel */}
-          {showActivity && !showChat && (
+          {/* Services panel — right side panel */}
+          {showServices && !showChat && (
+            <div className="w-72 border-l border-border/20 bg-surface-50/30 overflow-hidden flex flex-col shrink-0">
+              <div className="flex items-center gap-2 px-3 py-1.5 border-b border-border/20 shrink-0">
+                <Server className="w-3 h-3 text-theme-muted" />
+                <span className="text-[10px] font-label uppercase tracking-wider text-theme-muted">Services</span>
+                <span className="flex-1" />
+                <button onClick={() => setShowServices(false)} className="text-theme-subtle hover:text-theme-secondary p-0.5"><X className="w-3 h-3" /></button>
+              </div>
+              <div className="flex-1 overflow-y-auto min-h-0">
+                <ServicesPanel
+                  workspaceId={id!}
+                  services={workspace.services ?? []}
+                  domain="flowforge.inomy.shop"
+                  onRefresh={refreshWorkspace}
+                />
+              </div>
+            </div>
+          )}
+
+          {showActivity && !showChat && !showServices && (
             <div className="w-64 border-l border-border/20 bg-surface-50/30 overflow-y-auto flex flex-col shrink-0">
               <div className="flex items-center gap-2 px-3 py-1.5 border-b border-border/20 shrink-0">
                 <History className="w-3 h-3 text-theme-muted" />

@@ -135,8 +135,11 @@ async function main(): Promise<void> {
   // Start file watch WebSocket server on port 4025
   startFileWatchServer();
 
-  // Start dedicated WebSocket terminal server on port 4024
+  // Clean up stale service PIDs from a previous server run
   const wsManager = new WorkspaceManager(db);
+  wsManager.cleanupStalePids().catch(err => console.error('[workspace] stale PID cleanup failed:', err));
+
+  // Start dedicated WebSocket terminal server on port 4024
   startTerminalWebSocketServer(async (workspaceId: string) => {
     const ws = await wsManager.get(workspaceId);
     return ws?.worktreePath ?? null;
