@@ -7,8 +7,9 @@
 
 import type { Db } from 'mongodb';
 import type { ChatTraceEvent } from './chat-llm.js';
-import { resolve } from 'node:path';
+import { resolve, dirname } from 'node:path';
 import { existsSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 
 // ── Shared Types ──
 
@@ -86,12 +87,16 @@ function log(msg: string, data?: unknown): void {
 
 // ── Sync MCP servers to Codex CLI ──
 
-/** Path to the FlowForge MCP server script */
+/** Path to the FlowForge MCP server script.
+ * Uses import.meta.url to resolve relative to THIS file — works regardless of
+ * process.cwd() (which varies between dev, systemd, SSM, etc.). */
 function getFlowForgeMcpServerPath(): string {
-  // In dev (tsx), use .ts file. In prod (compiled), use .js
-  const tsPath = resolve(process.cwd(), 'src/services/flowforge-mcp-server.ts');
+  const thisDir = dirname(fileURLToPath(import.meta.url));
+  // In dev (tsx): thisDir = .../src/services, script is in the same dir
+  const tsPath = resolve(thisDir, 'flowforge-mcp-server.ts');
   if (existsSync(tsPath)) return tsPath;
-  return resolve(process.cwd(), 'dist/services/flowforge-mcp-server.js');
+  // In prod (compiled): thisDir = .../dist/services, script is in the same dir
+  return resolve(thisDir, 'flowforge-mcp-server.js');
 }
 
 export async function syncMcpToCodex(db: Db): Promise<void> {
@@ -113,10 +118,12 @@ export async function syncMcpToCodex(db: Db): Promise<void> {
   if (!existingOutput.includes('flowforge')) {
     try {
       const serverPath = getFlowForgeMcpServerPath();
+      // In dev: .ts file → run with npx tsx. In prod: .js file → run with node.
+      const runner = serverPath.endsWith('.ts') ? ['npx', 'tsx'] : ['node'];
       await execFileAsync('codex', [
         'mcp', 'add', 'flowforge',
         '--env', `FLOWFORGE_API_URL=http://localhost:${process.env.PORT ?? '4023'}`,
-        '--', 'npx', 'tsx', serverPath,
+        '--', ...runner, serverPath,
       ], { timeout: 10000 });
       log('Registered FlowForge MCP server with Codex CLI');
     } catch (err) {
