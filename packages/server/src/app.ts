@@ -78,6 +78,24 @@ async function main(): Promise<void> {
 
   app.use(express.json({ limit: '10mb' }));
 
+  // Workspace subdomain proxy — MUST be before API routes so that requests
+  // to <service>-<wsid>.flowforge.inomy.shop are proxied to the workspace
+  // service instead of being handled by the main API routes.
+  const WORKSPACE_SUBDOMAIN_REGEX = /^([a-z][a-z0-9_-]*)-([a-f0-9]{10,})\./;
+  const subdomainProxy = createWorkspaceProxy(db);
+
+  app.use((req, res, next) => {
+    const host = req.hostname || req.headers.host?.split(':')[0] || '';
+    const match = host.match(WORKSPACE_SUBDOMAIN_REGEX);
+    if (!match) return next();
+
+    const [, serviceName, wsId] = match;
+    console.log(`[subdomain-proxy] ${req.method} ${host}${req.url} → service=${serviceName} wsId=${wsId}`);
+    (req.query as Record<string, string>).service = serviceName;
+    req.params = { ...req.params, id: wsId };
+    return subdomainProxy(req, res, next);
+  });
+
   // Health check
   app.get('/api/health', (_req, res) => {
     res.json({ status: 'ok', timestamp: new Date().toISOString() });
@@ -104,28 +122,6 @@ async function main(): Promise<void> {
   // Preview reverse proxy — must be after json middleware but catches /api/workspaces/:id/preview/*
   app.use('/api/workspaces/:id/preview', createWorkspaceProxy(db));
 
-  // Workspace subdomain proxy — parses <service>-<workspace-id> from the Host
-  // header and proxies directly to the workspace service.
-  // nginx just proxies *.flowforge.inomy.shop → Express; all logic is here.
-  //
-  // URL format: https://frontend-69d7b6fa.flowforge.inomy.shop/any/path
-  //   → service = "frontend", workspaceId = "69d7b6fa"
-  const WORKSPACE_SUBDOMAIN_REGEX = /^([a-z][a-z0-9_-]*)-([a-f0-9]{10,})\./;
-  const subdomainProxy = createWorkspaceProxy(db);
-
-  app.use((req, res, next) => {
-    const host = req.hostname || req.headers.host?.split(':')[0] || '';
-    const match = host.match(WORKSPACE_SUBDOMAIN_REGEX);
-    if (!match) return next();
-
-    const [, serviceName, wsId] = match;
-    // Set up params/query so the workspace proxy can find the right service
-    (req.query as Record<string, string>).service = serviceName;
-    req.params = { ...req.params, id: wsId };
-    // Proxy directly — do NOT rewrite URL or call next('route'),
-    // which would let other /api/* routes intercept the request.
-    return subdomainProxy(req, res, next);
-  });
 
   app.listen(PORT, () => {
     console.log(`FlowForge server running on http://localhost:${PORT}`);
