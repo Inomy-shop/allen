@@ -1,6 +1,28 @@
 # ── Application deployment via SSM ──
-# Renders configs locally, writes them to EC2 via SSM parameters, then runs bootstrap.
-# No S3 needed — configs are passed directly in the SSM command.
+# 1. Stores rendered configs in SSM Parameter Store (EC2 can read via AmazonSSMReadOnlyAccess)
+# 2. SSM command on EC2: pulls configs from Parameter Store, clones/pulls repo, runs bootstrap
+# 3. Polls for completion, streams output every 15s
+
+# Store nginx config in SSM Parameter Store
+resource "aws_ssm_parameter" "nginx_config" {
+  name  = "/flowforge/${var.environment}/nginx-config"
+  type  = "String"
+  value = templatefile("${path.module}/templates/nginx.conf.tftpl", { domain = var.domain })
+  tags  = local.tags
+}
+
+# Store .env.production in SSM Parameter Store (encrypted)
+resource "aws_ssm_parameter" "env_production" {
+  name  = "/flowforge/${var.environment}/env-production"
+  type  = "SecureString"
+  value = templatefile("${path.module}/templates/env.production.tftpl", {
+    port       = var.app_port
+    ws_port    = var.ws_port
+    docdb_uri  = var.docdb_uri
+    master_key = var.master_key
+  })
+  tags = local.tags
+}
 
 resource "null_resource" "deploy_app" {
   triggers = {
@@ -9,14 +31,15 @@ resource "null_resource" "deploy_app" {
     deploy_version = var.deploy_version
     app_port       = var.app_port
     ws_port        = var.ws_port
-    # Re-deploy when configs change
-    nginx_hash     = md5(templatefile("${path.module}/templates/nginx.conf.tftpl", { domain = var.domain }))
-    env_hash       = md5(templatefile("${path.module}/templates/env.production.tftpl", { port = var.app_port, ws_port = var.ws_port, docdb_uri = var.docdb_uri, master_key = var.master_key }))
+    nginx_version  = aws_ssm_parameter.nginx_config.version
+    env_version    = aws_ssm_parameter.env_production.version
   }
 
   depends_on = [
     aws_lb_listener_rule.flowforge,
     aws_lb_target_group_attachment.flowforge,
+    aws_ssm_parameter.nginx_config,
+    aws_ssm_parameter.env_production,
   ]
 
   provisioner "local-exec" {
@@ -24,50 +47,61 @@ resource "null_resource" "deploy_app" {
     command     = <<-SCRIPT
       set -euo pipefail
 
-      # Render configs locally to temp files
-      cat > /tmp/_ff_nginx.conf << 'NGINX_EOF'
-${templatefile("${path.module}/templates/nginx.conf.tftpl", { domain = var.domain })}
-NGINX_EOF
-
-      cat > /tmp/_ff_env << 'ENV_EOF'
-${templatefile("${path.module}/templates/env.production.tftpl", { port = var.app_port, ws_port = var.ws_port, docdb_uri = var.docdb_uri, master_key = var.master_key })}
-ENV_EOF
-
-      # Base64-encode configs to avoid shell escaping issues in SSM
-      NGINX_B64=$(base64 < /tmp/_ff_nginx.conf)
-      ENV_B64=$(base64 < /tmp/_ff_env)
-      rm -f /tmp/_ff_nginx.conf /tmp/_ff_env
-
       echo "Sending deploy command to EC2 ${var.instance_id}..."
       COMMAND_ID=$(aws ssm send-command \
         --instance-ids "${var.instance_id}" \
         --document-name "AWS-RunShellScript" \
         --timeout-seconds 600 \
         --comment "FlowForge deploy v${var.deploy_version}" \
-        --parameters commands="[\"#!/bin/bash\",\"set -euo pipefail\",\"echo $NGINX_B64 | base64 -d > /tmp/flowforge-nginx.conf\",\"echo $ENV_B64 | base64 -d > /tmp/flowforge-env\",\"if [ ! -d /opt/flowforge/.git ]; then sudo mkdir -p /opt/flowforge && sudo chown ubuntu:ubuntu /opt/flowforge && sudo -u ubuntu git clone ${var.repo_url} /opt/flowforge; fi\",\"cd /opt/flowforge && sudo -u ubuntu git fetch origin && sudo -u ubuntu git checkout ${var.repo_branch} && sudo -u ubuntu git reset --hard origin/${var.repo_branch}\",\"cd /opt/flowforge && export REPO_URL=${var.repo_url} && export BRANCH=${var.repo_branch} && sudo -u ubuntu -E bash infra/templates/bootstrap.sh 2>&1 | tee /tmp/flowforge-deploy.log\"]" \
+        --parameters 'commands=[
+          "#!/bin/bash",
+          "set -euo pipefail",
+          "echo === Pulling configs from SSM Parameter Store ===",
+          "aws ssm get-parameter --name /flowforge/${var.environment}/nginx-config --query Parameter.Value --output text > /tmp/flowforge-nginx.conf",
+          "aws ssm get-parameter --name /flowforge/${var.environment}/env-production --with-decryption --query Parameter.Value --output text > /tmp/flowforge-env",
+          "echo === Cloning repo if needed ===",
+          "if [ ! -d /opt/flowforge/.git ]; then sudo mkdir -p /opt/flowforge && sudo chown ubuntu:ubuntu /opt/flowforge && sudo -u ubuntu git clone ${var.repo_url} /opt/flowforge; fi",
+          "cd /opt/flowforge && sudo -u ubuntu git fetch origin && sudo -u ubuntu git checkout ${var.repo_branch} && sudo -u ubuntu git reset --hard origin/${var.repo_branch}",
+          "echo === Running bootstrap ===",
+          "cd /opt/flowforge && export REPO_URL=${var.repo_url} && export BRANCH=${var.repo_branch} && sudo -u ubuntu -E bash infra/templates/bootstrap.sh 2>&1 | tee /tmp/flowforge-deploy.log"
+        ]' \
         --query 'Command.CommandId' --output text)
 
       echo "SSM Command ID: $COMMAND_ID"
-      echo "Waiting for completion (up to 10 minutes)..."
+      echo ""
+      echo "=== Streaming deploy logs (polling every 15s) ==="
+      LAST_LEN=0
+      for i in $(seq 1 40); do
+        sleep 15
 
-      aws ssm wait command-executed \
-        --command-id "$COMMAND_ID" \
-        --instance-id "${var.instance_id}" 2>/dev/null || true
+        STATUS=$(aws ssm get-command-invocation \
+          --command-id "$COMMAND_ID" \
+          --instance-id "${var.instance_id}" \
+          --query 'Status' --output text 2>/dev/null || echo "Pending")
 
-      STATUS=$(aws ssm get-command-invocation \
-        --command-id "$COMMAND_ID" \
-        --instance-id "${var.instance_id}" \
-        --query 'Status' --output text 2>/dev/null || echo "Unknown")
+        OUTPUT=$(aws ssm get-command-invocation \
+          --command-id "$COMMAND_ID" \
+          --instance-id "${var.instance_id}" \
+          --query 'StandardOutputContent' --output text 2>/dev/null || echo "")
+
+        CUR_LEN=$${#OUTPUT}
+        if [ "$CUR_LEN" -gt "$LAST_LEN" ]; then
+          echo "$OUTPUT" | tail -c +$((LAST_LEN + 1))
+          LAST_LEN=$CUR_LEN
+        fi
+
+        if [ "$STATUS" = "Success" ] || [ "$STATUS" = "Failed" ] || [ "$STATUS" = "Cancelled" ]; then
+          break
+        fi
+      done
+
+      echo ""
+      echo "=== Final status: $STATUS ==="
 
       if [ "$STATUS" = "Success" ]; then
         echo "Deploy succeeded"
       else
-        echo "Deploy FAILED (status: $STATUS)"
-        echo "--- stdout (last 3000 chars) ---"
-        aws ssm get-command-invocation \
-          --command-id "$COMMAND_ID" \
-          --instance-id "${var.instance_id}" \
-          --query 'StandardOutputContent' --output text 2>/dev/null | tail -c 3000 || true
+        echo "Deploy FAILED"
         echo "--- stderr ---"
         aws ssm get-command-invocation \
           --command-id "$COMMAND_ID" \

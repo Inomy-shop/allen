@@ -18,8 +18,10 @@ if ! command -v nginx &>/dev/null; then
   sudo apt-get update -qq
   sudo apt-get install -y -qq nginx
 fi
-if ! command -v iptables-save &>/dev/null; then
-  sudo apt-get install -y -qq iptables-persistent
+# Build tools for native modules (node-pty, etc.)
+if ! command -v make &>/dev/null || ! command -v g++ &>/dev/null; then
+  sudo apt-get update -qq
+  sudo apt-get install -y -qq build-essential python3 make g++
 fi
 if ! command -v node &>/dev/null || [[ "$(node -v)" < "v20" ]]; then
   curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -

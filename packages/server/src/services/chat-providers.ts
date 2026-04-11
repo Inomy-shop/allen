@@ -7,6 +7,8 @@
 
 import type { Db } from 'mongodb';
 import type { ChatTraceEvent } from './chat-llm.js';
+import { resolve } from 'node:path';
+import { existsSync } from 'node:fs';
 
 // ── Shared Types ──
 
@@ -86,10 +88,8 @@ function log(msg: string, data?: unknown): void {
 
 /** Path to the FlowForge MCP server script */
 function getFlowForgeMcpServerPath(): string {
-  const { resolve } = require('node:path') as typeof import('node:path');
   // In dev (tsx), use .ts file. In prod (compiled), use .js
   const tsPath = resolve(process.cwd(), 'src/services/flowforge-mcp-server.ts');
-  const { existsSync } = require('node:fs') as typeof import('node:fs');
   if (existsSync(tsPath)) return tsPath;
   return resolve(process.cwd(), 'dist/services/flowforge-mcp-server.js');
 }
