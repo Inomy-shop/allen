@@ -115,7 +115,11 @@ async function executeAgentNode(
 
   const cwd = state.worktree_path as string | undefined;
   const existingSession = sessions[nodeName];
-  const resume = nodeDef.resume_on_retry && existingSession ? existingSession : undefined;
+  // Resume the agent's prior session by default — preserves context across
+  // retry loops (build/test failures, clarify revisions, review verdicts).
+  // Opt-out by setting `resume_on_retry: false` on a node that should start fresh.
+  const resumeFlag = nodeDef.resume_on_retry !== false;
+  const resume = resumeFlag && existingSession ? existingSession : undefined;
   let rawResponse = '';
   let sessionId: string | undefined;
   let turns = 0;

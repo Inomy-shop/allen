@@ -26,6 +26,7 @@ export interface NodeDef {
   outputs?: string[];
   output_format?: OutputFormat;
   output_extraction?: Record<string, string>;
+  /** Resume the agent's prior session on retry. Default: true. Set to false for stateless nodes (e.g. reviewers) that should start fresh each run. */
   resume_on_retry?: boolean;
   timeout?: number;              // seconds
 

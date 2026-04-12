@@ -34,7 +34,8 @@ export async function executeCodexNode(
 ): Promise<CodexResult> {
   const start = Date.now();
   const model = role?.model ?? 'default';
-  const isResume = !!(nodeDef.resume_on_retry && sessionId);
+  // Resume by default unless explicitly disabled on the node
+  const isResume = !!((nodeDef.resume_on_retry !== false) && sessionId);
 
   let prompt = nodeDef.prompt ? renderTemplate(nodeDef.prompt, state) : '';
   if (!isResume && role?.system) {
