@@ -274,9 +274,9 @@ async function executeAgentNode(
       // exit with code 1 if prior subprocess state still holds ~/.claude/ locks.
       await new Promise(r => setTimeout(r, 5000));
 
-      const reprompt = `Your previous response did not include the required output fields in a parseable JSON format. Please respond again with ONLY a JSON code block containing these exact keys: ${requiredOutputs.join(', ')}.
+      const reprompt = `Your previous response did not include the required output fields in a parseable JSON format. Please respond again with ONLY a JSON code block.
 
-Required format:
+Required format (all keys must be present):
 \`\`\`json
 {
 ${requiredOutputs.map(k => `  "${k}": ...`).join(',\n')}
@@ -287,7 +287,17 @@ Rules:
 - Include ALL keys listed above.
 - Use null if you genuinely don't have a value for a field.
 - Do not rename keys.
-- Do not include any explanation before or after the JSON code block.`;
+- Do not include any explanation before or after the JSON code block.
+
+OR — if you genuinely cannot produce the required outputs because the task is impossible, the input is broken, or you need human clarification, return an auto-gate signal instead:
+\`\`\`json
+{
+  "__action": "stop" | "skip" | "clarify",
+  "__reason": "brief explanation of why",
+  "__clarify_action": "retry" | "continue"
+}
+\`\`\`
+Use auto-gate only if the original prompt's workflow context explicitly allowed it for this node.`;
 
       try {
         const retry = await callAgent({
