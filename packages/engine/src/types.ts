@@ -277,10 +277,21 @@ export interface ValidationResult {
 
 // ── Built-in Function ───────────────────────────────────────────────────────
 
+/**
+ * Context passed to built-in functions at execution time.
+ * `db` is available when the engine runs with a MongoDB connection (normal
+ * server path); offline runs may omit it.
+ */
+export interface BuiltInContext {
+  emitter: EngineEventEmitter;
+  db?: import('mongodb').Db;
+  executionId?: string;
+}
+
 export type BuiltInFunction = (
   config: Record<string, unknown>,
   state: Record<string, unknown>,
-  emitter: EngineEventEmitter,
+  ctx: BuiltInContext,
 ) => Promise<Record<string, unknown>>;
 
 // ── Learning System ────────────────────────────────────────────────────────

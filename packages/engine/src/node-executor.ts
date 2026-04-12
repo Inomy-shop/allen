@@ -247,7 +247,7 @@ async function executeCodeNode(
         const delayMs = calculateBackoff(nodeDef, attempt);
         await sleep(delayMs);
       }
-      const outputs = await fn(config, state, deps.emitter);
+      const outputs = await fn(config, state, { emitter: deps.emitter, db: deps.db, executionId: deps.executionId });
       return {
         outputs,
         cost: { actual: null, estimated: 0, method: 'estimated' },

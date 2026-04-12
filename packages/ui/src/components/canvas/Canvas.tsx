@@ -97,9 +97,10 @@ interface Props {
   edges: Edge[];
   onNodesChange: (nodes: Node[]) => void;
   onEdgesChange: (edges: Edge[]) => void;
+  workflowInput?: Record<string, any> | null;
 }
 
-export default function Canvas({ nodes, edges, onNodesChange, onEdgesChange }: Props) {
+export default function Canvas({ nodes, edges, onNodesChange, onEdgesChange, workflowInput }: Props) {
   const selectedNode = nodes.find(n => n.selected) ?? null;
   const { size: propsWidth, handleMouseDown: propsResizeStart } = useResizable({ direction: 'horizontal', initialSize: 288, minSize: 220, maxSize: 500 });
   const { pushSnapshot, undo, redo } = useUndoRedo(nodes, edges, onNodesChange, onEdgesChange);
@@ -199,6 +200,7 @@ export default function Canvas({ nodes, edges, onNodesChange, onEdgesChange }: P
           node={selectedNode}
           onUpdate={handleUpdateNode}
           onDelete={handleDeleteNode}
+          workflowInput={workflowInput ?? null}
         />
       </div>
     </div>

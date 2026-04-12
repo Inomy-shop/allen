@@ -47,11 +47,13 @@ nodes:
       5. Propose a specific minimal fix
     outputs: [root_cause, affected_files, fix_proposal, is_backend, is_frontend]
 
-  # ── Phase 3: Branch ──
+  # ── Phase 3: Workspace (git worktree + ports + setup) ──
   create-branch:
     type: code
-    function: git-create-branch
-    outputs: [worktree_path, branch_name]
+    function: create-workspace
+    config:
+      wait_for_setup: true
+    outputs: [worktree_path, branch_name, workspace_id]
 
   # ── Phase 4: Fix (route to right specialist) ──
   fix-backend:

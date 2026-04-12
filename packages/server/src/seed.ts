@@ -4,7 +4,7 @@ import { fileURLToPath } from 'node:url';
 import yaml from 'js-yaml';
 import type { Db } from 'mongodb';
 import { loadAgents, validateWorkflow, getBuiltIns } from '@flowforge/engine';
-import type { WorkflowDef, AgentDef } from '@flowforge/engine';
+import type { WorkflowDef } from '@flowforge/engine';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -84,6 +84,7 @@ export async function seedDefaultWorkflows(db: Db): Promise<void> {
   }
 
   let seeded = 0;
+  let updated = 0;
   const files = readdirSync(workflowDir).filter(f => f.endsWith('.yml') || f.endsWith('.yaml'));
 
   for (const file of files) {
@@ -91,26 +92,47 @@ export async function seedDefaultWorkflows(db: Db): Promise<void> {
     const parsed = yaml.load(content) as WorkflowDef;
 
     const existing = await col.findOne({ name: parsed.name });
-    if (existing) continue;
-
     const validation = validateWorkflow(parsed, agents, builtInNames);
 
-    await col.insertOne({
-      name: parsed.name,
-      description: parsed.description ?? '',
-      version: 1,
-      yaml: content,
-      parsed,
-      reactFlowData: null,
-      validation,
-      tags: ['default'],
-      createdBy: 'system',
-      createdAt: new Date(),
-      updatedAt: new Date(),
-    });
+    if (!existing) {
+      await col.insertOne({
+        name: parsed.name,
+        description: parsed.description ?? '',
+        version: 1,
+        yaml: content,
+        parsed,
+        reactFlowData: null,
+        validation,
+        tags: ['default'],
+        createdBy: 'system',
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      });
+      seeded++;
+      continue;
+    }
 
-    seeded++;
+    // Auto-update system-seeded workflows when the YAML on disk changes.
+    // User-edited workflows (createdBy !== 'system') are never touched.
+    const isSystemSeed = existing.createdBy === 'system';
+    const yamlChanged = existing.yaml !== content;
+    if (isSystemSeed && yamlChanged) {
+      await col.updateOne(
+        { _id: existing._id },
+        {
+          $set: {
+            description: parsed.description ?? '',
+            yaml: content,
+            parsed,
+            validation,
+            updatedAt: new Date(),
+          },
+        },
+      );
+      updated++;
+      console.log(`[seed] Updated built-in workflow: ${parsed.name}`);
+    }
   }
 
-  console.log(`Seeded ${seeded} default workflows (${files.length} checked)`);
+  console.log(`Seeded ${seeded} new, updated ${updated} default workflows (${files.length} checked)`);
 }

@@ -3,6 +3,7 @@ import { gitCreateBranch, gitCommit, gitPush, gitCreatePR, gitCleanupWorktree } 
 import { runBuild, runTests } from './build.js';
 import { classifyTask } from './classify.js';
 import { promptUser } from './prompt-user.js';
+import { createWorkspace } from './workspace.js';
 
 const builtIns: Record<string, BuiltInFunction> = {
   'git-create-branch': gitCreateBranch,
@@ -14,6 +15,7 @@ const builtIns: Record<string, BuiltInFunction> = {
   'run-tests': runTests,
   'classify-task': classifyTask,
   'prompt-user': promptUser,
+  'create-workspace': createWorkspace,
 };
 
 export function getBuiltIns(): Record<string, BuiltInFunction> {

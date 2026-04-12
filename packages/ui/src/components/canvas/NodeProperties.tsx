@@ -15,12 +15,20 @@ interface Props {
   node: Node | null;
   onUpdate: (id: string, data: Record<string, any>) => void;
   onDelete: (id: string) => void;
+  /** Workflow-level input schema (`input:` section in YAML). Shown when START is selected. */
+  workflowInput?: Record<string, any> | null;
 }
 
-const builtIns = ['git-create-branch', 'git-commit', 'git-push', 'git-create-pr', 'git-cleanup-worktree', 'run-build', 'run-tests', 'classify-task'];
+const builtIns = [
+  'create-workspace',
+  'git-create-branch', 'git-commit', 'git-push', 'git-create-pr', 'git-cleanup-worktree',
+  'run-build', 'run-tests',
+  'classify-task',
+  'prompt-user',
+];
 const fieldTypes = ['string', 'text', 'boolean', 'number', 'select'];
 
-export default function NodeProperties({ node, onUpdate, onDelete }: Props) {
+export default function NodeProperties({ node, onUpdate, onDelete, workflowInput }: Props) {
   const [localData, setLocalData] = useState<Record<string, any>>({});
   const [agentList, setAgentList] = useState<any[]>([]);
 
@@ -33,10 +41,65 @@ export default function NodeProperties({ node, onUpdate, onDelete }: Props) {
     if (node) setLocalData({ ...node.data });
   }, [node?.id, node?.data]);
 
-  if (!node || node.id === 'START' || node.id === 'END') {
+  if (!node) {
     return (
       <div className="p-4 text-sm text-theme-muted font-mono">
         SELECT A NODE TO EDIT
+      </div>
+    );
+  }
+
+  // START — show workflow input schema so users can see what data the
+  // workflow expects at run time.
+  if (node.id === 'START') {
+    const inputs = workflowInput && typeof workflowInput === 'object' ? Object.entries(workflowInput) : [];
+    return (
+      <div className="p-4 space-y-3 overflow-auto h-full">
+        <h3 className="font-heading text-sm font-semibold text-theme-primary tracking-wider">Workflow Input</h3>
+        <p className="text-[11px] text-theme-muted font-body">
+          Fields the user is prompted for when running this workflow. Edit in the YAML view under <code className="bg-surface-200/60 px-1 rounded text-[10px]">input:</code>.
+        </p>
+        {inputs.length === 0 ? (
+          <div className="text-xs text-theme-subtle italic">No inputs declared.</div>
+        ) : (
+          <div className="space-y-2">
+            {inputs.map(([name, def]) => {
+              const d = (def ?? {}) as Record<string, any>;
+              return (
+                <div key={name} className="border border-border/30 rounded-md p-2.5 bg-surface-100/30">
+                  <div className="flex items-center gap-2 mb-1">
+                    <span className="text-xs font-mono text-theme-primary font-semibold">{name}</span>
+                    <span className="text-[9px] font-mono uppercase tracking-wider px-1.5 py-0.5 rounded bg-accent-blue/10 text-accent-blue">
+                      {d.type ?? 'string'}
+                    </span>
+                    {d.required && (
+                      <span className="text-[9px] font-mono uppercase tracking-wider px-1.5 py-0.5 rounded bg-accent-red/10 text-accent-red">
+                        required
+                      </span>
+                    )}
+                  </div>
+                  {d.description && (
+                    <p className="text-[10px] text-theme-muted font-body">{d.description}</p>
+                  )}
+                  {d.default !== undefined && (
+                    <div className="text-[10px] text-theme-subtle font-mono mt-1">
+                      default: <span className="text-theme-secondary">{JSON.stringify(d.default)}</span>
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  // END — nothing to configure
+  if (node.id === 'END') {
+    return (
+      <div className="p-4 text-sm text-theme-muted font-mono">
+        END — no configuration
       </div>
     );
   }

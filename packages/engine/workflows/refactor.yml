@@ -62,11 +62,13 @@ nodes:
       - { name: notes, type: text, required: false, label: "Modifications" }
     outputs: [decision, notes]
 
-  # ── Phase 3: Safety baseline (QA Team) ──
+  # ── Phase 3: Workspace + safety baseline (QA Team) ──
   create-branch:
     type: code
-    function: git-create-branch
-    outputs: [worktree_path, branch_name]
+    function: create-workspace
+    config:
+      wait_for_setup: true
+    outputs: [worktree_path, branch_name, workspace_id]
 
   baseline-tests:
     agent: unit-test-writer

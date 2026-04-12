@@ -140,11 +140,13 @@ nodes:
       5. What monitoring to add
     outputs: [root_cause, fix_plan, fix_risk, monitoring_plan]
 
-  # ── Phase 5: Hotfix ──
+  # ── Phase 5: Hotfix workspace (git worktree + ports + setup) ──
   create-branch:
     type: code
-    function: git-create-branch
-    outputs: [worktree_path, branch_name]
+    function: create-workspace
+    config:
+      wait_for_setup: true
+    outputs: [worktree_path, branch_name, workspace_id]
 
   hotfix:
     agent: api-developer

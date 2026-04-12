@@ -313,6 +313,7 @@ export default function WorkflowBuilderPage() {
             edges={edges}
             onNodesChange={(n) => { setNodes(n); setDirty(true); }}
             onEdgesChange={(e) => { setEdges(e); setDirty(true); }}
+            workflowInput={parsedWorkflow?.input ?? null}
           />
         ) : (
           <div className="flex h-full">
