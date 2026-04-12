@@ -566,7 +566,11 @@ export class FlowForgeEngine {
           }
         }
 
-        const completedSet = currentNodes.filter(n => n !== 'END');
+        // Use the UNION of (just-finished nodes) and (historical completedNodes)
+        // so join edges like [requirements, ux-spec] → threat-model can still
+        // fire on retry paths where only one of the join sources re-runs.
+        const justFinished = currentNodes.filter(n => n !== 'END');
+        const completedSet = Array.from(new Set([...justFinished, ...exec.completedNodes]));
         currentNodes = this.getNextNodes(completedSet, edges, exec.state, exec.retryCounts, exec.id);
       }
 
