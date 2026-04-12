@@ -419,21 +419,23 @@ export class FlowForgeEngine {
         status: 'running',
       });
 
-      // Check if current node triggers a parallel fork
-      // Case 1: single source node has a parallel edge (e.g., { from: 'implement', to: ['test', 'build'], parallel: true })
-      // Case 2: START edge was parallel and getStartNodes returned all targets — detect by checking if all currentNodes match a parallel edge's `to`
-      const parallelEdge = edges.find(
-        e => e.parallel && Array.isArray(e.to) && (
-          // Single source node
-          (currentNodes.length === 1 && currentNodes[0] === this.normalizeFrom(e.from)) ||
-          // Multiple nodes from START that match the parallel edge's targets
-          (currentNodes.length > 1 && Array.isArray(e.to) && e.to.length === currentNodes.length && e.to.every(t => currentNodes.includes(t)))
-        ),
-      );
+      // Check if current nodes ARE the targets of a parallel edge — i.e. we're
+      // entering a parallel fork. This fires when getNextNodes / getStartNodes
+      // returned multiple nodes that all match a single parallel edge's `to`.
+      //
+      // NOTE: we must NOT match when currentNodes[0] is the SOURCE of a parallel
+      // edge — the source node must run first as a normal single-node execution;
+      // the parallel fork happens afterwards when getNextNodes returns the targets.
+      const parallelEdge = edges.find(e => {
+        if (!e.parallel || !Array.isArray(e.to)) return false;
+        if (e.to.length !== currentNodes.length) return false;
+        return e.to.every(t => currentNodes.includes(t));
+      });
 
       if (parallelEdge && Array.isArray(parallelEdge.to)) {
         await this.executeParallelNodes(parallelEdge.to, parallelEdge, nodes, exec, nestingDepth);
-        const nextNodes = this.getNextNodes(parallelEdge.to, edges, exec.state, exec.retryCounts, exec.id);
+        const parallelJustFinished = parallelEdge.to as string[];
+        const nextNodes = this.getNextNodes(exec.completedNodes, edges, exec.state, exec.retryCounts, exec.id, parallelJustFinished);
         currentNodes = nextNodes;
       } else {
         let gateAction: 'continue' | 'stop' | 'skip' | 'clarify' = 'continue';
@@ -566,12 +568,13 @@ export class FlowForgeEngine {
           }
         }
 
-        // Use the UNION of (just-finished nodes) and (historical completedNodes)
-        // so join edges like [requirements, ux-spec] → threat-model can still
-        // fire on retry paths where only one of the join sources re-runs.
+        // Pass exec.completedNodes BY REFERENCE so getNextNodes can rewind
+        // downstream history when a retry edge fires. justFinished is passed
+        // separately — join edges use (completedNodes ∪ justFinished) for the
+        // allFromCompleted check, while retry edges require at least one source
+        // in justFinished to prevent infinite loops on stale state.
         const justFinished = currentNodes.filter(n => n !== 'END');
-        const completedSet = Array.from(new Set([...justFinished, ...exec.completedNodes]));
-        currentNodes = this.getNextNodes(completedSet, edges, exec.state, exec.retryCounts, exec.id);
+        currentNodes = this.getNextNodes(exec.completedNodes, edges, exec.state, exec.retryCounts, exec.id, justFinished);
       }
 
       if (currentNodes.includes('END') || currentNodes.length === 0) {
@@ -1070,21 +1073,83 @@ export class FlowForgeEngine {
     return [];
   }
 
+  /**
+   * Collect every node reachable by following forward (non-retry) edges
+   * starting from a set of source nodes. Used to rewind downstream history
+   * when a retry edge fires — so nodes that were completed AS A CONSEQUENCE
+   * of the retry target get re-executed on the retry path.
+   */
+  private findDownstreamNodes(startNodes: string[], edges: EdgeDef[]): Set<string> {
+    const downstream = new Set<string>();
+    const queue = [...startNodes];
+    while (queue.length > 0) {
+      const node = queue.shift()!;
+      for (const edge of edges) {
+        // Only follow forward edges — retry edges introduce cycles and
+        // shouldn't propagate downstream invalidation.
+        if (edge.max_retries != null) continue;
+        const froms = Array.isArray(edge.from) ? edge.from : [edge.from];
+        if (!froms.includes(node)) continue;
+        const tos = Array.isArray(edge.to) ? edge.to : [edge.to];
+        for (const t of tos) {
+          if (t === 'END' || downstream.has(t)) continue;
+          downstream.add(t);
+          queue.push(t);
+        }
+      }
+    }
+    return downstream;
+  }
+
   private getNextNodes(
+    /** Mutable ref — will be spliced when a retry edge rewinds history. */
     completedNodes: string[],
     edges: EdgeDef[],
     state: Record<string, unknown>,
     retryCounts: Record<string, number>,
     executionId?: string,
+    /**
+     * Subset of completedNodes that were JUST finished in this iteration.
+     * - Retry edges only fire when at least one source is in this set (prevents
+     *   infinite loops on stale historical state).
+     * - `allFromCompleted` checks use the UNION of completedNodes ∪ justFinished
+     *   so join edges can fire when only one of their sources just re-ran.
+     */
+    justFinished?: string[],
   ): string[] {
     const nextNodes: string[] = [];
+    const justFinishedSet = justFinished ? new Set(justFinished) : null;
+    // The effective "completed" view = historical completedNodes ∪ justFinished.
+    // justFinished nodes may or may not already be in completedNodes depending
+    // on whether the caller has pushed them yet.
+    const effectiveCompleted = new Set([...completedNodes, ...(justFinished ?? [])]);
 
     for (const edge of edges) {
       const fromNodes = Array.isArray(edge.from) ? edge.from : [edge.from];
       if (fromNodes[0] === 'START') continue;
 
-      const allFromCompleted = fromNodes.every(f => completedNodes.includes(f));
+      const allFromCompleted = fromNodes.every(f => effectiveCompleted.has(f));
       if (!allFromCompleted) continue;
+
+      // Retry edges: only fire when at least one source is in the just-finished
+      // set. Without this, a retry edge like `clarify → requirements if revise`
+      // would keep firing on every subsequent iteration because `clarify` stays
+      // in historical completedNodes and `approved` state doesn't auto-reset.
+      if (edge.max_retries != null && justFinishedSet) {
+        const anyJustFinished = fromNodes.some(f => justFinishedSet.has(f));
+        if (!anyJustFinished) continue;
+      }
+
+      // For forward (non-retry) edges: skip if ALL targets are already
+      // completed. This prevents re-routing to already-visited nodes on
+      // subsequent iterations (e.g. edge 3 `[req, ux] → threat-model` firing
+      // again after threat-model already ran). Retry edges intentionally
+      // re-route and are exempt.
+      if (edge.max_retries == null) {
+        const targets = Array.isArray(edge.to) ? edge.to : [edge.to];
+        const allTargetsDone = targets.every(t => t !== 'END' && effectiveCompleted.has(t));
+        if (allTargetsDone) continue;
+      }
 
       if (edge.condition) {
         const condResult = evaluateCondition(edge.condition, state);
@@ -1135,6 +1200,20 @@ export class FlowForgeEngine {
             retryContext: state.retry_context,
           },
         });
+
+        // Rewind downstream: remove every node reachable forward from the
+        // retry targets from completedNodes. This ensures that after the
+        // retry runs, the forward edges will fire again (instead of being
+        // blocked by the "all targets already completed" filter above).
+        const retryTargets = Array.isArray(edge.to) ? edge.to : [edge.to];
+        const downstream = this.findDownstreamNodes(retryTargets, edges);
+        if (downstream.size > 0) {
+          for (let i = completedNodes.length - 1; i >= 0; i--) {
+            if (downstream.has(completedNodes[i])) {
+              completedNodes.splice(i, 1);
+            }
+          }
+        }
       }
 
       const targets = Array.isArray(edge.to) ? edge.to : [edge.to];
