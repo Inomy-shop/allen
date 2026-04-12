@@ -211,7 +211,96 @@ async function executeAgentNode(
 
   const model = role?.model ?? 'sonnet';
   const extractLog = (msg: string) => emitLog(deps, nodeName, { level: 'debug', category: 'system', message: `[extraction] ${msg}` });
-  const outputs = await extractOutputs(rawResponse, nodeDef, extractLog);
+  let outputs = await extractOutputs(rawResponse, nodeDef, extractLog);
+
+  // ── Extraction auto-retry ──────────────────────────────────────────────
+  // If the agent produced a response but we couldn't extract the required
+  // outputs, re-prompt the SAME session asking it to provide the JSON in the
+  // expected format. This is NOT a workflow-level retry — max_retries on edges
+  // is not incremented. We try up to MAX_EXTRACTION_RETRIES times.
+  const MAX_EXTRACTION_RETRIES = 2;
+  const requiredOutputs = (nodeDef.outputs ?? []).filter(k => !k.startsWith('__'));
+  const extractionFailed = (out: Record<string, unknown>) => {
+    if (requiredOutputs.length === 0) return false;
+    // If any gate action fired (clarify/stop/skip), skip re-prompt
+    if (out.__action) return false;
+    // Missing if none of the required outputs are present
+    return !requiredOutputs.some(k => k in out);
+  };
+
+  let extractAttempt = 0;
+  while (extractionFailed(outputs) && extractAttempt < MAX_EXTRACTION_RETRIES && sessionId) {
+    extractAttempt++;
+    emitLog(deps, nodeName, {
+      level: 'warn',
+      category: 'system',
+      message: `[extraction] Auto-retry ${extractAttempt}/${MAX_EXTRACTION_RETRIES} — agent response did not contain required outputs [${requiredOutputs.join(', ')}]. Asking agent to resend in expected JSON format.`,
+    });
+
+    const reprompt = `Your previous response did not include the required output fields in a parseable format. Please respond again with ONLY a JSON code block containing these exact keys: ${requiredOutputs.join(', ')}.
+
+Wrap the response like this:
+\`\`\`json
+{
+${requiredOutputs.map(k => `  "${k}": ...`).join(',\n')}
+}
+\`\`\`
+
+Do not include any explanation before or after the JSON block. Just the JSON code block.`;
+
+    try {
+      const { query } = await import('@anthropic-ai/claude-code');
+      let retryResponse = '';
+      const retryConv = query({
+        prompt: reprompt,
+        options: {
+          model: role?.model ?? 'sonnet',
+          maxTurns: 1,
+          permissionMode: 'bypassPermissions',
+          resume: sessionId, // resume the same session so the agent has full context
+          ...(deps.abortSignal ? { abortController: { signal: deps.abortSignal, abort() { /* handled */ } } as any } : {}),
+        },
+      });
+      for await (const message of retryConv) {
+        if (message.type === 'assistant') {
+          for (const block of (message as any).message.content) {
+            if (block.type === 'text') retryResponse += block.text;
+          }
+        } else if (message.type === 'result') {
+          if ((message as any).session_id) sessionId = (message as any).session_id;
+          const rc = (message as any).total_cost_usd;
+          if (typeof rc === 'number') actualCost = (actualCost ?? 0) + rc;
+          turns += (message as any).num_turns ?? 0;
+        }
+      }
+
+      rawResponse += '\n\n--- Extraction retry ' + extractAttempt + ' ---\n' + retryResponse;
+      outputs = await extractOutputs(retryResponse, nodeDef, extractLog);
+      if (!extractionFailed(outputs)) {
+        emitLog(deps, nodeName, {
+          level: 'info',
+          category: 'system',
+          message: `[extraction] Auto-retry ${extractAttempt} succeeded — extracted [${Object.keys(outputs).join(', ')}]`,
+        });
+      }
+    } catch (err) {
+      emitLog(deps, nodeName, {
+        level: 'warn',
+        category: 'system',
+        message: `[extraction] Auto-retry ${extractAttempt} failed: ${(err as Error).message}`,
+      });
+      break;
+    }
+  }
+
+  if (extractionFailed(outputs)) {
+    emitLog(deps, nodeName, {
+      level: 'warn',
+      category: 'system',
+      message: `[extraction] Failed to extract required outputs after ${extractAttempt} auto-retries — downstream conditions may evaluate with undefined values`,
+    });
+  }
+  // ───────────────────────────────────────────────────────────────────────
 
   return {
     outputs,

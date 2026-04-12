@@ -311,8 +311,23 @@ export function buildOutputInstruction(outputs: string[], format: string | undef
   if (!outputs.length) return '';
   if (format === 'freeform') return '';
 
-  const fields = outputs.map(o => `"${o}": ...`).join(', ');
-  return `\n\nWhen done, return results as JSON:\n\`\`\`json\n{ ${fields} }\n\`\`\``;
+  const fields = outputs.map(o => `  "${o}": ...`).join(',\n');
+  return `\n\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+IMPORTANT — RESPONSE FORMAT
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+You MUST end your response with a JSON code block containing EXACTLY these keys:
+
+\`\`\`json
+{
+${fields}
+}
+\`\`\`
+
+- Include the JSON block at the very end of your response.
+- All listed keys are required. Use null if you don't have a value.
+- Do not omit any keys.
+- Do not rename any keys.
+- The downstream workflow will fail if this JSON block is missing or malformed.`;
 }
 
 /**

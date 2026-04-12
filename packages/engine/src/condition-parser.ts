@@ -3,6 +3,27 @@ import { compileExpression } from 'filtrex';
 const conditionCache = new Map<string, (data: Record<string, unknown>) => unknown>();
 
 /**
+ * Collect every identifier referenced in a filtrex expression so we can
+ * pre-populate missing ones with `undefined`. Filtrex otherwise returns
+ * an UnknownPropertyError object (not throws!) which gets coerced to `true`
+ * by `!!`, making both `x` and `NOT x` evaluate to `true` when x is missing.
+ */
+function extractIdentifiers(expression: string): string[] {
+  const keywords = new Set(['and', 'or', 'not', 'in', 'true', 'false', 'null', 'undefined']);
+  const ids = new Set<string>();
+  // Strip string literals first
+  const stripped = expression.replace(/"[^"]*"/g, '""').replace(/'[^']*'/g, "''");
+  const matches = stripped.matchAll(/\b([a-zA-Z_][a-zA-Z0-9_]*)\b/g);
+  for (const m of matches) {
+    const token = m[1];
+    if (!keywords.has(token.toLowerCase()) && isNaN(Number(token))) {
+      ids.add(token);
+    }
+  }
+  return [...ids];
+}
+
+/**
  * Normalize uppercase logical operators to lowercase for filtrex compatibility.
  * Handles: AND → and, OR → or, NOT → not
  * Only replaces standalone keywords (word boundaries) to avoid mangling variable names.
@@ -24,7 +45,23 @@ export function evaluateCondition(expression: string, state: Record<string, unkn
     fn = compileExpression(normalized);
     conditionCache.set(normalized, fn);
   }
-  return !!fn(state);
+
+  // Build a safe state view where any identifier referenced in the expression
+  // but missing from `state` is set to `false`. Without this, filtrex returns
+  // an UnknownPropertyError object (not throws), and `!!errorObject === true`
+  // makes BOTH `x` and `NOT x` evaluate to `true` when x is undefined.
+  const ids = extractIdentifiers(expression);
+  const safeState: Record<string, unknown> = { ...state };
+  for (const id of ids) {
+    if (!(id in safeState)) safeState[id] = false;
+    // Also coerce undefined/null to false so NOT x works sanely
+    else if (safeState[id] === undefined || safeState[id] === null) safeState[id] = false;
+  }
+
+  const result = fn(safeState);
+  // Defensive: if filtrex still returned an error object, coerce to false
+  if (result instanceof Error) return false;
+  return !!result;
 }
 
 /**
