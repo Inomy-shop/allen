@@ -129,56 +129,72 @@ async function executeAgentNode(
   let agentTextBuffer = '';
   let agentTextChunkCount = 0;
 
+  const { query } = await import('@anthropic-ai/claude-code');
+
+  // Load MCP servers so agent nodes can access Linear, Postgres, etc.
+  let mcpServers: Record<string, unknown> | undefined;
   try {
-    const { query } = await import('@anthropic-ai/claude-code');
+    const { loadAllMcpServers } = await import('./mcp-loader.js');
+    if (deps.db) mcpServers = await loadAllMcpServers(deps.db);
+  } catch { /* MCP not available — continue without */ }
 
-    // Load MCP servers so agent nodes can access Linear, Postgres, etc.
-    let mcpServers: Record<string, unknown> | undefined;
-    try {
-      const { loadAllMcpServers } = await import('./mcp-loader.js');
-      if (deps.db) mcpServers = await loadAllMcpServers(deps.db);
-    } catch { /* MCP not available — continue without */ }
+  /**
+   * Shared helper to call the Claude Code SDK with the agent's full context.
+   * Used for BOTH the initial agent turn AND any extraction retry turns.
+   * Keeping the options identical is essential — a retry with missing
+   * options (customSystemPrompt, allowedTools, mcpServers) against a
+   * resumed session causes `Claude Code process exited with code 1`.
+   */
+  type CallAgentOpts = {
+    promptText: string;
+    resumeSession?: string;
+    maxTurns?: number;
+    emitText?: boolean; // whether to stream text as agent_text events
+  };
+  const callAgent = async (opts: CallAgentOpts): Promise<{ text: string; sessionId?: string; cost: number | null; turns: number }> => {
+    let text = '';
+    let localSessionId: string | undefined;
+    let localTurns = 0;
+    let localCost: number | null = null;
 
-    const conversation = query({
-      prompt,
+    const conv = query({
+      prompt: opts.promptText,
       options: {
         customSystemPrompt: role?.system,
         model: role?.model ?? 'sonnet',
         allowedTools: role?.tools ?? [],
         cwd,
-        resume,
-        maxTurns: 50,
+        resume: opts.resumeSession,
+        maxTurns: opts.maxTurns ?? 50,
         permissionMode: 'bypassPermissions',
         ...(mcpServers && Object.keys(mcpServers).length > 0 ? { mcpServers: mcpServers as any } : {}),
         ...(deps.abortSignal ? { abortController: { signal: deps.abortSignal, abort() { /* handled by engine */ } } as any } : {}),
       },
     });
 
-    for await (const message of conversation) {
+    for await (const message of conv) {
       if (message.type === 'assistant') {
-        for (const block of message.message.content) {
+        for (const block of (message as any).message.content) {
           if (block.type === 'text') {
-            rawResponse += block.text;
-            deps.emitter.emit({ event: 'agent_text', data: { node: nodeName, text: block.text } });
-
-            // Throttled agent text log
-            agentTextBuffer += block.text;
-            agentTextChunkCount++;
-            if (agentTextBuffer.length >= 100 || agentTextChunkCount % 5 === 0) {
-              emitLog(deps, nodeName, {
-                category: 'agent',
-                level: 'debug',
-                message: agentTextBuffer.slice(0, 200),
-              });
-              agentTextBuffer = '';
+            text += block.text;
+            if (opts.emitText) {
+              deps.emitter.emit({ event: 'agent_text', data: { node: nodeName, text: block.text } });
+              agentTextBuffer += block.text;
+              agentTextChunkCount++;
+              if (agentTextBuffer.length >= 100 || agentTextChunkCount % 5 === 0) {
+                emitLog(deps, nodeName, {
+                  category: 'agent',
+                  level: 'debug',
+                  message: agentTextBuffer.slice(0, 200),
+                });
+                agentTextBuffer = '';
+              }
             }
-          } else if (block.type === 'tool_use') {
+          } else if (block.type === 'tool_use' && opts.emitText) {
             deps.emitter.emit({
               event: 'agent_tool_start',
               data: { node: nodeName, tool: block.name, args: block.input },
             });
-
-            // Tool call log
             const toolArgs = block.input as Record<string, unknown> | undefined;
             const argSummary = toolArgs ? Object.keys(toolArgs).join(', ') : '';
             emitLog(deps, nodeName, {
@@ -188,116 +204,189 @@ async function executeAgentNode(
             });
           }
         }
-        turns++;
+        localTurns++;
       } else if (message.type === 'result') {
-        sessionId = message.session_id;
-        actualCost = message.total_cost_usd ?? null;
-        turns = message.num_turns;
+        localSessionId = (message as any).session_id;
+        localCost = (message as any).total_cost_usd ?? null;
+        localTurns = (message as any).num_turns ?? localTurns;
       }
     }
 
-    // Flush remaining agent text buffer
-    if (agentTextBuffer.length > 0) {
-      emitLog(deps, nodeName, {
-        category: 'agent',
-        level: 'debug',
-        message: agentTextBuffer.slice(0, 200),
-      });
-    }
+    return { text, sessionId: localSessionId, cost: localCost, turns: localTurns };
+  };
 
-  } catch (err: unknown) {
-    throw err;
+  // ── Initial agent call ────────────────────────────────────────────────
+  const initial = await callAgent({
+    promptText: prompt,
+    resumeSession: resume,
+    maxTurns: 50,
+    emitText: true,
+  });
+  rawResponse = initial.text;
+  sessionId = initial.sessionId;
+  actualCost = initial.cost;
+  turns = initial.turns;
+
+  // Flush remaining agent text buffer
+  if (agentTextBuffer.length > 0) {
+    emitLog(deps, nodeName, {
+      category: 'agent',
+      level: 'debug',
+      message: agentTextBuffer.slice(0, 200),
+    });
   }
 
   const model = role?.model ?? 'sonnet';
   const extractLog = (msg: string) => emitLog(deps, nodeName, { level: 'debug', category: 'system', message: `[extraction] ${msg}` });
-  let outputs = await extractOutputs(rawResponse, nodeDef, extractLog);
-
-  // ── Extraction auto-retry ──────────────────────────────────────────────
-  // If the agent produced a response but we couldn't extract the required
-  // outputs, re-prompt the SAME session asking it to provide the JSON in the
-  // expected format. This is NOT a workflow-level retry — max_retries on edges
-  // is not incremented. We try up to MAX_EXTRACTION_RETRIES times.
-  const MAX_EXTRACTION_RETRIES = 2;
   const requiredOutputs = (nodeDef.outputs ?? []).filter(k => !k.startsWith('__'));
   const extractionFailed = (out: Record<string, unknown>) => {
     if (requiredOutputs.length === 0) return false;
-    // If any gate action fired (clarify/stop/skip), skip re-prompt
-    if (out.__action) return false;
-    // Missing if none of the required outputs are present
+    if (out.__action) return false; // gate actions override extraction
     return !requiredOutputs.some(k => k in out);
   };
 
-  let extractAttempt = 0;
-  while (extractionFailed(outputs) && extractAttempt < MAX_EXTRACTION_RETRIES && sessionId) {
-    extractAttempt++;
-    emitLog(deps, nodeName, {
-      level: 'warn',
-      category: 'system',
-      message: `[extraction] Auto-retry ${extractAttempt}/${MAX_EXTRACTION_RETRIES} — agent response did not contain required outputs [${requiredOutputs.join(', ')}]. Asking agent to resend in expected JSON format.`,
-    });
+  // ── Step 1: regex-only extraction (Layers 0-3, NO LLM) ─────────────────
+  // Fast, reliable extraction from structured response text.
+  let outputs = await extractOutputs(rawResponse, nodeDef, extractLog, /*skipLLMFallback*/ true);
 
-    const reprompt = `Your previous response did not include the required output fields in a parseable format. Please respond again with ONLY a JSON code block containing these exact keys: ${requiredOutputs.join(', ')}.
+  // ── Step 2: Agent-resume retry ─────────────────────────────────────────
+  // Ask the SAME agent (via callAgent helper with identical options — same
+  // system prompt, same tools, same mcpServers) to resend its response in
+  // the expected JSON format. The agent is the smartest extractor because
+  // it has full context — Haiku can only guess from whatever text is there.
+  // Runs BEFORE Haiku so the original agent gets a chance to fix its own
+  // formatting.
+  //
+  // Key: using callAgent() with resume:sessionId and the SAME options as
+  // the original call avoids the "Claude Code process exited with code 1"
+  // error that occurs when options drift between call and resume.
+  const MAX_AGENT_RETRIES = 2;
+  if (extractionFailed(outputs) && sessionId) {
+    for (let attempt = 1; attempt <= MAX_AGENT_RETRIES; attempt++) {
+      emitLog(deps, nodeName, {
+        level: 'warn',
+        category: 'system',
+        message: `[extraction] Agent-resume retry ${attempt}/${MAX_AGENT_RETRIES} — asking agent to resend in expected JSON format (5s cooldown first)`,
+      });
 
-Wrap the response like this:
+      // 5 second cooldown — gives the Claude Code SDK subprocess time to
+      // fully clean up from the previous call. Fresh spawn under load can
+      // exit with code 1 if prior subprocess state still holds ~/.claude/ locks.
+      await new Promise(r => setTimeout(r, 5000));
+
+      const reprompt = `Your previous response did not include the required output fields in a parseable JSON format. Please respond again with ONLY a JSON code block containing these exact keys: ${requiredOutputs.join(', ')}.
+
+Required format:
 \`\`\`json
 {
 ${requiredOutputs.map(k => `  "${k}": ...`).join(',\n')}
 }
 \`\`\`
 
-Do not include any explanation before or after the JSON block. Just the JSON code block.`;
+Rules:
+- Include ALL keys listed above.
+- Use null if you genuinely don't have a value for a field.
+- Do not rename keys.
+- Do not include any explanation before or after the JSON code block.`;
 
-    try {
-      const { query } = await import('@anthropic-ai/claude-code');
-      let retryResponse = '';
-      const retryConv = query({
-        prompt: reprompt,
-        options: {
-          model: role?.model ?? 'sonnet',
-          maxTurns: 1,
-          permissionMode: 'bypassPermissions',
-          resume: sessionId, // resume the same session so the agent has full context
-          ...(deps.abortSignal ? { abortController: { signal: deps.abortSignal, abort() { /* handled */ } } as any } : {}),
-        },
-      });
-      for await (const message of retryConv) {
-        if (message.type === 'assistant') {
-          for (const block of (message as any).message.content) {
-            if (block.type === 'text') retryResponse += block.text;
-          }
-        } else if (message.type === 'result') {
-          if ((message as any).session_id) sessionId = (message as any).session_id;
-          const rc = (message as any).total_cost_usd;
-          if (typeof rc === 'number') actualCost = (actualCost ?? 0) + rc;
-          turns += (message as any).num_turns ?? 0;
-        }
-      }
-
-      rawResponse += '\n\n--- Extraction retry ' + extractAttempt + ' ---\n' + retryResponse;
-      outputs = await extractOutputs(retryResponse, nodeDef, extractLog);
-      if (!extractionFailed(outputs)) {
-        emitLog(deps, nodeName, {
-          level: 'info',
-          category: 'system',
-          message: `[extraction] Auto-retry ${extractAttempt} succeeded — extracted [${Object.keys(outputs).join(', ')}]`,
+      try {
+        const retry = await callAgent({
+          promptText: reprompt,
+          resumeSession: sessionId,
+          maxTurns: 2,
+          emitText: false,
         });
+
+        if (retry.sessionId) sessionId = retry.sessionId;
+        if (retry.cost != null) actualCost = (actualCost ?? 0) + retry.cost;
+        turns += retry.turns;
+
+        if (retry.text) {
+          rawResponse += '\n\n--- Agent retry ' + attempt + ' ---\n' + retry.text;
+          const retryOutputs = await extractOutputs(retry.text, nodeDef, extractLog, /*skipLLMFallback*/ true);
+          outputs = { ...outputs, ...retryOutputs };
+          if (!extractionFailed(outputs)) {
+            emitLog(deps, nodeName, {
+              level: 'info',
+              category: 'system',
+              message: `[extraction] Agent-resume retry ${attempt} succeeded — extracted [${Object.keys(retryOutputs).join(', ')}]`,
+            });
+            break;
+          }
+        } else {
+          emitLog(deps, nodeName, {
+            level: 'warn',
+            category: 'system',
+            message: `[extraction] Agent-resume retry ${attempt} returned empty response`,
+          });
+        }
+      } catch (err) {
+        emitLog(deps, nodeName, {
+          level: 'warn',
+          category: 'system',
+          message: `[extraction] Agent-resume retry ${attempt} failed: ${(err as Error).message}`,
+        });
+        // Continue to next attempt
       }
+    }
+  }
+
+  // ── Step 3: Haiku LLM fallback (Layer 4) ───────────────────────────────
+  // If the agent-resume retries didn't produce output (SDK concurrency errors
+  // or agent refused to cooperate), try a fresh Haiku call to extract from
+  // the raw text as a last-ditch LLM attempt.
+  if (extractionFailed(outputs)) {
+    emitLog(deps, nodeName, {
+      level: 'warn',
+      category: 'system',
+      message: `[extraction] Falling back to Haiku LLM extraction (5s cooldown first)`,
+    });
+    await new Promise(r => setTimeout(r, 5000));
+    try {
+      const haikuOutputs = await extractOutputs(rawResponse, nodeDef, extractLog, /*skipLLMFallback*/ false);
+      outputs = { ...outputs, ...haikuOutputs };
     } catch (err) {
       emitLog(deps, nodeName, {
         level: 'warn',
         category: 'system',
-        message: `[extraction] Auto-retry ${extractAttempt} failed: ${(err as Error).message}`,
+        message: `[extraction] Haiku fallback failed: ${(err as Error).message}`,
       });
-      break;
     }
+  }
+
+  // ── Step 4: Salvage defaults from raw response ─────────────────────────
+  // Last-ditch effort: scan the raw response for "key: value" patterns and
+  // fill in null defaults for anything still missing. Ensures downstream
+  // conditions always see a value (the parser treats null as false).
+  if (extractionFailed(outputs) && rawResponse.length > 0) {
+    const salvaged: Record<string, unknown> = {};
+    for (const key of requiredOutputs) {
+      if (key in outputs) continue;
+      const m = rawResponse.match(new RegExp(`${key}\\s*[:=]\\s*([^\\n]+)`, 'i'));
+      if (m) {
+        const v = m[1].trim().replace(/^["']|["',]$/g, '');
+        if (v === 'true') salvaged[key] = true;
+        else if (v === 'false') salvaged[key] = false;
+        else if (v === 'null') salvaged[key] = null;
+        else if (!isNaN(Number(v)) && v !== '') salvaged[key] = Number(v);
+        else salvaged[key] = v;
+      } else {
+        salvaged[key] = null;
+      }
+    }
+    outputs = { ...salvaged, ...outputs };
+    emitLog(deps, nodeName, {
+      level: 'info',
+      category: 'system',
+      message: `[extraction] Salvaged defaults from raw response for ${Object.keys(salvaged).join(', ')}`,
+    });
   }
 
   if (extractionFailed(outputs)) {
     emitLog(deps, nodeName, {
       level: 'warn',
       category: 'system',
-      message: `[extraction] Failed to extract required outputs after ${extractAttempt} auto-retries — downstream conditions may evaluate with undefined values`,
+      message: `[extraction] All strategies failed — downstream conditions will evaluate missing values as false`,
     });
   }
   // ───────────────────────────────────────────────────────────────────────

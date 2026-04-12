@@ -28,6 +28,10 @@ export async function extractOutputs(
   response: string,
   nodeDef: NodeDef,
   log?: ExtractionLogger,
+  /** Skip Layer 4 (Haiku LLM fallback). Used when caller will run a better
+   * retry strategy (e.g. resuming the original agent session) before falling
+   * back to Haiku. */
+  skipLLMFallback?: boolean,
 ): Promise<Record<string, unknown>> {
   const outputs = nodeDef.outputs ?? [];
   if (outputs.length === 0) return {};
@@ -132,18 +136,23 @@ export async function extractOutputs(
   }
   log?.('Layer 3 (key-value): no matches');
 
-  // Layer 4: LLM fallback via Haiku — extract outputs + gate fields
-  log?.('Layer 4 (LLM fallback): calling Haiku to extract from unstructured text...');
-  try {
-    const allFields = [...outputs, ...GATE_FIELDS];
-    const llmResult = await extractViaLLM(response, allFields);
-    if (llmResult && Object.keys(llmResult).length > 0) {
-      log?.(`Layer 4 (LLM fallback): extracted [${Object.keys(llmResult).join(', ')}]`);
-      return llmResult;
+  // Layer 4: LLM fallback via Haiku — extract outputs + gate fields.
+  // Skipped when caller wants to run its own retry strategy first.
+  if (!skipLLMFallback) {
+    log?.('Layer 4 (LLM fallback): calling Haiku to extract from unstructured text...');
+    try {
+      const allFields = [...outputs, ...GATE_FIELDS];
+      const llmResult = await extractViaLLM(response, allFields);
+      if (llmResult && Object.keys(llmResult).length > 0) {
+        log?.(`Layer 4 (LLM fallback): extracted [${Object.keys(llmResult).join(', ')}]`);
+        return llmResult;
+      }
+      log?.('Layer 4 (LLM fallback): no fields extracted');
+    } catch (err: unknown) {
+      log?.(`Layer 4 (LLM fallback): failed — ${err instanceof Error ? err.message : String(err)}`);
     }
-    log?.('Layer 4 (LLM fallback): no fields extracted');
-  } catch (err: unknown) {
-    log?.(`Layer 4 (LLM fallback): failed — ${err instanceof Error ? err.message : String(err)}`);
+  } else {
+    log?.('Layer 4 (LLM fallback): skipped — caller will handle retry');
   }
 
   // Layer 5: Auto-detect clarification — ONLY if no outputs were extracted at all
