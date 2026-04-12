@@ -75,11 +75,17 @@ export class SlackService {
    * falls back to environment variables for local dev.
    */
   async getBotToken(): Promise<string | null> {
-    return (await this.secrets.get('SLACK_BOT_TOKEN')) ?? process.env.SLACK_BOT_TOKEN ?? null;
+    return (await this.secrets.get('FLOWFORGE_SLACK_BOT_TOKEN'))
+      ?? (await this.secrets.get('SLACK_BOT_TOKEN'))
+      ?? process.env.SLACK_BOT_TOKEN
+      ?? null;
   }
 
   async getSigningSecret(): Promise<string | null> {
-    return (await this.secrets.get('SLACK_SIGNING_SECRET')) ?? process.env.SLACK_SIGNING_SECRET ?? null;
+    return (await this.secrets.get('FLOWFORGE_SLACK_SIGNING_SECRET'))
+      ?? (await this.secrets.get('SLACK_SIGNING_SECRET'))
+      ?? process.env.SLACK_SIGNING_SECRET
+      ?? null;
   }
 
   async isConfigured(): Promise<boolean> {

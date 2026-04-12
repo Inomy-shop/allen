@@ -7,11 +7,13 @@ export function secretRoutes(db: Db): Router {
   const router = Router();
   const service = new SecretService(db);
 
-  // GET /api/secrets — list keys only
-  router.get('/', async (_req: Request, res: Response) => {
+  // GET /api/secrets — list keys only; supports ?prefix=FLOWFORGE_ filter
+  router.get('/', async (req: Request, res: Response) => {
     try {
       const keys = await service.list();
-      res.json(keys);
+      const prefix = typeof req.query.prefix === 'string' ? req.query.prefix : '';
+      const filtered = prefix ? keys.filter(k => k.startsWith(prefix)) : keys;
+      res.json(filtered);
     } catch (err: unknown) {
       res.status(500).json({ error: (err as Error).message });
     }

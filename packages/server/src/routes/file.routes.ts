@@ -1,5 +1,5 @@
 import { Router, type Request, type Response } from 'express';
-import { existsSync, mkdirSync } from 'node:fs';
+import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { join, extname } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import multer from 'multer';
@@ -55,7 +55,6 @@ export function fileRoutes(): Router {
     const storedName = `${id}${ext}`;
     const fullPath = join(UPLOADS_DIR, storedName);
 
-    const { writeFileSync } = require('node:fs');
     writeFileSync(fullPath, content, 'utf-8');
 
     const url = `/api/files/${storedName}`;

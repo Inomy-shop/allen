@@ -47,7 +47,9 @@ const PORT = parseInt(process.env.PORT ?? '4000', 10);
 async function main(): Promise<void> {
   const db = await connectDB();
   await ensureIndexes(db);
-  await new SecretService(db).migrateLegacyPlaintext();
+  const secretSvc = new SecretService(db);
+  await secretSvc.migrateLegacyPlaintext();
+  await secretSvc.migrateToFlowforgePrefix(db);
   const mcpSvc = new McpService(db);
   await mcpSvc.migrateLegacyEnvLiterals();
   await mcpSvc.migrateGhCliServersToSecret();

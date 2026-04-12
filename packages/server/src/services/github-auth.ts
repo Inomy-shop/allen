@@ -15,7 +15,9 @@ import type { Db } from 'mongodb';
 import { SecretService } from './secret.service.js';
 
 /** Secret key under which the GitHub token is stored. Matches the MCP preset. */
-export const GITHUB_TOKEN_SECRET_KEY = 'GITHUB_PERSONAL_ACCESS_TOKEN';
+export const GITHUB_TOKEN_SECRET_KEY = 'FLOWFORGE_GITHUB_PERSONAL_ACCESS_TOKEN';
+/** Legacy key kept for backward compatibility during migration. */
+const LEGACY_GITHUB_TOKEN_KEY = 'GITHUB_PERSONAL_ACCESS_TOKEN';
 
 /**
  * Build a child-process env object suitable for spawning `gh` CLI.
@@ -27,7 +29,8 @@ export const GITHUB_TOKEN_SECRET_KEY = 'GITHUB_PERSONAL_ACCESS_TOKEN';
  * Always preserves PATH, HOME, and other parent env vars `gh` needs.
  */
 export async function buildGhEnv(db: Db): Promise<NodeJS.ProcessEnv> {
-  const token = await new SecretService(db).get(GITHUB_TOKEN_SECRET_KEY);
+  const secretSvc = new SecretService(db);
+  const token = (await secretSvc.get(GITHUB_TOKEN_SECRET_KEY)) ?? (await secretSvc.get(LEGACY_GITHUB_TOKEN_KEY));
   if (!token) return { ...process.env };
   return {
     ...process.env,
@@ -41,6 +44,7 @@ export async function buildGhEnv(db: Db): Promise<NodeJS.ProcessEnv> {
  * Useful for surfacing setup hints in the UI.
  */
 export async function hasGithubToken(db: Db): Promise<boolean> {
-  const token = await new SecretService(db).get(GITHUB_TOKEN_SECRET_KEY);
+  const secretSvc = new SecretService(db);
+  const token = (await secretSvc.get(GITHUB_TOKEN_SECRET_KEY)) ?? (await secretSvc.get(LEGACY_GITHUB_TOKEN_KEY));
   return Boolean(token);
 }

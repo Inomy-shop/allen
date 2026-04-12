@@ -3,7 +3,7 @@ import { mcp as api, secrets as secretsApi } from '../../services/api';
 import {
   Server, Plus, Trash2, RefreshCw, Power, PowerOff,
   CheckCircle, XCircle, HelpCircle, ExternalLink, ChevronDown, ChevronRight, Wrench,
-  Lock, Pencil,
+  Lock,
 } from 'lucide-react';
 
 interface McpServer {
@@ -114,9 +114,48 @@ function ServerCard({
         <div className="px-4 py-3 border-t border-border/20 bg-surface-200/20 space-y-2 text-xs">
           {server.type === 'stdio' && (
             <>
-              <div><span className="text-theme-muted">Command:</span> <span className="text-theme-secondary font-mono">{server.command} {(server.args ?? []).join(' ')}</span></div>
+              {/* Command with secret refs masked */}
+              <div>
+                <span className="text-theme-muted">Command:</span>{' '}
+                <span className="text-theme-secondary font-mono">
+                  {server.command}{' '}
+                  {(server.args ?? []).map((a, i) => {
+                    if (typeof a === 'string' && a.startsWith('@secret:')) {
+                      const key = a.slice('@secret:'.length);
+                      return (
+                        <span key={i} className="inline-flex items-center gap-1 bg-accent-green/10 text-accent-green px-1.5 py-0.5 rounded mr-1" title={`Linked to secret: ${key}`}>
+                          <Lock className="w-2.5 h-2.5" /> {key}
+                        </span>
+                      );
+                    }
+                    return <span key={i} className="mr-1">{a}</span>;
+                  })}
+                </span>
+              </div>
+              {/* Env vars with secret linkage */}
               {server.env && Object.keys(server.env).length > 0 && (
-                <div><span className="text-theme-muted">Env vars:</span> <span className="text-theme-secondary font-mono">{Object.keys(server.env).join(', ')}</span></div>
+                <div>
+                  <span className="text-theme-muted">Env vars:</span>
+                  <div className="mt-1 space-y-0.5 pl-2">
+                    {Object.entries(server.env).map(([envName, val]) => {
+                      const isSecret = typeof val === 'string' && val.startsWith('@secret:');
+                      const secretKey = isSecret ? val.slice('@secret:'.length) : null;
+                      return (
+                        <div key={envName} className="flex items-center gap-2 font-mono text-[11px]">
+                          <span className="text-theme-secondary">{envName}</span>
+                          <span className="text-theme-subtle">→</span>
+                          {isSecret ? (
+                            <span className="inline-flex items-center gap-1 bg-accent-green/10 text-accent-green px-1.5 py-0.5 rounded">
+                              <Lock className="w-2.5 h-2.5" /> {secretKey}
+                            </span>
+                          ) : (
+                            <span className="text-amber-400">{val as string} (literal)</span>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
               )}
             </>
           )}
@@ -140,98 +179,166 @@ function ServerCard({
 
 /** Sentinel used in env/arg values to indicate "look up this secret at spawn time" */
 const SECRET_REF_PREFIX = '@secret:';
+const FLOWFORGE_PREFIX = 'FLOWFORGE_';
 
 /**
- * One field in the preset form. Can either be linked to an existing secret
- * (auto-detected by name) or hold a literal value the user is typing.
+ * One field in the preset form. Always references a secret (by key).
+ * The key MUST already exist in the secret store — enforced by the UI,
+ * which only lets users pick existing secrets or create new ones via dialog.
  */
-type FieldMode = 'use-existing' | 'enter-new';
-type FieldState = { mode: FieldMode; value: string };
+type FieldState = { selectedKey: string };
 
-function PresetField({
-  fieldKey, state, hasExistingSecret, placeholder, secret, onChange,
+/**
+ * Inline dialog to create a new FLOWFORGE_-prefixed secret without leaving
+ * the MCP add-server flow.
+ */
+function NewSecretDialog({
+  defaultKey, onClose, onCreated,
 }: {
-  fieldKey: string;
-  state: FieldState;
-  hasExistingSecret: boolean;
-  placeholder?: string;
-  secret: boolean; // password input vs text
-  onChange: (next: FieldState) => void;
+  defaultKey: string;
+  onClose: () => void;
+  onCreated: (key: string) => void;
 }) {
-  // Auto-link mode: there's already a secret with this exact name in the store
-  if (state.mode === 'use-existing') {
-    return (
-      <div>
-        <label className="text-[10px] font-label uppercase tracking-wider text-theme-muted mb-1 block">{fieldKey}</label>
-        <div className="flex items-center gap-2 bg-accent-green/5 border border-accent-green/30 rounded-sm px-3 py-1.5">
-          <Lock className="w-3 h-3 text-accent-green shrink-0" />
-          <span className="text-xs font-mono text-accent-green flex-1">Using saved secret <span className="text-theme-primary">{fieldKey}</span></span>
-          <button
-            onClick={() => onChange({ mode: 'enter-new', value: '' })}
-            className="text-[10px] text-theme-muted hover:text-theme-secondary flex items-center gap-0.5"
-            title="Replace with a new value"
-            type="button"
-          >
-            <Pencil className="w-2.5 h-2.5" /> Replace
+  const [key, setKey] = useState(defaultKey);
+  const [value, setValue] = useState('');
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState('');
+
+  const handleSave = async () => {
+    if (!key.trim() || !value.trim()) return;
+    const finalKey = key.startsWith(FLOWFORGE_PREFIX) ? key : FLOWFORGE_PREFIX + key;
+    setSaving(true); setError('');
+    try {
+      await secretsApi.create(finalKey, value);
+      onCreated(finalKey);
+    } catch (e: any) {
+      setError(e.message ?? 'Failed to create secret');
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50" onClick={onClose}>
+      <div className="bg-surface-100 border border-border/40 rounded-lg p-4 w-[440px]" onClick={e => e.stopPropagation()}>
+        <h3 className="text-sm font-body text-theme-primary mb-3 flex items-center gap-2">
+          <Lock className="w-4 h-4 text-accent-green" /> New Secret
+        </h3>
+        <div className="space-y-2">
+          <div>
+            <label className="text-[10px] font-label uppercase tracking-wider text-theme-muted mb-1 block">Key</label>
+            <input
+              value={key}
+              onChange={e => setKey(e.target.value.toUpperCase().replace(/[^A-Z0-9_]/g, ''))}
+              placeholder="FLOWFORGE_MY_TOKEN"
+              autoFocus
+              className="w-full bg-surface-200/50 border border-border/30 rounded-sm px-3 py-1.5 text-sm text-theme-primary font-mono"
+            />
+            <p className="text-[9px] text-theme-subtle mt-0.5">Auto-prefixed with FLOWFORGE_ if missing.</p>
+          </div>
+          <div>
+            <label className="text-[10px] font-label uppercase tracking-wider text-theme-muted mb-1 block">Value</label>
+            <input
+              type="password"
+              value={value}
+              onChange={e => setValue(e.target.value)}
+              placeholder="secret value..."
+              autoComplete="new-password"
+              className="w-full bg-surface-200/50 border border-border/30 rounded-sm px-3 py-1.5 text-sm text-theme-primary font-mono"
+            />
+          </div>
+          {error && <p className="text-[11px] text-red-400">{error}</p>}
+        </div>
+        <div className="flex items-center gap-2 justify-end mt-3">
+          <button onClick={onClose} className="btn-ghost text-xs py-1.5 px-3">Cancel</button>
+          <button onClick={handleSave} disabled={!key.trim() || !value.trim() || saving} className="btn-primary text-xs py-1.5 px-4 disabled:opacity-50">
+            {saving ? 'Saving...' : 'Create Secret'}
           </button>
         </div>
       </div>
-    );
-  }
+    </div>
+  );
+}
 
-  // Manual entry mode (no existing secret, OR user clicked Replace)
+/**
+ * Dropdown to pick an existing FLOWFORGE_-prefixed secret, with an inline
+ * "+ New secret" option that opens NewSecretDialog.
+ */
+function SecretPicker({
+  fieldKey, state, flowforgeSecrets, onChange, onSecretCreated,
+}: {
+  fieldKey: string;
+  state: FieldState;
+  flowforgeSecrets: string[];
+  onChange: (next: FieldState) => void;
+  onSecretCreated: (key: string) => void;
+}) {
+  const [showNew, setShowNew] = useState(false);
+  // Default key suggestion: if fieldKey already starts with FLOWFORGE_, use it;
+  // otherwise prefix it.
+  const defaultNewKey = fieldKey.startsWith(FLOWFORGE_PREFIX) ? fieldKey : FLOWFORGE_PREFIX + fieldKey;
+
   return (
     <div>
-      <label className="text-[10px] font-label uppercase tracking-wider text-theme-muted mb-1 block">
-        {fieldKey}
-        {hasExistingSecret && (
-          <button
-            onClick={() => onChange({ mode: 'use-existing', value: '' })}
-            className="ml-2 text-[10px] normal-case tracking-normal text-accent-blue hover:text-accent-blue/80"
-            type="button"
-          >
-            ← use saved secret
-          </button>
+      <label className="text-[10px] font-label uppercase tracking-wider text-theme-muted mb-1 block">{fieldKey}</label>
+      <div className="flex items-center gap-2">
+        <select
+          value={state.selectedKey}
+          onChange={e => {
+            if (e.target.value === '__new__') setShowNew(true);
+            else onChange({ selectedKey: e.target.value });
+          }}
+          className="flex-1 bg-surface-200/50 border border-border/30 rounded-sm px-3 py-1.5 text-sm text-theme-primary font-mono focus:outline-none focus:border-accent-blue/50"
+        >
+          <option value="">— select secret —</option>
+          {flowforgeSecrets.map(k => (
+            <option key={k} value={k}>{k}</option>
+          ))}
+          <option value="__new__">+ New secret…</option>
+        </select>
+        {state.selectedKey && (
+          <span className="flex items-center gap-1 text-[10px] text-accent-green">
+            <Lock className="w-3 h-3" /> linked
+          </span>
         )}
-      </label>
-      <input
-        type={secret ? 'password' : 'text'}
-        value={state.value}
-        onChange={e => onChange({ mode: 'enter-new', value: e.target.value })}
-        placeholder={placeholder ?? `Enter ${fieldKey}...`}
-        autoComplete="new-password"
-        className="w-full bg-surface-200/50 border border-border/30 rounded-sm px-3 py-1.5 text-sm text-theme-primary font-mono placeholder-gray-600 focus:outline-none focus:border-accent-blue/50"
-      />
+      </div>
+      {showNew && (
+        <NewSecretDialog
+          defaultKey={defaultNewKey}
+          onClose={() => setShowNew(false)}
+          onCreated={(key) => {
+            onSecretCreated(key);
+            onChange({ selectedKey: key });
+            setShowNew(false);
+          }}
+        />
+      )}
     </div>
   );
 }
 
 function AddFromPreset({
-  presets, existingSecretKeys, onAdd,
+  presets, flowforgeSecrets, onSecretCreated, onAdd,
 }: {
   presets: McpPreset[];
-  existingSecretKeys: Set<string>;
+  flowforgeSecrets: string[];
+  onSecretCreated: (key: string) => void;
   onAdd: (preset: McpPreset, envFields: Record<string, FieldState>, argFields: Record<string, FieldState>) => void;
 }) {
   const [selected, setSelected] = useState<McpPreset | null>(null);
   const [envFields, setEnvFields] = useState<Record<string, FieldState>>({});
   const [argFields, setArgFields] = useState<Record<string, FieldState>>({});
 
-  // Initialize fields when a preset is picked. If a secret with the same name
-  // already exists in the store, default to "use existing"; otherwise prompt
-  // the user to enter a new value.
+  // Initialize fields when a preset is picked. Auto-select a matching
+  // FLOWFORGE_-prefixed secret if one exists, otherwise leave empty (user
+  // must pick one from the dropdown or create a new secret).
   const choosePreset = (p: McpPreset) => {
     const initEnv: Record<string, FieldState> = {};
     for (const k of p.envKeys) {
-      initEnv[k] = existingSecretKeys.has(k)
-        ? { mode: 'use-existing', value: '' }
-        : { mode: 'enter-new', value: '' };
+      initEnv[k] = { selectedKey: flowforgeSecrets.includes(k) ? k : '' };
     }
     const initArgs: Record<string, FieldState> = {};
     for (const k of (p.argKeys ?? [])) {
-      initArgs[k] = existingSecretKeys.has(k)
-        ? { mode: 'use-existing', value: '' }
-        : { mode: 'enter-new', value: '' };
+      initArgs[k] = { selectedKey: flowforgeSecrets.includes(k) ? k : '' };
     }
     setSelected(p);
     setEnvFields(initEnv);
@@ -255,15 +362,10 @@ function AddFromPreset({
     );
   }
 
-  // A field is "filled" if it's linked to an existing secret OR has a non-empty value
-  const isFilled = (s?: FieldState) => !!s && (s.mode === 'use-existing' || s.value.length > 0);
+  // A field is "filled" if the user has picked a secret
+  const isFilled = (s?: FieldState) => !!s && !!s.selectedKey;
   const allEnvFilled = selected.envKeys.every(k => isFilled(envFields[k]));
   const allArgsFilled = (selected.argKeys ?? []).every(k => isFilled(argFields[k]));
-
-  const ARG_PLACEHOLDERS: Record<string, string> = {
-    POSTGRES_CONNECTION_STRING: 'postgresql://user:pass@host:5432/db?sslmode=require',
-    MONGODB_CONNECTION_STRING: 'mongodb://user:pass@host:27017/db',
-  };
 
   return (
     <div className="border border-border/40 rounded-lg p-4 bg-surface-200/20 space-y-3">
@@ -275,25 +377,24 @@ function AddFromPreset({
 
       {/* Connection strings (positional args) */}
       {(selected.argKeys ?? []).map(key => (
-        <PresetField
+        <SecretPicker
           key={key}
           fieldKey={key}
-          state={argFields[key] ?? { mode: 'enter-new', value: '' }}
-          hasExistingSecret={existingSecretKeys.has(key)}
-          placeholder={ARG_PLACEHOLDERS[key]}
-          secret={false}
+          state={argFields[key] ?? { selectedKey: '' }}
+          flowforgeSecrets={flowforgeSecrets}
+          onSecretCreated={onSecretCreated}
           onChange={next => setArgFields(prev => ({ ...prev, [key]: next }))}
         />
       ))}
 
       {/* Env vars (API keys, tokens) */}
       {selected.envKeys.map(key => (
-        <PresetField
+        <SecretPicker
           key={key}
           fieldKey={key}
-          state={envFields[key] ?? { mode: 'enter-new', value: '' }}
-          hasExistingSecret={existingSecretKeys.has(key)}
-          secret={true}
+          state={envFields[key] ?? { selectedKey: '' }}
+          flowforgeSecrets={flowforgeSecrets}
+          onSecretCreated={onSecretCreated}
           onChange={next => setEnvFields(prev => ({ ...prev, [key]: next }))}
         />
       ))}
@@ -317,7 +418,7 @@ function AddFromPreset({
 export default function McpServerManager() {
   const [servers, setServers] = useState<McpServer[]>([]);
   const [presets, setPresets] = useState<McpPreset[]>([]);
-  const [secretKeys, setSecretKeys] = useState<Set<string>>(new Set());
+  const [flowforgeSecrets, setFlowforgeSecrets] = useState<string[]>([]);
   const [loading, setLoading] = useState(true);
   const [showAdd, setShowAdd] = useState(false);
   const [testingId, setTestingId] = useState<string | null>(null);
@@ -331,12 +432,17 @@ export default function McpServerManager() {
       ]);
       setServers(s);
       setPresets(p);
-      setSecretKeys(new Set(secretsList ?? []));
+      // Only expose FLOWFORGE_-prefixed secrets to the MCP picker
+      setFlowforgeSecrets((secretsList ?? []).filter(k => k.startsWith(FLOWFORGE_PREFIX)).sort());
     } catch (e) {
       console.error('Failed to load MCP servers:', e);
     } finally {
       setLoading(false);
     }
+  };
+
+  const handleSecretCreated = (key: string) => {
+    setFlowforgeSecrets(prev => prev.includes(key) ? prev : [...prev, key].sort());
   };
 
   useEffect(() => { loadServers(); }, []);
@@ -347,41 +453,23 @@ export default function McpServerManager() {
     argFields: Record<string, FieldState>,
   ) => {
     try {
-      // For any field where the user typed a NEW value, first store it as a
-      // secret under the secret KEY name (which may differ from the env var
-      // name — see envVarOverrides). This way the secret is named after what
-      // it IS (e.g. GITHUB_PERSONAL_ACCESS_TOKEN), not where it's used
-      // (e.g. GH_TOKEN). After this step, every field is a `@secret:` reference.
-      const newlyCreatedKeys: string[] = [];
-      for (const secretKey of preset.envKeys) {
-        const f = envFields[secretKey];
-        if (!f || f.mode !== 'enter-new' || !f.value) continue;
-        await secretsApi.create(secretKey, f.value);
-        newlyCreatedKeys.push(secretKey);
-      }
-      for (const secretKey of (preset.argKeys ?? [])) {
-        const f = argFields[secretKey];
-        if (!f || f.mode !== 'enter-new' || !f.value) continue;
-        await secretsApi.create(secretKey, f.value);
-        newlyCreatedKeys.push(secretKey);
-      }
-
-      // Build env. Each entry is `<envVarName>: '@secret:<secretKey>'`. The
-      // env var name is the override target if specified, else the secret key.
+      // Each field references an existing secret (guaranteed by the UI).
+      // Build env: <envVarName>: '@secret:<selectedSecretKey>'. The env var
+      // name is the override target if specified, else the preset's declared key.
       const env: Record<string, string> = {};
-      for (const secretKey of preset.envKeys) {
-        const f = envFields[secretKey];
-        if (!f) continue;
-        const envVarName = preset.envVarOverrides?.[secretKey] ?? secretKey;
-        env[envVarName] = `${SECRET_REF_PREFIX}${secretKey}`;
+      for (const presetKey of preset.envKeys) {
+        const f = envFields[presetKey];
+        if (!f?.selectedKey) continue;
+        const envVarName = preset.envVarOverrides?.[presetKey] ?? presetKey;
+        env[envVarName] = `${SECRET_REF_PREFIX}${f.selectedKey}`;
       }
 
-      // Build args. Positional args are appended in the order presets define.
+      // Build args. Positional args appended in preset order.
       const args = [...(preset.args ?? [])];
-      for (const secretKey of (preset.argKeys ?? [])) {
-        const f = argFields[secretKey];
-        if (!f) continue;
-        args.push(`${SECRET_REF_PREFIX}${secretKey}`);
+      for (const presetKey of (preset.argKeys ?? [])) {
+        const f = argFields[presetKey];
+        if (!f?.selectedKey) continue;
+        args.push(`${SECRET_REF_PREFIX}${f.selectedKey}`);
       }
 
       await api.create({
@@ -394,15 +482,7 @@ export default function McpServerManager() {
         env,
       });
       setShowAdd(false);
-      // Refresh both server list AND secrets list (we may have just created some)
       void loadServers();
-      if (newlyCreatedKeys.length > 0) {
-        setSecretKeys(prev => {
-          const next = new Set(prev);
-          for (const k of newlyCreatedKeys) next.add(k);
-          return next;
-        });
-      }
     } catch (e) {
       console.error('Failed to add MCP server:', e);
     }
@@ -462,7 +542,7 @@ export default function McpServerManager() {
             <button onClick={() => setShowAdd(false)} className="text-xs text-theme-muted hover:text-theme-secondary">Cancel</button>
           </div>
           {availablePresets.length > 0 ? (
-            <AddFromPreset presets={availablePresets} existingSecretKeys={secretKeys} onAdd={handleAddPreset} />
+            <AddFromPreset presets={availablePresets} flowforgeSecrets={flowforgeSecrets} onSecretCreated={handleSecretCreated} onAdd={handleAddPreset} />
           ) : (
             <div className="text-xs text-theme-subtle">All preset servers have been added.</div>
           )}

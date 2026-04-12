@@ -217,7 +217,8 @@ export const MCP_PRESETS: McpPreset[] = [
     type: 'stdio',
     command: 'npx',
     args: ['-y', 'mcp-server-linear'],
-    envKeys: ['LINEAR_ACCESS_TOKEN'],
+    envKeys: ['FLOWFORGE_LINEAR_ACCESS_TOKEN'],
+    envVarOverrides: { FLOWFORGE_LINEAR_ACCESS_TOKEN: 'LINEAR_ACCESS_TOKEN' },
     docsUrl: 'https://github.com/dvcrn/mcp-server-linear',
   },
   {
@@ -230,8 +231,8 @@ export const MCP_PRESETS: McpPreset[] = [
     type: 'stdio',
     command: 'gh',
     args: ['mcp'],
-    envKeys: ['GITHUB_PERSONAL_ACCESS_TOKEN'],
-    envVarOverrides: { GITHUB_PERSONAL_ACCESS_TOKEN: 'GH_TOKEN' },
+    envKeys: ['FLOWFORGE_GITHUB_PERSONAL_ACCESS_TOKEN'],
+    envVarOverrides: { FLOWFORGE_GITHUB_PERSONAL_ACCESS_TOKEN: 'GH_TOKEN' },
     docsUrl: 'https://github.com/github/github-mcp-server',
   },
   {
@@ -244,7 +245,7 @@ export const MCP_PRESETS: McpPreset[] = [
     // flag is fixed and stays as a literal.
     args: ['-y', '@henkey/postgres-mcp-server', '--connection-string'],
     envKeys: [],
-    argKeys: ['POSTGRES_CONNECTION_STRING'],
+    argKeys: ['FLOWFORGE_POSTGRES_CONNECTION_STRING'],
     docsUrl: 'https://github.com/HenkDz/postgresql-mcp-server',
   },
   {
@@ -254,7 +255,7 @@ export const MCP_PRESETS: McpPreset[] = [
     command: 'npx',
     args: ['-y', 'mcp-mongo-server'],
     envKeys: [],
-    argKeys: ['MONGODB_CONNECTION_STRING'],
+    argKeys: ['FLOWFORGE_MONGODB_CONNECTION_STRING'],
     docsUrl: 'https://github.com/kiliczsh/mcp-mongo-server',
   },
   {
@@ -267,7 +268,8 @@ export const MCP_PRESETS: McpPreset[] = [
     type: 'stdio',
     command: 'npx',
     args: ['-y', '@modelcontextprotocol/server-slack'],
-    envKeys: ['SLACK_BOT_TOKEN', 'SLACK_TEAM_ID'],
+    envKeys: ['FLOWFORGE_SLACK_BOT_TOKEN', 'FLOWFORGE_SLACK_TEAM_ID'],
+    envVarOverrides: { FLOWFORGE_SLACK_BOT_TOKEN: 'SLACK_BOT_TOKEN', FLOWFORGE_SLACK_TEAM_ID: 'SLACK_TEAM_ID' },
     docsUrl: 'https://github.com/modelcontextprotocol/servers-archived/tree/main/src/slack',
   },
   {
@@ -515,7 +517,7 @@ export class McpService {
       if (env.GH_TOKEN) continue; // already configured
       const newEnv = {
         ...env,
-        GH_TOKEN: `${MCP_SECRET_PREFIX}GITHUB_PERSONAL_ACCESS_TOKEN`,
+        GH_TOKEN: `${MCP_SECRET_PREFIX}FLOWFORGE_GITHUB_PERSONAL_ACCESS_TOKEN`,
       };
       await this.collection.updateOne(
         { _id: doc._id },
