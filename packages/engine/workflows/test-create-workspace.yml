@@ -21,13 +21,14 @@ input:
     description: Base branch to branch from. Defaults to the repo's default branch.
 
 nodes:
+  # All inputs (repo_name / branch / base_branch) come from the workflow
+  # input section and flow into state automatically. The create-workspace
+  # built-in reads state.repo_name, state.branch, state.base_branch when
+  # no matching `config` key is provided.
   create-ws:
     type: code
     function: create-workspace
     config:
-      repo_name: "{{repo_name}}"
-      branch: "{{branch}}"
-      base_branch: "{{base_branch}}"
       wait_for_setup: true
       timeout_sec: 600
     outputs: [workspace_id, workspace_name, branch, worktree_path, base_port, status]

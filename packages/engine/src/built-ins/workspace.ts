@@ -20,11 +20,20 @@ import type { BuiltInFunction } from '../types.js';
  * Returns:
  *   workspace_id, workspace_name, branch, worktree_path, base_port, status
  */
-/** Return undefined for null/undefined/empty/whitespace-only strings. */
+/**
+ * Return undefined for:
+ *   - non-strings
+ *   - empty / whitespace-only strings
+ *   - unresolved handlebars templates like "{{repo_name}}" (the engine
+ *     doesn't interpolate code node config values, so literal templates
+ *     mean "not actually provided")
+ */
 function nonEmpty(v: unknown): string | undefined {
   if (typeof v !== 'string') return undefined;
   const trimmed = v.trim();
-  return trimmed ? trimmed : undefined;
+  if (!trimmed) return undefined;
+  if (/^\{\{\s*[\w.]+\s*\}\}$/.test(trimmed)) return undefined;
+  return trimmed;
 }
 
 export const createWorkspace: BuiltInFunction = async (config, state, ctx) => {
@@ -46,30 +55,46 @@ export const createWorkspace: BuiltInFunction = async (config, state, ctx) => {
       throw new Error(`Invalid repo_id: ${repoId}`);
     }
   }
+  // Try repo_name against `name`, and if that misses, against `path` too
+  // (users commonly pass an absolute path into a `repo_name` field).
   if (!repo && repoName) {
     repo = await repoCol.findOne({ name: repoName });
+    if (!repo && repoName.startsWith('/')) {
+      repo = await repoCol.findOne({ path: repoName });
+    }
   }
+  // Try repo_path — same dual lookup in case someone passed a bare name
   if (!repo && repoPath) {
     repo = await repoCol.findOne({ path: repoPath });
     if (!repo) {
-      throw new Error(
-        `Repo with path "${repoPath}" is not registered in FlowForge. ` +
-        `Register it from the Repos page first.`,
-      );
+      repo = await repoCol.findOne({ name: repoPath });
     }
   }
   if (!repo) {
-    throw new Error('Repo not found. Provide repo_id, repo_name, or repo_path.');
+    const tried = [repoId, repoName, repoPath].filter(Boolean).join(', ') || '(none)';
+    throw new Error(
+      `Repo not found. Tried: ${tried}. ` +
+      `Register the repo from the Repos page first, then pass its name or path.`,
+    );
   }
 
   const detected = (repo.detected as Record<string, unknown>) ?? {};
   const defaultBranch = (detected.defaultBranch as string) ?? 'main';
 
-  // Derive branch + workspace name
-  const taskSlug = String(state.task ?? 'feature')
+  // Derive branch slug from whichever common input field the workflow uses.
+  // Each workflow names it differently — task, bug, feature, target, incident, etc.
+  const taskSource =
+    (state.task as string | undefined) ??
+    (state.bug as string | undefined) ??
+    (state.feature as string | undefined) ??
+    (state.target as string | undefined) ??
+    (state.incident as string | undefined) ??
+    'feature';
+  const taskSlug = String(taskSource)
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, '-')
-    .slice(0, 40);
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 40) || 'feature';
   const branch =
     nonEmpty(config.branch) ??
     nonEmpty(state.branch) ??
