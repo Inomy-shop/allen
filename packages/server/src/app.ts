@@ -40,6 +40,7 @@ import { CronService } from './services/cron.service.js';
 import { seedCronJobs } from './services/cron-seed.service.js';
 import { createRepoScanIfChangedAction } from './services/repo-context-scanner.service.js';
 import { createRepoPullAllAction } from './services/repo.service.js';
+import { createMcpBundleCleanupAction } from './services/mcp-bundle.service.js';
 import { cronRoutes } from './routes/cron.routes.js';
 
 const PORT = parseInt(process.env.PORT ?? '4000', 10);
@@ -54,6 +55,17 @@ async function main(): Promise<void> {
   await mcpSvc.migrateLegacyEnvLiterals();
   await mcpSvc.migrateGhCliServersToSecret();
   await mcpSvc.syncPresetDescriptions();
+
+  // Sync MCP servers into Codex CLI's global config ONCE on boot.
+  // Per-chat sync is disabled to avoid races between parallel sessions
+  // rewriting the global Codex config concurrently.
+  try {
+    const { syncMcpToCodex } = await import('./services/chat-providers.js');
+    await syncMcpToCodex(db);
+    console.log('[mcp] Initial Codex sync complete');
+  } catch (err) {
+    console.error('[mcp] Initial Codex sync failed:', (err as Error).message);
+  }
   // Build the full 10-team org chart. Runs BEFORE legacy seeds to avoid
   // duplicate key conflicts on the teamName_lead_unique index.
   await new OrgSeedService(db).seed();
@@ -71,6 +83,7 @@ async function main(): Promise<void> {
   const cronService = new CronService(db);
   cronService.registerSystemAction(createRepoScanIfChangedAction(db));
   cronService.registerSystemAction(createRepoPullAllAction(db));
+  cronService.registerSystemAction(createMcpBundleCleanupAction(db));
   await cronService.start();
 
   const app = express();

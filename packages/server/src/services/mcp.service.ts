@@ -174,6 +174,13 @@ export interface McpServerRecord {
   url?: string;
   headers?: Record<string, string>;
 
+  // Bundle — set when uploaded via the zip bundle flow. When present, the
+  // spawn logic resolves command=node, cwd=<bundlePath>, args=[<bundlePath>/<entry>]
+  // and the rest of args[] is ignored (reserved for future extension).
+  bundleId?: string;
+  bundlePath?: string;    // absolute path to the extracted bundle dir
+  bundleEntry?: string;   // relative entry point inside the bundle
+
   // Status (updated on connection test)
   status: 'connected' | 'failed' | 'untested' | 'disabled';
   lastTestedAt?: Date;
@@ -384,12 +391,21 @@ export class McpService {
 
     for (const s of servers) {
       if (s.type === 'stdio') {
-        config[s.name] = {
+        const resolvedEnv = await resolveEnvSecrets(s.env, this.db);
+        // Silence dotenv's startup banner — it writes to stdout and corrupts
+        // strict MCP clients (e.g. Codex CLI's rmcp) that expect pure JSON-RPC.
+        (resolvedEnv as Record<string, string>).DOTENV_CONFIG_QUIET = 'true';
+        const stdioConfig: Record<string, unknown> = {
           type: 'stdio',
           command: s.command,
           args: await resolveArgSecrets(s.args, this.db),
-          env: await resolveEnvSecrets(s.env, this.db),
+          env: resolvedEnv,
         };
+        // Bundle servers must spawn with cwd = bundle dir so that Node can
+        // resolve node_modules, relative imports, and dotenv() from the
+        // bundle root. Without this, agents can't discover the server's tools.
+        if (s.bundlePath) stdioConfig.cwd = s.bundlePath;
+        config[s.name] = stdioConfig;
       } else if (s.type === 'sse') {
         config[s.name] = {
           type: 'sse',

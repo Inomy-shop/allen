@@ -173,6 +173,23 @@ export const mcp = {
     request<void>(`/mcp/servers/${id}`, { method: 'DELETE' }),
   test: (id: string) =>
     request<any>(`/mcp/servers/${id}/test`, { method: 'POST' }),
+  // Bundle upload
+  uploadBundle: async (file: File) => {
+    const form = new FormData();
+    form.append('file', file);
+    const res = await fetch(`/api/mcp/servers/upload`, { method: 'POST', body: form });
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}));
+      throw new Error(body.error ?? `Upload failed: ${res.status}`);
+    }
+    return res.json();
+  },
+  getBundle: (bundleId: string) =>
+    request<any>(`/mcp/servers/upload/${bundleId}`),
+  setBundleEntry: (bundleId: string, entry: string) =>
+    request<any>(`/mcp/servers/upload/${bundleId}`, { method: 'PATCH', body: JSON.stringify({ entry }) }),
+  deleteBundle: (bundleId: string) =>
+    request<void>(`/mcp/servers/upload/${bundleId}`, { method: 'DELETE' }),
 };
 
 // ── Learnings ─────────────────────────────────────────────────────────────

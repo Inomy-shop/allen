@@ -43,6 +43,21 @@ const SEED_JOBS: Omit<CronJob, '_id' | 'nextRunAt' | 'lastRunAt' | 'lastRunStatu
     isBuiltIn: true,
     createdBy: 'seed',
   },
+  {
+    name: 'mcp-bundle-cleanup-hourly',
+    displayName: 'MCP Bundle Cleanup',
+    description:
+      'Deletes uploaded MCP server bundles that were never linked to a server record (orphans older than 24 hours).',
+    enabled: true,
+    schedule: '0 * * * *',
+    timezone: 'UTC',
+    target: {
+      type: 'system',
+      systemAction: 'mcp-bundle-cleanup',
+    },
+    isBuiltIn: true,
+    createdBy: 'seed',
+  },
 ];
 
 export async function seedCronJobs(db: Db): Promise<number> {

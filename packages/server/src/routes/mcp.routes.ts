@@ -1,6 +1,9 @@
 import { Router, type Request, type Response } from 'express';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
+import { existsSync, mkdirSync, unlinkSync } from 'node:fs';
+import { join } from 'node:path';
+import multer from 'multer';
 import { param } from '../types.js';
 import {
   McpService,
@@ -9,7 +12,24 @@ import {
   storeEnvLiteralsAsSecrets,
   storeArgLiteralsAsSecretsForPreset,
 } from '../services/mcp.service.js';
+import { McpBundleService } from '../services/mcp-bundle.service.js';
+import { healthCheckMcpServer } from '../services/mcp-health.service.js';
 import type { Db } from 'mongodb';
+
+const BUNDLE_UPLOAD_TMP = '/tmp/mcp-bundle-uploads';
+if (!existsSync(BUNDLE_UPLOAD_TMP)) mkdirSync(BUNDLE_UPLOAD_TMP, { recursive: true });
+
+const bundleUpload = multer({
+  dest: BUNDLE_UPLOAD_TMP,
+  limits: { fileSize: 100 * 1024 * 1024 }, // 100MB
+  fileFilter: (_req, file, cb) => {
+    if (!file.originalname.toLowerCase().endsWith('.zip')) {
+      cb(new Error('Only .zip files are accepted'));
+      return;
+    }
+    cb(null, true);
+  },
+});
 
 const execFileAsync = promisify(execFile);
 
@@ -29,10 +49,13 @@ async function syncAllToCodex(service: McpService, db: Db): Promise<void> {
         resolveArgSecrets(s.args, db),
       ]);
 
+      // Silence dotenv banner on stdout — corrupts Codex's strict rmcp client
+      const envWithQuiet = { ...env, DOTENV_CONFIG_QUIET: 'true' };
+
       if (s.enabled && !isRegistered) {
         // Add
         const args = ['mcp', 'add', s.name];
-        for (const [k, v] of Object.entries(env)) args.push('--env', `${k}=${v}`);
+        for (const [k, v] of Object.entries(envWithQuiet)) args.push('--env', `${k}=${v}`);
         args.push('--', s.command!, ...serverArgs);
         await execFileAsync('codex', args, { timeout: 10000 });
       } else if (!s.enabled && isRegistered) {
@@ -42,7 +65,7 @@ async function syncAllToCodex(service: McpService, db: Db): Promise<void> {
         // Update: remove + re-add
         await execFileAsync('codex', ['mcp', 'remove', s.name], { timeout: 5000 });
         const args = ['mcp', 'add', s.name];
-        for (const [k, v] of Object.entries(env)) args.push('--env', `${k}=${v}`);
+        for (const [k, v] of Object.entries(envWithQuiet)) args.push('--env', `${k}=${v}`);
         args.push('--', s.command!, ...serverArgs);
         await execFileAsync('codex', args, { timeout: 10000 });
       }
@@ -65,6 +88,49 @@ async function syncAllToCodex(service: McpService, db: Db): Promise<void> {
 export function mcpRoutes(db: Db): Router {
   const router = Router();
   const service = new McpService(db);
+  const bundleService = new McpBundleService(db);
+
+  // ── Bundle upload routes ──
+
+  // POST /api/mcp/servers/upload — upload a zip bundle, extract, run npm install
+  router.post('/servers/upload', bundleUpload.single('file'), async (req: Request, res: Response) => {
+    const file = req.file;
+    if (!file) return res.status(400).json({ error: 'No file uploaded' });
+    try {
+      const meta = await bundleService.extractZip(file.path, file.originalname);
+      // Delete the temp uploaded file — it's been extracted
+      try { unlinkSync(file.path); } catch {}
+      res.status(201).json(meta);
+    } catch (err: unknown) {
+      try { unlinkSync(file.path); } catch {}
+      res.status(400).json({ error: (err as Error).message });
+    }
+  });
+
+  // GET /api/mcp/servers/upload/:bundleId — get current status (for polling)
+  router.get('/servers/upload/:bundleId', (req: Request, res: Response) => {
+    const meta = bundleService.getMeta(param(req, 'bundleId'));
+    if (!meta) return res.status(404).json({ error: 'Bundle not found' });
+    res.json(meta);
+  });
+
+  // PATCH /api/mcp/servers/upload/:bundleId — override entry point
+  router.patch('/servers/upload/:bundleId', (req: Request, res: Response) => {
+    try {
+      const { entry } = req.body;
+      if (!entry) return res.status(400).json({ error: 'entry is required' });
+      bundleService.setEntry(param(req, 'bundleId'), entry);
+      res.json(bundleService.getMeta(param(req, 'bundleId')));
+    } catch (err: unknown) {
+      res.status(400).json({ error: (err as Error).message });
+    }
+  });
+
+  // DELETE /api/mcp/servers/upload/:bundleId — discard an uploaded bundle
+  router.delete('/servers/upload/:bundleId', (req: Request, res: Response) => {
+    bundleService.delete(param(req, 'bundleId'));
+    res.status(204).send();
+  });
 
   // GET /api/mcp/servers — List all MCP servers
   router.get('/servers', async (_req: Request, res: Response) => {
@@ -84,24 +150,50 @@ export function mcpRoutes(db: Db): Router {
   // POST /api/mcp/servers — Create MCP server
   router.post('/servers', async (req: Request, res: Response) => {
     try {
-      const { name, description, type, enabled, command, args, env, url, headers } = req.body;
+      const { name, description, type, enabled, command, args, env, url, headers, bundleId } = req.body;
       if (!name || !type) return res.status(400).json({ error: 'name and type are required' });
 
       const existing = await service.getByName(name);
       if (existing) return res.status(409).json({ error: `MCP server "${name}" already exists` });
 
+      // Resolve bundle if bundleId is present — command/args/cwd come from the bundle
+      let finalCommand = command;
+      let finalArgs: string[] = args ?? [];
+      let bundlePath: string | undefined;
+      let bundleEntry: string | undefined;
+
+      if (bundleId) {
+        const meta = bundleService.getMeta(bundleId);
+        if (!meta) return res.status(404).json({ error: `Bundle ${bundleId} not found` });
+        if (meta.status !== 'ready') {
+          return res.status(400).json({ error: `Bundle is not ready (status: ${meta.status})` });
+        }
+        const entryPath = bundleService.getEntryPath(bundleId);
+        if (!entryPath) return res.status(400).json({ error: 'Bundle has no entry point' });
+        finalCommand = 'node';
+        finalArgs = [entryPath];
+        bundlePath = bundleService.getBundlePath(bundleId);
+        bundleEntry = meta.entry;
+      }
+
       // Move any literal env values AND preset-defined sensitive args into the
-      // encrypted secrets store, replacing them with `@secret:` references
-      // before persisting the MCP config.
+      // encrypted secrets store, replacing them with `@secret:` references.
       const [envWithRefs, argsWithRefs] = await Promise.all([
         storeEnvLiteralsAsSecrets(env, db),
-        storeArgLiteralsAsSecretsForPreset(name, args, db),
+        storeArgLiteralsAsSecretsForPreset(name, finalArgs, db),
       ]);
 
       const server = await service.create({
         name, description: description ?? '', type, enabled: enabled ?? true,
-        command, args: argsWithRefs, env: envWithRefs, url, headers,
+        command: finalCommand, args: argsWithRefs, env: envWithRefs, url, headers,
+        bundleId, bundlePath, bundleEntry,
       });
+
+      // Link the bundle so the cleanup cron keeps it
+      if (bundleId && server._id) {
+        bundleService.markLinked(bundleId, server._id.toString());
+      }
+
       syncAllToCodex(service, db).catch(() => {});
       res.status(201).json(server);
     } catch (err: unknown) {
@@ -150,7 +242,12 @@ export function mcpRoutes(db: Db): Router {
   router.delete('/servers/:id', async (req: Request, res: Response) => {
     try {
       const id = param(req, 'id');
+      const existing = await service.getById(id);
       await service.delete(id);
+      // Clean up the bundle directory if this server had one
+      if (existing?.bundleId) {
+        bundleService.delete(existing.bundleId);
+      }
       syncAllToCodex(service, db).catch(() => {});
       res.status(204).send();
     } catch (err: unknown) {
@@ -158,71 +255,34 @@ export function mcpRoutes(db: Db): Router {
     }
   });
 
-  // POST /api/mcp/servers/:id/test — Test connection to MCP server
+  // POST /api/mcp/servers/:id/test — Test connection via a real MCP handshake
   router.post('/servers/:id/test', async (req: Request, res: Response) => {
+    const id = param(req, 'id');
     try {
-      const id = param(req, 'id');
       const server = await service.getById(id);
       if (!server) return res.status(404).json({ error: 'MCP server not found' });
 
-      // Build config for this single server. Resolve any @secret: references
-      // (in env AND args) so claude-code receives plaintext values.
-      const mcpConfig: Record<string, unknown> = {};
-      if (server.type === 'stdio') {
-        const [env, args] = await Promise.all([
-          resolveEnvSecrets(server.env, db),
-          resolveArgSecrets(server.args, db),
-        ]);
-        mcpConfig[server.name] = { type: 'stdio', command: server.command, args, env };
-      } else if (server.type === 'sse') {
-        mcpConfig[server.name] = { type: 'sse', url: server.url, headers: server.headers ?? {} };
+      // Spawn the server and do an actual MCP handshake (initialize + tools/list)
+      // to count the real number of tools. Avoids relying on an LLM round-trip.
+      const result = await healthCheckMcpServer(server, db);
+
+      if (result.ok) {
+        await service.updateStatus(id, 'connected', {
+          serverInfo: result.serverInfo,
+          toolCount: result.toolCount ?? 0,
+        });
+        res.json({
+          status: 'connected',
+          serverInfo: result.serverInfo,
+          toolCount: result.toolCount ?? 0,
+          durationMs: result.durationMs,
+        });
       } else {
-        mcpConfig[server.name] = { type: 'http', url: server.url, headers: server.headers ?? {} };
+        await service.updateStatus(id, 'failed', { error: result.error });
+        res.json({ status: 'failed', error: result.error, durationMs: result.durationMs });
       }
-
-      // Quick test: start a Claude query with this MCP server and check its status
-      const { query } = await import('@anthropic-ai/claude-code');
-
-      const conversation = query({
-        prompt: `List the tools available from the "${server.name}" MCP server. Just list tool names, nothing else.`,
-        options: {
-          model: 'sonnet',
-          maxTurns: 1,
-          permissionMode: 'bypassPermissions',
-          mcpServers: mcpConfig as any,
-        } as any,
-      });
-
-      let toolCount = 0;
-      let serverInfo: { name: string; version: string } | undefined;
-      let responseText = '';
-
-      for await (const msg of conversation) {
-        if (msg.type === 'assistant') {
-          const blocks = msg.message.content as Array<{ type: string; text?: string }>;
-          responseText = blocks.filter(b => b.type === 'text').map(b => b.text || '').join('');
-        }
-        // Check for MCP server status in the init message
-        if (msg.type === 'result') {
-          const result = msg as any;
-          if (result.mcp_servers) {
-            const mcpStatus = result.mcp_servers.find((s: any) => s.name === server.name);
-            if (mcpStatus) {
-              serverInfo = mcpStatus.serverInfo;
-            }
-          }
-        }
-      }
-
-      // Count tools mentioned in response (rough heuristic)
-      const lines = responseText.split('\n').filter(l => l.trim().startsWith('-') || l.trim().match(/^\d+\./));
-      toolCount = lines.length || 1;
-
-      await service.updateStatus(id, 'connected', { serverInfo, toolCount });
-      res.json({ status: 'connected', serverInfo, toolCount, response: responseText.slice(0, 500) });
     } catch (err: unknown) {
       const error = (err as Error).message;
-      const id = param(req, 'id');
       await service.updateStatus(id, 'failed', { error });
       res.json({ status: 'failed', error });
     }

@@ -80,7 +80,8 @@ async function checkStdioServer(server: McpServerRecord, db: Db): Promise<Health
 
     try {
       proc = spawn(command, args, {
-        env: { ...process.env, ...env },
+        cwd: server.bundlePath,
+        env: { ...process.env, ...env, DOTENV_CONFIG_QUIET: 'true' },
         stdio: ['pipe', 'pipe', 'pipe'],
       });
     } catch (err) {

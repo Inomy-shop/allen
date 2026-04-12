@@ -87,7 +87,8 @@ async function connectServer(server: McpServerRecord, db: Db): Promise<McpConnec
   ]);
 
   const proc = spawn(server.command!, resolvedArgs, {
-    env: { ...process.env, ...resolvedEnv },
+    cwd: server.bundlePath,
+    env: { ...process.env, ...resolvedEnv, DOTENV_CONFIG_QUIET: 'true' },
     stdio: ['pipe', 'pipe', 'pipe'],
   });
 

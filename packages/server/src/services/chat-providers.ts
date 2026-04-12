@@ -132,18 +132,25 @@ export async function syncMcpToCodex(db: Db): Promise<void> {
     }
   }
 
-  // Register external MCP servers
+  // Register external MCP servers — resolve @secret: refs in env AND args
+  // so Codex gets plaintext values. Also silence dotenv's stdout banner.
+  // Always remove and re-add so config drift (e.g. missing DOTENV_CONFIG_QUIET
+  // from older registrations) gets corrected every sync.
+  const { resolveEnvSecrets, resolveArgSecrets } = await import('./mcp.service.js');
   for (const server of servers) {
-    if (existingOutput.includes(server.name)) continue;
-
     try {
-      const cmdArgs = ['mcp', 'add', server.name];
-      if (server.env) {
-        for (const [k, v] of Object.entries(server.env)) {
-          cmdArgs.push('--env', `${k}=${v}`);
-        }
+      const [resolvedEnv, resolvedArgs] = await Promise.all([
+        resolveEnvSecrets(server.env, db),
+        resolveArgSecrets(server.args, db),
+      ]);
+      const envWithQuiet = { ...resolvedEnv, DOTENV_CONFIG_QUIET: 'true' };
+      // Remove first (may fail if not registered — that's fine)
+      if (existingOutput.includes(server.name)) {
+        await execFileAsync('codex', ['mcp', 'remove', server.name], { timeout: 5000 }).catch(() => {});
       }
-      cmdArgs.push('--', server.command!, ...(server.args ?? []));
+      const cmdArgs = ['mcp', 'add', server.name];
+      for (const [k, v] of Object.entries(envWithQuiet)) cmdArgs.push('--env', `${k}=${v}`);
+      cmdArgs.push('--', server.command!, ...resolvedArgs);
       await execFileAsync('codex', cmdArgs, { timeout: 10000 });
       log(`Registered MCP server with Codex CLI: ${server.name}`);
     } catch (err) {
@@ -184,10 +191,8 @@ export async function runCodexCLI(
     args.push(prompt);
   }
 
-  // Sync MCP servers to Codex CLI config
-  if (!skipTools) {
-    await syncMcpToCodex(db);
-  }
+  // Note: MCP sync runs once on server boot, not per chat call.
+  // Avoids races between parallel chats rewriting Codex's global config.
 
   log(`Spawning codex: ${args.slice(0, 4).join(' ')}...`);
 

@@ -570,9 +570,9 @@ async function runSpawnInBackground(
 
     if (provider === 'codex') {
       // ── Codex CLI with MCP ──
+      // Note: no per-call syncMcpToCodex — sync happens once on server boot
+      // to avoid races between parallel chats rebuilding the Codex config.
       const { spawn } = await import('node:child_process');
-      const { syncMcpToCodex } = await import('./chat-providers.js');
-      await syncMcpToCodex(db);
 
       const args: string[] = ['exec'];
       if (currentResumeSession) {
@@ -1633,11 +1633,9 @@ async function runAgentTurn(
   try {
     if (provider === 'codex') {
       // ── Codex CLI with MCP ──
+      // Note: no per-call syncMcpToCodex — sync runs once on boot to avoid
+      // races between parallel agent spawns rewriting Codex's config.
       const { spawn } = await import('node:child_process');
-
-      // Sync MCP servers so Codex can access FlowForge tools
-      const { syncMcpToCodex } = await import('./chat-providers.js');
-      await syncMcpToCodex(db);
 
       const args: string[] = ['exec'];
       if (resumeSessionId) {

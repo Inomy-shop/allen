@@ -1,9 +1,9 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { mcp as api, secrets as secretsApi } from '../../services/api';
 import {
   Server, Plus, Trash2, RefreshCw, Power, PowerOff,
   CheckCircle, XCircle, HelpCircle, ExternalLink, ChevronDown, ChevronRight, Wrench,
-  Lock,
+  Lock, Upload, Loader2, Package, AlertCircle, X as XIcon,
 } from 'lucide-react';
 
 interface McpServer {
@@ -415,12 +415,327 @@ function AddFromPreset({
   );
 }
 
+// ─── Upload Bundle Form ──────────────────────────────────────────────────
+
+interface BundleMeta {
+  bundleId: string;
+  originalName: string;
+  uploadedAt: string;
+  entry: string;
+  candidateEntries: string[];
+  status: 'extracting' | 'installing' | 'ready' | 'failed';
+  error?: string;
+  installLog?: string;
+}
+
+type EnvRow = { id: number; name: string; selectedKey: string };
+
+function UploadBundleForm({
+  flowforgeSecrets, onSecretCreated, onAdded,
+}: {
+  flowforgeSecrets: string[];
+  onSecretCreated: (key: string) => void;
+  onAdded: () => void;
+}) {
+  const [bundle, setBundle] = useState<BundleMeta | null>(null);
+  const [uploading, setUploading] = useState(false);
+  const [uploadError, setUploadError] = useState('');
+  const [dragOver, setDragOver] = useState(false);
+
+  // Form fields (stage 4)
+  const [name, setName] = useState('');
+  const [description, setDescription] = useState('');
+  const [envRows, setEnvRows] = useState<EnvRow[]>([]);
+  const [submitting, setSubmitting] = useState(false);
+  const [submitError, setSubmitError] = useState('');
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // Poll for install status
+  useEffect(() => {
+    if (!bundle || (bundle.status !== 'extracting' && bundle.status !== 'installing')) return;
+    const interval = setInterval(async () => {
+      try {
+        const updated = await api.getBundle(bundle.bundleId);
+        setBundle(updated);
+        if (updated.status === 'ready' || updated.status === 'failed') {
+          clearInterval(interval);
+        }
+      } catch {}
+    }, 2000);
+    return () => clearInterval(interval);
+  }, [bundle]);
+
+  const handleUpload = async (file: File) => {
+    setUploading(true);
+    setUploadError('');
+    try {
+      const meta = await api.uploadBundle(file);
+      setBundle(meta);
+      // Auto-derive name from filename (strip .zip)
+      const baseName = file.name.replace(/\.zip$/i, '').replace(/[^a-z0-9-_]/gi, '-').toLowerCase();
+      setName(baseName);
+    } catch (e: any) {
+      setUploadError(e.message ?? 'Upload failed');
+    }
+    setUploading(false);
+  };
+
+  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const f = e.target.files?.[0];
+    if (f) handleUpload(f);
+    e.target.value = '';
+  };
+
+  const handleDrop = (e: React.DragEvent) => {
+    e.preventDefault();
+    setDragOver(false);
+    const f = e.dataTransfer.files[0];
+    if (f) handleUpload(f);
+  };
+
+  const handleDiscard = async () => {
+    if (!bundle) return;
+    try { await api.deleteBundle(bundle.bundleId); } catch {}
+    setBundle(null);
+    setName('');
+    setDescription('');
+    setEnvRows([]);
+    setUploadError('');
+    setSubmitError('');
+  };
+
+  const handleEntryChange = async (entry: string) => {
+    if (!bundle) return;
+    try {
+      const updated = await api.setBundleEntry(bundle.bundleId, entry);
+      setBundle(updated);
+    } catch (e: any) {
+      setUploadError(e.message ?? 'Failed to update entry');
+    }
+  };
+
+  const addEnvRow = () => {
+    setEnvRows(prev => [...prev, { id: Date.now() + Math.random(), name: '', selectedKey: '' }]);
+  };
+  const updateEnvRow = (id: number, patch: Partial<EnvRow>) => {
+    setEnvRows(prev => prev.map(r => r.id === id ? { ...r, ...patch } : r));
+  };
+  const removeEnvRow = (id: number) => {
+    setEnvRows(prev => prev.filter(r => r.id !== id));
+  };
+
+  const handleSubmit = async () => {
+    if (!bundle) return;
+    if (!name.trim()) { setSubmitError('Name is required'); return; }
+    setSubmitting(true);
+    setSubmitError('');
+    try {
+      const env: Record<string, string> = {};
+      for (const row of envRows) {
+        if (row.name.trim() && row.selectedKey) {
+          env[row.name.trim()] = `@secret:${row.selectedKey}`;
+        }
+      }
+      await api.create({
+        name: name.trim(),
+        description: description.trim(),
+        type: 'stdio',
+        enabled: true,
+        env,
+        bundleId: bundle.bundleId,
+      });
+      onAdded();
+    } catch (e: any) {
+      setSubmitError(e.message ?? 'Failed to create server');
+    }
+    setSubmitting(false);
+  };
+
+  // ── Render stages ──
+
+  // Stage 1: no bundle yet — drop zone
+  if (!bundle) {
+    return (
+      <div>
+        <input ref={fileInputRef} type="file" accept=".zip" className="hidden" onChange={handleFileChange} />
+        <div
+          onDragOver={e => { e.preventDefault(); setDragOver(true); }}
+          onDragLeave={() => setDragOver(false)}
+          onDrop={handleDrop}
+          onClick={() => fileInputRef.current?.click()}
+          className={`border-2 border-dashed rounded-lg p-8 text-center cursor-pointer transition-colors ${dragOver ? 'border-accent-blue bg-accent-blue/5' : 'border-border/40 hover:border-accent-blue/30 hover:bg-surface-200/30'}`}
+        >
+          {uploading ? (
+            <div className="flex items-center justify-center gap-2 text-theme-secondary">
+              <Loader2 className="w-5 h-5 animate-spin" />
+              <span className="text-sm">Uploading & extracting...</span>
+            </div>
+          ) : (
+            <>
+              <Upload className="w-8 h-8 mx-auto mb-2 text-theme-muted" />
+              <p className="text-sm text-theme-secondary font-body">Drop .zip file here or click to browse</p>
+              <p className="text-[11px] text-theme-subtle mt-1">Max 100MB. Do not include node_modules/ — we install it for you.</p>
+            </>
+          )}
+        </div>
+        {uploadError && (
+          <div className="mt-2 flex items-start gap-2 text-[11px] text-red-400">
+            <AlertCircle className="w-3.5 h-3.5 shrink-0 mt-0.5" />
+            <span>{uploadError}</span>
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  // Stage 2/3: extracting or installing
+  if (bundle.status === 'extracting' || bundle.status === 'installing') {
+    return (
+      <div className="border border-border/30 rounded-lg p-4 space-y-2">
+        <div className="flex items-center gap-2">
+          <Package className="w-4 h-4 text-theme-muted" />
+          <span className="text-sm text-theme-secondary">{bundle.originalName}</span>
+          <span className="flex-1" />
+          <button onClick={handleDiscard} className="text-[10px] text-theme-muted hover:text-red-400">Discard</button>
+        </div>
+        <div className="flex items-center gap-2 text-xs text-theme-muted">
+          <Loader2 className="w-3.5 h-3.5 animate-spin" />
+          {bundle.status === 'extracting' ? 'Extracting bundle...' : 'Running npm install...'}
+        </div>
+      </div>
+    );
+  }
+
+  // Stage 5: failed
+  if (bundle.status === 'failed') {
+    return (
+      <div className="border border-red-500/30 bg-red-500/5 rounded-lg p-4 space-y-2">
+        <div className="flex items-center gap-2">
+          <AlertCircle className="w-4 h-4 text-red-400" />
+          <span className="text-sm text-red-400">{bundle.originalName} — Failed</span>
+          <span className="flex-1" />
+          <button onClick={handleDiscard} className="text-[10px] text-theme-muted hover:text-red-400">Discard</button>
+        </div>
+        <div className="text-xs text-red-400 font-mono">{bundle.error}</div>
+        {bundle.installLog && (
+          <pre className="text-[10px] text-theme-muted bg-black/30 p-2 rounded max-h-40 overflow-auto font-mono whitespace-pre-wrap">{bundle.installLog}</pre>
+        )}
+      </div>
+    );
+  }
+
+  // Stage 4: ready — show config form
+  return (
+    <div className="border border-border/40 rounded-lg p-4 bg-surface-200/20 space-y-3">
+      <div className="flex items-center gap-2">
+        <Package className="w-4 h-4 text-accent-green" />
+        <span className="text-sm text-theme-primary font-body">{bundle.originalName}</span>
+        <span className="text-[10px] text-theme-subtle">({bundle.candidateEntries.length} entry point{bundle.candidateEntries.length !== 1 ? 's' : ''})</span>
+        <span className="flex-1" />
+        <button onClick={handleDiscard} className="text-[10px] text-theme-muted hover:text-red-400">Discard</button>
+      </div>
+
+      {/* Entry point dropdown */}
+      <div>
+        <label className="text-[10px] font-label uppercase tracking-wider text-theme-muted mb-1 block">Entry Point</label>
+        <select
+          value={bundle.entry}
+          onChange={e => handleEntryChange(e.target.value)}
+          className="w-full bg-surface-200/50 border border-border/30 rounded-sm px-3 py-1.5 text-sm text-theme-primary font-mono"
+        >
+          {bundle.candidateEntries.map(e => <option key={e} value={e}>{e}</option>)}
+        </select>
+      </div>
+
+      {/* Name */}
+      <div>
+        <label className="text-[10px] font-label uppercase tracking-wider text-theme-muted mb-1 block">Name</label>
+        <input
+          value={name}
+          onChange={e => setName(e.target.value)}
+          placeholder="my-custom-server"
+          className="w-full bg-surface-200/50 border border-border/30 rounded-sm px-3 py-1.5 text-sm text-theme-primary font-mono"
+        />
+      </div>
+
+      {/* Description */}
+      <div>
+        <label className="text-[10px] font-label uppercase tracking-wider text-theme-muted mb-1 block">Description</label>
+        <input
+          value={description}
+          onChange={e => setDescription(e.target.value)}
+          placeholder="What does this server do?"
+          className="w-full bg-surface-200/50 border border-border/30 rounded-sm px-3 py-1.5 text-sm text-theme-primary"
+        />
+      </div>
+
+      {/* Env vars */}
+      <div>
+        <label className="text-[10px] font-label uppercase tracking-wider text-theme-muted mb-1 block">Environment Variables</label>
+        {envRows.length === 0 && (
+          <p className="text-[10px] text-theme-subtle mb-2">No env vars. Click "+ Add env var" if your server needs any.</p>
+        )}
+        <div className="space-y-2">
+          {envRows.map(row => (
+            <div key={row.id} className="flex items-start gap-2">
+              <input
+                value={row.name}
+                onChange={e => updateEnvRow(row.id, { name: e.target.value.toUpperCase().replace(/[^A-Z0-9_]/g, '') })}
+                placeholder="API_BASE_URL"
+                className="w-40 bg-surface-200/50 border border-border/30 rounded-sm px-2 py-1.5 text-xs text-theme-primary font-mono"
+              />
+              <span className="text-theme-subtle text-sm leading-8">→</span>
+              <div className="flex-1">
+                <SecretPicker
+                  fieldKey={row.name || 'SECRET'}
+                  state={{ selectedKey: row.selectedKey }}
+                  flowforgeSecrets={flowforgeSecrets}
+                  onSecretCreated={onSecretCreated}
+                  onChange={next => updateEnvRow(row.id, { selectedKey: next.selectedKey })}
+                />
+              </div>
+              <button onClick={() => removeEnvRow(row.id)} className="p-1.5 text-theme-muted hover:text-red-400">
+                <XIcon className="w-3 h-3" />
+              </button>
+            </div>
+          ))}
+        </div>
+        <button onClick={addEnvRow} className="mt-2 text-[11px] text-accent-blue hover:text-accent-blue/80 flex items-center gap-1">
+          <Plus className="w-3 h-3" /> Add env var
+        </button>
+      </div>
+
+      {/* Command preview */}
+      <div className="text-[10px] text-theme-subtle font-mono bg-surface-200/30 p-2 rounded">
+        node <span className="text-theme-muted">&lt;bundle&gt;/</span>{bundle.entry}
+      </div>
+
+      {submitError && (
+        <div className="text-[11px] text-red-400 flex items-center gap-1">
+          <AlertCircle className="w-3 h-3" /> {submitError}
+        </div>
+      )}
+
+      <div className="flex items-center gap-2">
+        <button
+          onClick={handleSubmit}
+          disabled={!name.trim() || submitting}
+          className="btn-primary text-xs px-3 py-1.5 disabled:opacity-30"
+        >
+          {submitting ? 'Adding...' : 'Add Server'}
+        </button>
+      </div>
+    </div>
+  );
+}
+
 export default function McpServerManager() {
   const [servers, setServers] = useState<McpServer[]>([]);
   const [presets, setPresets] = useState<McpPreset[]>([]);
   const [flowforgeSecrets, setFlowforgeSecrets] = useState<string[]>([]);
   const [loading, setLoading] = useState(true);
   const [showAdd, setShowAdd] = useState(false);
+  const [addMode, setAddMode] = useState<'preset' | 'bundle'>('preset');
   const [testingId, setTestingId] = useState<string | null>(null);
 
   const loadServers = async () => {
@@ -541,10 +856,34 @@ export default function McpServerManager() {
             <h3 className="text-xs font-label uppercase tracking-widest text-theme-secondary">Add MCP Server</h3>
             <button onClick={() => setShowAdd(false)} className="text-xs text-theme-muted hover:text-theme-secondary">Cancel</button>
           </div>
-          {availablePresets.length > 0 ? (
-            <AddFromPreset presets={availablePresets} flowforgeSecrets={flowforgeSecrets} onSecretCreated={handleSecretCreated} onAdd={handleAddPreset} />
-          ) : (
-            <div className="text-xs text-theme-subtle">All preset servers have been added.</div>
+          {/* Tab selector */}
+          <div className="flex items-center gap-1 border-b border-border/20">
+            <button
+              onClick={() => setAddMode('preset')}
+              className={`px-3 py-1.5 text-xs font-body border-b-2 transition-colors ${addMode === 'preset' ? 'border-accent-blue text-accent-blue' : 'border-transparent text-theme-muted hover:text-theme-secondary'}`}
+            >
+              From Preset
+            </button>
+            <button
+              onClick={() => setAddMode('bundle')}
+              className={`px-3 py-1.5 text-xs font-body border-b-2 transition-colors ${addMode === 'bundle' ? 'border-accent-blue text-accent-blue' : 'border-transparent text-theme-muted hover:text-theme-secondary'}`}
+            >
+              Upload Bundle
+            </button>
+          </div>
+          {addMode === 'preset' && (
+            availablePresets.length > 0 ? (
+              <AddFromPreset presets={availablePresets} flowforgeSecrets={flowforgeSecrets} onSecretCreated={handleSecretCreated} onAdd={handleAddPreset} />
+            ) : (
+              <div className="text-xs text-theme-subtle">All preset servers have been added.</div>
+            )
+          )}
+          {addMode === 'bundle' && (
+            <UploadBundleForm
+              flowforgeSecrets={flowforgeSecrets}
+              onSecretCreated={handleSecretCreated}
+              onAdded={() => { setShowAdd(false); void loadServers(); }}
+            />
           )}
         </div>
       ) : (
