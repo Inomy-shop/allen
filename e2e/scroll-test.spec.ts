@@ -38,12 +38,10 @@ test('file content loads fully and scrolls', async ({ page }) => {
   }
 
   // Screenshot at bottom of file
-  await page.screenshot({ path: '/Users/shreemantkumar/flowforge/e2e/scroll-bottom.png', fullPage: false });
 
   // Scroll back to top
   await textarea.evaluate(el => { el.scrollTop = 0; });
   await page.waitForTimeout(300);
-  await page.screenshot({ path: '/Users/shreemantkumar/flowforge/e2e/scroll-top.png', fullPage: false });
 
   console.log('Scroll test passed');
 });

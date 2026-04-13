@@ -130,7 +130,6 @@ test.describe('Workspace Full Feature Test', () => {
       await page.waitForTimeout(1000);
     }
 
-    await page.screenshot({ path: '/Users/shreemantkumar/flowforge/e2e/workspace-final.png', fullPage: false });
     console.log('Final screenshot saved');
   });
 });

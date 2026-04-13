@@ -17,9 +17,5 @@ test('markdown preview full width', async ({ page }) => {
     await page.waitForTimeout(500);
 
     // Crop just the editor area
-    await page.screenshot({
-      path: '/Users/shreemantkumar/flowforge/e2e/md-preview-closeup.png',
-      clip: { x: 310, y: 38, width: 1090, height: 860 },
-    });
   }
 });

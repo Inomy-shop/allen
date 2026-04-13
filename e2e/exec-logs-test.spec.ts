@@ -51,10 +51,8 @@ test('execution detail shows merged logs + tool calls + metadata', async ({ page
     console.log('✓ Open Chat link visible');
   }
 
-  await page.screenshot({ path: '/Users/shreemantkumar/flowforge/e2e/exec-merged-logs.png', fullPage: false });
 
   // Scroll down to see tool calls
   await page.evaluate(() => window.scrollTo(0, 500));
   await page.waitForTimeout(500);
-  await page.screenshot({ path: '/Users/shreemantkumar/flowforge/e2e/exec-tool-calls.png', fullPage: false });
 });

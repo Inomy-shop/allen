@@ -23,5 +23,4 @@ test('repo list with workspace button', async ({ page }) => {
   await expect(page.locator('text=New Workspace')).toBeVisible();
   await expect(page.locator('input[placeholder="feature/my-feature"]')).toBeVisible();
 
-  await page.screenshot({ path: '/Users/shreemantkumar/flowforge/e2e/repo-new-workspace.png', fullPage: false });
 });

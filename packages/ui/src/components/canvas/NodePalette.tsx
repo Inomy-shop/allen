@@ -16,7 +16,7 @@ const paletteItems: PaletteItem[] = [
     icon: Bot,
     color: 'text-accent-blue',
     bgColor: 'hover:bg-accent-blue/10',
-    defaults: { role: 'developer', prompt: '', outputs: [] },
+    defaults: { role: 'developer', prompt: '', outputs: {} },
   },
   {
     type: 'code',
@@ -24,7 +24,7 @@ const paletteItems: PaletteItem[] = [
     icon: Cog,
     color: 'text-accent-green',
     bgColor: 'hover:bg-accent-green/10',
-    defaults: { type: 'code', function: 'run-build', outputs: [] },
+    defaults: { type: 'code', function: 'run-build', outputs: {} },
   },
   {
     type: 'human',
@@ -32,7 +32,7 @@ const paletteItems: PaletteItem[] = [
     icon: MessageSquare,
     color: 'text-accent-orange',
     bgColor: 'hover:bg-accent-orange/10',
-    defaults: { type: 'human', prompt: '', fields: [], outputs: [] },
+    defaults: { type: 'human', prompt: '', fields: [], outputs: {} },
   },
   {
     type: 'workflow',

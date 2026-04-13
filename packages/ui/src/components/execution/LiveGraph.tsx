@@ -13,6 +13,7 @@ import {
   applyNodeChanges,
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
+import { outputsAsKeys } from '../../utils/outputs';
 import dagre from '@dagrejs/dagre';
 
 import type { NodeState } from '../../hooks/useExecution';
@@ -88,13 +89,17 @@ function ExecutionNode({ data, selected }: NodeProps) {
       </div>
 
       {/* Outputs pills */}
-      {d.outputs?.length > 0 && (
-        <div className="mt-1.5 flex flex-wrap gap-1">
-          {d.outputs.map((o: string) => (
-            <span key={o} className={`text-[8px] bg-${accent}/10 text-${accent}/60 px-1 rounded-sm font-mono`}>{o}</span>
-          ))}
-        </div>
-      )}
+      {(() => {
+        const keys = outputsAsKeys(d.outputs);
+        if (keys.length === 0) return null;
+        return (
+          <div className="mt-1.5 flex flex-wrap gap-1">
+            {keys.map((o) => (
+              <span key={o} className={`text-[8px] bg-${accent}/10 text-${accent}/60 px-1 rounded-sm font-mono`}>{o}</span>
+            ))}
+          </div>
+        );
+      })()}
 
       {/* Retry badge */}
       {attempt > 1 && (

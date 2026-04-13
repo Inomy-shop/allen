@@ -76,7 +76,6 @@ test.describe('Agent Execution Tracing', () => {
       console.log('✓ CWD visible in UI');
     }
 
-    await page.screenshot({ path: '/Users/shreemantkumar/flowforge/e2e/agent-exec-detail.png', fullPage: false });
     console.log('Screenshot saved');
   });
 
@@ -108,6 +107,5 @@ test.describe('Agent Execution Tracing', () => {
       console.log('✓ Open Chat link visible');
     }
 
-    await page.screenshot({ path: '/Users/shreemantkumar/flowforge/e2e/agent-exec-completed.png', fullPage: false });
   });
 });

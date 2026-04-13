@@ -7,7 +7,9 @@
     "build": "tsc",
     "dev": "tsx watch src/app.ts",
     "start": "node dist/app.js",
-    "lint": "tsc --noEmit"
+    "lint": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest"
   },
   "dependencies": {
     "@flowforge/engine": "*",
@@ -34,6 +36,7 @@
     "@types/js-yaml": "^4.0.9",
     "@types/multer": "^1.4.12",
     "@types/node": "^22.0.0",
-    "tsx": "^4.19.0"
+    "tsx": "^4.19.0",
+    "vitest": "^2.1.8"
   }
 }

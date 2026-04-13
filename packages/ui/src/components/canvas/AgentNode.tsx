@@ -1,5 +1,6 @@
 import { Handle, Position, type NodeProps } from '@xyflow/react';
 import RoleIcon from '../common/RoleIcon';
+import { outputsAsKeys } from '../../utils/outputs';
 
 export default function AgentNode({ data, selected }: NodeProps) {
   return (
@@ -16,13 +17,17 @@ export default function AgentNode({ data, selected }: NodeProps) {
           <div className="text-[10px] text-accent-blue/70 font-mono uppercase">{(data as any).agent ?? 'agent'}</div>
         </div>
       </div>
-      {(data as any).outputs?.length > 0 && (
-        <div className="mt-1.5 flex flex-wrap gap-1">
-          {(data as any).outputs.map((o: string) => (
-            <span key={o} className="text-[9px] bg-accent-blue/10 text-accent-blue/70 px-1 rounded-sm font-mono">{o}</span>
-          ))}
-        </div>
-      )}
+      {(() => {
+        const keys = outputsAsKeys((data as any).outputs);
+        if (keys.length === 0) return null;
+        return (
+          <div className="mt-1.5 flex flex-wrap gap-1">
+            {keys.map((o) => (
+              <span key={o} className="text-[9px] bg-accent-blue/10 text-accent-blue/70 px-1 rounded-sm font-mono">{o}</span>
+            ))}
+          </div>
+        );
+      })()}
       <Handle type="source" position={Position.Bottom} id="bottom" className="!bg-accent-blue !w-2.5 !h-2.5 !border-surface" />
       <Handle type="source" position={Position.Right} id="right" className="!bg-accent-yellow !w-2 !h-2 !border-surface" />
       <Handle type="source" position={Position.Left} id="left" className="!bg-accent-yellow !w-2 !h-2 !border-surface" />

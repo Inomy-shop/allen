@@ -19,7 +19,7 @@ const nodeProperties = [
   { label: 'agent', detail: 'Agent name', insertText: 'agent: ' },
   { label: 'prompt', detail: 'Node prompt template', insertText: 'prompt: |\n    ' },
   { label: 'type', detail: 'Node type', insertText: 'type: ' },
-  { label: 'outputs', detail: 'Output field names', insertText: 'outputs: []' },
+  { label: 'outputs', detail: 'Output keys with descriptions', insertText: 'outputs:\n    result: "What this output should contain"' },
   { label: 'output_format', detail: 'json | freeform', insertText: 'output_format: json' },
   { label: 'resume_on_retry', detail: 'Reuse Claude session', insertText: 'resume_on_retry: true' },
   { label: 'timeout', detail: 'Timeout in seconds', insertText: 'timeout: 300' },

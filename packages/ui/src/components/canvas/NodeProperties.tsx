@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import type { Node } from '@xyflow/react';
 import { Trash2, Plus, X } from 'lucide-react';
 import { agents as agentsApi } from '../../services/api';
+import { outputsAsKeys, mergeOutputsFromKeys } from '../../utils/outputs';
 
 interface HumanField {
   name: string;
@@ -113,8 +114,7 @@ export default function NodeProperties({ node, onUpdate, onDelete, workflowInput
   };
 
   const updateOutputs = (val: string) => {
-    const outputs = val.split(',').map(s => s.trim()).filter(Boolean);
-    update('outputs', outputs);
+    update('outputs', mergeOutputsFromKeys(localData.outputs, val));
   };
 
   // ── Human field helpers ──
@@ -259,7 +259,7 @@ export default function NodeProperties({ node, onUpdate, onDelete, workflowInput
       {type !== 'condition' && (
         <div>
           <label className="block text-xs font-label font-medium text-theme-secondary mb-1 uppercase tracking-wider">Outputs (comma-separated)</label>
-          <input className="input w-full text-xs" value={((localData.outputs as string[]) ?? []).join(', ')} onChange={e => updateOutputs(e.target.value)} placeholder="e.g., changed_files, summary" />
+          <input className="input w-full text-xs" value={outputsAsKeys(localData.outputs).join(', ')} onChange={e => updateOutputs(e.target.value)} placeholder="e.g., changed_files, summary" />
         </div>
       )}
 

@@ -29,6 +29,5 @@ test('Monaco editor loads with syntax highlighting', async ({ page }) => {
   const minimap = page.locator('.minimap');
   expect(await minimap.count()).toBeGreaterThan(0);
 
-  await page.screenshot({ path: '/Users/shreemantkumar/flowforge/e2e/monaco-editor.png', fullPage: false });
   console.log('Monaco screenshot saved');
 });

@@ -128,7 +128,6 @@ test.describe.serial('Live Agent Spawn & Execution Detail', () => {
     const spawnedByCard = page.locator('.card:has-text("Spawned By")').first();
     console.log('Spawned By:', await spawnedByCard.textContent());
 
-    await page.screenshot({ path: '/Users/shreemantkumar/flowforge/e2e/agent-live-new.png', fullPage: false });
     console.log('✓ Screenshot saved');
   });
 });

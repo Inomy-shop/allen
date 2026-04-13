@@ -21,13 +21,8 @@ test('material icon close-up', async ({ page }) => {
   await page.waitForTimeout(500);
 
   // Full page
-  await page.screenshot({ path: '/Users/shreemantkumar/flowforge/e2e/material-icons-full.png', fullPage: false });
 
   // Clip just the sidebar area
-  await page.screenshot({
-    path: '/Users/shreemantkumar/flowforge/e2e/material-icons-sidebar.png',
-    clip: { x: 64, y: 38, width: 260, height: 860 },
-  });
 
   console.log('Screenshots saved');
 });

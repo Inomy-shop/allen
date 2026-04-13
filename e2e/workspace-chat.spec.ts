@@ -20,7 +20,6 @@ test.describe('Workspace Embedded Chat', () => {
     const assistantBtn = page.locator('button:has-text("Assistant")').last();
     expect(await assistantBtn.count()).toBeGreaterThan(0);
 
-    await page.screenshot({ path: '/Users/shreemantkumar/flowforge/e2e/chat-linked.png', fullPage: false });
   });
 
   test('new chat button clears to empty state', async ({ page }) => {
@@ -41,7 +40,6 @@ test.describe('Workspace Embedded Chat', () => {
     const emptyState = page.locator('text=Chat with AI about this workspace');
     await expect(emptyState).toBeVisible({ timeout: 3000 });
 
-    await page.screenshot({ path: '/Users/shreemantkumar/flowforge/e2e/chat-new.png', fullPage: false });
   });
 
   test('chat is resizable', async ({ page }) => {

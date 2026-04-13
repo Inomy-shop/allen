@@ -92,7 +92,6 @@ test.describe('Workspace Sandbox & Config', () => {
     const serverInput = page.locator('input[value="server"]');
     expect(await serverInput.count()).toBeGreaterThan(0);
 
-    await page.screenshot({ path: '/Users/shreemantkumar/flowforge/e2e/config-editor.png', fullPage: false });
   });
 
   test('workspace info panel opens from detail page', async ({ page }) => {

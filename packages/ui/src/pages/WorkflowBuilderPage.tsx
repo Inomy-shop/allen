@@ -52,7 +52,7 @@ export default function WorkflowBuilderPage() {
   // Load existing workflow
   useEffect(() => {
     if (!id) {
-      const defaultYaml = `name: new-workflow\ndescription: \nversion: 1\n\ncontext:\n  requires: []\n  tools: []\n\ninput:\n  task: { type: string, required: true }\n\nnodes:\n  plan:\n    role: planner\n    prompt: "Break down: {{task}}"\n    outputs: [plan]\n\nedges:\n  - { from: START, to: plan }\n  - { from: plan, to: END }\n`;
+      const defaultYaml = `name: new-workflow\ndescription: \nversion: 1\n\ncontext:\n  requires: []\n  tools: []\n\ninput:\n  task: { type: string, required: true }\n\nnodes:\n  plan:\n    role: planner\n    prompt: "Break down: {{task}}"\n    outputs:\n      plan: "A structured breakdown of the task into concrete steps."\n\nedges:\n  - { from: START, to: plan }\n  - { from: plan, to: END }\n`;
       setYamlContent(defaultYaml);
       syncYamlToVisual(defaultYaml);
       setLoading(false);
