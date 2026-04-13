@@ -156,10 +156,19 @@ export default function NodeDetail({ nodeName, nodeState, trace, allTraces = [],
     return total > 0 ? total : (nodeState?.durationMs ?? activeTrace?.durationMs);
   })();
 
-  const prompt = activeTrace?.renderedPrompt;
+  // Prompt + inputState come from either:
+  //   1. The saved trace (available after node completes OR on a prior attempt)
+  //   2. The live NodeState populated by the `node_started` SSE event
+  //      (available while the node is still running, before the trace is saved)
+  // When the user is viewing a prior attempt, always prefer the trace for that attempt.
+  const prompt = viewAttempt != null
+    ? activeTrace?.renderedPrompt
+    : (activeTrace?.renderedPrompt ?? nodeState?.renderedPrompt);
   const streamText = viewAttempt != null ? (activeTrace?.rawResponse ?? '') : (nodeState?.streamText ?? activeTrace?.rawResponse ?? '');
   const activity: ActivityEntry[] = viewAttempt != null ? (activeTrace?.activity ?? []) : (nodeState?.activity ?? activeTrace?.activity ?? []);
-  const inputState = activeTrace?.inputState;
+  const inputState = viewAttempt != null
+    ? activeTrace?.inputState
+    : (activeTrace?.inputState ?? nodeState?.inputState);
 
   const handleSubmit = () => { if (onSubmitInput) onSubmitInput(formData); setFormData({}); };
 

@@ -288,25 +288,35 @@ export default function ExecutionDetailPage() {
 
   const latestInputEvent = [...timeline].reverse().find((e: TimelineEvent) => e.event === 'input_required');
 
-  // Auto-select node based on execution state
+  // Auto-select node based on execution state.
+  // IMPORTANT: the right-side detail pane should NOT auto-follow the running
+  // node — doing so overrides the user's manual selection whenever execution
+  // moves to a new node. Instead we only auto-select when `selectedNode` is
+  // null (first load) OR when the execution hits a state that requires the
+  // user's attention (waiting_for_input, just-completed, just-failed).
   const prevStatusRef = useRef<string | null>(null);
   useEffect(() => {
     if (!execution) return;
     const status = execution.status;
 
-    // Waiting for input → select the waiting node
+    // Waiting for input → always pin the pane to the waiting node so the
+    // user sees the form (regardless of prior selection).
     if (status === 'waiting_for_input' && latestInputEvent?.data?.node) {
       setSelectedNode(latestInputEvent.data.node);
       prevStatusRef.current = status;
       return;
     }
 
-    // Running → always follow the running node
+    // Running → only auto-select the running node on first load (nothing
+    // selected yet). Once the user picks a node, their selection is
+    // preserved even as execution moves to other nodes.
     if (status === 'running') {
-      for (const [name, state] of nodeStates) {
-        if (state.status === 'running') {
-          setSelectedNode(name);
-          break;
+      if (!selectedNode) {
+        for (const [name, state] of nodeStates) {
+          if (state.status === 'running') {
+            setSelectedNode(name);
+            break;
+          }
         }
       }
       prevStatusRef.current = status;

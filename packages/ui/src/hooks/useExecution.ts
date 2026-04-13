@@ -36,6 +36,11 @@ export interface NodeState {
   cost?: any;
   streamText: string;
   activity: ActivityEntry[];
+  /** Rendered prompt shipped with `node_started` so the UI can show it
+   *  while the node is still executing (before the trace is saved). */
+  renderedPrompt?: string;
+  /** Shallow snapshot of state at the moment the node started. */
+  inputState?: Record<string, unknown>;
 }
 
 export function useExecution(id: string | undefined) {
@@ -179,7 +184,15 @@ export function useExecution(id: string | undefined) {
                 timestamp: new Date(t.startedAt),
                 event: 'node_started',
                 node: t.node,
-                data: { node: t.node, role: t.role, attempt: t.attempt },
+                data: {
+                  node: t.node,
+                  role: t.role,
+                  attempt: t.attempt,
+                  // Backfill from trace so historical executions also show
+                  // the prompt and input state in the detail pane.
+                  renderedPrompt: t.renderedPrompt,
+                  inputState: t.inputState,
+                },
               });
             }
             if (t.attempt > 1) {
@@ -278,6 +291,8 @@ export function useExecution(id: string | undefined) {
             attempt: e.data.attempt ?? 1,
             streamText: '',
             activity: [],
+            renderedPrompt: e.data.renderedPrompt,
+            inputState: e.data.inputState,
           });
           break;
         }
@@ -294,6 +309,10 @@ export function useExecution(id: string | undefined) {
             cost: e.data.cost,
             streamText: existing?.streamText ?? '',
             activity: existing?.activity ?? [],
+            // Preserve renderedPrompt + inputState from the node_started event
+            // so the pane still shows them after completion.
+            renderedPrompt: existing?.renderedPrompt,
+            inputState: existing?.inputState,
           });
           break;
         }
@@ -307,6 +326,8 @@ export function useExecution(id: string | undefined) {
             attempt: existing?.attempt ?? 1,
             streamText: existing?.streamText ?? '',
             activity: existing?.activity ?? [],
+            renderedPrompt: existing?.renderedPrompt,
+            inputState: existing?.inputState,
           });
           break;
         }
@@ -321,6 +342,10 @@ export function useExecution(id: string | undefined) {
               attempt: e.data.attempt ?? (existing.attempt + 1),
               streamText: '',
               activity: [],
+              // Clear prompt/inputState — a new node_started event will
+              // arrive shortly with the fresh retry prompt.
+              renderedPrompt: undefined,
+              inputState: undefined,
             });
           }
           break;

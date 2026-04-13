@@ -170,7 +170,16 @@ ${context}
 
   deps.emitter.emit({
     event: 'node_started',
-    data: { node: nodeName, agent: nodeDef.agent, attempt: (state.retry_count as number ?? 0) + 1 },
+    data: {
+      node: nodeName,
+      agent: nodeDef.agent,
+      attempt: (state.retry_count as number ?? 0) + 1,
+      // Ship the rendered prompt and input state with the start event so
+      // the UI can show them immediately — without waiting for the trace
+      // that's only written after the node completes.
+      renderedPrompt: prompt,
+      inputState: { ...state },
+    },
   });
   let rawResponse = '';
   let sessionId: string | undefined;
