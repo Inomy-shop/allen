@@ -7,6 +7,7 @@ import CommandPalette from '../components/chat/CommandPalette';
 import ConversationLogs from '../components/chat/ConversationLogs';
 import {
   MessageSquare, Command, Server, ScrollText, Users,
+  Sparkles, Zap, BarChart3, Terminal, FolderOpen, AlertTriangle, Bot,
 } from 'lucide-react';
 import { chat as chatApi, mcp as mcpApi, learnings as learningsApi, agents as agentsApi } from '../services/api';
 
@@ -187,11 +188,41 @@ export default function ChatPage() {
         <div className="flex-1 flex items-center justify-center"><div className="text-xs text-theme-subtle animate-pulse">Loading...</div></div>
       ) : messages.length === 0 && !activeSessionId && !streaming ? (
         <div className="flex-1 flex flex-col items-center justify-center text-center px-8">
-          <MessageSquare className="w-12 h-12 text-accent-blue/20 mb-4" />
-          <h2 className="font-heading text-lg text-theme-primary tracking-wider mb-2">FlowForge Chat</h2>
-          <p className="text-sm text-theme-muted font-body max-w-md">
-            Ask anything about your workflows, repos, and executions. Use <span className="text-accent-blue font-mono">@name</span> to reference resources.
+          {/* Sparkle icon in rounded square */}
+          <div className="w-16 h-16 rounded-xl bg-surface-100 border border-border/40 flex items-center justify-center mb-6">
+            <Sparkles className="w-7 h-7 text-accent-blue" strokeWidth={1.5} />
+          </div>
+
+          {/* Headline */}
+          <h2 className="font-heading text-xl text-theme-primary tracking-wide mb-2">
+            Start a conversation with FlowForge Assistant.
+          </h2>
+          <p className="text-sm text-theme-muted font-body mb-10">
+            Use <span className="text-accent-blue font-mono">@mentions</span> to reference workflows, repos, and agents.
           </p>
+
+          {/* Quick-action grid (2 columns × 3 rows) */}
+          <div className="grid grid-cols-2 gap-3 w-full max-w-lg">
+            {[
+              { icon: Zap, color: 'text-accent-blue', label: 'List workflows', prompt: 'List all workflows' },
+              { icon: BarChart3, color: 'text-accent-green', label: 'Dashboard stats', prompt: 'Show me the dashboard stats' },
+              { icon: Terminal, color: 'text-accent-cyan', label: 'Recent executions', prompt: 'Show me recent executions' },
+              { icon: FolderOpen, color: 'text-accent-yellow', label: 'List repos', prompt: 'List all registered repos' },
+              { icon: AlertTriangle, color: 'text-accent-red', label: 'Failed today', prompt: 'Show me executions that failed today' },
+              { icon: Bot, color: 'text-accent-purple', label: 'Available agents', prompt: 'List all available agents' },
+            ].map(({ icon: Icon, color, label, prompt }) => (
+              <button
+                key={label}
+                onClick={() => handleSuggestionClick(prompt)}
+                className="flex items-center gap-3 px-4 py-3 rounded-md border border-border/40 bg-surface-50/40 hover:bg-surface-100/60 hover:border-border/70 transition-all text-left group"
+              >
+                <Icon className={`w-4 h-4 ${color} shrink-0`} strokeWidth={1.5} />
+                <span className="text-sm text-theme-secondary font-body group-hover:text-theme-primary transition-colors">
+                  {label}
+                </span>
+              </button>
+            ))}
+          </div>
         </div>
       ) : (
         <ChatMessageList messages={messages} streamText={streamText} thinkingText={thinkingText} streaming={streaming} activeToolCalls={activeToolCalls} agentThreads={agentThreads} agentReports={agentReports} threadsByMessage={threadsByMessage} spawnedAgents={spawnedAgents} pendingUserQuestion={pendingUserQuestion} onAnswerUserQuestion={answerUserQuestion} activeAgent={activeSession?.activeAgent} onSuggestionClick={handleSuggestionClick} onSaveToLearnings={handleSaveToLearnings} />

@@ -1,7 +1,12 @@
+import { authHeaders } from './api';
+
 const BASE = '/api';
 
 async function request<T>(path: string, options?: RequestInit): Promise<T> {
-  const res = await fetch(`${BASE}${path}`, { headers: { 'Content-Type': 'application/json' }, ...options });
+  const res = await fetch(`${BASE}${path}`, {
+    ...options,
+    headers: { 'Content-Type': 'application/json', ...authHeaders(), ...(options?.headers ?? {}) },
+  });
   if (!res.ok) { const body = await res.json().catch(() => ({})); throw new Error(body.error ?? `Request failed: ${res.status}`); }
   if (res.status === 204) return undefined as T;
   return res.json();

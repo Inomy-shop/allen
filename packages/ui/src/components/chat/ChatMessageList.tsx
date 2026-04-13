@@ -226,6 +226,10 @@ function renderBlocks(text: string): React.ReactNode {
   const lines = text.split('\n');
   const elements: React.ReactNode[] = [];
   let i = 0;
+  // Monotonic key counter — the line index `i` alone is not unique because
+  // branches that consume multiple lines (tables, lists, blockquotes) can
+  // end up sharing an `i` value with the next iteration's element.
+  let k = 0;
 
   while (i < lines.length) {
     const line = lines[i];
@@ -237,14 +241,14 @@ function renderBlocks(text: string): React.ReactNode {
         tableLines.push(lines[i]);
         i++;
       }
-      elements.push(<span key={i}>{renderTable(tableLines)}</span>);
+      elements.push(<span key={`tbl-${k++}`}>{renderTable(tableLines)}</span>);
       continue;
     }
 
     // Horizontal rule
     if (line.match(/^(-{3,}|\*{3,}|_{3,})$/)) {
       elements.push(
-        <hr key={i} className="border-0 h-px bg-gradient-to-r from-transparent via-border to-transparent my-4" />,
+        <hr key={`hr-${k++}`} className="border-0 h-px bg-gradient-to-r from-transparent via-border to-transparent my-4" />,
       );
       i++;
       continue;
@@ -258,7 +262,7 @@ function renderBlocks(text: string): React.ReactNode {
         i++;
       }
       elements.push(
-        <div key={i} className="border-l-2 border-accent-blue/40 pl-3 my-2 py-1">
+        <div key={`bq-${k++}`} className="border-l-2 border-accent-blue/40 pl-3 my-2 py-1">
           <div className="text-theme-secondary italic text-sm">
             {quoteLines.map((ql, qi) => (
               <div key={qi}>{renderInline(ql)}</div>
@@ -272,7 +276,7 @@ function renderBlocks(text: string): React.ReactNode {
     // Headers
     if (line.startsWith('### ')) {
       elements.push(
-        <h4 key={i} className="text-sm font-bold text-theme-primary mt-4 mb-1.5 font-heading tracking-wide">
+        <h4 key={`h4-${k++}`} className="text-sm font-bold text-theme-primary mt-4 mb-1.5 font-heading tracking-wide">
           {renderInline(line.slice(4))}
         </h4>,
       );
@@ -281,7 +285,7 @@ function renderBlocks(text: string): React.ReactNode {
     }
     if (line.startsWith('## ')) {
       elements.push(
-        <h3 key={i} className="text-[15px] font-bold text-theme-primary mt-5 mb-2 font-heading tracking-wide">
+        <h3 key={`h3-${k++}`} className="text-[15px] font-bold text-theme-primary mt-5 mb-2 font-heading tracking-wide">
           {renderInline(line.slice(3))}
         </h3>,
       );
@@ -290,7 +294,7 @@ function renderBlocks(text: string): React.ReactNode {
     }
     if (line.startsWith('# ')) {
       elements.push(
-        <h2 key={i} className="text-base font-bold text-theme-primary mt-5 mb-2 font-heading tracking-wide">
+        <h2 key={`h2-${k++}`} className="text-base font-bold text-theme-primary mt-5 mb-2 font-heading tracking-wide">
           {renderInline(line.slice(2))}
         </h2>,
       );
@@ -306,7 +310,7 @@ function renderBlocks(text: string): React.ReactNode {
         i++;
       }
       elements.push(
-        <ul key={i} className="my-2 space-y-1">
+        <ul key={`ul-${k++}`} className="my-2 space-y-1">
           {items.map((item, idx) => (
             <li key={idx} className="flex gap-2.5 ml-1">
               <span className="shrink-0 w-1.5 h-1.5 rounded-full bg-accent-blue/50 mt-[7px]" />
@@ -327,7 +331,7 @@ function renderBlocks(text: string): React.ReactNode {
         i++;
       }
       elements.push(
-        <ol key={i} className="my-2 space-y-1">
+        <ol key={`ol-${k++}`} className="my-2 space-y-1">
           {items.map((item, idx) => (
             <li key={idx} className="flex gap-2.5 ml-1">
               <span className="shrink-0 text-accent-blue/60 font-mono text-xs mt-[2px] w-4 text-right">{item.num}.</span>
@@ -341,14 +345,14 @@ function renderBlocks(text: string): React.ReactNode {
 
     // Empty line
     if (line.trim() === '') {
-      elements.push(<div key={i} className="h-2" />);
+      elements.push(<div key={`sp-${k++}`} className="h-2" />);
       i++;
       continue;
     }
 
     // Regular paragraph
     elements.push(
-      <p key={i} className="my-0.5 leading-relaxed">{renderInline(line)}</p>,
+      <p key={`p-${k++}`} className="my-0.5 leading-relaxed">{renderInline(line)}</p>,
     );
     i++;
   }

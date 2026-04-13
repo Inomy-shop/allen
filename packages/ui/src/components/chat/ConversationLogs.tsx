@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import { createPortal } from 'react-dom';
+import { authHeaders } from '../../services/api';
 import {
   X, Clock, Wrench, Brain, CheckCircle, XCircle, Play,
   ChevronDown, ChevronRight, MessageSquare, Zap, AlertCircle,
@@ -148,11 +149,12 @@ export default function ConversationLogs({ sessionId, onClose }: ConversationLog
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
+    const headers = authHeaders();
     Promise.all([
-      fetch(`/api/chat/sessions/${sessionId}/logs`).then(r => r.json()),
-      fetch(`/api/chat/sessions/${sessionId}`).then(r => r.json()),
+      fetch(`/api/chat/sessions/${sessionId}/logs`, { headers }).then(r => r.json()),
+      fetch(`/api/chat/sessions/${sessionId}`, { headers }).then(r => r.json()),
     ]).then(([logData, sessionData]) => {
-      setLogs(logData);
+      setLogs(Array.isArray(logData) ? logData : []);
       setSession(sessionData);
       setLoading(false);
     }).catch(() => setLoading(false));

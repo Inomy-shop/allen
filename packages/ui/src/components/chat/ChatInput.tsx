@@ -1,6 +1,7 @@
 import { useState, useRef, useCallback, useEffect, forwardRef, useImperativeHandle } from 'react';
 import { Send, Square, ChevronDown, Paperclip, Loader2, X } from 'lucide-react';
 import MentionAutocomplete, { type MentionOption } from './MentionAutocomplete';
+import { authHeaders } from '../../services/api';
 
 export interface ChatInputHandle {
   setValue: (v: string) => void;
@@ -67,7 +68,7 @@ const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function ChatInput
       try {
         const form = new FormData();
         form.append('file', file);
-        const res = await fetch('/api/files', { method: 'POST', body: form });
+        const res = await fetch('/api/files', { method: 'POST', headers: authHeaders(), body: form });
         if (!res.ok) continue;
         const data = await res.json();
         const fullUrl = `${window.location.origin}${data.url}`;

@@ -14,6 +14,65 @@
 
 const API_BASE = process.env.FLOWFORGE_API_URL ?? `http://localhost:${process.env.PORT ?? '4023'}`;
 
+// ── Auth: mint a short-lived JWT using the shared secret ──
+// The MCP server runs as a child process of the main server and shares
+// JWT_ACCESS_SECRET via env. We mint a system-admin token on demand and
+// cache it for a few minutes to avoid re-signing on every call.
+
+import jwt, { type SignOptions } from 'jsonwebtoken';
+
+const JWT_ACCESS_SECRET = process.env.JWT_ACCESS_SECRET;
+
+interface CachedToken {
+  token: string;
+  expiresAt: number;
+}
+let cached: CachedToken | null = null;
+
+function getAuthToken(): string | null {
+  if (!JWT_ACCESS_SECRET) return null;
+  const now = Date.now();
+  if (cached && cached.expiresAt - now > 30_000) return cached.token;
+  const token = jwt.sign(
+    {
+      sub: 'mcp-system',
+      email: 'mcp@internal.local',
+      role: 'admin',
+      mustResetPassword: false,
+    },
+    JWT_ACCESS_SECRET,
+    { expiresIn: '1h' } as SignOptions,
+  );
+  cached = { token, expiresAt: now + 60 * 60 * 1000 };
+  return token;
+}
+
+// Wrap the global fetch so every call made from this module — including
+// the many ad-hoc fetch(...) calls in executeTool — automatically carries
+// the Authorization header when talking to the FlowForge API.
+type FetchInput = Parameters<typeof fetch>[0];
+const originalFetch = globalThis.fetch.bind(globalThis);
+globalThis.fetch = async (input: FetchInput, init?: RequestInit): Promise<Response> => {
+  const url =
+    typeof input === 'string'
+      ? input
+      : input instanceof URL
+        ? input.toString()
+        : (input as Request).url;
+  if (!url.startsWith(API_BASE)) {
+    return originalFetch(input, init);
+  }
+  const token = getAuthToken();
+  if (!token) {
+    return originalFetch(input, init);
+  }
+  const mergedHeaders = new Headers(init?.headers);
+  if (!mergedHeaders.has('Authorization')) {
+    mergedHeaders.set('Authorization', `Bearer ${token}`);
+  }
+  return originalFetch(input, { ...init, headers: mergedHeaders });
+};
+
 // ── Helpers ──
 
 /**
@@ -92,7 +151,7 @@ async function callAPI(endpoint: string, method = 'GET', body?: unknown): Promis
   const opts: RequestInit = { method, headers: { 'Content-Type': 'application/json' } };
   if (body) opts.body = JSON.stringify(body);
 
-  const res = await fetch(url);
+  const res = await fetch(url, opts);
   if (!res.ok) return { error: `API ${res.status}: ${await res.text().catch(() => 'unknown')}` };
   return res.json();
 }

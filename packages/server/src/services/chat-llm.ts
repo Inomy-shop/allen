@@ -100,7 +100,12 @@ async function runClaudeCLI(
       type: 'stdio',
       command: runner.command,
       args: runner.args,
-      env: { FLOWFORGE_API_URL: `http://localhost:${process.env.PORT ?? '4023'}` },
+      env: {
+        FLOWFORGE_API_URL: `http://localhost:${process.env.PORT ?? '4023'}`,
+        // Shared with the MCP subprocess so it can mint its own access token
+        // when calling back into /api/* — see flowforge-mcp-server.ts.
+        JWT_ACCESS_SECRET: process.env.JWT_ACCESS_SECRET ?? '',
+      },
     };
 
     // External MCP servers (Linear, GitHub, etc.)

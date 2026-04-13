@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
-import { chat as api } from '../services/api';
+import { chat as api, authHeaders } from '../services/api';
 
 export interface ChatSession {
   _id: string;
@@ -206,7 +206,9 @@ export function useChat() {
         const streamingMsg = session.messages?.find((m: any) => m.status === 'streaming');
         if (streamingMsg?.content) setStreamText(streamingMsg.content);
 
-        const response = await fetch(api.streamUrl(activeSessionId));
+        const response = await fetch(api.streamUrl(activeSessionId), {
+          headers: authHeaders(),
+        });
         if (cancelled || !response.body) { setStreaming(false); return; }
 
         const reader = response.body.getReader();
@@ -456,7 +458,18 @@ export function useChat() {
   }, [activeSessionId]);
 
   const switchSession = useCallback((id: string) => {
-    if (streaming) return;
+    // Detach from the current session's local SSE reader (if any). The server
+    // keeps the query running independently in activeQueries — the agent
+    // process continues, events are still broadcast, and our listener is
+    // dropped on the next write when the aborted fetch closes the Response.
+    // When the user switches BACK to this session, the session-load effect
+    // reconnects via api.streamUrl() and resumes seeing events live.
+    if (abortRef.current) {
+      abortRef.current.abort();
+      abortRef.current = null;
+    }
+    sendingRef.current = false;
+
     setActiveSessionId(id || null);
     setMessages([]);
     setStreamText('');
@@ -467,7 +480,8 @@ export function useChat() {
     setThreadsByMessage({});
     setPendingUserQuestion(null);
     setSpawnedAgents([]);
-  }, [streaming]);
+    setStreaming(false);
+  }, []);
 
   const sendMessage = useCallback(async (content: string, overrideSessionId?: string, agent?: string) => {
     const sessionId = overrideSessionId || activeSessionId;
@@ -497,7 +511,7 @@ export function useChat() {
     try {
       const response = await fetch(api.sendMessageUrl(sessionId), {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', ...authHeaders() },
         body: JSON.stringify({ content, agent }),
         signal: abortController.signal,
       });

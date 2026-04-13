@@ -7,7 +7,7 @@ import {
 } from 'lucide-react';
 import { useExecution, type TimelineEvent } from '../hooks/useExecution';
 import { useResizable } from '../hooks/useResizable';
-import { executions as api } from '../services/api';
+import { executions as api, authHeaders } from '../services/api';
 import StatusBadge from '../components/common/StatusBadge';
 import CostDisplay from '../components/common/CostDisplay';
 import { renderMarkdown } from '../components/chat/ChatMessageList';
@@ -40,7 +40,7 @@ function AgentExecutionView({ execution, agentName, trace, id }: {
     const poll = async () => {
       while (alive) {
         try {
-          const res = await fetch(`/api/executions/${id}/logs?limit=500`);
+          const res = await fetch(`/api/executions/${id}/logs?limit=500`, { headers: authHeaders() });
           const logs = await res.json();
           if (alive && Array.isArray(logs)) setLiveLogs(logs);
         } catch {}

@@ -1725,7 +1725,15 @@ async function runAgentTurn(
 
       const mcpServers: Record<string, unknown> = {};
       const serverPath = resolve(dirname(new URL(import.meta.url).pathname), 'flowforge-mcp-server.ts');
-      mcpServers.flowforge = { type: 'stdio', command: 'npx', args: ['tsx', serverPath], env: { FLOWFORGE_API_URL: `http://localhost:${process.env.PORT ?? '4023'}` } };
+      mcpServers.flowforge = {
+        type: 'stdio',
+        command: 'npx',
+        args: ['tsx', serverPath],
+        env: {
+          FLOWFORGE_API_URL: `http://localhost:${process.env.PORT ?? '4023'}`,
+          JWT_ACCESS_SECRET: process.env.JWT_ACCESS_SECRET ?? '',
+        },
+      };
       const { loadExternalMcpServers } = await import('./chat-mcp.js');
       Object.assign(mcpServers, await loadExternalMcpServers(db));
 

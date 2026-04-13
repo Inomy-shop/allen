@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { pullRequests, workspaces } from '../services/workspaceService';
+import { repos as reposApi } from '../services/api';
 import {
   GitPullRequest, RefreshCw, Loader2, ExternalLink,
   GitMerge, XCircle, FolderGit2, Clock, FileDiff,
@@ -26,7 +27,7 @@ export default function PullRequestListPage() {
   useEffect(() => { load(); }, [load]);
 
   useEffect(() => {
-    fetch('/api/repos').then(r => r.json()).then(setRepos).catch(() => {});
+    reposApi.list().then(setRepos).catch(() => {});
   }, []);
 
   async function handleSync() {

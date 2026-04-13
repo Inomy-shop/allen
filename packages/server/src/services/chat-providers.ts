@@ -115,21 +115,28 @@ export async function syncMcpToCodex(db: Db): Promise<void> {
     existingOutput = stdout;
   } catch { /* no servers yet */ }
 
-  // Register FlowForge MCP server if not present
-  if (!existingOutput.includes('flowforge')) {
-    try {
-      const serverPath = getFlowForgeMcpServerPath();
-      // In dev: .ts file → run with npx tsx. In prod: .js file → run with node.
-      const runner = serverPath.endsWith('.ts') ? ['npx', 'tsx'] : ['node'];
-      await execFileAsync('codex', [
-        'mcp', 'add', 'flowforge',
-        '--env', `FLOWFORGE_API_URL=http://localhost:${process.env.PORT ?? '4023'}`,
-        '--', ...runner, serverPath,
-      ], { timeout: 10000 });
-      log('Registered FlowForge MCP server with Codex CLI');
-    } catch (err) {
-      log(`Failed to register FlowForge MCP with Codex: ${(err as Error).message}`);
+  // Always remove + re-add the FlowForge MCP entry so env changes (port,
+  // JWT_ACCESS_SECRET rotations, etc.) propagate to Codex on every sync.
+  // Older registrations won't have JWT_ACCESS_SECRET and would silently
+  // 401 on every tool call — this is how we heal that drift.
+  try {
+    if (existingOutput.includes('flowforge')) {
+      await execFileAsync('codex', ['mcp', 'remove', 'flowforge'], { timeout: 10000 }).catch(() => {});
     }
+    const serverPath = getFlowForgeMcpServerPath();
+    // In dev: .ts file → run with npx tsx. In prod: .js file → run with node.
+    const runner = serverPath.endsWith('.ts') ? ['npx', 'tsx'] : ['node'];
+    await execFileAsync('codex', [
+      'mcp', 'add', 'flowforge',
+      '--env', `FLOWFORGE_API_URL=http://localhost:${process.env.PORT ?? '4023'}`,
+      // Shared with the MCP subprocess so it can mint its own access token
+      // when calling back into /api/* — see flowforge-mcp-server.ts.
+      '--env', `JWT_ACCESS_SECRET=${process.env.JWT_ACCESS_SECRET ?? ''}`,
+      '--', ...runner, serverPath,
+    ], { timeout: 10000 });
+    log('Registered FlowForge MCP server with Codex CLI');
+  } catch (err) {
+    log(`Failed to register FlowForge MCP with Codex: ${(err as Error).message}`);
   }
 
   // Register external MCP servers — resolve @secret: refs in env AND args

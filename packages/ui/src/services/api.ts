@@ -2,6 +2,17 @@ import { useAuthStore } from '../stores/authStore';
 
 const BASE = '/api';
 
+/**
+ * Returns the Authorization header for authenticated API calls.
+ * Used by places that need to bypass the `request()` helper — SSE streams,
+ * raw fetches, file uploads with FormData, WebSocket upgrades via query
+ * string, etc. Returns an empty object if no token is set.
+ */
+export function authHeaders(): Record<string, string> {
+  const token = useAuthStore.getState().accessToken;
+  return token ? { Authorization: `Bearer ${token}` } : {};
+}
+
 // ── Single-flight refresh queue ─────────────────────────────────────────
 // Many requests can 401 at the same time; we only want to run /auth/refresh
 // once and have the rest await the result.
@@ -99,9 +110,9 @@ export const workflows = {
   validate: (id: string) =>
     request<any>(`/workflows/${id}/validate`, { method: 'POST' }),
   mermaid: (id: string) =>
-    fetch(`${BASE}/workflows/${id}/mermaid`).then(r => r.text()),
+    fetch(`${BASE}/workflows/${id}/mermaid`, { headers: authHeaders() }).then(r => r.text()),
   exportYaml: (id: string) =>
-    fetch(`${BASE}/workflows/${id}/export`).then(r => r.text()),
+    fetch(`${BASE}/workflows/${id}/export`, { headers: authHeaders() }).then(r => r.text()),
   importYaml: (yaml: string) =>
     request<any>('/workflows/import', { method: 'POST', body: JSON.stringify({ yaml }) }),
 };
@@ -254,7 +265,7 @@ export const mcp = {
   uploadBundle: async (file: File) => {
     const form = new FormData();
     form.append('file', file);
-    const res = await fetch(`/api/mcp/servers/upload`, { method: 'POST', body: form });
+    const res = await fetch(`/api/mcp/servers/upload`, { method: 'POST', headers: authHeaders(), body: form });
     if (!res.ok) {
       const body = await res.json().catch(() => ({}));
       throw new Error(body.error ?? `Upload failed: ${res.status}`);
