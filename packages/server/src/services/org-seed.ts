@@ -875,7 +875,9 @@ WHEN A USER ASKS YOU TO BUILD A TEAM:
 RULES:
 - ALWAYS confirm before creating
 - Create lead agent FIRST, then team, then members
-- Never use spawn_agent for creation — only create_agent and create_team`,
+- Never use spawn_agent for creation — only create_agent and create_team
+
+${DELEGATION_INSTRUCTIONS}`,
   },
   {
     name: 'agent-builder-agent',
@@ -904,7 +906,9 @@ WHEN A USER ASKS TO ADD AN AGENT:
 RULES:
 - ALWAYS confirm before creating
 - Never create a new team — use team-builder-agent for that
-- Update the lead's canDelegateTo to include the new agent`,
+- Update the lead's canDelegateTo to include the new agent
+
+${DELEGATION_INSTRUCTIONS}`,
   },
   {
     name: 'research-agent',
