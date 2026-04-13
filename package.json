@@ -10,10 +10,10 @@
     "build": "turbo run build",
     "lint": "turbo run lint",
     "test": "turbo run test",
-    "test:e2e": "playwright install chromium && playwright test",
-    "test:e2e:ui": "playwright install chromium && playwright test --ui",
-    "test:e2e:headed": "playwright install chromium && playwright test --headed",
-    "test:e2e:dev": "E2E_REUSE_DEV_SERVER=1 playwright test",
+    "test:e2e": "playwright install chromium && tsx scripts/e2e-preauth.ts && playwright test",
+    "test:e2e:ui": "playwright install chromium && tsx scripts/e2e-preauth.ts && playwright test --ui",
+    "test:e2e:headed": "playwright install chromium && tsx scripts/e2e-preauth.ts && playwright test --headed",
+    "test:e2e:dev": "tsx scripts/e2e-preauth.ts && E2E_REUSE_DEV_SERVER=1 playwright test",
     "test:e2e:report": "playwright show-report"
   },
   "devDependencies": {

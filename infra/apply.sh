@@ -25,14 +25,20 @@ else
 fi
 
 # Verify required secrets are set
-if [ -z "${TF_VAR_docdb_uri:-}" ]; then
-  echo "ERROR: TF_VAR_docdb_uri is not set in .env"
-  exit 1
-fi
-if [ -z "${TF_VAR_master_key:-}" ]; then
-  echo "ERROR: TF_VAR_master_key is not set in .env"
-  exit 1
-fi
+REQUIRED_VARS=(
+  TF_VAR_docdb_uri
+  TF_VAR_master_key
+  TF_VAR_jwt_access_secret
+  TF_VAR_jwt_refresh_secret
+  TF_VAR_admin_email
+  TF_VAR_admin_password
+)
+for v in "${REQUIRED_VARS[@]}"; do
+  if [ -z "${!v:-}" ]; then
+    echo "ERROR: $v is not set in .env"
+    exit 1
+  fi
+done
 
 # Init if needed
 if [ ! -d .terraform ]; then

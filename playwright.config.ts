@@ -1,9 +1,32 @@
 import { defineConfig } from '@playwright/test';
+import { existsSync, readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 
 const UI_PORT = process.env.UI_PORT || '5173';
 const API_PORT = process.env.API_PORT || process.env.PORT || '4023';
 // Skip auto-starting servers when the user already has `npm run dev` running.
 const REUSE_DEV = process.env.E2E_REUSE_DEV_SERVER === '1';
+
+// Auth state produced by scripts/e2e-preauth.ts before `playwright test`
+// runs. Both files are present by the time this config is evaluated because
+// `npm run test:e2e` chains the preauth step first.
+const STORAGE_STATE_PATH = resolve(__dirname, 'e2e/.auth/storageState.json');
+const ACCESS_TOKEN_PATH = resolve(__dirname, 'e2e/.auth/accessToken.txt');
+
+// Parse the storageState file into an object rather than passing the path.
+// Playwright handles the object form more reliably for localStorage-only
+// fixtures (no cookies) — the path form has had issues injecting localStorage
+// on first navigation in some versions.
+const preAuthStorageState = existsSync(STORAGE_STATE_PATH)
+  ? (JSON.parse(readFileSync(STORAGE_STATE_PATH, 'utf8')) as {
+      cookies: never[];
+      origins: Array<{ origin: string; localStorage: Array<{ name: string; value: string }> }>;
+    })
+  : undefined;
+
+const preAuthHeaders = existsSync(ACCESS_TOKEN_PATH)
+  ? { Authorization: `Bearer ${readFileSync(ACCESS_TOKEN_PATH, 'utf8').trim()}` }
+  : undefined;
 
 export default defineConfig({
   testDir: './e2e',
@@ -19,6 +42,11 @@ export default defineConfig({
     headless: true,
     screenshot: 'only-on-failure',
     trace: 'retain-on-failure',
+    // Pre-auth (from scripts/e2e-preauth.ts):
+    // - storageState populates localStorage so page-based tests skip /login
+    // - extraHTTPHeaders injects Authorization on request-fixture tests
+    storageState: preAuthStorageState,
+    extraHTTPHeaders: preAuthHeaders,
   },
   projects: [
     { name: 'chromium', use: { browserName: 'chromium' } },

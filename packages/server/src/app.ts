@@ -42,12 +42,18 @@ import { createRepoScanIfChangedAction } from './services/repo-context-scanner.s
 import { createRepoPullAllAction } from './services/repo.service.js';
 import { createMcpBundleCleanupAction } from './services/mcp-bundle.service.js';
 import { cronRoutes } from './routes/cron.routes.js';
+import { authRoutes } from './routes/auth.routes.js';
+import { userRoutes } from './routes/users.routes.js';
+import { bootstrapAdmin } from './services/adminBootstrap.js';
+import { requireAuth } from './middleware/requireAuth.js';
+import { blockIfMustReset } from './middleware/blockIfMustReset.js';
 
 const PORT = parseInt(process.env.PORT ?? '4000', 10);
 
 async function main(): Promise<void> {
   const db = await connectDB();
   await ensureIndexes(db);
+  await bootstrapAdmin(db);
   const secretSvc = new SecretService(db);
   await secretSvc.migrateLegacyPlaintext();
   await secretSvc.migrateToFlowforgePrefix(db);
@@ -122,10 +128,20 @@ async function main(): Promise<void> {
 
   app.use(express.json({ limit: '10mb' }));
 
-  // Health check
+  // Health check (public)
   app.get('/api/health', (_req, res) => {
     res.json({ status: 'ok', timestamp: new Date().toISOString() });
   });
+
+  // Auth routes (public — login, refresh; logout/reset/me are auth-gated inside the router)
+  app.use('/api/auth', authRoutes(db));
+
+  // Every API route below this line requires a valid access token, and if
+  // the user has `mustResetPassword: true` they can only hit /api/auth/*.
+  app.use('/api', requireAuth, blockIfMustReset);
+
+  // Admin-only user management
+  app.use('/api/users', userRoutes(db));
 
   // Routes
   app.use('/api/workflows', workflowRoutes(db));

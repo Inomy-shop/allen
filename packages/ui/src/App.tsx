@@ -8,8 +8,18 @@ import {
   Server, Palette, Key, User, ChevronRight, GitPullRequest, Clock,
 } from 'lucide-react';
 import { useSettingsStore } from './stores/settingsStore';
+import { useAuthStore } from './stores/authStore';
 import { useChat, type ChatSession } from './hooks/useChat';
 import DeleteConfirmDialog from './components/common/DeleteConfirmDialog';
+import { LogOut, ShieldCheck } from 'lucide-react';
+import { auth as authApi } from './services/api';
+
+interface SettingsTab {
+  id: string;
+  label: string;
+  icon: React.ComponentType<{ className?: string }>;
+  adminOnly?: boolean;
+}
 
 // ── Nav Groups ──
 
@@ -36,11 +46,12 @@ const NAV_GROUPS = [
   ]},
 ];
 
-const SETTINGS_TABS = [
+const SETTINGS_TABS: SettingsTab[] = [
+  { id: 'profile', label: 'Profile', icon: User },
+  { id: 'users', label: 'Users', icon: ShieldCheck, adminOnly: true },
   { id: 'mcp', label: 'MCP Servers', icon: Server },
   { id: 'theme', label: 'Appearance', icon: Palette },
   { id: 'secrets', label: 'Secrets', icon: Key },
-  { id: 'profile', label: 'Profile', icon: User },
 ];
 
 // Provider display
@@ -129,14 +140,16 @@ function ChatSidebarSection() {
 
 function SettingsSidebarSection() {
   const location = useLocation();
-  const activeTab = location.pathname.split('/settings/')[1] ?? 'mcp';
+  const activeTab = location.pathname.split('/settings/')[1] ?? 'profile';
+  const isAdmin = useAuthStore((s) => s.user?.role === 'admin');
+  const visibleTabs = SETTINGS_TABS.filter((t) => !t.adminOnly || isAdmin);
 
   return (
     <div className="py-2">
       <div className="px-5 py-1 mb-1">
         <span className="text-[10px] font-label uppercase tracking-[0.15em] text-theme-muted">Settings</span>
       </div>
-      {SETTINGS_TABS.map(({ id, label, icon: Icon }) => (
+      {visibleTabs.map(({ id, label, icon: Icon }) => (
         <NavLink
           key={id}
           to={`/settings/${id}`}
@@ -168,8 +181,23 @@ export default function App() {
   }, [addSystemThemeListener]);
 
   const location = useLocation();
+  const navigate = useNavigate();
   const isChat = location.pathname.startsWith('/chat');
   const isSettings = location.pathname.startsWith('/settings');
+
+  const currentUser = useAuthStore((s) => s.user);
+  const refreshToken = useAuthStore((s) => s.refreshToken);
+  const clearAuth = useAuthStore((s) => s.clear);
+
+  async function handleLogout() {
+    try {
+      if (refreshToken) await authApi.logout(refreshToken);
+    } catch {
+      // ignore — we clear locally regardless
+    }
+    clearAuth();
+    navigate('/login', { replace: true });
+  }
 
   return (
     <div className="flex h-screen">
@@ -249,6 +277,22 @@ export default function App() {
             <Settings className="w-[18px] h-[18px]" />
             Settings
           </NavLink>
+
+          {currentUser && (
+            <div className="flex items-center justify-between px-4 py-2 mx-2 rounded-md hover:bg-surface-200/40 group">
+              <div className="min-w-0">
+                <div className="text-xs text-theme-secondary font-body truncate">{currentUser.name}</div>
+                <div className="text-[10px] text-theme-subtle font-mono truncate">{currentUser.email}</div>
+              </div>
+              <button
+                onClick={handleLogout}
+                className="shrink-0 p-1.5 rounded text-theme-muted hover:text-accent-red"
+                title="Sign out"
+              >
+                <LogOut className="w-4 h-4" />
+              </button>
+            </div>
+          )}
 
           <div className="flex items-center justify-between px-5 py-2">
             <span className="text-[10px] text-theme-subtle font-mono">v0.1.0</span>

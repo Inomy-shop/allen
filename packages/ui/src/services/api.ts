@@ -1,10 +1,83 @@
+import { useAuthStore } from '../stores/authStore';
+
 const BASE = '/api';
 
-async function request<T>(path: string, options?: RequestInit): Promise<T> {
-  const res = await fetch(`${BASE}${path}`, {
-    headers: { 'Content-Type': 'application/json' },
-    ...options,
-  });
+// ── Single-flight refresh queue ─────────────────────────────────────────
+// Many requests can 401 at the same time; we only want to run /auth/refresh
+// once and have the rest await the result.
+let refreshInFlight: Promise<string | null> | null = null;
+
+async function refreshAccessToken(): Promise<string | null> {
+  if (refreshInFlight) return refreshInFlight;
+  const { refreshToken } = useAuthStore.getState();
+  if (!refreshToken) return null;
+
+  refreshInFlight = (async () => {
+    try {
+      const res = await fetch(`${BASE}/auth/refresh`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ refreshToken }),
+      });
+      if (!res.ok) {
+        useAuthStore.getState().clear();
+        return null;
+      }
+      const data = await res.json();
+      useAuthStore.getState().setSession({
+        user: data.user,
+        accessToken: data.accessToken,
+        refreshToken: data.refreshToken,
+      });
+      return data.accessToken as string;
+    } catch {
+      useAuthStore.getState().clear();
+      return null;
+    } finally {
+      refreshInFlight = null;
+    }
+  })();
+
+  return refreshInFlight;
+}
+
+function redirectToLogin(): void {
+  const current = window.location.pathname + window.location.search;
+  if (window.location.pathname === '/login') return;
+  window.location.assign(`/login?from=${encodeURIComponent(current)}`);
+}
+
+async function doFetch(path: string, options: RequestInit, token: string | null): Promise<Response> {
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json',
+    ...((options.headers as Record<string, string>) ?? {}),
+  };
+  if (token) headers.Authorization = `Bearer ${token}`;
+  return fetch(`${BASE}${path}`, { ...options, headers });
+}
+
+async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
+  // Don't attach tokens to /auth/login or /auth/refresh themselves.
+  const isPublicAuth = path.startsWith('/auth/login') || path.startsWith('/auth/refresh');
+  const token = isPublicAuth ? null : useAuthStore.getState().accessToken;
+
+  let res = await doFetch(path, options, token);
+
+  if (res.status === 401 && !isPublicAuth) {
+    // Try to refresh once.
+    const fresh = await refreshAccessToken();
+    if (!fresh) {
+      redirectToLogin();
+      throw new Error('session_expired');
+    }
+    res = await doFetch(path, options, fresh);
+    if (res.status === 401) {
+      useAuthStore.getState().clear();
+      redirectToLogin();
+      throw new Error('session_expired');
+    }
+  }
+
   if (!res.ok) {
     const body = await res.json().catch(() => ({}));
     throw new Error(body.error ?? `Request failed: ${res.status}`);
@@ -148,6 +221,10 @@ export const chat = {
     request<any[]>(`/chat/sessions/${id}/threads`),
   answerAgentQuestion: (id: string, answer: string) =>
     request<any>(`/chat/sessions/${id}/agent-answer`, { method: 'POST', body: JSON.stringify({ answer }) }),
+  logs: (params?: Record<string, string>) => {
+    const qs = params ? '?' + new URLSearchParams(params).toString() : '';
+    return request<any[]>(`/chat/logs${qs}`);
+  },
 };
 
 // ── Alerts ───────────────────────────────────────────────────────────────
@@ -244,4 +321,52 @@ export const crons = {
     request<any>(`/crons/preview-schedule?cron=${encodeURIComponent(cron)}&n=${n}&timezone=${encodeURIComponent(timezone)}`),
   systemActions: () =>
     request<any[]>('/crons/system-actions'),
+};
+
+// ── Auth ──────────────────────────────────────────────────────────────────
+import type { AuthUser } from '../stores/authStore';
+
+interface SessionResponse {
+  accessToken: string;
+  refreshToken: string;
+  user: AuthUser;
+}
+
+export const auth = {
+  login: (email: string, password: string) =>
+    request<SessionResponse>('/auth/login', {
+      method: 'POST',
+      body: JSON.stringify({ email, password }),
+    }),
+  logout: (refreshToken: string) =>
+    request<{ ok: true }>('/auth/logout', {
+      method: 'POST',
+      body: JSON.stringify({ refreshToken }),
+    }),
+  resetPassword: (currentPassword: string, newPassword: string) =>
+    request<SessionResponse>('/auth/reset-password', {
+      method: 'POST',
+      body: JSON.stringify({ currentPassword, newPassword }),
+    }),
+  me: () => request<{ user: AuthUser }>('/auth/me'),
+};
+
+// ── Users (admin-only) ───────────────────────────────────────────────────
+export const users = {
+  list: () => request<AuthUser[]>('/users'),
+  create: (body: { email: string; name: string }) =>
+    request<{ user: AuthUser; tempPassword: string }>('/users', {
+      method: 'POST',
+      body: JSON.stringify(body),
+    }),
+  update: (id: string, patch: { name?: string; role?: 'admin' | 'user' }) =>
+    request<AuthUser>(`/users/${id}`, {
+      method: 'PATCH',
+      body: JSON.stringify(patch),
+    }),
+  delete: (id: string) => request<void>(`/users/${id}`, { method: 'DELETE' }),
+  resetTempPassword: (id: string) =>
+    request<{ tempPassword: string }>(`/users/${id}/reset-temp-password`, {
+      method: 'POST',
+    }),
 };

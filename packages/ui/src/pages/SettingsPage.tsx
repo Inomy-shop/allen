@@ -2,10 +2,12 @@ import { useEffect, useRef, useState, useCallback } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { RotateCcw, Check, Palette, Type, Sparkles, Server, User, Eye, Key,
   Bot, Brain, Zap, Cpu, Atom, Terminal, Code, Rocket, Shield, Hexagon, Flame, Monitor, Moon, Sun,
-  Plus, Pencil, Trash2, X, Lock, AlertCircle,
+  Plus, Pencil, Trash2, X, Lock, AlertCircle, ShieldCheck,
 } from 'lucide-react';
 import McpServerManager from '../components/settings/McpServerManager';
 import { secrets as secretsApi } from '../services/api';
+import { useAuthStore } from '../stores/authStore';
+import UsersAdminPage from './UsersAdminPage';
 import {
   useSettingsStore,
   THEME_PRESETS,
@@ -25,10 +27,11 @@ const ICON_MAP: Record<string, React.ElementType> = {
 // ── Settings Tabs ──
 
 const TABS = [
-  { id: 'mcp', label: 'MCP Servers', icon: Server, description: 'External tool integrations' },
-  { id: 'theme', label: 'Appearance', icon: Palette, description: 'Theme, fonts & agent icon' },
-  { id: 'secrets', label: 'Secrets', icon: Key, description: 'API keys & credentials' },
-  { id: 'profile', label: 'Profile', icon: User, description: 'Account & environment' },
+  { id: 'profile', label: 'Profile', icon: User, description: 'Your account', adminOnly: false },
+  { id: 'users', label: 'Users', icon: ShieldCheck, description: 'Team member management', adminOnly: true },
+  { id: 'mcp', label: 'MCP Servers', icon: Server, description: 'External tool integrations', adminOnly: false },
+  { id: 'theme', label: 'Appearance', icon: Palette, description: 'Theme, fonts & agent icon', adminOnly: false },
+  { id: 'secrets', label: 'Secrets', icon: Key, description: 'API keys & credentials', adminOnly: false },
 ] as const;
 
 type TabId = (typeof TABS)[number]['id'];
@@ -46,40 +49,103 @@ function SectionHeader({ icon: Icon, title }: { icon: React.ElementType; title: 
 
 // ── Profile Tab ──
 
+function ProfileRow({ label, value }: { label: string; value: React.ReactNode }) {
+  return (
+    <div className="flex items-center justify-between py-2 border-b border-border/20 last:border-0">
+      <span className="text-[10px] font-label uppercase tracking-[0.15em] text-theme-muted">{label}</span>
+      <span className="text-sm text-theme-secondary font-mono">{value}</span>
+    </div>
+  );
+}
+
+function formatProfileDate(iso: string | null): string {
+  if (!iso) return '—';
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return '—';
+  return d.toLocaleString([], {
+    year: 'numeric',
+    month: 'short',
+    day: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+  });
+}
+
 function ProfileTab() {
+  const user = useAuthStore((s) => s.user);
+
+  if (!user) {
+    return (
+      <div className="space-y-6">
+        <h1 className="font-heading text-xl text-theme-primary tracking-wider">Profile</h1>
+        <div className="card p-6 text-sm text-theme-muted font-body">Not signed in.</div>
+      </div>
+    );
+  }
+
+  const initials = user.name
+    .split(/\s+/)
+    .filter(Boolean)
+    .slice(0, 2)
+    .map((s) => s[0]?.toUpperCase())
+    .join('');
+
   return (
     <div className="space-y-6">
       <div>
         <h1 className="font-heading text-xl text-theme-primary tracking-wider">Profile</h1>
-        <p className="text-sm text-theme-muted font-body mt-1">Manage your FlowForge identity</p>
+        <p className="text-sm text-theme-muted font-body mt-1">Your FlowForge account</p>
       </div>
-      <div className="card p-6 space-y-4">
-        <div className="flex items-center gap-4">
-          <div className="w-16 h-16 rounded-lg bg-accent-blue/10 border border-accent-blue/20 flex items-center justify-center">
-            <User className="w-8 h-8 text-accent-blue/50" />
+
+      {/* Identity card */}
+      <div className="card p-6">
+        <div className="flex items-center gap-5">
+          <div className="w-16 h-16 rounded-sm bg-accent-blue/10 border border-accent-blue/30 flex items-center justify-center">
+            <span className="font-heading text-xl text-accent-blue tracking-wider">{initials || '?'}</span>
           </div>
-          <div>
-            <div className="text-lg font-heading text-theme-primary">FlowForge User</div>
-            <div className="text-sm text-theme-muted font-body">Local development environment</div>
+          <div className="min-w-0 flex-1">
+            <div className="text-lg font-heading text-theme-primary truncate">{user.name}</div>
+            <div className="text-sm text-theme-muted font-mono truncate">{user.email}</div>
+            <div className="mt-2 inline-flex items-center gap-2">
+              <span
+                className={`text-[10px] font-mono uppercase tracking-wider px-2 py-0.5 rounded-sm border ${
+                  user.role === 'admin'
+                    ? 'bg-accent-blue/10 text-accent-blue border-accent-blue/40'
+                    : 'bg-surface-200/60 text-theme-muted border-border/40'
+                }`}
+              >
+                {user.role}
+              </span>
+              {user.mustResetPassword && (
+                <span className="text-[10px] font-mono uppercase tracking-wider px-2 py-0.5 rounded-sm bg-accent-yellow/10 text-accent-yellow border border-accent-yellow/40">
+                  must reset
+                </span>
+              )}
+            </div>
           </div>
         </div>
-        <div className="border-t border-border/30 pt-4 space-y-3">
-          <div className="flex items-center justify-between">
-            <span className="text-xs text-theme-muted font-label uppercase tracking-wider">Environment</span>
-            <span className="text-sm text-theme-secondary font-mono">development</span>
-          </div>
-          <div className="flex items-center justify-between">
-            <span className="text-xs text-theme-muted font-label uppercase tracking-wider">Version</span>
-            <span className="text-sm text-theme-secondary font-mono">v0.1.0</span>
-          </div>
-          <div className="flex items-center justify-between">
-            <span className="text-xs text-theme-muted font-label uppercase tracking-wider">Claude CLI</span>
-            <span className="text-sm text-accent-green font-mono">Authenticated</span>
-          </div>
+      </div>
+
+      {/* Account details */}
+      <div className="card p-5">
+        <SectionHeader icon={User} title="Account" />
+        <div className="space-y-0">
+          <ProfileRow label="Email" value={user.email} />
+          <ProfileRow label="Name" value={user.name} />
+          <ProfileRow label="Role" value={user.role} />
+          <ProfileRow label="User ID" value={<span className="text-[11px]">{user.id}</span>} />
+          <ProfileRow label="Created" value={formatProfileDate(user.createdAt)} />
+          <ProfileRow label="Last Login" value={formatProfileDate(user.lastLoginAt)} />
         </div>
       </div>
     </div>
   );
+}
+
+// ── Users Tab ──
+
+function UsersTab() {
+  return <UsersAdminPage />;
 }
 
 // ── Theme Tab (existing content extracted) ──
@@ -643,6 +709,7 @@ function SecretsTab() {
 
 const TAB_COMPONENTS: Record<TabId, React.FC> = {
   profile: ProfileTab,
+  users: UsersTab,
   theme: ThemeTab,
   mcp: McpTab,
   secrets: SecretsTab,
@@ -651,11 +718,24 @@ const TAB_COMPONENTS: Record<TabId, React.FC> = {
 export default function SettingsPage() {
   const { tab } = useParams<{ tab?: string }>();
   const navigate = useNavigate();
-  const activeTab = (TABS.some(t => t.id === tab) ? tab : 'mcp') as TabId;
+  const currentUser = useAuthStore((s) => s.user);
+  const isAdmin = currentUser?.role === 'admin';
+
+  // If a non-admin lands on an admin-only tab, redirect to profile.
+  const requested = tab;
+  const tabDef = TABS.find((t) => t.id === requested);
+  const allowed = tabDef && (!tabDef.adminOnly || isAdmin);
+  const activeTab: TabId = allowed ? (requested as TabId) : 'profile';
 
   useEffect(() => {
-    if (!tab) navigate('/settings/mcp', { replace: true });
-  }, [tab]);
+    if (!requested) {
+      navigate('/settings/profile', { replace: true });
+      return;
+    }
+    if (!allowed) {
+      navigate('/settings/profile', { replace: true });
+    }
+  }, [requested, allowed, navigate]);
 
   const TabContent = TAB_COMPONENTS[activeTab];
 

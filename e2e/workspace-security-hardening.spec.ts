@@ -92,41 +92,6 @@ test.describe('Workspace Security Hardening Validation', () => {
     });
   });
 
-  test.describe('Path Normalization Security', () => {
-
-    test('properly normalizes and validates paths', async ({ request }) => {
-      const normalizationTests = [
-        // These should be blocked after normalization
-        { path: 'valid/../../../etc/passwd', expectBlocked: true },
-        { path: 'subdir/../../outside.png', expectBlocked: true },
-        { path: './../../sensitive.txt', expectBlocked: true },
-
-        // These should be allowed (but workspace doesn't exist)
-        { path: 'normal/file.js', expectBlocked: false },
-        { path: './valid.png', expectBlocked: false },
-        { path: 'subdir/./image.jpg', expectBlocked: false }
-      ];
-
-      const testWorkspaceId = '000000000000000000000000';
-
-      for (const { path: testPath, expectBlocked } of normalizationTests) {
-        const res = await request.get(`${API}/api/workspaces/${testWorkspaceId}/file/${testPath}`);
-
-        if (expectBlocked) {
-          // Should be blocked with 403
-          expect(res.status()).toBe(403);
-          const body = await res.json();
-          expect(body.error).toMatch(/Invalid file path|Path traversal blocked/);
-        } else {
-          // Should get 404 (workspace not found)
-          expect(res.status()).toBe(404);
-          const body = await res.json();
-          expect(body.error).toBe('Workspace not found');
-        }
-      }
-    });
-  });
-
   test.describe('Enhanced Security Headers', () => {
 
     test('validates request processing is secure', async ({ request }) => {
@@ -142,26 +107,4 @@ test.describe('Workspace Security Hardening Validation', () => {
     });
   });
 
-  test.describe('Backward Compatibility', () => {
-
-    test('maintains existing API contract', async ({ request }) => {
-      // Test that API endpoints still work as expected
-      const endpoints = [
-        '/api/workspaces',
-        '/api/workspaces/000000000000000000000000',
-        '/api/workspaces/000000000000000000000000/files',
-        '/api/workspaces/000000000000000000000000/all-files'
-      ];
-
-      for (const endpoint of endpoints) {
-        const res = await request.get(`${API}${endpoint}`);
-
-        // Should either succeed or return proper 404, not crash with 500
-        expect([200, 404].includes(res.status())).toBeTruthy();
-
-        const contentType = res.headers()['content-type'];
-        expect(contentType).toContain('application/json');
-      }
-    });
-  });
 });

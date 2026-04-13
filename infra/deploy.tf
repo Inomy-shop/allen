@@ -16,10 +16,16 @@ resource "aws_ssm_parameter" "env_production" {
   name  = "/flowforge/${var.environment}/env-production"
   type  = "SecureString"
   value = templatefile("${path.module}/templates/env.production.tftpl", {
-    port       = var.app_port
-    ws_port    = var.ws_port
-    docdb_uri  = var.docdb_uri
-    master_key = var.master_key
+    port               = var.app_port
+    ws_port            = var.ws_port
+    docdb_uri          = var.docdb_uri
+    master_key         = var.master_key
+    jwt_access_secret  = var.jwt_access_secret
+    jwt_refresh_secret = var.jwt_refresh_secret
+    access_token_ttl   = var.access_token_ttl
+    refresh_token_ttl  = var.refresh_token_ttl
+    admin_email        = var.admin_email
+    admin_password     = var.admin_password
   })
   tags = local.tags
 }

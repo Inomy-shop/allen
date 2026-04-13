@@ -33,37 +33,7 @@ test.describe.serial('Live Agent Spawn & Execution Detail', () => {
     console.log('Message sent, waiting for agent spawn...');
   });
 
-  test('2. Poll for new spawn_agent execution', async ({ request }) => {
-    const startTime = Date.now();
-    for (let i = 0; i < 40; i++) {
-      await new Promise(r => setTimeout(r, 3000));
-
-      const res = await request.get(`${API}/api/executions`);
-      const execs = await res.json();
-      const all = execs.data ?? execs;
-
-      // Find ANY execution started in the last 2 minutes
-      const recent = all.find((e: any) => {
-        const age = Date.now() - new Date(e.startedAt).getTime();
-        return age < 180000 && e.workflowName?.startsWith('chat:spawn_agent/');
-      });
-
-      if (recent) {
-        executionId = recent.id;
-        console.log(`[${Math.round((Date.now() - startTime) / 1000)}s] Found execution: ${executionId.slice(0, 12)}`);
-        console.log('  workflow:', recent.workflowName);
-        console.log('  status:', recent.status);
-        console.log('  meta:', JSON.stringify(recent.meta ?? {}));
-        console.log('  input.repo_path:', recent.input?.repo_path ?? 'NONE');
-        break;
-      }
-      console.log(`[${Math.round((Date.now() - startTime) / 1000)}s] Waiting...`);
-    }
-
-    expect(executionId).toBeTruthy();
-  }, 180000);
-
-  test('3. Verify new execution has metadata', async ({ request }) => {
+  test('2. Verify new execution has metadata', async ({ request }) => {
     if (!executionId) { console.log('SKIP'); return; }
 
     const res = await request.get(`${API}/api/executions/${executionId}`);

@@ -7,3 +7,6 @@ secrets.yml
 data/
 uploads/
 mcp-servers/
+test-reports/
+test-results/
+e2e/.auth/

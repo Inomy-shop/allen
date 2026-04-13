@@ -100,6 +100,20 @@ export async function ensureIndexes(db: Db): Promise<void> {
     },
   );
 
+  // Users (auth)
+  await db.collection('users').createIndex({ email: 1 }, { unique: true });
+  await db.collection('users').createIndex({ role: 1 });
+
+  // Refresh Tokens (auth sessions)
+  await db.collection('refresh_tokens').createIndex({ tokenHash: 1 }, { unique: true });
+  await db.collection('refresh_tokens').createIndex({ jti: 1 }, { unique: true });
+  await db.collection('refresh_tokens').createIndex({ userId: 1 });
+  // TTL: auto-purge expired refresh tokens
+  await db.collection('refresh_tokens').createIndex(
+    { expiresAt: 1 },
+    { expireAfterSeconds: 0 },
+  );
+
   // Slack Thread Mappings (Slack thread → FlowForge chat session)
   await db.collection('slack_thread_mappings').createIndex(
     { slackTeamId: 1, slackChannelId: 1, slackThreadTs: 1 },

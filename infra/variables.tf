@@ -61,6 +61,43 @@ variable "master_key" {
   sensitive   = true
 }
 
+# ── Auth secrets ──────────────────────────────────────────────────────────
+
+variable "jwt_access_secret" {
+  description = "HS256 signing secret for short-lived access tokens (base64-encoded, >=32 bytes)"
+  type        = string
+  sensitive   = true
+}
+
+variable "jwt_refresh_secret" {
+  description = "HS256 signing secret for long-lived refresh tokens (base64-encoded, >=32 bytes, different from access)"
+  type        = string
+  sensitive   = true
+}
+
+variable "admin_email" {
+  description = "Email address of the bootstrap admin user. Seeded by bootstrapAdmin on first boot only."
+  type        = string
+}
+
+variable "admin_password" {
+  description = "Initial password for the bootstrap admin. mustResetPassword is forced on first login."
+  type        = string
+  sensitive   = true
+}
+
+variable "access_token_ttl" {
+  description = "Access token TTL (any string jsonwebtoken accepts, e.g. '15m', '1d'). Default: 1d."
+  type        = string
+  default     = "1d"
+}
+
+variable "refresh_token_ttl" {
+  description = "Refresh token TTL. Default: 7d."
+  type        = string
+  default     = "7d"
+}
+
 variable "repo_url" {
   description = "Git repo URL for FlowForge"
   type        = string

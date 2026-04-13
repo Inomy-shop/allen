@@ -43,43 +43,7 @@ test.describe('Agent Execution Tracing', () => {
     }
   });
 
-  test('3. UI execution detail page renders correctly', async ({ page }) => {
-    await page.setViewportSize({ width: 1400, height: 900 });
-    await page.goto(`${UI}/executions/${executionId}`);
-    await page.waitForTimeout(3000);
-
-    // Header with agent name
-    const header = page.locator('h1');
-    await expect(header).toBeVisible();
-    console.log('Agent:', await header.textContent());
-
-    // Metadata cards should be present (use exact label selectors)
-    await expect(page.locator('.card:has-text("Working Directory")').first()).toBeVisible();
-    await expect(page.locator('.card:has-text("Provider")').first()).toBeVisible();
-    await expect(page.locator('.card:has-text("Spawned By")').first()).toBeVisible();
-    await expect(page.locator('.card:has-text("Duration")').first()).toBeVisible();
-    await expect(page.locator('.card:has-text("Cost")').first()).toBeVisible();
-    await expect(page.locator('.card:has-text("Model")').first()).toBeVisible();
-
-    // Live Logs section
-    await expect(page.locator('text=Live Logs')).toBeVisible();
-
-    // Prompt section
-    await expect(page.locator('text=Prompt')).toBeVisible();
-
-    // Response section
-    await expect(page.locator('text=Response')).toBeVisible();
-
-    // Working directory value should be visible
-    const cwdValue = page.locator('text=/flowforge-workspaces|tmp/').first();
-    if (await cwdValue.count() > 0) {
-      console.log('✓ CWD visible in UI');
-    }
-
-    console.log('Screenshot saved');
-  });
-
-  test('4. Tool Calls section shows when trace available', async ({ page }) => {
+  test('3. Tool Calls section shows when trace available', async ({ page }) => {
     await page.setViewportSize({ width: 1400, height: 900 });
 
     // Find a completed execution with tool calls

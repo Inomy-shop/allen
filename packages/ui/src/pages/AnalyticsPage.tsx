@@ -21,10 +21,11 @@ export default function AnalyticsPage() {
   const [viewingSessionId, setViewingSessionId] = useState<string | null>(null);
 
   useEffect(() => {
-    fetch('/api/chat/logs?limit=100')
-      .then(r => r.json())
-      .then(data => { setLogs(data); setLoading(false); })
-      .catch(() => setLoading(false));
+    chatApi
+      .logs({ limit: '100' })
+      .then((data) => setLogs(Array.isArray(data) ? data : []))
+      .catch(() => setLogs([]))
+      .finally(() => setLoading(false));
   }, []);
 
   // Compute stats

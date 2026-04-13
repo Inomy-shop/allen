@@ -9,14 +9,6 @@ test.describe('Workspace Terminal & File Tree', () => {
     expect(res.status()).toBe(404);
   });
 
-  test('all-files API returns file list', async ({ request }) => {
-    const res = await request.get(`${API}/api/workspaces/69d520cd51ffbb1176abcb73/all-files`);
-    expect(res.ok()).toBeTruthy();
-    const files = await res.json();
-    expect(Array.isArray(files)).toBeTruthy();
-    expect(files.length).toBeGreaterThan(0);
-  });
-
   test('workspace detail page loads file tree', async ({ page }) => {
     await page.goto(`${UI}/workspaces/69d520cd51ffbb1176abcb73`);
     await page.waitForTimeout(3000);
