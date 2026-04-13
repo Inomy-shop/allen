@@ -103,7 +103,8 @@ fi
 # ── 6. Install dependencies ────────────────────────────────────────────────
 echo "=== [6/9] npm ci ==="
 cd "$REPO_DIR"
-npm ci --prefer-offline 2>&1 | tail -3
+# Don't pipe to `tail` — we need full error output if the install fails.
+npm ci --prefer-offline
 
 # ── 6b. Playwright browser + system libs (for `npm run test:e2e` on EC2) ───
 # Playwright needs ~20 shared libs (libnss3, libatk, libxkbcommon, etc.) that
@@ -121,10 +122,13 @@ if command -v npx &>/dev/null; then
 fi
 
 # ── 7. Build all packages ─────────────────────────────────────────────────
+# Do NOT pipe to `tail` — tsc errors are lost and we only see the final
+# "npm error command sh -c tsc" line, which tells us nothing about the
+# actual compile failure. Full output makes deploy debugging possible.
 echo "=== [7/9] Build ==="
-npm run build --workspace=@flowforge/engine 2>&1 | tail -1
-npm run build --workspace=@flowforge/server 2>&1 | tail -1
-npm run build --workspace=@flowforge/ui 2>&1 | tail -1
+npm run build --workspace=@flowforge/engine
+npm run build --workspace=@flowforge/server
+npm run build --workspace=@flowforge/ui
 echo "  build complete"
 
 # ── 8. Start / restart services ────────────────────────────────────────────
