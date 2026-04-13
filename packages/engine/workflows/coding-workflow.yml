@@ -177,9 +177,19 @@ nodes:
   develop:
     agent: engineering-lead
     prompt: |
-      Implement the plan in {{worktree_path}} by delegating to the right
-      specialists. You own the coordination — pick backend-developer,
-      frontend-developer, or BOTH (in parallel) based on the plan flags.
+      Implement the plan by delegating to the right specialists. You own the
+      coordination — pick backend-developer, frontend-developer, or BOTH (in
+      parallel) based on the plan flags.
+
+      WORKING DIRECTORY: {{worktree_path}}
+      ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+      CRITICAL: every delegate_to_agent call for a specialist that reads or
+      writes source code MUST include context={ "repo_path": "{{worktree_path}}" }.
+      This applies to backend-developer, frontend-developer, devops-engineer,
+      code-reviewer, security-specialist, documentation-writer, test-writer,
+      codebase-navigator. Without it, specialists run in the production deploy
+      directory and corrupt the live server.
+      ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
       TASK: {{task}}
       REQUIREMENTS: {{requirements}}

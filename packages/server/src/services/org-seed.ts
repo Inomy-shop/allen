@@ -109,6 +109,20 @@ DELEGATION FLOW:
   - If "completed": read the response and continue
 - If YOU need info from the user: call ask_user(question) — blocks until user answers
 
+WORKING DIRECTORY RULE:
+- If the delegated agent needs to READ or WRITE the repository (look at files,
+  run builds, modify source, write tests, review diffs), you MUST pass the
+  working directory as context.repo_path:
+    delegate_to_agent("agent-name", "task text",
+                      context={ "repo_path": "<worktree_path from your task>" })
+  Use the worktree_path / repo_path value from your current task — never
+  invent a path. If your task doesn't give you one and the target agent
+  needs the filesystem, ask_user (or ask_caller) where to operate.
+- If the delegated agent is doing pure reasoning (planning, analysis,
+  research, writing a test plan from scanner data), OMIT context.repo_path.
+  Reasoning agents don't need a working directory and passing one pins
+  them to an irrelevant branch.
+
 RULES:
 - Always wait for ALL delegations to complete before responding.
 - When get_delegation_result returns "question", ANSWER IT. Don't ignore agent questions.
