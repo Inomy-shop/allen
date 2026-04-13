@@ -102,17 +102,6 @@ async function executeAgentNode(
     throw new Error(`Role not found: ${nodeDef.agent}`);
   }
 
-  let prompt = nodeDef.prompt ? renderTemplate(nodeDef.prompt, state) : '';
-  prompt += buildOutputInstruction(nodeDef.outputs, nodeDef.output_format);
-  if (deps.nodeContext) {
-    prompt += deps.nodeContext;
-  }
-
-  deps.emitter.emit({
-    event: 'node_started',
-    data: { node: nodeName, agent: nodeDef.agent, attempt: (state.retry_count as number ?? 0) + 1 },
-  });
-
   const cwd = state.worktree_path as string | undefined;
   const existingSession = sessions[nodeName];
   // Resume the agent's prior session by default — preserves context across
@@ -120,6 +109,69 @@ async function executeAgentNode(
   // Opt-out by setting `resume_on_retry: false` on a node that should start fresh.
   const resumeFlag = nodeDef.resume_on_retry !== false;
   const resume = resumeFlag && existingSession ? existingSession : undefined;
+
+  // Decide prompt shape based on whether this is a retry WITH a resumable
+  // session. On a real retry, the agent already has the full task context
+  // from its prior turns — we only need to hand it the feedback. Re-sending
+  // the whole original prompt wastes tokens and confuses the agent (it sees
+  // "analyze this task" right after it just analyzed it).
+  const retryTargets = state.__retry_target as string[] | undefined;
+  const isRetryTarget = Array.isArray(retryTargets) && retryTargets.includes(nodeName);
+  const useMinimalRetryPrompt = isRetryTarget && resume !== undefined;
+
+  let prompt: string;
+  if (useMinimalRetryPrompt) {
+    // Minimal retry prompt — only the feedback. The agent's resumed session
+    // already carries the task, tool history, and prior output schema.
+    const attempt = (state.__retry_attempt as number) ?? 2;
+    const source = (state.__retry_source as string) ?? 'previous step';
+    const context = (state.retry_context as string) ?? '';
+    prompt = `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+RETRY FEEDBACK — ATTEMPT ${attempt}
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+You are being re-run. The ${source} step produced a result that failed a
+downstream gate. Fix the issues below and re-emit your JSON output block
+with the corrected values.
+
+Do NOT redo work that is already correct. Do NOT re-read files or re-run
+tools unless the feedback specifically requires it. Focus only on what
+the feedback calls out.
+
+${context}
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`;
+  } else {
+    // Full prompt — fresh run (first attempt) or retry with a reset session.
+    prompt = nodeDef.prompt ? renderTemplate(nodeDef.prompt, state) : '';
+    prompt += buildOutputInstruction(nodeDef.outputs, nodeDef.output_format);
+    if (deps.nodeContext) {
+      prompt += deps.nodeContext;
+    }
+
+    // Retry with no session resume — we can't rely on prior context, so
+    // still append the feedback block after the full re-rendered prompt.
+    if (isRetryTarget) {
+      const attempt = (state.__retry_attempt as number) ?? 2;
+      const source = (state.__retry_source as string) ?? 'previous step';
+      const context = (state.retry_context as string) ?? '';
+      prompt += `
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+RETRY FEEDBACK — ATTEMPT ${attempt}
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+You are being re-run because the previous attempt of ${source} produced a
+result that failed a downstream gate. Address the feedback below in this
+run. Do NOT redo work that is already correct — focus on the issues called
+out here.
+
+${context}
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`;
+    }
+  }
+
+  deps.emitter.emit({
+    event: 'node_started',
+    data: { node: nodeName, agent: nodeDef.agent, attempt: (state.retry_count as number ?? 0) + 1 },
+  });
   let rawResponse = '';
   let sessionId: string | undefined;
   let turns = 0;

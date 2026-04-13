@@ -713,6 +713,18 @@ export class FlowForgeEngine {
       // Update state with outputs
       Object.assign(exec.state, result.outputs);
 
+      // If this node ran as the target of a retry edge, consume the retry
+      // payload (retry_context + flags) so forward-path nodes downstream
+      // don't see stale feedback. The engine is the single source of truth
+      // for retry plumbing — workflow authors never manage this manually.
+      const retryTargets = exec.state.__retry_target as string[] | undefined;
+      if (Array.isArray(retryTargets) && retryTargets.includes(nodeName)) {
+        delete exec.state.retry_context;
+        delete exec.state.__retry_target;
+        delete exec.state.__retry_attempt;
+        delete exec.state.__retry_source;
+      }
+
       // Track session for resume
       if (result.sessionId) {
         exec.sessions[nodeName] = result.sessionId;
@@ -1085,6 +1097,40 @@ export class FlowForgeEngine {
    * when a retry edge fires — so nodes that were completed AS A CONSEQUENCE
    * of the retry target get re-executed on the retry path.
    */
+
+  /**
+   * Build a retry context summary from the source node's outputs when the
+   * edge did not declare an explicit `retry_context` template. Used by the
+   * engine to auto-inject feedback into retry targets without requiring the
+   * workflow author to write `{{retry_context}}` scaffolding in every node.
+   */
+  private synthesiseRetryContext(
+    fromNodes: string[],
+    state: Record<string, unknown>,
+  ): string {
+    const lines: string[] = [
+      `The previous attempt completed ${fromNodes.join(', ')}. Address any issues below before retrying.`,
+      '',
+    ];
+    // Dump the source node's outputs from state. Prefer known gate fields
+    // first, then fall back to a shallow JSON of remaining keys.
+    const candidateKeys = [
+      'answers', 'approved', 'failed_checks', 'missing_items',
+      'security_feedback', 'review_feedback', 'final_failed_items',
+      'validation_results', 'requirement_results',
+    ];
+    for (const key of candidateKeys) {
+      if (state[key] != null && state[key] !== '') {
+        const v = state[key];
+        const s = typeof v === 'string' ? v : JSON.stringify(v, null, 2);
+        lines.push(`${key}:`);
+        lines.push(s.length > 2000 ? s.slice(0, 2000) + '\n... (truncated)' : s);
+        lines.push('');
+      }
+    }
+    return lines.join('\n').trim();
+  }
+
   private findDownstreamNodes(startNodes: string[], edges: EdgeDef[]): Set<string> {
     const downstream = new Set<string>();
     const queue = [...startNodes];
@@ -1182,11 +1228,25 @@ export class FlowForgeEngine {
         }
         retryCounts[edgeKey] = count + 1;
 
-        if (edge.retry_context) {
-          state.retry_context = renderTemplate(edge.retry_context, state);
-        }
+        // Build the feedback payload the engine will auto-inject into the
+        // target node's prompt. Every retry edge gets one, even if no
+        // retry_context template was declared — in that case we synthesise
+        // a summary from the source node's outputs so the workflow author
+        // never has to scaffold `{{retry_context}}` manually.
+        const rendered = edge.retry_context
+          ? renderTemplate(edge.retry_context, state)
+          : this.synthesiseRetryContext(fromNodes, state);
+        state.retry_context = rendered;
 
-        const targetNode = Array.isArray(edge.to) ? edge.to[0] : edge.to;
+        const targetNodes = Array.isArray(edge.to) ? edge.to : [edge.to];
+        // Scope the retry payload to the immediate target(s) so forward-path
+        // nodes downstream of the retry target don't accidentally see stale
+        // retry_context on their next run.
+        state.__retry_target = targetNodes;
+        state.__retry_attempt = count + 2;
+        state.__retry_source = fromNodes.join(',');
+
+        const targetNode = targetNodes[0];
         if (executionId) {
           this.log(executionId, {
             category: 'routing',
@@ -1211,8 +1271,7 @@ export class FlowForgeEngine {
         // retry targets from completedNodes. This ensures that after the
         // retry runs, the forward edges will fire again (instead of being
         // blocked by the "all targets already completed" filter above).
-        const retryTargets = Array.isArray(edge.to) ? edge.to : [edge.to];
-        const downstream = this.findDownstreamNodes(retryTargets, edges);
+        const downstream = this.findDownstreamNodes(targetNodes, edges);
         if (downstream.size > 0) {
           for (let i = completedNodes.length - 1; i >= 0; i--) {
             if (downstream.has(completedNodes[i])) {

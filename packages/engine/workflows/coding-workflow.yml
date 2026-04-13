@@ -54,7 +54,12 @@ nodes:
       5. affected_areas — files, modules, services in scope
       6. out_of_scope — what NOT to touch
       7. risks — breaking changes, migrations, security implications
-      8. open_questions — things the user should clarify, or "none"
+      8. open_questions — things the user should clarify, or "none".
+
+      If the engine appends a RETRY FEEDBACK block below, that means the user
+      already clarified something. Treat those clarifications as authoritative
+      and do NOT re-ask answered questions — set open_questions to "none" and
+      let the workflow move forward.
     outputs:
       task_type: "One of: feature | bugfix | refactor | chore | docs | config | release. Classifies the kind of work for the conventional-commit prefix later."
       requirements: "Ordered list of concrete, testable things the finished task must satisfy. Each item is a short imperative sentence."
@@ -190,12 +195,6 @@ nodes:
       has_backend_changes: {{has_backend_changes}}
       has_frontend_changes: {{has_frontend_changes}}
 
-      {{#if retry_context}}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-      FIX THESE ISSUES FROM THE PREVIOUS ATTEMPT:
-      {{retry_context}}
-      ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-      {{/if}}
-
       ROUTING RULES:
       1. If has_backend_changes is true AND has_frontend_changes is true:
          - In a single turn, call delegate_to_agent TWICE — once for
@@ -214,10 +213,12 @@ nodes:
 
       BRIEFING EACH SPECIALIST:
       Pass them ALL of: the relevant section of the plan (schema/api for
-      backend, ui for frontend), validation_approach, risks, and the full
-      retry_context if provided. They execute the changes and report back.
+      backend, ui for frontend), validation_approach, and risks. If the
+      engine appended a RETRY FEEDBACK block at the end of this prompt,
+      INCLUDE THAT BLOCK VERBATIM in every specialist brief so they know
+      exactly which issues to fix. They execute the changes and report back.
 
-      On retry, you RE-DELEGATE with the retry_context so the specialists
+      On retry, you RE-DELEGATE with the retry feedback so the specialists
       know exactly which issues to fix. Do NOT attempt to fix things yourself
       in this node — always delegate the coding work.
 
@@ -249,13 +250,15 @@ nodes:
       BACKEND SUMMARY: {{backend_summary}}
       FRONTEND SUMMARY: {{frontend_summary}}
 
-      {{#if retry_context}}FIX THESE ISSUES:
-      {{retry_context}}{{/if}}
-
       Use the repo's existing test framework. Cover every case in the plan:
       - unit_tests
       - integration_tests
       - edge_cases
+
+      If the developers changed the implementation on retry (the backend/frontend
+      file lists above will reflect the new state), add or update tests to match.
+      Do NOT try to fix application code — that's the developers' job. Your only
+      output is test files.
 
       Run the tests once. It is OK if some FAIL — the validator handles that.
       What matters is the tests exist and execute.
