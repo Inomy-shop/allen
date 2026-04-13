@@ -12,6 +12,7 @@ import { runChatLLM, type ChatLLMMessage, type ChatProvider, PROVIDERS } from '.
 import { AlertService } from './alert.service.js';
 import { registerActiveSession, unregisterActiveSession, waitForBackgroundTasks } from './chat-tools.js';
 import { searchSimilar, backfillEmbeddings } from './embedding.service.js';
+import { buildOrgContextBlock } from './org-context.js';
 // Note: embedding.service.ts re-exports from @flowforge/engine — single implementation shared by engine + server
 
 // ── Types ──
@@ -184,6 +185,13 @@ CRITICAL: For A and B, route to the right builder. Don't try to create teams or 
 
 DO NOT route to team-builder for unrelated requests (running workflows, querying executions, debugging code, etc.) — only when the user explicitly wants to extend the team/agent structure.${learningsBlock}`;
 
+  // Inject the live org chart so the assistant knows who to spawn/delegate to.
+  let orgBlock = '';
+  try {
+    const chart = await buildOrgContextBlock(db, { includeFullChart: true, includeMeta: true });
+    if (chart) orgBlock = `\n\n${chart}`;
+  } catch {}
+
   // Inject available repos
   let reposBlock = '';
   try {
@@ -208,7 +216,7 @@ Examples:
 - "Check execution abc123" → call flowforge get_execution with execution_id=abc123
 - "List my agents" → call flowforge list_agents
 
-For code tasks (review, investigate, plan): use flowforge spawn_agent or run_workflow with the correct repo_path from @mentions.${reposBlock}`;
+For code tasks (review, investigate, plan): use flowforge spawn_agent or run_workflow with the correct repo_path from @mentions.${orgBlock}${reposBlock}`;
   }
 
   // For claude-cli: tool instructions are appended by buildToolInstructions() in chat-llm.ts
@@ -225,7 +233,7 @@ Examples:
 - "Review code in @my-repo" → use list_agents to find an agent, then spawn_agent with repo_path
 - If an execution is waiting for input → present the fields, then use submit_execution_input
 
-For code tasks (review, investigate, plan): delegate to an agent via spawn_agent with the correct repo_path from @mentions.${reposBlock}`;
+For code tasks (review, investigate, plan): delegate to an agent via spawn_agent with the correct repo_path from @mentions.${orgBlock}${reposBlock}`;
 }
 
 // ── Active Query Tracking ──
@@ -699,7 +707,6 @@ export class ChatService {
     const system = (agentDoc.system as string) ?? '';
     const personality = (agentDoc.personality as string) ?? '';
     const displayName = (agentDoc.displayName as string) ?? agentName;
-    const canDelegateTo = (agentDoc.canDelegateTo as string[]) ?? [];
     const canTrigger = (agentDoc.canTrigger as string[]) ?? [];
 
     const parts = [
@@ -709,9 +716,17 @@ export class ChatService {
 
     if (personality) parts.push(`\nPersonality: ${personality}`);
 
-    if (canDelegateTo.length > 0) {
-      parts.push(`\nYou can delegate tasks to: ${canDelegateTo.join(', ')} using delegate_to_agent.`);
-    }
+    // Inject the live org chart + description-rich delegation targets.
+    // This replaces hand-written delegation lists in the agent's system prompt
+    // so adding/renaming an agent only requires editing canDelegateTo.
+    try {
+      const orgBlock = await buildOrgContextBlock(this.db, {
+        forAgent: agentName,
+        includeFullChart: true,
+        includeMeta: true,
+      });
+      if (orgBlock) parts.push(`\n${orgBlock}`);
+    } catch {}
 
     if (canTrigger.length > 0) {
       parts.push(`You can trigger workflows: ${canTrigger.join(', ')} using run_workflow.`);

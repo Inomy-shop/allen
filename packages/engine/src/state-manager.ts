@@ -6,10 +6,71 @@ export class StateManager {
   private checkpointsCol: Collection;
   private tracesCol: Collection;
 
+  private failureReportsCol: Collection;
+
   constructor(private db: Db) {
     this.executionsCol = db.collection('executions');
     this.checkpointsCol = db.collection('checkpoints');
     this.tracesCol = db.collection('execution_traces');
+    this.failureReportsCol = db.collection('execution_failure_reports');
+  }
+
+  /**
+   * Persist a detailed "why did this fail" report for forensics when an
+   * execution transitions to `failed`. Pulls gate-specific diagnostic fields
+   * out of the final state so we can show actionable diffs in the UI later.
+   */
+  async saveFailureReport(exec: ExecutionState, error: Error | string): Promise<void> {
+    const message = error instanceof Error ? error.message : String(error);
+    const state = exec.state ?? {};
+
+    const failureType: 'max_retries_exceeded' | 'node_threw' | 'unknown' =
+      /Max retries.*exceeded/i.test(message) ? 'max_retries_exceeded'
+      : exec.failedNode ? 'node_threw'
+      : 'unknown';
+
+    const pick = <T,>(keys: string[]): T | undefined => {
+      const out: Record<string, unknown> = {};
+      let hasAny = false;
+      for (const k of keys) {
+        if (k in state) {
+          out[k] = (state as Record<string, unknown>)[k];
+          hasAny = true;
+        }
+      }
+      return hasAny ? (out as T) : undefined;
+    };
+
+    const doc = {
+      executionId: exec.id,
+      workflowName: exec.workflowName,
+      failedAt: new Date(),
+      failureType,
+      failedNode: exec.failedNode ?? null,
+      errorMessage: message,
+
+      lastValidatorResult: pick<unknown>(['validation_passed', 'validation_results', 'failed_checks']),
+      lastRequirementResult: pick<unknown>(['completeness', 'requirement_results', 'missing_items']),
+      lastSecurityResult: pick<unknown>(['security_verdict', 'security_feedback']),
+      lastCodeReviewResult: pick<unknown>(['review_verdict', 'review_feedback']),
+      lastFinalValidation: pick<unknown>(['final_passed', 'final_failed_items']),
+
+      finalState: state,
+      completedNodes: exec.completedNodes ?? [],
+      retryCounts: exec.retryCounts ?? {},
+
+      createdAt: new Date(),
+    };
+
+    try {
+      await this.failureReportsCol.insertOne(doc as any);
+    } catch (err) {
+      console.error('[state-manager] Failed to save failure report:', (err as Error).message);
+    }
+  }
+
+  async getFailureReport(executionId: string): Promise<unknown | null> {
+    return this.failureReportsCol.findOne({ executionId });
   }
 
   async createExecution(exec: ExecutionState): Promise<string> {

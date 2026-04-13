@@ -42,7 +42,7 @@ export async function executeCodexNode(
     // Only prepend system prompt on first run — resume already has context
     prompt = `${role.system}\n\n${prompt}`;
   }
-  prompt += buildOutputInstruction(nodeDef.outputs ?? [], nodeDef.output_format);
+  prompt += buildOutputInstruction(nodeDef.outputs, nodeDef.output_format);
   if (nodeContext) {
     prompt += nodeContext;
   }

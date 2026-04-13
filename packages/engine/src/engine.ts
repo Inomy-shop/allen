@@ -138,6 +138,10 @@ export class FlowForgeEngine {
         durationMs: exec.durationMs,
       });
 
+      // Persist a detailed failure report (gate-specific diagnostics + state)
+      // so the UI can surface WHY the workflow failed.
+      await this.stateManager.saveFailureReport(exec, err as Error);
+
       this.log(executionId, { category: 'system', level: 'error', message: `Execution failed: ${message}` });
       this.emit({
         event: 'execution_failed',
@@ -220,6 +224,7 @@ export class FlowForgeEngine {
         errorMessage: message,
         failedNode: exec.failedNode,
       });
+      await this.stateManager.saveFailureReport(exec, err as Error);
       this.emit({
         event: 'execution_failed',
         data: { executionId, failedNode: exec.failedNode, error: message },
@@ -300,6 +305,7 @@ export class FlowForgeEngine {
         errorMessage: message,
         failedNode: exec.failedNode,
       });
+      await this.stateManager.saveFailureReport(exec, err as Error);
       this.emit({
         event: 'execution_failed',
         data: { executionId, failedNode: exec.failedNode, error: message },

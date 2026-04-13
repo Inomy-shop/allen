@@ -1,4 +1,4 @@
-import type { NodeDef } from './types.js';
+import type { NodeDef, OutputsSpec } from './types.js';
 
 /**
  * Extract structured outputs from agent response text.
@@ -9,6 +9,17 @@ import type { NodeDef } from './types.js';
  */
 /** Gate fields that should always be preserved if present in parsed JSON */
 const GATE_FIELDS = ['__action', '__reason', '__clarify_action', '__clarify_fields', '__learnings'];
+
+/** Flat list of output keys from the OutputsSpec object. */
+export function outputKeys(outputs: OutputsSpec | undefined): string[] {
+  if (!outputs) return [];
+  return Object.keys(outputs);
+}
+
+/** Return the key → description map. */
+export function outputDescriptions(outputs: OutputsSpec | undefined): Record<string, string> {
+  return outputs ? { ...outputs } : {};
+}
 
 function extractFromParsed(parsed: Record<string, unknown>, outputs: string[]): Record<string, unknown> {
   const result: Record<string, unknown> = {};
@@ -33,7 +44,7 @@ export async function extractOutputs(
    * back to Haiku. */
   skipLLMFallback?: boolean,
 ): Promise<Record<string, unknown>> {
-  const outputs = nodeDef.outputs ?? [];
+  const outputs = outputKeys(nodeDef.outputs);
   if (outputs.length === 0) return {};
 
   log?.(`Starting extraction for outputs: [${outputs.join(', ')}] from response (${response.length} chars)`);
@@ -185,7 +196,7 @@ export function extractOutputsSync(
   response: string,
   nodeDef: NodeDef,
 ): Record<string, unknown> {
-  const outputs = nodeDef.outputs ?? [];
+  const outputs = outputKeys(nodeDef.outputs);
   if (outputs.length === 0) return {};
 
   // Layer 0: Try parsing entire response as JSON
@@ -315,12 +326,24 @@ function parseValue(raw: string): unknown {
 /**
  * Build the output instruction appended to agent prompts.
  * Only adds JSON output format — auto-gate instructions come from buildNodeContext.
+ *
+ * Accepts either the legacy array form or the rich object form. Rich-form
+ * descriptions are inlined as comments in the JSON schema block so the agent
+ * knows exactly what each key should contain.
  */
-export function buildOutputInstruction(outputs: string[], format: string | undefined): string {
-  if (!outputs.length) return '';
+export function buildOutputInstruction(outputs: OutputsSpec | undefined, format: string | undefined): string {
+  const keys = outputKeys(outputs);
+  if (!keys.length) return '';
   if (format === 'freeform') return '';
 
-  const fields = outputs.map(o => `  "${o}": ...`).join(',\n');
+  const descriptions = outputDescriptions(outputs);
+
+  const fields = keys
+    .map((k) => `  // ${descriptions[k] ?? ''}\n  "${k}": ...`)
+    .join(',\n');
+
+  const fieldGuide = keys.map((k) => `- ${k}: ${descriptions[k] ?? ''}`).join('\n');
+
   return `\n\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 IMPORTANT — RESPONSE FORMAT
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -332,10 +355,14 @@ ${fields}
 }
 \`\`\`
 
+Each key must contain:
+${fieldGuide}
+
 - Include the JSON block at the very end of your response.
 - All listed keys are required. Use null if you don't have a value.
 - Do not omit any keys.
 - Do not rename any keys.
+- Values may be nested objects or arrays — use whatever shape matches the description above.
 - The downstream workflow will fail if this JSON block is missing or malformed.`;
 }
 
@@ -392,9 +419,8 @@ export function buildNodeContext(
     const def = allNodes[name] as Record<string, unknown> | undefined;
     if (!def) return name;
     const role = def.role ? ` (${def.role})` : '';
-    const outputs = Array.isArray(def.outputs) && def.outputs.length > 0
-      ? ` — needs: ${(def.outputs as string[]).join(', ')}`
-      : '';
+    const keys = outputKeys(def.outputs as OutputsSpec | undefined);
+    const outputs = keys.length > 0 ? ` — needs: ${keys.join(', ')}` : '';
     // Extract first line of prompt for context
     const prompt = typeof def.prompt === 'string' ? def.prompt.split('\n')[0].trim().slice(0, 80) : '';
     return `${name}${role}${outputs}${prompt ? ` — "${prompt}"` : ''}`;

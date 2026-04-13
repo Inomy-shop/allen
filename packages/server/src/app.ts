@@ -29,13 +29,13 @@ import { startTerminalWebSocketServer } from './services/workspace-terminal.js';
 import { createWorkspaceProxy } from './services/workspace-proxy.js';
 import { startFileWatchServer } from './services/workspace-watcher.js';
 import { WorkspaceManager } from './services/workspace.service.js';
-import { seedDefaultAgents, seedDefaultWorkflows } from './seed.js';
+import { seedDefaultWorkflows } from './seed.js';
 import { setStreamDb } from './services/stream.service.js';
 import { SecretService } from './services/secret.service.js';
 import { McpService } from './services/mcp.service.js';
 import { startMcpHealthMonitor } from './services/mcp-health.service.js';
-import { TeamSeedService } from './services/team-seed.service.js';
 import { OrgSeedService } from './services/org-seed.js';
+import { cleanupOrphanedSeedEntities } from './services/org-cleanup.js';
 import { CronService } from './services/cron.service.js';
 import { seedCronJobs } from './services/cron-seed.service.js';
 import { createRepoScanIfChangedAction } from './services/repo-context-scanner.service.js';
@@ -70,12 +70,18 @@ async function main(): Promise<void> {
   // duplicate key conflicts on the teamName_lead_unique index.
   await new OrgSeedService(db).seed();
   // Legacy seeds disabled — the new OrgSeedService replaces both.
-  // seedDefaultAgents and TeamSeedService.migrate are no longer needed since
-  // org-seed creates ALL teams and agents from scratch with the new structure.
-  // Keeping the imports for now in case we need to revert.
   // await seedDefaultAgents(db);
   // await new TeamSeedService(db).migrate();
   await seedDefaultWorkflows(db);
+
+  // Remove orphaned seed teams/agents/workflows from prior schemas.
+  // Meta team is always protected by cleanupOrphanedSeedEntities.
+  await cleanupOrphanedSeedEntities(
+    db,
+    OrgSeedService.seedTeamNames,
+    OrgSeedService.seedAgentNames,
+    ['coding-workflow'],
+  );
   await seedCronJobs(db);
   setStreamDb(db);
 

@@ -130,7 +130,7 @@ export function validateWorkflow(
   // 8. Template variable warnings
   const allOutputs = new Set<string>();
   for (const node of Object.values(workflow.nodes)) {
-    for (const o of node.outputs ?? []) allOutputs.add(o);
+    for (const o of Object.keys(node.outputs ?? {})) allOutputs.add(o);
   }
   if (workflow.input) {
     for (const key of Object.keys(workflow.input)) allOutputs.add(key);

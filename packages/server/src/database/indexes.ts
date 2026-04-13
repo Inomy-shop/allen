@@ -24,6 +24,10 @@ export async function ensureIndexes(db: Db): Promise<void> {
   // Checkpoints
   await db.collection('checkpoints').createIndex({ executionId: 1, createdAt: -1 });
 
+  // Failure reports — one per failed execution, queried by executionId
+  await db.collection('execution_failure_reports').createIndex({ executionId: 1 }, { unique: true });
+  await db.collection('execution_failure_reports').createIndex({ failedAt: -1 });
+
   // Secrets
   await db.collection('secrets').createIndex({ key: 1 }, { unique: true });
 

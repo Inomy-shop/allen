@@ -46,6 +46,21 @@ export function executionRoutes(db: Db): Router {
     }
   });
 
+  // GET /api/executions/:id/failure-report
+  // Returns the detailed failure report saved when an execution transitions
+  // to `failed` (gate-specific diagnostic fields + final state snapshot).
+  router.get('/:id/failure-report', async (req: Request, res: Response) => {
+    try {
+      const report = await db
+        .collection('execution_failure_reports')
+        .findOne({ executionId: param(req, 'id') });
+      if (!report) return res.status(404).json({ error: 'No failure report for this execution' });
+      res.json(report);
+    } catch (err: unknown) {
+      res.status(500).json({ error: (err as Error).message });
+    }
+  });
+
   // POST /api/executions/:id/cancel
   router.post('/:id/cancel', async (req: Request, res: Response) => {
     try {

@@ -9,7 +9,7 @@ import type {
   ExecutionLog,
 } from './types.js';
 import { renderTemplate } from './template.js';
-import { extractOutputs, buildOutputInstruction } from './output-extractor.js';
+import { extractOutputs, buildOutputInstruction, outputKeys } from './output-extractor.js';
 import { evaluateCondition } from './condition-parser.js';
 import { executeCodexNode } from './codex-executor.js';
 
@@ -103,7 +103,7 @@ async function executeAgentNode(
   }
 
   let prompt = nodeDef.prompt ? renderTemplate(nodeDef.prompt, state) : '';
-  prompt += buildOutputInstruction(nodeDef.outputs ?? [], nodeDef.output_format);
+  prompt += buildOutputInstruction(nodeDef.outputs, nodeDef.output_format);
   if (deps.nodeContext) {
     prompt += deps.nodeContext;
   }
@@ -138,6 +138,24 @@ async function executeAgentNode(
     if (deps.db) mcpServers = await loadAllMcpServers(deps.db);
   } catch { /* MCP not available — continue without */ }
 
+  // Build the effective system prompt with live org chart + delegation targets
+  // appended. Runtime injection keeps chat and workflow agent behavior aligned
+  // and avoids prompt drift when agents are added/renamed.
+  let effectiveSystem: string | undefined = role?.system;
+  if (deps.db && nodeDef.agent && role?.system) {
+    try {
+      const { buildOrgContextBlock } = await import('./org-context.js');
+      const orgBlock = await buildOrgContextBlock(deps.db, {
+        forAgent: nodeDef.agent,
+        includeFullChart: true,
+        includeMeta: true,
+      });
+      if (orgBlock) {
+        effectiveSystem = `${role.system}\n\n${orgBlock}`;
+      }
+    } catch { /* org-context unavailable — fall back to plain system prompt */ }
+  }
+
   /**
    * Shared helper to call the Claude Code SDK with the agent's full context.
    * Used for BOTH the initial agent turn AND any extraction retry turns.
@@ -160,7 +178,7 @@ async function executeAgentNode(
     const conv = query({
       prompt: opts.promptText,
       options: {
-        customSystemPrompt: role?.system,
+        customSystemPrompt: effectiveSystem,
         model: role?.model ?? 'sonnet',
         allowedTools: role?.tools ?? [],
         cwd,
@@ -215,13 +233,45 @@ async function executeAgentNode(
     return { text, sessionId: localSessionId, cost: localCost, turns: localTurns };
   };
 
-  // ── Initial agent call ────────────────────────────────────────────────
-  const initial = await callAgent({
-    promptText: prompt,
-    resumeSession: resume,
-    maxTurns: 50,
-    emitText: true,
-  });
+  // ── Initial agent call (with transient-error retry) ──────────────────
+  // The Claude Code SDK sometimes exits with code 1 when multiple subprocesses
+  // spawn in rapid succession (e.g. after a parallel fork that just completed).
+  // Retry transparently with a cooldown so transient failures don't crash the
+  // whole workflow execution.
+  const MAIN_CALL_MAX_ATTEMPTS = 3;
+  let initial: Awaited<ReturnType<typeof callAgent>> | null = null;
+  let lastMainError: Error | null = null;
+  for (let attempt = 1; attempt <= MAIN_CALL_MAX_ATTEMPTS; attempt++) {
+    try {
+      if (attempt > 1) {
+        emitLog(deps, nodeName, {
+          level: 'warn',
+          category: 'system',
+          message: `[agent-call] Transient error on attempt ${attempt - 1}, retrying after 5s cooldown: ${lastMainError?.message ?? 'unknown'}`,
+        });
+        await new Promise(r => setTimeout(r, 5000));
+      }
+      initial = await callAgent({
+        promptText: prompt,
+        resumeSession: resume,
+        maxTurns: 50,
+        emitText: true,
+      });
+      break; // success
+    } catch (err) {
+      lastMainError = err instanceof Error ? err : new Error(String(err));
+      const msg = lastMainError.message;
+      // Only retry transient SDK errors — not genuine logic errors
+      const isTransient = /exited with code 1|ECONNRESET|ETIMEDOUT|fetch failed|socket hang up/i.test(msg);
+      if (!isTransient || attempt === MAIN_CALL_MAX_ATTEMPTS) {
+        throw lastMainError;
+      }
+    }
+  }
+  if (!initial) {
+    throw lastMainError ?? new Error('Agent call failed after retries');
+  }
+
   rawResponse = initial.text;
   sessionId = initial.sessionId;
   actualCost = initial.cost;
@@ -238,7 +288,7 @@ async function executeAgentNode(
 
   const model = role?.model ?? 'sonnet';
   const extractLog = (msg: string) => emitLog(deps, nodeName, { level: 'debug', category: 'system', message: `[extraction] ${msg}` });
-  const requiredOutputs = (nodeDef.outputs ?? []).filter(k => !k.startsWith('__'));
+  const requiredOutputs = outputKeys(nodeDef.outputs).filter(k => !k.startsWith('__'));
   const extractionFailed = (out: Record<string, unknown>) => {
     if (requiredOutputs.length === 0) return false;
     if (out.__action) return false; // gate actions override extraction

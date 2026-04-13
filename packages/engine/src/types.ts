@@ -19,11 +19,23 @@ export type AutoGateAction = 'continue' | 'stop' | 'skip' | 'clarify';
 
 export type ClarifyAction = 'retry' | 'continue';
 
+/**
+ * Node outputs declaration. Object form — every output key MUST include a
+ * description that explains what the value should contain. The descriptions
+ * are injected into the agent's RESPONSE FORMAT block so the model knows
+ * exactly what each key should produce. Values may be nested.
+ *
+ *   outputs:
+ *     completeness: "fully_complete if all requirements MET, else partial"
+ *     missing_items: "list of actionable file:line items when partial"
+ */
+export type OutputsSpec = Record<string, string>;
+
 export interface NodeDef {
   type?: NodeType;               // default: 'agent'
   agent?: string;                // for agent nodes
   prompt?: string;               // for agent/human nodes
-  outputs?: string[];
+  outputs?: OutputsSpec;
   output_format?: OutputFormat;
   output_extraction?: Record<string, string>;
   /** Resume the agent's prior session on retry. Default: true. Set to false for stateless nodes (e.g. reviewers) that should start fresh each run. */
