@@ -59,6 +59,10 @@ async function main(): Promise<void> {
   await secretSvc.migrateToFlowforgePrefix(db);
   const mcpSvc = new McpService(db);
   await mcpSvc.migrateLegacyEnvLiterals();
+  // Must run before migrateGhCliServersToSecret — that one touches `gh`
+  // rows specifically to wire GH_TOKEN, which is irrelevant once we've
+  // rewritten the command away from `gh mcp`.
+  await mcpSvc.migrateGhMcpServerToNpx();
   await mcpSvc.migrateGhCliServersToSecret();
   await mcpSvc.syncPresetDescriptions();
 

@@ -229,18 +229,21 @@ export const MCP_PRESETS: McpPreset[] = [
     docsUrl: 'https://github.com/dvcrn/mcp-server-linear',
   },
   {
-    // GitHub's first-party MCP server, bundled with the gh CLI. Requires `gh`
-    // (>= v2.86) to be installed. Authenticates via GH_TOKEN, which we map to
-    // the GITHUB_PERSONAL_ACCESS_TOKEN secret so a single stored token powers
-    // both this server AND every `gh` invocation in pull-request flows.
+    // Community GitHub MCP server, launched via npx so no separate install is
+    // needed. We previously shipped `gh mcp` here, but that subcommand is only
+    // present in a narrow band of gh CLI builds and silently exits when absent
+    // — which the health checker reports as a spawn failure. Using the npm
+    // package matches how the slack preset is wired and removes the gh version
+    // dependency entirely. The package reads GITHUB_PERSONAL_ACCESS_TOKEN from
+    // the env, which we map from the FlowForge-prefixed secret.
     name: 'github',
-    description: 'GitHub — repos, issues, PRs, code search (first-party via gh CLI)',
+    description: 'GitHub — repos, issues, PRs, code search',
     type: 'stdio',
-    command: 'gh',
-    args: ['mcp'],
+    command: 'npx',
+    args: ['-y', '@modelcontextprotocol/server-github'],
     envKeys: ['FLOWFORGE_GITHUB_PERSONAL_ACCESS_TOKEN'],
-    envVarOverrides: { FLOWFORGE_GITHUB_PERSONAL_ACCESS_TOKEN: 'GH_TOKEN' },
-    docsUrl: 'https://github.com/github/github-mcp-server',
+    envVarOverrides: { FLOWFORGE_GITHUB_PERSONAL_ACCESS_TOKEN: 'GITHUB_PERSONAL_ACCESS_TOKEN' },
+    docsUrl: 'https://github.com/modelcontextprotocol/servers-archived/tree/main/src/github',
   },
   {
     name: 'postgres',
@@ -515,6 +518,53 @@ export class McpService {
       updated++;
     }
     return updated;
+  }
+
+  /**
+   * One-shot migration: rewrite any existing `github` MCP server rows that
+   * still launch `gh mcp` to use the npm-based server instead. Older installs
+   * shipped the gh-bundled preset, which depends on a subcommand only some
+   * gh builds include; the server crashes on spawn when it's absent.
+   *
+   * Targets rows where the stored command is `gh` AND the first arg is `mcp`.
+   * Preserves any other fields (name, description, icon, custom env keys).
+   * Idempotent — no-op once rewritten.
+   */
+  async migrateGhMcpServerToNpx(): Promise<number> {
+    const docs = await this.collection
+      .find({ type: 'stdio', command: 'gh' })
+      .toArray() as McpServerRecord[];
+    let touched = 0;
+    for (const doc of docs) {
+      const args = doc.args ?? [];
+      if (args[0] !== 'mcp') continue; // only rewrite `gh mcp …`, leave other gh wrappers alone
+      const env = { ...(doc.env ?? {}) };
+      // Remap GH_TOKEN → GITHUB_PERSONAL_ACCESS_TOKEN (what the npm package reads).
+      // Preserve the @secret:… reference if one was already set.
+      if (env.GH_TOKEN && !env.GITHUB_PERSONAL_ACCESS_TOKEN) {
+        env.GITHUB_PERSONAL_ACCESS_TOKEN = env.GH_TOKEN;
+      }
+      delete env.GH_TOKEN;
+      if (!env.GITHUB_PERSONAL_ACCESS_TOKEN) {
+        env.GITHUB_PERSONAL_ACCESS_TOKEN = `${MCP_SECRET_PREFIX}FLOWFORGE_GITHUB_PERSONAL_ACCESS_TOKEN`;
+      }
+      await this.collection.updateOne(
+        { _id: doc._id },
+        {
+          $set: {
+            command: 'npx',
+            args: ['-y', '@modelcontextprotocol/server-github'],
+            env,
+            updatedAt: new Date(),
+          },
+        },
+      );
+      touched++;
+    }
+    if (touched > 0) {
+      console.log(`[mcp] Rewrote ${touched} legacy \`gh mcp\` server(s) to use @modelcontextprotocol/server-github`);
+    }
+    return touched;
   }
 
   /**
