@@ -24,6 +24,9 @@ import type { Db } from 'mongodb';
 import type { ChatTool } from './chat-tools.js';
 import { getAnyActiveSession } from './chat-tools.js';
 import { TeamService } from './team.service.js';
+import { WorkflowService } from './workflow.service.js';
+import type { WorkflowDef } from '@flowforge/engine';
+import yaml from 'js-yaml';
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -52,6 +55,12 @@ const ANY_BUILDER = new Set([
   'create_agent',
   'update_agent',
   'delete_agent',
+]);
+
+/** Tools that ONLY workflow-builder-agent can call (creates/updates workflows) */
+const WORKFLOW_BUILDER_ONLY = new Set([
+  'create_workflow',
+  'update_workflow',
 ]);
 
 /**
@@ -86,6 +95,15 @@ function assertCallerCanCall(toolName: string): { ok: true; caller: string } | {
       return {
         ok: false,
         error: `Permission denied: only team-builder-agent or agent-builder-agent can call ${toolName}. Caller: "${caller}".`,
+      };
+    }
+  }
+
+  if (WORKFLOW_BUILDER_ONLY.has(toolName)) {
+    if (caller !== 'workflow-builder-agent') {
+      return {
+        ok: false,
+        error: `Permission denied: only workflow-builder-agent can call ${toolName}. Caller: "${caller}".`,
       };
     }
   }
@@ -506,6 +524,155 @@ const deleteAgentTool: ChatTool = {
   },
 };
 
+// ── Workflow management tools (workflow-builder-agent only) ──────────────────
+//
+// These let the workflow-builder-agent persist agent-designed workflows
+// directly to the database. The DB is the source of truth for both the
+// editor and the executor — workflows created here are usable immediately
+// without a restart and without writing a YAML seed file.
+//
+// Workflows are created with createdBy="workflow-builder" so the YAML
+// seed loop never overwrites them.
+
+function parseWorkflowInput(args: Record<string, unknown>): { yaml?: string; parsed?: WorkflowDef; error?: string } {
+  const rawYaml = args.yaml as string | undefined;
+  const rawParsed = args.parsed;
+  if (!rawYaml && !rawParsed) {
+    return { error: 'Provide either `yaml` (string) or `parsed` (object).' };
+  }
+  if (rawYaml) {
+    try {
+      const parsed = yaml.load(rawYaml) as WorkflowDef;
+      if (!parsed || typeof parsed !== 'object' || !parsed.name) {
+        return { error: 'YAML did not parse into a workflow object with a `name` field.' };
+      }
+      return { yaml: rawYaml, parsed };
+    } catch (err) {
+      return { error: `Invalid YAML: ${(err as Error).message}` };
+    }
+  }
+  // parsed object branch
+  if (typeof rawParsed !== 'object' || rawParsed === null || !(rawParsed as WorkflowDef).name) {
+    return { error: '`parsed` must be an object with at least a `name` field.' };
+  }
+  return { parsed: rawParsed as WorkflowDef };
+}
+
+const validateWorkflowTool: ChatTool = {
+  name: 'validate_workflow',
+  description: 'Validate a workflow definition (YAML or parsed object) against the live agent registry and built-ins. Returns { valid, errors, warnings }. No permission required — read-only check.',
+  inputSchema: {
+    type: 'object',
+    properties: {
+      yaml: { type: 'string', description: 'YAML source of the workflow' },
+      parsed: { type: 'object', description: 'Parsed workflow object (alternative to yaml)' },
+    },
+  },
+  async execute(args, db) {
+    const input = parseWorkflowInput(args);
+    if (input.error) return { error: input.error };
+    try {
+      const result = await new WorkflowService(db).validate(input.parsed!);
+      return { ...result };
+    } catch (err) {
+      return { error: (err as Error).message };
+    }
+  },
+};
+
+const createWorkflowTool: ChatTool = {
+  name: 'create_workflow',
+  description: 'Persist a new workflow to the database. ONLY workflow-builder-agent can call this. Validates first; returns the validation result inline so the caller can read errors and retry. Created workflows are usable immediately by the editor and executor — no restart needed. Stored with createdBy="workflow-builder" so the YAML seed loop will not touch them.',
+  destructive: true,
+  inputSchema: {
+    type: 'object',
+    properties: {
+      yaml: { type: 'string', description: 'Full YAML source of the workflow (preferred)' },
+      parsed: { type: 'object', description: 'Parsed workflow object (alternative to yaml)' },
+      tags: { type: 'array', items: { type: 'string' }, description: 'Optional tags' },
+    },
+  },
+  async execute(args, db) {
+    const guard = assertCallerCanCall('create_workflow');
+    if (!guard.ok) return { error: guard.error };
+
+    const input = parseWorkflowInput(args);
+    if (input.error) return { error: input.error };
+
+    try {
+      const created = await new WorkflowService(db).create({
+        yaml: input.yaml,
+        parsed: input.parsed,
+        createdBy: 'workflow-builder',
+        tags: (args.tags as string[]) ?? ['agent-built'],
+      });
+      return {
+        success: true,
+        workflow: {
+          _id: String(created._id),
+          name: created.name,
+          version: created.version,
+          validation: created.validation,
+        },
+      };
+    } catch (err) {
+      return { error: (err as Error).message };
+    }
+  },
+};
+
+const updateWorkflowTool: ChatTool = {
+  name: 'update_workflow',
+  description: 'Update an existing workflow by id (or by name if id is omitted). ONLY workflow-builder-agent can call this. Bumps version. Refuses to touch workflows with createdBy="system" — those are managed by the YAML seed loop.',
+  destructive: true,
+  inputSchema: {
+    type: 'object',
+    properties: {
+      id: { type: 'string', description: 'Workflow MongoDB ObjectId' },
+      name: { type: 'string', description: 'Workflow name (used when id is omitted)' },
+      yaml: { type: 'string', description: 'New YAML source' },
+      parsed: { type: 'object', description: 'New parsed workflow object (alternative to yaml)' },
+    },
+  },
+  async execute(args, db) {
+    const guard = assertCallerCanCall('update_workflow');
+    if (!guard.ok) return { error: guard.error };
+
+    const input = parseWorkflowInput(args);
+    if (input.error) return { error: input.error };
+
+    const service = new WorkflowService(db);
+    let id = args.id as string | undefined;
+    if (!id && args.name) {
+      const existing = await service.getByName(args.name as string);
+      if (!existing) return { error: `Workflow "${args.name}" not found` };
+      id = String(existing._id);
+    }
+    if (!id) return { error: 'Provide either `id` or `name` to identify the workflow.' };
+
+    const existing = await service.getById(id);
+    if (!existing) return { error: `Workflow ${id} not found` };
+    if (existing.createdBy === 'system') {
+      return { error: `Workflow "${existing.name}" is system-seeded and managed by the YAML seed loop. Edit the YAML file or save it under a new name.` };
+    }
+
+    try {
+      const updated = await service.update(id, { yaml: input.yaml, parsed: input.parsed });
+      return {
+        success: true,
+        workflow: {
+          _id: String(updated._id ?? id),
+          name: updated.name,
+          version: updated.version,
+          validation: updated.validation,
+        },
+      };
+    } catch (err) {
+      return { error: (err as Error).message };
+    }
+  },
+};
+
 // ── Self-introspection tools (any agent can call) ────────────────────────────
 //
 // These let a running agent inspect its own context — what the user originally
@@ -639,6 +806,10 @@ export const metaChatTools: ChatTool[] = [
   createAgentTool,
   updateAgentTool,
   deleteAgentTool,
+  // Workflow management (workflow-builder only)
+  validateWorkflowTool,
+  createWorkflowTool,
+  updateWorkflowTool,
 ];
 
 /** Tool names that are destructive — added to the global DESTRUCTIVE_TOOLS set. */
@@ -649,4 +820,6 @@ export const META_DESTRUCTIVE_TOOLS = [
   'create_agent',
   'update_agent',
   'delete_agent',
+  'create_workflow',
+  'update_workflow',
 ];

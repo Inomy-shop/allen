@@ -28,7 +28,7 @@ export class WorkflowService {
     return this.col.findOne({ name });
   }
 
-  async create(body: { yaml?: string; parsed?: WorkflowDef }): Promise<Record<string, unknown>> {
+  async create(body: { yaml?: string; parsed?: WorkflowDef; createdBy?: string; tags?: string[] }): Promise<Record<string, unknown>> {
     let parsed: WorkflowDef;
     let rawYaml: string;
 
@@ -42,6 +42,13 @@ export class WorkflowService {
       throw new Error('Either yaml or parsed must be provided');
     }
 
+    // Reject duplicate names so the agent gets a clear error instead of
+    // silently creating a second workflow that shadows the first.
+    const existing = await this.col.findOne({ name: parsed.name });
+    if (existing) {
+      throw new Error(`Workflow "${parsed.name}" already exists. Use update instead, or pick a different name.`);
+    }
+
     const validation = await this.validate(parsed);
 
     const doc = {
@@ -52,8 +59,8 @@ export class WorkflowService {
       parsed,
       reactFlowData: null,
       validation,
-      tags: [],
-      createdBy: 'system',
+      tags: body.tags ?? [],
+      createdBy: body.createdBy ?? 'system',
       createdAt: new Date(),
       updatedAt: new Date(),
     };
