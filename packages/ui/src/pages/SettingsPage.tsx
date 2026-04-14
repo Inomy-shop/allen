@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, useCallback } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { RotateCcw, Check, Palette, Type, Sparkles, Server, User, Eye, Key,
   Bot, Brain, Zap, Cpu, Atom, Terminal, Code, Rocket, Shield, Hexagon, Flame, Monitor, Moon, Sun,
-  Plus, Pencil, Trash2, X, Lock, AlertCircle, ShieldCheck,
+  Plus, Pencil, Trash2, X, Lock, AlertCircle, ShieldCheck, Settings,
 } from 'lucide-react';
 import McpServerManager from '../components/settings/McpServerManager';
 import { secrets as secretsApi } from '../services/api';
@@ -721,21 +721,37 @@ export default function SettingsPage() {
   const currentUser = useAuthStore((s) => s.user);
   const isAdmin = currentUser?.role === 'admin';
 
-  // If a non-admin lands on an admin-only tab, redirect to profile.
+  // If a non-admin lands on an admin-only tab, redirect to profile. We do NOT
+  // auto-redirect on bare /settings anymore — clicking the sidebar's Settings
+  // link should just expand the sub-tab menu in the sidebar without forcing
+  // the user into a specific page. They pick the tab they want themselves.
   const requested = tab;
   const tabDef = TABS.find((t) => t.id === requested);
   const allowed = tabDef && (!tabDef.adminOnly || isAdmin);
-  const activeTab: TabId = allowed ? (requested as TabId) : 'profile';
+  const activeTab: TabId | null = requested && allowed ? (requested as TabId) : null;
 
   useEffect(() => {
-    if (!requested) {
-      navigate('/settings/profile', { replace: true });
-      return;
-    }
-    if (!allowed) {
+    if (requested && !allowed) {
+      // Non-admin tried to access an admin-only tab — bounce to profile.
       navigate('/settings/profile', { replace: true });
     }
   }, [requested, allowed, navigate]);
+
+  // No tab chosen yet (bare /settings) — show a quiet placeholder so the
+  // user can pick a tab from the sidebar menu.
+  if (!activeTab) {
+    return (
+      <div className="flex-1 flex flex-col items-center justify-center text-center p-6">
+        <div className="w-14 h-14 rounded-xl bg-surface-100 border border-border/40 flex items-center justify-center mb-4">
+          <Settings className="w-6 h-6 text-theme-muted" strokeWidth={1.5} />
+        </div>
+        <h2 className="font-heading text-base text-theme-primary tracking-wide mb-1">Settings</h2>
+        <p className="text-sm text-theme-muted font-body max-w-sm">
+          Pick a setting from the sidebar to get started.
+        </p>
+      </div>
+    );
+  }
 
   const TabContent = TAB_COMPONENTS[activeTab];
 

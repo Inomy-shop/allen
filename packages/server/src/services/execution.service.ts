@@ -18,10 +18,34 @@ const runningEngines = new Map<string, FlowForgeEngine>();
 /** Load agents from YAML + database (DB is source of truth, YAML is fallback). */
 async function loadAllAgents(db: Db): Promise<Record<string, AgentDef>> {
   const yamlAgents = loadAgents();
-  const dbAgents = await db.collection('agents').find({}, { projection: { name: 1, system: 1, model: 1, provider: 1, tools: 1, type: 1 } }).toArray();
+  const dbAgents = await db
+    .collection('agents')
+    .find(
+      {},
+      {
+        projection: {
+          name: 1,
+          system: 1,
+          model: 1,
+          provider: 1,
+          tools: 1,
+          type: 1,
+          reasoningEffort: 1,
+          planMode: 1,
+        },
+      },
+    )
+    .toArray();
   const merged: Record<string, AgentDef> = { ...yamlAgents };
   for (const a of dbAgents) {
-    merged[a.name as string] = { system: (a.system as string) ?? '', model: a.model as string, provider: a.provider as any, tools: a.tools as string[] };
+    merged[a.name as string] = {
+      system: (a.system as string) ?? '',
+      model: a.model as string,
+      provider: a.provider as AgentDef['provider'],
+      tools: a.tools as string[],
+      reasoningEffort: a.reasoningEffort as AgentDef['reasoningEffort'],
+      planMode: a.planMode as boolean | undefined,
+    };
   }
   return merged;
 }

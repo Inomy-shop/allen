@@ -31,9 +31,24 @@ export type ClarifyAction = 'retry' | 'continue';
  */
 export type OutputsSpec = Record<string, string>;
 
+/**
+ * Non-destructive per-node override of an agent's model/reasoning/plan settings.
+ * Lives on the workflow-node doc only — never mutates the agent document.
+ * All fields optional; `null` means "explicitly inherit parent" and is semantically
+ * equivalent to omitting the field.
+ */
+export interface AgentOverrides {
+  provider?: 'claude-cli' | 'codex' | null;
+  model?: string | null;
+  reasoningEffort?: 'off' | 'low' | 'medium' | 'high' | 'max' | null;
+  planMode?: boolean | null;
+}
+
 export interface NodeDef {
   type?: NodeType;               // default: 'agent'
   agent?: string;                // for agent nodes
+  /** Per-node override of the referenced agent's model/effort/planMode. Ephemeral. */
+  agentOverrides?: AgentOverrides;
   prompt?: string;               // for agent/human nodes
   outputs?: OutputsSpec;
   output_format?: OutputFormat;
@@ -141,6 +156,10 @@ export interface AgentDef {
   capabilities?: string[];
   canDelegateTo?: string[];
   canTrigger?: string[];
+  /** Default reasoning effort for this agent. Can be overridden per node via `agentOverrides`. */
+  reasoningEffort?: 'off' | 'low' | 'medium' | 'high' | 'max';
+  /** Default plan-mode flag for this agent. Claude-only; silently ignored for Codex. */
+  planMode?: boolean;
 }
 
 // ── Router ──────────────────────────────────────────────────────────────────

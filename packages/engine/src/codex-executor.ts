@@ -33,7 +33,17 @@ export async function executeCodexNode(
   abortSignal?: AbortSignal,
 ): Promise<CodexResult> {
   const start = Date.now();
-  const model = role?.model ?? 'default';
+  // Apply per-node overrides first, then agent defaults.
+  const override = nodeDef.agentOverrides ?? {};
+  const model = (override.model ?? role?.model) ?? 'default';
+  const reasoningEffort = (override.reasoningEffort ?? role?.reasoningEffort) ?? undefined;
+  // Codex doesn't support 'max' — clamp to 'high'. 'off' means "don't emit".
+  const codexEffort =
+    reasoningEffort && reasoningEffort !== 'off'
+      ? reasoningEffort === 'max'
+        ? 'high'
+        : reasoningEffort
+      : undefined;
   // Resume by default unless explicitly disabled on the node
   const isResume = !!((nodeDef.resume_on_retry !== false) && sessionId);
 
@@ -77,6 +87,9 @@ export async function executeCodexNode(
       args.push('--json', '--dangerously-bypass-approvals-and-sandbox');
       if (model && model !== 'default') {
         args.push('-c', `model="${model}"`);
+      }
+      if (codexEffort) {
+        args.push('-c', `model_reasoning_effort="${codexEffort}"`);
       }
       args.push(prompt);
     }

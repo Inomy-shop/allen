@@ -70,9 +70,29 @@ export async function executeNode(
   switch (type) {
     case 'agent': {
       const role = nodeDef.agent ? deps.agents[nodeDef.agent] : undefined;
-      if (role?.provider === 'codex') {
+      // Effective provider: per-node override wins over agent default.
+      // This lets a workflow cross-override a Claude agent to run on Codex
+      // (or vice versa) without mutating the agent document.
+      const overrideProvider = nodeDef.agentOverrides?.provider;
+      const effectiveProvider =
+        overrideProvider === 'codex' || overrideProvider === 'claude-cli'
+          ? overrideProvider
+          : role?.provider === 'codex'
+            ? 'codex'
+            : 'claude';
+      if (effectiveProvider === 'codex') {
         const existingSession = sessions[nodeName];
-        return executeCodexNode(nodeName, nodeDef, state, role, deps.emitter, deps.executionId ?? '', existingSession, deps.nodeContext, deps.abortSignal);
+        return executeCodexNode(
+          nodeName,
+          nodeDef,
+          state,
+          role,
+          deps.emitter,
+          deps.executionId ?? '',
+          existingSession,
+          deps.nodeContext,
+          deps.abortSignal,
+        );
       }
       return executeAgentNode(nodeName, nodeDef, state, sessions, deps);
     }
@@ -236,19 +256,44 @@ ${context}
     let localTurns = 0;
     let localCost: number | null = null;
 
+    // Resolve per-node agent settings overrides. The node may specify
+    // `agentOverrides` to override the agent's default model / reasoning
+    // effort / plan mode for just this node. The agent document itself is
+    // read-only from here.
+    const override = nodeDef.agentOverrides ?? {};
+    const resolvedModel = (override.model ?? role?.model) ?? 'sonnet';
+    const resolvedEffort = override.reasoningEffort ?? role?.reasoningEffort;
+    const resolvedPlanMode = override.planMode ?? role?.planMode ?? false;
+
+    // Map effort to Anthropic's documented prompt-keyword triggers. The
+    // Claude Code SDK's bundled cli.js doesn't accept --effort in any
+    // published version, so we inject the keyword into the prompt instead.
+    // See packages/server/src/services/agent-settings.ts for details.
+    let effectivePrompt = opts.promptText;
+    if (resolvedEffort) {
+      const keyword =
+        resolvedEffort === 'max' ? 'ultrathink' :
+        resolvedEffort === 'high' ? 'think hard' :
+        resolvedEffort === 'medium' ? 'think' :
+        undefined;
+      if (keyword) {
+        effectivePrompt = `${keyword}\n\n${effectivePrompt}`;
+      }
+    }
+
     const conv = query({
-      prompt: opts.promptText,
+      prompt: effectivePrompt,
       options: {
         customSystemPrompt: effectiveSystem,
-        model: role?.model ?? 'sonnet',
+        model: resolvedModel,
         allowedTools: role?.tools ?? [],
         cwd,
         resume: opts.resumeSession,
         maxTurns: opts.maxTurns ?? 50,
-        permissionMode: 'bypassPermissions',
+        permissionMode: resolvedPlanMode ? 'plan' : 'bypassPermissions',
         ...(mcpServers && Object.keys(mcpServers).length > 0 ? { mcpServers: mcpServers as any } : {}),
         ...(deps.abortSignal ? { abortController: { signal: deps.abortSignal, abort() { /* handled by engine */ } } as any } : {}),
-      },
+      } as Record<string, unknown>,
     });
 
     for await (const message of conv) {

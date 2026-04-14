@@ -1,7 +1,14 @@
 import { useState, useRef, useCallback, useEffect, forwardRef, useImperativeHandle } from 'react';
-import { Send, Square, ChevronDown, Paperclip, Loader2, X } from 'lucide-react';
+import { Send, Square, ChevronDown, Paperclip, Loader2, X, Sparkles, ShieldCheck } from 'lucide-react';
 import MentionAutocomplete, { type MentionOption } from './MentionAutocomplete';
 import { authHeaders } from '../../services/api';
+
+export type ReasoningEffortValue = 'off' | 'low' | 'medium' | 'high' | 'max';
+
+interface SessionOverrides {
+  reasoningEffort?: ReasoningEffortValue | null;
+  planMode?: boolean | null;
+}
 
 export interface ChatInputHandle {
   setValue: (v: string) => void;
@@ -27,6 +34,13 @@ interface ChatInputProps {
   selectedModel?: string;
   modelLocked?: boolean;
   onProviderChange?: (provider: string, model: string) => void;
+  /** Current overrides (session or pending). */
+  agentOverrides?: SessionOverrides;
+  /** Agent defaults shown as the fallback when no override is set. */
+  inheritedEffort?: ReasoningEffortValue | null;
+  inheritedPlanMode?: boolean | null;
+  /** Parent decides whether to persist via PATCH or keep in local state. */
+  onAgentOverridesChanged?: (next: SessionOverrides) => void;
 }
 
 const PROVIDER_COLORS: Record<string, string> = {
@@ -34,14 +48,82 @@ const PROVIDER_COLORS: Record<string, string> = {
   'claude-cli': 'text-accent-blue',
 };
 
+const EFFORT_OPTIONS: Array<{ value: ReasoningEffortValue; label: string; description: string }> = [
+  { value: 'off', label: 'Off', description: 'No extended thinking' },
+  { value: 'low', label: 'Low', description: 'Quick' },
+  { value: 'medium', label: 'Medium', description: 'Standard' },
+  { value: 'high', label: 'High', description: 'Deliberate' },
+  { value: 'max', label: 'Max', description: 'Opus only' },
+];
+
+function capitalize(s: string): string {
+  return s.charAt(0).toUpperCase() + s.slice(1);
+}
+
+/**
+ * Render the effort button label.
+ *   - No override, no inherited value → "Default"
+ *   - No override, inherited value present → "<Value> (default)"
+ *   - Override set → "<Value>"
+ */
+function effortLabel(
+  override: ReasoningEffortValue | null | undefined,
+  inherited: ReasoningEffortValue | null | undefined,
+): string {
+  if (override) return capitalize(override);
+  if (inherited) return `${capitalize(inherited)} (default)`;
+  return 'Default';
+}
+
 const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function ChatInput(
-  { onSend, onCancel, streaming, disabled, disabledReason, providers, selectedProvider, selectedModel, modelLocked, onProviderChange },
+  {
+    onSend,
+    onCancel,
+    streaming,
+    disabled,
+    disabledReason,
+    providers,
+    selectedProvider,
+    selectedModel,
+    modelLocked,
+    onProviderChange,
+    agentOverrides,
+    inheritedEffort,
+    inheritedPlanMode,
+    onAgentOverridesChanged,
+  },
   ref,
 ) {
   const [value, setValue] = useState('');
   const [mentionVisible, setMentionVisible] = useState(false);
   const [mentionQuery, setMentionQuery] = useState('');
   const [showModelPicker, setShowModelPicker] = useState(false);
+  const [showEffortPicker, setShowEffortPicker] = useState(false);
+  const effortPickerRef = useRef<HTMLDivElement>(null);
+
+  // Effective values: override wins, else inherited agent default
+  const effectiveEffort = (agentOverrides?.reasoningEffort ?? inheritedEffort) ?? null;
+  const effectivePlanMode =
+    agentOverrides?.planMode ?? inheritedPlanMode ?? false;
+
+  // Close the effort picker when clicking outside
+  useEffect(() => {
+    if (!showEffortPicker) return;
+    const onDoc = (e: MouseEvent) => {
+      if (!effortPickerRef.current?.contains(e.target as Node)) setShowEffortPicker(false);
+    };
+    document.addEventListener('mousedown', onDoc);
+    return () => document.removeEventListener('mousedown', onDoc);
+  }, [showEffortPicker]);
+
+  function setEffort(v: ReasoningEffortValue): void {
+    onAgentOverridesChanged?.({ ...agentOverrides, reasoningEffort: v });
+    setShowEffortPicker(false);
+  }
+
+  function togglePlanMode(): void {
+    onAgentOverridesChanged?.({ ...agentOverrides, planMode: !effectivePlanMode });
+  }
   const [attachments, setAttachments] = useState<{ name: string; url: string }[]>([]);
   const [uploading, setUploading] = useState(false);
   const [dragOver, setDragOver] = useState(false);
@@ -215,7 +297,9 @@ const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function ChatInput
 
         {/* Bottom bar inside the input — model selector + send button */}
         <div className="absolute bottom-0 left-0 right-0 flex items-center justify-between px-2 py-1.5">
-          {/* Model selector (left side) */}
+          {/* ── Left cluster: model, effort, plan, attach ── */}
+          <div className="flex items-center gap-1">
+          {/* Model selector */}
           <div className="relative" ref={pickerRef}>
             {providers && providers.length > 0 && (
               <button
@@ -262,26 +346,121 @@ const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function ChatInput
             )}
           </div>
 
+          {/* Reasoning effort picker — same dropdown style as the model picker */}
+          <div className="relative" ref={effortPickerRef}>
+            <button
+              type="button"
+              onClick={() => setShowEffortPicker((v) => !v)}
+              title="Reasoning effort"
+              className={`flex items-center gap-1 px-2 py-0.5 rounded-md text-[11px] font-mono transition-all ${
+                agentOverrides?.reasoningEffort
+                  ? 'text-accent-blue hover:bg-accent-blue/10'
+                  : 'text-theme-muted hover:text-theme-secondary hover:bg-surface-100/50'
+              }`}
+            >
+              <Sparkles className="w-3 h-3" />
+              <span>{effortLabel(agentOverrides?.reasoningEffort, inheritedEffort)}</span>
+              <ChevronDown className="w-2.5 h-2.5 text-theme-subtle" />
+            </button>
+
+            {showEffortPicker && (
+              <div className="absolute bottom-full left-0 mb-1 z-30 bg-surface-100 border border-border/50 rounded-lg shadow-2xl overflow-hidden min-w-[220px]">
+                <div className="px-3 py-1 bg-surface-200/30 border-b border-border/20">
+                  <span className="text-[10px] font-label uppercase tracking-widest text-theme-muted">
+                    Reasoning Effort
+                  </span>
+                </div>
+                {EFFORT_OPTIONS.map((opt) => {
+                  const isActive = effectiveEffort === opt.value;
+                  const isInheritedDefault =
+                    !agentOverrides?.reasoningEffort && inheritedEffort === opt.value;
+                  return (
+                    <button
+                      key={opt.value}
+                      onClick={() => setEffort(opt.value)}
+                      className={`w-full text-left px-3 py-1.5 text-xs font-mono transition-colors hover:bg-surface-200/50 flex items-center justify-between gap-2 ${
+                        isActive ? 'text-accent-blue bg-accent-blue/5' : 'text-theme-secondary'
+                      }`}
+                    >
+                      <span className="flex items-center gap-1.5">
+                        <span>{opt.label}</span>
+                        <span className="text-[10px] text-theme-subtle">— {opt.description}</span>
+                      </span>
+                      {isInheritedDefault && (
+                        <span className="text-[9px] text-theme-subtle uppercase tracking-wider">
+                          default
+                        </span>
+                      )}
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+
+          {/* Plan mode — slider toggle (Claude only) */}
+          {(selectedProvider === 'claude-cli' || selectedProvider === 'claude') && (
+            <button
+              type="button"
+              onClick={togglePlanMode}
+              title={
+                effectivePlanMode
+                  ? 'Plan mode ON — agent will read & plan only, no edits'
+                  : 'Plan mode OFF — agent may edit files'
+              }
+              aria-pressed={effectivePlanMode}
+              className="flex items-center gap-1.5 px-1.5 py-0.5 rounded-md hover:bg-surface-100/50 transition-colors"
+            >
+              <ShieldCheck
+                className={`w-3 h-3 ${effectivePlanMode ? 'text-accent-blue' : 'text-theme-muted'}`}
+              />
+              <span
+                className={`text-[11px] font-mono ${effectivePlanMode ? 'text-accent-blue' : 'text-theme-muted'}`}
+              >
+                Plan
+              </span>
+              {/* Slider track */}
+              <span
+                className={`relative inline-block w-6 h-3 rounded-full transition-colors ${
+                  effectivePlanMode ? 'bg-accent-blue' : 'bg-surface-200/70 border border-border/60'
+                }`}
+              >
+                {/* Knob */}
+                <span
+                  className={`absolute top-1/2 -translate-y-1/2 w-2 h-2 rounded-full bg-white shadow-sm transition-all ${
+                    effectivePlanMode ? 'left-[calc(100%-10px)]' : 'left-[2px]'
+                  }`}
+                />
+              </span>
+            </button>
+          )}
+
           {/* Attach button */}
           <button onClick={() => fileInputRef.current?.click()} disabled={uploading || disabled}
             className="p-1 text-theme-muted hover:text-theme-secondary rounded transition-colors disabled:opacity-30" title="Attach file">
             {uploading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Paperclip className="w-3.5 h-3.5" />}
           </button>
+          </div>
+          {/* ── /Left cluster ── */}
 
-          {/* Hint */}
-          <span className="text-[10px] text-theme-subtle font-mono hidden sm:inline">shift+enter for new line</span>
+          {/* ── Right cluster: hint + send ── */}
+          <div className="flex items-center gap-2">
+            {/* Hint */}
+            <span className="text-[10px] text-theme-subtle font-mono hidden sm:inline">shift+enter for new line</span>
 
-          {/* Send / Stop button (right side) */}
-          {streaming ? (
-            <button onClick={onCancel} className="shrink-0 w-8 h-8 flex items-center justify-center rounded-md bg-red-500/20 text-red-400 hover:bg-red-500/30 transition-colors" title="Stop">
-              <Square className="w-3.5 h-3.5" />
-            </button>
-          ) : (
-            <button onClick={handleSend} disabled={!value.trim() || disabled}
-              className="shrink-0 w-8 h-8 flex items-center justify-center rounded-md bg-accent-blue/20 text-accent-blue hover:bg-accent-blue/30 transition-colors disabled:opacity-30 disabled:cursor-not-allowed" title="Send">
-              <Send className="w-3.5 h-3.5" />
-            </button>
-          )}
+            {/* Send / Stop button */}
+            {streaming ? (
+              <button onClick={onCancel} className="shrink-0 w-8 h-8 flex items-center justify-center rounded-md bg-red-500/20 text-red-400 hover:bg-red-500/30 transition-colors" title="Stop">
+                <Square className="w-3.5 h-3.5" />
+              </button>
+            ) : (
+              <button onClick={handleSend} disabled={!value.trim() || disabled}
+                className="shrink-0 w-8 h-8 flex items-center justify-center rounded-md bg-accent-blue/20 text-accent-blue hover:bg-accent-blue/30 transition-colors disabled:opacity-30 disabled:cursor-not-allowed" title="Send">
+                <Send className="w-3.5 h-3.5" />
+              </button>
+            )}
+          </div>
+          {/* ── /Right cluster ── */}
         </div>
       </div>
     </div>

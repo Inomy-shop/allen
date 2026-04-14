@@ -179,8 +179,10 @@ export async function runCodexCLI(
   resumeSessionId?: string,
   skipTools?: boolean,
   cwd?: string,
+  resolved?: import('./agent-settings.js').ResolvedSettings,
 ): Promise<ProviderResult & { sessionId?: string }> {
   const { spawn } = await import('node:child_process');
+  const { toCodexArgs } = await import('./agent-settings.js');
   const trace: ChatTraceEvent[] = [];
   const lastUserMsg = messages.length > 0 ? messages[messages.length - 1].content : '';
 
@@ -189,12 +191,36 @@ export async function runCodexCLI(
     prompt = `${systemPrompt}\n\n${lastUserMsg}`;
   }
 
+  // Extra -c flags from the resolved settings (model, model_reasoning_effort).
+  // Codex accepts `-c key=value` on both `exec` and `exec resume`, so we
+  // forward these on *every* call — otherwise mid-session effort overrides
+  // get silently dropped on resumed threads.
+  //
+  // On resume we intentionally strip the `model=...` pair, because a thread
+  // is pinned to the model it was created with — Codex will reject a model
+  // change on resume. Reasoning-effort changes ARE supported mid-thread.
+  const resolvedArgs = resolved ? toCodexArgs(resolved) : [];
+  const resumeSafeArgs: string[] = [];
+  for (let i = 0; i < resolvedArgs.length; i += 2) {
+    const flag = resolvedArgs[i];      // '-c'
+    const kv = resolvedArgs[i + 1] ?? ''; // 'model="..."' or 'model_reasoning_effort="..."'
+    if (kv.startsWith('model=')) continue;
+    resumeSafeArgs.push(flag, kv);
+  }
+
   const args: string[] = ['exec'];
   if (resumeSessionId) {
-    args.push('resume', '--json', '--dangerously-bypass-approvals-and-sandbox', '--skip-git-repo-check', resumeSessionId, prompt);
+    args.push('resume', '--json', '--dangerously-bypass-approvals-and-sandbox', '--skip-git-repo-check');
+    // Apply resume-safe overrides (effort only) BEFORE the session id + prompt.
+    if (resumeSafeArgs.length > 0) args.push(...resumeSafeArgs);
+    args.push(resumeSessionId, prompt);
   } else {
     args.push('--json', '--dangerously-bypass-approvals-and-sandbox', '--skip-git-repo-check');
-    if (model && model !== 'default') args.push('-c', `model="${model}"`);
+    if (resolvedArgs.length > 0) {
+      args.push(...resolvedArgs);
+    } else if (model && model !== 'default') {
+      args.push('-c', `model="${model}"`);
+    }
     args.push(prompt);
   }
 

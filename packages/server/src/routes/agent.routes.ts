@@ -1,6 +1,32 @@
 import { Router, type Request, type Response } from 'express';
 import { param } from '../types.js';
 import type { Db } from 'mongodb';
+import { resolveAgentSettings, AgentSettingsValidationError, type AgentLike } from '../services/agent-settings.js';
+
+const ALLOWED_EFFORTS = new Set(['off', 'low', 'medium', 'high', 'max']);
+
+function validateAgentSettingsFields(body: Record<string, unknown>): void {
+  if (body.reasoningEffort !== undefined && body.reasoningEffort !== null) {
+    if (typeof body.reasoningEffort !== 'string' || !ALLOWED_EFFORTS.has(body.reasoningEffort)) {
+      throw new AgentSettingsValidationError(
+        'invalid_reasoning_effort',
+        `reasoningEffort must be one of ${[...ALLOWED_EFFORTS].join(', ')}`,
+      );
+    }
+  }
+  if (body.planMode !== undefined && body.planMode !== null && typeof body.planMode !== 'boolean') {
+    throw new AgentSettingsValidationError('invalid_plan_mode', 'planMode must be a boolean');
+  }
+  // Semantic validation (planMode+provider, effort=max+model) runs via resolve on the merged agent.
+  const probe: AgentLike = {
+    name: (body.name as string) ?? 'probe',
+    provider: body.provider as string | undefined,
+    model: body.model as string | undefined,
+    reasoningEffort: body.reasoningEffort as AgentLike['reasoningEffort'],
+    planMode: body.planMode as boolean | undefined,
+  };
+  resolveAgentSettings(probe);
+}
 
 export function agentRoutes(db: Db): Router {
   const router = Router();
@@ -30,6 +56,8 @@ export function agentRoutes(db: Db): Router {
       delete body.createdBy;
       delete body.createdAt;
 
+      validateAgentSettingsFields(body);
+
       const agent = {
         ...body,
         isBuiltIn: false,
@@ -40,6 +68,9 @@ export function agentRoutes(db: Db): Router {
       const result = await col.insertOne(agent);
       res.status(201).json({ ...agent, _id: result.insertedId });
     } catch (err: unknown) {
+      if (err instanceof AgentSettingsValidationError) {
+        return res.status(400).json({ error: err.message, code: err.code });
+      }
       res.status(400).json({ error: (err as Error).message });
     }
   });
@@ -58,10 +89,20 @@ export function agentRoutes(db: Db): Router {
       delete updates.isBuiltIn;
       delete updates.createdBy;
       delete updates.createdAt;
+
+      // For PUT, fold the update over the existing doc before validating — that
+      // way someone toggling just `planMode` doesn't have to resend `provider`.
+      const existing = await col.findOne({ name });
+      if (!existing) return res.status(404).json({ error: 'Agent not found' });
+      validateAgentSettingsFields({ ...existing, ...updates });
+
       const result = await col.updateOne({ name }, { $set: updates });
       if (result.matchedCount === 0) return res.status(404).json({ error: 'Agent not found' });
       res.json({ name, ...updates });
     } catch (err: unknown) {
+      if (err instanceof AgentSettingsValidationError) {
+        return res.status(400).json({ error: err.message, code: err.code });
+      }
       res.status(400).json({ error: (err as Error).message });
     }
   });

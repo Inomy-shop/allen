@@ -28,6 +28,13 @@ export default function ChatPage() {
   const [selectedModel, setSelectedModel] = useState('');
   const [selectedAgent, setSelectedAgent] = useState<string | null>(null);
   const [teamAgents, setTeamAgents] = useState<any[]>([]);
+  const [allAgents, setAllAgents] = useState<any[]>([]);
+  // Pending override state for chats that don't have a session yet. Once the
+  // first message creates the session, this is merged into createSession().
+  const [pendingOverrides, setPendingOverrides] = useState<{
+    reasoningEffort?: 'off' | 'low' | 'medium' | 'high' | 'max' | null;
+    planMode?: boolean | null;
+  }>({});
   const chatInputRef = useRef<{ setValue: (v: string) => void; focus: () => void } | null>(null);
 
   const {
@@ -47,12 +54,45 @@ export default function ChatPage() {
       setMcpCount({ enabled: servers.filter((s: any) => s.enabled).length, connected: servers.filter((s: any) => s.status === 'connected').length });
     }).catch(() => {});
     agentsApi.list().then(all => {
+      setAllAgents(all);
       setTeamAgents(all.filter((a: any) => a.type === 'team'));
     }).catch(() => {});
   }, []);
 
   const activeSession = sessions.find(s => s._id === activeSessionId);
   const activeProvider = activeSession?.provider ?? selectedProvider;
+
+  // Reset pending overrides whenever the user switches to a different
+  // conversation — they only apply to a new chat that hasn't been created yet.
+  useEffect(() => {
+    setPendingOverrides({});
+  }, [activeSessionId]);
+
+  // The agent doc whose defaults we display as the fallback in the popover.
+  const selectedAgentDoc = selectedAgent
+    ? allAgents.find((a) => a.name === selectedAgent) ?? null
+    : null;
+
+  // Effective overrides: session-persisted if session exists, else in-memory pending.
+  const effectiveOverrides = activeSession?.agentOverrides ?? pendingOverrides;
+
+  // Called from ChatInput when the user changes effort or plan mode.
+  // Before a session exists, mutate local state. After, PATCH the session doc.
+  async function handleOverridesChange(next: {
+    reasoningEffort?: 'off' | 'low' | 'medium' | 'high' | 'max' | null;
+    planMode?: boolean | null;
+  }) {
+    if (activeSessionId) {
+      try {
+        await chatApi.updateSession(activeSessionId, { agentOverrides: next });
+        setPendingOverrides(next);
+      } catch (err) {
+        console.error('updateSession failed:', err);
+      }
+    } else {
+      setPendingOverrides(next);
+    }
+  }
 
   // Restore agent selector from session when switching conversations or on page load
   useEffect(() => {
@@ -113,7 +153,15 @@ export default function ChatPage() {
 
   async function handleSend(content: string) {
     if (!activeSessionId) {
-      const session = await createSession(selectedProvider, selectedModel || undefined);
+      // Only pass pending overrides that are explicitly set (not null/undefined).
+      const overrides: Record<string, unknown> = {};
+      if (pendingOverrides.reasoningEffort != null) overrides.reasoningEffort = pendingOverrides.reasoningEffort;
+      if (pendingOverrides.planMode != null) overrides.planMode = pendingOverrides.planMode;
+      const session = await createSession(
+        selectedProvider,
+        selectedModel || undefined,
+        Object.keys(overrides).length > 0 ? overrides : undefined,
+      );
       navigate(`/chat/${session._id}`, { replace: true });
       sendMessage(content, session._id, selectedAgent ?? undefined);
       return;
@@ -273,6 +321,13 @@ export default function ChatPage() {
           selectedModel={activeSession?.model ?? selectedModel}
           modelLocked={!!activeSessionId}
           onProviderChange={(p, m) => { setSelectedProvider(p); setSelectedModel(m); }}
+          agentOverrides={effectiveOverrides}
+          // When no team agent is selected, the chat talks to the raw
+          // assistant. Its default effort is 'medium' — see chat.service.ts
+          // for the matching server-side fallback.
+          inheritedEffort={selectedAgentDoc?.reasoningEffort ?? 'medium'}
+          inheritedPlanMode={selectedAgentDoc?.planMode ?? null}
+          onAgentOverridesChanged={handleOverridesChange}
         />
       </div>
 

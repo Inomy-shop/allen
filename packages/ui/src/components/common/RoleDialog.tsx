@@ -7,6 +7,19 @@ const CLAUDE_MODELS = ['sonnet', 'opus', 'haiku'];
 const CODEX_MODELS = ['gpt-5.3-codex', 'gpt-5.4', 'gpt-5.2-codex', 'gpt-5.1-codex-max', 'gpt-5.2', 'gpt-5.1-codex-mini'];
 const PROVIDERS = ['claude', 'codex'];
 const TOOLS = ['filesystem', 'terminal', 'git', 'web-search', 'web-fetch', 'database'];
+const EFFORT_LEVELS = [
+  { value: '', label: '(CLI default)' },
+  { value: 'off', label: 'Off' },
+  { value: 'low', label: 'Low' },
+  { value: 'medium', label: 'Medium' },
+  { value: 'high', label: 'High' },
+  { value: 'max', label: 'Max — Opus only' },
+];
+const PLAN_MODE_OPTIONS = [
+  { value: '', label: '(CLI default: off)' },
+  { value: 'off', label: 'Off — may edit files' },
+  { value: 'on', label: 'On — read & plan only' },
+];
 const ICONS = ['clipboard', 'code', 'eye', 'search', 'flask', 'pen', 'git-branch', 'bar-chart', 'magnifying-glass', 'layout', 'bot'];
 const AGENT_TYPES = [
   { value: 'team', label: 'Team Agent — coordinates and delegates' },
@@ -32,6 +45,8 @@ export default function RoleDialog({ open, onClose, onSave, role }: RoleDialogPr
   const [system, setSystem] = useState('');
   const [provider, setProvider] = useState('claude');
   const [model, setModel] = useState('sonnet');
+  const [reasoningEffort, setReasoningEffort] = useState(''); // '' = CLI default
+  const [planMode, setPlanMode] = useState(''); // '', 'off', 'on'
   const [tools, setTools] = useState<string[]>([]);
   const [icon, setIcon] = useState('clipboard');
   const [color, setColor] = useState('#3b82f6');
@@ -47,6 +62,10 @@ export default function RoleDialog({ open, onClose, onSave, role }: RoleDialogPr
       setSystem((role.system as string) ?? '');
       setProvider((role.provider as string) ?? 'claude');
       setModel((role.model as string) ?? 'sonnet');
+      setReasoningEffort((role.reasoningEffort as string) ?? '');
+      setPlanMode(
+        role.planMode === true ? 'on' : role.planMode === false ? 'off' : '',
+      );
       setTools((role.tools as string[]) ?? []);
       setIcon((role.icon as string) ?? 'clipboard');
       setColor((role.color as string) ?? '#3b82f6');
@@ -58,6 +77,8 @@ export default function RoleDialog({ open, onClose, onSave, role }: RoleDialogPr
       setSystem('');
       setProvider('claude');
       setModel('sonnet');
+      setReasoningEffort('');
+      setPlanMode('');
       setTools([]);
       setIcon('clipboard');
       setColor('#3b82f6');
@@ -91,6 +112,8 @@ export default function RoleDialog({ open, onClose, onSave, role }: RoleDialogPr
         system: system.trim(),
         provider,
         model,
+        reasoningEffort: reasoningEffort || undefined,
+        planMode: planMode === '' ? undefined : planMode === 'on',
         tools,
         icon,
         color,
@@ -238,6 +261,34 @@ export default function RoleDialog({ open, onClose, onSave, role }: RoleDialogPr
             <div>
               <label className="font-label text-xs text-theme-secondary mb-1 block">Model</label>
               <Select value={model} onChange={setModel} options={modelOptions} />
+            </div>
+          </div>
+
+          {/* Reasoning & Plan mode */}
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="font-label text-xs text-theme-secondary mb-1 block">
+                Reasoning Effort
+              </label>
+              <Select
+                value={reasoningEffort}
+                onChange={setReasoningEffort}
+                options={EFFORT_LEVELS.filter(
+                  (l) => l.value !== 'max' || /opus/i.test(model),
+                )}
+              />
+            </div>
+            <div>
+              <label className="font-label text-xs text-theme-secondary mb-1 block">
+                Plan Mode
+              </label>
+              {provider === 'claude' ? (
+                <Select value={planMode} onChange={setPlanMode} options={PLAN_MODE_OPTIONS} />
+              ) : (
+                <div className="px-3 py-2 bg-surface-50 border border-border/30 rounded-sm text-[11px] text-theme-subtle">
+                  Claude only
+                </div>
+              )}
             </div>
           </div>
 

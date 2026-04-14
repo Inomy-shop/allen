@@ -12,6 +12,13 @@ export interface ChatSession {
   model?: string;
   llmSessionId?: string;
   activeAgent?: string | null;
+  /** Session-level overrides for the agent's model / reasoning effort / plan mode. */
+  agentOverrides?: {
+    provider?: 'claude-cli' | 'codex' | null;
+    model?: string | null;
+    reasoningEffort?: 'off' | 'low' | 'medium' | 'high' | 'max' | null;
+    planMode?: boolean | null;
+  };
   /** Where the session was created from. Slack-sourced sessions are read-only in the UI. */
   source?: 'ui' | 'slack';
   /** Slack thread metadata for sessions sourced from Slack. */
@@ -440,13 +447,16 @@ export function useChat() {
     }
   }, [streamText]);
 
-  const createSession = useCallback(async (provider?: string, model?: string) => {
-    const session = await api.createSession(provider, model);
-    setSessions(prev => [session, ...prev]);
-    setActiveSessionId(session._id);
-    setMessages([]);
-    return session;
-  }, []);
+  const createSession = useCallback(
+    async (provider?: string, model?: string, agentOverrides?: Record<string, unknown>) => {
+      const session = await api.createSession(provider, model, agentOverrides);
+      setSessions(prev => [session, ...prev]);
+      setActiveSessionId(session._id);
+      setMessages([]);
+      return session;
+    },
+    [],
+  );
 
   const deleteSession = useCallback(async (id: string) => {
     await api.deleteSession(id);

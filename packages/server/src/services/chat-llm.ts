@@ -13,6 +13,10 @@ import {
   runCodexCLI,
 } from './chat-providers.js';
 import { loadExternalMcpServers } from './chat-mcp.js';
+import {
+  toClaudeSdkOptions,
+  type ResolvedSettings,
+} from './agent-settings.js';
 
 // ── Types ──
 
@@ -27,6 +31,12 @@ export interface ChatLLMMessage {
 export interface ChatLLMOptions {
   provider?: ChatProvider;
   model?: string;
+  /**
+   * Fully-resolved spawn settings from resolveAgentSettings(). When present, the
+   * provider-specific effort/planMode flags will be emitted on top of the raw
+   * provider+model values. Callers that don't pass this get the CLI defaults.
+   */
+  resolvedSettings?: ResolvedSettings;
   systemPrompt: string;
   messages: ChatLLMMessage[];
   resumeSessionId?: string;
@@ -80,6 +90,7 @@ async function runClaudeCLI(
   resumeSessionId?: string,
   skipTools?: boolean,
   cwd?: string,
+  resolved?: ResolvedSettings,
 ): Promise<{ text: string; costUsd: number; sessionId?: string; trace: ChatTraceEvent[] }> {
   const { query } = await import('@anthropic-ai/claude-code');
   const { resolve, dirname } = await import('node:path');
@@ -116,7 +127,7 @@ async function runClaudeCLI(
     systemPrompt += `\n\nYou have MCP tools from: ${names.join(', ')}. Use them directly. The "flowforge" tools provide workflow, execution, repo, agent, and dashboard data.`;
   }
 
-  const lastUserMsg = messages.length > 0 ? messages[messages.length - 1].content : '';
+  let lastUserMsg = messages.length > 0 ? messages[messages.length - 1].content : '';
   const trace: ChatTraceEvent[] = [];
   let llmSessionId: string | undefined = resumeSessionId;
   const activeMcpToolCalls = new Map<string, { tool: string; args: Record<string, unknown>; startMs: number }>();
@@ -127,6 +138,21 @@ async function runClaudeCLI(
     permissionMode: 'bypassPermissions',
     cwd: cwd || '/tmp/flowforge',
   };
+
+  // Apply resolved agent settings (effort / planMode / model) if present.
+  // - model / planMode map to native SDK options.
+  // - reasoningEffort is injected into the user prompt as a trigger keyword
+  //   (think / think hard / ultrathink). The SDK has no native effort flag
+  //   and its bundled cli.js doesn't accept --effort — this is the only
+  //   mechanism that actually works. See agent-settings.ts for details.
+  if (resolved) {
+    const fragment = toClaudeSdkOptions(resolved);
+    if (fragment.model) sdkOptions.model = fragment.model;
+    if (fragment.permissionMode === 'plan') sdkOptions.permissionMode = 'plan';
+    if (fragment.promptPrefix) {
+      lastUserMsg = `${fragment.promptPrefix}\n\n${lastUserMsg}`;
+    }
+  }
 
   if (resumeSessionId) sdkOptions.resume = resumeSessionId;
   else sdkOptions.customSystemPrompt = systemPrompt;
@@ -222,12 +248,17 @@ export async function runChatLLM(db: Db, options: ChatLLMOptions): Promise<ChatL
 
   let result: { text: string; costUsd: number; sessionId?: string; trace: ChatTraceEvent[] };
 
+  const resolved = options.resolvedSettings;
+  if (resolved) {
+    log(`Effort=${resolved.reasoningEffort ?? '(default)'} planMode=${resolved.planMode}`);
+  }
+
   switch (provider) {
     case 'codex':
-      result = await runCodexCLI(db, options.systemPrompt, options.messages, model, callbacks, options.resumeSessionId, options.skipTools, options.cwd);
+      result = await runCodexCLI(db, options.systemPrompt, options.messages, model, callbacks, options.resumeSessionId, options.skipTools, options.cwd, resolved);
       break;
     case 'claude-cli':
-      result = await runClaudeCLI(db, options.systemPrompt, options.messages, model, callbacks, options.resumeSessionId, options.skipTools, options.cwd);
+      result = await runClaudeCLI(db, options.systemPrompt, options.messages, model, callbacks, options.resumeSessionId, options.skipTools, options.cwd, resolved);
       break;
     default:
       throw new Error(`Unknown provider: ${provider}`);

@@ -49,6 +49,10 @@ interface AgentSeed {
   personality: string;
   canDelegateTo: string[];
   system: string;
+  /** Default reasoning effort. See docs/plans/agent-reasoning-assignments.md. */
+  reasoningEffort?: 'off' | 'low' | 'medium' | 'high' | 'max';
+  /** Default plan-mode flag. Claude-only — pure planners/researchers should set this true. */
+  planMode?: boolean;
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
@@ -158,6 +162,8 @@ const AGENTS: AgentSeed[] = [
   // ─────────────────────────────────────────────────────────────────────────
   {
     name: 'ceo',
+    reasoningEffort: 'high',
+    planMode: false,
     displayName: 'CEO',
     description: 'Top-level orchestrator — sets priorities, approves plans, and routes work to the right lead.',
     teamName: 'executive',
@@ -196,6 +202,8 @@ You NEVER write code. You make decisions and delegate.`,
   // ─────────────────────────────────────────────────────────────────────────
   {
     name: 'product-manager',
+    reasoningEffort: 'high',
+    planMode: false,
     displayName: 'Product Manager',
     description: 'Owns requirements and acceptance criteria. Coordinates the product specialists.',
     teamName: 'product',
@@ -225,6 +233,8 @@ You NEVER write code. You define what to build and verify it was built correctly
   },
   {
     name: 'requirements-analyst',
+    reasoningEffort: 'high',
+    planMode: true,
     displayName: 'Requirements Analyst',
     description: 'Turns tasks into concrete user stories, acceptance criteria, and edge cases.',
     teamName: 'product',
@@ -256,6 +266,8 @@ Be exhaustive on edge cases — they're where bugs hide. Always ask: "What if th
   },
   {
     name: 'acceptance-tester',
+    reasoningEffort: 'high',
+    planMode: false,
     displayName: 'Acceptance Tester',
     description: 'Verifies that built features actually satisfy the original requirements.',
     teamName: 'product',
@@ -289,6 +301,8 @@ Be strict. If the requirement says "show an error when input is empty" and the c
   // ─────────────────────────────────────────────────────────────────────────
   {
     name: 'engineering-lead',
+    reasoningEffort: 'high',
+    planMode: true,
     displayName: 'Engineering Lead',
     description: 'Designs implementation plans and coordinates backend, frontend, devops, review, and security specialists.',
     teamName: 'engineering',
@@ -365,6 +379,8 @@ Never skip keys. Use null if a value genuinely doesn't apply.`,
   },
   {
     name: 'backend-developer',
+    reasoningEffort: 'low',
+    planMode: false,
     displayName: 'Backend Developer',
     description: 'Writes server-side code, APIs, database logic, auth, jobs, and service integrations.',
     teamName: 'engineering',
@@ -420,6 +436,8 @@ End with a JSON block containing: backend_files (list), backend_summary (one par
   },
   {
     name: 'frontend-developer',
+    reasoningEffort: 'low',
+    planMode: false,
     displayName: 'Frontend Developer',
     description: 'Builds UI components, pages, forms, state, and API client code following the engineering-lead\'s plan.',
     teamName: 'engineering',
@@ -476,6 +494,8 @@ End with a JSON block containing: frontend_files (list), frontend_summary (one p
   },
   {
     name: 'devops-engineer',
+    reasoningEffort: 'medium',
+    planMode: false,
     displayName: 'DevOps Engineer',
     description: 'Owns CI/CD, infrastructure-as-code, containers, deployment, git, and PR creation.',
     teamName: 'engineering',
@@ -546,6 +566,8 @@ End with a JSON block containing: pr_url, commit_hash.`,
   },
   {
     name: 'code-reviewer',
+    reasoningEffort: 'high',
+    planMode: false,
     displayName: 'Code Reviewer',
     description: 'Reviews diffs for correctness, conventions, performance, readability, and test quality.',
     teamName: 'engineering',
@@ -592,6 +614,8 @@ End with a JSON block containing: review_verdict ("APPROVED" | "REQUEST_CHANGES"
   },
   {
     name: 'security-specialist',
+    reasoningEffort: 'high',
+    planMode: false,
     displayName: 'Security Specialist',
     description: 'Threat-models features, audits auth/secrets, and flags OWASP-class issues in diffs.',
     teamName: 'engineering',
@@ -643,6 +667,8 @@ End with a JSON block containing: security_verdict, security_feedback (markdown)
   },
   {
     name: 'documentation-writer',
+    reasoningEffort: 'medium',
+    planMode: false,
     displayName: 'Documentation Writer',
     description: 'Updates READMEs, changelogs, API docs, and inline comments after changes ship.',
     teamName: 'engineering',
@@ -681,6 +707,8 @@ Never write generic fluff. Every sentence should teach something specific.`,
   },
   {
     name: 'codebase-navigator',
+    reasoningEffort: 'high',
+    planMode: false,
     displayName: 'Codebase Navigator',
     description: 'Explores unfamiliar repos and surfaces relevant files, entry points, and patterns.',
     teamName: 'engineering',
@@ -717,6 +745,8 @@ When explaining architecture:
   // ─────────────────────────────────────────────────────────────────────────
   {
     name: 'qa-lead',
+    reasoningEffort: 'high',
+    planMode: false,
     displayName: 'QA Lead',
     description: 'Runs build/test/lint validation gates and coordinates test planning and test writing.',
     teamName: 'quality',
@@ -768,6 +798,8 @@ End with a JSON block. For validator: validation_passed, validation_results, fai
   },
   {
     name: 'test-planner',
+    reasoningEffort: 'high',
+    planMode: true,
     displayName: 'Test Planner',
     description: 'Designs comprehensive test plans — unit, integration, e2e, and edge cases — from requirements.',
     teamName: 'quality',
@@ -803,6 +835,8 @@ End with a JSON block containing: test_plan.`,
   },
   {
     name: 'test-writer',
+    reasoningEffort: 'low',
+    planMode: false,
     displayName: 'Test Writer',
     description: 'Writes unit, integration, and e2e tests after implementation, using the repo\'s existing framework.',
     teamName: 'quality',
@@ -851,6 +885,8 @@ End with a JSON block containing: test_files (list), test_summary (one paragraph
   // ─────────────────────────────────────────────────────────────────────────
   {
     name: 'team-builder-agent',
+    reasoningEffort: 'high',
+    planMode: false,
     displayName: 'Team Builder',
     description: 'Designs and creates new teams on demand by researching the domain and confirming before creating.',
     teamName: 'meta',
@@ -881,6 +917,8 @@ ${DELEGATION_INSTRUCTIONS}`,
   },
   {
     name: 'agent-builder-agent',
+    reasoningEffort: 'high',
+    planMode: false,
     displayName: 'Agent Builder',
     description: 'Adds new specialist agents to existing teams after researching and confirming.',
     teamName: 'meta',
@@ -912,6 +950,8 @@ ${DELEGATION_INSTRUCTIONS}`,
   },
   {
     name: 'research-agent',
+    reasoningEffort: 'high',
+    planMode: true,
     displayName: 'Research Agent',
     description: 'Produces structured research about roles, domains, and org-design patterns for the builders.',
     teamName: 'meta',
@@ -940,6 +980,8 @@ Be specific. Quote real tools and practices. No generic fluff.`,
   },
   {
     name: 'planner-agent',
+    reasoningEffort: 'high',
+    planMode: true,
     displayName: 'Planner Agent',
     description: 'Turns research into FlowForge agent and team blueprints with lean member counts.',
     teamName: 'meta',
@@ -964,6 +1006,8 @@ Rules:
   },
   {
     name: 'repo-scanner',
+    reasoningEffort: 'high',
+    planMode: false,
     displayName: 'Repo Scanner',
     description: 'Explores a registered repo and writes a comprehensive markdown context document used by other agents.',
     teamName: 'meta',
@@ -1106,6 +1150,14 @@ export class OrgSeedService {
               teamName: agent.teamName,
               teamRole: agent.teamRole,
               isBuiltIn: true,
+              // Reasoning-effort / plan-mode defaults (see
+              // docs/plans/agent-reasoning-assignments.md). Only written
+              // when the seed defines them, otherwise left untouched so
+              // any user customization survives the boot-time upsert.
+              ...(agent.reasoningEffort !== undefined
+                ? { reasoningEffort: agent.reasoningEffort }
+                : {}),
+              ...(agent.planMode !== undefined ? { planMode: agent.planMode } : {}),
               updatedAt: new Date(),
             },
           },

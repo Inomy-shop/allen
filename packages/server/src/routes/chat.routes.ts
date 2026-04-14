@@ -112,8 +112,8 @@ export function chatRoutes(db: Db): Router {
   // POST /api/chat/sessions — Create new session
   router.post('/sessions', async (req: Request, res: Response) => {
     try {
-      const { provider, model } = req.body ?? {};
-      const session = await chatService.createSession(provider, model);
+      const { provider, model, agentOverrides } = req.body ?? {};
+      const session = await chatService.createSession(provider, model, 'ui', undefined, agentOverrides);
       res.status(201).json(session);
     } catch (err: unknown) {
       res.status(500).json({ error: (err as Error).message });
@@ -176,12 +176,13 @@ export function chatRoutes(db: Db): Router {
     res.json({ streaming: chatService.isStreaming(sessionId) });
   });
 
-  // PATCH /api/chat/sessions/:id — Update session (title, status)
+  // PATCH /api/chat/sessions/:id — Update session
+  // Accepts: title, status, provider, model, agentOverrides
   router.patch('/sessions/:id', async (req: Request, res: Response) => {
     try {
       const id = param(req, 'id');
-      const { title, status } = req.body;
-      const session = await chatService.updateSession(id, { title, status });
+      const { title, status, provider, model, agentOverrides } = req.body ?? {};
+      const session = await chatService.updateSession(id, { title, status, provider, model, agentOverrides });
       if (!session) return res.status(404).json({ error: 'Session not found' });
       res.json(session);
     } catch (err: unknown) {

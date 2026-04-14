@@ -184,6 +184,12 @@ export default function NodeProperties({ node, onUpdate, onDelete, workflowInput
             <input type="checkbox" checked={!!localData.resume_on_retry} onChange={e => update('resume_on_retry', e.target.checked)} className="w-3.5 h-3.5 rounded-sm bg-surface-200 border-accent-blue/30 accent-accent-blue" />
             <label className="text-xs text-theme-secondary font-label">Resume on retry</label>
           </div>
+          <AgentNodeOverrides
+            agentName={(localData.agent as string) ?? ''}
+            agentList={agentList}
+            overrides={(localData.agentOverrides as AgentOverridesValue | undefined) ?? {}}
+            onChange={(next) => update('agentOverrides', next)}
+          />
         </>
       )}
 
@@ -268,6 +274,221 @@ export default function NodeProperties({ node, onUpdate, onDelete, workflowInput
         <label className="block text-xs font-label font-medium text-theme-secondary mb-1 uppercase tracking-wider">Timeout (seconds)</label>
         <input type="number" className="input w-20 text-xs" value={(localData.timeout as number) ?? ''} onChange={e => update('timeout', parseInt(e.target.value) || undefined)} placeholder="600" />
       </div>
+    </div>
+  );
+}
+
+/* ── Agent override sub-component ─────────────────────────────────────── */
+
+type EffortValue = 'off' | 'low' | 'medium' | 'high' | 'max';
+type ProviderValue = 'claude-cli' | 'codex';
+
+interface AgentOverridesValue {
+  provider?: ProviderValue | null;
+  model?: string | null;
+  reasoningEffort?: EffortValue | null;
+  planMode?: boolean | null;
+}
+
+// Both Claude and Codex model lists — the dropdown always shows both, grouped
+// by provider, so you can cross-override a Claude agent to run on Codex (or
+// vice versa) on just this workflow node.
+const CLAUDE_MODELS = ['sonnet', 'opus', 'haiku'];
+const CODEX_MODELS = ['default', 'gpt-5.3-codex', 'gpt-5.4', 'gpt-5.2-codex'];
+
+// Compound value in the <select>. Encodes both provider and model so a single
+// dropdown can span two providers without a separate provider picker.
+function encodeModelOption(provider: ProviderValue, model: string): string {
+  return `${provider}::${model}`;
+}
+function decodeModelOption(value: string): { provider: ProviderValue; model: string } | null {
+  if (!value) return null;
+  const [p, ...rest] = value.split('::');
+  if (!rest.length) return null;
+  if (p !== 'claude-cli' && p !== 'codex') return null;
+  return { provider: p, model: rest.join('::') };
+}
+
+function normalizeProvider(p: string | undefined): ProviderValue {
+  return p === 'codex' ? 'codex' : 'claude-cli';
+}
+
+function AgentNodeOverrides({
+  agentName,
+  agentList,
+  overrides,
+  onChange,
+}: {
+  agentName: string;
+  agentList: any[];
+  overrides: AgentOverridesValue;
+  onChange: (next: AgentOverridesValue) => void;
+}) {
+  const [expanded, setExpanded] = useState(false);
+  if (!agentName) return null;
+
+  const agent = agentList.find((a) => a.name === agentName);
+  if (!agent) return null;
+
+  // Agent defaults — what the node inherits if no override is set.
+  const agentProvider = normalizeProvider(agent.provider);
+  const agentModel: string | undefined = agent.model;
+  const agentEffort: EffortValue | undefined = agent.reasoningEffort;
+  const agentPlan: boolean | undefined = agent.planMode;
+
+  // Effective resolved values (override wins, else agent default).
+  const effectiveProvider: ProviderValue = overrides.provider ?? agentProvider;
+  const effectiveIsClaude = effectiveProvider === 'claude-cli';
+
+  // Current value for the model dropdown — if no override, show the inherit option.
+  const modelSelectValue =
+    overrides.model != null
+      ? encodeModelOption(overrides.provider ?? agentProvider, overrides.model)
+      : '';
+
+  const inheritedModelLabel = `${agentProvider === 'claude-cli' ? 'Claude' : 'Codex'} / ${agentModel ?? '(CLI default)'}`;
+  const inheritedEffortLabel = agentEffort ?? '(CLI default)';
+  const inheritedPlanLabel =
+    agentPlan === true ? 'on' : agentPlan === false ? 'off' : '(CLI default: off)';
+
+  const planSelectValue =
+    overrides.planMode === undefined || overrides.planMode === null
+      ? ''
+      : overrides.planMode
+        ? 'on'
+        : 'off';
+
+  function update(next: AgentOverridesValue): void {
+    const pruned: AgentOverridesValue = { ...next };
+    if (pruned.provider == null) delete pruned.provider;
+    if (pruned.model == null) delete pruned.model;
+    if (pruned.reasoningEffort == null) delete pruned.reasoningEffort;
+    if (pruned.planMode == null) delete pruned.planMode;
+    onChange(pruned);
+  }
+
+  // Handler: picking a model option. Encodes provider in the value so we can
+  // flip the override's provider in the same edit (and clear plan mode if the
+  // user crosses from Claude → Codex, since Codex doesn't support it).
+  function handleModelChange(value: string): void {
+    if (!value) {
+      update({ ...overrides, provider: null, model: null });
+      return;
+    }
+    const decoded = decodeModelOption(value);
+    if (!decoded) return;
+    const next: AgentOverridesValue = {
+      ...overrides,
+      provider: decoded.provider,
+      model: decoded.model,
+    };
+    // Moving to Codex? Drop any explicit plan-mode override.
+    if (decoded.provider === 'codex' && next.planMode === true) next.planMode = null;
+    update(next);
+  }
+
+  const hasAnyOverride =
+    (overrides.provider != null) ||
+    (overrides.model != null) ||
+    (overrides.reasoningEffort != null) ||
+    (overrides.planMode != null);
+
+  return (
+    <div className="mt-3 border-t border-border/30 pt-3">
+      <button
+        type="button"
+        onClick={() => setExpanded((v) => !v)}
+        className="flex items-center justify-between w-full text-left"
+      >
+        <span className="text-xs font-label uppercase tracking-wider text-theme-secondary">
+          Override agent settings {hasAnyOverride && <span className="text-accent-blue">●</span>}
+        </span>
+        <span className="text-[10px] text-theme-subtle">{expanded ? '▾' : '▸'}</span>
+      </button>
+      {expanded && (
+        <div className="mt-2 space-y-3">
+          <p className="text-[10px] text-theme-subtle font-body leading-relaxed">
+            Ephemeral per-node overrides. The agent's defaults are not modified — these
+            values only apply when this workflow node runs. You can cross-override a
+            Claude agent to run on a Codex model (or vice versa) on just this node.
+          </p>
+
+          {/* Provider + Model (grouped dropdown) */}
+          <div>
+            <label className="block text-[10px] font-label uppercase tracking-[0.15em] text-theme-muted mb-1">
+              Model
+            </label>
+            <select
+              className="input w-full text-xs"
+              value={modelSelectValue}
+              onChange={(e) => handleModelChange(e.target.value)}
+            >
+              <option value="">Inherit — {inheritedModelLabel}</option>
+              <optgroup label="Claude">
+                {CLAUDE_MODELS.map((m) => (
+                  <option key={`claude::${m}`} value={encodeModelOption('claude-cli', m)}>
+                    {m}
+                  </option>
+                ))}
+              </optgroup>
+              <optgroup label="Codex">
+                {CODEX_MODELS.map((m) => (
+                  <option key={`codex::${m}`} value={encodeModelOption('codex', m)}>
+                    {m}
+                  </option>
+                ))}
+              </optgroup>
+            </select>
+          </div>
+
+          {/* Effort */}
+          <div>
+            <label className="block text-[10px] font-label uppercase tracking-[0.15em] text-theme-muted mb-1">
+              Reasoning Effort
+            </label>
+            <select
+              className="input w-full text-xs"
+              value={overrides.reasoningEffort ?? ''}
+              onChange={(e) =>
+                update({ ...overrides, reasoningEffort: (e.target.value || null) as EffortValue | null })
+              }
+            >
+              <option value="">Inherit — {inheritedEffortLabel}</option>
+              <option value="off">Off</option>
+              <option value="low">Low</option>
+              <option value="medium">Medium</option>
+              <option value="high">High</option>
+              <option value="max">Max — Claude Opus only</option>
+            </select>
+          </div>
+
+          {/* Plan mode — only when effective provider is Claude */}
+          {effectiveIsClaude ? (
+            <div>
+              <label className="block text-[10px] font-label uppercase tracking-[0.15em] text-theme-muted mb-1">
+                Plan Mode
+              </label>
+              <select
+                className="input w-full text-xs"
+                value={planSelectValue}
+                onChange={(e) => {
+                  const v = e.target.value;
+                  update({ ...overrides, planMode: v === '' ? null : v === 'on' });
+                }}
+              >
+                <option value="">Inherit — {inheritedPlanLabel}</option>
+                <option value="off">Off — may edit files</option>
+                <option value="on">On — read &amp; plan only</option>
+              </select>
+            </div>
+          ) : (
+            <div className="text-[10px] text-theme-subtle font-body leading-relaxed">
+              Plan mode is Claude-only — this node currently resolves to Codex, so plan
+              mode is unavailable. Switch the model back to a Claude option to use it.
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }

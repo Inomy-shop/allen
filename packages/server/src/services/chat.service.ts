@@ -9,6 +9,7 @@ import type { Db } from 'mongodb';
 import { ObjectId } from 'mongodb';
 import type { Response } from 'express';
 import { runChatLLM, type ChatLLMMessage, type ChatProvider, PROVIDERS } from './chat-llm.js';
+import { resolveAgentSettings, type AgentLike, type AgentOverrides, type ResolvedSettings } from './agent-settings.js';
 import { AlertService } from './alert.service.js';
 import { registerActiveSession, unregisterActiveSession, waitForBackgroundTasks } from './chat-tools.js';
 import { searchSimilar, backfillEmbeddings } from './embedding.service.js';
@@ -275,6 +276,7 @@ export class ChatService {
     model?: string,
     source: 'ui' | 'slack' = 'ui',
     slackContext?: SlackContext,
+    agentOverrides?: Record<string, unknown>,
   ): Promise<ChatSession> {
     const now = new Date();
     const doc: ChatSession = {
@@ -282,6 +284,7 @@ export class ChatService {
       lastMessageAt: now, totalCostUsd: 0, provider, model,
       source,
       ...(slackContext ? { slackContext } : {}),
+      ...(agentOverrides ? { agentOverrides } : {}),
       createdAt: now, updatedAt: now,
     };
     const result = await this.sessions.insertOne(doc);
@@ -516,9 +519,39 @@ export class ChatService {
       // Use already-resolved cwd (workspace path or @repo path)
       const workspaceCwd = resolvedCwd;
 
+      // Resolve agent settings (reasoning effort, plan mode) using:
+      //   session.agentOverrides  >  agent defaults  >  assistant default
+      // Mutations never propagate back to the agent document — overrides are
+      // ephemeral per-session state.
+      //
+      // When no team agent is selected, the chat talks to the raw assistant;
+      // that pseudo-agent defaults to reasoningEffort='medium' so it matches
+      // the UI label shown in the ChatInput effort picker.
+      let resolvedSettings: ResolvedSettings | undefined;
+      try {
+        const agentDoc = effectiveAgent
+          ? (await this.db.collection('agents').findOne({ name: effectiveAgent }))
+          : null;
+        const assistantDefaultEffort = 'medium';
+        const agentLike: AgentLike = {
+          name: effectiveAgent ?? 'default',
+          provider,
+          model,
+          reasoningEffort: agentDoc?.reasoningEffort ?? (effectiveAgent ? undefined : assistantDefaultEffort),
+          planMode: agentDoc?.planMode,
+        };
+        const sessionOverrides = (session?.agentOverrides as AgentOverrides | undefined) ?? undefined;
+        resolvedSettings = resolveAgentSettings(agentLike, [sessionOverrides]);
+      } catch (err) {
+        // If validation fails we keep going without the override — the log
+        // makes it visible so the user can fix it in the UI.
+        console.warn(`[chat] resolveAgentSettings failed: ${(err as Error).message}`);
+      }
+
       const result = await runChatLLM(this.db, {
-        provider,
-        model,
+        provider: (resolvedSettings?.provider as ChatProvider) ?? provider,
+        model: resolvedSettings?.model || model,
+        resolvedSettings,
         systemPrompt,
         messages: llmMessages,
         resumeSessionId: hasSessionResume ? resumeSessionId : undefined,
@@ -791,8 +824,24 @@ RULES:
     return parts.join('\n');
   }
 
-  async updateSession(id: string, update: { title?: string; status?: 'active' | 'archived' }): Promise<ChatSession | null> {
-    await this.sessions.updateOne({ _id: new ObjectId(id) }, { $set: { ...update, updatedAt: new Date() } });
+  async updateSession(
+    id: string,
+    update: {
+      title?: string;
+      status?: 'active' | 'archived';
+      provider?: string;
+      model?: string;
+      agentOverrides?: Record<string, unknown> | null;
+    },
+  ): Promise<ChatSession | null> {
+    // Only whitelist known fields so clients can't smuggle arbitrary keys in.
+    const set: Record<string, unknown> = { updatedAt: new Date() };
+    if (update.title !== undefined) set.title = update.title;
+    if (update.status !== undefined) set.status = update.status;
+    if (update.provider !== undefined) set.provider = update.provider;
+    if (update.model !== undefined) set.model = update.model;
+    if (update.agentOverrides !== undefined) set.agentOverrides = update.agentOverrides;
+    await this.sessions.updateOne({ _id: new ObjectId(id) }, { $set: set });
     return this.sessions.findOne({ _id: new ObjectId(id) }) as Promise<ChatSession | null>;
   }
 
