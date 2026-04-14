@@ -174,12 +174,18 @@ export class SlackService {
       combinedMessage = cleanedText;
     }
 
-    // Create a new chat session marked as Slack-sourced
-    const session = await this.chatService.createSession('codex', undefined, 'slack', {
-      channelId,
-      threadTs,
-      teamId,
-    });
+    // Create a new chat session marked as Slack-sourced. Default the Slack
+    // entry point to Claude Opus with medium reasoning effort — Slack traffic
+    // is usually short-form Q&A from non-technical users, so we want better
+    // reasoning than Codex default but not max-effort token burn on every
+    // @mention. Users can still override per-session via the UI if needed.
+    const session = await this.chatService.createSession(
+      'claude-cli',
+      'opus',
+      'slack',
+      { channelId, threadTs, teamId },
+      { reasoningEffort: 'medium' },
+    );
     const sessionId = session._id!.toString();
 
     // Save the thread mapping BEFORE processing so concurrent events find it

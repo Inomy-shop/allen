@@ -32,6 +32,7 @@ async function loadAllAgents(db: Db): Promise<Record<string, AgentDef>> {
           type: 1,
           reasoningEffort: 1,
           planMode: 1,
+          sourceRepoPath: 1,
         },
       },
     )
@@ -45,6 +46,7 @@ async function loadAllAgents(db: Db): Promise<Record<string, AgentDef>> {
       tools: a.tools as string[],
       reasoningEffort: a.reasoningEffort as AgentDef['reasoningEffort'],
       planMode: a.planMode as boolean | undefined,
+      sourceRepoPath: (a.sourceRepoPath as string | undefined) || undefined,
     };
   }
   return merged;

@@ -122,7 +122,12 @@ async function executeAgentNode(
     throw new Error(`Role not found: ${nodeDef.agent}`);
   }
 
-  const cwd = state.worktree_path as string | undefined;
+  // Resolve cwd: workflow state's worktree_path wins; otherwise fall back to
+  // the agent's sourceRepoPath, which is populated for agents imported from
+  // a registered repo's `.claude/agents/*.md` file. This lets an imported
+  // agent auto-run in its source repo when a workflow references it without
+  // threading a worktree_path through the inputs.
+  const cwd = (state.worktree_path as string | undefined) ?? role?.sourceRepoPath;
   const existingSession = sessions[nodeName];
   // Resume the agent's prior session by default — preserves context across
   // retry loops (build/test failures, clarify revisions, review verdicts).

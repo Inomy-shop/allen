@@ -155,6 +155,32 @@ export const agents = {
     request<any>(`/agents/${name}`, { method: 'PUT', body: JSON.stringify(agent) }),
   delete: (name: string) =>
     request<void>(`/agents/${name}`, { method: 'DELETE' }),
+  // Import Claude agents from a registered repo's `.claude/agents/*.md` files.
+  importPreview: (repoId: string) =>
+    request<{ repo: { _id: string; name: string; path: string }; verdicts: any[] }>(
+      '/agents/import/preview',
+      { method: 'POST', body: JSON.stringify({ repoId }) },
+    ),
+  import: (repoId: string, agentNames: string[]) =>
+    request<{ created: string[]; skipped: { name: string; reason: string }[] }>(
+      '/agents/import',
+      { method: 'POST', body: JSON.stringify({ repoId, agentNames }) },
+    ),
+  resync: (name: string) =>
+    request<any>(`/agents/${name}/resync`, { method: 'POST' }),
+  moveToTeam: (name: string, teamName: string, teamRole: 'lead' | 'member' = 'member') =>
+    request<any>(`/agents/${name}/team`, {
+      method: 'PATCH',
+      body: JSON.stringify({ teamName, teamRole }),
+    }),
+  bulkAssignTeam: (agentNames: string[], teamName: string, autoWireDelegation = true) =>
+    request<{ moved: string[]; skipped: { name: string; reason: string }[] }>(
+      '/agents/bulk-team',
+      {
+        method: 'POST',
+        body: JSON.stringify({ agentNames, teamName, autoWireDelegation }),
+      },
+    ),
 };
 
 // ── Teams ──────────────────────────────────────────────────────────────────
@@ -165,6 +191,19 @@ export const teams = {
   blueprint: (name: string) => request<any>(`/teams/${name}/blueprint`),
   create: (team: any) =>
     request<any>('/teams', { method: 'POST', body: JSON.stringify(team) }),
+  // Create a team with an auto-generated lead agent in one call. Used by the
+  // "Create Team" flow on the agents page. Optionally moves selected agents
+  // into the new team as members.
+  createWithMembers: (body: {
+    team: { name: string; displayName: string; description?: string; mission?: string; parentTeamName?: string };
+    lead?: { name?: string; displayName?: string; model?: string; reasoningEffort?: string; system?: string };
+    memberAgentNames?: string[];
+    autoWireDelegation?: boolean;
+  }) =>
+    request<any>('/teams/with-members', {
+      method: 'POST',
+      body: JSON.stringify(body),
+    }),
   update: (name: string, team: any) =>
     request<any>(`/teams/${name}`, { method: 'PUT', body: JSON.stringify(team) }),
   delete: (name: string) =>

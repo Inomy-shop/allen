@@ -7,6 +7,12 @@ export async function ensureIndexes(db: Db): Promise<void> {
 
   // Agents
   await db.collection('agents').createIndex({ name: 1 }, { unique: true });
+  // Lookup imported agents by source repo — used by the import preview to
+  // detect "already imported" rows and by the UI to badge agents by origin.
+  await db.collection('agents').createIndex(
+    { sourceRepoId: 1 },
+    { partialFilterExpression: { sourceRepoId: { $exists: true } } },
+  );
 
   // Executions
   await db.collection('executions').createIndex({ id: 1 }, { unique: true });

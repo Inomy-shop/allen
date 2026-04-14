@@ -160,6 +160,13 @@ export interface AgentDef {
   reasoningEffort?: 'off' | 'low' | 'medium' | 'high' | 'max';
   /** Default plan-mode flag for this agent. Claude-only; silently ignored for Codex. */
   planMode?: boolean;
+  /**
+   * Absolute filesystem path the agent should run in when the caller
+   * doesn't provide an explicit cwd. Populated for agents imported from a
+   * registered repo's `.claude/agents/*.md` files — an imported agent
+   * auto-runs in its source repo unless the workflow overrides `worktree_path`.
+   */
+  sourceRepoPath?: string;
 }
 
 // ── Router ──────────────────────────────────────────────────────────────────

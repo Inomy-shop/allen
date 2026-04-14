@@ -9,9 +9,14 @@ import { useToast } from '../components/common/Toast';
 import { renderMarkdown } from '../components/chat/ChatMessageList';
 import {
   RefreshCw, Sparkles, Pencil, Trash2, Users, Crown,
-  Search, Play, ArrowRight, X, Eye,
+  Search, Play, ArrowRight, X, Eye, FolderGit2, Plus,
 } from 'lucide-react';
 import { DelegationGraph } from '../components/agents/DelegationGraph';
+import {
+  ImportAgentsFromRepoDialog,
+  AssignToTeamDialog,
+  CreateTeamFromAgentsDialog,
+} from '../components/agents/ImportAndTeamDialogs';
 
 interface TeamSummary {
   name: string;
@@ -112,21 +117,35 @@ function AgentDetailPanel({ agent, onClose }: { agent: Record<string, unknown>; 
 
 // ── Agent Row ────────────────────────────────────────────────────────────────
 
-function AgentRow({ agent, onEdit, onDelete, onRun, onView }: {
+function AgentRow({ agent, onEdit, onDelete, onRun, onView, selected, onToggleSelect }: {
   agent: Record<string, unknown>;
   onEdit: (agent: Record<string, unknown>) => void;
   onDelete: (name: string) => void;
   onRun: (agent: Record<string, unknown>) => void;
   onView: (agent: Record<string, unknown>) => void;
+  selected?: boolean;
+  onToggleSelect?: (name: string) => void;
 }) {
   const isLead = agent.teamRole === 'lead';
+  const isBuiltIn = !!agent.isBuiltIn;
   const capabilities = (agent.capabilities as string[] | undefined) ?? [];
   const delegateTargets = (agent.canDelegateTo as string[] | undefined) ?? [];
+  const fromRepo = !!agent.sourceRepoId;
 
   return (
     <div className={`flex items-center gap-4 px-4 py-3 border-b border-border/10 hover:bg-surface-200/10 transition-colors ${
       isLead ? 'bg-accent-yellow/[0.02]' : ''
-    }`}>
+    } ${selected ? 'bg-accent-blue/5' : ''}`}>
+      {/* Checkbox — disabled for built-ins */}
+      <input
+        type="checkbox"
+        checked={!!selected}
+        disabled={isBuiltIn}
+        onChange={() => onToggleSelect?.(agent.name as string)}
+        title={isBuiltIn ? 'Built-in agents cannot be moved' : 'Select'}
+        className="shrink-0"
+      />
+
       {/* Icon with colored bg */}
       <button
         onClick={() => onView(agent)}
@@ -142,6 +161,14 @@ function AgentRow({ agent, onEdit, onDelete, onRun, onView }: {
         <div className="flex items-center gap-1.5">
           <span className="text-[13px] text-theme-primary font-body font-medium truncate">{(agent.displayName as string) ?? (agent.name as string)}</span>
           {isLead && <Crown className="w-3 h-3 text-accent-yellow shrink-0" />}
+          {fromRepo && (
+            <span
+              title={`Imported from ${agent.sourceFile ?? 'repo'}`}
+              className="inline-flex items-center gap-0.5 text-[8px] font-mono px-1 py-0 rounded-full bg-accent-purple/10 text-accent-purple"
+            >
+              <FolderGit2 className="w-2.5 h-2.5" /> repo
+            </span>
+          )}
         </div>
         <span className="text-[10px] text-theme-subtle font-mono block truncate">{agent.name as string}</span>
       </button>
@@ -228,7 +255,25 @@ export default function RoleManagerPage() {
   const [deletingRole, setDeletingRole] = useState<string | null>(null);
   const [viewingAgent, setViewingAgent] = useState<Record<string, unknown> | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
+  // Import + team-assignment state
+  const [importOpen, setImportOpen] = useState(false);
+  const [assignOpen, setAssignOpen] = useState(false);
+  const [createTeamOpen, setCreateTeamOpen] = useState(false);
+  const [selectedAgents, setSelectedAgents] = useState<Set<string>>(new Set());
   const toast = useToast();
+
+  function toggleAgentSelection(name: string) {
+    setSelectedAgents(prev => {
+      const next = new Set(prev);
+      if (next.has(name)) next.delete(name);
+      else next.add(name);
+      return next;
+    });
+  }
+
+  function clearSelection() {
+    setSelectedAgents(new Set());
+  }
 
   useEffect(() => {
     teamsApi.list()
@@ -324,11 +369,53 @@ export default function RoleManagerPage() {
           <button title="Refresh" onClick={refresh} className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[10px] font-mono bg-surface-200/30 text-theme-muted hover:bg-surface-200/50 transition-colors">
             <RefreshCw className="w-3 h-3" />
           </button>
+          <button onClick={() => setImportOpen(true)} className="inline-flex items-center gap-1 px-3 py-1.5 rounded-full text-[10px] font-mono bg-accent-purple/10 text-accent-purple hover:bg-accent-purple/20 transition-colors">
+            <FolderGit2 className="w-3 h-3" /> Import from Repo
+          </button>
+          <button
+            onClick={() => {
+              // No agents selected → scaffold an empty team. Otherwise the
+              // selected agents become the initial members.
+              setCreateTeamOpen(true);
+            }}
+            className="inline-flex items-center gap-1 px-3 py-1.5 rounded-full text-[10px] font-mono bg-accent-green/10 text-accent-green hover:bg-accent-green/20 transition-colors"
+          >
+            <Plus className="w-3 h-3" /> Create Team
+          </button>
           <button onClick={handleCreate} className="inline-flex items-center gap-1 px-3 py-1.5 rounded-full text-[10px] font-mono bg-accent-blue/10 text-accent-blue hover:bg-accent-blue/20 transition-colors">
             <Sparkles className="w-3 h-3" /> Create Agent
           </button>
         </div>
       </div>
+
+      {/* Selection bar — appears when any agent is checked */}
+      {selectedAgents.size > 0 && (
+        <div className="flex items-center justify-between gap-3 mb-4 px-4 py-2 rounded-lg bg-accent-blue/5 border border-accent-blue/20">
+          <span className="text-[11px] font-mono text-accent-blue">
+            {selectedAgents.size} selected
+          </span>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => setAssignOpen(true)}
+              className="inline-flex items-center gap-1 px-3 py-1 rounded-full text-[10px] font-mono bg-accent-blue/10 text-accent-blue hover:bg-accent-blue/20"
+            >
+              <ArrowRight className="w-3 h-3" /> Assign to team
+            </button>
+            <button
+              onClick={() => setCreateTeamOpen(true)}
+              className="inline-flex items-center gap-1 px-3 py-1 rounded-full text-[10px] font-mono bg-accent-green/10 text-accent-green hover:bg-accent-green/20"
+            >
+              <Plus className="w-3 h-3" /> Create team with these
+            </button>
+            <button
+              onClick={clearSelection}
+              className="inline-flex items-center gap-1 px-3 py-1 rounded-full text-[10px] font-mono bg-surface-200/30 text-theme-muted hover:bg-surface-200/50"
+            >
+              <X className="w-3 h-3" /> Clear
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* Org Chart */}
       {!searchQuery && allAgents.length > 0 && (
@@ -341,6 +428,7 @@ export default function RoleManagerPage() {
           <span className="text-[10px] text-theme-muted font-mono block mb-2">{filteredAgents.length} result{filteredAgents.length !== 1 ? 's' : ''}</span>
           {/* Column headers */}
           <div className="flex items-center gap-4 px-4 py-2 border-b border-border/20 text-[10px] font-label uppercase tracking-widest text-theme-subtle">
+            <span className="w-4" />
             <span className="w-8" />
             <span className="w-48">Name</span>
             <span className="w-16">Provider</span>
@@ -350,7 +438,7 @@ export default function RoleManagerPage() {
             <span className="text-right">Actions</span>
           </div>
           {filteredAgents.map((agent: any) => (
-            <AgentRow key={agent.name} agent={agent} onEdit={handleEdit} onDelete={setDeletingRole} onRun={handleRun} onView={setViewingAgent} />
+            <AgentRow key={agent.name} agent={agent} onEdit={handleEdit} onDelete={setDeletingRole} onRun={handleRun} onView={setViewingAgent} selected={selectedAgents.has(agent.name)} onToggleSelect={toggleAgentSelection} />
           ))}
         </div>
       )}
@@ -388,7 +476,7 @@ export default function RoleManagerPage() {
                 </div>
                 {/* Agent rows */}
                 {members.map((agent: any) => (
-                  <AgentRow key={agent.name} agent={agent} onEdit={handleEdit} onDelete={setDeletingRole} onRun={handleRun} onView={setViewingAgent} />
+                  <AgentRow key={agent.name} agent={agent} onEdit={handleEdit} onDelete={setDeletingRole} onRun={handleRun} onView={setViewingAgent} selected={selectedAgents.has(agent.name)} onToggleSelect={toggleAgentSelection} />
                 ))}
               </div>
             );
@@ -414,7 +502,7 @@ export default function RoleManagerPage() {
                 <span className="text-right">Actions</span>
               </div>
               {unassigned.map((agent: any) => (
-                <AgentRow key={agent.name} agent={agent} onEdit={handleEdit} onDelete={setDeletingRole} onRun={handleRun} onView={setViewingAgent} />
+                <AgentRow key={agent.name} agent={agent} onEdit={handleEdit} onDelete={setDeletingRole} onRun={handleRun} onView={setViewingAgent} selected={selectedAgents.has(agent.name)} onToggleSelect={toggleAgentSelection} />
               ))}
             </div>
           )}
@@ -427,6 +515,23 @@ export default function RoleManagerPage() {
       {/* Dialogs */}
       <RoleDialog open={dialogOpen} onClose={() => setDialogOpen(false)} onSave={handleSave} role={editingRole} />
       <DeleteConfirmDialog open={!!deletingRole} resourceType="agent" resourceName={deletingRole ?? ''} onConfirm={handleDelete} onCancel={() => setDeletingRole(null)} />
+      <ImportAgentsFromRepoDialog
+        open={importOpen}
+        onClose={() => setImportOpen(false)}
+        onImported={() => { refresh(); }}
+      />
+      <AssignToTeamDialog
+        open={assignOpen}
+        onClose={() => setAssignOpen(false)}
+        agentNames={Array.from(selectedAgents)}
+        onAssigned={() => { clearSelection(); refresh(); }}
+      />
+      <CreateTeamFromAgentsDialog
+        open={createTeamOpen}
+        onClose={() => setCreateTeamOpen(false)}
+        memberAgentNames={Array.from(selectedAgents)}
+        onCreated={() => { clearSelection(); refresh(); }}
+      />
     </div>
   );
 }

@@ -456,11 +456,19 @@ const spawnAgent: ChatTool = {
       return { error: `Agent "${agentName}" not found. Use list_agents to see available agents.` };
     }
 
-    // Resolve repo_path: explicit arg > session context cwd > workspace linked to session
+    // Resolve repo_path: explicit arg > session context cwd > workspace linked
+    // to session > agent's sourceRepoPath (set when imported from a repo).
+    // The imported-repo fallback lets agents that were pulled from a Claude
+    // agents file auto-run in their source repo without the caller passing
+    // it every time. Explicit caller paths still win — this is a *default*,
+    // not a lock.
     let repoPath = args.repo_path as string | undefined;
     if (!repoPath) {
       const activeCtx = getAnyActiveSession();
       repoPath = activeCtx?.resolvedCwd ?? await resolveWorkspacePath(db, activeCtx?.chatSessionId) ?? undefined;
+    }
+    if (!repoPath && typeof role.sourceRepoPath === 'string' && role.sourceRepoPath) {
+      repoPath = role.sourceRepoPath;
     }
 
     const { randomUUID } = await import('node:crypto');
@@ -1214,10 +1222,19 @@ CRITICAL RULES:
     const currentDepth = (activeCtx?.delegationDepth ?? 0) + 1;
     const onEvent = activeCtx?.broadcastEvent;
 
-    // Resolve cwd: explicit context > session cwd > workspace linked to session
+    // Resolve cwd: explicit context > session cwd > workspace linked to
+    // session > target agent's sourceRepoPath. See spawn_agent for the full
+    // rationale. This fallback makes imported Claude agents "just work"
+    // without every caller having to look up their source repo.
     let delegationCwd = context.repo_path as string | undefined;
     if (!delegationCwd) {
       delegationCwd = activeCtx?.resolvedCwd ?? await resolveWorkspacePath(db, activeCtx?.chatSessionId) ?? undefined;
+    }
+    if (!delegationCwd && typeof targetAgent.sourceRepoPath === 'string' && targetAgent.sourceRepoPath) {
+      delegationCwd = targetAgent.sourceRepoPath;
+      // Mirror into context so the receiving agent's prompt includes the
+      // same repo_path it will actually run in.
+      if (!context.repo_path) context.repo_path = delegationCwd;
     }
 
     // ── Continue existing conversation (explicit ID or auto-find) ──

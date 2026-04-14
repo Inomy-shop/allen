@@ -1,7 +1,12 @@
 import { Router, type Request, type Response } from 'express';
 import { param } from '../types.js';
-import type { Db } from 'mongodb';
+import { ObjectId, type Db } from 'mongodb';
 import { resolveAgentSettings, AgentSettingsValidationError, type AgentLike } from '../services/agent-settings.js';
+import {
+  scanRepoForClaudeAgents,
+  resolveImportActions,
+  type ParsedClaudeAgent,
+} from '../services/claude-agents-importer.js';
 
 const ALLOWED_EFFORTS = new Set(['off', 'low', 'medium', 'high', 'max']);
 
@@ -55,6 +60,11 @@ export function agentRoutes(db: Db): Router {
       delete body.isBuiltIn;
       delete body.createdBy;
       delete body.createdAt;
+      // Source-of-record fields — only the import endpoints may set these.
+      delete body.sourceRepoId;
+      delete body.sourceRepoPath;
+      delete body.sourceFile;
+      delete body.sourceSha;
 
       validateAgentSettingsFields(body);
 
@@ -89,6 +99,10 @@ export function agentRoutes(db: Db): Router {
       delete updates.isBuiltIn;
       delete updates.createdBy;
       delete updates.createdAt;
+      delete updates.sourceRepoId;
+      delete updates.sourceRepoPath;
+      delete updates.sourceFile;
+      delete updates.sourceSha;
 
       // For PUT, fold the update over the existing doc before validating — that
       // way someone toggling just `planMode` doesn't have to resend `provider`.
@@ -119,5 +133,278 @@ export function agentRoutes(db: Db): Router {
     }
   });
 
+  // ── Import Claude agents from a registered repo ─────────────────────────
+  //
+  // Two-step flow: preview tells the UI what would happen, commit actually
+  // inserts the rows. Both endpoints run the same resolver server-side so
+  // the client can't forge verdicts.
+
+  async function loadRepo(repoId: string): Promise<Record<string, unknown> | null> {
+    let oid: ObjectId;
+    try { oid = new ObjectId(repoId); }
+    catch { return null; }
+    return db.collection('repos').findOne({ _id: oid });
+  }
+
+  // POST /api/agents/import/preview  { repoId }
+  router.post('/import/preview', async (req: Request, res: Response) => {
+    try {
+      const repoId = req.body?.repoId as string | undefined;
+      if (!repoId) return res.status(400).json({ error: 'repoId is required' });
+      const repo = await loadRepo(repoId);
+      if (!repo) return res.status(404).json({ error: 'Repo not found' });
+
+      const scan = scanRepoForClaudeAgents(repo.path as string);
+      const verdicts = await resolveImportActions(db, repo._id as ObjectId, scan);
+      res.json({
+        repo: { _id: String(repo._id), name: repo.name, path: repo.path },
+        verdicts,
+      });
+    } catch (err: unknown) {
+      res.status(500).json({ error: (err as Error).message });
+    }
+  });
+
+  // POST /api/agents/import  { repoId, agentNames: string[] }
+  router.post('/import', async (req: Request, res: Response) => {
+    try {
+      const repoId = req.body?.repoId as string | undefined;
+      const agentNames = (req.body?.agentNames ?? []) as string[];
+      if (!repoId) return res.status(400).json({ error: 'repoId is required' });
+      if (!Array.isArray(agentNames) || agentNames.length === 0) {
+        return res.status(400).json({ error: 'agentNames must be a non-empty array' });
+      }
+      const repo = await loadRepo(repoId);
+      if (!repo) return res.status(404).json({ error: 'Repo not found' });
+
+      const scan = scanRepoForClaudeAgents(repo.path as string);
+      const verdicts = await resolveImportActions(db, repo._id as ObjectId, scan);
+
+      const created: string[] = [];
+      const skipped: { name: string; reason: string }[] = [];
+
+      for (const v of verdicts) {
+        if (v.kind !== 'create') {
+          // Surface skipped items only if the caller asked for them.
+          const file = v.kind === 'skip:parse-error' ? v.file : v.agent.name;
+          if (agentNames.includes(file)) {
+            skipped.push({ name: file, reason: v.kind });
+          }
+          continue;
+        }
+        if (!agentNames.includes(v.agent.name)) continue;
+
+        // Re-check name at commit time — protects against races between
+        // preview and commit where another caller imported the same slug.
+        const conflict = await col.findOne({ name: v.agent.name });
+        if (conflict) {
+          skipped.push({ name: v.agent.name, reason: 'skip:name-collision' });
+          continue;
+        }
+
+        const doc = buildImportedAgentDoc(v.agent, repo);
+        try {
+          await col.insertOne(doc);
+          created.push(v.agent.name);
+        } catch (err) {
+          skipped.push({ name: v.agent.name, reason: `insert-failed: ${(err as Error).message}` });
+        }
+      }
+
+      res.status(201).json({ created, skipped });
+    } catch (err: unknown) {
+      res.status(500).json({ error: (err as Error).message });
+    }
+  });
+
+  // POST /api/agents/:name/resync — re-read the source file and update the
+  // existing agent row. Bypasses the "already-imported" refusal because the
+  // user explicitly asked for it.
+  router.post('/:name/resync', async (req: Request, res: Response) => {
+    try {
+      const name = param(req, 'name');
+      const agent = await col.findOne({ name });
+      if (!agent) return res.status(404).json({ error: 'Agent not found' });
+      if (!agent.sourceRepoId || !agent.sourceFile) {
+        return res.status(400).json({ error: `Agent "${name}" was not imported — nothing to resync` });
+      }
+      const repo = await db.collection('repos').findOne({ _id: agent.sourceRepoId as ObjectId });
+      if (!repo) return res.status(404).json({ error: 'Source repo no longer registered' });
+
+      const scan = scanRepoForClaudeAgents(repo.path as string);
+      const match = scan.parsed.find(p => p.sourceFile === agent.sourceFile);
+      if (!match) {
+        const err = scan.errors.find(e => e.file === agent.sourceFile);
+        return res.status(404).json({
+          error: err ? `Source file parse error: ${err.error}` : 'Source file no longer exists in repo',
+        });
+      }
+
+      await col.updateOne(
+        { name },
+        {
+          $set: {
+            description: match.description,
+            tools: match.tools,
+            model: match.model,
+            system: match.system,
+            sourceSha: match.sourceSha,
+            sourceRepoPath: repo.path as string,
+            updatedAt: new Date(),
+          },
+        },
+      );
+      res.json({ success: true, name, sha: match.sourceSha });
+    } catch (err: unknown) {
+      res.status(500).json({ error: (err as Error).message });
+    }
+  });
+
+  // PATCH /api/agents/:name/team  { teamName, teamRole }
+  router.patch('/:name/team', async (req: Request, res: Response) => {
+    try {
+      const name = param(req, 'name');
+      const teamName = req.body?.teamName as string | undefined;
+      const teamRole = (req.body?.teamRole ?? 'member') as 'lead' | 'member';
+      if (!teamName) return res.status(400).json({ error: 'teamName is required' });
+      if (teamRole !== 'lead' && teamRole !== 'member') {
+        return res.status(400).json({ error: 'teamRole must be "lead" or "member"' });
+      }
+
+      const agent = await col.findOne({ name });
+      if (!agent) return res.status(404).json({ error: 'Agent not found' });
+      if (agent.isBuiltIn) {
+        return res.status(403).json({ error: 'Built-in agents cannot be moved' });
+      }
+
+      // Verify the target team exists (unless it's the unassigned holding area,
+      // which is seeded but we tolerate the absence defensively).
+      const targetTeam = await db.collection('teams').findOne({ name: teamName });
+      if (!targetTeam && teamName !== 'unassigned') {
+        return res.status(404).json({ error: `Team "${teamName}" does not exist` });
+      }
+
+      // Lead uniqueness check — partial index will reject the update anyway,
+      // but a clean 409 beats a raw Mongo error.
+      if (teamRole === 'lead') {
+        const existingLead = await col.findOne({ teamName, teamRole: 'lead' });
+        if (existingLead && existingLead.name !== name) {
+          return res.status(409).json({
+            error: `Team "${teamName}" already has lead "${existingLead.name}". Demote the existing lead first.`,
+          });
+        }
+      }
+
+      await col.updateOne(
+        { name },
+        { $set: { teamName, teamRole, updatedAt: new Date() } },
+      );
+      res.json({ success: true, name, teamName, teamRole });
+    } catch (err: unknown) {
+      res.status(500).json({ error: (err as Error).message });
+    }
+  });
+
+  // POST /api/agents/bulk-team  { agentNames, teamName, autoWireDelegation? }
+  // Move many agents into an existing team at once. All moves are members.
+  // Optionally append the moved agent names to the team lead's canDelegateTo
+  // so the new members are reachable via delegation. Default on.
+  router.post('/bulk-team', async (req: Request, res: Response) => {
+    try {
+      const agentNames = (req.body?.agentNames ?? []) as string[];
+      const teamName = req.body?.teamName as string | undefined;
+      const autoWire = req.body?.autoWireDelegation !== false; // default true
+      if (!teamName) return res.status(400).json({ error: 'teamName is required' });
+      if (!Array.isArray(agentNames) || agentNames.length === 0) {
+        return res.status(400).json({ error: 'agentNames must be a non-empty array' });
+      }
+
+      const team = await db.collection('teams').findOne({ name: teamName });
+      if (!team && teamName !== 'unassigned') {
+        return res.status(404).json({ error: `Team "${teamName}" does not exist` });
+      }
+
+      const moved: string[] = [];
+      const skipped: { name: string; reason: string }[] = [];
+
+      for (const n of agentNames) {
+        const agent = await col.findOne({ name: n });
+        if (!agent) {
+          skipped.push({ name: n, reason: 'not-found' });
+          continue;
+        }
+        if (agent.isBuiltIn) {
+          skipped.push({ name: n, reason: 'built-in' });
+          continue;
+        }
+        await col.updateOne(
+          { name: n },
+          { $set: { teamName, teamRole: 'member', updatedAt: new Date() } },
+        );
+        moved.push(n);
+      }
+
+      // Auto-wire delegation: append moved members to the team lead's
+      // canDelegateTo list so the new arrivals are reachable immediately.
+      if (autoWire && team?.leadAgentName && moved.length > 0) {
+        const leadName = team.leadAgentName as string;
+        const lead = await col.findOne({ name: leadName });
+        if (lead && !lead.isBuiltIn) {
+          const existing = (lead.canDelegateTo as string[] | undefined) ?? [];
+          const merged = Array.from(new Set([...existing, ...moved]));
+          if (merged.length !== existing.length) {
+            await col.updateOne(
+              { name: leadName },
+              { $set: { canDelegateTo: merged, updatedAt: new Date() } },
+            );
+          }
+        }
+      }
+
+      res.json({ moved, skipped, autoWireDelegation: autoWire });
+    } catch (err: unknown) {
+      res.status(500).json({ error: (err as Error).message });
+    }
+  });
+
   return router;
+}
+
+/**
+ * Build the MongoDB document for a newly imported Claude agent.
+ * Non-negotiable fields are set here; everything else derives from the
+ * parsed frontmatter + body. Imported agents always start in the
+ * `unassigned` team so the UI's team-grouping shows them clearly and
+ * `org-context.ts` can render them without special-casing orphans.
+ */
+function buildImportedAgentDoc(
+  parsed: ParsedClaudeAgent,
+  repo: Record<string, unknown>,
+): Record<string, unknown> {
+  return {
+    name: parsed.name,
+    displayName: parsed.description.slice(0, 80) || parsed.name,
+    description: parsed.description,
+    teamName: 'unassigned',
+    teamRole: 'member',
+    type: 'technical',
+    provider: 'claude-cli',
+    model: parsed.model,
+    tools: parsed.tools,
+    capabilities: [],
+    canDelegateTo: [],
+    canTrigger: [],
+    personality: '',
+    icon: 'bot',
+    color: '#6366f1',
+    system: parsed.system,
+    isBuiltIn: false,
+    createdBy: 'import',
+    sourceRepoId: repo._id,
+    sourceRepoPath: repo.path,
+    sourceFile: parsed.sourceFile,
+    sourceSha: parsed.sourceSha,
+    createdAt: new Date(),
+    updatedAt: new Date(),
+  };
 }

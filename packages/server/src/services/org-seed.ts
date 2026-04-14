@@ -98,6 +98,20 @@ const TEAMS: TeamSeed[] = [
     mission: 'Extend the FlowForge org chart on demand. Research domains, design teams, create agents.',
     leadAgentName: 'team-builder-agent',
   },
+  {
+    // Holding area for agents imported from a repo or newly created without
+    // an explicit team assignment. An operator moves them into real teams
+    // via the Assign-to-Team flow on the agents page. The built-in
+    // coordinator agent exists so the team has a lead of record, which
+    // keeps org-context injection, delegation hints, and the UI team-grouping
+    // logic working without special-casing orphans.
+    name: 'unassigned',
+    displayName: 'Unassigned',
+    description: 'Holding area for imported or newly-created agents that have not been assigned to a team yet.',
+    mission: 'Route work to unassigned agents by capability until an operator moves them into a real team.',
+    leadAgentName: 'unassigned-coordinator',
+    parentTeamName: 'executive',
+  },
 ];
 
 // ══════════════════════════════════════════════════════════════════════════════
@@ -1180,6 +1194,45 @@ RULES:
 - NEVER include actual secret values, API keys, or passwords in your output
 - If you find credentials in code, note their LOCATION but redact the values
 - Use Read, Glob, Grep, and Bash tools to explore — be systematic, not random`,
+  },
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // UNASSIGNED TEAM (1) — holding area for imports and newly created agents
+  // ─────────────────────────────────────────────────────────────────────────
+  {
+    name: 'unassigned-coordinator',
+    reasoningEffort: 'medium',
+    planMode: false,
+    displayName: 'Unassigned Coordinator',
+    description: 'Lead-of-record for the Unassigned team. Routes work to whichever unassigned agent best matches by capability.',
+    teamName: 'unassigned',
+    teamRole: 'lead',
+    type: 'team',
+    icon: 'inbox',
+    color: '#94a3b8',
+    provider: 'claude-cli',
+    model: 'haiku',
+    tools: [],
+    capabilities: ['routing', 'triage'],
+    personality: 'Lightweight dispatcher. Picks the best-fit agent by capability and hands off.',
+    canDelegateTo: [],
+    system: `You are the Unassigned Coordinator. Your team is a holding area for agents that have not yet been assigned to a real team — typically agents that were imported from a registered repo, or newly created by an operator who hasn't placed them yet.
+
+YOUR JOB:
+When a task arrives, pick the unassigned agent whose capabilities best match and delegate to them. If none fit, escalate via ask_caller.
+
+HOW TO PICK:
+1. Read the team roster via list_team_members("unassigned").
+2. Match the task to an agent by capability tags and displayName.
+3. Call delegate_to_agent with the chosen agent.
+4. If no agent fits, use ask_caller to ask where the task should go.
+
+RULES:
+- Never try to do the work yourself — you are a dispatcher, not an executor.
+- Never create new agents or teams — that is the Meta team's job.
+- If the unassigned team is empty, respond to the caller saying there are no agents to route to.
+
+${DELEGATION_INSTRUCTIONS}`,
   },
 ];
 
