@@ -22,6 +22,7 @@ import { extractAutoGateFields, buildNodeContext } from './output-extractor.js';
 import { StateManager } from './state-manager.js';
 import { LearningManager, type ExtractionContext } from './learning-manager.js';
 import type { Db } from 'mongodb';
+import type { EngineServices } from './types.js';
 
 export interface EngineConfig {
   db: Db;
@@ -30,6 +31,8 @@ export interface EngineConfig {
   workflows: Record<string, WorkflowDef>;
   emitter: EngineEventEmitter;
   maxNestingDepth?: number;
+  /** In-process service hooks for built-ins (e.g. workspace creation without HTTP). */
+  services?: EngineServices;
 }
 
 export interface RunOptions {
@@ -669,6 +672,7 @@ export class FlowForgeEngine {
       executionId: exec.id,
       nodeContext,
       db: this.config.db,
+      services: this.config.services,
       abortSignal: ac.signal,
     };
     this.log(exec.id, {
@@ -965,6 +969,7 @@ export class FlowForgeEngine {
         executionId: exec.id,
         nodeContext,
         db: this.config.db,
+        services: this.config.services,
         abortSignal: retryAc.signal,
       };
 

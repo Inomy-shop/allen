@@ -7,6 +7,7 @@ import {
   resolveImportActions,
   type ParsedClaudeAgent,
 } from '../services/claude-agents-importer.js';
+import { executeChatTool } from '../services/chat-tools.js';
 
 const ALLOWED_EFFORTS = new Set(['off', 'low', 'medium', 'high', 'max']);
 
@@ -128,6 +129,32 @@ export function agentRoutes(db: Db): Router {
       if (!agent) return res.status(404).json({ error: 'Agent not found' });
       await col.deleteOne({ name: param(req, 'name') });
       res.status(204).send();
+    } catch (err: unknown) {
+      res.status(500).json({ error: (err as Error).message });
+    }
+  });
+
+  // POST /api/agents/:name/run — One-shot agent run from the Agents page.
+  // Delegates to the existing spawn_agent chat tool so behaviour is identical
+  // to how an orchestrator agent spawns a specialist: same execution row shape,
+  // same runSpawnInBackground path, same get_execution polling contract. The
+  // UI can then navigate to /executions/:execution_id for the live view.
+  router.post('/:name/run', async (req: Request, res: Response) => {
+    try {
+      const agentName = param(req, 'name');
+      const prompt = req.body?.prompt as string | undefined;
+      const repoPath = req.body?.repo_path as string | undefined;
+      const sessionId = req.body?.session_id as string | undefined;
+      if (!prompt || !prompt.trim()) {
+        return res.status(400).json({ error: 'prompt is required' });
+      }
+      const result = await executeChatTool(
+        'spawn_agent',
+        { agent_name: agentName, prompt, repo_path: repoPath, session_id: sessionId },
+        db,
+      );
+      if (result.error) return res.status(400).json(result);
+      res.status(202).json(result);
     } catch (err: unknown) {
       res.status(500).json({ error: (err as Error).message });
     }

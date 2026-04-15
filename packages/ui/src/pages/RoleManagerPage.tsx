@@ -219,6 +219,123 @@ function AgentRow({ agent, onEdit, onDelete, onRun, onView, selected, onToggleSe
   );
 }
 
+// ── Run Agent Dialog ─────────────────────────────────────────────────────────
+//
+// Fires POST /api/agents/:name/run, which calls the same `spawn_agent` chat
+// tool that orchestrator agents use internally — so the execution row shape,
+// background runner, and tracing are identical to an MCP-initiated spawn.
+
+function RunAgentDialog({
+  agent,
+  onClose,
+  onStarted,
+}: {
+  agent: Record<string, unknown>;
+  onClose: () => void;
+  onStarted: (executionId: string) => void;
+}) {
+  const [prompt, setPrompt] = useState('');
+  const [repoPath, setRepoPath] = useState(((agent.sourceRepoPath as string) ?? '').trim());
+  const [submitting, setSubmitting] = useState(false);
+  const toast = useToast();
+
+  async function submit() {
+    const trimmed = prompt.trim();
+    if (!trimmed) {
+      toast.error('Prompt is required');
+      return;
+    }
+    setSubmitting(true);
+    try {
+      const result = await agentsApi.run(agent.name as string, {
+        prompt: trimmed,
+        repo_path: repoPath.trim() || undefined,
+      });
+      if (result.error) {
+        toast.error(result.error);
+        setSubmitting(false);
+        return;
+      }
+      toast.success(`Agent "${agent.name as string}" started.`);
+      onStarted(result.execution_id);
+    } catch (err: unknown) {
+      toast.error(err instanceof Error ? err.message : 'Failed to start agent');
+      setSubmitting(false);
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-md" onClick={onClose}>
+      <div className="card w-full max-w-2xl shadow-glow-blue/20 animate-in fade-in zoom-in-95 duration-200" onClick={e => e.stopPropagation()}>
+        <div className="px-6 py-5 border-b border-border/60">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-3">
+              <div
+                className="w-10 h-10 rounded-lg flex items-center justify-center border border-border/30"
+                style={{ backgroundColor: ((agent.color as string) ?? '#666') + '15' }}
+              >
+                <RoleIcon icon={agent.icon as string} color={agent.color as string} size={22} />
+              </div>
+              <div>
+                <h2 className="font-heading text-sm font-bold text-theme-primary tracking-wider uppercase">
+                  Run {(agent.displayName as string) ?? (agent.name as string)}
+                </h2>
+                <div className="text-[10px] text-theme-subtle font-mono mt-0.5">{agent.name as string}</div>
+              </div>
+            </div>
+            <button onClick={onClose} className="p-1.5 rounded-lg hover:bg-surface-200/50 transition-colors">
+              <X className="w-4 h-4 text-theme-muted" />
+            </button>
+          </div>
+        </div>
+        <div className="px-6 py-5 space-y-4">
+          <div>
+            <label className="block text-[10px] font-mono text-theme-muted uppercase tracking-wider mb-1.5">Prompt</label>
+            <textarea
+              autoFocus
+              value={prompt}
+              onChange={e => setPrompt(e.target.value)}
+              onKeyDown={e => {
+                if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') submit();
+              }}
+              rows={8}
+              placeholder="Describe the task for the agent…"
+              className="w-full px-3 py-2 rounded-lg bg-surface-200/40 border border-border/50 text-sm text-theme-primary placeholder:text-theme-subtle focus:outline-none focus:border-accent-blue/50"
+            />
+          </div>
+          <div>
+            <label className="block text-[10px] font-mono text-theme-muted uppercase tracking-wider mb-1.5">
+              Repo path <span className="text-theme-subtle normal-case">(optional — defaults to the agent's source repo)</span>
+            </label>
+            <input
+              type="text"
+              value={repoPath}
+              onChange={e => setRepoPath(e.target.value)}
+              placeholder="/absolute/path/to/repo"
+              className="w-full px-3 py-2 rounded-lg bg-surface-200/40 border border-border/50 text-sm text-theme-primary placeholder:text-theme-subtle focus:outline-none focus:border-accent-blue/50"
+            />
+          </div>
+        </div>
+        <div className="px-6 py-4 border-t border-border/60 flex items-center justify-end gap-2">
+          <button
+            onClick={onClose}
+            className="px-4 py-2 rounded-lg text-[11px] font-mono text-theme-muted hover:text-theme-primary hover:bg-surface-200/40 transition-colors"
+          >
+            Cancel
+          </button>
+          <button
+            onClick={submit}
+            disabled={submitting || !prompt.trim()}
+            className="inline-flex items-center gap-1.5 px-4 py-2 rounded-lg text-[11px] font-mono bg-accent-green/10 text-accent-green hover:bg-accent-green/20 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+          >
+            <Play className="w-3 h-3" /> {submitting ? 'Starting…' : 'Run agent'}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ── Loading Row Skeleton ────────────────────────────────────────────────────
 
 function RowSkeleton() {
@@ -254,6 +371,7 @@ export default function RoleManagerPage() {
   const [editingRole, setEditingRole] = useState<Record<string, unknown> | null>(null);
   const [deletingRole, setDeletingRole] = useState<string | null>(null);
   const [viewingAgent, setViewingAgent] = useState<Record<string, unknown> | null>(null);
+  const [runningAgent, setRunningAgent] = useState<Record<string, unknown> | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
   // Import + team-assignment state
   const [importOpen, setImportOpen] = useState(false);
@@ -287,7 +405,7 @@ export default function RoleManagerPage() {
   }
 
   function handleRun(agent: Record<string, unknown>) {
-    navigate(`/chat?${new URLSearchParams({ agent: agent.name as string }).toString()}`);
+    setRunningAgent(agent);
   }
 
   function handleEdit(role: Record<string, unknown>) { setEditingRole(role); setDialogOpen(true); }
@@ -511,6 +629,19 @@ export default function RoleManagerPage() {
 
       {/* Agent detail viewer (markdown) */}
       {viewingAgent && <AgentDetailPanel agent={viewingAgent} onClose={() => setViewingAgent(null)} />}
+
+      {/* Run-agent dialog — replaces the old chat redirect. Calls the same
+          spawn_agent tool orchestrators use, then jumps to the execution page. */}
+      {runningAgent && (
+        <RunAgentDialog
+          agent={runningAgent}
+          onClose={() => setRunningAgent(null)}
+          onStarted={(executionId) => {
+            setRunningAgent(null);
+            navigate(`/executions/${executionId}`);
+          }}
+        />
+      )}
 
       {/* Dialogs */}
       <RoleDialog open={dialogOpen} onClose={() => setDialogOpen(false)} onSave={handleSave} role={editingRole} />

@@ -376,10 +376,30 @@ export interface ValidationResult {
  * `db` is available when the engine runs with a MongoDB connection (normal
  * server path); offline runs may omit it.
  */
+/**
+ * In-process service hooks the host (normally the server) can pass into the
+ * engine so built-ins can reach infrastructure without looping back through
+ * HTTP. Kept structural so the engine stays decoupled from server types.
+ */
+export interface EngineServices {
+  workspaces?: {
+    create: (payload: {
+      repoId: string;
+      repoName: string;
+      repoPath: string;
+      branch: string;
+      baseBranch: string;
+      name: string;
+    }) => Promise<Record<string, unknown>>;
+    get: (id: string) => Promise<Record<string, unknown> | null>;
+  };
+}
+
 export interface BuiltInContext {
   emitter: EngineEventEmitter;
   db?: import('mongodb').Db;
   executionId?: string;
+  services?: EngineServices;
 }
 
 export type BuiltInFunction = (

@@ -103,10 +103,6 @@ export const createWorkspace: BuiltInFunction = async (config, state, ctx) => {
     nonEmpty(config.base_branch) ?? nonEmpty(state.base_branch) ?? defaultBranch;
   const workspaceName = nonEmpty(config.name) ?? branch;
 
-  // Call the internal API — reuses exactly the same code path as the UI
-  const port = process.env.PORT ?? '4023';
-  const apiUrl = `http://127.0.0.1:${port}/api/workspaces`;
-
   const payload = {
     repoId: String(repo._id),
     repoName: repo.name as string,
@@ -126,17 +122,20 @@ export const createWorkspace: BuiltInFunction = async (config, state, ctx) => {
     },
   });
 
-  const createRes = await fetch(apiUrl, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(payload),
-  });
-  if (!createRes.ok) {
-    const err = await createRes.text().catch(() => `HTTP ${createRes.status}`);
-    throw new Error(`Workspace creation failed: ${err}`);
+  // In-process path: the host (server) passes a WorkspaceManager wrapper via
+  // ctx.services.workspaces. We use it directly so the engine doesn't have to
+  // loop back through /api/workspaces (which requires a Bearer token now).
+  // No auth dance, no self-call, no port coupling — same process, same Mongo.
+  const wsService = ctx.services?.workspaces;
+  if (!wsService) {
+    throw new Error(
+      'create-workspace: no workspace service bound on the engine context. ' +
+      'The host must pass `services.workspaces` when constructing FlowForgeEngine.',
+    );
   }
-  const workspace = await createRes.json() as Record<string, unknown>;
-  const workspaceId = String(workspace._id);
+
+  const workspace = await wsService.create(payload);
+  const workspaceId = String((workspace as { _id: unknown })._id);
 
   // Poll for setup completion (default on)
   const waitForSetup = (config.wait_for_setup as boolean | undefined) ?? true;
@@ -150,9 +149,8 @@ export const createWorkspace: BuiltInFunction = async (config, state, ctx) => {
     const deadline = Date.now() + timeoutSec * 1000;
     while (Date.now() < deadline) {
       await new Promise(r => setTimeout(r, 2000));
-      const res = await fetch(`${apiUrl}/${workspaceId}`);
-      if (!res.ok) continue;
-      const ws = await res.json() as Record<string, unknown>;
+      const ws = await wsService.get(workspaceId);
+      if (!ws) continue;
       finalStatus = ws.status as string;
       worktreePath = ws.worktreePath as string;
       basePort = ws.basePort as number;

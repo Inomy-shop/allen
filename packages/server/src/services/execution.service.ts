@@ -17,6 +17,29 @@ import {
   type InterventionField,
 } from './intervention.service.js';
 import type { AgentDef } from '@flowforge/engine';
+import { WorkspaceManager } from './workspace.service.js';
+
+/**
+ * Build the in-process service hook bundle the engine passes to built-ins.
+ * Lets built-ins like `create-workspace` invoke server-side infra (Mongo +
+ * filesystem operations) without looping back through /api, which would
+ * fail the `requireAuth` middleware. Same process, same DB, no HTTP hop.
+ */
+function buildEngineServices(db: Db): EngineConfig['services'] {
+  const wsManager = new WorkspaceManager(db);
+  return {
+    workspaces: {
+      create: async (payload) => {
+        const ws = await wsManager.create(payload);
+        return ws as unknown as Record<string, unknown>;
+      },
+      get: async (id) => {
+        const ws = await wsManager.get(id);
+        return (ws as unknown as Record<string, unknown> | null) ?? null;
+      },
+    },
+  };
+}
 
 // Track running engines by executionId
 const runningEngines = new Map<string, FlowForgeEngine>();
@@ -148,6 +171,7 @@ export class ExecutionService {
       builtIns: getBuiltIns(),
       workflows,
       emitter,
+      services: buildEngineServices(this.db),
     };
 
     const engine = new FlowForgeEngine(config);
@@ -293,6 +317,7 @@ export class ExecutionService {
       builtIns: getBuiltIns(),
       workflows,
       emitter,
+      services: buildEngineServices(this.db),
     };
 
     const engine = new FlowForgeEngine(config);

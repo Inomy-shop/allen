@@ -181,6 +181,11 @@ export const agents = {
         body: JSON.stringify({ agentNames, teamName, autoWireDelegation }),
       },
     ),
+  run: (name: string, body: { prompt: string; repo_path?: string; session_id?: string }) =>
+    request<{ agent_name: string; execution_id: string; status: string; message?: string; error?: string }>(
+      `/agents/${name}/run`,
+      { method: 'POST', body: JSON.stringify(body) },
+    ),
 };
 
 // ── Teams ──────────────────────────────────────────────────────────────────

@@ -46,6 +46,8 @@ export interface NodeExecutorDeps {
   executionId?: string;
   nodeContext?: string;
   db?: import('mongodb').Db;
+  /** In-process service hooks exposed to built-ins (see EngineServices). */
+  services?: import('./types.js').EngineServices;
   /** Abort signal — set by engine on cancel, checked/used by node executors to kill processes */
   abortSignal?: AbortSignal;
 }
@@ -607,7 +609,12 @@ async function executeCodeNode(
         const delayMs = calculateBackoff(nodeDef, attempt);
         await sleep(delayMs);
       }
-      const outputs = await fn(config, state, { emitter: deps.emitter, db: deps.db, executionId: deps.executionId });
+      const outputs = await fn(config, state, {
+        emitter: deps.emitter,
+        db: deps.db,
+        executionId: deps.executionId,
+        services: deps.services,
+      });
       return {
         outputs,
         cost: { actual: null, estimated: 0, method: 'estimated' },

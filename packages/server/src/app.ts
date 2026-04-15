@@ -126,6 +126,7 @@ async function main(): Promise<void> {
       'bug-investigate-and-fix',
       'test-human-intervention',
       'test-chat-loop',
+      'test-create-workspace',
     ],
   );
   await seedCronJobs(db);
@@ -183,6 +184,13 @@ async function main(): Promise<void> {
   // Write operations stay behind auth via `fileRoutes()` mounted further down.
   app.use('/api/files', publicFileRoutes());
 
+  // Execution SSE stream — mounted BEFORE requireAuth so the browser's
+  // EventSource (which cannot send an Authorization header) can subscribe.
+  // The execution id is an unguessable UUID, same capability-URL model as
+  // /api/files. Authenticated mutation of execution state still goes through
+  // `executionRoutes` below, which sits behind requireAuth.
+  app.use('/api/executions', streamRoutes());
+
   // Every API route below this line requires a valid access token, and if
   // the user has `mustResetPassword: true` they can only hit /api/auth/*.
   app.use('/api', requireAuth, blockIfMustReset);
@@ -193,7 +201,6 @@ async function main(): Promise<void> {
   // Routes
   app.use('/api/workflows', workflowRoutes(db));
   app.use('/api/executions', executionRoutes(db));
-  app.use('/api/executions', streamRoutes());
   app.use('/api/agents', agentRoutes(db));
   app.use('/api/teams', teamRoutes(db));
   app.use('/api/secrets', secretRoutes(db));
