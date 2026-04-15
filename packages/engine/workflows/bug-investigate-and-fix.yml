@@ -1,0 +1,306 @@
+name: bug-investigate-and-fix
+description: >
+  Lean bug fix workflow: investigate the root cause, distinguish from
+  feature-in-disguise, create a worktree, dispatch the fix via the developer
+  orchestrator, write a regression test, run the full suite (no skip flag —
+  bug fixes are regression-risk), update tech docs, security-aware code
+  review, open a PR, post a summary.
+
+  Human touches per run (steady state): 1-2 total —
+    1. Initial bug report
+    2. PR merge on GitHub (external)
+
+  Escalation touches when investigate flags feature-in-disguise, when QA
+  can't triage a failure, or when reproduction isn't inferrable.
+
+version: 1
+
+context:
+  requires: [repo]
+  tools: [filesystem, git, terminal]
+  concurrency: 3
+
+input:
+  bug_report:
+    type: string
+    required: true
+    description: The user's raw bug report
+  repo_path:
+    type: string
+    required: true
+    description: Absolute path of a registered repo
+  related_pr:
+    type: string
+    required: false
+    description: Optional related PR URL (for context)
+  chat_session_id:
+    type: string
+    required: false
+    description: Originating chat session ID (for intervention routing)
+  started_by_user_id:
+    type: string
+    required: false
+    description: User ID who started the run
+
+nodes:
+  investigate:
+    agent: bug-investigator
+    prompt: |
+      Investigate this bug and find the root cause.
+
+      BUG REPORT: {{bug_report}}
+      REPO PATH: {{repo_path}}
+      {{#if related_pr}}
+      RELATED PR: {{related_pr}}
+      {{/if}}
+
+      Follow your four-rule contract:
+        1. Reproduce first — run the reported steps in a terminal.
+        2. Walk the call stack — don't guess.
+        3. Distinguish bug from feature-in-disguise — set
+           looks_like_a_feature=true if the root cause is "the code was
+           never specified to handle this case."
+        4. Identify minimal fix scope — no while-we're-here cleanup.
+
+      End with a JSON block: root_cause, files_to_touch[], confidence,
+      scope, fix_description, looks_like_a_feature, reproduction_steps,
+      affected_components, security_implications.
+    outputs:
+      investigate_output: "The investigator's full JSON output."
+      files_to_touch: "Files the fix needs to touch."
+      looks_like_a_feature: "Boolean — if true, workflow pauses for user decision."
+      root_cause: "One-paragraph root cause."
+      fix_description: "One-paragraph fix description."
+
+  feature_escalation_human:
+    type: human
+    fields:
+      - name: decision
+        label: "This looks like a feature, not a bug. What do you want to do?"
+        type: select
+        options: [continue_as_bug, start_feature_workflow, cancel]
+        required: true
+    prompt: |
+      ⚠ The bug-investigator determined this is actually a feature request,
+      not a bug fix. The code is behaving as specified — but the
+      specification doesn't cover this case.
+
+      Original bug report:
+      {{bug_report}}
+
+      Root cause:
+      {{root_cause}}
+
+      Proposed fix (as a bug):
+      {{fix_description}}
+
+      Options:
+        continue_as_bug        → proceed anyway with the minimal fix
+        start_feature_workflow → cancel this run, open a new
+                                 feature-plan-and-implement workflow for
+                                 proper design review
+        cancel                 → abandon the workflow
+
+  create_branch:
+    type: code
+    function: create-workspace
+    config:
+      repo_path: "{{repo_path}}"
+      branch_prefix: "fix"
+      task_summary: "{{root_cause}}"
+    outputs:
+      worktree_path: "Absolute path to the isolated git worktree."
+      branch_name: "New branch name."
+      workspace_id: "Internal FlowForge workspace identifier."
+
+  develop:
+    agent: developer
+    prompt: |
+      You are the Developer Orchestrator. Dispatch the fix via spawn_agent.
+
+      BUG ROOT CAUSE: {{root_cause}}
+      FIX DESCRIPTION: {{fix_description}}
+      FILES TO TOUCH: {{files_to_touch}}
+
+      WORKTREE PATH: {{worktree_path}}
+      BRANCH: {{branch_name}}
+
+      Follow your six-rule contract: group files by specialist (most bug
+      fixes touch one subsystem — spawn one specialist), detect conflicts,
+      parallelise when safe. Pass repo_path={{worktree_path}} to every
+      spawn_agent call.
+
+      End with a JSON summary of the spawn — specialists_used, batches,
+      files_changed, any_failures.
+    outputs:
+      developer_output: "The orchestrator's summary JSON."
+      files_changed: "List of files changed by the fix."
+
+  qa:
+    agent: qa-lead
+    resume_on_retry: true
+    retries: 1
+    prompt: |
+      You are the QA orchestrator. Drive the ENTIRE quality loop in one
+      call: spawn test-writer to write a regression test that would fail
+      without the fix, run build + lint + all tests, loop until green
+      or fail. Bug workflow ALWAYS runs the full regression suite — no
+      skip flag.
+
+      BUG REPORT: {{bug_report}}
+      ROOT CAUSE: {{root_cause}}
+      FIX DESCRIPTION: {{fix_description}}
+      FILES CHANGED: {{files_changed}}
+      WORKTREE PATH: {{worktree_path}}
+      SKIP REGRESSION: false
+
+      Follow your five-rule contract:
+        1. Spawn test-writer with the bug context. Ask it to write a
+           regression test that would fail without the fix. Tag it
+           @unit or @integration — NOT @regression (that's for slow
+           pre-existing tests, and this new one must always run).
+        2. Run build + lint + full test suite inside {{worktree_path}}.
+        3. Verify the regression test actually catches the bug — if
+           the test passes WITHOUT the fix applied, test-writer wrote
+           a non-regression test and must rewrite.
+        4. Loop until green (max 3 cycles).
+        5. Emit your structured JSON verdict.
+
+      ALWAYS pass repo_path={{worktree_path}} to every spawn_agent call.
+
+      {{#if retry_context}}
+      RETRY FEEDBACK:
+      {{retry_context}}
+      {{/if}}
+    outputs:
+      qa_verdict: "pass | fail | escalate"
+      test_files: "List of test files produced."
+      regression_test_file: "Path to the new regression test file."
+      regression_test_summary: "One paragraph describing what the test asserts."
+      cycles_used: "Number of write-run-verify cycles."
+      failure_target: "developer | test-writer | null"
+      failure_details: "Details when verdict is fail or escalate."
+
+  update_docs:
+    agent: documentation-writer
+    prompt: |
+      MODE: update_docs
+
+      Update the in-repo technical documentation to reflect the bug fix.
+      For most bug fixes this is a small update — a behaviour note, a
+      corrected example, or nothing if the docs don't describe the
+      affected module.
+
+      WORKTREE PATH: {{worktree_path}}
+      FILES CHANGED: {{files_changed}}
+      BUG ROOT CAUSE: {{root_cause}}
+      FIX DESCRIPTION: {{fix_description}}
+
+      Follow your 7-rule contract. Graceful no-op if there are no docs
+      to update.
+    outputs:
+      docs_updated: "Boolean."
+      doc_files: "Files updated."
+
+  code_review:
+    agent: code-reviewer
+    resume_on_retry: true
+    retries: 1
+    prompt: |
+      Review the bug fix diff in the worktree, INCLUDING doc changes.
+
+      WORKTREE PATH: {{worktree_path}}
+      BRANCH: {{branch_name}}
+      FILES CHANGED: {{files_changed}}
+      BUG ROOT CAUSE: {{root_cause}}
+
+      Run your full 15-point rubric including security checklist. Focus on:
+        - Does the fix actually address the root cause (not just the symptom)?
+        - Is the regression test meaningful?
+        - Does the fix introduce any security regression?
+        - Does the fix introduce any new deviation from the repo's conventions?
+
+      End with a JSON block: review_verdict, review_feedback,
+      security_findings, doc_drift_findings.
+
+      {{#if retry_context}}
+      RETRY FEEDBACK:
+      {{retry_context}}
+      {{/if}}
+    outputs:
+      review_verdict: "APPROVED or REQUEST_CHANGES"
+      review_feedback: "Markdown review notes."
+      security_findings: "Array of security issues."
+
+  open_pr:
+    agent: devops-engineer
+    prompt: |
+      Create a pull request for this bug fix run.
+
+      WORKFLOW TYPE: bug
+      WORKTREE PATH: {{worktree_path}}
+      BRANCH NAME: {{branch_name}}
+
+      BUG REPORT: {{bug_report}}
+      ROOT CAUSE: {{root_cause}}
+      FIX DESCRIPTION: {{fix_description}}
+      REGRESSION TEST: {{regression_test_file}} — {{regression_test_summary}}
+
+      CODE REVIEW SUMMARY: {{review_feedback}}
+      SECURITY FINDINGS: {{security_findings}}
+      FILES CHANGED: {{files_changed}}
+
+      Follow your PR-creation contract: stage, commit with `fix: ...`
+      message, push, gh pr create, handle errors at each step, and
+      return structured JSON. Include bug report, root cause, fix
+      description, regression test path, security findings, and
+      verification steps in the PR body.
+    outputs:
+      pr_url: "The created (or reused) PR URL, or null on failure."
+      commit_hash: "Git SHA of the commit pushed."
+      status: "created | reused_existing | failed"
+      error: "Error message when status is failed."
+
+  summary:
+    agent: documentation-writer
+    prompt: |
+      MODE: summary
+
+      Produce the final implementation summary for this bug fix run.
+
+      BUG REPORT: {{bug_report}}
+      ROOT CAUSE: {{root_cause}}
+      FIX DESCRIPTION: {{fix_description}}
+      PR URL: {{pr_url}}
+      BRANCH: {{branch_name}}
+      WORKTREE PATH: {{worktree_path}}
+      FILES CHANGED: {{files_changed}}
+      REGRESSION TEST: {{regression_test_file}}
+      CODE REVIEW: {{review_feedback}}
+      SECURITY FINDINGS: {{security_findings}}
+
+      Follow your Mode 2 BUG contract: one-line bug, root cause, fix
+      file-by-file, regression test assertion, security notes, how to
+      verify manually.
+
+      End with a JSON block per your Mode 2 output contract.
+    outputs:
+      summary_markdown: "Full summary as markdown."
+      summary_url: "Public .md URL."
+      workflow_verdict: "success or partial_success_with_manual_review"
+
+edges:
+  - { from: START, to: investigate }
+  - { from: investigate, to: create_branch, condition: "looks_like_a_feature == false" }
+  - { from: investigate, to: feature_escalation_human, condition: "looks_like_a_feature == true" }
+  - { from: feature_escalation_human, to: create_branch }
+  - { from: create_branch, to: develop }
+  - { from: develop, to: qa }
+  - { from: qa, to: update_docs, condition: "qa_verdict == 'pass'" }
+  - { from: qa, to: develop, condition: "qa_verdict == 'fail'", max_retries: 2, retry_context: "QA failed — build/lint/tests broken:\n{{failure_details}}" }
+  - { from: qa, to: END, condition: "qa_verdict == 'escalate'" }
+  - { from: update_docs, to: code_review }
+  - { from: code_review, to: open_pr, condition: "review_verdict == 'APPROVED'" }
+  - { from: code_review, to: develop, condition: "review_verdict == 'REQUEST_CHANGES'", max_retries: 2, retry_context: "Review feedback:\n{{review_feedback}}" }
+  - { from: open_pr, to: summary }
+  - { from: summary, to: END }

@@ -210,6 +210,56 @@ export const teams = {
     request<void>(`/teams/${name}`, { method: 'DELETE' }),
 };
 
+// ── Interventions ──────────────────────────────────────────────────────────
+// Human-in-the-loop pauses surfaced by the HIP (Human Intervention Protocol).
+// Every workflow human pause becomes an intervention record. The dedicated
+// Interventions page lists all of them; the chat card and workflow execution
+// page indicator both read from this API.
+export const interventions = {
+  list: (params?: {
+    status?: 'pending' | 'answered' | 'expired' | 'skipped';
+    workflow_run_id?: string;
+    workflow_name?: string;
+    severity?: 'question' | 'approval' | 'escalation';
+    limit?: number;
+  }) => {
+    const qs = params ? '?' + new URLSearchParams(
+      Object.entries(params).filter(([, v]) => v !== undefined).map(([k, v]) => [k, String(v)]),
+    ).toString() : '';
+    return request<any[]>(`/interventions${qs}`);
+  },
+  get: (id: string) => request<any>(`/interventions/${id}`),
+  listForWorkflowRun: (workflowRunId: string) =>
+    request<any[]>(`/interventions/by-workflow-run/${workflowRunId}`),
+  respond: (id: string, body: {
+    decision: 'approve' | 'request_changes' | 'reject' | 'answer';
+    field_values?: Record<string, unknown>;
+    feedback?: string;
+    scope?: 'requirements' | 'architecture' | 'technical_design' | 'all' | null;
+    answer?: string;
+    answered_by_user_id?: string;
+    human_node_name?: string;
+    retry_target_override?: string;
+  }) =>
+    request<any>(`/interventions/${id}/respond`, {
+      method: 'POST',
+      body: JSON.stringify(body),
+    }),
+};
+
+// ── Design Docs ────────────────────────────────────────────────────────────
+export const designDocs = {
+  list: (params?: { status?: string; chatSessionId?: string }) => {
+    const qs = params ? '?' + new URLSearchParams(
+      Object.entries(params).filter(([, v]) => v !== undefined).map(([k, v]) => [k, String(v)]),
+    ).toString() : '';
+    return request<any[]>(`/design-docs${qs}`);
+  },
+  get: (id: string) => request<any>(`/design-docs/${id}`),
+  getByWorkflowRun: (workflowRunId: string) =>
+    request<any>(`/design-docs/by-workflow-run/${workflowRunId}`),
+};
+
 // ── Secrets ────────────────────────────────────────────────────────────────
 export const secrets = {
   list: () => request<string[]>('/secrets'),

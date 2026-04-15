@@ -42,6 +42,8 @@ import { createRepoScanIfChangedAction } from './services/repo-context-scanner.s
 import { createRepoPullAllAction } from './services/repo.service.js';
 import { createMcpBundleCleanupAction } from './services/mcp-bundle.service.js';
 import { cronRoutes } from './routes/cron.routes.js';
+import { designDocRoutes } from './routes/design-doc.routes.js';
+import { interventionRoutes } from './routes/intervention.routes.js';
 import { authRoutes } from './routes/auth.routes.js';
 import { userRoutes } from './routes/users.routes.js';
 import { bootstrapAdmin } from './services/adminBootstrap.js';
@@ -49,6 +51,33 @@ import { requireAuth } from './middleware/requireAuth.js';
 import { blockIfMustReset } from './middleware/blockIfMustReset.js';
 
 const PORT = parseInt(process.env.PORT ?? '4000', 10);
+
+// ── Global error handlers ─────────────────────────────────────────────
+//
+// Native modules (node-pty, sharp, better-sqlite3, etc.) can throw
+// errors that propagate up through async boundaries and bypass normal
+// try/catch blocks in Express handlers. Without these top-level
+// handlers, a single pty spawn failure or an awaited Promise rejection
+// takes down the entire FlowForge server process — killing every chat
+// session, every running workflow, and every MCP health check.
+//
+// Log loudly and KEEP GOING. Individual request handlers are still
+// responsible for their own try/catch (we're not using this as a
+// substitute for proper error handling), but this is the safety net
+// that prevents a single bug from nuking the whole dev server.
+process.on('uncaughtException', (err: Error, origin: string) => {
+  console.error(`\n━━━ UNCAUGHT EXCEPTION [${origin}] ━━━`);
+  console.error(err.stack ?? err.message ?? err);
+  console.error(`━━━ Server is continuing — fix the root cause, this is a safety net, not a pattern ━━━\n`);
+});
+
+process.on('unhandledRejection', (reason: unknown, promise: Promise<unknown>) => {
+  console.error(`\n━━━ UNHANDLED PROMISE REJECTION ━━━`);
+  const r = reason instanceof Error ? (reason.stack ?? reason.message) : String(reason);
+  console.error(r);
+  console.error(`Promise:`, promise);
+  console.error(`━━━ Server is continuing — fix the root cause ━━━\n`);
+});
 
 async function main(): Promise<void> {
   const db = await connectDB();
@@ -86,11 +115,18 @@ async function main(): Promise<void> {
 
   // Remove orphaned seed teams/agents/workflows from prior schemas.
   // Meta team is always protected by cleanupOrphanedSeedEntities.
+  // Keep this list in sync with the .yml files in packages/engine/workflows/.
   await cleanupOrphanedSeedEntities(
     db,
     OrgSeedService.seedTeamNames,
     OrgSeedService.seedAgentNames,
-    ['coding-workflow'],
+    [
+      'coding-workflow',
+      'feature-plan-and-implement',
+      'bug-investigate-and-fix',
+      'test-human-intervention',
+      'test-chat-loop',
+    ],
   );
   await seedCronJobs(db);
   setStreamDb(db);
@@ -171,6 +207,8 @@ async function main(): Promise<void> {
   app.use('/api/workspaces', workspaceRoutes(db));
   app.use('/api/pull-requests', pullRequestRoutes(db));
   app.use('/api/crons', cronRoutes(db, cronService));
+  app.use('/api/design-docs', designDocRoutes(db));
+  app.use('/api/interventions', interventionRoutes(db));
   app.use('/api/files', fileRoutes());
 
   // Preview reverse proxy — must be after json middleware but catches /api/workspaces/:id/preview/*

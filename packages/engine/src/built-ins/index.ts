@@ -4,6 +4,7 @@ import { runBuild, runTests } from './build.js';
 import { classifyTask } from './classify.js';
 import { promptUser } from './prompt-user.js';
 import { createWorkspace } from './workspace.js';
+import { persistDesignDocs } from './persist-design-docs.js';
 
 const builtIns: Record<string, BuiltInFunction> = {
   'git-create-branch': gitCreateBranch,
@@ -16,6 +17,7 @@ const builtIns: Record<string, BuiltInFunction> = {
   'classify-task': classifyTask,
   'prompt-user': promptUser,
   'create-workspace': createWorkspace,
+  'persist-design-docs': persistDesignDocs,
 };
 
 export function getBuiltIns(): Record<string, BuiltInFunction> {

@@ -14,6 +14,33 @@ export async function ensureIndexes(db: Db): Promise<void> {
     { partialFilterExpression: { sourceRepoId: { $exists: true } } },
   );
 
+  // Design Docs — one per feature-plan run, holds PRD + HLA + TDD
+  // sections with per-section versioning. Queried by chatSessionId when
+  // resuming a session, by workflowRunId when loading the execution view,
+  // and by status when filtering the Design Docs list page.
+  await db.collection('design_docs').createIndex({ chatSessionId: 1 });
+  await db.collection('design_docs').createIndex({ workflowRunId: 1 });
+  await db.collection('design_docs').createIndex({ status: 1, updatedAt: -1 });
+
+  // Workflow Interventions — every human pause in any workflow (HIP).
+  // Queried heavily by workflow_run_id (execution page sidebar), by
+  // started_by_user_id (user's pending interventions list), by status +
+  // deadline (future timeout sweeping).
+  await db.collection('workflow_interventions').createIndex(
+    { workflow_run_id: 1, created_at: 1 },
+  );
+  await db.collection('workflow_interventions').createIndex(
+    { started_by_user_id: 1, status: 1 },
+  );
+  await db.collection('workflow_interventions').createIndex(
+    { status: 1, deadline: 1 },
+  );
+  // Unique lookup by short intervention ID for deep links
+  await db.collection('workflow_interventions').createIndex(
+    { intervention_id: 1 },
+    { unique: true },
+  );
+
   // Executions
   await db.collection('executions').createIndex({ id: 1 }, { unique: true });
   await db.collection('executions').createIndex({ workflowId: 1 });

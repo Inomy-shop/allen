@@ -1,0 +1,594 @@
+name: feature-plan-and-implement
+description: >
+  End-to-end feature workflow: clarify the ask, produce PRD + HLA + TDD with
+  per-doc agent audits, pause at one human gate for plan approval, then run
+  the implementation phase — developer orchestrator spawns specialists in
+  parallel, QA reviews coverage and runs tests, implementation-validator
+  checks the final diff against the PRD, docs are updated, security-aware
+  code review runs, PR opens, and a final summary is posted back to chat.
+
+  Human touches per run (steady state): 3-4 total —
+    1. Initial ask
+    2. Clarification answer (if the ask is ambiguous)
+    3. Plan approval (unless trusted_mode=true)
+    4. PR merge on GitHub (external)
+
+  Escalations may add extra touches when agents can't self-correct.
+
+version: 1
+
+context:
+  requires: [repo]
+  tools: [filesystem, git, terminal]
+  concurrency: 2
+
+input:
+  user_request:
+    type: string
+    required: true
+    description: The user's raw feature request — the source of truth for the validator
+  repo_path:
+    type: string
+    required: true
+    description: Absolute path of a registered repo
+  trusted_mode:
+    type: boolean
+    required: false
+    default: false
+    description: If true, skip the plan approval human gate and auto-advance from TDD audit to implementation
+  skip_regression:
+    type: boolean
+    required: false
+    default: false
+    description: If true, regression tests are listed but not executed; non-regression tests always run
+  chat_session_id:
+    type: string
+    required: false
+    description: Originating chat session ID (for design_doc persistence + intervention routing)
+  started_by_user_id:
+    type: string
+    required: false
+    description: User ID who started the run (for intervention DM routing)
+
+nodes:
+  # ══════════════════════════════════════════════════════════════════════
+  # PHASE 1 — PLANNING
+  # ══════════════════════════════════════════════════════════════════════
+
+  clarify:
+    agent: requirements-analyst
+    prompt: |
+      You are in CLARIFICATION mode. Read the user's raw feature request and
+      decide whether it's clear enough to produce a PRD OR whether you need to
+      ask clarifying questions first.
+
+      USER REQUEST: {{user_request}}
+      REPO PATH: {{repo_path}}
+      You are allowed up to 3 clarification rounds before you must commit.
+
+      If the request is unambiguous (who, what, why all clear), emit:
+        { "clarifying_questions": [], "ready_to_produce_prd": true }
+
+      Otherwise emit 1-3 concrete, answerable clarifying questions:
+        {
+          "clarifying_questions": [
+            "Per-user or per-workspace bookmarks?",
+            "Pinned to top, or separate section?",
+            "Is there a cap on count?"
+          ],
+          "ready_to_produce_prd": false
+        }
+
+      Round 3 is your last chance to ask. After round 3, commit to the best
+      interpretation of the user's ask and the doc-auditor will catch any
+      remaining drift.
+    outputs:
+      clarifying_questions: "Array of clarifying questions. Empty when the ask is clear enough to proceed."
+      ready_to_produce_prd: "Boolean — true if no clarification needed."
+
+  clarify_human:
+    type: human
+    fields:
+      - name: answers
+        label: "Answers to clarifying questions"
+        type: textarea
+        required: true
+    outputs:
+      answers: "Free-text answers to the clarifying questions."
+    prompt: |
+      The agent needs clarification before producing the PRD.
+
+      Original request: {{user_request}}
+
+      Questions to answer:
+      {{clarifying_questions}}
+
+      Please answer each question in order. The agent will incorporate
+      your answers into the PRD.
+
+  produce_prd:
+    agent: requirements-analyst
+    resume_on_retry: true
+    retries: 2
+    prompt: |
+      Produce the Requirements Document (PRD) for this feature.
+
+      USER REQUEST: {{user_request}}
+      {{#if answers}}
+      USER ANSWERS TO CLARIFICATION: {{answers}}
+      {{/if}}
+
+      Walk through your standard requirements decomposition and output a
+      complete PRD with: user stories, acceptance criteria (Given/When/Then),
+      edge cases, out-of-scope items, affected areas, risks, assumptions,
+      non-functional requirements, and any remaining open questions.
+
+      End with a JSON block containing the structured PRD.
+
+      {{#if retry_context}}
+      RETRY FEEDBACK from doc-auditor:
+      {{retry_context}}
+      {{/if}}
+    outputs:
+      prd_markdown: "Full PRD as markdown."
+      prd_json: "Structured PRD with requirements, acceptance_criteria, edge_cases, assumptions, risks, open_questions, out_of_scope, non_functional_requirements."
+
+  audit_prd:
+    agent: doc-auditor
+    prompt: |
+      Audit this PRD against the user's original request for intent fidelity.
+
+      ORIGINAL USER REQUEST: {{user_request}}
+
+      PRD TO AUDIT:
+      {{prd_markdown}}
+
+      Judge: does this PRD answer what the user asked for? Are stories,
+      acceptance criteria, and edge cases covered? Flag drift, not technical
+      correctness — that's the validator's job later.
+
+      Return verdict: approve | revise | escalate with structured issues.
+    outputs:
+      audit_verdict: "One of: approve, revise, escalate"
+      audit_issues: "Array of {severity, description, suggested_fix} — empty when approve"
+      audit_rationale: "One-paragraph rationale for the verdict"
+
+  produce_hla:
+    agent: solution-architect
+    resume_on_retry: true
+    retries: 2
+    prompt: |
+      Produce the High-Level Architecture (HLA) for this feature.
+
+      APPROVED PRD:
+      {{prd_markdown}}
+
+      ORIGINAL USER REQUEST: {{user_request}}
+      REPO PATH: {{repo_path}}
+
+      Follow your 8-section contract: system overview, components, data flow,
+      technology choices with rationale, non-functional requirements, risks
+      and mitigations, tradeoffs considered, out of scope. End with a JSON
+      block.
+
+      {{#if retry_context}}
+      RETRY FEEDBACK from doc-auditor:
+      {{retry_context}}
+      {{/if}}
+    outputs:
+      hla_markdown: "Full HLA as markdown."
+      hla_json: "Structured HLA with components, data_flow_summary, tech_choices, non_functional_requirements, risks, build_vs_buy, confidence."
+
+  audit_hla:
+    agent: doc-auditor
+    prompt: |
+      Audit this HLA against the user's original request AND the approved PRD.
+
+      ORIGINAL USER REQUEST: {{user_request}}
+
+      APPROVED PRD:
+      {{prd_markdown}}
+
+      HLA TO AUDIT:
+      {{hla_markdown}}
+
+      Judge: does every HLA component, tech choice, and NFR trace to the PRD?
+      Are the risks this kind of change usually has identified? Is the HLA
+      consistent with the PRD?
+
+      Return verdict: approve | revise | escalate.
+    outputs:
+      audit_verdict: "approve | revise | escalate"
+      audit_issues: "Structured issues."
+      audit_rationale: "One paragraph."
+
+  produce_tdd:
+    agent: technical-designer
+    resume_on_retry: true
+    retries: 2
+    prompt: |
+      Produce the Technical Design Document (TDD) for this feature.
+
+      APPROVED PRD:
+      {{prd_markdown}}
+
+      APPROVED HLA:
+      {{hla_markdown}}
+
+      ORIGINAL USER REQUEST: {{user_request}}
+      REPO PATH: {{repo_path}}
+
+      Follow your section contract: data models, API contracts, sequence
+      diagrams, error taxonomy, observability plan, UI changes, implementation
+      flags (has_backend_changes / has_frontend_changes). End with a JSON
+      block.
+
+      {{#if retry_context}}
+      RETRY FEEDBACK from doc-auditor:
+      {{retry_context}}
+      {{/if}}
+    outputs:
+      tdd_markdown: "Full TDD as markdown."
+      tdd_json: "Structured TDD with data_models, api_contracts, error_taxonomy, observability, has_backend_changes, has_frontend_changes."
+      has_backend_changes: "Boolean from TDD JSON."
+      has_frontend_changes: "Boolean from TDD JSON."
+
+  audit_tdd:
+    agent: doc-auditor
+    prompt: |
+      Audit this TDD against the approved PRD and HLA.
+
+      ORIGINAL USER REQUEST: {{user_request}}
+
+      APPROVED PRD:
+      {{prd_markdown}}
+
+      APPROVED HLA:
+      {{hla_markdown}}
+
+      TDD TO AUDIT:
+      {{tdd_markdown}}
+
+      Judge: does every API contract and data model trace to the HLA? Does
+      every endpoint satisfy at least one PRD acceptance criterion? Are the
+      models and APIs internally consistent?
+
+      Return verdict: approve | revise | escalate.
+    outputs:
+      audit_verdict: "approve | revise | escalate"
+      audit_issues: "Structured issues."
+      audit_rationale: "One paragraph."
+
+  persist_docs:
+    type: code
+    function: persist-design-docs
+    config:
+      # Creates a design_docs record via DesignDocService with three section
+      # versions, uploads each as a public .md, and returns the URLs.
+      chat_session_id: "{{chat_session_id}}"
+      workflow_run_id: "{{execution_id}}"
+      user_request: "{{user_request}}"
+      prd: "{{prd_markdown}}"
+      hla: "{{hla_markdown}}"
+      tdd: "{{tdd_markdown}}"
+    outputs:
+      design_doc_id: "Mongo ID of the design_docs record."
+      prd_url: "Public .md URL for the PRD."
+      hla_url: "Public .md URL for the HLA."
+      tdd_url: "Public .md URL for the TDD."
+
+  plan_approval_gate:
+    type: human
+    prompt: |
+      ✅ All three design docs are produced and audited. Review and approve
+      to start implementation.
+
+      USER REQUEST: {{user_request}}
+
+      📋 Requirements: {{prd_url}}
+      🏗️ Architecture: {{hla_url}}
+      🔧 Technical Design: {{tdd_url}}
+
+      has_backend_changes: {{has_backend_changes}}
+      has_frontend_changes: {{has_frontend_changes}}
+
+      All three docs passed agent audit (no critical issues).
+
+      Decision:
+        approve         → advance to implementation
+        request_changes → loop back to the producer (pick scope)
+        reject          → abandon the workflow
+    fields:
+      - name: decision
+        label: "Decision"
+        type: select
+        options: [approve, request_changes, reject]
+        required: true
+      - name: scope
+        label: "Scope (only used for request_changes)"
+        type: select
+        options: [requirements, architecture, technical_design, all]
+        required: false
+      - name: feedback
+        label: "Feedback (required for request_changes)"
+        type: textarea
+        required: false
+
+  # ══════════════════════════════════════════════════════════════════════
+  # PHASE 2 — IMPLEMENTATION
+  # ══════════════════════════════════════════════════════════════════════
+
+  plan_implementation:
+    agent: engineering-lead
+    prompt: |
+      You are in MODE A — consume an approved design and produce a file-level
+      implementation plan. DO NOT redesign.
+
+      APPROVED PRD: {{prd_url}}
+      APPROVED HLA: {{hla_url}}
+      APPROVED TDD: {{tdd_url}}
+
+      REPO PATH: {{repo_path}}
+
+      Translate the TDD into a concrete file-level plan. For every file, set
+      the `specialist` hint based on which specialty should own that file.
+
+      End with a JSON block: { mode, changes[], validation_approach,
+      has_backend_changes, has_frontend_changes, risks[] }.
+    outputs:
+      implementation_plan: "The full implementation plan JSON."
+
+  create_branch:
+    type: code
+    function: create-workspace
+    config:
+      repo_path: "{{repo_path}}"
+      branch_prefix: "feature"
+      task_summary: "{{user_request}}"
+    outputs:
+      worktree_path: "Absolute path to the isolated git worktree."
+      branch_name: "New branch name."
+      workspace_id: "Internal FlowForge workspace identifier."
+
+  develop:
+    agent: developer
+    prompt: |
+      You are the Developer Orchestrator. Drive the implementation plan to
+      completion by spawning specialists in parallel via spawn_agent.
+
+      IMPLEMENTATION PLAN:
+      {{implementation_plan}}
+
+      WORKTREE PATH: {{worktree_path}}
+      BRANCH: {{branch_name}}
+
+      Follow your six-rule contract: read plan → group by specialist hint →
+      detect file conflicts → spawn parallel batches (wait for each batch
+      before the next) → serialise when conflicted → collect & validate.
+
+      ALWAYS pass repo_path={{worktree_path}} to every spawn_agent call.
+
+      End with a JSON summary of specialists used, batches, files changed,
+      and any failures.
+    outputs:
+      developer_output: "The orchestrator's summary JSON with specialists_used, batches, files_changed, any_failures."
+      files_changed: "List of all files the specialists touched."
+
+  qa:
+    agent: qa-lead
+    resume_on_retry: true
+    retries: 1
+    prompt: |
+      You are the QA orchestrator. Drive the ENTIRE quality loop in one
+      call: spawn test-writer to write tests, run them, check coverage,
+      fix or delegate back on failure, repeat until green. You never
+      return partial results — you only return when quality is pass,
+      fail (delegate back to developer), or escalate.
+
+      APPROVED PRD URL: {{prd_url}}
+      APPROVED HLA URL: {{hla_url}}
+      APPROVED TDD URL: {{tdd_url}}
+      WORKTREE PATH: {{worktree_path}}
+      FILES CHANGED BY DEVELOPER: {{files_changed}}
+      SKIP REGRESSION: {{skip_regression}}
+
+      Follow your five-rule contract:
+        1. Spawn test-writer with the PRD's acceptance criteria.
+        2. Run build + lint + tests inside {{worktree_path}}.
+        3. Verify coverage against the PRD's acceptance criteria.
+        4. Loop until green (max 3 write-run-verify cycles).
+        5. Emit your structured JSON verdict.
+
+      ALWAYS pass repo_path={{worktree_path}} to every spawn_agent call.
+
+      {{#if retry_context}}
+      RETRY FEEDBACK:
+      {{retry_context}}
+      {{/if}}
+    outputs:
+      qa_verdict: "pass | fail | escalate"
+      test_files: "List of test files produced or touched."
+      covered_acceptance_criteria: "List of ACs with passing tests."
+      uncovered_acceptance_criteria: "List of ACs without tests (empty on pass)."
+      cycles_used: "Number of write-run-verify cycles."
+      failure_target: "developer | test-writer | null"
+      failure_details: "Details when verdict is fail or escalate."
+
+  implementation_validator:
+    agent: implementation-validator
+    resume_on_retry: true
+    retries: 1
+    prompt: |
+      Validate the final implementation against the approved PRD.
+
+      REMEMBER: PRD is the source of truth. TDD deviations are
+      informational, not blocking, as long as the PRD is still satisfied.
+
+      APPROVED PRD: {{prd_url}}
+      APPROVED HLA: {{hla_url}}
+      APPROVED TDD: {{tdd_url}}
+      IMPLEMENTATION PLAN: {{implementation_plan}}
+      WORKTREE PATH: {{worktree_path}}
+
+      Run your blocking-checks list + informational-checks list against the
+      current diff in the worktree. End with your structured JSON verdict.
+
+      {{#if retry_context}}
+      RETRY FEEDBACK from a previous validator loop:
+      {{retry_context}}
+      {{/if}}
+    outputs:
+      prd_satisfied: "Boolean."
+      blocking_violations: "Array of blocking violations — PRD-breaking."
+      informational_deviations: "Array of TDD drifts that still satisfy the PRD."
+      validator_confidence: "Float 0-1."
+
+  update_docs:
+    agent: documentation-writer
+    prompt: |
+      MODE: update_docs
+
+      Update the in-repo technical documentation to reflect the changes in
+      the current diff.
+
+      WORKTREE PATH: {{worktree_path}}
+      FILES CHANGED: {{files_changed}}
+      PRD URL: {{prd_url}}
+      HLA URL: {{hla_url}}
+      TDD URL: {{tdd_url}}
+
+      Follow your 7-rule contract: discover docs, match to changed modules,
+      update to match reality, match existing style, no speculation,
+      graceful no-op if repo has no docs, run the doc linter.
+
+      End with a JSON block per your Mode 1 output contract.
+    outputs:
+      docs_updated: "Boolean."
+      doc_files: "Files updated."
+
+  code_review:
+    agent: code-reviewer
+    resume_on_retry: true
+    retries: 1
+    prompt: |
+      Review the full diff in the worktree, INCLUDING doc changes from the
+      update_docs node.
+
+      WORKTREE PATH: {{worktree_path}}
+      BRANCH: {{branch_name}}
+      FILES CHANGED: {{files_changed}}
+
+      Run your full 15-point rubric: correctness, conventions, performance,
+      test quality, readability, type safety, security checklist (8 points),
+      and doc-code drift.
+
+      End with a JSON block: review_verdict, review_feedback,
+      security_findings, doc_drift_findings.
+
+      {{#if retry_context}}
+      RETRY FEEDBACK:
+      {{retry_context}}
+      {{/if}}
+    outputs:
+      review_verdict: "APPROVED or REQUEST_CHANGES"
+      review_feedback: "Markdown review notes."
+      security_findings: "Array of security issues (may be empty)."
+
+  open_pr:
+    agent: devops-engineer
+    prompt: |
+      Create a pull request for this feature run.
+
+      WORKFLOW TYPE: feature
+      WORKTREE PATH: {{worktree_path}}
+      BRANCH NAME: {{branch_name}}
+      USER REQUEST: {{user_request}}
+
+      PRD URL: {{prd_url}}
+      HLA URL: {{hla_url}}
+      TDD URL: {{tdd_url}}
+
+      VALIDATOR VERDICT: prd_satisfied={{prd_satisfied}}
+      INFORMATIONAL DEVIATIONS: {{informational_deviations}}
+      CODE REVIEW SUMMARY: {{review_feedback}}
+      SECURITY FINDINGS: {{security_findings}}
+      FILES CHANGED: {{files_changed}}
+
+      Follow your PR-creation contract: stage, commit, push, gh pr
+      create, handle errors at each step (already-exists, non-fast-
+      forward, auth, empty branch), and return a structured JSON
+      result with pr_url and status. If you can recover from a
+      transient error, do so. If you hit a hard failure, emit the
+      failed-status JSON with actionable error details so the
+      summary node can surface them.
+    outputs:
+      pr_url: "The created (or reused) PR URL, or null on failure."
+      commit_hash: "Git SHA of the commit pushed."
+      status: "created | reused_existing | failed"
+      error: "Error message when status is failed."
+
+  summary:
+    agent: documentation-writer
+    prompt: |
+      MODE: summary
+
+      Produce the final implementation summary for this feature workflow
+      run. Post it back to the chat session AND upload as a public .md.
+
+      USER REQUEST: {{user_request}}
+      PR URL: {{pr_url}}
+      BRANCH: {{branch_name}}
+      WORKTREE PATH: {{worktree_path}}
+      PRD URL: {{prd_url}}
+      HLA URL: {{hla_url}}
+      TDD URL: {{tdd_url}}
+      IMPLEMENTATION PLAN: {{implementation_plan}}
+      VALIDATOR VERDICT: prd_satisfied={{prd_satisfied}}, informational_deviations={{informational_deviations}}
+      QA VERDICT: {{qa_verdict}}
+      COVERED ACCEPTANCE CRITERIA: {{covered_acceptance_criteria}}
+      FILES CHANGED: {{files_changed}}
+      CODE REVIEW: {{review_feedback}}
+
+      Follow your Mode 2 contract — include the traceability spine
+      (acceptance criteria → tests → files), file-by-file rationale, minor
+      validator deviations, skipped regression tests, follow-ups.
+
+      End with a JSON block per your Mode 2 output contract.
+    outputs:
+      summary_markdown: "Full summary as markdown."
+      summary_url: "Public .md URL."
+      workflow_verdict: "success or partial_success_with_manual_review"
+
+edges:
+  - { from: START, to: clarify }
+  - { from: clarify, to: produce_prd, condition: "ready_to_produce_prd == true" }
+  - { from: clarify, to: clarify_human, condition: "ready_to_produce_prd != true" }
+  - { from: clarify_human, to: produce_prd }
+  - { from: produce_prd, to: audit_prd }
+  - { from: audit_prd, to: produce_hla, condition: "audit_verdict == 'approve'" }
+  - { from: audit_prd, to: produce_prd, condition: "audit_verdict == 'revise'", max_retries: 2, retry_context: "Audit feedback:\n{{audit_rationale}}\n{{audit_issues}}" }
+  - { from: audit_prd, to: END, condition: "audit_verdict == 'escalate'" }
+  - { from: produce_hla, to: audit_hla }
+  - { from: audit_hla, to: produce_tdd, condition: "audit_verdict == 'approve'" }
+  - { from: audit_hla, to: produce_hla, condition: "audit_verdict == 'revise'", max_retries: 2, retry_context: "Audit feedback:\n{{audit_rationale}}\n{{audit_issues}}" }
+  - { from: audit_hla, to: END, condition: "audit_verdict == 'escalate'" }
+  - { from: produce_tdd, to: audit_tdd }
+  - { from: audit_tdd, to: persist_docs, condition: "audit_verdict == 'approve'" }
+  - { from: audit_tdd, to: produce_tdd, condition: "audit_verdict == 'revise'", max_retries: 2, retry_context: "Audit feedback:\n{{audit_rationale}}\n{{audit_issues}}" }
+  - { from: audit_tdd, to: END, condition: "audit_verdict == 'escalate'" }
+  - { from: persist_docs, to: plan_implementation, condition: "trusted_mode == true" }
+  - { from: persist_docs, to: plan_approval_gate, condition: "trusted_mode != true" }
+  - { from: plan_approval_gate, to: plan_implementation }
+  - { from: plan_implementation, to: create_branch }
+  - { from: create_branch, to: develop }
+  - { from: develop, to: qa }
+  - { from: qa, to: implementation_validator, condition: "qa_verdict == 'pass'" }
+  - { from: qa, to: develop, condition: "qa_verdict == 'fail'", max_retries: 2, retry_context: "QA failed — build/lint/tests broken:\n{{failure_details}}" }
+  - { from: qa, to: END, condition: "qa_verdict == 'escalate'" }
+  - { from: implementation_validator, to: update_docs, condition: "prd_satisfied == true" }
+  - { from: implementation_validator, to: plan_implementation, condition: "prd_satisfied != true", max_retries: 2, retry_context: "Validator found blocking violations:\n{{blocking_violations}}" }
+  - { from: update_docs, to: code_review }
+  - { from: code_review, to: open_pr, condition: "review_verdict == 'APPROVED'" }
+  - { from: code_review, to: develop, condition: "review_verdict == 'REQUEST_CHANGES'", max_retries: 2, retry_context: "Review feedback:\n{{review_feedback}}" }
+  - { from: open_pr, to: summary }
+  - { from: summary, to: END }

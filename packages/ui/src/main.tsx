@@ -21,6 +21,7 @@ import WorkspaceDetailPage from './pages/WorkspaceDetailPage';
 import PullRequestListPage from './pages/PullRequestListPage';
 import PullRequestDetailPage from './pages/PullRequestDetailPage';
 import CronManagerPage from './pages/CronManagerPage';
+import InterventionsPage from './pages/InterventionsPage';
 import LoginPage from './pages/LoginPage';
 import ResetPasswordPage from './pages/ResetPasswordPage';
 import ForbiddenPage from './pages/ForbiddenPage';
@@ -56,6 +57,8 @@ const router = createBrowserRouter([
           { path: 'pull-requests/:id', element: <PullRequestDetailPage /> },
           { path: 'analytics', element: <AnalyticsPage /> },
           { path: 'crons', element: <CronManagerPage /> },
+          { path: 'interventions', element: <InterventionsPage /> },
+          { path: 'interventions/:id', element: <InterventionsPage /> },
           { path: 'settings', element: <SettingsPage /> },
           { path: 'settings/:tab', element: <SettingsPage /> },
         ],

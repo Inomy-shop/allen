@@ -6,7 +6,7 @@ import {
   LayoutDashboard, GitBranch, Play, Users, Activity, Settings,
   FolderGit2, Brain, MessageSquare, BarChart3, Plus, Trash2,
   Server, Palette, Key, User, ChevronRight, ChevronUp, ChevronDown,
-  GitPullRequest, Clock,
+  GitPullRequest, Clock, HelpCircle,
 } from 'lucide-react';
 import { useSettingsStore } from './stores/settingsStore';
 import { useAuthStore } from './stores/authStore';
@@ -41,6 +41,7 @@ const NAV_GROUPS = [
   ]},
   { label: 'Monitor', items: [
     { to: '/executions', icon: Play, label: 'Executions' },
+    { to: '/interventions', icon: HelpCircle, label: 'Interventions' },
     { to: '/analytics', icon: BarChart3, label: 'Analytics' },
     { to: '/learnings', icon: Brain, label: 'Learnings' },
     { to: '/crons', icon: Clock, label: 'Scheduled Jobs' },

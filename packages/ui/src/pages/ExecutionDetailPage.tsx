@@ -4,10 +4,11 @@ import {
   ArrowLeft, XCircle, Pause, Play, RefreshCw, Wifi, WifiOff,
   Download, RotateCcw, Brain, Bot, Clock, DollarSign, Terminal,
   CheckCircle, AlertCircle, Wrench, ChevronDown, ChevronRight,
+  ArrowRight,
 } from 'lucide-react';
 import { useExecution, type TimelineEvent } from '../hooks/useExecution';
 import { useResizable } from '../hooks/useResizable';
-import { executions as api, authHeaders } from '../services/api';
+import { executions as api, authHeaders, interventions as interventionsApi } from '../services/api';
 import StatusBadge from '../components/common/StatusBadge';
 import CostDisplay from '../components/common/CostDisplay';
 import { renderMarkdown } from '../components/chat/ChatMessageList';
@@ -285,8 +286,25 @@ export default function ExecutionDetailPage() {
   } = useExecution(id);
 
   const [selectedNode, setSelectedNode] = useState<string | null>(null);
+  // Interventions for this workflow run — drives the pending-intervention
+  // banner and the interventions sidebar. The dedicated InterventionsPage
+  // is where users actually take action; this page just shows awareness.
+  const [runInterventions, setRunInterventions] = useState<any[]>([]);
 
   const latestInputEvent = [...timeline].reverse().find((e: TimelineEvent) => e.event === 'input_required');
+
+  // Load interventions for this workflow run when the execution loads,
+  // and refresh on every status change so the banner updates in real time.
+  useEffect(() => {
+    if (!id) return;
+    let cancelled = false;
+    interventionsApi.listForWorkflowRun(id)
+      .then(data => { if (!cancelled) setRunInterventions(data ?? []); })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, [id, execution?.status]);
+
+  const pendingIntervention = runInterventions.find((i: any) => i.status === 'pending');
 
   // Auto-select node based on execution state.
   // IMPORTANT: the right-side detail pane should NOT auto-follow the running
@@ -529,6 +547,67 @@ export default function ExecutionDetailPage() {
         </div>
       </header>
 
+      {/* Intervention banner — shown when the run is paused awaiting a
+          human intervention. Action happens on the dedicated
+          /interventions/:id page, not inline here. */}
+      {pendingIntervention && (
+        <div
+          className={`flex items-center gap-4 px-6 py-3 border-b border-border/50 ${
+            pendingIntervention.severity === 'escalation'
+              ? 'bg-accent-red/10 border-accent-red/30'
+              : pendingIntervention.severity === 'approval'
+                ? 'bg-accent-green/10 border-accent-green/30'
+                : 'bg-accent-yellow/10 border-accent-yellow/30'
+          }`}
+        >
+          <span className="text-xl shrink-0">
+            {pendingIntervention.severity === 'escalation' ? '🔴'
+              : pendingIntervention.severity === 'approval' ? '🟢' : '🟡'}
+          </span>
+          <div className="flex-1 min-w-0">
+            <div className="text-xs font-heading font-semibold text-theme-primary">
+              PAUSED — {pendingIntervention.title}
+            </div>
+            <div className="text-[10px] font-mono text-theme-muted mt-0.5 truncate">
+              {pendingIntervention.context_summary}
+              {pendingIntervention.round_info &&
+                <> · round {pendingIntervention.round_info.current}/{pendingIntervention.round_info.max}</>}
+            </div>
+          </div>
+          <Link
+            to={`/interventions/${pendingIntervention.intervention_id}`}
+            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-[11px] font-mono bg-theme-primary text-surface-100 hover:opacity-80 transition-opacity shrink-0"
+          >
+            Respond <ArrowRight className="w-3 h-3" />
+          </Link>
+        </div>
+      )}
+
+      {/* Interventions sidebar — quick chronological list of every
+          intervention fired on this run so the operator can see the
+          decision history at a glance. */}
+      {runInterventions.length > 0 && (
+        <div className="px-6 py-2 border-b border-border/30 bg-surface-50 flex items-center gap-3 overflow-x-auto">
+          <span className="text-[10px] font-label uppercase tracking-widest text-theme-subtle shrink-0">
+            Interventions ({runInterventions.length})
+          </span>
+          {runInterventions.map((i: any) => (
+            <Link
+              key={i.intervention_id}
+              to={`/interventions/${i.intervention_id}`}
+              className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[9px] font-mono bg-surface-200/40 text-theme-muted hover:bg-surface-200/60 transition-colors shrink-0"
+              title={`${i.title} — ${i.status}`}
+            >
+              <span>{i.severity === 'escalation' ? '🔴' : i.severity === 'approval' ? '🟢' : '🟡'}</span>
+              <span className="truncate max-w-[200px]">{i.title}</span>
+              <span className="text-theme-subtle">
+                {i.status === 'pending' ? '·' : `· ${i.response?.decision ?? i.status}`}
+              </span>
+            </Link>
+          ))}
+        </div>
+      )}
+
       {/* Main content — graph + detail top, timeline bottom */}
       <div className="flex-1 flex flex-col overflow-hidden">
         {/* Top: Graph + Node detail side by side */}
@@ -553,16 +632,21 @@ export default function ExecutionDetailPage() {
               className="absolute top-0 left-0 bottom-0 w-2 cursor-col-resize z-10"
               onMouseDown={rightResizeStart}
             />
+            {/*
+              The inline human-input form is intentionally DISABLED here.
+              Human interventions now surface on the dedicated Interventions
+              page (/interventions/:id) — we pass `waitingInput={null}` so
+              NodeDetail never renders its inline form. The pending-intervention
+              banner at the top of this page is the awareness surface; the
+              Interventions page is the action surface. See §9.7 of
+              docs/plans/feature-and-bug-workflows.md.
+            */}
             <NodeDetail
               nodeName={selectedNode ?? ''}
               nodeState={selectedState}
               trace={selectedTrace}
               allTraces={selectedTraces}
-              waitingInput={
-                latestInputEvent && execution.status === 'waiting_for_input'
-                  ? { node: latestInputEvent.data.node, prompt: latestInputEvent.data.prompt, fields: latestInputEvent.data.fields ?? [] }
-                  : null
-              }
+              waitingInput={null}
               onSubmitInput={handleSubmitInput}
             />
           </div>

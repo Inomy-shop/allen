@@ -5,14 +5,75 @@
 
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { existsSync, mkdirSync } from 'node:fs';
+import { existsSync, mkdirSync, accessSync, constants as fsConstants } from 'node:fs';
 import { join, dirname } from 'node:path';
+import { homedir } from 'node:os';
 import { spawn, type ChildProcess } from 'node:child_process';
 import type { Db, ObjectId } from 'mongodb';
 import { watchWorkspace, unwatchWorkspace } from './workspace-watcher.js';
 
 const exec = promisify(execFile);
-const WORKSPACE_BASE = process.env.WORKSPACE_BASE_DIR ?? '/tmp/flowforge-workspaces';
+
+/**
+ * Resolve the base directory where flowforge git worktrees live. Priority:
+ *
+ *   1. WORKSPACE_BASE_DIR env var — explicit opt-in, wins over everything.
+ *   2. ~/.flowforge/workspaces — persistent, user-owned, survives reboots,
+ *      not subject to /tmp sweeping. This is the preferred location in
+ *      production.
+ *   3. /tmp/flowforge-workspaces — legacy fallback. Only used if home dir
+ *      is somehow unwritable (read-only HOME, no HOME env, etc.).
+ *
+ * We PROACTIVELY create the directory here with the current process's
+ * ownership. This avoids the "someone else created /tmp/flowforge-workspaces
+ * as root on a prior deploy and now the service user can't write to it"
+ * failure class we hit in production.
+ */
+function resolveWorkspaceBaseDir(): string {
+  const envOverride = process.env.WORKSPACE_BASE_DIR;
+  if (envOverride) {
+    ensureDir(envOverride);
+    return envOverride;
+  }
+
+  const home = homedir();
+  if (home && home !== '/') {
+    const homeDir = join(home, '.flowforge', 'workspaces');
+    try {
+      ensureDir(homeDir);
+      // Sanity: can we actually write here?
+      accessSync(homeDir, fsConstants.W_OK);
+      return homeDir;
+    } catch (err) {
+      console.warn(
+        `[workspace] home-based dir ${homeDir} not writable (${(err as Error).message}); falling back to /tmp`,
+      );
+    }
+  }
+
+  const tmpDir = '/tmp/flowforge-workspaces';
+  ensureDir(tmpDir);
+  // Sanity: can we actually write here? If not, fail LOUD at startup
+  // instead of waiting for a workflow run to cryptically fail later.
+  try {
+    accessSync(tmpDir, fsConstants.W_OK);
+  } catch (err) {
+    throw new Error(
+      `[workspace] Cannot write to workspace base dir ${tmpDir}: ${(err as Error).message}. ` +
+      `Either fix permissions (sudo chown -R <service-user> ${tmpDir}) or set WORKSPACE_BASE_DIR ` +
+      `to a user-writable path in your environment.`,
+    );
+  }
+  return tmpDir;
+}
+
+function ensureDir(path: string): void {
+  if (!existsSync(path)) {
+    mkdirSync(path, { recursive: true, mode: 0o755 });
+  }
+}
+
+const WORKSPACE_BASE = resolveWorkspaceBaseDir();
 const PORT_RANGE_START = 15000;
 const PORT_RANGE_PER_WORKSPACE = 10;
 const LOG_RING_SIZE = 2000; // max lines per service

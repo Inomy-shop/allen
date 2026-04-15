@@ -6,6 +6,8 @@
 import { createServer, type IncomingMessage } from 'http';
 import { WebSocketServer, WebSocket } from 'ws';
 import { createRequire } from 'module';
+import { statSync, constants as fsConstants, accessSync, chmodSync, existsSync } from 'node:fs';
+import { join, dirname } from 'node:path';
 
 // node-pty is a native C++ addon — must use require() not import()
 let pty: typeof import('node-pty') | null = null;
@@ -13,8 +15,48 @@ try {
   const req = createRequire(import.meta.url);
   pty = req('node-pty');
   console.log('[terminal] node-pty loaded successfully');
+  // Self-heal: ensure the prebuilt `spawn-helper` binary for this
+  // platform+arch has the execute bit set. Some installers (certain
+  // archive tools, certain CI caches) strip the +x bit when
+  // extracting node-pty's prebuilds, and posix_spawnp then fails
+  // with a cryptic "posix_spawnp failed." error. This check runs
+  // once at module load and is a no-op if the bit is already set.
+  ensureSpawnHelperExecutable();
 } catch (err: any) {
   console.warn('[terminal] node-pty not available:', err.message);
+}
+
+/**
+ * Walks node-pty's prebuilds directory looking for the spawn-helper
+ * binary matching the current platform+arch, and forces the execute
+ * bit on if missing. Logs a heads-up so operators know what was fixed.
+ *
+ * Safe to run unconditionally — if the binary is already executable
+ * the chmod is a no-op. If the file doesn't exist or we can't touch
+ * it, we just log and move on; the spawn itself will produce a
+ * cleaner error downstream.
+ */
+function ensureSpawnHelperExecutable(): void {
+  if (process.platform === 'win32') return; // Windows has no spawn-helper
+  try {
+    const req = createRequire(import.meta.url);
+    const ptyPkgPath = req.resolve('node-pty/package.json');
+    const ptyRoot = dirname(ptyPkgPath);
+    const triplet = `${process.platform}-${process.arch}`;
+    const helperPath = join(ptyRoot, 'prebuilds', triplet, 'spawn-helper');
+    if (!existsSync(helperPath)) {
+      console.warn(`[terminal] spawn-helper not found at ${helperPath} — node-pty may not support ${triplet}`);
+      return;
+    }
+    // Check current mode — fix only if the user or group execute bit is missing
+    const st = statSync(helperPath);
+    const mode = st.mode & 0o777;
+    if ((mode & 0o111) === 0o111) return; // already executable for u/g/o — nothing to do
+    chmodSync(helperPath, mode | 0o755);
+    console.log(`[terminal] Fixed execute permissions on ${helperPath} (was ${mode.toString(8)}, now 755)`);
+  } catch (err) {
+    console.warn('[terminal] Could not self-heal spawn-helper permissions:', (err as Error).message);
+  }
 }
 
 interface TerminalSession {
@@ -25,6 +67,45 @@ interface TerminalSession {
 }
 
 const sessions = new Map<string, TerminalSession>();
+
+/**
+ * Resolve a shell binary that actually exists on this machine. Walks
+ * a fallback chain so that a missing $SHELL doesn't break the terminal.
+ *
+ * Priority:
+ *   1. FLOWFORGE_TERMINAL_SHELL env override — explicit opt-in for ops.
+ *   2. $SHELL from the environment — if it points at an existing, executable file.
+ *   3. /bin/bash — nearly universal on Linux and macOS.
+ *   4. /bin/sh — POSIX last-resort.
+ *   5. /usr/bin/zsh — some distros ship zsh here.
+ *   6. Windows: powershell.exe, cmd.exe.
+ *
+ * Returns null if none of these work — caller must handle that by
+ * sending an error to the WebSocket instead of calling pty.spawn.
+ */
+function resolveShell(): string | null {
+  if (process.platform === 'win32') {
+    return process.env.COMSPEC ?? 'cmd.exe';
+  }
+
+  const candidates: string[] = [];
+  if (process.env.FLOWFORGE_TERMINAL_SHELL) candidates.push(process.env.FLOWFORGE_TERMINAL_SHELL);
+  if (process.env.SHELL) candidates.push(process.env.SHELL);
+  candidates.push('/bin/bash', '/bin/sh', '/usr/bin/zsh', '/usr/local/bin/bash');
+
+  for (const candidate of candidates) {
+    try {
+      const st = statSync(candidate);
+      if (!st.isFile()) continue;
+      accessSync(candidate, fsConstants.X_OK);
+      return candidate;
+    } catch {
+      // Missing or not executable — try the next one.
+    }
+  }
+
+  return null;
+}
 
 // Read lazily — dotenv hasn't loaded yet at import time
 function getWsPort(): number {
@@ -98,7 +179,43 @@ async function handleConnection(ws: WebSocket, workspaceId: string, terminalId: 
       return;
     }
 
-    const shell = process.platform === 'win32' ? 'powershell.exe' : (process.env.SHELL ?? 'zsh');
+    // Guard: cwd must actually exist as a directory. node-pty's
+    // posix_spawnp throws a hard, uncatchable error if the cwd is
+    // missing — which has historically crashed the entire server
+    // process. Check explicitly before the spawn.
+    try {
+      const st = statSync(cwd);
+      if (!st.isDirectory()) {
+        ws.send(JSON.stringify({ type: 'error', data: `Workspace path is not a directory: ${cwd}` }));
+        ws.close();
+        return;
+      }
+    } catch (err) {
+      ws.send(JSON.stringify({
+        type: 'error',
+        data: `Workspace path not accessible: ${cwd} (${(err as Error).message})`,
+      }));
+      ws.close();
+      return;
+    }
+
+    // Resolve a working shell. On Linux, $SHELL may point at a binary
+    // that doesn't exist on the target machine (e.g., /bin/zsh inherited
+    // from a dev laptop's systemd env, when the server only has bash).
+    // Walk a fallback chain and pick the first one that actually exists
+    // and is executable.
+    const shell = resolveShell();
+    if (!shell) {
+      const tried = process.platform === 'win32'
+        ? 'powershell.exe, cmd.exe'
+        : '$SHELL, /bin/bash, /bin/sh';
+      ws.send(JSON.stringify({
+        type: 'error',
+        data: `No executable shell found on this server. Tried: ${tried}. Install bash or set SHELL to an existing binary in the flowforge systemd environment.`,
+      }));
+      ws.close();
+      return;
+    }
 
     // Clean env for workspace terminals — remove host server's PORT and other
     // conflicting vars so workspace services can use their own ports
@@ -106,18 +223,64 @@ async function handleConnection(ws: WebSocket, workspaceId: string, terminalId: 
     delete cleanEnv.PORT;
     delete cleanEnv.TERMINAL_WS_PORT;
     delete cleanEnv.FILE_WATCH_WS_PORT;
+    // Also overwrite SHELL in the child env so interactive programs
+    // inside the terminal pick up the shell we actually spawned
+    // (important when the user's $SHELL points at a missing binary).
+    cleanEnv.SHELL = shell;
 
-    const term = pty!.spawn(shell, [], {
-      name: 'xterm-256color',
-      cols: 120,
-      rows: 30,
-      cwd,
-      env: {
-        ...cleanEnv,
-        TERM: 'xterm-256color',
-        COLORTERM: 'truecolor',
-      } as Record<string, string>,
-    });
+    // Wrap the pty spawn in a try/catch. node-pty's posix_spawnp can
+    // fail for reasons we can't predict (kernel process table full,
+    // shell missing, cwd deleted between the check above and the
+    // spawn, SELinux/AppArmor denies, etc.), and if we don't catch
+    // the error it propagates up through the async boundary and
+    // crashes the entire Node process — killing every chat session,
+    // every workflow run, and every MCP health check. Catching it
+    // here keeps the blast radius to ONE broken terminal connection.
+    let term;
+    try {
+      term = pty!.spawn(shell, [], {
+        name: 'xterm-256color',
+        cols: 120,
+        rows: 30,
+        cwd,
+        env: {
+          ...cleanEnv,
+          TERM: 'xterm-256color',
+          COLORTERM: 'truecolor',
+        } as Record<string, string>,
+      });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      console.error(`[terminal] Failed to spawn pty for workspace ${workspaceId} in ${cwd} with shell ${shell}:`, msg);
+
+      // Build a user-facing hint based on the error pattern. "posix_spawnp
+      // failed." almost always means node-pty's spawn-helper binary is
+      // missing the execute bit or the prebuilt native module is broken
+      // for this Node version. The startup self-heal should have fixed
+      // this already, but if it didn't (read-only filesystem, wrong
+      // install path, etc.), point the user at the manual fix.
+      let hint = '';
+      if (msg.includes('posix_spawnp')) {
+        hint = ' This usually means node-pty\'s native prebuilt module is broken for your Node runtime. '
+          + 'Try: (1) `chmod +x node_modules/node-pty/prebuilds/darwin-arm64/spawn-helper` '
+          + '(substitute darwin-arm64 for your platform+arch), '
+          + 'or (2) `cd node_modules/node-pty && npm run install` to rebuild, '
+          + 'or (3) delete node_modules and reinstall.';
+      } else if (msg.toLowerCase().includes('enoent')) {
+        hint = ` The shell binary or cwd was not found. Verified cwd: ${cwd}. Verified shell: ${shell}.`;
+      } else if (msg.toLowerCase().includes('eacces') || msg.toLowerCase().includes('permission')) {
+        hint = ` Permission denied. Check that the shell (${shell}) and the cwd (${cwd}) are both accessible by the flowforge process user.`;
+      }
+
+      try {
+        ws.send(JSON.stringify({
+          type: 'error',
+          data: `Failed to start terminal: ${msg}${hint}`,
+        }));
+        ws.close();
+      } catch {}
+      return;
+    }
 
     session = { id: terminalId, workspaceId, pty: term, ws: new Set() };
     sessions.set(key, session);
