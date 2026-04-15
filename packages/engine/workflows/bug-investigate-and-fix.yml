@@ -24,23 +24,33 @@ input:
   bug_report:
     type: string
     required: true
-    description: The user's raw bug report
+    widget: textarea
+    label: Bug report
+    description: Describe the bug — symptoms, repro steps, error messages, stack traces if you have them. The investigator uses this to reproduce the issue and trace to the root cause.
+    placeholder: "e.g. Clicking the Delete button on an empty workflow crashes the UI with 'Cannot read property id of undefined'. Reproduced on Chrome 120 and Firefox 125. Happens on workflows with no nodes."
   repo_path:
     type: string
     required: true
-    description: Absolute path of a registered repo
+    widget: repo_picker
+    label: Target repo
+    description: The registered repo where the bug lives.
   related_pr:
     type: string
     required: false
-    description: Optional related PR URL (for context)
+    widget: text
+    label: Related PR (optional)
+    description: URL of a PR you suspect introduced the bug. Handed to the investigator as a context hint — it doesn't have to use it.
+    placeholder: "https://github.com/org/repo/pull/123"
   chat_session_id:
     type: string
     required: false
-    description: Originating chat session ID (for intervention routing)
+    widget: text
+    description: Originating chat session ID (auto-populated from chat — leave blank when running from this form).
   started_by_user_id:
     type: string
     required: false
-    description: User ID who started the run
+    widget: text
+    description: User ID who started the run (for Slack DM routing of interventions).
 
 nodes:
   investigate:

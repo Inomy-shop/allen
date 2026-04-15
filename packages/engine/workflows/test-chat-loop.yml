@@ -33,7 +33,9 @@ input:
     type: string
     required: false
     default: "Hello! What can I help you with today?"
-    description: Optional greeting shown on the first question card.
+    widget: text
+    label: Greeting
+    description: Optional greeting shown on the first question card. Leave at default for a normal test run.
 
 nodes:
   ask_question:

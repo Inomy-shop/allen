@@ -26,29 +26,40 @@ input:
   user_request:
     type: string
     required: true
-    description: The user's raw feature request — the source of truth for the validator
+    widget: textarea
+    label: Feature request
+    description: Describe the feature in plain English — what the user wants, why, and any constraints. This is the source of truth the doc-auditor validates every design decision against.
+    placeholder: "e.g. Users should be able to bookmark their favorite workflows so they appear pinned at the top of the workflow list. Per-user, no cap."
   repo_path:
     type: string
     required: true
-    description: Absolute path of a registered repo
+    widget: repo_picker
+    label: Target repo
+    description: The registered repo where the feature will be implemented.
   trusted_mode:
     type: boolean
     required: false
     default: false
-    description: If true, skip the plan approval human gate and auto-advance from TDD audit to implementation
+    widget: checkbox
+    label: Trusted mode (skip plan approval gate)
+    description: If enabled, skips the human plan-approval gate and auto-advances from TDD audit straight to implementation. Only enable for low-risk / repetitive changes where you trust the agents without reviewing the PRD/HLA/TDD.
   skip_regression:
     type: boolean
     required: false
     default: false
-    description: If true, regression tests are listed but not executed; non-regression tests always run
+    widget: checkbox
+    label: Skip regression tests
+    description: If enabled, regression tests are listed but not executed by QA. Non-regression tests always run. Use when regression is slow and you want to save ~5-10 minutes per run.
   chat_session_id:
     type: string
     required: false
-    description: Originating chat session ID (for design_doc persistence + intervention routing)
+    widget: text
+    description: Originating chat session ID (auto-populated when kicked off from chat — leave blank when running from this form).
   started_by_user_id:
     type: string
     required: false
-    description: User ID who started the run (for intervention DM routing)
+    widget: text
+    description: User ID who started the run (auto-populated from chat — used for Slack DM routing of interventions).
 
 nodes:
   # ══════════════════════════════════════════════════════════════════════
@@ -264,9 +275,12 @@ nodes:
     function: persist-design-docs
     config:
       # Creates a design_docs record via DesignDocService with three section
-      # versions, uploads each as a public .md, and returns the URLs.
+      # versions, uploads each as a public .md, and returns the URLs. The
+      # built-in resolves workflow_run_id from ctx.executionId automatically
+      # (state doesn't carry execution_id, so {{execution_id}} wouldn't work
+      # here). The built-in is implemented in
+      # packages/engine/src/built-ins/persist-design-docs.ts.
       chat_session_id: "{{chat_session_id}}"
-      workflow_run_id: "{{execution_id}}"
       user_request: "{{user_request}}"
       prd: "{{prd_markdown}}"
       hla: "{{hla_markdown}}"

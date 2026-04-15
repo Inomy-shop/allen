@@ -122,10 +122,65 @@ export interface WorkflowContext {
   concurrency?: number;
 }
 
+/**
+ * Workflow input field definition — describes one input parameter that
+ * the workflow takes at run time. Drives the Run Workflow form in the UI,
+ * the execution service's input validation, and the intervention system's
+ * `user_request` extraction (see execution.service.ts).
+ *
+ * The `widget` field is a UI hint. If omitted, the UI picks a default
+ * widget based on `type` + the field name.
+ */
 export interface InputFieldDef {
-  type: string;
+  /**
+   * Data type. The engine only really distinguishes `boolean` vs
+   * everything-else — string / number / object are all stored as-is.
+   */
+  type: 'string' | 'boolean' | 'number' | 'object' | 'array' | string;
   required?: boolean;
   default?: unknown;
+  /**
+   * Human-readable description. Shown as the field's placeholder in the
+   * Run Workflow form and surfaced in the workflow graph's START node
+   * properties panel.
+   */
+  description?: string;
+  /**
+   * Allowed values. When present, the UI renders a `<select>` dropdown
+   * instead of a free-form input, regardless of `type`. Useful for
+   * enums (e.g., `severity: [low, medium, high]`).
+   */
+  enum?: string[];
+  /**
+   * Explicit UI widget hint. Overrides the default widget picked from
+   * `type`. One of:
+   *   - `text`         — single-line text input
+   *   - `textarea`     — multi-line text area (for long prose like user_request / bug_report)
+   *   - `checkbox`     — boolean toggle (auto-picked for type: boolean)
+   *   - `select`       — dropdown (auto-picked when `enum` is present)
+   *   - `repo_picker`  — repo selector populated from registered repos
+   *   - `number`       — numeric input (auto-picked for type: number)
+   *
+   * If omitted, the UI falls back to type-based defaults. If a hint is
+   * present but doesn't match the value type, the UI uses the hint anyway
+   * (the user knows what they want).
+   */
+  widget?: 'text' | 'textarea' | 'checkbox' | 'select' | 'repo_picker' | 'number';
+  /**
+   * Placeholder text for the form input. Falls back to `description`
+   * when not set.
+   */
+  placeholder?: string;
+  /**
+   * Label for the form input. Falls back to the field's name (with
+   * underscores replaced by spaces) when not set.
+   */
+  label?: string;
+  /**
+   * For number inputs. Inclusive bounds.
+   */
+  min?: number;
+  max?: number;
 }
 
 export interface WorkflowDef {

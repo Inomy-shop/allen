@@ -33,7 +33,9 @@ input:
     type: string
     required: false
     default: "Testing HIP end-to-end"
-    description: Any string — just gets echoed back to the user in the question card
+    widget: text
+    label: Test message
+    description: Any string — gets echoed back on the first question card so you can confirm the input flowed through.
 
 nodes:
   ask_question:

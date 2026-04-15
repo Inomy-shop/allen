@@ -64,7 +64,11 @@ export const persistDesignDocs: BuiltInFunction = async (config, _state, ctx) =>
   const hla = String(config.hla ?? '');
   const tdd = String(config.tdd ?? '');
   const chatSessionId = config.chat_session_id as string | undefined;
-  const workflowRunId = config.workflow_run_id as string | undefined;
+  // Pull the execution ID from the built-in context — it's not in
+  // workflow state, so a `{{execution_id}}` template in the YAML
+  // wouldn't resolve. The engine passes ctx.executionId into every
+  // built-in invocation, so we use that directly.
+  const workflowRunId = (config.workflow_run_id as string | undefined) ?? ctx.executionId;
 
   if (!prd || !hla || !tdd) {
     throw new Error('persist-design-docs: prd, hla, and tdd are all required');
