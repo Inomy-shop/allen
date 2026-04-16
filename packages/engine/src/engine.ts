@@ -424,6 +424,7 @@ export class FlowForgeEngine {
       exec.currentNodes = currentNodes;
       await this.stateManager.updateExecution(exec.id, {
         currentNodes,
+        completedNodes: exec.completedNodes,
         state: exec.state,
         status: 'running',
       });
@@ -471,7 +472,11 @@ export class FlowForgeEngine {
               : [{ name: 'clarification', type: 'text', label: 'Your response', required: true, placeholder: 'Type your answer here...' }];
 
             exec.status = 'waiting_for_input';
-            await this.stateManager.updateExecution(exec.id, { status: 'waiting_for_input' });
+            await this.stateManager.updateExecution(exec.id, {
+              status: 'waiting_for_input',
+              completedNodes: exec.completedNodes,
+              state: exec.state,
+            });
 
             this.emit({
               event: 'input_required',
@@ -693,7 +698,11 @@ export class FlowForgeEngine {
       // Handle human node waiting
       if (result.outputs.__waiting_for_input) {
         exec.status = 'waiting_for_input';
-        await this.stateManager.updateExecution(exec.id, { status: 'waiting_for_input' });
+        await this.stateManager.updateExecution(exec.id, {
+          status: 'waiting_for_input',
+          completedNodes: exec.completedNodes,
+          state: exec.state,
+        });
 
         // Save checkpoint before waiting
         await this.stateManager.saveCheckpoint({

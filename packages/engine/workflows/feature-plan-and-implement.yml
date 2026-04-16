@@ -68,6 +68,11 @@ nodes:
 
   clarify:
     agent: requirements-analyst
+    # resume_on_retry: true (default) — after the user answers clarifying
+    # questions, the agent resumes its prior session so it remembers what
+    # it asked. The retry feedback prompt delivers the user's answers into
+    # the resumed conversation. The agent then either asks follow-up
+    # questions or emits ready_to_produce_prd=true to advance.
     prompt: |
       You are in CLARIFICATION mode. Read the user's raw feature request and
       decide whether it's clear enough to produce a PRD OR whether you need to
@@ -75,27 +80,45 @@ nodes:
 
       USER REQUEST: {{user_request}}
       REPO PATH: {{repo_path}}
+
+      Scan the repo briefly to understand what already exists — this helps you
+      ask informed clarifying questions (e.g., "this API already exists in
+      routes/teams.ts, did you mean to extend it or add a new one?").
+
       You are allowed up to 3 clarification rounds before you must commit.
 
-      If the request is unambiguous (who, what, why all clear), emit:
-        { "clarifying_questions": [], "ready_to_produce_prd": true }
-
-      Otherwise emit 1-3 concrete, answerable clarifying questions:
+      If the request is UNCLEAR, emit 1-3 concrete, answerable questions:
+        ```json
         {
           "clarifying_questions": [
             "Per-user or per-workspace bookmarks?",
             "Pinned to top, or separate section?",
             "Is there a cap on count?"
           ],
-          "ready_to_produce_prd": false
+          "ready_to_produce_prd": false,
+          "refined_request": ""
         }
+        ```
+
+      If the request is CLEAR (or after you've received enough answers to
+      resolve ambiguity), synthesize everything you know — the original ask
+      AND all Q&A from prior rounds — into a single coherent specification.
+      This `refined_request` is what the PRD producer reads. Do NOT just
+      parrot the original; incorporate every clarification answer:
+        ```json
+        {
+          "clarifying_questions": [],
+          "ready_to_produce_prd": true,
+          "refined_request": "Users should be able to bookmark workflows (per-user, no cap). Bookmarked workflows appear pinned at the top of the workflow list page, sorted by bookmark time. A bookmark icon toggles the state. Backend: new bookmarks collection with userId + workflowId. Frontend: star icon on each workflow card."
+        }
+        ```
 
       Round 3 is your last chance to ask. After round 3, commit to the best
-      interpretation of the user's ask and the doc-auditor will catch any
-      remaining drift.
+      interpretation and emit refined_request with ready_to_produce_prd=true.
     outputs:
       clarifying_questions: "Array of clarifying questions. Empty when the ask is clear enough to proceed."
       ready_to_produce_prd: "Boolean — true if no clarification needed."
+      refined_request: "Synthesized specification incorporating the original ask + all Q&A answers. Only populated when ready_to_produce_prd=true."
 
   clarify_human:
     type: human
@@ -120,21 +143,45 @@ nodes:
   produce_prd:
     agent: requirements-analyst
     resume_on_retry: true
-    retries: 2
     prompt: |
       Produce the Requirements Document (PRD) for this feature.
 
-      USER REQUEST: {{user_request}}
-      {{#if answers}}
-      USER ANSWERS TO CLARIFICATION: {{answers}}
+      {{#if refined_request}}
+      REFINED SPECIFICATION (from clarification):
+      {{refined_request}}
       {{/if}}
+
+      ORIGINAL USER REQUEST: {{user_request}}
+      REPO PATH: {{repo_path}}
 
       Walk through your standard requirements decomposition and output a
       complete PRD with: user stories, acceptance criteria (Given/When/Then),
       edge cases, out-of-scope items, affected areas, risks, assumptions,
       non-functional requirements, and any remaining open questions.
 
-      End with a JSON block containing the structured PRD.
+      Use the refined_request as your primary input if present — it
+      incorporates the user's original ask plus all clarification answers.
+      Fall back to user_request only if no clarification occurred.
+
+      CRITICAL OUTPUT FORMAT:
+      End your response with a fenced JSON block containing EXACTLY these
+      top-level keys (the engine extracts by key name — wrong names = lost data):
+
+      ```json
+      {
+        "prd_markdown": "<your full PRD as a markdown string>",
+        "prd_json": {
+          "requirements": [...],
+          "acceptance_criteria": [...],
+          "edge_cases": [...],
+          "assumptions": [...],
+          "risks": [...],
+          "open_questions": [...],
+          "out_of_scope": [...],
+          "non_functional_requirements": [...]
+        }
+      }
+      ```
 
       {{#if retry_context}}
       RETRY FEEDBACK from doc-auditor:
@@ -158,16 +205,22 @@ nodes:
       acceptance criteria, and edge cases covered? Flag drift, not technical
       correctness — that's the validator's job later.
 
-      Return verdict: approve | revise | escalate with structured issues.
+      Return your verdict as a JSON block with these EXACT keys:
+      ```json
+      {
+        "prd_audit_verdict": "approve | revise | escalate",
+        "prd_audit_issues": [],
+        "prd_audit_rationale": "..."
+      }
+      ```
     outputs:
-      audit_verdict: "One of: approve, revise, escalate"
-      audit_issues: "Array of {severity, description, suggested_fix} — empty when approve"
-      audit_rationale: "One-paragraph rationale for the verdict"
+      prd_audit_verdict: "One of: approve, revise, escalate"
+      prd_audit_issues: "Array of {severity, description, suggested_fix} — empty when approve"
+      prd_audit_rationale: "One-paragraph rationale for the verdict"
 
   produce_hla:
     agent: solution-architect
     resume_on_retry: true
-    retries: 2
     prompt: |
       Produce the High-Level Architecture (HLA) for this feature.
 
@@ -177,10 +230,52 @@ nodes:
       ORIGINAL USER REQUEST: {{user_request}}
       REPO PATH: {{repo_path}}
 
+      EXISTING CODEBASE AWARENESS (MANDATORY):
+      Before designing anything, understand the existing system:
+        1. Read the repo's package.json / go.mod / Cargo.toml / requirements.txt
+           to learn the tech stack, frameworks, and dependencies already in use.
+        2. Scan the directory structure to understand the existing patterns —
+           route/controller/service layers, model locations, config conventions.
+        3. Look at 2-3 existing features similar in scope to identify how the
+           repo handles: routing, data access, validation, error handling,
+           authentication, and testing.
+
+      YOUR DESIGN MUST FIT THE EXISTING ARCHITECTURE unless:
+        - The existing patterns genuinely cannot accommodate the feature
+          (explain WHY in your tradeoffs section).
+        - A simpler solution exists that would reduce complexity compared to
+          forcing the feature into the current patterns (justify the departure).
+        - The feature requires infrastructure the repo doesn't have yet (call
+          this out explicitly as new infra with a migration/rollout plan).
+
+      If the repo uses Express + MongoDB + service layer, your HLA uses
+      Express + MongoDB + service layer. If the repo has a React frontend
+      with a specific state management pattern, you follow it. Do NOT
+      propose new frameworks, ORMs, or architectural styles unless the
+      existing ones are fundamentally insufficient for this feature.
+
       Follow your 8-section contract: system overview, components, data flow,
       technology choices with rationale, non-functional requirements, risks
-      and mitigations, tradeoffs considered, out of scope. End with a JSON
-      block.
+      and mitigations, tradeoffs considered, out of scope.
+
+      CRITICAL OUTPUT FORMAT:
+      End your response with a fenced JSON block containing EXACTLY these
+      top-level keys (the engine extracts by key name — wrong names = lost data):
+
+      ```json
+      {
+        "hla_markdown": "<your full HLA as a markdown string>",
+        "hla_json": {
+          "components": [...],
+          "data_flow_summary": "...",
+          "tech_choices": [...],
+          "non_functional_requirements": [...],
+          "risks": [...],
+          "build_vs_buy": [...],
+          "confidence": 0.95
+        }
+      }
+      ```
 
       {{#if retry_context}}
       RETRY FEEDBACK from doc-auditor:
@@ -207,16 +302,22 @@ nodes:
       Are the risks this kind of change usually has identified? Is the HLA
       consistent with the PRD?
 
-      Return verdict: approve | revise | escalate.
+      Return your verdict as a JSON block with these EXACT keys:
+      ```json
+      {
+        "hla_audit_verdict": "approve | revise | escalate",
+        "hla_audit_issues": [],
+        "hla_audit_rationale": "..."
+      }
+      ```
     outputs:
-      audit_verdict: "approve | revise | escalate"
-      audit_issues: "Structured issues."
-      audit_rationale: "One paragraph."
+      hla_audit_verdict: "approve | revise | escalate"
+      hla_audit_issues: "Structured issues."
+      hla_audit_rationale: "One paragraph."
 
   produce_tdd:
     agent: technical-designer
     resume_on_retry: true
-    retries: 2
     prompt: |
       Produce the Technical Design Document (TDD) for this feature.
 
@@ -229,10 +330,64 @@ nodes:
       ORIGINAL USER REQUEST: {{user_request}}
       REPO PATH: {{repo_path}}
 
+      EXISTING CODEBASE AWARENESS (MANDATORY):
+      Before writing any technical spec, understand how the repo actually works:
+        1. Read the existing data models / schemas — what ORM/ODM does the
+           repo use? What naming conventions? What field patterns?
+        2. Read 2-3 existing API route files to understand the route →
+           controller → service → data-access chain the repo follows.
+        3. Check the existing error handling pattern — does the repo use
+           custom error classes? HTTP status conventions? Error response shape?
+        4. Check test patterns — unit vs integration, test runner, mock
+           conventions, fixture patterns.
+
+      YOUR DESIGN MUST FOLLOW THE EXISTING PATTERNS unless:
+        - The existing patterns genuinely cannot express this feature's
+          requirements (explain WHY in your design).
+        - A simpler alternative reduces overall complexity compared to
+          forcing the feature into the current structure (justify the departure
+          with concrete complexity comparison).
+        - The feature requires new infrastructure not present in the repo
+          (call this out explicitly and include a rollout plan).
+
+      Examples of what "follow existing patterns" means:
+        - If the repo defines routes in `src/routes/<resource>.routes.ts` with
+          a service in `src/services/<resource>.service.ts`, your new endpoints
+          MUST follow that same split — not invent a controller layer.
+        - If the repo uses Mongoose schemas, your data models use Mongoose
+          schemas — not Prisma or raw MongoDB driver.
+        - If the repo's error responses are `{ error: string }`, yours are too
+          — not `{ message, code, details }` unless you're migrating everything.
+        - If the repo has no WebSocket infra and the feature can work with
+          polling, use polling.
+
       Follow your section contract: data models, API contracts, sequence
       diagrams, error taxonomy, observability plan, UI changes, implementation
-      flags (has_backend_changes / has_frontend_changes). End with a JSON
-      block.
+      flags (has_backend_changes / has_frontend_changes).
+
+      CRITICAL OUTPUT FORMAT:
+      End your response with a fenced JSON block containing EXACTLY these
+      top-level keys (the engine extracts by key name — wrong names = lost data):
+
+      ```json
+      {
+        "tdd_markdown": "<your full TDD as a markdown string>",
+        "tdd_json": {
+          "data_models": [...],
+          "api_contracts": [...],
+          "error_taxonomy": [...],
+          "observability": {...},
+          "has_backend_changes": true,
+          "has_frontend_changes": false
+        },
+        "has_backend_changes": true,
+        "has_frontend_changes": false
+      }
+      ```
+
+      IMPORTANT: `tdd_markdown` and `tdd_json` MUST be top-level keys in
+      your JSON. Do NOT nest them under a `tdd` wrapper. The downstream
+      audit node reads `{{tdd_markdown}}` directly from state.
 
       {{#if retry_context}}
       RETRY FEEDBACK from doc-auditor:
@@ -264,11 +419,18 @@ nodes:
       every endpoint satisfy at least one PRD acceptance criterion? Are the
       models and APIs internally consistent?
 
-      Return verdict: approve | revise | escalate.
+      Return your verdict as a JSON block with these EXACT keys:
+      ```json
+      {
+        "tdd_audit_verdict": "approve | revise | escalate",
+        "tdd_audit_issues": [],
+        "tdd_audit_rationale": "..."
+      }
+      ```
     outputs:
-      audit_verdict: "approve | revise | escalate"
-      audit_issues: "Structured issues."
-      audit_rationale: "One paragraph."
+      tdd_audit_verdict: "approve | revise | escalate"
+      tdd_audit_issues: "Structured issues."
+      tdd_audit_rationale: "One paragraph."
 
   persist_docs:
     type: code
@@ -342,6 +504,10 @@ nodes:
       APPROVED HLA: {{hla_url}}
       APPROVED TDD: {{tdd_url}}
 
+      IMPORTANT: The URLs above point to public markdown files. Fetch each
+      document before reading it — use WebFetch or curl to download the
+      content. Do NOT guess from the URL alone.
+
       REPO PATH: {{repo_path}}
 
       Translate the TDD into a concrete file-level plan. For every file, set
@@ -402,6 +568,8 @@ nodes:
       APPROVED PRD URL: {{prd_url}}
       APPROVED HLA URL: {{hla_url}}
       APPROVED TDD URL: {{tdd_url}}
+      (Fetch each URL with WebFetch/curl to read the document content.)
+
       WORKTREE PATH: {{worktree_path}}
       FILES CHANGED BY DEVELOPER: {{files_changed}}
       SKIP REGRESSION: {{skip_regression}}
@@ -441,6 +609,8 @@ nodes:
       APPROVED PRD: {{prd_url}}
       APPROVED HLA: {{hla_url}}
       APPROVED TDD: {{tdd_url}}
+      (Fetch each URL with WebFetch/curl to read the document content.)
+
       IMPLEMENTATION PLAN: {{implementation_plan}}
       WORKTREE PATH: {{worktree_path}}
 
@@ -509,7 +679,7 @@ nodes:
       security_findings: "Array of security issues (may be empty)."
 
   open_pr:
-    agent: devops-engineer
+    agent: pr-creator
     prompt: |
       Create a pull request for this feature run.
 
@@ -577,22 +747,49 @@ edges:
   - { from: START, to: clarify }
   - { from: clarify, to: produce_prd, condition: "ready_to_produce_prd == true" }
   - { from: clarify, to: clarify_human, condition: "ready_to_produce_prd != true" }
-  - { from: clarify_human, to: produce_prd }
+  # After the user answers, loop back to clarify so the agent can
+  # incorporate the answers and decide if more questions are needed or
+  # if the request is now clear enough to produce the PRD. Max 3 rounds
+  # (the clarify prompt tells the agent to commit after round 3).
+  #
+  # The agent's session is RESUMED (resume_on_retry default=true) so it
+  # remembers what questions it asked. The retry_context delivers the
+  # user's answers into the resumed conversation — the agent sees its
+  # prior questions in session history, then receives the answers below,
+  # and either emits ready_to_produce_prd=true or asks follow-ups.
+  - from: clarify_human
+    to: clarify
+    max_retries: 3
+    retry_context: |
+      The user answered your clarifying questions:
+
+      {{answers}}
+
+      Based on these answers, decide:
+      - If the request is now clear enough → emit ready_to_produce_prd=true
+      - If you still need clarification → emit new clarifying_questions (you have {{__retry_attempt}} of 3 rounds used)
   - { from: produce_prd, to: audit_prd }
-  - { from: audit_prd, to: produce_hla, condition: "audit_verdict == 'approve'" }
-  - { from: audit_prd, to: produce_prd, condition: "audit_verdict == 'revise'", max_retries: 2, retry_context: "Audit feedback:\n{{audit_rationale}}\n{{audit_issues}}" }
-  - { from: audit_prd, to: END, condition: "audit_verdict == 'escalate'" }
+  - { from: audit_prd, to: produce_hla, condition: "prd_audit_verdict == 'approve'" }
+  - { from: audit_prd, to: produce_prd, condition: "prd_audit_verdict == 'revise'", max_retries: 2, retry_context: "PRD audit feedback:\n{{prd_audit_rationale}}\n{{prd_audit_issues}}" }
+  - { from: audit_prd, to: END, condition: "prd_audit_verdict == 'escalate'" }
   - { from: produce_hla, to: audit_hla }
-  - { from: audit_hla, to: produce_tdd, condition: "audit_verdict == 'approve'" }
-  - { from: audit_hla, to: produce_hla, condition: "audit_verdict == 'revise'", max_retries: 2, retry_context: "Audit feedback:\n{{audit_rationale}}\n{{audit_issues}}" }
-  - { from: audit_hla, to: END, condition: "audit_verdict == 'escalate'" }
+  - { from: audit_hla, to: produce_tdd, condition: "hla_audit_verdict == 'approve'" }
+  - { from: audit_hla, to: produce_hla, condition: "hla_audit_verdict == 'revise'", max_retries: 2, retry_context: "HLA audit feedback:\n{{hla_audit_rationale}}\n{{hla_audit_issues}}" }
+  - { from: audit_hla, to: END, condition: "hla_audit_verdict == 'escalate'" }
   - { from: produce_tdd, to: audit_tdd }
-  - { from: audit_tdd, to: persist_docs, condition: "audit_verdict == 'approve'" }
-  - { from: audit_tdd, to: produce_tdd, condition: "audit_verdict == 'revise'", max_retries: 2, retry_context: "Audit feedback:\n{{audit_rationale}}\n{{audit_issues}}" }
-  - { from: audit_tdd, to: END, condition: "audit_verdict == 'escalate'" }
+  - { from: audit_tdd, to: persist_docs, condition: "tdd_audit_verdict == 'approve'" }
+  - { from: audit_tdd, to: produce_tdd, condition: "tdd_audit_verdict == 'revise'", max_retries: 2, retry_context: "TDD audit feedback:\n{{tdd_audit_rationale}}\n{{tdd_audit_issues}}" }
+  - { from: audit_tdd, to: END, condition: "tdd_audit_verdict == 'escalate'" }
   - { from: persist_docs, to: plan_implementation, condition: "trusted_mode == true" }
   - { from: persist_docs, to: plan_approval_gate, condition: "trusted_mode != true" }
-  - { from: plan_approval_gate, to: plan_implementation }
+  # Gate routing — the user picks approve / request_changes / reject.
+  # request_changes loops back to the producer for the chosen scope.
+  - { from: plan_approval_gate, to: plan_implementation, condition: "decision == 'approve'" }
+  - { from: plan_approval_gate, to: END, condition: "decision == 'reject'" }
+  - { from: plan_approval_gate, to: produce_prd, condition: "decision == 'request_changes' AND scope == 'requirements'", max_retries: 2, retry_context: "Human feedback on PRD:\n{{feedback}}" }
+  - { from: plan_approval_gate, to: produce_hla, condition: "decision == 'request_changes' AND scope == 'architecture'", max_retries: 2, retry_context: "Human feedback on HLA:\n{{feedback}}" }
+  - { from: plan_approval_gate, to: produce_tdd, condition: "decision == 'request_changes' AND scope == 'technical_design'", max_retries: 2, retry_context: "Human feedback on TDD:\n{{feedback}}" }
+  - { from: plan_approval_gate, to: produce_prd, condition: "decision == 'request_changes' AND scope == 'all'", max_retries: 2, retry_context: "Human feedback (full redesign):\n{{feedback}}" }
   - { from: plan_implementation, to: create_branch }
   - { from: create_branch, to: develop }
   - { from: develop, to: qa }

@@ -447,7 +447,7 @@ nodes:
   # ─────────────────────────────────────────────────────────────────────
 
   create-pr:
-    agent: devops-engineer
+    agent: pr-creator
     prompt: |
       Create a pull request from branch {{branch_name}} in {{worktree_path}}.
 
