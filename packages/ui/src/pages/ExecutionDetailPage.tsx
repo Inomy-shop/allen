@@ -1,5 +1,5 @@
 import { useState, useCallback, useEffect, useRef } from 'react';
-import { useParams, Link } from 'react-router-dom';
+import { useParams, Link, useNavigate } from 'react-router-dom';
 import {
   ArrowLeft, XCircle, Pause, Play, RefreshCw, Wifi, WifiOff,
   Download, RotateCcw, Brain, Bot, Clock, DollarSign, Terminal,
@@ -39,10 +39,14 @@ function formatDuration(ms: number | null | undefined): string {
 function AgentExecutionView({ execution, agentName, trace, id }: {
   execution: any; agentName: string; trace: any; id: string;
 }) {
+  const navigate = useNavigate();
   const [showPrompt, setShowPrompt] = useState(false);
   const [showResponse, setShowResponse] = useState(true);
   const [showLogs, setShowLogs] = useState(true);
   const [liveLogs, setLiveLogs] = useState<any[]>([]);
+  const [resumeOpen, setResumeOpen] = useState(false);
+  const [resumePrompt, setResumePrompt] = useState('');
+  const [resumeBusy, setResumeBusy] = useState(false);
   const logsEndRef = useRef<HTMLDivElement>(null);
 
   const prompt = trace?.renderedPrompt ?? execution.input?.prompt ?? '';
@@ -51,6 +55,38 @@ function AgentExecutionView({ execution, agentName, trace, id }: {
   const toolCalls = trace?.toolCalls ?? [];
   const durationMs = trace?.durationMs ?? execution.durationMs ?? 0;
   const meta = execution.meta ?? {};
+
+  // Session ID for resume — stored on the execution row at sessions.<agentName>
+  // and also in trace.output.session_id. Either source works.
+  const sessionId: string | undefined =
+    execution.sessions?.[agentName]
+    ?? trace?.output?.session_id
+    ?? undefined;
+  const canResume = !!sessionId && (execution.status === 'completed' || execution.status === 'failed');
+
+  const handleResume = async () => {
+    const trimmed = resumePrompt.trim();
+    if (!trimmed || !sessionId) return;
+    setResumeBusy(true);
+    try {
+      const { agents } = await import('../services/api');
+      const result = await agents.run(agentName, {
+        prompt: trimmed,
+        session_id: sessionId,
+        repo_path: meta.cwd || execution.input?.repo_path,
+      });
+      if (result.error) {
+        alert(`Resume failed: ${result.error}`);
+        setResumeBusy(false);
+        return;
+      }
+      // Navigate to the new execution
+      navigate(`/executions/${result.execution_id}`);
+    } catch (err) {
+      alert(`Resume failed: ${(err as Error).message}`);
+      setResumeBusy(false);
+    }
+  };
 
   // Poll live logs for running executions, merge with trace activity for completed.
   //
@@ -151,8 +187,51 @@ function AgentExecutionView({ execution, agentName, trace, id }: {
               <XCircle className="w-3.5 h-3.5" /> Cancel
             </button>
           )}
+          {canResume && (
+            <button
+              onClick={() => setResumeOpen(v => !v)}
+              className="flex items-center gap-1 text-xs text-accent-blue hover:text-accent-blue/80 bg-accent-blue/10 hover:bg-accent-blue/20 border border-accent-blue/20 rounded px-2.5 py-1 font-mono transition-colors"
+            >
+              <Play className="w-3.5 h-3.5" /> Resume
+            </button>
+          )}
         </div>
       </header>
+
+      {/* Resume prompt bar — shown below header when the user clicks Resume.
+          Sends a follow-up prompt to the same agent, resuming the prior
+          claude-cli session so the agent has full context from this run. */}
+      {resumeOpen && canResume && (
+        <div className="flex items-center gap-3 px-6 py-3 border-b border-accent-blue/30 bg-accent-blue/5 shrink-0">
+          <div className="flex-1 min-w-0">
+            <textarea
+              autoFocus
+              value={resumePrompt}
+              onChange={e => setResumePrompt(e.target.value)}
+              onKeyDown={e => { if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') handleResume(); }}
+              rows={2}
+              placeholder="Follow-up prompt — the agent will resume its prior session with full context from this run…"
+              className="w-full px-3 py-2 rounded-lg bg-surface-200/40 border border-border/50 text-sm text-theme-primary placeholder:text-theme-subtle focus:outline-none focus:border-accent-blue/50 font-mono resize-none"
+            />
+          </div>
+          <div className="flex flex-col gap-1.5 shrink-0">
+            <button
+              onClick={handleResume}
+              disabled={resumeBusy || !resumePrompt.trim()}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[11px] font-mono bg-accent-blue text-white hover:opacity-90 disabled:opacity-40 disabled:cursor-not-allowed transition-opacity"
+            >
+              <Play className="w-3 h-3" />
+              {resumeBusy ? 'Resuming…' : 'Send'}
+            </button>
+            <button
+              onClick={() => { setResumeOpen(false); setResumePrompt(''); }}
+              className="text-[10px] font-mono text-theme-muted hover:text-theme-primary transition-colors"
+            >
+              Cancel
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* Content */}
       <div className="flex-1 overflow-y-auto p-6 space-y-4">
