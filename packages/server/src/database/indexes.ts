@@ -49,6 +49,12 @@ export async function ensureIndexes(db: Db): Promise<void> {
   await db.collection('executions').createIndex({ startedAt: -1 });
   // Compound index for concurrency limit checks
   await db.collection('executions').createIndex({ workflowName: 1, status: 1 });
+  // Spawn-tree indexes — parentExecutionId powers the "direct children of
+  // this node" query on the execution detail page, rootExecutionId powers
+  // the "every descendant of this workflow run" query (Phase 2 "Show all
+  // descendants" toggle + Phase 3 log fan-out).
+  await db.collection('executions').createIndex({ parentExecutionId: 1, startedAt: 1 });
+  await db.collection('executions').createIndex({ rootExecutionId: 1, startedAt: 1 });
 
   // Traces
   await db.collection('execution_traces').createIndex({ executionId: 1, node: 1, attempt: 1 });

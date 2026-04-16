@@ -474,23 +474,70 @@ const spawnAgent: ChatTool = {
     const { randomUUID } = await import('node:crypto');
     const executionId = randomUUID();
     const activeCtxForMeta = getAnyActiveSession();
+
+    // ── Spawn-tree linkage (Phase 1 of the workflow-spawn visibility plan) ──
+    //
+    // The FlowForge MCP server propagates these three fields via env vars
+    // captured from whichever claude-cli subprocess launched it. For
+    // workflow-node-initiated spawns they're set by node-executor.ts; for
+    // nested spawns (a spawned agent spawning another) they're set below
+    // by runSpawnInBackground when it launches the child's subprocess.
+    //
+    //   parent_execution_id → immediate parent's execution id
+    //   parent_caller       → immediate parent's label (node name OR agent name)
+    //   root_execution_id   → top-of-tree execution id (workflow run or chat run)
+    //
+    // For top-level chat-initiated spawns, none of these are set and we
+    // fall back to the chat session context (`chat` as caller, this
+    // execution as its own root).
+    const parentExecutionId = (args.parent_execution_id as string | undefined) || null;
+    const parentCaller = (args.parent_caller as string | undefined)?.trim() || null;
+    const providedRoot = (args.root_execution_id as string | undefined) || null;
+    const callerLabel = parentCaller || 'chat';
+    const workflowName = `${callerLabel}:spawn_agent/${agentName}`;
+    // Root defaults to this new execution if no upstream root was passed.
+    // Used by Phase 3 log fan-out to broadcast the entire spawn subtree up
+    // to the top-of-tree execution page in one indexed lookup.
+    const rootExecutionId = providedRoot || executionId;
+    // Depth = 1 if we have a parent, else 0 (root). Walks aren't needed —
+    // parents send us their depth implicitly by being a parent at all.
+    // We compute the real depth at nested-spawn time by looking up the
+    // parent row; if missing, we fall back to 1.
+    let spawnDepth = 0;
+    if (parentExecutionId) {
+      try {
+        const parentDoc = await db.collection('executions').findOne(
+          { id: parentExecutionId },
+          { projection: { spawnDepth: 1 } },
+        );
+        spawnDepth = ((parentDoc?.spawnDepth as number | undefined) ?? 0) + 1;
+      } catch {
+        spawnDepth = 1;
+      }
+    }
+
     await db.collection('executions').insertOne({
       id: executionId,
-      workflowName: `chat:spawn_agent/${agentName}`,
+      workflowName,
       workflowId: null,
       workflowVersion: 0,
       status: 'running',
-      source: 'chat',
+      source: parentCaller ? 'spawn' : 'chat',
       input: { prompt, agent_name: agentName, repo_path: repoPath, session_id: resumeSession },
       // Execution metadata for tracing
       meta: {
         cwd: repoPath || process.cwd(),
         provider: (role.provider as string) ?? 'claude',
         model: (role.model as string) ?? 'sonnet',
-        spawnedBy: activeCtxForMeta?.currentAgent ?? 'user',
+        spawnedBy: activeCtxForMeta?.currentAgent ?? parentCaller ?? 'user',
         chatSessionId: activeCtxForMeta?.chatSessionId,
         parentMessageId: activeCtxForMeta?.parentMessageId,
       },
+      // Spawn-tree linkage — indexed for the /children query and Phase 3 fan-out.
+      parentExecutionId,
+      parentCaller,
+      rootExecutionId,
+      spawnDepth,
       state: {},
       sessions: {},
       retryCounts: {},
@@ -501,8 +548,17 @@ const spawnAgent: ChatTool = {
       startedAt: new Date(),
     });
 
-    // Run in background — return immediately so MCP doesn't timeout
-    runSpawnInBackground(db, role, agentName, prompt, executionId, resumeSession, repoPath).catch(() => {});
+    // Run in background — return immediately so MCP doesn't timeout.
+    // Pass the spawn-tree context so runSpawnInBackground can propagate the
+    // env vars onward to this agent's own claude-cli subprocess, allowing
+    // grandchild spawns (`agent A spawns agent B`) to carry correct
+    // parent/root linkage.
+    runSpawnInBackground(db, role, agentName, prompt, executionId, resumeSession, repoPath, {
+      parentExecutionId,
+      parentCaller,
+      rootExecutionId,
+      spawnDepth,
+    }).catch(() => {});
 
     return {
       agent_name: agentName,
@@ -513,10 +569,25 @@ const spawnAgent: ChatTool = {
   },
 };
 
+/**
+ * Context passed from spawnAgent.execute to runSpawnInBackground so the
+ * spawned agent's claude-cli subprocess can propagate the spawn-tree env
+ * vars onward. Lets grandchild spawns (an agent calling spawn_agent from
+ * inside its own session) receive correct parent/root linkage instead of
+ * defaulting back to `chat:`.
+ */
+interface SpawnTreeContext {
+  parentExecutionId: string | null;
+  parentCaller: string | null;
+  rootExecutionId: string;
+  spawnDepth: number;
+}
+
 /** Run spawn_agent in background — supports both Claude and Codex with MCP + tracing */
 async function runSpawnInBackground(
   db: Db, role: Record<string, unknown>, agentName: string, prompt: string,
   executionId: string, resumeSession: string | undefined, repoPath: string | undefined,
+  spawnTree?: SpawnTreeContext,
 ): Promise<void> {
   const activeCtx = getAnyActiveSession();
   if (activeCtx) activeCtx.pendingBackgroundTasks++;
@@ -528,8 +599,69 @@ async function runSpawnInBackground(
 
   // Broadcast spawn started + persist log
   if (onEvent) onEvent('spawn_started', { executionId, agent: agentName, prompt: prompt.slice(0, 200), provider, model });
+
+  // ── Phase 3 log fan-out setup ──
+  //
+  // When this spawn is part of a workflow-initiated spawn tree, we want its
+  // log entries to appear LIVE on the parent workflow's execution detail
+  // page, not just on the child's own page. We achieve this by:
+  //
+  //   1. Keeping the primary write to execution_logs under the child's
+  //      executionId (unchanged — child's own /logs endpoint still works).
+  //   2. Broadcasting an SSE-only mirror to the ROOT execution's channel
+  //      with the entry reshaped into the engine's log schema + extra
+  //      child-tag fields (childExecutionId, childAgentName, childCaller)
+  //      so the parent UI can render it as an indented child log line.
+  //
+  // The /api/executions/:id/logs endpoint also does a union query so
+  // refresh / initial load reconstructs the same merged view from
+  // persisted rows (see execution.routes.ts).
+  const spawnTreeRoot = spawnTree?.rootExecutionId ?? executionId;
+  const spawnTreeParentCaller = spawnTree?.parentCaller ?? null;
+  const fanOutEnabled = !!spawnTree?.parentExecutionId || spawnTreeRoot !== executionId;
+  const streamSvc = await import('./stream.service.js');
   const liveLog = (entry: { type: string; tool?: string; command?: string; content?: string }) => {
-    db.collection('execution_logs').insertOne({ executionId, agent: agentName, ...entry, timestamp: new Date() }).catch(() => {});
+    const now = new Date();
+    // Primary write — child's own execution_logs row, unchanged schema.
+    db.collection('execution_logs').insertOne({
+      executionId, agent: agentName, ...entry, timestamp: now,
+    }).catch(() => {});
+
+    // Fan-out to the root execution's SSE channel when this spawn is part
+    // of a workflow-rooted tree. Reshape the entry into the engine's log
+    // schema so useExecution.handleEvent (which expects `category` /
+    // `node` / `message`) renders it without special-casing.
+    if (fanOutEnabled) {
+      const category: 'tool' | 'agent' | 'system' =
+        entry.type === 'tool_use' || entry.tool ? 'tool'
+        : entry.type === 'text' ? 'agent'
+        : 'system';
+      const message = entry.content ?? (entry.tool ? `Tool: ${entry.tool}` : entry.type);
+      streamSvc.broadcastSSEOnly(spawnTreeRoot, {
+        event: 'execution_log',
+        data: {
+          executionId: spawnTreeRoot,
+          timestamp: now,
+          level: 'info',
+          category,
+          // Attribute the child log to the node that spawned the top-level
+          // ancestor of this chain. For direct children this is the
+          // workflow node name (e.g. 'develop'). For grandchildren it's
+          // whatever their direct parent's parentCaller was — the parent
+          // log line will already show the nested relationship.
+          node: spawnTreeParentCaller ?? agentName,
+          message: typeof message === 'string' ? message : String(message),
+          data: {
+            childExecutionId: executionId,
+            childAgentName: agentName,
+            childParentCaller: spawnTreeParentCaller,
+            childDepth: spawnTree?.spawnDepth ?? 1,
+            originalType: entry.type,
+            originalTool: entry.tool,
+          },
+        },
+      });
+    }
   };
   liveLog({ type: 'started', content: `Agent ${agentName} spawned in ${repoPath || '/tmp/flowforge'}` });
 
@@ -684,10 +816,33 @@ async function runSpawnInBackground(
       // ── Claude CLI with MCP ──
       const { query } = await import('@anthropic-ai/claude-code');
       const { loadAllMcpServers } = await import('@flowforge/engine');
-      const mcpServers = await loadAllMcpServers(db);
+
+      // Spawn-tree env propagation for any grandchild spawn this agent
+      // initiates. From the grandchild's perspective:
+      //   PARENT_EXECUTION_ID → this (spawning) execution's id
+      //   PARENT_CALLER       → this agent's name
+      //   ROOT_EXECUTION_ID   → unchanged from above, so the whole subtree
+      //                         shares one root for Phase 3 fan-out.
+      // Top-level chat-initiated spawns still populate these so grandchild
+      // spawns form a proper tree rooted at this execution.
+      const spawnContextEnv: Record<string, string> = {
+        FLOWFORGE_PARENT_EXECUTION_ID: executionId,
+        FLOWFORGE_PARENT_CALLER: agentName,
+        FLOWFORGE_ROOT_EXECUTION_ID: spawnTree?.rootExecutionId ?? executionId,
+      };
+
+      // Pass the spawn context directly into the MCP config loader so the
+      // FlowForge MCP server subprocess gets the vars in its own env dict —
+      // not relying on claude-cli's parent-env inheritance for MCP
+      // children, which is implementation-defined.
+      const mcpServers = await loadAllMcpServers(db, spawnContextEnv);
 
       const sdkOptions: Record<string, unknown> = {
         model, maxTurns: 50, permissionMode: 'bypassPermissions',
+        // Also set env on the claude-cli subprocess itself, so any logic
+        // inside the CLI (or tools that fall back to process.env) can see
+        // the spawn tree. Merged on top of parent env.
+        env: { ...process.env, ...spawnContextEnv },
         ...(Object.keys(mcpServers).length > 0 ? { mcpServers } : {}),
       };
       if (currentResumeSession) sdkOptions.resume = currentResumeSession;

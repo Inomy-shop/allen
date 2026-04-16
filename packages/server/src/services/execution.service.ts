@@ -346,6 +346,80 @@ export class ExecutionService {
     return this.stateManager.getExecutionStats();
   }
 
+  /**
+   * Fetch the spawn-tree children of an execution. The workflow-node view
+   * uses this to show "what did develop spawn" under each node, and the
+   * "Show all descendants" toggle uses it with mode='descendants' to see
+   * the whole subtree at any depth.
+   *
+   * mode='direct'      → rows where parentExecutionId === id
+   * mode='descendants' → rows where rootExecutionId === id (includes id itself
+   *                      if the exec is its own root; we filter that out here)
+   *
+   * Returns a compact projection with the fields the UI needs — no rawResponse,
+   * no full state, no cost history. The full rows are available via GET
+   * /api/executions/:childId for deep inspection.
+   */
+  async getChildren(
+    id: string,
+    mode: 'direct' | 'descendants',
+  ): Promise<Record<string, unknown>[]> {
+    const filter = mode === 'descendants'
+      ? { rootExecutionId: id, id: { $ne: id } }
+      : { parentExecutionId: id };
+    const rows = await this.db
+      .collection('executions')
+      .find(filter, {
+        projection: {
+          id: 1,
+          workflowName: 1,
+          parentExecutionId: 1,
+          parentCaller: 1,
+          rootExecutionId: 1,
+          spawnDepth: 1,
+          status: 1,
+          startedAt: 1,
+          completedAt: 1,
+          durationMs: 1,
+          cost: 1,
+          failedNode: 1,
+          errorMessage: 1,
+          input: 1,
+          meta: 1,
+        },
+      })
+      .sort({ startedAt: 1 })
+      .toArray();
+    // Decorate each row with a parsed agent name + a short prompt preview
+    // so the UI doesn't have to split workflowName / truncate input.prompt
+    // in every cell.
+    return rows.map(row => {
+      const wf = (row.workflowName as string | undefined) ?? '';
+      const agentNameFromWf = wf.includes(':spawn_agent/') ? wf.split(':spawn_agent/')[1] : '';
+      const input = (row.input ?? {}) as Record<string, unknown>;
+      const agentName = (input.agent_name as string | undefined) ?? agentNameFromWf ?? 'unknown';
+      const promptText = (input.prompt as string | undefined) ?? '';
+      const promptPreview = promptText.length > 200 ? promptText.slice(0, 200) + '…' : promptText;
+      return {
+        id: row.id,
+        workflowName: row.workflowName,
+        agentName,
+        parentCaller: row.parentCaller ?? null,
+        parentExecutionId: row.parentExecutionId ?? null,
+        rootExecutionId: row.rootExecutionId ?? null,
+        spawnDepth: row.spawnDepth ?? 0,
+        status: row.status,
+        startedAt: row.startedAt,
+        completedAt: row.completedAt ?? null,
+        durationMs: row.durationMs ?? null,
+        cost: row.cost ?? null,
+        failedNode: row.failedNode ?? null,
+        errorMessage: row.errorMessage ?? null,
+        promptPreview,
+      };
+    });
+  }
+
   // ── Human Intervention Protocol hook ──────────────────────────────────
   //
   // Wraps the SSE emitter in a middleware that forwards every event to the

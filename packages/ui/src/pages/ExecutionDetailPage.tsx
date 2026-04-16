@@ -4,7 +4,7 @@ import {
   ArrowLeft, XCircle, Pause, Play, RefreshCw, Wifi, WifiOff,
   Download, RotateCcw, Brain, Bot, Clock, DollarSign, Terminal,
   CheckCircle, AlertCircle, Wrench, ChevronDown, ChevronRight,
-  ArrowRight,
+  ArrowRight, AlertTriangle,
 } from 'lucide-react';
 import { useExecution, type TimelineEvent } from '../hooks/useExecution';
 import { useResizable } from '../hooks/useResizable';
@@ -15,6 +15,24 @@ import { renderMarkdown } from '../components/chat/ChatMessageList';
 import LiveGraph from '../components/execution/LiveGraph';
 import Timeline from '../components/execution/Timeline';
 import NodeDetail from '../components/execution/NodeDetail';
+
+/**
+ * Human-friendly duration format:
+ *   < 60s  → "12.3s"
+ *   < 1h   → "5m 23s"
+ *   ≥ 1h   → "1h 12m"
+ */
+function formatDuration(ms: number | null | undefined): string {
+  if (ms == null || ms <= 0) return '—';
+  const totalSec = ms / 1000;
+  if (totalSec < 60) return `${totalSec.toFixed(1)}s`;
+  const totalMin = Math.floor(totalSec / 60);
+  const remainSec = Math.floor(totalSec % 60);
+  if (totalMin < 60) return `${totalMin}m ${remainSec}s`;
+  const hours = Math.floor(totalMin / 60);
+  const remainMin = totalMin % 60;
+  return `${hours}h ${remainMin}m`;
+}
 
 // ── Agent Execution View (single-node) ──
 
@@ -34,19 +52,35 @@ function AgentExecutionView({ execution, agentName, trace, id }: {
   const durationMs = trace?.durationMs ?? execution.durationMs ?? 0;
   const meta = execution.meta ?? {};
 
-  // Poll live logs for running executions, merge with trace activity for completed
+  // Poll live logs for running executions, merge with trace activity for completed.
+  //
+  // RACE FIX: on a fast agent run, the final few log lines are emitted to
+  // `execution_logs` via fire-and-forget inserts that can lag behind the
+  // status transition by 500-1500ms. Without care, the poll loop's `break`
+  // on non-running status leaves behind a stale snapshot with the tail
+  // missing. We do a FINAL fetch AFTER the break plus a short delayed
+  // catch-up fetch, so any rows that landed post-transition are picked up.
   useEffect(() => {
     if (!id) return;
     let alive = true;
+    const fetchLogs = async () => {
+      try {
+        const res = await fetch(`/api/executions/${id}/logs?limit=500`, { headers: authHeaders() });
+        const logs = await res.json();
+        if (alive && Array.isArray(logs)) setLiveLogs(logs);
+      } catch { /* ignore */ }
+    };
     const poll = async () => {
       while (alive) {
-        try {
-          const res = await fetch(`/api/executions/${id}/logs?limit=500`, { headers: authHeaders() });
-          const logs = await res.json();
-          if (alive && Array.isArray(logs)) setLiveLogs(logs);
-        } catch {}
+        await fetchLogs();
         if (execution.status !== 'running') break;
         await new Promise(r => setTimeout(r, 2000));
+      }
+      // Terminal-state catch-up: one more fetch now and one after a short
+      // delay to pick up tail rows whose Mongo insert was still pending.
+      if (alive) {
+        await fetchLogs();
+        setTimeout(() => { if (alive) fetchLogs(); }, 1500);
       }
     };
     poll();
@@ -108,7 +142,7 @@ function AgentExecutionView({ execution, agentName, trace, id }: {
           {execution.status === 'running' && <span className="w-2 h-2 rounded-full bg-blue-400 animate-pulse" />}
           {durationMs > 0 && (
             <span className="flex items-center gap-1 text-xs text-theme-secondary font-mono">
-              <Clock className="w-3 h-3" /> {(durationMs / 1000).toFixed(1)}s
+              <Clock className="w-3 h-3" /> {formatDuration(durationMs)}
             </span>
           )}
           <CostDisplay cost={cost} />
@@ -130,7 +164,7 @@ function AgentExecutionView({ execution, agentName, trace, id }: {
           </div>
           <div className="card p-3">
             <span className="text-[10px] font-label uppercase tracking-widest text-theme-muted">Duration</span>
-            <div className="mt-1 text-sm text-theme-primary font-mono">{durationMs > 0 ? `${(durationMs / 1000).toFixed(1)}s` : execution.status === 'running' ? '...' : '—'}</div>
+            <div className="mt-1 text-sm text-theme-primary font-mono">{durationMs > 0 ? `${formatDuration(durationMs)}` : execution.status === 'running' ? '...' : '—'}</div>
           </div>
           <div className="card p-3">
             <span className="text-[10px] font-label uppercase tracking-widest text-theme-muted">Cost</span>
@@ -283,6 +317,7 @@ export default function ExecutionDetailPage() {
     execution, workflow, traces, timeline, nodeStates,
     logs, logFilter, setLogFilter,
     loading, connected, isLive, refresh,
+    children, descendantsMode, toggleDescendants,
   } = useExecution(id);
 
   const [selectedNode, setSelectedNode] = useState<string | null>(null);
@@ -330,12 +365,19 @@ export default function ExecutionDetailPage() {
     // preserved even as execution moves to other nodes.
     if (status === 'running') {
       if (!selectedNode) {
+        let picked: string | null = null;
         for (const [name, state] of nodeStates) {
-          if (state.status === 'running') {
-            setSelectedNode(name);
-            break;
-          }
+          if (state.status === 'running') { picked = name; break; }
         }
+        // Belt-and-suspenders fallback: if nodeStates doesn't carry a
+        // running entry yet (e.g., between-nodes routing gap, or the
+        // useExecution backfill from currentNodes hasn't landed because
+        // of load order), pin the pane to whatever the engine says is
+        // current. Better than leaving the right pane blank.
+        if (!picked && Array.isArray(execution.currentNodes) && execution.currentNodes.length > 0) {
+          picked = execution.currentNodes.find((n: string) => n !== 'END') ?? null;
+        }
+        if (picked) setSelectedNode(picked);
       }
       prevStatusRef.current = status;
       return;
@@ -368,7 +410,7 @@ export default function ExecutionDetailPage() {
     }
 
     prevStatusRef.current = status;
-  }, [execution?.status, execution?.failedNode, execution?.completedNodes, latestInputEvent, nodeStates]);
+  }, [execution?.status, execution?.failedNode, execution?.completedNodes, execution?.currentNodes, latestInputEvent, nodeStates]);
 
   const { size: rightWidth, handleMouseDown: rightResizeStart } = useResizable({ direction: 'horizontal', initialSize: 40, minSize: 20, maxSize: 60, unit: 'percent' });
   const { size: bottomHeight, handleMouseDown: bottomResizeStart } = useResizable({ direction: 'vertical', initialSize: 200, minSize: 120, maxSize: 500 });
@@ -395,10 +437,20 @@ export default function ExecutionDetailPage() {
     }
   }, [id, latestInputEvent]);
 
+  const [resumeBusy, setResumeBusy] = useState(false);
+  const [resumePickerOpen, setResumePickerOpen] = useState(false);
   const handleRetryFrom = useCallback(async (node: string) => {
-    if (id) {
+    if (!id) return;
+    setResumeBusy(true);
+    setResumePickerOpen(false);
+    try {
       await api.retryFrom(id, node);
       refresh();
+    } catch (err) {
+      // Surface failures inline — the operator should see why resume didn't start.
+      alert(`Failed to resume from ${node}: ${(err as Error).message}`);
+    } finally {
+      setResumeBusy(false);
     }
   }, [id, refresh]);
 
@@ -499,7 +551,7 @@ export default function ExecutionDetailPage() {
 
         <div className="flex items-center gap-2">
           {execution.durationMs != null && (
-            <span className="text-xs text-theme-secondary font-mono">{(execution.durationMs / 1000).toFixed(1)}s</span>
+            <span className="text-xs text-theme-secondary font-mono">{formatDuration(execution.durationMs)}</span>
           )}
           <CostDisplay cost={liveCost} />
           {(learningCounts.injected > 0 || learningCounts.extracted > 0) && (
@@ -546,6 +598,72 @@ export default function ExecutionDetailPage() {
           </button>
         </div>
       </header>
+
+      {/* Failure banner — prominent resume-from-node controls when the
+          execution has failed. The compact `Retry` button in the top bar
+          stays (muscle memory), but this banner is the obvious entry point
+          with the error shown, the failing node called out, and a picker
+          to rewind further back than the failure point if needed. */}
+      {execution.status === 'failed' && execution.failedNode && (
+        <div className="flex items-start gap-4 px-6 py-3 border-b border-accent-red/30 bg-accent-red/10">
+          <AlertTriangle className="w-5 h-5 text-accent-red shrink-0 mt-0.5" />
+          <div className="flex-1 min-w-0">
+            <div className="text-xs font-heading font-semibold text-theme-primary">
+              FAILED AT <span className="font-mono text-accent-red">{execution.failedNode}</span>
+            </div>
+            {execution.errorMessage && (
+              <div className="text-[11px] font-mono text-theme-muted mt-1 break-words max-w-3xl">
+                {execution.errorMessage}
+              </div>
+            )}
+            <div className="text-[10px] font-mono text-theme-subtle mt-1">
+              Resume rewinds state to the checkpoint taken before the selected node and re-enters the graph from there. Upstream outputs and agent sessions are preserved.
+            </div>
+          </div>
+          <div className="flex items-center gap-2 shrink-0 relative">
+            <button
+              onClick={() => handleRetryFrom(execution.failedNode)}
+              disabled={resumeBusy}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-[11px] font-mono bg-accent-red text-white hover:opacity-90 disabled:opacity-40 disabled:cursor-not-allowed transition-opacity"
+              title={`Resume execution from ${execution.failedNode}`}
+            >
+              <RotateCcw className="w-3 h-3" />
+              {resumeBusy ? 'Resuming…' : `Continue from ${execution.failedNode}`}
+            </button>
+            {execution.completedNodes && execution.completedNodes.length > 0 && (
+              <>
+                <button
+                  onClick={() => setResumePickerOpen(v => !v)}
+                  disabled={resumeBusy}
+                  className="inline-flex items-center gap-1 px-2 py-1.5 rounded-full text-[11px] font-mono bg-surface-200/60 text-theme-primary hover:bg-surface-200 disabled:opacity-40 transition-colors"
+                  title="Resume from an earlier node"
+                >
+                  Other node <ChevronDown className="w-3 h-3" />
+                </button>
+                {resumePickerOpen && (
+                  <div
+                    className="absolute right-0 top-full mt-1 w-56 rounded-lg border border-border/60 bg-surface shadow-lg py-1 z-50"
+                    onMouseLeave={() => setResumePickerOpen(false)}
+                  >
+                    <div className="px-3 py-1.5 text-[9px] font-label uppercase tracking-widest text-theme-subtle border-b border-border/30">
+                      Rewind to before…
+                    </div>
+                    {[...execution.completedNodes].reverse().map((n: string) => (
+                      <button
+                        key={n}
+                        onClick={() => handleRetryFrom(n)}
+                        className="w-full text-left px-3 py-1.5 text-[11px] font-mono text-theme-primary hover:bg-surface-200/60 transition-colors"
+                      >
+                        {n}
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </>
+            )}
+          </div>
+        </div>
+      )}
 
       {/* Intervention banner — shown when the run is paused awaiting a
           human intervention. Action happens on the dedicated
@@ -619,6 +737,10 @@ export default function ExecutionDetailPage() {
               nodeStates={nodeStates}
               selectedNode={selectedNode}
               onSelectNode={setSelectedNode}
+              spawnCounts={(children ?? []).reduce((acc: Record<string, number>, c) => {
+                if (c.parentCaller) acc[c.parentCaller] = (acc[c.parentCaller] ?? 0) + 1;
+                return acc;
+              }, {})}
             />
           </div>
 
@@ -648,6 +770,10 @@ export default function ExecutionDetailPage() {
               allTraces={selectedTraces}
               waitingInput={null}
               onSubmitInput={handleSubmitInput}
+              spawnedChildren={(children ?? []).filter(c => c.parentCaller === selectedNode)}
+              allChildren={children ?? []}
+              descendantsMode={descendantsMode}
+              onToggleDescendants={toggleDescendants}
             />
           </div>
         </div>
@@ -725,7 +851,7 @@ export default function ExecutionDetailPage() {
                       <td className="px-4 py-1.5"><StatusBadge status={state.status} /></td>
                       <td className="px-4 py-1.5 text-theme-secondary tabular-nums font-mono">{state.attempt}</td>
                       <td className="px-4 py-1.5 text-theme-secondary tabular-nums font-mono">
-                        {totalDuration != null ? `${(totalDuration / 1000).toFixed(1)}s` : '-'}
+                        {totalDuration != null ? formatDuration(totalDuration) : '-'}
                       </td>
                       <td className="px-4 py-1.5"><CostDisplay cost={totalCost} /></td>
                     </tr>

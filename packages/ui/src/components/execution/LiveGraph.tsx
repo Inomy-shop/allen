@@ -35,6 +35,18 @@ const statusRing: Record<string, string> = {
   waiting_for_input: 'ring-2 ring-accent-yellow/50',
 };
 
+function formatDurationShort(ms: number | null | undefined): string {
+  if (ms == null || ms <= 0) return '';
+  const totalSec = ms / 1000;
+  if (totalSec < 60) return `${totalSec.toFixed(1)}s`;
+  const totalMin = Math.floor(totalSec / 60);
+  const remainSec = Math.floor(totalSec % 60);
+  if (totalMin < 60) return `${totalMin}m ${remainSec}s`;
+  const hours = Math.floor(totalMin / 60);
+  const remainMin = totalMin % 60;
+  return `${hours}h ${remainMin}m`;
+}
+
 // ── Execution Node (read-only, status-aware) ──
 function ExecutionNode({ data, selected }: NodeProps) {
   const d = data as any;
@@ -84,7 +96,7 @@ function ExecutionNode({ data, selected }: NodeProps) {
         }`} />
         <span className="text-[9px] font-mono text-theme-secondary uppercase">{status}</span>
         {d.__durationMs != null && (
-          <span className="text-[9px] font-mono text-theme-muted">{(d.__durationMs / 1000).toFixed(1)}s</span>
+          <span className="text-[9px] font-mono text-theme-muted">{formatDurationShort(d.__durationMs)}</span>
         )}
       </div>
 
@@ -105,6 +117,18 @@ function ExecutionNode({ data, selected }: NodeProps) {
       {attempt > 1 && (
         <span className="absolute -top-2 -right-2 bg-accent-yellow text-black text-[9px] font-bold rounded-sm w-5 h-5 flex items-center justify-center font-mono">
           {attempt}
+        </span>
+      )}
+
+      {/* Spawn-count badge — shown when this node called spawn_agent at
+          least once. The number reflects direct children only (same scope
+          the NodeDetail "Spawned Agents" panel uses by default). */}
+      {d.__spawnCount > 0 && (
+        <span
+          className="absolute -top-2 -left-2 bg-accent-purple/90 text-white text-[9px] font-mono font-bold rounded-full h-5 px-1.5 flex items-center justify-center gap-0.5 border border-accent-purple shadow-sm"
+          title={`${d.__spawnCount} spawned agent${d.__spawnCount === 1 ? '' : 's'}`}
+        >
+          ⚙ {d.__spawnCount}
         </span>
       )}
 
@@ -168,9 +192,13 @@ interface Props {
   nodeStates: Map<string, NodeState>;
   selectedNode: string | null;
   onSelectNode: (name: string) => void;
+  /** Count of spawn_agent children per node name. Surfaces as a `⚙ N`
+   *  badge on the node so the operator can see at a glance which nodes
+   *  kicked off sub-agents. */
+  spawnCounts?: Record<string, number>;
 }
 
-export default function LiveGraph({ workflow, nodeStates, selectedNode, onSelectNode }: Props) {
+export default function LiveGraph({ workflow, nodeStates, selectedNode, onSelectNode, spawnCounts = {} }: Props) {
   const workflowNodes = workflow?.parsed?.nodes;
   const workflowEdges: any[] = workflow?.parsed?.edges ?? [];
 
@@ -311,7 +339,8 @@ export default function LiveGraph({ workflow, nodeStates, selectedNode, onSelect
     setNodes(initialNodes);
   }, [initialNodes]);
 
-  // When nodeStates change (live updates), update node data without resetting positions
+  // When nodeStates or spawnCounts change (live updates), update node data
+  // without resetting positions
   useEffect(() => {
     setNodes(prev => prev.map(node => {
       const state = nodeStates.get(node.id);
@@ -323,10 +352,11 @@ export default function LiveGraph({ workflow, nodeStates, selectedNode, onSelect
           __status: state?.status ?? 'pending',
           __attempt: state?.attempt ?? 1,
           __durationMs: state?.durationMs,
+          __spawnCount: spawnCounts[node.id] ?? 0,
         },
       };
     }));
-  }, [nodeStates, selectedNode]);
+  }, [nodeStates, selectedNode, spawnCounts]);
 
   // Handle drag
   const onNodesChange: OnNodesChange = useCallback((changes) => {

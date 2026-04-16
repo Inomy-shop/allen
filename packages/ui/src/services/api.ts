@@ -118,6 +118,26 @@ export const workflows = {
 };
 
 // ── Executions ─────────────────────────────────────────────────────────────
+
+/** Shape returned by GET /executions/:id/children — spawn-tree row. */
+export interface SpawnedChild {
+  id: string;
+  workflowName: string;
+  agentName: string;
+  parentCaller: string | null;
+  parentExecutionId: string | null;
+  rootExecutionId: string | null;
+  spawnDepth: number;
+  status: string;
+  startedAt: string;
+  completedAt: string | null;
+  durationMs: number | null;
+  cost: { actual: number | null; estimated: number } | null;
+  failedNode: string | null;
+  errorMessage: string | null;
+  promptPreview: string;
+}
+
 export const executions = {
   list: (params?: Record<string, string>) => {
     const qs = params ? '?' + new URLSearchParams(params).toString() : '';
@@ -128,6 +148,15 @@ export const executions = {
     request<any>('/executions', { method: 'POST', body: JSON.stringify({ workflowId, input }) }),
   cancel: (id: string) =>
     request<any>(`/executions/${id}/cancel`, { method: 'POST' }),
+  /**
+   * Cancel this execution and every spawn-tree descendant. Used by the
+   * Spawned Agents panel's "Cancel subtree" action.
+   */
+  cancelSubtree: (id: string) =>
+    request<{ cancelled: number; total: number; results: { id: string; ok: boolean; error?: string }[] }>(
+      `/executions/${id}/cancel-subtree`,
+      { method: 'POST' },
+    ),
   pause: (id: string) =>
     request<any>(`/executions/${id}/pause`, { method: 'POST' }),
   resume: (id: string) =>
@@ -136,6 +165,13 @@ export const executions = {
     request<any>(`/executions/${id}/input`, { method: 'POST', body: JSON.stringify({ node, data }) }),
   retryFrom: (id: string, node: string) =>
     request<any>(`/executions/${id}/retry-from/${node}`, { method: 'POST' }),
+  /**
+   * Fetch spawn-tree children of an execution.
+   *   mode 'direct'      → only children spawned directly by this execution
+   *   mode 'descendants' → every row in the subtree (children, grandchildren, …)
+   */
+  children: (id: string, mode: 'direct' | 'descendants' = 'direct') =>
+    request<SpawnedChild[]>(`/executions/${id}/children?mode=${mode}`),
   logs: (id: string, params?: Record<string, string>) => {
     const qs = params ? '?' + new URLSearchParams(params).toString() : '';
     return request<any[]>(`/executions/${id}/logs${qs}`);

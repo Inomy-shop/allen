@@ -106,8 +106,18 @@ export async function loadMcpServers(db: Db): Promise<Record<string, unknown>> {
  * Get the FlowForge MCP server config.
  * This provides our built-in tools (list_workflows, get_execution, etc.)
  * via a local MCP server that calls the FlowForge API.
+ *
+ * `extraEnv` lets callers stamp additional environment variables onto the
+ * MCP server's subprocess env — used for spawn-tree propagation so the
+ * MCP server can read FLOWFORGE_PARENT_EXECUTION_ID / _CALLER /
+ * _ROOT_EXECUTION_ID at startup and forward them into every `spawn_agent`
+ * HTTP call. Passing them explicitly here (rather than relying on
+ * claude-cli's parent-env inheritance for MCP children) keeps the chain
+ * working regardless of whether the SDK merges or replaces env.
  */
-export function getFlowForgeMcpConfig(): Record<string, unknown> | null {
+export function getFlowForgeMcpConfig(
+  extraEnv?: Record<string, string>,
+): Record<string, unknown> | null {
   const apiUrl = process.env.FLOWFORGE_API_URL ?? `http://localhost:${process.env.PORT ?? '4023'}`;
 
   // Find the FlowForge MCP server script
@@ -120,22 +130,42 @@ export function getFlowForgeMcpConfig(): Record<string, unknown> | null {
   const serverPath = candidates.find(p => existsSync(p));
   if (!serverPath) return null;
 
+  // The MCP server needs JWT_ACCESS_SECRET to mint authenticated HTTP calls
+  // back into the FlowForge API. Previous versions relied on claude-cli
+  // merging parent env with our `env` field, which is an undocumented
+  // assumption — we now pass JWT_ACCESS_SECRET explicitly so the MCP
+  // server works even under an SDK/CLI version that replaces env instead
+  // of merging.
+  const env: Record<string, string> = {
+    FLOWFORGE_API_URL: apiUrl,
+    PATH: process.env.PATH ?? '',
+    HOME: process.env.HOME ?? '',
+    ...(process.env.JWT_ACCESS_SECRET ? { JWT_ACCESS_SECRET: process.env.JWT_ACCESS_SECRET } : {}),
+    ...(extraEnv ?? {}),
+  };
+
   return {
     type: 'stdio',
     command: 'npx',
     args: ['tsx', serverPath],
-    env: { FLOWFORGE_API_URL: apiUrl },
+    env,
   };
 }
 
 /**
  * Load ALL MCP servers: FlowForge built-in + user-configured external.
+ * `extraEnv` is forwarded to the FlowForge MCP server's env so callers
+ * (node-executor, chat-tools.runSpawnInBackground) can stamp the
+ * spawn-tree propagation vars without reaching inside the config dict.
  */
-export async function loadAllMcpServers(db: Db): Promise<Record<string, unknown>> {
+export async function loadAllMcpServers(
+  db: Db,
+  extraEnv?: Record<string, string>,
+): Promise<Record<string, unknown>> {
   const config: Record<string, unknown> = {};
 
   // FlowForge built-in tools
-  const ffConfig = getFlowForgeMcpConfig();
+  const ffConfig = getFlowForgeMcpConfig(extraEnv);
   if (ffConfig) config.flowforge = ffConfig;
 
   // External servers (Linear, Postgres, MongoDB, etc.)

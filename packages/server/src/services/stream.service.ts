@@ -64,6 +64,32 @@ export function broadcastToExecution(executionId: string, event: SSEEvent): void
 }
 
 /**
+ * Broadcast an SSE event to subscribers of `executionId` WITHOUT persisting
+ * it to Mongo. Used by spawn-tree log fan-out: the child execution already
+ * wrote its own log row under its own executionId, and we just want the
+ * parent's live stream to see a mirrored copy. Persisting a duplicate row
+ * under the parent's executionId would double storage and confuse the
+ * /logs endpoint's sort ordering.
+ *
+ * The parent's page sees the fanned-out event live via SSE, and the
+ * /logs endpoint's union query surfaces the same data from the child's
+ * stored rows on refresh / initial load.
+ */
+export function broadcastSSEOnly(executionId: string, event: SSEEvent): void {
+  const data = JSON.stringify(event.data);
+  for (let i = clients.length - 1; i >= 0; i--) {
+    const client = clients[i];
+    if (client.executionId === executionId || client.executionId === '*') {
+      try {
+        client.res.write(`event: ${event.event}\ndata: ${data}\n\n`);
+      } catch {
+        clients.splice(i, 1);
+      }
+    }
+  }
+}
+
+/**
  * Create an emitter that broadcasts SSE events for a specific executionId.
  * The executionId MUST be provided — the emitter is bound to it.
  */

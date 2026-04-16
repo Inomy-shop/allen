@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from 'react';
+import { Link } from 'react-router-dom';
 import type { ExecutionLog } from '../../hooks/useExecution';
 import Select from '../common/Select';
-import { Search, ArrowDown } from 'lucide-react';
+import { Search, ArrowDown, ExternalLink } from 'lucide-react';
 
 const categoryColors: Record<string, string> = {
   system: 'text-theme-secondary bg-surface-200/40',
@@ -32,7 +33,15 @@ export default function Timeline({ logs, nodeFilter, onNodeFilterChange, workflo
   const containerRef = useRef<HTMLDivElement>(null);
   const [search, setSearch] = useState('');
   const [autoScroll, setAutoScroll] = useState(true);
+  const [showSpawnLogs, setShowSpawnLogs] = useState(true);
   const isUserScrolling = useRef(false);
+
+  // Detect whether a log row comes from a spawned agent (Phase 3 fan-out).
+  // Both fields are populated by chat-tools.ts liveLog when fan-out is
+  // enabled, and by the /logs endpoint's normalization pass for descendant
+  // rows pulled via the union query.
+  const isChildLog = (l: ExecutionLog): boolean =>
+    !!(l.data && typeof l.data === 'object' && (l.data as any).childExecutionId);
 
   // Auto-scroll to bottom when new logs arrive — only if user hasn't scrolled up
   useEffect(() => {
@@ -59,8 +68,11 @@ export default function Timeline({ logs, nodeFilter, onNodeFilterChange, workflo
   const filtered = logs.filter(log => {
     if (nodeFilter && log.node !== nodeFilter) return false;
     if (search && !log.message.toLowerCase().includes(search.toLowerCase())) return false;
+    if (!showSpawnLogs && isChildLog(log)) return false;
     return true;
   });
+
+  const spawnLogCount = logs.filter(isChildLog).length;
 
   return (
     <div className="flex flex-col h-full relative">
@@ -84,6 +96,23 @@ export default function Timeline({ logs, nodeFilter, onNodeFilterChange, workflo
             className="bg-transparent text-xs text-theme-secondary placeholder-gray-600 outline-none w-full font-mono"
           />
         </div>
+        {/* Spawned-agent log toggle. Only shown when there's at least one
+            child log in the current set so we don't clutter the header
+            for non-spawn workflows. */}
+        {spawnLogCount > 0 && (
+          <label
+            className="flex items-center gap-1 text-[10px] font-mono text-theme-muted hover:text-theme-primary cursor-pointer shrink-0"
+            title={`${spawnLogCount} log line${spawnLogCount === 1 ? '' : 's'} from spawned agents`}
+          >
+            <input
+              type="checkbox"
+              checked={showSpawnLogs}
+              onChange={e => setShowSpawnLogs(e.target.checked)}
+              className="w-3 h-3 accent-accent-purple"
+            />
+            Spawn ({spawnLogCount})
+          </label>
+        )}
       </div>
 
       {/* Log entries */}
@@ -100,11 +129,22 @@ export default function Timeline({ logs, nodeFilter, onNodeFilterChange, workflo
           filtered.map((log, i) => {
             const isError = log.level === 'error';
             const catClass = isError ? 'text-accent-red bg-accent-red/10' : (categoryColors[log.category] ?? 'text-theme-secondary bg-surface-200/40');
+            const child = isChildLog(log) ? (log.data as {
+              childExecutionId: string;
+              childAgentName: string;
+              childParentCaller: string | null;
+              childDepth: number;
+            }) : null;
+            // Indent child rows by depth so nested spawn trees render as
+            // a visible hierarchy — grandchildren sit further to the right
+            // than their direct parents.
+            const indentPx = child ? Math.min(child.childDepth, 4) * 16 : 0;
 
             return (
               <div
                 key={`${log.executionId}-${i}`}
-                className={`flex items-start gap-1.5 px-3 py-0.5 hover:bg-accent-blue/5 text-xs transition-colors ${isError ? 'bg-accent-red/5' : ''}`}
+                className={`flex items-start gap-1.5 px-3 py-0.5 hover:bg-accent-blue/5 text-xs transition-colors ${isError ? 'bg-accent-red/5' : ''} ${child ? 'bg-accent-purple/[0.03]' : ''}`}
+                style={{ paddingLeft: 12 + indentPx }}
               >
                 {/* Timestamp */}
                 <span className="text-[10px] text-theme-muted font-mono mt-px shrink-0 w-28 tabular-nums">
@@ -123,6 +163,20 @@ export default function Timeline({ logs, nodeFilter, onNodeFilterChange, workflo
                   </span>
                 ) : (
                   <span className="shrink-0 w-20" />
+                )}
+
+                {/* Spawned-agent origin tag. Replaces the blank space of a
+                    normal log row with a clickable [agent-name] chip that
+                    opens the child's own execution detail page. */}
+                {child && (
+                  <Link
+                    to={`/executions/${child.childExecutionId}`}
+                    className="shrink-0 inline-flex items-center gap-0.5 text-[9px] font-mono px-1 py-px rounded bg-accent-purple/10 text-accent-purple hover:bg-accent-purple/20 transition-colors max-w-[120px] truncate"
+                    title={`Spawned by ${child.childParentCaller ?? 'unknown'} — click to open child execution`}
+                  >
+                    <span className="truncate">{child.childAgentName}</span>
+                    <ExternalLink className="w-2.5 h-2.5 shrink-0 opacity-60" />
+                  </Link>
                 )}
 
                 {/* Message */}

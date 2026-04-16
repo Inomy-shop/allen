@@ -620,14 +620,19 @@ export class FlowForgeEngine {
 
     const nodeType = nodeDef.type ?? 'agent';
 
-    // Compute hasConditionalOutEdges before execution (used for both nodeContext and gate check)
+    // Compute hasConditionalOutEdges — informational for logging. We used to
+    // gate auto-gate behavior on this, but auto-gate is about short-circuiting
+    // the workflow (STOP/SKIP), which is orthogonal to conditional routing.
+    // Agents on conditional-edge nodes still need to be able to say "the
+    // premise is broken, stop everything" — see buildNodeContext for details.
     const hasConditionalOutEdges = edges?.some(e => {
       const froms = Array.isArray(e.from) ? e.from : [e.from];
       return froms.includes(nodeName) && (e.condition || e.max_retries != null);
     }) ?? false;
 
-    // Build context-aware auto-gate instruction for agent nodes
-    let nodeContext = nodeType === 'agent' && !hasConditionalOutEdges && workflow
+    // Build context-aware auto-gate instruction for EVERY agent node,
+    // regardless of whether it has conditional outgoing edges.
+    let nodeContext = nodeType === 'agent' && workflow
       ? buildNodeContext(nodeName, { nodes: workflow.nodes as Record<string, unknown>, edges: workflow.edges as unknown as Array<Record<string, unknown>> })
       : '';
 
@@ -828,17 +833,31 @@ export class FlowForgeEngine {
         delete exec.state.__learnings;
       }
 
-      // Auto-gate: check if agent signaled stop/skip/clarify
-      // Skip auto-gate for nodes that have outgoing conditional/retry edges
-      // (those nodes make routing decisions via their outputs, not via auto-gate)
-      if (nodeType === 'agent' && !hasConditionalOutEdges) {
+      // Auto-gate: check if agent signaled stop / skip / clarify.
+      //
+      // Runs for EVERY agent node now, including nodes with conditional
+      // outgoing edges. Auto-gate is about short-circuiting the workflow
+      // (the premise is broken, the task is already done, continuing is
+      // wasted tokens), which is orthogonal to conditional routing. An
+      // agent that wants to use its conditional edges simply omits
+      // `__action` from its output — same as before.
+      //
+      // The `hasConditionalOutEdges` flag is kept for the log line so
+      // operators can see that this gate fired on a node that also had
+      // branch routing — useful forensic signal.
+      if (nodeType === 'agent') {
         const gate = extractAutoGateFields(result.rawResponse ?? '', result.outputs);
         if (gate.action !== 'continue') {
           this.log(exec.id, {
             category: 'gate',
             node: nodeName,
             message: `Auto-gate: ${gate.action} — ${gate.reason ?? 'Agent decided to ' + gate.action}`,
-            data: { action: gate.action, reason: gate.reason, clarifyAction: gate.clarifyAction },
+            data: {
+              action: gate.action,
+              reason: gate.reason,
+              clarifyAction: gate.clarifyAction,
+              onConditionalEdgeNode: hasConditionalOutEdges,
+            },
           });
 
           // Learning system: extract from auto-gate ONLY for stop (workflow was pointless)
@@ -875,13 +894,6 @@ export class FlowForgeEngine {
             message: 'Auto-gate: continue',
           });
         }
-      } else if (nodeType === 'agent' && hasConditionalOutEdges) {
-        this.log(exec.id, {
-          category: 'gate',
-          node: nodeName,
-          level: 'debug',
-          message: 'Auto-gate: skipped (node has conditional edges)',
-        });
       }
 
       return 'continue';

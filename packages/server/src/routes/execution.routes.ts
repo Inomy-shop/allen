@@ -116,6 +116,60 @@ export function executionRoutes(db: Db): Router {
     }
   });
 
+  // POST /api/executions/:id/cancel-subtree
+  //
+  // Cancels this execution AND every spawn-tree descendant via the
+  // rootExecutionId index. Used from the Spawned Agents panel to kill a
+  // whole branch without having to click through each child. The parent
+  // /cancel route handles the top execution, we just need to reach the
+  // already-running descendants.
+  router.post('/:id/cancel-subtree', async (req: Request, res: Response) => {
+    try {
+      const id = param(req, 'id');
+      // Gather descendants (running or not — we try to cancel each).
+      const descendants = await db
+        .collection('executions')
+        .find(
+          { rootExecutionId: id, id: { $ne: id } },
+          { projection: { id: 1, status: 1 } },
+        )
+        .toArray();
+      const ids = [id, ...descendants.map(d => d.id as string)];
+      const results: { id: string; ok: boolean; error?: string }[] = [];
+      for (const execId of ids) {
+        try {
+          await service.cancel(execId);
+          results.push({ id: execId, ok: true });
+        } catch (err: unknown) {
+          results.push({ id: execId, ok: false, error: (err as Error).message });
+        }
+      }
+      res.json({ cancelled: results.filter(r => r.ok).length, total: ids.length, results });
+    } catch (err: unknown) {
+      res.status(500).json({ error: (err as Error).message });
+    }
+  });
+
+  // GET /api/executions/:id/children
+  //
+  // Returns every execution spawned by this one. Two scopes:
+  //   mode=direct      → only rows where parentExecutionId === :id
+  //                      (children immediately under this execution)
+  //   mode=descendants → every row where rootExecutionId === :id
+  //                      (entire spawn subtree — children, grandchildren, ...)
+  // Default is `direct`. The rows carry the minimum fields the execution
+  // detail page needs to render the "Spawned Agents" panel without a
+  // second round-trip.
+  router.get('/:id/children', async (req: Request, res: Response) => {
+    try {
+      const mode = (req.query.mode as string) === 'descendants' ? 'descendants' : 'direct';
+      const rows = await service.getChildren(param(req, 'id'), mode);
+      res.json(rows);
+    } catch (err: unknown) {
+      res.status(500).json({ error: (err as Error).message });
+    }
+  });
+
   // GET /api/executions/:id/traces
   router.get('/:id/traces', async (req: Request, res: Response) => {
     try {
@@ -137,13 +191,62 @@ export function executionRoutes(db: Db): Router {
   });
 
   // GET /api/executions/:id/logs
+  //
+  // Returns the execution's own log rows plus, by default, any rows from
+  // spawn-tree descendants (children spawned via spawn_agent) so the
+  // workflow execution page reconstructs the same merged view the live
+  // SSE fan-out produces. Descendant rows are decorated with
+  // `childExecutionId` / `childAgentName` fields so the UI can render
+  // them indented with their origin tag.
+  //
+  // Query params:
+  //   include_descendants=false   — exclude child logs (child pages use this)
+  //   limit / offset              — standard pagination
+  //   node / category / level     — field filters on the PARENT's own rows;
+  //                                 not applied to descendant rows so the
+  //                                 user sees the full child context
   router.get('/:id/logs', async (req: Request, res: Response) => {
     try {
       const executionId = param(req, 'id');
-      const filter: Record<string, unknown> = { executionId };
-      if (req.query.node) filter.node = String(req.query.node);
-      if (req.query.category) filter.category = String(req.query.category);
-      if (req.query.level) filter.level = String(req.query.level);
+      const includeDescendants = req.query.include_descendants !== 'false';
+
+      // Start with the parent's own filter. These field filters only apply
+      // to parent rows, not descendants — descendant rows carry different
+      // categories (tool/agent) that the user probably still wants to see.
+      const parentFilter: Record<string, unknown> = { executionId };
+      if (req.query.node) parentFilter.node = String(req.query.node);
+      if (req.query.category) parentFilter.category = String(req.query.category);
+      if (req.query.level) parentFilter.level = String(req.query.level);
+
+      // Find every descendant execution id (any depth) via the
+      // rootExecutionId index, excluding the root itself. Also capture
+      // each descendant's agent name + caller so we can decorate the
+      // returned rows with child-tag fields the UI uses for indentation.
+      let descendantIds: string[] = [];
+      const descendantMeta = new Map<string, { agentName: string; parentCaller: string | null; depth: number }>();
+      if (includeDescendants) {
+        const descendants = await db
+          .collection('executions')
+          .find(
+            { rootExecutionId: executionId, id: { $ne: executionId } },
+            { projection: { id: 1, workflowName: 1, parentCaller: 1, spawnDepth: 1 } },
+          )
+          .toArray();
+        for (const d of descendants) {
+          const wf = (d.workflowName as string | undefined) ?? '';
+          const agentNameFromWf = wf.includes(':spawn_agent/') ? wf.split(':spawn_agent/')[1] : '';
+          descendantIds.push(d.id as string);
+          descendantMeta.set(d.id as string, {
+            agentName: agentNameFromWf || 'unknown',
+            parentCaller: (d.parentCaller as string | undefined) ?? null,
+            depth: (d.spawnDepth as number | undefined) ?? 1,
+          });
+        }
+      }
+
+      const filter: Record<string, unknown> = descendantIds.length > 0
+        ? { $or: [parentFilter, { executionId: { $in: descendantIds } }] }
+        : parentFilter;
 
       const limit = Math.min(parseInt(String(req.query.limit ?? '500'), 10), 2000);
       const offset = parseInt(String(req.query.offset ?? '0'), 10);
@@ -155,7 +258,61 @@ export function executionRoutes(db: Db): Router {
         .limit(limit)
         .toArray();
 
-      res.json(logs);
+      // Normalize descendant rows into the engine's log shape so the UI
+      // renders them natively. The child's own execution_logs rows use a
+      // different schema (`{ type, tool, content, agent }`) than engine
+      // logs (`{ category, level, node, message, data }`) because the
+      // chat-tools liveLog helper predates the engine's structured log
+      // schema. Parent rows pass through unchanged.
+      const normalized = logs.map(row => {
+        const rowExecId = row.executionId as string;
+        const meta = descendantMeta.get(rowExecId);
+        if (!meta) return row; // parent row, pass through
+
+        // Already in engine shape? (Future: if we migrate liveLog to the
+        // engine schema, descendant rows will come out typed correctly.)
+        if (typeof row.category === 'string' && typeof row.message === 'string') {
+          return {
+            ...row,
+            data: {
+              ...((row.data as Record<string, unknown>) ?? {}),
+              childExecutionId: rowExecId,
+              childAgentName: meta.agentName,
+              childParentCaller: meta.parentCaller,
+              childDepth: meta.depth,
+            },
+          };
+        }
+
+        // Legacy liveLog shape — transform into engine shape.
+        const type = row.type as string | undefined;
+        const tool = row.tool as string | undefined;
+        const content = row.content as string | undefined;
+        const category: 'tool' | 'agent' | 'system' =
+          type === 'tool_use' || tool ? 'tool'
+          : type === 'text' ? 'agent'
+          : 'system';
+        const message = content ?? (tool ? `Tool: ${tool}` : type ?? '(child log)');
+        return {
+          _id: row._id,
+          executionId: rowExecId,
+          timestamp: row.timestamp ?? new Date(),
+          level: 'info',
+          category,
+          node: meta.parentCaller ?? meta.agentName,
+          message,
+          data: {
+            childExecutionId: rowExecId,
+            childAgentName: meta.agentName,
+            childParentCaller: meta.parentCaller,
+            childDepth: meta.depth,
+            originalType: type,
+            originalTool: tool,
+          },
+        };
+      });
+
+      res.json(normalized);
     } catch (err: unknown) {
       res.status(500).json({ error: (err as Error).message });
     }

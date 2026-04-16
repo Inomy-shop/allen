@@ -12,6 +12,7 @@ import { renderTemplate } from './template.js';
 import { extractOutputs, buildOutputInstruction, outputKeys } from './output-extractor.js';
 import { evaluateCondition } from './condition-parser.js';
 import { executeCodexNode } from './codex-executor.js';
+import { statSync } from 'node:fs';
 
 function emitLog(
   deps: NodeExecutorDeps,
@@ -133,45 +134,195 @@ async function executeAgentNode(
   //   3. agent.sourceRepoPath — populated for agents imported from a registered repo's
   //                      `.claude/agents/*.md` file, so an imported agent auto-runs in
   //                      its source repo without threading inputs through the workflow.
-  const cwd =
-    (state.worktree_path as string | undefined) ??
-    (state.repo_path as string | undefined) ??
-    role?.sourceRepoPath;
+  //
+  // Each candidate is validated as an existing directory before we accept it.
+  // Without this, a stale /tmp path (after macOS /tmp cleanup, a deleted
+  // worktree, or a path that was valid on the workflow author's laptop but
+  // not on this host) causes `child_process.spawn({ cwd })` to fail with
+  // `spawn node ENOENT` — Node's error formatter blames the executable even
+  // though the real problem is the missing cwd, which is maximally confusing.
+  const dirExists = (p: string | undefined): boolean => {
+    if (!p || typeof p !== 'string') return false;
+    try { return statSync(p).isDirectory(); } catch { return false; }
+  };
+  const cwdCandidates: [string, string | undefined][] = [
+    ['worktree_path', state.worktree_path as string | undefined],
+    ['repo_path', state.repo_path as string | undefined],
+    ['sourceRepoPath', role?.sourceRepoPath],
+  ];
+  let cwd: string | undefined;
+  for (const [label, path] of cwdCandidates) {
+    if (!path) continue;
+    if (dirExists(path)) { cwd = path; break; }
+    emitLog(deps, nodeName, {
+      level: 'warn',
+      category: 'system',
+      message: `[cwd] ${label}="${path}" does not exist — falling through to next candidate`,
+    });
+  }
+  if (!cwd) {
+    const declared = cwdCandidates.filter(([, p]) => p).map(([l, p]) => `${l}="${p}"`).join(', ');
+    if (declared) {
+      emitLog(deps, nodeName, {
+        level: 'warn',
+        category: 'system',
+        message: `[cwd] no candidate directory exists (${declared}); inheriting engine's cwd`,
+      });
+    }
+  }
   const existingSession = sessions[nodeName];
-  // Resume the agent's prior session by default — preserves context across
-  // retry loops (build/test failures, clarify revisions, review verdicts).
-  // Opt-out by setting `resume_on_retry: false` on a node that should start fresh.
-  const resumeFlag = nodeDef.resume_on_retry !== false;
-  const resume = resumeFlag && existingSession ? existingSession : undefined;
-
-  // Decide prompt shape based on whether this is a retry WITH a resumable
-  // session. On a real retry, the agent already has the full task context
-  // from its prior turns — we only need to hand it the feedback. Re-sending
-  // the whole original prompt wastes tokens and confuses the agent (it sees
-  // "analyze this task" right after it just analyzed it).
+  // A node re-enters the executor in two distinct shapes, and the prompt
+  // we send is different for each. In BOTH cases we resume the prior
+  // session — the resumed conversation already carries the agent's role,
+  // task history, tool calls, and output schema, and sending the full
+  // rendered prompt again on top of replayed session history is what
+  // overflows the model's context window and causes the opaque
+  // `Claude Code process exited with code 1` at subprocess startup.
+  //
+  //   (a) Direct retry target — an edge looped back to this node
+  //       (`qa→develop→qa` after `qa_verdict='fail'`). `state.__retry_target`
+  //       contains this node's name and `retry_context` carries the gate
+  //       feedback.
+  //         → "RETRY FEEDBACK" prompt: "you failed a downstream gate, fix
+  //           the issues below, re-emit your output."
+  //
+  //   (b) Forward-path re-entry — an UPSTREAM node retried, completed, and
+  //       routing arrived back at this node on the forward path. The engine
+  //       already consumed the retry payload when the upstream target
+  //       completed, so `__retry_target` no longer contains this node.
+  //       Critically, the upstream re-run produced DIFFERENT outputs
+  //       (new files_changed, developer_output, review feedback), so the
+  //       agent's prior analysis is now stale.
+  //         → "UPSTREAM RE-RUN" prompt: "your upstream dependency re-ran,
+  //           your prior outputs are stale, re-read the current state and
+  //           re-execute your contract."
+  //
+  // `resume_on_retry: false` disables resume entirely — those nodes always
+  // start fresh with the full rendered prompt.
   const retryTargets = state.__retry_target as string[] | undefined;
   const isRetryTarget = Array.isArray(retryTargets) && retryTargets.includes(nodeName);
-  const useMinimalRetryPrompt = isRetryTarget && resume !== undefined;
+  const resumeFlag = nodeDef.resume_on_retry !== false;
+  const resume = resumeFlag && existingSession ? existingSession : undefined;
+  // Three possible prompt shapes, decided together:
+  //   retry        — isRetryTarget && resume  — gate feedback
+  //   forward      — !isRetryTarget && resume — upstream re-ran
+  //   full         — no resume (first run, or resume_on_retry:false)
+  const promptShape: 'retry' | 'forward' | 'full' =
+    resume !== undefined && isRetryTarget ? 'retry'
+    : resume !== undefined ? 'forward'
+    : 'full';
+
+  // Log forward-path re-entries so operators can correlate the upstream
+  // retry with this node's re-invocation — silent re-runs are hard to debug.
+  if (promptShape === 'forward') {
+    emitLog(deps, nodeName, {
+      level: 'debug',
+      category: 'system',
+      message: `[session] forward-path re-entry — resuming session ${existingSession!.slice(0, 8)} with upstream-re-ran prompt`,
+    });
+  }
+
+  // Helper used by both resume-shape branches. Serializes a state value for
+  // inlining in the minimal retry prompt. Strings are shown verbatim (up to
+  // 800 chars); numbers/booleans/null are shown as-is; arrays/objects are
+  // JSON-stringified then truncated. The truncation ceiling is deliberately
+  // generous — we want the agent to see enough of the updated value to
+  // compare against its session memory, but not enough to overflow the
+  // context window when the value is e.g. an entire rawResponse dump.
+  const formatStateValue = (v: unknown): string => {
+    if (v == null) return String(v);
+    if (typeof v === 'string') {
+      return v.length > 800 ? v.slice(0, 800) + ` ... (${v.length - 800} chars truncated)` : v;
+    }
+    if (typeof v === 'number' || typeof v === 'boolean') return String(v);
+    let json: string;
+    try { json = JSON.stringify(v, null, 2); }
+    catch { json = String(v); }
+    return json.length > 800 ? json.slice(0, 800) + ` ... (${json.length - 800} chars truncated)` : json;
+  };
+  const renderCurrentState = (): string => {
+    const lines: string[] = [];
+    for (const [k, v] of Object.entries(state)) {
+      if (k.startsWith('__')) continue;
+      // Skip the retry plumbing itself even though it doesn't start with __ —
+      // the agent has no use for these and they'd confuse the snapshot.
+      if (k === 'retry_context' || k === 'retry_count') continue;
+      lines.push(`${k}: ${formatStateValue(v)}`);
+    }
+    return lines.length > 0 ? lines.join('\n') : '(no top-level state fields)';
+  };
 
   let prompt: string;
-  if (useMinimalRetryPrompt) {
-    // Minimal retry prompt — only the feedback. The agent's resumed session
-    // already carries the task, tool history, and prior output schema.
+  if (promptShape === 'retry') {
+    // Gate-feedback retry — a downstream reviewer rejected this node's
+    // previous output and fired the retry edge. The resumed session carries
+    // the original task and the agent's prior turns; we only hand back the
+    // reviewer's feedback. The agent decides what re-work that requires.
+    //
+    // NOTE on `__retry_source`: this is the REVIEWING node (qa, code_review,
+    // validator, etc.) — the one that decided the retry — NOT the current
+    // node being re-run. The prompt is worded accordingly.
     const attempt = (state.__retry_attempt as number) ?? 2;
-    const source = (state.__retry_source as string) ?? 'previous step';
+    const source = (state.__retry_source as string) ?? 'downstream step';
     const context = (state.retry_context as string) ?? '';
     prompt = `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-RETRY FEEDBACK — ATTEMPT ${attempt}
+REVIEW FEEDBACK — ATTEMPT ${attempt}
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-You are being re-run. The ${source} step produced a result that failed a
-downstream gate. Fix the issues below and re-emit your JSON output block
-with the corrected values.
+Your previous output was rejected by the ${source} step's review. Their
+feedback is below. Apply the fixes and re-emit your JSON output block.
 
-Do NOT redo work that is already correct. Do NOT re-read files or re-run
-tools unless the feedback specifically requires it. Focus only on what
-the feedback calls out.
+Do NOT redo analysis that is still valid — apply the feedback as a
+targeted fix. You decide what tool calls that requires: re-read the
+files you're about to change, re-run tests after editing, whatever
+your role's contract needs. Do not skip verification to save turns.
 
+━━━ FEEDBACK FROM ${source} ━━━
 ${context}
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`;
+  } else if (promptShape === 'forward') {
+    // Upstream re-ran. Your task is unchanged, but your inputs changed and
+    // your prior outputs are stale.
+    //
+    // Example — qa after a develop retry loop:
+    //   qa ran, failed develop, fired retry edge → develop re-ran, produced
+    //   new files_changed + developer_output → qa re-enters on the forward
+    //   path → qa must re-run build/lint/tests against the NEW files, not
+    //   return its prior "fail" verdict from session memory.
+    //
+    // Example — code_review after a downstream-triggered rewind:
+    //   code_review approved → downstream node failed → retry-from-node
+    //   rewound past code_review to develop → develop re-ran → code_review
+    //   re-enters on the forward path → code_review must review the NEW
+    //   diff, not return its prior "APPROVED" verdict.
+    //
+    // CRITICAL: the agent has no way to query workflow state at runtime.
+    // It can only see what we put in the prompt, its session memory, and
+    // what it reads from disk via tools. The agent's session memory has
+    // the ORIGINAL interpolated state values from the first full prompt —
+    // those are stale. So we MUST dump the current values in the prompt.
+    // Skipping this is what makes a naive forward-re-entry prompt operate
+    // on stale data and silently return wrong answers.
+    prompt = `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+UPSTREAM RE-RUN — INPUTS CHANGED
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+An upstream node in this workflow re-ran since your last turn and
+produced different outputs. The workflow inputs you operated on
+previously are now stale — do not trust anything in your prior turns'
+analysis, tool outputs, or returned JSON.
+
+Your role, task, tools, and output schema are UNCHANGED. Your job is to
+re-execute your original task against the CURRENT inputs shown below and
+emit a fresh JSON output block.
+
+Compare each field against what you remember from your prior turn. Where
+they differ, your earlier work on that field is invalid. Where they
+match, your earlier analysis may still apply — but verify, don't assume.
+
+Do NOT copy your prior JSON output verbatim. Produce values that reflect
+the current inputs, even if they happen to match your prior values.
+
+━━━ CURRENT WORKFLOW STATE ━━━
+${renderCurrentState()}
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`;
   } else {
     // Full prompt — fresh run (first attempt) or retry with a reset session.
@@ -226,11 +377,27 @@ ${context}
 
   const { query } = await import('@anthropic-ai/claude-code');
 
+  // Spawn-tree context vars — propagated to claude-cli (and on to the
+  // FlowForge MCP server it spawns) so any `spawn_agent` tool call made
+  // inside this agent's session can tag the resulting execution row with
+  // its caller. Root id lets the Phase 3 log fan-out broadcast grandchild
+  // events up to the top of the tree in one indexed lookup. See
+  // chat-tools.ts:spawnAgent for where these are consumed.
+  const spawnContextEnv: Record<string, string> = {
+    FLOWFORGE_PARENT_EXECUTION_ID: deps.executionId ?? '',
+    FLOWFORGE_PARENT_CALLER: nodeName,
+    FLOWFORGE_ROOT_EXECUTION_ID:
+      process.env.FLOWFORGE_ROOT_EXECUTION_ID || deps.executionId || '',
+  };
+
   // Load MCP servers so agent nodes can access Linear, Postgres, etc.
+  // We stamp the spawn-tree context onto the FlowForge MCP server's env
+  // block here so it's carried as a first-class subprocess env, not left
+  // to the SDK's undocumented merge behavior.
   let mcpServers: Record<string, unknown> | undefined;
   try {
     const { loadAllMcpServers } = await import('./mcp-loader.js');
-    if (deps.db) mcpServers = await loadAllMcpServers(deps.db);
+    if (deps.db) mcpServers = await loadAllMcpServers(deps.db, spawnContextEnv);
   } catch { /* MCP not available — continue without */ }
 
   // Build the effective system prompt with live org chart + delegation targets
@@ -305,6 +472,9 @@ ${context}
         resume: opts.resumeSession,
         maxTurns: opts.maxTurns ?? 50,
         permissionMode: resolvedPlanMode ? 'plan' : 'bypassPermissions',
+        // Merge parent env so PATH / HOME / ANTHROPIC_API_KEY / etc survive,
+        // then overlay our spawn-tree vars.
+        env: { ...process.env, ...spawnContextEnv },
         ...(mcpServers && Object.keys(mcpServers).length > 0 ? { mcpServers: mcpServers as any } : {}),
         ...(deps.abortSignal ? { abortController: { signal: deps.abortSignal, abort() { /* handled by engine */ } } as any } : {}),
       } as Record<string, unknown>,

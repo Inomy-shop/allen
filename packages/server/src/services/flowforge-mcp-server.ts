@@ -14,6 +14,16 @@
 
 const API_BASE = process.env.FLOWFORGE_API_URL ?? `http://localhost:${process.env.PORT ?? '4023'}`;
 
+// Spawn-tree context — passed in by whoever launched this MCP server (a
+// workflow node's claude-cli, or an already-spawned agent's claude-cli).
+// These are propagated via env because the Claude Code SDK passes parent
+// env to its stdio MCP children. When this process invokes `spawn_agent`,
+// we forward them to the HTTP endpoint so chat-tools can record
+// parent/root linkage on the newly-created execution row.
+const SPAWN_PARENT_EXECUTION_ID = process.env.FLOWFORGE_PARENT_EXECUTION_ID || undefined;
+const SPAWN_PARENT_CALLER = process.env.FLOWFORGE_PARENT_CALLER || undefined;
+const SPAWN_ROOT_EXECUTION_ID = process.env.FLOWFORGE_ROOT_EXECUTION_ID || undefined;
+
 // ── Auth: mint a short-lived JWT using the shared secret ──
 // The MCP server runs as a child process of the main server and shares
 // JWT_ACCESS_SECRET via env. We mint a system-admin token on demand and
@@ -266,7 +276,18 @@ async function executeTool(name: string, args: Record<string, unknown>): Promise
       const res = await fetch(url, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ agent_name: args.agent_name, prompt: args.prompt, repo_path: args.repo_path, session_id: args.session_id }),
+        body: JSON.stringify({
+          agent_name: args.agent_name,
+          prompt: args.prompt,
+          repo_path: args.repo_path,
+          session_id: args.session_id,
+          // Spawn-tree linkage — lets the execution row carry its caller
+          // label, parent pointer, and root pointer so the parent workflow's
+          // execution page can find and track its spawned children.
+          parent_execution_id: SPAWN_PARENT_EXECUTION_ID,
+          parent_caller: SPAWN_PARENT_CALLER,
+          root_execution_id: SPAWN_ROOT_EXECUTION_ID,
+        }),
       });
       return res.json();
     }
