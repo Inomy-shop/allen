@@ -155,7 +155,11 @@ export class TeamService {
     if (!lead) throw new Error(`Lead agent "${agentName}" not found`);
 
     const currentTeam = lead.teamName as string | undefined;
-    if (currentTeam && currentTeam !== teamName) {
+    // Allow moves FROM 'unassigned' — it's a holding pen for imported
+    // agents, not a real team assignment. Without this, creating a new
+    // team with an imported agent as lead is impossible (circular:
+    // team creation needs the lead, but the lead is "in a team").
+    if (currentTeam && currentTeam !== teamName && currentTeam !== 'unassigned') {
       throw new Error(
         `Agent "${agentName}" is already a member of team "${currentTeam}". ` +
           `Cross-team agent moves are not allowed — pick a different lead, or delete the agent and recreate it under "${teamName}".`,
