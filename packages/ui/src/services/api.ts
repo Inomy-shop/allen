@@ -136,6 +136,10 @@ export interface SpawnedChild {
   failedNode: string | null;
   errorMessage: string | null;
   promptPreview: string;
+  /** How the parent↔child link was established:
+   *  'direct'  — Phase 1 parentExecutionId match (authoritative).
+   *  'timing'  — Timing-based correlation for pre-Phase-1 data (heuristic). */
+  linkType: 'direct' | 'timing';
 }
 
 export const executions = {

@@ -81,6 +81,50 @@ async function loadAllAgents(db: Db): Promise<Record<string, AgentDef>> {
   return merged;
 }
 
+// ── Children query helpers ──────────────────────────────────────────────
+
+const CHILDREN_PROJECTION = {
+  id: 1, workflowName: 1, parentExecutionId: 1, parentCaller: 1,
+  rootExecutionId: 1, spawnDepth: 1, status: 1, startedAt: 1,
+  completedAt: 1, durationMs: 1, cost: 1, failedNode: 1,
+  errorMessage: 1, input: 1, meta: 1,
+};
+
+function decorateChildRow(
+  row: Record<string, unknown>,
+  linkType: 'direct' | 'timing',
+): Record<string, unknown> {
+  const wf = (row.workflowName as string | undefined) ?? '';
+  const agentNameFromWf = wf.includes(':spawn_agent/') ? wf.split(':spawn_agent/')[1] : '';
+  const input = (row.input ?? {}) as Record<string, unknown>;
+  const agentName = (input.agent_name as string | undefined) ?? agentNameFromWf ?? 'unknown';
+  const promptText = (input.prompt as string | undefined) ?? '';
+  const promptPreview = promptText.length > 200 ? promptText.slice(0, 200) + '…' : promptText;
+  // For timing-correlated rows, parentCaller is unknown — infer from
+  // meta.spawnedBy which the old spawn_agent code did populate.
+  const inferredCaller = (row.parentCaller as string | undefined)
+    ?? ((row.meta as Record<string, unknown> | undefined)?.spawnedBy as string | undefined)
+    ?? null;
+  return {
+    id: row.id,
+    workflowName: row.workflowName,
+    agentName,
+    parentCaller: inferredCaller,
+    parentExecutionId: row.parentExecutionId ?? null,
+    rootExecutionId: row.rootExecutionId ?? null,
+    spawnDepth: row.spawnDepth ?? 0,
+    status: row.status,
+    startedAt: row.startedAt,
+    completedAt: row.completedAt ?? null,
+    durationMs: row.durationMs ?? null,
+    cost: row.cost ?? null,
+    failedNode: row.failedNode ?? null,
+    errorMessage: row.errorMessage ?? null,
+    promptPreview,
+    linkType,
+  };
+}
+
 export class ExecutionService {
   private db: Db;
   private stateManager: StateManager;
@@ -369,55 +413,11 @@ export class ExecutionService {
       : { parentExecutionId: id };
     const rows = await this.db
       .collection('executions')
-      .find(filter, {
-        projection: {
-          id: 1,
-          workflowName: 1,
-          parentExecutionId: 1,
-          parentCaller: 1,
-          rootExecutionId: 1,
-          spawnDepth: 1,
-          status: 1,
-          startedAt: 1,
-          completedAt: 1,
-          durationMs: 1,
-          cost: 1,
-          failedNode: 1,
-          errorMessage: 1,
-          input: 1,
-          meta: 1,
-        },
-      })
+      .find(filter, { projection: CHILDREN_PROJECTION })
       .sort({ startedAt: 1 })
       .toArray();
-    // Decorate each row with a parsed agent name + a short prompt preview
-    // so the UI doesn't have to split workflowName / truncate input.prompt
-    // in every cell.
-    return rows.map(row => {
-      const wf = (row.workflowName as string | undefined) ?? '';
-      const agentNameFromWf = wf.includes(':spawn_agent/') ? wf.split(':spawn_agent/')[1] : '';
-      const input = (row.input ?? {}) as Record<string, unknown>;
-      const agentName = (input.agent_name as string | undefined) ?? agentNameFromWf ?? 'unknown';
-      const promptText = (input.prompt as string | undefined) ?? '';
-      const promptPreview = promptText.length > 200 ? promptText.slice(0, 200) + '…' : promptText;
-      return {
-        id: row.id,
-        workflowName: row.workflowName,
-        agentName,
-        parentCaller: row.parentCaller ?? null,
-        parentExecutionId: row.parentExecutionId ?? null,
-        rootExecutionId: row.rootExecutionId ?? null,
-        spawnDepth: row.spawnDepth ?? 0,
-        status: row.status,
-        startedAt: row.startedAt,
-        completedAt: row.completedAt ?? null,
-        durationMs: row.durationMs ?? null,
-        cost: row.cost ?? null,
-        failedNode: row.failedNode ?? null,
-        errorMessage: row.errorMessage ?? null,
-        promptPreview,
-      };
-    });
+
+    return rows.map(row => decorateChildRow(row, 'direct'));
   }
 
   // ── Human Intervention Protocol hook ──────────────────────────────────

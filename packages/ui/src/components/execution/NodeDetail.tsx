@@ -377,6 +377,7 @@ interface SpawnedChildRow {
   failedNode: string | null;
   errorMessage: string | null;
   promptPreview: string;
+  linkType: 'direct' | 'timing';
 }
 
 // ── Spawned Agents panel ──

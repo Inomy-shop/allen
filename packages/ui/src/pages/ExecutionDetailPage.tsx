@@ -475,9 +475,25 @@ export default function ExecutionDetailPage() {
   }
 
   // Role execution — simplified single-node view
-  const isAgentExecution = execution.workflowName?.startsWith('chat:spawn_agent/') || execution.source === 'chat';
+  // Detect single-agent executions (spawned via spawn_agent — either from
+  // chat or from a workflow orchestrator node). These render the simplified
+  // AgentExecutionView instead of the full workflow graph.
+  //
+  // Three signals, any one sufficient:
+  //   1. workflowName contains ':spawn_agent/' — the naming convention from
+  //      Phase 1 (caller-qualified, e.g. 'develop:spawn_agent/frontend-developer'
+  //      or legacy 'chat:spawn_agent/frontend-developer').
+  //   2. source === 'chat' — legacy chat-initiated spawns before Phase 1.
+  //   3. source === 'spawn' — workflow-initiated spawns after Phase 1.
+  const wfName = execution.workflowName ?? '';
+  const isAgentExecution = wfName.includes(':spawn_agent/') || execution.source === 'chat' || execution.source === 'spawn';
   if (isAgentExecution) {
-    const agentName = execution.workflowName?.replace('chat:spawn_agent/', '') ?? 'unknown';
+    // Parse the agent name from the caller-qualified workflowName.
+    // Pattern: '<caller>:spawn_agent/<agentName>' — split on ':spawn_agent/'
+    // and take the second part. Falls back gracefully for legacy or malformed names.
+    const agentName = wfName.includes(':spawn_agent/')
+      ? wfName.split(':spawn_agent/')[1]
+      : wfName.replace('chat:spawn_agent/', '') || 'unknown';
     const agentTrace = traces.length > 0 ? traces[traces.length - 1] : null;
     return <AgentExecutionView execution={execution} agentName={agentName} trace={agentTrace} id={id!} />;
   }
