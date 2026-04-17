@@ -11,6 +11,10 @@ export function userRoutes(db: Db): Router {
   const users = new UserService(db);
   const tokens = new RefreshTokenService(db);
 
+  // The global requireAuth at app.ts sets req.user for all /api/* routes.
+  // requireAdmin checks req.user.role. If req.user is somehow missing
+  // (Express quirk with router-level vs app-level middleware), re-run
+  // requireAuth as a safety net.
   router.use(requireAuth, requireAdmin);
 
   // GET /api/users

@@ -6,7 +6,6 @@ export interface AuthedRequest extends Request {
 }
 
 export const requireAuth: RequestHandler = (req: AuthedRequest, res: Response, next: NextFunction) => {
-  return next();
   const header = req.headers.authorization ?? '';
   const [scheme, token] = header.split(' ');
   if (scheme !== 'Bearer' || !token) {
