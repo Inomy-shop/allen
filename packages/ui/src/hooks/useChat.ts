@@ -792,15 +792,25 @@ export function useChat() {
   }, [activeSessionId, streaming, loadSessions]);
 
   const cancelStream = useCallback(() => {
+    // 1. Abort the frontend SSE fetch so the UI stops receiving chunks.
     if (abortRef.current) {
       abortRef.current.abort();
       abortRef.current = null;
+    }
+    // 2. Tell the server to kill the actual claude-cli subprocess. Without
+    //    this the agent keeps running in the background consuming tokens
+    //    even though the user clicked Stop.
+    if (activeSessionId) {
+      fetch(`/api/chat/sessions/${activeSessionId}/cancel`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...authHeaders() },
+      }).catch(() => { /* best-effort — frontend abort already happened */ });
     }
     setStreaming(false);
     setStreamText('');
     setThinkingText('');
     setActiveToolCalls([]);
-  }, []);
+  }, [activeSessionId]);
 
   return {
     sessions,

@@ -260,9 +260,65 @@ interface ActiveQuery {
   toolCalls: ToolCallRecord[];
   listeners: Set<Response>;
   aborted: boolean;
+  /** Abort controller for the underlying LLM subprocess. Calling .abort()
+   *  kills the claude-cli process (SIGTERM) and stops token generation.
+   *  Without this, clicking "Stop" in the UI only closes the SSE connection
+   *  but the agent keeps running in the background burning tokens. */
+  abortController: AbortController;
 }
 
 const activeQueries = new Map<string, ActiveQuery>();
+
+/**
+ * Cancel a running chat session's LLM subprocess. Called from the
+ * POST /api/chat/sessions/:id/cancel route.
+ *
+ * This is an INTERRUPT, not just a stop:
+ *   1. Kills the claude-cli / codex subprocess (SIGTERM via AbortController)
+ *   2. Clears the stale llmSessionId so the next message starts a fresh
+ *      thread instead of trying to resume the dead one (which fails with
+ *      "no rollout found" on Codex)
+ *   3. Marks the in-flight assistant message as cancelled
+ *   4. Removes the session from activeQueries so it's not "busy"
+ *   5. Broadcasts a cancel event to any SSE listeners
+ *
+ * After cancel, the user can immediately send a new message.
+ */
+export async function cancelChatSession(sessionId: string, db?: Db): Promise<boolean> {
+  const entry = activeQueries.get(sessionId);
+  if (!entry) return false;
+
+  // 1. Kill the subprocess for THIS turn only
+  entry.aborted = true;
+  entry.abortController.abort();
+
+  // 2. DO NOT touch llmSessionId — the thread still exists on the
+  //    provider's side. We just killed our local subprocess. The next
+  //    message resumes the same thread with full prior context.
+
+  // 3. Mark the in-flight assistant message as cancelled
+  if (db) {
+    const { ObjectId } = await import('mongodb');
+    if (entry.messageId) {
+      await db.collection('chat_messages').updateOne(
+        { _id: new ObjectId(entry.messageId) },
+        { $set: {
+          status: 'cancelled',
+          content: entry.currentText || '(cancelled by user)',
+          completedAt: new Date(),
+        } },
+      ).catch(() => {});
+    }
+  }
+
+  // 4. Broadcast cancel event so UI updates immediately
+  broadcastToListeners(entry, 'cancelled', { messageId: entry.messageId });
+
+  // 5. Remove from active queries so the user can send the next message
+  activeQueries.delete(sessionId);
+
+  return true;
+}
 
 function broadcastToListeners(entry: ActiveQuery, event: string, data: unknown): void {
   for (const listener of entry.listeners) {
@@ -350,7 +406,7 @@ export class ChatService {
 
     res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', Connection: 'keep-alive', 'X-Accel-Buffering': 'no' });
 
-    const entry: ActiveQuery = { sessionId, messageId: assistantMsgId, currentText: '', toolCalls: [], listeners: new Set([res]), aborted: false };
+    const entry: ActiveQuery = { sessionId, messageId: assistantMsgId, currentText: '', toolCalls: [], listeners: new Set([res]), aborted: false, abortController: new AbortController() };
     activeQueries.set(sessionId, entry);
     res.on('close', () => { entry.listeners.delete(res); });
 
@@ -389,7 +445,7 @@ export class ChatService {
     // ActiveQuery with no SSE listeners — UI can still subscribe via GET /stream
     const entry: ActiveQuery = {
       sessionId, messageId: assistantMsgId, currentText: '', toolCalls: [],
-      listeners: new Set(), aborted: false,
+      listeners: new Set(), aborted: false, abortController: new AbortController(),
     };
     activeQueries.set(sessionId, entry);
 
@@ -570,6 +626,7 @@ export class ChatService {
         messages: llmMessages,
         resumeSessionId: hasSessionResume ? resumeSessionId : undefined,
         cwd: workspaceCwd,
+        signal: entry.abortController.signal,
         onText: (fullText) => {
           entry.currentText = fullText;
           broadcastToListeners(entry, 'message_delta', { text: fullText, messageId: assistantMsgId });
@@ -662,12 +719,40 @@ export class ChatService {
     } catch (error) {
       clearInterval(saveInterval);
       const errorMsg = error instanceof Error ? error.message : String(error);
+
+      // If the user cancelled this turn (clicked Stop), the subprocess was
+      // killed and we get an abort error. cancelChatSession already marked
+      // the message as 'cancelled' and cleaned up — just return silently.
+      // Do NOT overwrite the status to 'failed' or log it as an error.
+      if (entry.aborted) {
+        console.log(`[chat] Turn cancelled by user — skipping error handler`);
+        return;
+      }
+
       const isTimeout = errorMsg.toLowerCase().includes('timed out') || errorMsg.toLowerCase().includes('timeout');
       console.error('Chat LLM error:', errorMsg);
 
+      // ── Fallback: resume failed after an interrupted turn ──
+      // Codex returns "no rollout found" when the previous turn was killed
+      // mid-execution. Claude CLI may return similar session-corruption
+      // errors. In this case, clear the stale session ID and retry the
+      // SAME message without resume — the agent starts a fresh thread but
+      // the chat message history (stored in Mongo) is still intact for
+      // the system prompt to reference.
+      const isResumeFailed = /no rollout found|session.*not found|session.*expired|session.*invalid/i.test(errorMsg);
+      const savedSessionId = (await this.sessions.findOne({ _id: new ObjectId(sessionId) }))?.llmSessionId as string | undefined;
+      if (isResumeFailed && savedSessionId && retryCount < 1) {
+        console.log(`[chat] Resume failed ("${errorMsg.slice(0, 60)}") — clearing stale session and retrying as fresh thread`);
+        await this.sessions.updateOne(
+          { _id: new ObjectId(sessionId) },
+          { $unset: { llmSessionId: '' } },
+        ).catch(() => {});
+        // Retry the same message — runLLM will see no resumeSessionId and start fresh
+        return this.runLLM(sessionId, assistantMsgId, content, entry, agent, retryCount + 1);
+      }
+
       // Auto-retry on timeout: resume the session with "continue" prompt
       // This handles Codex/Claude CLI process timeouts during long delegations
-      const savedSessionId = (await this.sessions.findOne({ _id: new ObjectId(sessionId) }))?.llmSessionId as string | undefined;
       if (isTimeout && savedSessionId && retryCount < 3) {
         console.log(`[chat] Auto-retrying after timeout (attempt ${retryCount + 1}/3), resuming session ${savedSessionId.slice(0, 12)}...`);
         broadcastToListeners(entry, 'agent_report', {

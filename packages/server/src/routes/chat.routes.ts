@@ -1,12 +1,22 @@
 import { Router, type Request, type Response } from 'express';
 import { param } from '../types.js';
-import { ChatService } from '../services/chat.service.js';
+import { ChatService, cancelChatSession } from '../services/chat.service.js';
 import { executeChatTool } from '../services/chat-tools.js';
 import type { Db } from 'mongodb';
 
 export function chatRoutes(db: Db): Router {
   const router = Router();
   const chatService = new ChatService(db);
+
+  // POST /api/chat/sessions/:id/cancel — kill the running LLM subprocess
+  // AND clear the stale session so the next message starts fresh. Acts as
+  // an interrupt: after this call, the user can immediately send a new
+  // message without hitting "session busy" or "no rollout found" errors.
+  router.post('/sessions/:id/cancel', async (req: Request, res: Response) => {
+    const sessionId = param(req, 'id');
+    const cancelled = await cancelChatSession(sessionId, db);
+    res.json({ cancelled, sessionId });
+  });
 
   // POST /api/chat/spawn-agent — Execute spawn_agent tool via API (used by FlowForge MCP server)
   router.post('/spawn-agent', async (req: Request, res: Response) => {

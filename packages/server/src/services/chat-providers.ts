@@ -27,6 +27,9 @@ export interface ProviderCallbacks {
   onToolResult: (tool: string, result: Record<string, unknown>, id: string, durationMs: number) => void;
   /** Called as soon as the session/thread ID is known (for early persistence) */
   onSessionId?: (sessionId: string) => void;
+  /** Abort signal — wired to the claude-cli subprocess so clicking Stop
+   *  in chat kills the process instead of just closing the SSE connection. */
+  signal?: AbortSignal;
 }
 
 export interface ProviderResult {
@@ -241,6 +244,18 @@ export async function runCodexCLI(
       reject(new Error(`Failed to spawn codex: ${err.message}. Is codex CLI installed?`));
     });
 
+    // Wire abort signal so clicking Stop in chat kills the Codex subprocess.
+    if (callbacks.signal) {
+      const onAbort = () => {
+        try { proc.kill('SIGTERM'); } catch { /* already dead */ }
+      };
+      if (callbacks.signal.aborted) {
+        onAbort();
+      } else {
+        callbacks.signal.addEventListener('abort', onAbort, { once: true });
+      }
+    }
+
     proc.stdin.end();
 
     let rawResponse = '';
@@ -329,8 +344,10 @@ export async function runCodexCLI(
       }
     });
 
+    let stderrBuffer = '';
     proc.stderr.on('data', (chunk: Buffer) => {
       const msg = chunk.toString().trim();
+      stderrBuffer += msg + '\n';
       if (msg && !msg.includes('ERROR codex_core') && !msg.includes('Reading additional')) {
         log(`[codex] ${msg}`);
       }
@@ -340,6 +357,15 @@ export async function runCodexCLI(
 
     proc.on('close', (code) => {
       trace.push({ timestamp: new Date(), type: 'complete', text: `exit=${code}` });
+      // If the process exited non-zero with no response text, something
+      // went wrong (e.g. "no rollout found" after a cancelled turn).
+      // REJECT so runLLM's catch block can handle it — the "no rollout
+      // found" fallback clears the stale session and retries as fresh.
+      if (code !== 0 && !rawResponse) {
+        const errMsg = stderrBuffer.trim() || `Codex exited with code ${code}`;
+        reject(new Error(errMsg));
+        return;
+      }
       resolve({ text: rawResponse, costUsd: 0, sessionId: threadId, trace });
     });
   });

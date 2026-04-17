@@ -157,6 +157,11 @@ async function runClaudeCLI(
   if (resumeSessionId) sdkOptions.resume = resumeSessionId;
   else sdkOptions.customSystemPrompt = systemPrompt;
   if (Object.keys(mcpServers).length > 0) sdkOptions.mcpServers = mcpServers;
+  // Wire the abort signal so clicking "Stop" in chat kills the claude-cli
+  // subprocess (SIGTERM) instead of just closing the SSE connection.
+  if (callbacks.signal) {
+    sdkOptions.abortController = { signal: callbacks.signal, abort() { /* handled by chat.service */ } };
+  }
 
   let fullText = '';
   let costUsd = 0;
@@ -244,6 +249,7 @@ export async function runChatLLM(db: Db, options: ChatLLMOptions): Promise<ChatL
     onToolStart: options.onToolStart,
     onToolResult: options.onToolResult,
     onSessionId: options.onSessionId,
+    signal: options.signal,
   };
 
   let result: { text: string; costUsd: number; sessionId?: string; trace: ChatTraceEvent[] };
