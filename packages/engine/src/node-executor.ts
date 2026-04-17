@@ -12,7 +12,13 @@ import { renderTemplate } from './template.js';
 import { extractOutputs, buildOutputInstruction, outputKeys } from './output-extractor.js';
 import { evaluateCondition } from './condition-parser.js';
 import { executeCodexNode } from './codex-executor.js';
-import { statSync } from 'node:fs';
+import { statSync, mkdirSync } from 'node:fs';
+
+/** Agent-safe fallback cwd. Kept in sync with chat-providers.ts's
+ * AGENT_FALLBACK_CWD — duplicated here because the engine package can't
+ * import from the server package. Never fall back to process.cwd() because
+ * that's the server's source tree. */
+const AGENT_FALLBACK_CWD = '/tmp/flowforge';
 
 function emitLog(
   deps: NodeExecutorDeps,
@@ -166,9 +172,13 @@ async function executeAgentNode(
       emitLog(deps, nodeName, {
         level: 'warn',
         category: 'system',
-        message: `[cwd] no candidate directory exists (${declared}); inheriting engine's cwd`,
+        message: `[cwd] no candidate directory exists (${declared}); falling back to ${AGENT_FALLBACK_CWD}`,
       });
     }
+    // Never inherit the engine's own cwd — that would run the agent inside
+    // the server source tree. Use a dedicated scratch dir instead.
+    mkdirSync(AGENT_FALLBACK_CWD, { recursive: true });
+    cwd = AGENT_FALLBACK_CWD;
   }
   const existingSession = sessions[nodeName];
   // A node re-enters the executor in two distinct shapes, and the prompt

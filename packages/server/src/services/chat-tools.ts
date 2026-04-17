@@ -5,11 +5,21 @@
  */
 
 import type { Db, ObjectId } from 'mongodb';
+import { mkdirSync } from 'node:fs';
 import { ExecutionService } from './execution.service.js';
 import { embedAndSave, invalidateCache } from './embedding.service.js';
 import { AgentConversationService } from './agent-conversation.service.js';
 import { metaChatTools, META_DESTRUCTIVE_TOOLS } from './chat-tools-meta.js';
 import { buildRepoContextBlock } from './repo-context-builder.js';
+import { AGENT_FALLBACK_CWD } from './chat-providers.js';
+
+/** Resolve cwd for agent/chat spawns. Never falls back to process.cwd() —
+ * we don't want agents running inside the server's own source tree. */
+function resolveAgentCwd(...candidates: Array<string | undefined>): string {
+  const picked = candidates.find((c) => typeof c === 'string' && c.length > 0) ?? AGENT_FALLBACK_CWD;
+  mkdirSync(picked, { recursive: true });
+  return picked;
+}
 
 // ── Active Session Registry ──────────────────────────────────────────────────
 // When chat.service starts processing a message, it registers the session context.
@@ -526,7 +536,7 @@ const spawnAgent: ChatTool = {
       input: { prompt, agent_name: agentName, repo_path: repoPath, session_id: resumeSession },
       // Execution metadata for tracing
       meta: {
-        cwd: repoPath || process.cwd(),
+        cwd: repoPath || AGENT_FALLBACK_CWD,
         provider: (role.provider as string) ?? 'claude',
         model: (role.model as string) ?? 'sonnet',
         spawnedBy: activeCtxForMeta?.currentAgent ?? parentCaller ?? 'user',
@@ -724,7 +734,7 @@ async function runSpawnInBackground(
       }
 
       const result = await new Promise<{ text: string; threadId?: string }>((resolveP, rejectP) => {
-        const proc = spawn('codex', args, { cwd: repoPath || process.cwd(), env: { ...process.env }, stdio: ['pipe', 'pipe', 'pipe'] });
+        const proc = spawn('codex', args, { cwd: resolveAgentCwd(repoPath), env: { ...process.env }, stdio: ['pipe', 'pipe', 'pipe'] });
         proc.on('error', (err) => { rejectP(new Error(`Failed to spawn codex: ${err.message}. Is codex CLI installed?`)); });
         proc.stdin.end();
         // Register PID for cancel support
@@ -839,6 +849,9 @@ async function runSpawnInBackground(
 
       const sdkOptions: Record<string, unknown> = {
         model, maxTurns: 50, permissionMode: 'bypassPermissions',
+        // Pin cwd so the SDK doesn't implicitly inherit the server's own
+        // process.cwd() — agents should never run in the server source tree.
+        cwd: resolveAgentCwd(repoPath),
         // Also set env on the claude-cli subprocess itself, so any logic
         // inside the CLI (or tools that fall back to process.env) can see
         // the spawn tree. Merged on top of parent env.
@@ -1821,7 +1834,7 @@ async function runAgentTurn(
       const result = await new Promise<{ text: string; threadId?: string; costUsd: number }>((resolveP, rejectP) => {
         const cleanEnv = { ...process.env };
         delete cleanEnv.PORT; // Don't leak host server port
-        const proc = spawn('codex', args, { cwd: cwd || process.cwd(), env: cleanEnv, stdio: ['pipe', 'pipe', 'pipe'] });
+        const proc = spawn('codex', args, { cwd: resolveAgentCwd(cwd), env: cleanEnv, stdio: ['pipe', 'pipe', 'pipe'] });
         proc.on('error', (err) => { rejectP(new Error(`Failed to spawn codex: ${err.message}. Is codex CLI installed?`)); });
         proc.stdin.end();
         // Register PID for cancel — use convId as key for delegations
@@ -1910,7 +1923,7 @@ async function runAgentTurn(
       Object.assign(mcpServers, await loadExternalMcpServers(db));
 
       const abortController = new AbortController();
-      const sdkOptions: Record<string, unknown> = { model, maxTurns: 50, permissionMode: 'bypassPermissions', cwd: cwd || process.cwd(), mcpServers, abortController };
+      const sdkOptions: Record<string, unknown> = { model, maxTurns: 50, permissionMode: 'bypassPermissions', cwd: resolveAgentCwd(cwd), mcpServers, abortController };
       if (resumeSessionId) sdkOptions.resume = resumeSessionId;
       else sdkOptions.customSystemPrompt = systemPrompt;
       registerExecutionProcess(convId, process.pid, () => abortController.abort());

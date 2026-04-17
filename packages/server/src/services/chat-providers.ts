@@ -8,7 +8,12 @@
 import type { Db } from 'mongodb';
 import type { ChatTraceEvent } from './chat-llm.js';
 import { resolve, dirname } from 'node:path';
-import { existsSync } from 'node:fs';
+import { existsSync, mkdirSync } from 'node:fs';
+
+/** Fallback cwd for chat/agent spawns when no workspace/repo is in scope.
+ * Intentionally NOT `process.cwd()` — we don't want agents running inside
+ * the server's own source tree by accident. Auto-created on use. */
+export const AGENT_FALLBACK_CWD = '/tmp/flowforge';
 import { fileURLToPath } from 'node:url';
 
 // ── Shared Types ──
@@ -233,7 +238,8 @@ export async function runCodexCLI(
   log(`Spawning codex: ${args.slice(0, 4).join(' ')}...`);
 
   return new Promise<ProviderResult & { sessionId?: string }>((resolve, reject) => {
-    const fallbackCwd = cwd || process.cwd();
+    const fallbackCwd = cwd || AGENT_FALLBACK_CWD;
+    mkdirSync(fallbackCwd, { recursive: true });
     const proc = spawn('codex', args, {
       cwd: fallbackCwd,
       env: { ...process.env },

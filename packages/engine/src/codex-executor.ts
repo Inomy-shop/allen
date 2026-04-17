@@ -1,7 +1,12 @@
 import { spawn } from 'node:child_process';
+import { mkdirSync } from 'node:fs';
 import type { NodeDef, AgentDef, EngineEventEmitter } from './types.js';
 import { renderTemplate } from './template.js';
 import { extractOutputs, buildOutputInstruction } from './output-extractor.js';
+
+/** Scratch dir when no worktree/repo is in scope. Never fall back to
+ * process.cwd() — that's the engine's own source tree. */
+const AGENT_FALLBACK_CWD = '/tmp/flowforge';
 
 interface CodexResult {
   outputs: Record<string, unknown>;
@@ -74,7 +79,8 @@ export async function executeCodexNode(
     },
   });
 
-  const cwd = (state.worktree_path as string) ?? (state.repo_path as string) ?? process.cwd();
+  const cwd = (state.worktree_path as string) ?? (state.repo_path as string) ?? AGENT_FALLBACK_CWD;
+  mkdirSync(cwd, { recursive: true });
 
   return new Promise<CodexResult>((resolve, reject) => {
     const args: string[] = ['exec'];

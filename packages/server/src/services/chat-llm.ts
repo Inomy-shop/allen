@@ -11,6 +11,7 @@ import {
   type ProviderCallbacks,
   PROVIDERS,
   runCodexCLI,
+  AGENT_FALLBACK_CWD,
 } from './chat-providers.js';
 import { loadExternalMcpServers } from './chat-mcp.js';
 import {
@@ -132,11 +133,20 @@ async function runClaudeCLI(
   let llmSessionId: string | undefined = resumeSessionId;
   const activeMcpToolCalls = new Map<string, { tool: string; args: Record<string, unknown>; startMs: number }>();
 
+  // Resolve cwd and ensure it exists — child_process.spawn throws ENOENT
+  // for a missing cwd but Node formats it as "spawn node ENOENT", which
+  // misleadingly blames the executable. See smoke-claude.ts:97-101.
+  // Fallback is AGENT_FALLBACK_CWD (/tmp/flowforge), NOT process.cwd(),
+  // so agents never run inside the server's own source tree.
+  const resolvedCwd = cwd || AGENT_FALLBACK_CWD;
+  const { mkdirSync } = await import('node:fs');
+  mkdirSync(resolvedCwd, { recursive: true });
+
   const sdkOptions: Record<string, unknown> = {
     model,
     maxTurns: 30,
     permissionMode: 'bypassPermissions',
-    cwd: cwd || '/tmp/flowforge',
+    cwd: resolvedCwd,
   };
 
   // Apply resolved agent settings (effort / planMode / model) if present.
