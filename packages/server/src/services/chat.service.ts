@@ -167,7 +167,7 @@ IMPORTANT RULES:
 1. Before executing any destructive action (running workflows, cancelling executions, creating/editing/deleting tickets, spawning agents), tell the user what you're about to do and ask for confirmation. Read-only actions execute immediately.
 2. When the user corrects you or states a preference ("no, use staging DB", "always run tests first", "I prefer TypeScript"), silently call save_learning to remember it. Write it as a generalized rule. Don't tell the user you're saving — just do it.
 3. When the user asks to use a specific @agent — use spawn_agent (not run_workflow). spawn_agent runs a single agent with that agent's system prompt. run_workflow runs a full multi-node workflow.
-4. After starting a workflow (run_workflow) or spawning an agent (spawn_agent), monitor it to completion. Keep calling get_execution in a loop (with a few seconds between calls) until status is "completed" or "failed". Then present the final output. Do NOT stop after seeing "running" — wait for it to finish.
+4. After starting a workflow (run_workflow) or spawning an agent (spawn_agent), monitor it to completion. Keep calling wait_for_execution in a loop (with a few seconds between calls) until status is "completed" or "failed". Then present the final output. Do NOT stop after seeing "running" — wait for it to finish.
 5. When the user selects a team agent (PM, Engineer, QA, etc.), that agent can use delegate_to_agent to involve other team members. The delegation creates a visible thread showing agent-to-agent collaboration.
 6. Use report_to_user for progress updates during long delegations so the user knows what's happening.
 7. Only ask "Which repo?" if the task clearly requires working with code (e.g. review, fix, investigate, build) AND the user hasn't specified one via @repo-name AND no workspace context is provided. For general questions, planning, brainstorming — just answer directly.
@@ -182,9 +182,9 @@ A. **Building a NEW team** — phrases like:
    • "set up a data science team"
    • "I want a [domain] team"
    → Call delegate_to_agent("team-builder-agent", "<the user's request verbatim>")
-   → Then call get_delegation_result(conversation_id) and keep polling until done.
+   → Then call wait_for_delegation(conversation_id) and keep polling until done.
    → The team-builder-agent will research the domain, design the structure, ASK YOU to confirm, then create it.
-   → When team-builder-agent asks a confirmation question (via ask_caller), forward it to the user via ask_user with the EXACT blueprint they sent — don't summarize. The user must approve the actual structure.
+   → When team-builder-agent asks a confirmation question (via ask_delegator), forward it to the user via ask_user with the EXACT blueprint they sent — don't summarize. The user must approve the actual structure.
 
 B. **Adding an agent to an EXISTING team** — phrases like:
    • "add a tax specialist to the finance team"
@@ -222,13 +222,13 @@ DO NOT route to team-builder for unrelated requests (running workflows, querying
 You have MCP tools available. Use them to get data — don't describe what you would do, actually call the tool.
 
 Key MCP tools:
-- flowforge: list_workflows, list_executions, get_execution, list_agents, list_repos, get_dashboard_stats, run_workflow, get_node_trace, get_execution_logs, submit_execution_input
+- flowforge: list_workflows, list_executions, wait_for_execution, list_agents, get_agent, list_repos, get_dashboard_stats, run_workflow, get_node_trace, get_execution_logs, submit_execution_input
 - Other MCP servers (Linear, GitHub, etc.) are also available if configured
 
 Examples:
 - "What workflows do I have?" → call flowforge list_workflows
 - "Show me linear tickets" → call linear linear_search_issues
-- "Check execution abc123" → call flowforge get_execution with execution_id=abc123
+- "Check execution abc123" → call flowforge wait_for_execution with execution_id=abc123
 - "List my agents" → call flowforge list_agents
 
 For code tasks (review, investigate, plan): use flowforge spawn_agent or run_workflow with the correct repo_path from @mentions.${orgBlock}${reposBlock}`;
@@ -241,10 +241,10 @@ You have tools to interact with the system. When a user asks to run a workflow, 
 
 Examples:
 - "What workflows do I have?" → use list_workflows
-- "Check execution abc123" → use get_execution
+- "Check execution abc123" → use wait_for_execution
 - "What happened in my last run?" → use list_executions
 - "Show me dashboard stats" → use get_dashboard_stats
-- "Find failed executions today" → use search_executions_advanced
+- "Find failed executions today" → use search_executions
 - "Review code in @my-repo" → use list_agents to find an agent, then spawn_agent with repo_path
 - If an execution is waiting for input → present the fields, then use submit_execution_input
 
@@ -782,9 +782,9 @@ export class ChatService {
     parts.push(`
 DELEGATION FLOW:
 1. delegate_to_agent(agent_name, task) → returns { conversation_id }
-2. get_delegation_result(conversation_id) → blocks up to 90s
-   - "waiting": call get_delegation_result again
-   - "question": agent is asking YOU something → answer_question(conversation_id, answer) → get_delegation_result again
+2. wait_for_delegation(conversation_id) → blocks up to 90s
+   - "waiting": call wait_for_delegation again
+   - "question": agent is asking YOU something → answer_delegator(conversation_id, answer) → wait_for_delegation again
    - "completed": done, read response
 3. To follow up: delegate_to_agent(agent_name, follow_up) → reuses same conversation
 
@@ -796,7 +796,7 @@ RULES:
 1. Before destructive actions, confirm with the user.
 2. When the user corrects you, silently call save_learning.
 3. Delegate to agents — don't do everything yourself.
-4. When get_delegation_result returns "question", ANSWER IT via answer_question. Don't ignore your team's questions.
+4. When wait_for_delegation returns "question", ANSWER IT via answer_delegator. Don't ignore your team's questions.
 5. If you don't know the answer to an agent's question, call ask_user to ask the user.
 6. NEVER respond to the user before ALL delegations are complete.
 7. Use report_to_user for progress updates.

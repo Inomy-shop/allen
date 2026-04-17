@@ -106,57 +106,65 @@ function paramJsonType(desc: string): string {
 // ── Tool Definitions ──
 
 const TOOLS = [
-  { name: 'list_workflows', description: 'List all available workflows with name, description, node count, validation status', params: {} },
+  // ── Workflows ──
+  { name: 'list_workflows', description: 'List all workflows with name, description, node count, validation status.', params: {} },
+  { name: 'get_workflow', description: 'Get full details of a specific workflow: YAML source, parsed nodes, edges, input schema, version.', params: { name: 'string — workflow name', id: 'string — workflow MongoDB _id (use name OR id)' } },
   { name: 'run_workflow', description: 'Start executing a workflow. Returns execution ID.', params: { workflow_name: 'string (required)', input: 'object — workflow input parameters' } },
-  { name: 'get_execution', description: 'Wait for execution to complete. Blocks up to 90s. Returns response when done. If status="waiting", call again. Includes agent response from traces when completed.', params: { execution_id: 'string (required)' } },
+  { name: 'validate_workflow', description: 'Validate a workflow YAML or parsed object against the live agent registry. Returns { valid, errors, warnings }. Read-only.', params: { yaml: 'string — YAML source', parsed: 'object — parsed workflow object (alternative to yaml)' } },
+  { name: 'create_workflow', description: 'Create a new workflow. ONLY workflow-builder-agent.', params: { yaml: 'string — YAML source (preferred)', parsed: 'object — parsed workflow object (alternative)', tags: 'object — optional tags array' } },
+  { name: 'update_workflow', description: 'Update an existing workflow by name or id. ONLY workflow-builder-agent. Bumps version.', params: { id: 'string — MongoDB ObjectId', name: 'string — workflow name (used when id omitted)', yaml: 'string — new YAML source', parsed: 'object — new parsed workflow object' } },
+
+  // ── Executions ──
+  { name: 'wait_for_execution', description: 'Poll an execution until it completes. Blocks up to 90s. Returns response when done. If status="waiting", call again.', params: { execution_id: 'string (required)' } },
   { name: 'list_executions', description: 'List recent executions. Filter by status or workflow name.', params: { status: 'string', workflow_name: 'string', limit: 'number' } },
-  { name: 'cancel_execution', description: 'Cancel a running execution', params: { execution_id: 'string (required)' } },
-  { name: 'list_repos', description: 'List registered repositories with tech stack', params: {} },
-  { name: 'get_repo_context', description: 'Fetch the deep agent-generated context document for a registered repo (markdown describing each module). Use this to preview what gets injected into spawned/delegated agents working in that repo.', params: { repo_path: 'string (required) — absolute path of a registered repo or a workspace worktree path' } },
-  { name: 'list_agents', description: 'List all available agents with provider, model, and tools', params: {} },
-  { name: 'get_dashboard_stats', description: 'Get dashboard statistics: workflow count, executions, success rate, agent count', params: {} },
-  { name: 'get_learnings', description: 'Get learnings from the learning system', params: { workflow_name: 'string', type: 'string', limit: 'number' } },
-  { name: 'get_node_trace', description: 'Get detailed trace of a node execution for debugging', params: { execution_id: 'string (required)', node_name: 'string (required)' } },
-  { name: 'get_execution_logs', description: 'Get execution logs filtered by node, level, category', params: { execution_id: 'string (required)', node: 'string', level: 'string', category: 'string', limit: 'number' } },
-  { name: 'spawn_agent', description: 'Spawn a technical agent to perform a task. Pass session_id from a previous spawn to continue with context (agent resumes where it left off).', params: { agent_name: 'string (required)', prompt: 'string (required)', repo_path: 'string — optional repo path', session_id: 'string — session ID from previous spawn to resume with context' } },
-  { name: 'query_database', description: 'Run a read-only query against FlowForge MongoDB. Allowed collections: workflows, executions, agents, repos, learnings, chat_sessions, execution_logs, node_traces.', params: { collection: 'string (required)', filter: 'object', projection: 'object', sort: 'object', limit: 'number (max 20)' } },
-  { name: 'search_executions_advanced', description: 'Search executions with advanced filters: date range, cost, failed nodes.', params: { workflow_name: 'string', status: 'string', since_hours: 'number', min_cost: 'number', has_failed_node: 'boolean', limit: 'number' } },
-  { name: 'submit_execution_input', description: 'Submit input to a paused workflow execution', params: { execution_id: 'string (required)', node: 'string (required)', data: 'object (required)' } },
-  { name: 'save_learning', description: 'Save a learning/correction to system memory. Call silently when user corrects you or states a preference.', params: { content: 'string (required) — generalized rule', type: 'string (required) — fact, pattern, mistake, or preference' } },
-  { name: 'delegate_to_agent', description: 'Delegate a task to another team agent or continue a multi-turn conversation. Pass conversation_id to continue an existing thread with follow-up questions.', params: { agent_name: 'string (required) — target agent', task: 'string (required) — task or follow-up message', context: 'object — relevant context', conversation_id: 'string — existing conversation ID to continue (for multi-turn)' } },
-  { name: 'get_delegation_result', description: 'Wait for delegation result. Blocks up to 90s. If "waiting" call again. If "question" — agent is asking you something, answer via answer_question then call this again. If "completed" — done.', params: { conversation_id: 'string (required)' } },
-  { name: 'answer_question', description: 'Answer a question from an agent you delegated to. Use when get_delegation_result returns status="question".', params: { conversation_id: 'string (required)', answer: 'string (required)' } },
-  { name: 'ask_caller', description: 'Ask a question to the agent who delegated this task to you. Blocks until they answer. Use when you need clarification.', params: { question: 'string (required)', conversation_id: 'string — conversation ID (optional, auto-detected from context)' } },
-  { name: 'ask_user', description: 'Ask the user a question directly. Blocks until user answers. Only use when no agent can answer.', params: { question: 'string (required)' } },
+  { name: 'search_executions', description: 'Search executions with filters: date range, cost, failed nodes.', params: { workflow_name: 'string', status: 'string', since_hours: 'number', min_cost: 'number', has_failed_node: 'boolean', limit: 'number' } },
+  { name: 'cancel_execution', description: 'Cancel a running execution.', params: { execution_id: 'string (required)' } },
+  { name: 'submit_execution_input', description: 'Submit input to a paused workflow execution (e.g. answer a human node).', params: { execution_id: 'string (required)', node: 'string (required)', data: 'object (required)' } },
+  { name: 'get_node_trace', description: 'Get detailed trace of a specific node execution: prompt, response, outputs, cost, duration.', params: { execution_id: 'string (required)', node_name: 'string (required)' } },
+  { name: 'get_execution_logs', description: 'Get execution logs filtered by node, level, or category.', params: { execution_id: 'string (required)', node: 'string', level: 'string', category: 'string', limit: 'number' } },
+
+  // ── Agents ──
+  { name: 'list_agents', description: 'List all agents with minimal info: name, displayName, teamName, type, model, provider. Use get_agent for full details.', params: {} },
+  { name: 'get_agent', description: 'Get full details of a specific agent: system prompt, tools, capabilities, model, provider, canDelegateTo, personality, description.', params: { name: 'string (required) — agent slug' } },
+  { name: 'create_agent', description: 'Create a new agent in a team. Team must exist. ONLY builder agents.', params: { name: 'string (required) — lowercase slug', displayName: 'string (required)', description: 'string — short description of what the agent does', teamName: 'string (required) — existing team slug', teamRole: 'string (required) — "lead" or "member"', system: 'string (required) — full system prompt', provider: 'string (required) — "claude-cli" or "codex"', model: 'string', tools: 'object — array of tool names', capabilities: 'object — array of capability tags', canDelegateTo: 'object — array of agent names', personality: 'string', icon: 'string', color: 'string' } },
+  { name: 'update_agent', description: 'Update an agent: system prompt, model, provider, tools, capabilities, canDelegateTo, personality, displayName, description.', params: { name: 'string (required)', displayName: 'string', description: 'string', system: 'string', tools: 'object', capabilities: 'object', canDelegateTo: 'object', personality: 'string', model: 'string', provider: 'string' } },
+  { name: 'delete_agent', description: 'Delete an agent. Refuses built-in agents and team leads. Requires confirm=true.', params: { name: 'string (required)', confirm: 'boolean (required) — must be true' } },
+  { name: 'move_agent_to_team', description: 'Move one or more agents to a different team. Works for any cross-team move including unassigned → team.', params: { agent_names: 'object — array of agent name strings (required)', team_name: 'string (required) — target team slug' } },
+  { name: 'spawn_agent', description: 'Spawn an agent in the background. Returns immediately with execution_id. Pass session_id to resume a previous session.', params: { agent_name: 'string (required)', prompt: 'string (required)', repo_path: 'string — optional repo path', session_id: 'string — session ID from previous spawn to resume' } },
+
+  // ── Teams ──
+  { name: 'list_teams', description: 'List all teams: name, displayName, mission, lead, parent, isBuiltIn.', params: {} },
+  { name: 'get_team', description: 'Get a team\'s metadata and member list (names + roles, without system prompts). Use get_team_blueprint for the deep view.', params: { name: 'string (required) — team slug' } },
+  { name: 'get_team_blueprint', description: 'Full team blueprint: metadata, all members WITH system prompts, delegation edges. Use before adding agents.', params: { team_name: 'string (required) — team slug' } },
+  { name: 'list_team_members', description: 'List agents in a team with name, displayName, teamRole, capabilities, tools, canDelegateTo.', params: { team_name: 'string (required) — team slug' } },
+  { name: 'create_team', description: 'Create a team. Lead agent must exist first. ONLY team-builder-agent.', params: { name: 'string (required) — lowercase slug', displayName: 'string (required)', description: 'string', mission: 'string', leadAgentName: 'string (required) — lead agent name', parentTeamName: 'string — optional parent team' } },
+  { name: 'update_team', description: 'Update a team\'s displayName, description, mission, or parent. ONLY team-builder-agent.', params: { name: 'string (required)', displayName: 'string', description: 'string', mission: 'string', parentTeamName: 'string' } },
+  { name: 'delete_team', description: 'Delete a team. Refuses if it has members. Requires confirm=true. ONLY team-builder-agent.', params: { name: 'string (required)', confirm: 'boolean (required) — must be true' } },
+
+  // ── Repos ──
+  { name: 'list_repos', description: 'List registered repositories with tech stack.', params: {} },
+  { name: 'get_repo_context', description: 'Get the deep agent-generated context document for a repo (markdown describing each module).', params: { repo_path: 'string (required) — absolute path of a registered repo or workspace worktree' } },
+
+  // ── Delegation & Communication ──
+  { name: 'delegate_to_agent', description: 'Delegate a task to another agent. Pass conversation_id to continue an existing thread.', params: { agent_name: 'string (required)', task: 'string (required)', context: 'object — relevant context', conversation_id: 'string — existing conversation ID to continue' } },
+  { name: 'wait_for_delegation', description: 'Wait for a delegated task to finish. Blocks up to 90s. If "waiting" call again. If "question" — answer via answer_delegator then call again.', params: { conversation_id: 'string (required)' } },
+  { name: 'answer_delegator', description: 'Answer a question from an agent you delegated to. Use when wait_for_delegation returns status="question".', params: { conversation_id: 'string (required)', answer: 'string (required)' } },
+  { name: 'ask_delegator', description: 'Ask a question to the agent who delegated this task to you. Blocks until they answer.', params: { question: 'string (required)', conversation_id: 'string — optional, auto-detected from context' } },
+  { name: 'ask_user', description: 'Ask the user a question directly. Blocks until they answer. Only use when no agent can help.', params: { question: 'string (required)' } },
   { name: 'report_to_user', description: 'Send a progress update to the user during a delegation chain.', params: { message: 'string (required)', status: 'string — in_progress | completed | needs_input' } },
 
-  // ── Meta team tools (phase 4) — gated server-side by per-agent allow-list.
-  // Only team-builder-agent and agent-builder-agent can call these; calls
-  // from any other agent return a "Permission denied" error.
+  // ── Self-introspection ──
+  { name: 'get_my_session_history', description: 'Get your own chat session message history. Use to re-read the user\'s original request or see your prior responses.', params: { limit: 'number — max messages (default 30, max 100)' } },
+  { name: 'get_my_delegation_thread', description: 'Get messages in your current delegation thread. Only works for delegated agents.', params: {} },
 
-  // ── Self-introspection (any agent can call) ──
-  { name: 'get_my_session_history', description: 'Return the message history of the top-level chat session you are running in. Use this to re-read the user\'s original request, see your prior responses, and self-diagnose when you are confused about what was asked. Returns up to `limit` messages (default 30). Each message includes role, content, and toolCalls with summarized results.', params: { limit: 'number — max messages to return (default 30, max 100)' } },
-  { name: 'get_my_delegation_thread', description: 'Return the messages and tool results in your CURRENT delegation thread (the multi-turn conversation between you and the agent that delegated to you). Use this when you have been called multiple times and want to see what you have already done. Only works for delegated agents — returns an error if called from a top-level chat.', params: {} },
-
-  { name: 'list_teams', description: 'List all teams in the FlowForge org chart. Returns name, displayName, mission, leadAgentName, parentTeamName, isBuiltIn for each. Read-only — no permission required.', params: {} },
-  { name: 'list_team_members', description: 'List all agents in a specific team. Returns each member with name, displayName, teamRole, capabilities, tools, canDelegateTo.', params: { team_name: 'string (required) — team slug' } },
-  { name: 'get_team_blueprint', description: 'Return a team\'s full blueprint: team metadata, all members with system prompts, and internal delegation edges. Use this BEFORE adding a new agent so your blueprint integrates with existing members.', params: { team_name: 'string (required) — team slug' } },
-
-  { name: 'create_team', description: 'Create a new team in the org chart. ONLY team-builder-agent can call this. The lead agent must already exist (call create_agent for the lead first, then create_team).', params: { name: 'string (required) — lowercase slug', displayName: 'string (required) — human-readable name', description: 'string', mission: 'string — 2-3 sentence mission used in agent system prompts', leadAgentName: 'string (required) — name of the team lead agent', parentTeamName: 'string — optional parent team' } },
-  { name: 'update_team', description: 'Update a team\'s description, mission, or parent. ONLY team-builder-agent. Built-in teams cannot be updated.', params: { name: 'string (required)', displayName: 'string', description: 'string', mission: 'string', parentTeamName: 'string' } },
-  { name: 'delete_team', description: 'Delete a team. ONLY team-builder-agent. Refuses if team has members. Refuses built-in teams. Requires confirm=true.', params: { name: 'string (required)', confirm: 'boolean (required) — must be true' } },
-
-  { name: 'create_agent', description: 'Create a new agent in an existing team. team-builder-agent and agent-builder-agent can call this. Team must exist. Agent slug must be unique system-wide.', params: { name: 'string (required) — lowercase slug', displayName: 'string (required)', teamName: 'string (required) — existing team slug', teamRole: 'string (required) — "lead" or "member"', system: 'string (required) — full system prompt', provider: 'string (required) — "claude-cli" or "codex"', model: 'string', tools: 'object — array of tool names', capabilities: 'object — array of capability tags', canDelegateTo: 'object — array of agent names this agent can delegate to', personality: 'string', icon: 'string', color: 'string' } },
-  { name: 'update_agent', description: 'Update an existing non-built-in agent. team-builder-agent has full update access; agent-builder-agent can ONLY update canDelegateTo.', params: { name: 'string (required)', displayName: 'string', system: 'string', tools: 'object', capabilities: 'object', canDelegateTo: 'object', personality: 'string', model: 'string', provider: 'string' } },
-  { name: 'delete_agent', description: 'Delete an agent. Both builders can call this. Refuses built-in agents. Refuses to leave a non-built-in team leaderless. Requires confirm=true.', params: { name: 'string (required)', confirm: 'boolean (required) — must be true' } },
-
-  // ── Workflow management (workflow-builder-agent only) ──
-  { name: 'validate_workflow', description: 'Validate a workflow definition (YAML or parsed object) against the live agent registry and built-ins. Returns { valid, errors, warnings }. Read-only — any agent can call.', params: { yaml: 'string — YAML source', parsed: 'object — parsed workflow object (alternative to yaml)' } },
-  { name: 'create_workflow', description: 'Persist a NEW workflow to the database. ONLY workflow-builder-agent can call this. Validates first; created workflows are immediately usable by editor and executor with no restart. Stored as createdBy="workflow-builder" so the YAML seed loop never overwrites them.', params: { yaml: 'string — YAML source (preferred)', parsed: 'object — parsed workflow object (alternative)', tags: 'object — optional tags array' } },
-  { name: 'update_workflow', description: 'Update an existing workflow by id (or name). ONLY workflow-builder-agent can call this. Bumps version. Refuses to touch system-seeded workflows.', params: { id: 'string — MongoDB ObjectId', name: 'string — workflow name (used when id omitted)', yaml: 'string — new YAML source', parsed: 'object — new parsed workflow object' } },
+  // ── Knowledge & Data ──
+  { name: 'search_learnings', description: 'Search the learning system. Filter by workflow, type, or limit.', params: { workflow_name: 'string', type: 'string', limit: 'number' } },
+  { name: 'save_learning', description: 'Save a learning/correction to memory. Call when user corrects you or states a preference.', params: { content: 'string (required) — generalized rule', type: 'string (required) — fact, pattern, mistake, or preference' } },
+  { name: 'get_dashboard_stats', description: 'Get dashboard statistics: workflow count, executions, success rate, agent count.', params: {} },
+  { name: 'query_database', description: 'Read-only MongoDB query. Allowed collections: workflows, executions, agents, repos, learnings, chat_sessions, execution_logs, node_traces.', params: { collection: 'string (required)', filter: 'object', projection: 'object', sort: 'object', limit: 'number (max 20)' } },
 
   // ── File upload ──
-  { name: 'upload_file', description: 'Upload a file to FlowForge storage. Returns a public URL that can be shared with users. Use this when generating plans, documents, reports, CSVs, or any artifact that should be downloadable. The URL is permanent and publicly accessible.', params: { content: 'string (required) — file content (text)', filename: 'string (required) — desired filename with extension (e.g. "deployment-plan.md", "report.csv")', mime_type: 'string — MIME type (default: text/plain)' } },
+  { name: 'upload_file', description: 'Upload a file to FlowForge storage. Returns a permanent public URL.', params: { content: 'string (required) — file content', filename: 'string (required) — e.g. "report.md"', mime_type: 'string — MIME type (default: text/plain)' } },
 ];
 
 // ── API Call Helper ──
@@ -183,7 +191,7 @@ async function executeTool(name: string, args: Record<string, unknown>): Promise
       const qs = params.toString();
       return callAPI(`/api/executions${qs ? '?' + qs : ''}`);
     }
-    case 'get_execution': {
+    case 'wait_for_execution': {
       // Chunked long-poll: wait up to 90s for completion, then return
       const execId = args.execution_id;
       let eWait = 5000;
@@ -210,7 +218,7 @@ async function executeTool(name: string, args: Record<string, unknown>): Promise
         await new Promise(r => setTimeout(r, eWait));
         eWait = Math.min(eWait * 1.3, eMaxWait);
       }
-      return { id: execId, status: 'waiting', message: 'Execution still running. Call get_execution again.' };
+      return { id: execId, status: 'waiting', message: 'Execution still running. Call wait_for_execution again.' };
     }
     case 'cancel_execution': {
       const url = `${API_BASE}/api/executions/${args.execution_id}/cancel`;
@@ -242,9 +250,73 @@ async function executeTool(name: string, args: Record<string, unknown>): Promise
       }
       return res.json();
     }
-    case 'list_agents': return callAPI('/api/agents');
+    case 'list_agents': {
+      // Return minimal fields — full details via get_agent
+      const all = await callAPI('/api/agents') as any[];
+      if (!Array.isArray(all)) return all; // error passthrough
+      return all.map((a: any) => ({
+        name: a.name,
+        displayName: a.displayName,
+        description: a.description ?? '',
+        teamName: a.teamName,
+        type: a.type,
+        model: a.model,
+        provider: a.provider ?? 'claude-cli',
+      }));
+    }
+    case 'get_agent': {
+      const agentName = String(args.name ?? '');
+      if (!agentName) return { error: 'name is required' };
+      const res = await fetch(`${API_BASE}/api/agents`);
+      const agents = await res.json() as any[];
+      const agent = agents.find((a: any) => a.name === agentName);
+      if (!agent) return { error: `Agent "${agentName}" not found` };
+      return agent;
+    }
+    case 'get_workflow': {
+      const wfName = args.name as string | undefined;
+      const wfId = args.id as string | undefined;
+      if (!wfName && !wfId) return { error: 'name or id is required' };
+      if (wfId) return callAPI(`/api/workflows/${wfId}`);
+      // Find by name
+      const workflows = await callAPI('/api/workflows') as any[];
+      if (!Array.isArray(workflows)) return workflows;
+      const wf = workflows.find((w: any) => w.name === wfName || w.parsed?.name === wfName);
+      if (!wf) return { error: `Workflow "${wfName}" not found` };
+      return callAPI(`/api/workflows/${wf._id}`);
+    }
+    case 'get_team': {
+      const teamName = String(args.name ?? '');
+      if (!teamName) return { error: 'name is required' };
+      const team = await callAPI(`/api/teams/${teamName}`) as any;
+      if (team?.error) return team;
+      // Also fetch member names (light — no system prompts)
+      const members = await callAPI(`/api/teams/${teamName}/members`) as any[];
+      return {
+        ...team,
+        members: Array.isArray(members) ? members.map((m: any) => ({
+          name: m.name,
+          displayName: m.displayName,
+          teamRole: m.teamRole,
+          model: m.model,
+          type: m.type,
+        })) : [],
+      };
+    }
+    case 'move_agent_to_team': {
+      const agentNames = args.agent_names;
+      const teamName = args.team_name;
+      if (!Array.isArray(agentNames) || agentNames.length === 0) return { error: 'agent_names must be a non-empty array' };
+      if (!teamName) return { error: 'team_name is required' };
+      const res = await fetch(`${API_BASE}/api/agents/bulk-team`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ agentNames, teamName }),
+      });
+      return res.json();
+    }
     case 'get_dashboard_stats': return callAPI('/api/dashboard/stats');
-    case 'get_learnings': {
+    case 'search_learnings': {
       const params = new URLSearchParams();
       if (args.workflow_name) params.set('workflowName', String(args.workflow_name));
       if (args.type) params.set('type', String(args.type));
@@ -300,7 +372,7 @@ async function executeTool(name: string, args: Record<string, unknown>): Promise
       const res = await fetch(`${API_BASE}/api/${collection === 'chat_sessions' ? 'chat/sessions' : collection}?${params}`);
       return res.json();
     }
-    case 'search_executions_advanced': {
+    case 'search_executions': {
       const params = new URLSearchParams();
       if (args.status) params.set('status', String(args.status));
       if (args.workflow_name) params.set('workflowName', String(args.workflow_name));
@@ -335,7 +407,7 @@ async function executeTool(name: string, args: Record<string, unknown>): Promise
       });
       return res.json();
     }
-    case 'get_delegation_result': {
+    case 'wait_for_delegation': {
       // Chunked long-poll: wait up to 90s (under MCP's 120s transport timeout), then return
       // If still active, return { status: "waiting" } so the LLM calls again
       const convId = args.conversation_id;
@@ -355,23 +427,23 @@ async function executeTool(name: string, args: Record<string, unknown>): Promise
         await new Promise(r => setTimeout(r, waitMs));
         waitMs = Math.min(waitMs * 1.3, maxWait);
       }
-      // Return "waiting" so the LLM calls get_delegation_result again
+      // Return "waiting" so the LLM calls wait_for_delegation again
       return {
         conversation_id: convId,
         status: 'waiting',
-        message: 'Agent is still working. Call get_delegation_result again — it will continue waiting.',
+        message: 'Agent is still working. Call wait_for_delegation again — it will continue waiting.',
       };
     }
-    case 'answer_question': {
+    case 'answer_delegator': {
       const url = `${API_BASE}/api/chat/delegate`;
       const res = await fetch(url, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ tool: 'answer_question', conversation_id: args.conversation_id, answer: args.answer }),
+        body: JSON.stringify({ tool: 'answer_delegator', conversation_id: args.conversation_id, answer: args.answer }),
       });
       return res.json();
     }
-    case 'ask_caller': {
+    case 'ask_delegator': {
       // Blocks server-side until the caller answers
       const url = `${API_BASE}/api/chat/ask-caller`;
       const res = await fetch(url, {

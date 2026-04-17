@@ -104,7 +104,7 @@ export async function loadMcpServers(db: Db): Promise<Record<string, unknown>> {
 
 /**
  * Get the FlowForge MCP server config.
- * This provides our built-in tools (list_workflows, get_execution, etc.)
+ * This provides our built-in tools (list_workflows, wait_for_execution, etc.)
  * via a local MCP server that calls the FlowForge API.
  *
  * `extraEnv` lets callers stamp additional environment variables onto the

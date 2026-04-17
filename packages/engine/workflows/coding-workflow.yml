@@ -209,14 +209,14 @@ nodes:
       1. If has_backend_changes is true AND has_frontend_changes is true:
          - In a single turn, call delegate_to_agent TWICE — once for
            backend-developer and once for frontend-developer — so they run
-           in parallel. Then call get_delegation_result on each and wait
+           in parallel. Then call wait_for_delegation on each and wait
            for BOTH to complete.
       2. If only has_backend_changes is true:
          - delegate_to_agent("backend-developer", brief)
-         - get_delegation_result until "completed"
+         - wait_for_delegation until "completed"
       3. If only has_frontend_changes is true:
          - delegate_to_agent("frontend-developer", brief)
-         - get_delegation_result until "completed"
+         - wait_for_delegation until "completed"
       4. If neither flag is true:
          - No implementation needed. Set backend_files=[], frontend_files=[]
            and summaries to "no code changes required — task is docs/config only".

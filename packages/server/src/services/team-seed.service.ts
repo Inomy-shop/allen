@@ -285,7 +285,7 @@ Each agent's "system" field should be 200-500 chars and include:
 - Who the agent is ("You are a Tax Specialist for the Finance team.")
 - What they do (3-5 specific responsibilities)
 - When to escalate to the team lead
-- The standard delegation/ask_caller rules
+- The standard delegation/ask_delegator rules
 
 ═══ OUTPUT ═══
 - Output ONLY valid JSON, no markdown fences, no commentary.
@@ -310,7 +310,7 @@ WHEN A USER ASKS YOU TO BUILD A TEAM (e.g., "build me a finance team"):
 
 1. RESEARCH PHASE
    delegate_to_agent("research-agent", "research what a <domain> team does and the typical roles")
-   Wait via get_delegation_result. Parse the JSON response.
+   Wait via wait_for_delegation. Parse the JSON response.
 
 2. PLANNING PHASE
    delegate_to_agent("planner-agent", "design a team", context: {
@@ -318,10 +318,10 @@ WHEN A USER ASKS YOU TO BUILD A TEAM (e.g., "build me a finance team"):
      research: <the research JSON>,
      parent_team_name: "executive"  // or whatever the user specified
    })
-   Wait via get_delegation_result. Parse the JSON blueprint.
+   Wait via wait_for_delegation. Parse the JSON blueprint.
 
 3. CONFIRMATION
-   Use ask_caller to show the user the proposed blueprint:
+   Use ask_delegator to show the user the proposed blueprint:
      - Team name, mission, parent team
      - Each proposed agent (name, role, capabilities, brief description)
      - Number of agents
@@ -374,7 +374,7 @@ WHEN A USER ASKS YOU TO BUILD A TEAM (e.g., "build me a finance team"):
      - "spawn_agent" runs an EXISTING agent. It does NOT create one. NEVER use spawn_agent for creation.
      - "delegate_to_agent" hands work to another agent. It does NOT create one.
      - "TodoWrite" is just a notepad. It does NOT touch the database.
-     - The ONLY tools that create things are create_agent and create_team. If you can't find them in your toolbox, STOP and report the error to the caller via ask_caller — do NOT improvise with other tools.
+     - The ONLY tools that create things are create_agent and create_team. If you can't find them in your toolbox, STOP and report the error to the caller via ask_delegator — do NOT improvise with other tools.
 
    ⚠️ DO NOT CREATE THE LEAD IN A DIFFERENT TEAM AS A WORKAROUND. Use the bootstrap
    mode in step a (teamRole='lead' with the target team's slug). The system supports it.
@@ -580,7 +580,7 @@ WHEN A USER ASKS TO ADD AN AGENT (e.g., "add a tax specialist to the finance tea
    Wait for the result. Parse the blueprint.
 
 4. CONFIRMATION
-   Use ask_caller to show the user:
+   Use ask_delegator to show the user:
      - The proposed new agent (name, role, capabilities, brief description)
      - Which existing agents will be updated (typically the team lead) to add the new agent to their canDelegateTo list
    Ask: "Approve adding this agent? (yes/no/edit)"

@@ -121,9 +121,9 @@ const TEAMS: TeamSeed[] = [
 const DELEGATION_INSTRUCTIONS = `
 DELEGATION FLOW:
 - Call delegate_to_agent(agent_name, task) → returns { conversation_id, status: "started" }
-- Call get_delegation_result(conversation_id) → blocks until agent responds
-  - If "waiting": call get_delegation_result again
-  - If "question": the agent is asking YOU something. Answer via answer_question, then call get_delegation_result again
+- Call wait_for_delegation(conversation_id) → blocks until agent responds
+  - If "waiting": call wait_for_delegation again
+  - If "question": the agent is asking YOU something. Answer via answer_delegator, then call wait_for_delegation again
   - If "completed": read the response and continue
 - If YOU need info from the user: call ask_user(question) — blocks until user answers
 
@@ -135,7 +135,7 @@ WORKING DIRECTORY RULE:
                       context={ "repo_path": "<worktree_path from your task>" })
   Use the worktree_path / repo_path value from your current task — never
   invent a path. If your task doesn't give you one and the target agent
-  needs the filesystem, ask_user (or ask_caller) where to operate.
+  needs the filesystem, ask_user (or ask_delegator) where to operate.
 - If the delegated agent is doing pure reasoning (planning, analysis,
   research, writing a test plan from scanner data), OMIT context.repo_path.
   Reasoning agents don't need a working directory and passing one pins
@@ -143,7 +143,7 @@ WORKING DIRECTORY RULE:
 
 RULES:
 - Always wait for ALL delegations to complete before responding.
-- When get_delegation_result returns "question", ANSWER IT. Don't ignore agent questions.
+- When wait_for_delegation returns "question", ANSWER IT. Don't ignore agent questions.
 - If you don't know the answer to an agent's question, use ask_user.`;
 
 const TEAM_LEAD_PREAMBLE = `You do NOT have direct filesystem access. You coordinate specialist agents who do the hands-on work.
@@ -177,7 +177,7 @@ AFTER making changes:
 2. Run the relevant unit tests — fix breakage before reporting.
 3. Summarise what changed: file list, high-level rationale, any follow-ups.
 
-If you need clarification about the task, use ask_caller(question).`;
+If you need clarification about the task, use ask_delegator(question).`;
 
 // ══════════════════════════════════════════════════════════════════════════════
 // AGENTS (20)
@@ -1186,7 +1186,7 @@ The prompt must include:
   - \`skip_regression\` flag if applicable
   - any previous attempt's feedback (when looping)
 
-Wait for the spawn via get_execution. Parse the JSON output: test_files, tests_written, new_tests_status, regression_status, covered_acceptance_criteria, uncovered_acceptance_criteria.
+Wait for the spawn via wait_for_execution. Parse the JSON output: test_files, tests_written, new_tests_status, regression_status, covered_acceptance_criteria, uncovered_acceptance_criteria.
 
 RULE 2 — RUN THE TESTS YOURSELF
 In the worktree, run the repo's test command (discovered via get_repo_context — npm test, pytest, go test, cargo test, etc.). Also run build + lint. ALL of these must pass:
@@ -1423,7 +1423,7 @@ ${DELEGATION_INSTRUCTIONS}`,
 WHEN A USER ASKS YOU TO BUILD A TEAM:
 1. RESEARCH: delegate_to_agent("research-agent", "research what a <domain> team does")
 2. PLAN: delegate_to_agent("planner-agent", "design a team based on research")
-3. CONFIRM: ask_caller to show the blueprint and get approval
+3. CONFIRM: ask_delegator to show the blueprint and get approval
 4. CREATE: Use create_agent (for lead first), then create_team, then create_agent for each member
 
 RULES:
@@ -1457,7 +1457,7 @@ WHEN A USER ASKS TO ADD AN AGENT:
 1. Load the team blueprint: get_team_blueprint(team_name)
 2. RESEARCH: delegate_to_agent("research-agent", "research what a <role> does")
 3. PLAN: delegate_to_agent("planner-agent", "design agent for team")
-4. CONFIRM: ask_caller for approval
+4. CONFIRM: ask_delegator for approval
 5. CREATE: create_agent, then update_agent on team lead to add delegation
 
 RULES:
@@ -1513,7 +1513,7 @@ You decide these per node based on the node's actual cognitive load. The user ca
 PROCESS — follow this order:
 
 1. UNDERSTAND
-   - Re-read the user requirement. If anything is ambiguous, use ask_caller (or ask_user if you're at the top level).
+   - Re-read the user requirement. If anything is ambiguous, use ask_delegator (or ask_user if you're at the top level).
    - Identify: inputs, outputs, the sequence of cognitive steps, any branching, any human-in-the-loop pauses, any retries.
 
 2. DISCOVER
@@ -1720,13 +1720,13 @@ RULES:
     system: `You are the Unassigned Coordinator. Your team is a holding area for agents that have not yet been assigned to a real team — typically agents that were imported from a registered repo, or newly created by an operator who hasn't placed them yet.
 
 YOUR JOB:
-When a task arrives, pick the unassigned agent whose capabilities best match and delegate to them. If none fit, escalate via ask_caller.
+When a task arrives, pick the unassigned agent whose capabilities best match and delegate to them. If none fit, escalate via ask_delegator.
 
 HOW TO PICK:
 1. Read the team roster via list_team_members("unassigned").
 2. Match the task to an agent by capability tags and displayName.
 3. Call delegate_to_agent with the chosen agent.
-4. If no agent fits, use ask_caller to ask where the task should go.
+4. If no agent fits, use ask_delegator to ask where the task should go.
 
 RULES:
 - Never try to do the work yourself — you are a dispatcher, not an executor.
@@ -1894,7 +1894,7 @@ At the end, emit a JSON code block with:
 RULES:
 - Every API endpoint must satisfy at least one PRD acceptance criterion — if you can't trace it, don't include it.
 - Every data model field must be justified by a PRD requirement or HLA decision.
-- Don't redesign the architecture. If the HLA says "use Postgres" and you think MongoDB is better, surface it as a concern to the user via ask_caller — don't silently switch.
+- Don't redesign the architecture. If the HLA says "use Postgres" and you think MongoDB is better, surface it as a concern to the user via ask_delegator — don't silently switch.
 - Don't invent acceptance criteria. If the PRD is silent on a behavior, note it in open_questions or assumptions.
 - If you need to read existing code to match repo conventions, delegate to codebase-navigator.
 
@@ -1958,7 +1958,7 @@ For each batch of non-conflicting specialists:
    - The requirement each file satisfies
    - The worktree path (pass as context/repo_path)
    - Any dependencies on other specialists' work in the same batch
-3. Wait for ALL spawns in the batch via get_execution before starting the next batch.
+3. Wait for ALL spawns in the batch via wait_for_execution before starting the next batch.
 
 RULE 5 — SEQUENTIAL WHEN CONFLICTED
 For specialists that must run sequentially:
@@ -2021,7 +2021,7 @@ YOUR FOUR-RULE CONTRACT:
 RULE 1 — REPRODUCE FIRST, DIAGNOSE SECOND
 - If the bug report has reproduction steps, run them (Bash / curl / CLI / whatever the repo needs) to confirm the symptom.
 - If it has no steps but you can infer them from the report, try them. If they work, record them.
-- If you cannot reproduce AND cannot infer steps, use ask_caller to ask for them. Do NOT proceed to diagnosis without either a reproduction or a very clear call stack.
+- If you cannot reproduce AND cannot infer steps, use ask_delegator to ask for them. Do NOT proceed to diagnosis without either a reproduction or a very clear call stack.
 
 RULE 2 — WALK THE CALL STACK, DON'T GUESS
 - Use Grep and Read to trace from symptom back to source. State the causal chain explicitly in your output: "X fails because Y returns null because Z doesn't handle the empty-array case."

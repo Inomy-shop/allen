@@ -97,10 +97,10 @@ function toolDescription(tool: string, args: Record<string, unknown>): string {
     if (fn === 'list_workflows') return 'List workflows';
     if (fn === 'list_agents') return 'List agents';
     if (fn === 'list_repos') return 'List repos';
-    if (fn === 'get_execution') return `Get execution ${(args.execution_id as string ?? '').slice(0, 12)}`;
+    if (fn === 'wait_for_execution') return `Get execution ${(args.execution_id as string ?? '').slice(0, 12)}`;
     if (fn === 'spawn_agent') return `Spawn ${args.agent_name ?? 'agent'}`;
     if (fn === 'delegate_to_agent') return `Delegate to ${args.agent_name ?? 'agent'}: ${(args.task as string ?? '').slice(0, 80)}`;
-    if (fn === 'get_delegation_result') return `Wait for delegation ${(args.conversation_id as string ?? '').slice(0, 12)}`;
+    if (fn === 'wait_for_delegation') return `Wait for delegation ${(args.conversation_id as string ?? '').slice(0, 12)}`;
     if (fn === 'run_workflow') return `Run workflow ${args.workflow_name ?? args.workflow_id ?? ''}`;
     if (fn === 'save_learning') return `Save learning: ${(args.content as string ?? '').slice(0, 60)}`;
     if (fn === 'query_database') return `Query: ${(args.query as string ?? '').slice(0, 80)}`;
@@ -259,8 +259,8 @@ const runWorkflow: ChatTool = {
 };
 
 const getExecution: ChatTool = {
-  name: 'get_execution',
-  description: `Get the status of a workflow or spawned agent execution. If still running, blocks up to 90 seconds waiting for completion (like get_delegation_result). If status="waiting", call again. When completed, includes the agent's response.`,
+  name: 'wait_for_execution',
+  description: `Get the status of a workflow or spawned agent execution. If still running, blocks up to 90 seconds waiting for completion (like wait_for_delegation). If status="waiting", call again. When completed, includes the agent's response.`,
   inputSchema: {
     type: 'object',
     properties: {
@@ -321,7 +321,7 @@ const getExecution: ChatTool = {
     return {
       id: executionId,
       status: 'waiting',
-      message: 'Execution is still running. Call get_execution again — it will continue waiting.',
+      message: 'Execution is still running. Call wait_for_execution again — it will continue waiting.',
     };
   },
 };
@@ -435,7 +435,7 @@ const listAgents: ChatTool = {
 
 const spawnAgent: ChatTool = {
   name: 'spawn_agent',
-  description: `Spawn a technical agent in the background. Returns immediately with execution_id. The agent runs until done — use get_execution(execution_id) to check when finished (it may take minutes). Pass session_id from a previous spawn to resume with context.`,
+  description: `Spawn a technical agent in the background. Returns immediately with execution_id. The agent runs until done — use wait_for_execution(execution_id) to check when finished (it may take minutes). Pass session_id from a previous spawn to resume with context.`,
   inputSchema: {
     type: 'object',
     properties: {
@@ -564,7 +564,7 @@ const spawnAgent: ChatTool = {
       agent_name: agentName,
       execution_id: executionId,
       status: 'running',
-      message: `Agent "${agentName}" started. Use get_execution(execution_id="${executionId}") to poll for the result.`,
+      message: `Agent "${agentName}" started. Use wait_for_execution(execution_id="${executionId}") to poll for the result.`,
     };
   },
 };
@@ -959,7 +959,7 @@ async function runSpawnInBackground(
 }
 
 const getLearnings: ChatTool = {
-  name: 'get_learnings',
+  name: 'search_learnings',
   description: 'Get recent learnings from the learning system. Learnings capture patterns, mistakes, and optimizations from workflow executions.',
   inputSchema: {
     type: 'object',
@@ -1052,7 +1052,7 @@ const queryDatabase: ChatTool = {
 };
 
 const searchExecutionsAdvanced: ChatTool = {
-  name: 'search_executions_advanced',
+  name: 'search_executions',
   description: 'Search executions with advanced filters: date range, cost range, duration, node-level details. More powerful than list_executions.',
   inputSchema: {
     type: 'object',
@@ -1153,7 +1153,7 @@ const getNodeTrace: ChatTool = {
 };
 
 const getExecutionLogs: ChatTool = {
-  name: 'get_execution_logs',
+  name: 'wait_for_execution_logs',
   description: 'Get execution logs for debugging. Can filter by node, log level, and category. Returns the most recent logs.',
   inputSchema: {
     type: 'object',
@@ -1244,12 +1244,12 @@ const getDashboardStats: ChatTool = {
 
 const submitExecutionInput: ChatTool = {
   name: 'submit_execution_input',
-  description: 'Submit human input to a paused workflow execution. Use this when get_execution shows status "waiting_for_input" — it means a human node or auto-gate clarify is waiting for the user\'s response.',
+  description: 'Submit human input to a paused workflow execution. Use this when wait_for_execution shows status "waiting_for_input" — it means a human node or auto-gate clarify is waiting for the user\'s response.',
   inputSchema: {
     type: 'object',
     properties: {
       execution_id: { type: 'string', description: 'The execution ID that is waiting for input' },
-      node: { type: 'string', description: 'The node name that is waiting (from get_execution current_nodes)' },
+      node: { type: 'string', description: 'The node name that is waiting (from wait_for_execution current_nodes)' },
       data: { type: 'object', description: 'The input data to submit. For human nodes: field values. For clarify: { response: "user answer", __clarify_action: "retry" or "continue" }', additionalProperties: true },
     },
     required: ['execution_id', 'node', 'data'],
@@ -1331,20 +1331,20 @@ const saveLearning: ChatTool = {
 
 const delegateToAgent: ChatTool = {
   name: 'delegate_to_agent',
-  description: `Delegate a task to another team agent. Returns immediately with a conversation_id. Then call get_delegation_result(conversation_id) which BLOCKS until the agent finishes — no polling loop needed.
+  description: `Delegate a task to another team agent. Returns immediately with a conversation_id. Then call wait_for_delegation(conversation_id) which BLOCKS until the agent finishes — no polling loop needed.
 
 WORKFLOW:
 1. delegate_to_agent(agent_name="engineer", task="Analyze feasibility") → { conversation_id: "abc" }
-2. get_delegation_result(conversation_id="abc") → WAITS → { status: "completed", response: "..." }
+2. wait_for_delegation(conversation_id="abc") → WAITS → { status: "completed", response: "..." }
 3. Optional follow-up: delegate_to_agent(agent_name="engineer", task="What about CSS?", conversation_id="abc")
-4. get_delegation_result(conversation_id="abc") → WAITS → { status: "completed", response: "..." }
+4. wait_for_delegation(conversation_id="abc") → WAITS → { status: "completed", response: "..." }
 
 CRITICAL RULES:
-- ALWAYS call get_delegation_result after delegate_to_agent.
-- If get_delegation_result returns status="waiting", call it again immediately. Keep calling until "completed" or "failed".
+- ALWAYS call wait_for_delegation after delegate_to_agent.
+- If wait_for_delegation returns status="waiting", call it again immediately. Keep calling until "completed" or "failed".
 - NEVER respond to the user before ALL delegations are complete.
-- NEVER give up — the agent WILL finish. Just keep calling get_delegation_result.
-- After getting "completed", you MAY send follow-ups via delegate_to_agent(conversation_id=...) then get_delegation_result again.
+- NEVER give up — the agent WILL finish. Just keep calling wait_for_delegation.
+- After getting "completed", you MAY send follow-ups via delegate_to_agent(conversation_id=...) then wait_for_delegation again.
 - Only after ALL delegation results are in, synthesize and respond to the user.`,
   destructive: true,
   inputSchema: {
@@ -1413,7 +1413,7 @@ CRITICAL RULES:
       // Run in background — return immediately
       runDelegationInBackground(db, targetAgent, task, existingConvId, targetSessionId, conversationService, onEvent, activeCtx, currentDepth, fromAgent, targetName, delegationCwd).catch(() => {});
 
-      return { conversation_id: existingConvId, status: 'started', turn: 'continue', message: `Message sent to ${targetName}. Use get_delegation_result to check the response.` };
+      return { conversation_id: existingConvId, status: 'started', turn: 'continue', message: `Message sent to ${targetName}. Use wait_for_delegation to check the response.` };
     }
 
     // ── New conversation ──
@@ -1467,7 +1467,7 @@ CRITICAL RULES:
     // Run in background — return immediately so MCP doesn't timeout
     runDelegationInBackground(db, targetAgent, fullPrompt, convId, undefined, conversationService, onEvent, activeCtx, currentDepth, fromAgent, targetName, delegationCwd).catch(() => {});
 
-    return { conversation_id: convId, status: 'started', agent: targetName, depth: currentDepth, message: `Delegation started. Use get_delegation_result(conversation_id="${convId}") to get the response.` };
+    return { conversation_id: convId, status: 'started', agent: targetName, depth: currentDepth, message: `Delegation started. Use wait_for_delegation(conversation_id="${convId}") to get the response.` };
   },
 };
 
@@ -1504,20 +1504,20 @@ async function runDelegationInBackground(
 
 /** Wait for delegation result — handles active, waiting_for_answer, completed, failed */
 const getDelegationResult: ChatTool = {
-  name: 'get_delegation_result',
+  name: 'wait_for_delegation',
   description: `Wait for a delegation to complete. Blocks up to 90 seconds per call.
 
 Possible return statuses:
-- "waiting" → agent still working. Call get_delegation_result again.
-- "question" → agent is asking YOU a question. Read the question, then call answer_question(conversation_id, answer).
-  After answering, call get_delegation_result again to wait for the agent to finish.
+- "waiting" → agent still working. Call wait_for_delegation again.
+- "question" → agent is asking YOU a question. Read the question, then call answer_delegator(conversation_id, answer).
+  After answering, call wait_for_delegation again to wait for the agent to finish.
 - "completed" → agent finished. Response is in the result.
 - "failed" → agent errored.
 
 RULES:
-- If "waiting": call get_delegation_result again immediately. NEVER give up.
-- If "question": answer it via answer_question, then call get_delegation_result again.
-- If you can't answer the question yourself, use ask_caller to escalate to YOUR caller.
+- If "waiting": call wait_for_delegation again immediately. NEVER give up.
+- If "question": answer it via answer_delegator, then call wait_for_delegation again.
+- If you can't answer the question yourself, use ask_delegator to escalate to YOUR caller.
 - NEVER respond to the user before status is "completed" or "failed".`,
   inputSchema: {
     type: 'object',
@@ -1545,7 +1545,7 @@ RULES:
           status: 'question',
           question: conv.pendingQuestion.question,
           from_agent: conv.pendingQuestion.fromAgent,
-          message: `${conv.toAgent} is asking: "${conv.pendingQuestion.question}". Answer via answer_question(conversation_id, answer).`,
+          message: `${conv.toAgent} is asking: "${conv.pendingQuestion.question}". Answer via answer_delegator(conversation_id, answer).`,
         };
       }
 
@@ -1569,14 +1569,14 @@ RULES:
       waitMs = Math.min(waitMs * 1.3, maxWaitMs);
     }
 
-    return { conversation_id: convId, status: 'waiting', message: 'Agent is still working. Call get_delegation_result again.' };
+    return { conversation_id: convId, status: 'waiting', message: 'Agent is still working. Call wait_for_delegation again.' };
   },
 };
 
 /** Answer a question from a delegated agent */
 const answerQuestion: ChatTool = {
-  name: 'answer_question',
-  description: 'Answer a question from an agent you delegated to. Use when get_delegation_result returns status="question". After answering, call get_delegation_result again to wait for the agent to continue.',
+  name: 'answer_delegator',
+  description: 'Answer a question from an agent you delegated to. Use when wait_for_delegation returns status="question". After answering, call wait_for_delegation again to wait for the agent to continue.',
   inputSchema: {
     type: 'object',
     properties: {
@@ -1609,7 +1609,7 @@ const answerQuestion: ChatTool = {
 
 /** Ask the caller (agent who delegated to you) a question. Blocks until they answer. */
 const askCaller: ChatTool = {
-  name: 'ask_caller',
+  name: 'ask_delegator',
   description: 'Ask a question to the agent who delegated this task to you. Use when you need clarification, context, or a decision before you can proceed. Your execution pauses until they answer. Do NOT guess — ask.',
   inputSchema: {
     type: 'object',
@@ -1625,7 +1625,7 @@ const askCaller: ChatTool = {
     // Accept conversation_id from API route (when called via MCP → HTTP) or from active context
     const convId = (args._conversation_id as string) ?? activeCtx?.currentConversationId;
 
-    if (!convId) return { error: 'No active conversation context. ask_caller can only be used by a delegated agent.' };
+    if (!convId) return { error: 'No active conversation context. ask_delegator can only be used by a delegated agent.' };
 
     const conversationService = new AgentConversationService(db);
 
@@ -1991,16 +1991,16 @@ function buildDelegationPrompt(
 
   parts.push(`\nYou were delegated a task by ${fromAgent}. Respond with a clear, actionable answer.`);
 
-  // ask_caller — always available to delegated agents
+  // ask_delegator — always available to delegated agents
   parts.push(`
 ASKING QUESTIONS:
-- If you need clarification, context, or a decision from ${fromAgent}, use ask_caller(question).
+- If you need clarification, context, or a decision from ${fromAgent}, use ask_delegator(question).
 - Your execution pauses until ${fromAgent} answers, then you continue with the answer.
 - Do NOT guess when you're unsure — ASK.`);
 
   if (canDelegateTo.length > 0 && depth < maxDepth) {
     parts.push(`\nYou can delegate sub-tasks to: ${canDelegateTo.join(', ')} using delegate_to_agent.
-When get_delegation_result returns "question", answer it via answer_question, then call get_delegation_result again.`);
+When wait_for_delegation returns "question", answer it via answer_delegator, then call wait_for_delegation again.`);
   } else if (depth >= maxDepth) {
     parts.push(`\nYou are at the maximum delegation depth (${depth}/${maxDepth}). Do NOT delegate further — respond directly.`);
   }
@@ -2015,7 +2015,7 @@ When get_delegation_result returns "question", answer it via answer_question, th
     parts.push(`
 YOU MUST call spawn_agent before making any claims about code. You have no filesystem access.
 Available technical agents: coding-investigator, coding-planner, coding-reviewer, coding-developer, coding-tester, coding-writer, git-ops.
-Pick the right agent for each sub-task. Call spawn_agent(agent_name, prompt_with_repo_path), then get_execution to wait.
+Pick the right agent for each sub-task. Call spawn_agent(agent_name, prompt_with_repo_path), then wait_for_execution to wait.
 NEVER fabricate analysis. Every technical claim must come from an agent's actual response.`);
   }
 

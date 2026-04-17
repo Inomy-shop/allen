@@ -55,9 +55,9 @@ export function chatRoutes(db: Db): Router {
       const { tool, agent_name, task, context, conversation_id, answer } = req.body;
 
       // Route to the right tool
-      if (tool === 'answer_question') {
+      if (tool === 'answer_delegator' || tool === 'answer_question') {
         if (!conversation_id || !answer) return res.status(400).json({ error: 'conversation_id and answer are required' });
-        const result = await executeChatTool('answer_question', { conversation_id, answer }, db);
+        const result = await executeChatTool('answer_delegator', { conversation_id, answer }, db);
         return res.json(result);
       }
 
@@ -279,7 +279,7 @@ export function chatRoutes(db: Db): Router {
       const { question, conversation_id } = req.body;
       if (!question) return res.status(400).json({ error: 'question is required' });
       // conversation_id can come from the request or from the active session context
-      const result = await executeChatTool('ask_caller', { question, _conversation_id: conversation_id }, db);
+      const result = await executeChatTool('ask_delegator', { question, _conversation_id: conversation_id }, db);
       res.json(result);
     } catch (err: unknown) {
       res.status(500).json({ error: (err as Error).message });

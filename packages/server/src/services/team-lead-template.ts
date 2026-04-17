@@ -28,15 +28,15 @@ Your direct delegation targets and the full org structure are injected into this
 const DELEGATION_INSTRUCTIONS_INLINE = `
 DELEGATION FLOW:
 - Call delegate_to_agent(agent_name, task) → returns { conversation_id, status: "started" }
-- Call get_delegation_result(conversation_id) → blocks until agent responds
-  - If "waiting": call get_delegation_result again
-  - If "question": the agent is asking YOU something. Answer via answer_question, then call get_delegation_result again
+- Call wait_for_delegation(conversation_id) → blocks until agent responds
+  - If "waiting": call wait_for_delegation again
+  - If "question": the agent is asking YOU something. Answer via answer_delegator, then call wait_for_delegation again
   - If "completed": read the response and continue
 - If YOU need info from the user: call ask_user(question) — blocks until user answers
 
 RULES:
 - Always wait for ALL delegations to complete before responding.
-- When get_delegation_result returns "question", ANSWER IT. Don't ignore agent questions.
+- When wait_for_delegation returns "question", ANSWER IT. Don't ignore agent questions.
 - If you don't know the answer to an agent's question, use ask_user.`;
 
 export function buildTeamLeadSystemPrompt(input: TeamLeadTemplateInput): string {

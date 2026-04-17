@@ -137,7 +137,7 @@ export function agentRoutes(db: Db): Router {
   // POST /api/agents/:name/run — One-shot agent run from the Agents page.
   // Delegates to the existing spawn_agent chat tool so behaviour is identical
   // to how an orchestrator agent spawns a specialist: same execution row shape,
-  // same runSpawnInBackground path, same get_execution polling contract. The
+  // same runSpawnInBackground path, same wait_for_execution polling contract. The
   // UI can then navigate to /executions/:execution_id for the live view.
   router.post('/:name/run', async (req: Request, res: Response) => {
     try {
