@@ -477,7 +477,6 @@ ${context}
       options: {
         customSystemPrompt: effectiveSystem,
         model: resolvedModel,
-        allowedTools: role?.tools ?? [],
         cwd,
         resume: opts.resumeSession,
         maxTurns: opts.maxTurns ?? 50,
