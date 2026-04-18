@@ -13,7 +13,7 @@ export default function PullRequestDetailPage() {
   const navigate = useNavigate();
   const [pr, setPr] = useState<any>(null);
   const [loading, setLoading] = useState(true);
-  const [diff, setDiff] = useState<{ diff: string; files: { path: string; diff: string }[] }>({ diff: '', files: [] });
+  const [diff, setDiff] = useState<{ diff: string; files: { path: string; diff: string; originalContent?: string; modifiedContent?: string }[] }>({ diff: '', files: [] });
   const [selectedFile, setSelectedFile] = useState<string | null>(null);
   const [pendingWsId, setPendingWsId] = useState<string | null>(null);
 
@@ -53,20 +53,12 @@ export default function PullRequestDetailPage() {
 
   const selectedDiff = diff.files.find(f => f.path === selectedFile);
 
-  // Parse diff into original/modified for Monaco DiffEditor
-  function parseDiffContent(diffText: string): { original: string; modified: string; language: string } {
-    const lines = diffText.split('\n');
-    const origLines: string[] = [];
-    const modLines: string[] = [];
-    for (const line of lines) {
-      if (line.startsWith('@@') || line.startsWith('diff ') || line.startsWith('index ') || line.startsWith('---') || line.startsWith('+++')) continue;
-      if (line.startsWith('-')) origLines.push(line.slice(1));
-      else if (line.startsWith('+')) modLines.push(line.slice(1));
-      else { origLines.push(line.startsWith(' ') ? line.slice(1) : line); modLines.push(line.startsWith(' ') ? line.slice(1) : line); }
-    }
-    const ext = selectedFile?.split('.').pop()?.toLowerCase() ?? '';
-    const langMap: Record<string, string> = { ts: 'typescript', tsx: 'typescript', js: 'javascript', json: 'json', md: 'markdown', css: 'css', html: 'html', yml: 'yaml', yaml: 'yaml', py: 'python' };
-    return { original: origLines.join('\n'), modified: modLines.join('\n'), language: langMap[ext] ?? 'plaintext' };
+  // Language from file extension — Monaco does its own diff between the
+  // full original/modified file contents the server returns.
+  function detectLanguage(path: string | null): string {
+    const ext = path?.split('.').pop()?.toLowerCase() ?? '';
+    const langMap: Record<string, string> = { ts: 'typescript', tsx: 'typescript', js: 'javascript', jsx: 'javascript', json: 'json', md: 'markdown', css: 'css', scss: 'scss', html: 'html', yml: 'yaml', yaml: 'yaml', py: 'python', sh: 'shell', go: 'go', rs: 'rust' };
+    return langMap[ext] ?? 'plaintext';
   }
 
   return (
@@ -119,26 +111,23 @@ export default function PullRequestDetailPage() {
 
         {/* Diff viewer */}
         <div className="flex-1 min-h-0 overflow-hidden">
-          {selectedDiff ? (() => {
-            const { original, modified, language } = parseDiffContent(selectedDiff.diff);
-            return (
-              <DiffEditor
-                height="100%"
-                language={language}
-                original={original}
-                modified={modified}
-                theme="vs-dark"
-                options={{
-                  readOnly: true,
-                  fontSize: 12,
-                  fontFamily: "'JetBrains Mono', monospace",
-                  renderSideBySide: true,
-                  scrollBeyondLastLine: false,
-                  minimap: { enabled: false },
-                }}
-              />
-            );
-          })() : (
+          {selectedDiff ? (
+            <DiffEditor
+              height="100%"
+              language={detectLanguage(selectedFile)}
+              original={selectedDiff.originalContent ?? ''}
+              modified={selectedDiff.modifiedContent ?? ''}
+              theme="vs-dark"
+              options={{
+                readOnly: true,
+                fontSize: 12,
+                fontFamily: "'JetBrains Mono', monospace",
+                renderSideBySide: true,
+                scrollBeyondLastLine: false,
+                minimap: { enabled: false },
+              }}
+            />
+          ) : (
             <div className="flex items-center justify-center h-full text-theme-subtle text-sm">Select a file to view diff</div>
           )}
         </div>

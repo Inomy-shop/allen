@@ -8,6 +8,7 @@ import { AgentThread } from './AgentThread';
 import { AgentQuestionPrompt } from './AgentQuestionPrompt';
 import RoleIcon from '../common/RoleIcon';
 import { useSettingsStore } from '../../stores/settingsStore';
+import MermaidChatBlock from './MermaidChatBlock';
 
 const AGENT_ICONS: Record<string, React.ElementType> = {
   bot: Bot, brain: Brain, sparkles: Sparkles, zap: Zap, cpu: Cpu, atom: Atom,
@@ -129,19 +130,23 @@ export function renderMarkdown(content: string): React.ReactNode {
     }
     const lang = match[1] || '';
     const code = match[2].replace(/\n$/, '');
-    parts.push(
-      <div key={key++} className="group/code relative my-3 rounded-md overflow-hidden border border-border/40 bg-[rgb(var(--color-editor-background))]">
-        <div className="flex items-center justify-between px-3 py-1.5 bg-surface-200/60 border-b border-border/30">
-          <span className="text-[10px] font-mono text-theme-muted uppercase tracking-wider">
-            {lang || 'code'}
-          </span>
-          <CopyButton text={code} />
-        </div>
-        <pre className="px-4 py-3 overflow-x-auto text-[13px] leading-relaxed font-mono">
-          <code className="text-theme-secondary">{highlightCode(code, lang)}</code>
-        </pre>
-      </div>,
-    );
+    if (lang.toLowerCase() === 'mermaid') {
+      parts.push(<MermaidChatBlock key={key++} code={code} />);
+    } else {
+      parts.push(
+        <div key={key++} className="group/code relative my-3 rounded-md overflow-hidden border border-border/40 bg-[rgb(var(--color-editor-background))]">
+          <div className="flex items-center justify-between px-3 py-1.5 bg-surface-200/60 border-b border-border/30">
+            <span className="text-[10px] font-mono text-theme-muted uppercase tracking-wider">
+              {lang || 'code'}
+            </span>
+            <CopyButton text={code} />
+          </div>
+          <pre className="px-4 py-3 overflow-x-auto text-[13px] leading-relaxed font-mono">
+            <code className="text-theme-secondary">{highlightCode(code, lang)}</code>
+          </pre>
+        </div>,
+      );
+    }
     lastIndex = match.index + match[0].length;
   }
 

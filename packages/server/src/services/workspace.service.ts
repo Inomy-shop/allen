@@ -5,75 +5,16 @@
 
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { existsSync, mkdirSync, accessSync, constants as fsConstants } from 'node:fs';
+import { existsSync, mkdirSync } from 'node:fs';
 import { join, dirname } from 'node:path';
-import { homedir } from 'node:os';
 import { spawn, type ChildProcess } from 'node:child_process';
 import type { Db, ObjectId } from 'mongodb';
+import { resolveWorkspacesDir } from '@flowforge/engine';
 import { watchWorkspace, unwatchWorkspace } from './workspace-watcher.js';
 
 const exec = promisify(execFile);
 
-/**
- * Resolve the base directory where flowforge git worktrees live. Priority:
- *
- *   1. WORKSPACE_BASE_DIR env var — explicit opt-in, wins over everything.
- *   2. ~/.flowforge/workspaces — persistent, user-owned, survives reboots,
- *      not subject to /tmp sweeping. This is the preferred location in
- *      production.
- *   3. /tmp/flowforge-workspaces — legacy fallback. Only used if home dir
- *      is somehow unwritable (read-only HOME, no HOME env, etc.).
- *
- * We PROACTIVELY create the directory here with the current process's
- * ownership. This avoids the "someone else created /tmp/flowforge-workspaces
- * as root on a prior deploy and now the service user can't write to it"
- * failure class we hit in production.
- */
-function resolveWorkspaceBaseDir(): string {
-  const envOverride = process.env.WORKSPACE_BASE_DIR;
-  if (envOverride) {
-    ensureDir(envOverride);
-    return envOverride;
-  }
-
-  const home = homedir();
-  if (home && home !== '/') {
-    const homeDir = join(home, '.flowforge', 'workspaces');
-    try {
-      ensureDir(homeDir);
-      // Sanity: can we actually write here?
-      accessSync(homeDir, fsConstants.W_OK);
-      return homeDir;
-    } catch (err) {
-      console.warn(
-        `[workspace] home-based dir ${homeDir} not writable (${(err as Error).message}); falling back to /tmp`,
-      );
-    }
-  }
-
-  const tmpDir = '/tmp/flowforge-workspaces';
-  ensureDir(tmpDir);
-  // Sanity: can we actually write here? If not, fail LOUD at startup
-  // instead of waiting for a workflow run to cryptically fail later.
-  try {
-    accessSync(tmpDir, fsConstants.W_OK);
-  } catch (err) {
-    throw new Error(
-      `[workspace] Cannot write to workspace base dir ${tmpDir}: ${(err as Error).message}. ` +
-      `Either fix permissions (sudo chown -R <service-user> ${tmpDir}) or set WORKSPACE_BASE_DIR ` +
-      `to a user-writable path in your environment.`,
-    );
-  }
-  return tmpDir;
-}
-
-function ensureDir(path: string): void {
-  if (!existsSync(path)) {
-    mkdirSync(path, { recursive: true, mode: 0o755 });
-  }
-}
-
-const WORKSPACE_BASE = resolveWorkspaceBaseDir();
+const WORKSPACE_BASE = resolveWorkspacesDir();
 const PORT_RANGE_START = 15000;
 const PORT_RANGE_PER_WORKSPACE = 10;
 const LOG_RING_SIZE = 2000; // max lines per service
@@ -164,9 +105,7 @@ export class WorkspaceManager {
   private runningProcesses = new Map<string, ChildProcess>(); // key: workspaceId:serviceName
   private serviceLogs = new Map<string, LogRingBuffer>();     // key: workspaceId:serviceName
 
-  constructor(private db: Db) {
-    if (!existsSync(WORKSPACE_BASE)) mkdirSync(WORKSPACE_BASE, { recursive: true });
-  }
+  constructor(private db: Db) {}
 
   // ── Log access ──
 
@@ -459,7 +398,7 @@ export class WorkspaceManager {
     }
   }
 
-  async getDiff(id: string): Promise<{ baseBranch: string; files: { path: string; status: string; additions: number; deletions: number; diff: string }[] }> {
+  async getDiff(id: string): Promise<{ baseBranch: string; files: { path: string; status: string; additions: number; deletions: number; diff: string; originalContent: string; modifiedContent: string }[] }> {
     const ws = await this.get(id);
     if (!ws) throw new Error('Workspace not found');
 
@@ -479,32 +418,44 @@ export class WorkspaceManager {
       const status = statusChar === 'A' ? 'added' : statusChar === 'D' ? 'deleted' : 'modified';
       const statLine = statLines[i] ?? '';
       const [add, del] = statLine.split('\t');
-      return { path, status, additions: parseInt(add) || 0, deletions: parseInt(del) || 0, diff: '' };
+      return { path, status, additions: parseInt(add) || 0, deletions: parseInt(del) || 0, diff: '', originalContent: '', modifiedContent: '' };
     });
 
     // Add untracked files as "added"
     const existingPaths = new Set(files.map(f => f.path));
     for (const f of untracked.trim().split('\n').filter(Boolean)) {
       if (!existingPaths.has(f)) {
-        files.push({ path: f, status: 'added', additions: 0, deletions: 0, diff: '' });
+        files.push({ path: f, status: 'added', additions: 0, deletions: 0, diff: '', originalContent: '', modifiedContent: '' });
       }
     }
 
-    // Get full diff for each file
-    for (const file of files) {
+    // Get full diff + full file contents at HEAD and in working tree so the UI
+    // can render a real file-level diff in Monaco (not just the hunk slice).
+    const { readFileSync: rf } = await import('node:fs');
+    await Promise.all(files.map(async (file) => {
       try {
         if (file.status === 'added' && !nameStatus.includes(file.path)) {
-          // Untracked file — show full content as diff
-          const { readFileSync: rf } = await import('node:fs');
+          // Untracked file — no HEAD version, read working copy as modified
           const content = rf(join(ws.worktreePath, file.path), 'utf-8');
           file.diff = content.split('\n').map(l => `+${l}`).join('\n');
           file.additions = content.split('\n').length;
+          file.originalContent = '';
+          file.modifiedContent = content;
         } else {
-          const { stdout } = await exec('git', ['diff', 'HEAD', '--', file.path], { cwd: ws.worktreePath });
-          file.diff = stdout;
+          const [{ stdout: diff }, orig, mod] = await Promise.all([
+            exec('git', ['diff', 'HEAD', '--', file.path], { cwd: ws.worktreePath }),
+            exec('git', ['show', `HEAD:${file.path}`], { cwd: ws.worktreePath }).then(r => r.stdout).catch(() => ''),
+            (async () => {
+              if (file.status === 'deleted') return '';
+              try { return rf(join(ws.worktreePath, file.path), 'utf-8'); } catch { return ''; }
+            })(),
+          ]);
+          file.diff = diff;
+          file.originalContent = orig;
+          file.modifiedContent = mod;
         }
       } catch {}
-    }
+    }));
 
     return { baseBranch: ws.baseBranch, files };
   }

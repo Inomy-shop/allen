@@ -105,15 +105,30 @@ export class PullRequestService {
     return { synced, total: prList.length };
   }
 
-  async getDiff(repoPath: string, branch: string, baseBranch: string): Promise<{ diff: string; files: { path: string; diff: string }[] }> {
+  async getDiff(repoPath: string, branch: string, baseBranch: string): Promise<{ diff: string; files: { path: string; diff: string; originalContent: string; modifiedContent: string }[] }> {
     try {
       await exec('git', ['fetch', 'origin', branch], { cwd: repoPath }).catch(() => {});
+      await exec('git', ['fetch', 'origin', baseBranch], { cwd: repoPath }).catch(() => {});
       const { stdout } = await exec('git', ['diff', `origin/${baseBranch}...origin/${branch}`], { cwd: repoPath });
-      const files: { path: string; diff: string }[] = [];
+      const files: { path: string; diff: string; originalContent: string; modifiedContent: string }[] = [];
       const fileDiffs = stdout.split(/^diff --git /m).filter(Boolean);
-      for (const fd of fileDiffs) {
-        const pathMatch = fd.match(/a\/(.+?) b\//);
-        if (pathMatch) files.push({ path: pathMatch[1], diff: 'diff --git ' + fd });
+      // Fetch full file contents at base and head so the UI's DiffEditor can
+      // show real file-level diffs (not just hunks). Parallel for speed.
+      const fileMeta = fileDiffs
+        .map((fd) => ({ fd, match: fd.match(/a\/(.+?) b\//) }))
+        .filter((x) => x.match)
+        .map((x) => ({ fd: x.fd, path: x.match![1] }));
+      const contents = await Promise.all(fileMeta.map(async ({ path }) => {
+        const [orig, mod] = await Promise.all([
+          exec('git', ['show', `origin/${baseBranch}:${path}`], { cwd: repoPath }).then(r => r.stdout).catch(() => ''),
+          exec('git', ['show', `origin/${branch}:${path}`], { cwd: repoPath }).then(r => r.stdout).catch(() => ''),
+        ]);
+        return { path, originalContent: orig, modifiedContent: mod };
+      }));
+      for (let i = 0; i < fileMeta.length; i++) {
+        const { fd, path } = fileMeta[i];
+        const { originalContent, modifiedContent } = contents[i];
+        files.push({ path, diff: 'diff --git ' + fd, originalContent, modifiedContent });
       }
       return { diff: stdout, files };
     } catch {

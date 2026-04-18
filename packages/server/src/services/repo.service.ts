@@ -1,14 +1,13 @@
-import { existsSync, statSync, mkdirSync } from 'node:fs';
+import { existsSync, statSync } from 'node:fs';
 import { basename, join } from 'node:path';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import type { Collection, Db } from 'mongodb';
+import { resolveRepositoriesDir } from '@flowforge/engine';
 import { scanRepo } from './repo-scanner.js';
 import { RepoContextScannerService } from './repo-context-scanner.service.js';
 
 const exec = promisify(execFile);
-
-const CLONE_BASE_DIR = '/tmp/repositories';
 
 /**
  * Parse a GitHub URL (HTTPS or SSH) into { sshUrl, repoName }.
@@ -114,7 +113,7 @@ export class RepoService {
    * Clone a repo from a GitHub URL and register it.
    * 1. Parse URL → SSH clone URL + repo name
    * 2. Check for duplicates (name in DB + directory on disk)
-   * 3. git clone via SSH to /tmp/repositories/<repo-name>
+   * 3. git clone via SSH to <FLOWFORGE_HOME>/repositories/<repo-name>
    * 4. git checkout the specified branch
    * 5. Scan the repo
    * 6. Save to DB
@@ -129,7 +128,7 @@ export class RepoService {
     const { sshUrl, repoName: parsedName } = parseGitHubUrl(body.url);
     const repoName = body.name?.trim() || parsedName;
     const branch = body.branch?.trim() || 'main';
-    const clonePath = join(CLONE_BASE_DIR, repoName);
+    const clonePath = join(resolveRepositoriesDir(), repoName);
 
     // Check if repo with same name already exists in DB
     const existingByName = await this.col.findOne({ name: repoName });
@@ -146,11 +145,6 @@ export class RepoService {
     // Check if directory already exists on disk
     if (existsSync(clonePath)) {
       throw new Error(`Directory already exists at ${clonePath}. Delete it first or use a different name.`);
-    }
-
-    // Ensure base directory exists
-    if (!existsSync(CLONE_BASE_DIR)) {
-      mkdirSync(CLONE_BASE_DIR, { recursive: true });
     }
 
     // Clone

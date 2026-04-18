@@ -101,7 +101,7 @@ function AddRepoDialog({ open, onClose, onCreated }: { open: boolean; onClose: (
             </label>
             <input type="text" value={url} onChange={e => setUrl(e.target.value)}
               placeholder="https://github.com/owner/repo or git@github.com:owner/repo.git" className="input w-full font-mono text-sm" />
-            <p className="text-[10px] text-theme-muted mt-1">HTTPS or SSH URL. Clones via SSH to /tmp/repositories/&lt;repo-name&gt;</p>
+            <p className="text-[10px] text-theme-muted mt-1">HTTPS or SSH URL. Clones via SSH into the FlowForge repositories directory (default: ~/.flowforge/repositories/&lt;repo-name&gt;).</p>
           </div>
           <div>
             <label className="flex items-center gap-1 text-xs font-label font-semibold text-theme-secondary mb-2 uppercase tracking-widest">

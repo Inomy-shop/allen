@@ -438,7 +438,7 @@ export default function WorkspaceDetailPage() {
   // Git diff view
   const [showDiffView, setShowDiffView] = useState(false);
   const [diffLoading, setDiffLoading] = useState(false);
-  const [diffFiles, setDiffFiles] = useState<{ path: string; status: string; additions: number; deletions: number; diff: string }[]>([]);
+  const [diffFiles, setDiffFiles] = useState<{ path: string; status: string; additions: number; deletions: number; diff: string; originalContent?: string; modifiedContent?: string }[]>([]);
   const [diffSelectedFile, setDiffSelectedFile] = useState<string | null>(null);
   // PR modal
   const [showPrModal, setShowPrModal] = useState(false);
@@ -743,17 +743,8 @@ export default function WorkspaceDetailPage() {
             {showDiffView && diffSelectedFile ? (() => {
               const fileData = diffFiles.find(f => f.path === diffSelectedFile);
               if (!fileData) return <div className="flex-1 flex items-center justify-center text-theme-subtle text-sm">Select a file</div>;
-              const lines = fileData.diff.split('\n');
-              const origLines: string[] = [];
-              const modLines: string[] = [];
-              for (const line of lines) {
-                if (line.startsWith('@@') || line.startsWith('diff ') || line.startsWith('index ') || line.startsWith('---') || line.startsWith('+++')) continue;
-                if (line.startsWith('-')) origLines.push(line.slice(1));
-                else if (line.startsWith('+')) modLines.push(line.slice(1));
-                else { const c = line.startsWith(' ') ? line.slice(1) : line; origLines.push(c); modLines.push(c); }
-              }
               const ext = diffSelectedFile.split('.').pop()?.toLowerCase() ?? '';
-              const langMap: Record<string, string> = { ts: 'typescript', tsx: 'typescript', js: 'javascript', jsx: 'javascript', json: 'json', md: 'markdown', css: 'css', scss: 'scss', html: 'html', yml: 'yaml', yaml: 'yaml', py: 'python', sh: 'shell' };
+              const langMap: Record<string, string> = { ts: 'typescript', tsx: 'typescript', js: 'javascript', jsx: 'javascript', json: 'json', md: 'markdown', css: 'css', scss: 'scss', html: 'html', yml: 'yaml', yaml: 'yaml', py: 'python', sh: 'shell', go: 'go', rs: 'rust' };
               const fileName = diffSelectedFile.split('/').pop() ?? diffSelectedFile;
               return (
                 <>
@@ -769,8 +760,8 @@ export default function WorkspaceDetailPage() {
                     <DiffEditor
                       height="100%"
                       language={langMap[ext] ?? 'plaintext'}
-                      original={origLines.join('\n')}
-                      modified={modLines.join('\n')}
+                      original={fileData.originalContent ?? ''}
+                      modified={fileData.modifiedContent ?? ''}
                       theme="vs-dark"
                       options={{
                         readOnly: true,
