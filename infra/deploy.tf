@@ -69,7 +69,7 @@ resource "null_resource" "deploy_app" {
           "if [ ! -d /home/ubuntu/allen/.git ]; then sudo mkdir -p /home/ubuntu/allen && sudo chown ubuntu:ubuntu /home/ubuntu/allen && sudo -u ubuntu git clone ${var.repo_url} /home/ubuntu/allen; fi",
           "cd /home/ubuntu/allen && sudo -u ubuntu git fetch origin && sudo -u ubuntu git checkout ${var.repo_branch} && sudo -u ubuntu git reset --hard origin/${var.repo_branch}",
           "echo === Running bootstrap ===",
-          "cd /home/ubuntu/allen && export REPO_URL=${var.repo_url} && export BRANCH=${var.repo_branch} && sudo -u ubuntu -E bash infra/templates/bootstrap.sh 2>&1 | tee /tmp/allen-deploy.log"
+          "cd /home/ubuntu/allen && export REPO_URL=${var.repo_url} BRANCH=${var.repo_branch} ENV=${var.environment} && sudo -u ubuntu -E bash infra/templates/bootstrap.sh 2>&1 | tee /tmp/allen-deploy.log"
         ]' \
         --query 'Command.CommandId' --output text)
 
