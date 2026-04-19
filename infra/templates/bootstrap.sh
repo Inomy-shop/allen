@@ -45,33 +45,68 @@ echo "  branch: $(git branch --show-current)  commit: $(git rev-parse --short HE
 # ── 3. Write config files ──────────────────────────────────────────────────
 echo "=== [3/8] Write configs ==="
 
-# nginx (rendered by Terraform, placed at /tmp by SSM)
-if [ -f /tmp/allen-nginx.conf ]; then
+# Region for SSM fallback (EC2 metadata → env var → us-east-1 default)
+AWS_REGION="$(curl -fsS -m 2 http://169.254.169.254/latest/meta-data/placement/region 2>/dev/null \
+              || echo "${AWS_REGION:-us-east-1}")"
+
+# ── 3a. Purge the pre-rename flowforge footprint ──
+# Runs unconditionally so stale state from the old deploy never lingers,
+# regardless of whether /tmp/allen-* was staged by the SSM pre-step.
+echo "  cleanup: removing stale flowforge configs/units"
+sudo rm -f /etc/nginx/sites-enabled/flowforge /etc/nginx/sites-available/flowforge
+sudo rm -f /etc/nginx/sites-enabled/default
+if systemctl list-unit-files flowforge.service &>/dev/null; then
+  sudo systemctl stop flowforge.service 2>/dev/null || true
+  sudo systemctl disable flowforge.service 2>/dev/null || true
+fi
+sudo rm -f /etc/systemd/system/flowforge.service
+
+# ── 3b. nginx config ──
+# Normally staged by the SSM pre-bootstrap step at /tmp/allen-nginx.conf.
+# If it's missing or empty (SSM step failed / was skipped), fetch it
+# ourselves so bootstrap is self-sufficient.
+if [ ! -s /tmp/allen-nginx.conf ]; then
+  echo "  /tmp/allen-nginx.conf missing — fetching from SSM directly"
+  sudo aws ssm get-parameter \
+    --region "$AWS_REGION" \
+    --name "/allen/${ENV:-dev}/nginx-config" \
+    --query 'Parameter.Value' --output text \
+    | sudo tee /tmp/allen-nginx.conf > /dev/null
+fi
+if [ -s /tmp/allen-nginx.conf ]; then
   sudo cp /tmp/allen-nginx.conf /etc/nginx/sites-available/allen
-  sudo ln -sf /etc/nginx/sites-available/allen /etc/nginx/sites-enabled/
-  sudo rm -f /etc/nginx/sites-enabled/default
-  # Clean up stale configs from the pre-rename deploy so the new server_name
-  # rules are the only ones nginx considers for this box.
-  sudo rm -f /etc/nginx/sites-enabled/flowforge /etc/nginx/sites-available/flowforge
-  echo "  nginx config: updated"
+  sudo ln -sf /etc/nginx/sites-available/allen /etc/nginx/sites-enabled/allen
+  echo "  nginx config: installed at /etc/nginx/sites-available/allen"
 else
-  echo "  nginx config: /tmp/allen-nginx.conf not found, skipping"
+  echo "  nginx config: FAILED — /tmp/allen-nginx.conf still missing after SSM fetch" >&2
+  exit 1
 fi
 
-# .env.production (rendered by Terraform)
-if [ -f /tmp/allen-env ]; then
+# ── 3c. .env.production ──
+if [ ! -s /tmp/allen-env ]; then
+  echo "  /tmp/allen-env missing — fetching from SSM directly"
+  sudo aws ssm get-parameter \
+    --region "$AWS_REGION" \
+    --name "/allen/${ENV:-dev}/env-production" \
+    --with-decryption \
+    --query 'Parameter.Value' --output text \
+    | sudo tee /tmp/allen-env > /dev/null
+  sudo chown ubuntu:ubuntu /tmp/allen-env
+fi
+if [ -s /tmp/allen-env ]; then
   cp /tmp/allen-env "$REPO_DIR/.env.production"
   chmod 600 "$REPO_DIR/.env.production"
-  echo "  .env.production: updated"
+  echo "  .env.production: installed"
 else
-  echo "  .env.production: /tmp/allen-env not found, skipping"
+  echo "  .env.production: FAILED — /tmp/allen-env still missing after SSM fetch" >&2
+  exit 1
 fi
 
-# systemd service
+# ── 3d. systemd unit ──
 sudo cp "$REPO_DIR/infra/templates/allen.service" /etc/systemd/system/allen.service
 sudo systemctl daemon-reload
 sudo systemctl enable allen
-echo "  systemd: enabled"
+echo "  systemd: allen.service enabled"
 
 # ── 4. DocumentDB CA cert ──────────────────────────────────────────────────
 echo "=== [4/8] DocumentDB CA cert ==="
