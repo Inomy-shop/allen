@@ -101,7 +101,7 @@ variable "refresh_token_ttl" {
 variable "repo_url" {
   description = "Git repo URL for Allen"
   type        = string
-  default     = "https://github.com/Kalpai-poc/flowforge.git"
+  default     = "https://github.com/Kalpai-poc/allen.git"
 }
 
 variable "repo_branch" {

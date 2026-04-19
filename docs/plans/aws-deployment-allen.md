@@ -280,7 +280,7 @@ terraform apply
         ├── aws ssm send-command → EC2
         │   └── bootstrap.sh runs on the EC2:
         │       ├── Install nginx, Node.js 20 (if not present)
-        │       ├── git clone / git pull (https://github.com/Kalpai-poc/flowforge)
+        │       ├── git clone / git pull (https://github.com/Kalpai-poc/allen)
         │       ├── git checkout main
         │       ├── Write nginx.conf, .env.production, allen.service
         │       ├── Download DocumentDB CA cert
@@ -381,7 +381,7 @@ resource "null_resource" "deploy_app" {
 set -euo pipefail
 
 REPO_DIR=/opt/allen
-REPO_URL=https://github.com/Kalpai-poc/flowforge.git
+REPO_URL=https://github.com/Kalpai-poc/allen.git
 BRANCH=main
 
 echo "=== [1/8] Install system deps ==="
@@ -1072,7 +1072,7 @@ sudo apt install -y nodejs
 
 # Clone Allen
 sudo mkdir -p /opt/allen && sudo chown ubuntu:ubuntu /opt/allen
-git clone https://github.com/Kalpai-poc/flowforge.git /opt/allen
+git clone https://github.com/Kalpai-poc/allen.git /opt/allen
 cd /opt/allen && npm ci
 
 # Download DocumentDB CA cert

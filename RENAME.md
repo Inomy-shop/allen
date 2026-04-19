@@ -62,7 +62,7 @@ grep -rl '\.allen\b' --exclude-dir={node_modules,dist,.git,data} | xargs sed -i 
 1. Stop the service: `sudo systemctl stop allen.service`
 2. Move on-disk data: `mv ~/.allen ~/.new` then `git worktree repair` in each repo under `~/.new/repositories/`
 3. Rename MongoDB DB: `mongodump --db=allen` + `mongorestore --nsFrom=allen.* --nsTo=new.*`
-4. Rewrite env vars in `.env.production`: `sudo sed -i 's/^ALLEN_/NEW_/g' /home/ubuntu/flowforge/.env.production`
+4. Rewrite env vars in `.env.production`: `sudo sed -i 's/^ALLEN_/NEW_/g' /home/ubuntu/allen/.env.production`
 5. Rewrite SSM parameters: `/allen/<env>/*` → `/new/<env>/*`
 6. Rename secret keys in the Mongo `secrets` collection (the `ALLEN_SECRET_PREFIX` constant is updated in code, but existing documents keep their old names — one-shot script needed)
 7. Codex MCP cleanup: `codex mcp remove allen` (the new server registers itself on boot)
@@ -74,7 +74,4 @@ Script template: see `scripts/migrate-flowforge-to-allen.ts` for a working examp
 
 ### 2c. Intentionally NOT renamed
 
-These stay as `flowforge` because they're out of scope:
-
-- GitHub repository URL `github.com/Kalpai-poc/flowforge.git` (3 infra sites)
-- Local working directory name `/Users/*/flowforge` (user-specific)
+- Local working directory name `/Users/*/flowforge` on the author's Mac is not a rename blocker — it's a filesystem path outside the repo. Do `mv` whenever convenient.

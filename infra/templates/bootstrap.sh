@@ -5,7 +5,7 @@
 set -euo pipefail
 
 REPO_DIR=/home/ubuntu/allen
-REPO_URL="${REPO_URL:-https://github.com/Kalpai-poc/flowforge.git}"
+REPO_URL="${REPO_URL:-https://github.com/Kalpai-poc/allen.git}"
 BRANCH="${BRANCH:-main}"
 
 echo "========================================"
@@ -50,6 +50,9 @@ if [ -f /tmp/allen-nginx.conf ]; then
   sudo cp /tmp/allen-nginx.conf /etc/nginx/sites-available/allen
   sudo ln -sf /etc/nginx/sites-available/allen /etc/nginx/sites-enabled/
   sudo rm -f /etc/nginx/sites-enabled/default
+  # Clean up stale configs from the pre-rename deploy so the new server_name
+  # rules are the only ones nginx considers for this box.
+  sudo rm -f /etc/nginx/sites-enabled/flowforge /etc/nginx/sites-available/flowforge
   echo "  nginx config: updated"
 else
   echo "  nginx config: /tmp/allen-nginx.conf not found, skipping"
