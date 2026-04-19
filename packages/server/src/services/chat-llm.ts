@@ -1,11 +1,12 @@
 /**
  * Chat LLM Router
  * Routes to the correct provider. All providers use MCP for tool access:
- * - FlowForge MCP server: our built-in tools (workflows, executions, agents, etc.)
+ * - Allen MCP server: our built-in tools (workflows, executions, agents, etc.)
  * - External MCP servers: Linear, GitHub, etc. (configured in Settings)
  */
 
 import type { Db } from 'mongodb';
+import { MCP_SERVER_NAME } from '@allen/engine';
 import {
   type ChatProvider,
   type ProviderCallbacks,
@@ -96,26 +97,26 @@ async function runClaudeCLI(
   const { query } = await import('@anthropic-ai/claude-code');
   const { resolve, dirname } = await import('node:path');
 
-  // Build MCP servers: FlowForge + external
+  // Build MCP servers: Allen + external
   const mcpServers: Record<string, unknown> = {};
   if (!skipTools) {
-    // FlowForge MCP server (our built-in tools)
+    // Allen MCP server (our built-in tools)
     // Resolve relative to THIS file — works in both dev (src/) and prod (dist/)
     const thisDir = dirname(new URL(import.meta.url).pathname);
-    const tsPath = resolve(thisDir, 'flowforge-mcp-server.ts');
-    const jsPath = resolve(thisDir, 'flowforge-mcp-server.js');
+    const tsPath = resolve(thisDir, 'allen-mcp-server.ts');
+    const jsPath = resolve(thisDir, 'allen-mcp-server.js');
     const { existsSync } = await import('node:fs');
     // Dev: .ts file → run with npx tsx. Prod: .js file → run with node.
     const serverPath = existsSync(tsPath) ? tsPath : jsPath;
     const runner = serverPath.endsWith('.ts') ? { command: 'npx', args: ['tsx', serverPath] } : { command: 'node', args: [serverPath] };
-    mcpServers.flowforge = {
+    mcpServers[MCP_SERVER_NAME] = {
       type: 'stdio',
       command: runner.command,
       args: runner.args,
       env: {
-        FLOWFORGE_API_URL: `http://localhost:${process.env.PORT ?? '4023'}`,
+        ALLEN_API_URL: `http://localhost:${process.env.PORT ?? '4023'}`,
         // Shared with the MCP subprocess so it can mint its own access token
-        // when calling back into /api/* — see flowforge-mcp-server.ts.
+        // when calling back into /api/* — see allen-mcp-server.ts.
         JWT_ACCESS_SECRET: process.env.JWT_ACCESS_SECRET ?? '',
       },
     };
@@ -125,7 +126,7 @@ async function runClaudeCLI(
     Object.assign(mcpServers, external);
 
     const names = Object.keys(mcpServers);
-    systemPrompt += `\n\nYou have MCP tools from: ${names.join(', ')}. Use them directly. The "flowforge" tools provide workflow, execution, repo, agent, and dashboard data.`;
+    systemPrompt += `\n\nYou have MCP tools from: ${names.join(', ')}. Use them directly. The "allen" tools provide workflow, execution, repo, agent, and dashboard data.`;
   }
 
   let lastUserMsg = messages.length > 0 ? messages[messages.length - 1].content : '';
@@ -136,7 +137,7 @@ async function runClaudeCLI(
   // Resolve cwd and ensure it exists — child_process.spawn throws ENOENT
   // for a missing cwd but Node formats it as "spawn node ENOENT", which
   // misleadingly blames the executable. See smoke-claude.ts:97-101.
-  // Fallback is AGENT_FALLBACK_CWD (/tmp/flowforge), NOT process.cwd(),
+  // Fallback is AGENT_FALLBACK_CWD (/tmp/allen), NOT process.cwd(),
   // so agents never run inside the server's own source tree.
   const resolvedCwd = cwd || AGENT_FALLBACK_CWD;
   const { mkdirSync } = await import('node:fs');

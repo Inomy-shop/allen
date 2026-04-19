@@ -73,7 +73,7 @@ const sessions = new Map<string, TerminalSession>();
  * a fallback chain so that a missing $SHELL doesn't break the terminal.
  *
  * Priority:
- *   1. FLOWFORGE_TERMINAL_SHELL env override — explicit opt-in for ops.
+ *   1. ALLEN_TERMINAL_SHELL env override — explicit opt-in for ops.
  *   2. $SHELL from the environment — if it points at an existing, executable file.
  *   3. /bin/bash — nearly universal on Linux and macOS.
  *   4. /bin/sh — POSIX last-resort.
@@ -89,7 +89,7 @@ function resolveShell(): string | null {
   }
 
   const candidates: string[] = [];
-  if (process.env.FLOWFORGE_TERMINAL_SHELL) candidates.push(process.env.FLOWFORGE_TERMINAL_SHELL);
+  if (process.env.ALLEN_TERMINAL_SHELL) candidates.push(process.env.ALLEN_TERMINAL_SHELL);
   if (process.env.SHELL) candidates.push(process.env.SHELL);
   candidates.push('/bin/bash', '/bin/sh', '/usr/bin/zsh', '/usr/local/bin/bash');
 
@@ -211,7 +211,7 @@ async function handleConnection(ws: WebSocket, workspaceId: string, terminalId: 
         : '$SHELL, /bin/bash, /bin/sh';
       ws.send(JSON.stringify({
         type: 'error',
-        data: `No executable shell found on this server. Tried: ${tried}. Install bash or set SHELL to an existing binary in the flowforge systemd environment.`,
+        data: `No executable shell found on this server. Tried: ${tried}. Install bash or set SHELL to an existing binary in the Allen systemd environment.`,
       }));
       ws.close();
       return;
@@ -269,7 +269,7 @@ async function handleConnection(ws: WebSocket, workspaceId: string, terminalId: 
       } else if (msg.toLowerCase().includes('enoent')) {
         hint = ` The shell binary or cwd was not found. Verified cwd: ${cwd}. Verified shell: ${shell}.`;
       } else if (msg.toLowerCase().includes('eacces') || msg.toLowerCase().includes('permission')) {
-        hint = ` Permission denied. Check that the shell (${shell}) and the cwd (${cwd}) are both accessible by the flowforge process user.`;
+        hint = ` Permission denied. Check that the shell (${shell}) and the cwd (${cwd}) are both accessible by the Allen process user.`;
       }
 
       try {

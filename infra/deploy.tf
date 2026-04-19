@@ -5,7 +5,7 @@
 
 # Store nginx config in SSM Parameter Store
 resource "aws_ssm_parameter" "nginx_config" {
-  name  = "/flowforge/${var.environment}/nginx-config"
+  name  = "/allen/${var.environment}/nginx-config"
   type  = "String"
   value = templatefile("${path.module}/templates/nginx.conf.tftpl", { domain = var.domain })
   tags  = local.tags
@@ -13,7 +13,7 @@ resource "aws_ssm_parameter" "nginx_config" {
 
 # Store .env.production in SSM Parameter Store (encrypted)
 resource "aws_ssm_parameter" "env_production" {
-  name  = "/flowforge/${var.environment}/env-production"
+  name  = "/allen/${var.environment}/env-production"
   type  = "SecureString"
   value = templatefile("${path.module}/templates/env.production.tftpl", {
     port               = var.app_port
@@ -42,8 +42,8 @@ resource "null_resource" "deploy_app" {
   }
 
   depends_on = [
-    aws_lb_listener_rule.flowforge,
-    aws_lb_target_group_attachment.flowforge,
+    aws_lb_listener_rule.allen,
+    aws_lb_target_group_attachment.allen,
     aws_ssm_parameter.nginx_config,
     aws_ssm_parameter.env_production,
   ]
@@ -58,18 +58,18 @@ resource "null_resource" "deploy_app" {
         --instance-ids "${var.instance_id}" \
         --document-name "AWS-RunShellScript" \
         --timeout-seconds 600 \
-        --comment "FlowForge deploy v${var.deploy_version}" \
+        --comment "Allen deploy v${var.deploy_version}" \
         --parameters 'commands=[
           "#!/bin/bash",
           "set -euo pipefail",
           "echo === Pulling configs from SSM Parameter Store ===",
-          "aws ssm get-parameter --name /flowforge/${var.environment}/nginx-config --query Parameter.Value --output text > /tmp/flowforge-nginx.conf",
-          "aws ssm get-parameter --name /flowforge/${var.environment}/env-production --with-decryption --query Parameter.Value --output text > /tmp/flowforge-env",
+          "aws ssm get-parameter --name /allen/${var.environment}/nginx-config --query Parameter.Value --output text > /tmp/allen-nginx.conf",
+          "aws ssm get-parameter --name /allen/${var.environment}/env-production --with-decryption --query Parameter.Value --output text > /tmp/allen-env",
           "echo === Cloning repo if needed ===",
-          "if [ ! -d /home/ubuntu/flowforge/.git ]; then sudo mkdir -p /home/ubuntu/flowforge && sudo chown ubuntu:ubuntu /home/ubuntu/flowforge && sudo -u ubuntu git clone ${var.repo_url} /home/ubuntu/flowforge; fi",
-          "cd /home/ubuntu/flowforge && sudo -u ubuntu git fetch origin && sudo -u ubuntu git checkout ${var.repo_branch} && sudo -u ubuntu git reset --hard origin/${var.repo_branch}",
+          "if [ ! -d /home/ubuntu/allen/.git ]; then sudo mkdir -p /home/ubuntu/allen && sudo chown ubuntu:ubuntu /home/ubuntu/allen && sudo -u ubuntu git clone ${var.repo_url} /home/ubuntu/allen; fi",
+          "cd /home/ubuntu/allen && sudo -u ubuntu git fetch origin && sudo -u ubuntu git checkout ${var.repo_branch} && sudo -u ubuntu git reset --hard origin/${var.repo_branch}",
           "echo === Running bootstrap ===",
-          "cd /home/ubuntu/flowforge && export REPO_URL=${var.repo_url} && export BRANCH=${var.repo_branch} && sudo -u ubuntu -E bash infra/templates/bootstrap.sh 2>&1 | tee /tmp/flowforge-deploy.log"
+          "cd /home/ubuntu/allen && export REPO_URL=${var.repo_url} && export BRANCH=${var.repo_branch} && sudo -u ubuntu -E bash infra/templates/bootstrap.sh 2>&1 | tee /tmp/allen-deploy.log"
         ]' \
         --query 'Command.CommandId' --output text)
 

@@ -1,8 +1,8 @@
-# FlowForge Learning System — Design Plan
+# Allen Learning System — Design Plan
 
 ## 1. Overview
 
-FlowForge learns from every workflow execution — failures, retries, human corrections, auto-gate signals — and injects relevant learnings into future executions. Works across all domains: coding, marketing, sales, data analysis, or any workflow.
+Allen learns from every workflow execution — failures, retries, human corrections, auto-gate signals — and injects relevant learnings into future executions. Works across all domains: coding, marketing, sales, data analysis, or any workflow.
 
 No configuration needed. Learnings are automatically extracted, scoped, quality-controlled, and injected.
 
@@ -77,9 +77,9 @@ Instead of hardcoded `repoPath`, learnings use `contextTags` — flexible key-va
 | Domain | Example Tags |
 |--------|-------------|
 | Coding | `repo:/Users/shree/es-data-pipeline`, `module:src/pricing-update`, `language:typescript` |
-| Marketing | `platform:linkedin`, `content-type:blog`, `brand:flowforge` |
+| Marketing | `platform:linkedin`, `content-type:blog`, `brand:allen` |
 | Sales | `client:acme-corp`, `deal-stage:proposal`, `industry:healthcare` |
-| Product | `product:flowforge`, `feature:auto-gate`, `audience:developers` |
+| Product | `product:allen`, `feature:auto-gate`, `audience:developers` |
 | General | `team:engineering`, `priority:high`, `region:us` |
 
 When an execution starts, its context tags are derived from:
@@ -698,9 +698,9 @@ Both happen. Learnings are never lost due to gate actions.
 
 ---
 
-## 10. What Makes FlowForge's Approach Unique
+## 10. What Makes Allen's Approach Unique
 
-| Feature | Industry Standard | FlowForge |
+| Feature | Industry Standard | Allen |
 |---------|------------------|-----------|
 | **Scope granularity** | 1-2 levels (global, task) | 5 levels with generic context tags — works for coding, marketing, sales, any domain |
 | **Mem0 classification** | Most just append | ADD/UPDATE/DELETE/NOOP before storage — prevents duplicates and contradictions |

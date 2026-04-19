@@ -1,5 +1,5 @@
 /**
- * Organisation Seed — builds the simplified 5-team FlowForge org chart.
+ * Organisation Seed — builds the simplified 5-team Allen org chart.
  *
  * Team layout (5 teams, 20 agents):
  *   - meta (5)        — UNTOUCHED. Builds other teams and agents.
@@ -95,7 +95,7 @@ const TEAMS: TeamSeed[] = [
     name: 'meta',
     displayName: 'Meta — Builders',
     description: 'Agents that extend the org itself — create new teams, agents, and workflows.',
-    mission: 'Extend the FlowForge org chart on demand. Research domains, design teams, create agents.',
+    mission: 'Extend the Allen org chart on demand. Research domains, design teams, create agents.',
     leadAgentName: 'team-builder-agent',
   },
   {
@@ -402,7 +402,7 @@ You go where the energy is. If one idea has momentum, go deep on it. Don't cut t
 
 You're grounded. You have filesystem and terminal access. When brainstorming about something in a real codebase, READ THE CODE. See what actually exists before imagining what should. Ideas that account for reality are 10x more useful than ideas that ignore it.
 
-When the conversation reaches a natural landing point, you offer concrete next steps — not as a formality, but because good brainstorming ends with "OK so what do we actually DO." If a FlowForge workflow can take it from here, mention it.`,
+When the conversation reaches a natural landing point, you offer concrete next steps — not as a formality, but because good brainstorming ends with "OK so what do we actually DO." If an Allen workflow can take it from here, mention it.`,
   },
 
   // ─────────────────────────────────────────────────────────────────────────
@@ -740,7 +740,7 @@ HARD RULES:
 - ALWAYS operate inside the worktree passed in \`worktree_path\`. Never push from the main clone.
 - NEVER force-push (\`-f\` / \`--force\`). If a rebase is needed, do a non-destructive rebase-and-push.
 - NEVER create a PR with an empty body. Always include the Summary section at minimum.
-- If git identity isn't configured in the worktree, set it before committing: \`git config user.email flowforge@local && git config user.name "FlowForge Agent"\`.
+- If git identity isn't configured in the worktree, set it before committing: \`git config user.email allen@local && git config user.name "Allen Agent"\`.
 
 ${DELEGATION_INSTRUCTIONS}
 
@@ -776,8 +776,8 @@ STEP-BY-STEP CONTRACT
 
 1. SET UP GIT IDENTITY (if not configured)
    cd <worktree_path>
-   git config user.email "flowforge@local"
-   git config user.name "FlowForge Agent"
+   git config user.email "allen@local"
+   git config user.name "Allen Agent"
 
 2. STAGE AND COMMIT
    git add -A
@@ -1415,7 +1415,7 @@ ${DELEGATION_INSTRUCTIONS}`,
     capabilities: ['team-creation', 'org-design'],
     personality: 'Methodical orchestrator. Confirms before creating.',
     canDelegateTo: ['research-agent', 'planner-agent', 'agent-builder-agent', 'workflow-builder-agent'],
-    system: `You are the Team Builder and the lead of the Meta team. You orchestrate the creation of new teams in FlowForge, AND you route meta requests to the right specialist:
+    system: `You are the Team Builder and the lead of the Meta team. You orchestrate the creation of new teams in Allen, AND you route meta requests to the right specialist:
 - New team needed → you build it yourself (create_agent for lead, then create_team, then members).
 - New agent in an existing team → delegate_to_agent("agent-builder-agent", ...).
 - New WORKFLOW from a natural-language requirement → delegate_to_agent("workflow-builder-agent", "<the user's requirement verbatim>").
@@ -1472,7 +1472,7 @@ ${DELEGATION_INSTRUCTIONS}`,
     reasoningEffort: 'high',
     planMode: true,
     displayName: 'Workflow Builder',
-    description: 'Designs FlowForge workflows from natural-language requirements and persists them directly to the database.',
+    description: 'Designs Allen workflows from natural-language requirements and persists them directly to the database.',
     teamName: 'meta',
     teamRole: 'member',
     type: 'team',
@@ -1484,10 +1484,10 @@ ${DELEGATION_INSTRUCTIONS}`,
     capabilities: ['workflow-design', 'workflow-authoring', 'agent-orchestration-design'],
     personality: 'Methodical workflow architect. Picks existing agents first, escalates to builders only when a real gap exists.',
     canDelegateTo: ['team-builder-agent', 'agent-builder-agent', 'research-agent', 'planner-agent'],
-    system: `You are the Workflow Builder. You turn natural-language requirements into validated FlowForge workflows and persist them to the database.
+    system: `You are the Workflow Builder. You turn natural-language requirements into validated Allen workflows and persist them to the database.
 
 YOUR JOB:
-Given a user requirement, design a workflow whose nodes call existing FlowForge agents (or, when no fitting agent exists, request that one be created), validate it, and save it. The saved workflow is immediately runnable from the editor and the executor — no restart, no YAML file editing.
+Given a user requirement, design a workflow whose nodes call existing Allen agents (or, when no fitting agent exists, request that one be created), validate it, and save it. The saved workflow is immediately runnable from the editor and the executor — no restart, no YAML file editing.
 
 WORKFLOW DEFINITION SCHEMA (YAML):
 A workflow is a YAML document with:
@@ -1588,7 +1588,7 @@ Be specific. Quote real tools and practices. No generic fluff.`,
     reasoningEffort: 'high',
     planMode: true,
     displayName: 'Planner Agent',
-    description: 'Turns research into FlowForge agent and team blueprints with lean member counts.',
+    description: 'Turns research into Allen agent and team blueprints with lean member counts.',
     teamName: 'meta',
     teamRole: 'member',
     type: 'technical',
@@ -1600,7 +1600,7 @@ Be specific. Quote real tools and practices. No generic fluff.`,
     capabilities: ['team-design', 'agent-design'],
     personality: 'Pragmatic designer. Lean teams.',
     canDelegateTo: [],
-    system: `You are the Planner Agent. Given research, you design FlowForge agent blueprints.
+    system: `You are the Planner Agent. Given research, you design Allen agent blueprints.
 
 Output valid JSON with mode "new_team" or "add_role" — see team-builder/agent-builder for exact schema.
 
@@ -2245,7 +2245,7 @@ ${DELEGATION_INSTRUCTIONS}`,
     capabilities: ['q-and-a', 'conversational-response'],
     personality: 'Friendly, direct, and brief.',
     canDelegateTo: [],
-    system: `You are the Test Chat Helper — a minimal Q&A agent that exists only to smoke-test FlowForge's human-in-the-loop pipeline.
+    system: `You are the Test Chat Helper — a minimal Q&A agent that exists only to smoke-test Allen's human-in-the-loop pipeline.
 
 Your job is simple: the user will ask you a question. Answer it clearly and concisely in plain prose. Keep responses to 2–4 sentences unless the question genuinely needs more depth. No JSON blocks, no code fences (unless the user specifically asks for code), no structured output, no delegation. Just answer the question.
 

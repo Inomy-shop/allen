@@ -1,8 +1,8 @@
-# FlowForge vs. 6 Competitors — Final Comparison
+# Allen vs. 6 Competitors — Final Comparison
 
 **Last reviewed:** 2026-04-17
-**Compares:** FlowForge (this repo) against Factory, Letta, 8090, ProductNow, Conductor, Kiro.
-**Prerequisite reading:** `00-flowforge.md`, `01-factory.md`, `02-letta.md`, `03-8090.md`, `04-productnow.md`, `05-conductor.md`, `06-kiro.md`.
+**Compares:** Allen (this repo) against Factory, Letta, 8090, ProductNow, Conductor, Kiro.
+**Prerequisite reading:** `00-allen.md`, `01-factory.md`, `02-letta.md`, `03-8090.md`, `04-productnow.md`, `05-conductor.md`, `06-kiro.md`.
 
 This doc synthesizes the per-product deep dives into a head-to-head comparison along seven axes, then makes positioning recommendations.
 
@@ -14,14 +14,14 @@ The seven products are **not the same product**. They cluster:
 
 | Cluster | Products | Shared trait |
 |---|---|---|
-| **Self-hosted multi-agent platforms** | FlowForge, Letta | OSS-friendly, you own the infra, agents as primitives |
+| **Self-hosted multi-agent platforms** | Allen, Letta | OSS-friendly, you own the infra, agents as primitives |
 | **Enterprise SDLC suites** | Factory, 8090 | Closed SaaS, full-SDLC ambition, large enterprise GTM |
 | **Coding IDE / harness** | Kiro, Conductor | Developer-facing, session-based, integrated with git |
 | **Upstream PM tooling** | ProductNow | Not coding; sits before engineering |
 
-FlowForge's closest peers are **Letta** (on memory + OSS axis) and **Factory** (on multi-agent SDLC ambition), but it's distinct from both: Letta is a framework without SDLC opinions; Factory is a closed enterprise platform without self-host.
+Allen's closest peers are **Letta** (on memory + OSS axis) and **Factory** (on multi-agent SDLC ambition), but it's distinct from both: Letta is a framework without SDLC opinions; Factory is a closed enterprise platform without self-host.
 
-FlowForge's defensible niche: **the only self-hosted declarative multi-agent workflow engine with agents that can author agents, teams, and workflows via a built-in MCP server.**
+Allen's defensible niche: **the only self-hosted declarative multi-agent workflow engine with agents that can author agents, teams, and workflows via a built-in MCP server.**
 
 ---
 
@@ -29,7 +29,7 @@ FlowForge's defensible niche: **the only self-hosted declarative multi-agent wor
 
 | Product | Model | Assessment |
 |---|---|---|
-| **FlowForge** | Declarative YAML graph (5 node types) + 3-layer retry + checkpoints + parallel with merge strategies | **Most principled orchestration layer in cohort** |
+| **Allen** | Declarative YAML graph (5 node types) + 3-layer retry + checkpoints + parallel with merge strategies | **Most principled orchestration layer in cohort** |
 | Factory | Emergent Missions driven by droid planning loop | Sophisticated inside the droid, opaque outside |
 | Letta | ReAct or MemGPT agent loop + subagents + cross-agent messaging | Framework-level — you build orchestration with primitives |
 | 8090 | Sequential module pipeline (Refinery → Foundry → Planner) with artifact gates | Most rigid; designed for compliance |
@@ -37,9 +37,9 @@ FlowForge's defensible niche: **the only self-hosted declarative multi-agent wor
 | Conductor | Many Claude Code sessions in parallel worktrees | Session-level, not workflow-level |
 | Kiro | Spec files + agent hooks + preview autonomous agent (3 sub-agents) | Spec-driven with event triggers |
 
-**FlowForge wins** when the user wants: diffable workflow artifacts, per-node model overrides, explicit retry semantics, checkpoint rewind, named join policies.
+**Allen wins** when the user wants: diffable workflow artifacts, per-node model overrides, explicit retry semantics, checkpoint rewind, named join policies.
 
-**FlowForge loses** when the user wants: autonomous trajectory exploration (Factory), emergent research-style agent loops (Letta), compliance-gated artifact hand-offs (8090).
+**Allen loses** when the user wants: autonomous trajectory exploration (Factory), emergent research-style agent loops (Letta), compliance-gated artifact hand-offs (8090).
 
 ---
 
@@ -47,7 +47,7 @@ FlowForge's defensible niche: **the only self-hosted declarative multi-agent wor
 
 | Product | Planning primitive | Strength |
 |---|---|---|
-| **FlowForge** | Workflow YAML authored by a human; `coding-planner` agent inside a node | Medium — planning is declarative but no pass@k, no EARS artifacts |
+| **Allen** | Workflow YAML authored by a human; `coding-planner` agent inside a node | Medium — planning is declarative but no pass@k, no EARS artifacts |
 | **Factory** | Multi-trajectory + self-critique + test-validated selection (pass@k) | **Strongest autonomous planner** — published SWE-bench numbers |
 | Letta | Emergent ReAct/MemGPT loop with memory-aware tool calls | Framework-level; no opinion |
 | 8090 | PRD → Blueprint → Work Order pipeline with Knowledge Graph linking | **Strongest enterprise-rigorous planner** |
@@ -55,7 +55,7 @@ FlowForge's defensible niche: **the only self-hosted declarative multi-agent wor
 | Conductor | None (delegated to Claude Code) | — |
 | **Kiro** | `requirements.md` (EARS) + `design.md` + `tasks.md` in `.kiro/specs/` | **Strongest in-IDE planning artifact** |
 
-**Clear gaps for FlowForge:**
+**Clear gaps for Allen:**
 - No pass@k autonomous exploration (Factory's strength).
 - No EARS-format requirements or 3-file spec artifact (Kiro's strength).
 - No Knowledge Graph linking PRD/Blueprint/Code (8090's strength).
@@ -68,7 +68,7 @@ FlowForge's defensible niche: **the only self-hosted declarative multi-agent wor
 
 | Product | Memory tier | Consolidation | Editable by agent? |
 |---|---|---|---|
-| **FlowForge** | Learnings (Mem0-style delta facts) with scope + confidence + embedding | Post-execution review (Haiku) | Explicit `__learnings[]` field only |
+| **Allen** | Learnings (Mem0-style delta facts) with scope + confidence + embedding | Post-execution review (Haiku) | Explicit `__learnings[]` field only |
 | Factory | Org Memory + User Memory + persistent droid VM state | Auto-recorded stable facts | Implicit (from conversation) |
 | **Letta** | **Core blocks (editable) + recall (conversation) + archival (vector)** | **Memory sub-agents (continuous)** | **Yes (`memory_replace`, `memory_insert`, `memory_rethink`)** |
 | 8090 | Knowledge Graph across artifacts | Artifact co-evolution | No |
@@ -76,19 +76,19 @@ FlowForge's defensible niche: **the only self-hosted declarative multi-agent wor
 | Conductor | Per-workspace CLAUDE.md + general prefs | None | No |
 | Kiro | Steering files + SQLite + preview cross-session agent memory | None beyond append | Steering files: user-editable, not agent-editable |
 
-**Letta is the memory leader by a wide margin.** FlowForge's Mem0-style learnings are useful but don't match Letta's tiered, pinned, agent-editable, consolidatable architecture.
+**Letta is the memory leader by a wide margin.** Allen's Mem0-style learnings are useful but don't match Letta's tiered, pinned, agent-editable, consolidatable architecture.
 
-**The cheapest close:** implement memory blocks per the existing `docs/plans/memory-system-gap-analysis-2026.md`. Add `memory_blocks: Record<string, Block>` to agent state, pin into `effectiveSystem`, expose `memory_replace` / `memory_insert` via the FlowForge MCP server.
+**The cheapest close:** implement memory blocks per the existing `docs/plans/memory-system-gap-analysis-2026.md`. Add `memory_blocks: Record<string, Block>` to agent state, pin into `effectiveSystem`, expose `memory_replace` / `memory_insert` via the Allen MCP server.
 
 ---
 
 ## 5. Axis 4 — Agent-self-service
 
-**The axis where FlowForge uniquely wins.**
+**The axis where Allen uniquely wins.**
 
 | Product | Can agent: create other agents? | ...create workflows? | ...spawn peers? | ...delegate + wait? |
 |---|---|---|---|---|
-| **FlowForge** | ✅ `create_agent` MCP tool | ✅ `create_workflow` MCP tool | ✅ `spawn_agent` | ✅ `delegate_to_agent` + `wait_for_delegation` |
+| **Allen** | ✅ `create_agent` MCP tool | ✅ `create_workflow` MCP tool | ✅ `spawn_agent` | ✅ `delegate_to_agent` + `wait_for_delegation` |
 | Factory | ❌ droids are fixed types | ❌ missions, not workflows | ⚠️ via AGENTS.md conventions | ⚠️ implicit via mission planner |
 | **Letta** | ✅ via SDK | ⚠️ no declarative workflow | ✅ subagents | ✅ cross-agent messaging |
 | 8090 | ❌ closed modules | ❌ | ❌ | ⚠️ gated hand-offs |
@@ -96,7 +96,7 @@ FlowForge's defensible niche: **the only self-hosted declarative multi-agent wor
 | Conductor | ❌ | ❌ | ⚠️ handoffs preview | ⚠️ manual |
 | Kiro | ❌ | ❌ | ⚠️ sub-agent triad (preview) | ⚠️ sub-agent coordination |
 
-FlowForge is the **only product in the cohort where a running agent can author a new agent, commit a new workflow YAML, form a team, and delegate to it — all at runtime**. This is the genuine moat.
+Allen is the **only product in the cohort where a running agent can author a new agent, commit a new workflow YAML, form a team, and delegate to it — all at runtime**. This is the genuine moat.
 
 ---
 
@@ -104,7 +104,7 @@ FlowForge is the **only product in the cohort where a running agent can author a
 
 | Product | Can BYO model keys? | Can swap model mid-session? | Is harness swappable? |
 |---|---|---|---|
-| **FlowForge** | ✅ (Claude API + Codex API, your keys) | ✅ per-node `agentOverrides` | ⚠️ tied to Claude Code SDK + Codex CLI |
+| **Allen** | ✅ (Claude API + Codex API, your keys) | ✅ per-node `agentOverrides` | ⚠️ tied to Claude Code SDK + Codex CLI |
 | Factory | ❌ (Pro/Max) / ✅ Enterprise | ❌ router decides | ❌ closed |
 | **Letta** | ✅ any provider | **✅ state portable across models** | ✅ OSS, forkable |
 | 8090 | ❌ | ❌ | ❌ |
@@ -112,7 +112,7 @@ FlowForge is the **only product in the cohort where a running agent can author a
 | Conductor | ✅ (your Claude Code / Codex auth) | ⚠️ slash command per session | ❌ wraps Claude Code SDK |
 | Kiro | ❌ (Bedrock-routed) | ⚠️ dropdown, new process | ❌ proprietary `kiro-cli` |
 
-**Letta is the flexibility leader** (state portable across models). **FlowForge is second** (per-node provider override + your keys, but tied to specific CLIs). **Kiro and Factory are the least flexible** on model choice.
+**Letta is the flexibility leader** (state portable across models). **Allen is second** (per-node provider override + your keys, but tied to specific CLIs). **Kiro and Factory are the least flexible** on model choice.
 
 ---
 
@@ -120,7 +120,7 @@ FlowForge is the **only product in the cohort where a running agent can author a
 
 | Product | Interrupt point | Approve / reject / request-changes | Retry-from-checkpoint |
 |---|---|---|---|
-| **FlowForge** | `human` node + auto-gate `clarify` + interventions | ✅ all three + Slack DM + channel | ✅ rewind to checkpoint |
+| **Allen** | `human` node + auto-gate `clarify` + interventions | ✅ all three + Slack DM + channel | ✅ rewind to checkpoint |
 | Factory | Mission review in web UI | ✅ approval + change requests | ⚠️ mission-level |
 | Letta | API-level | ⚠️ build your own | ❌ |
 | 8090 | Artifact gates between modules | ✅ artifact-level approvals | N/A (artifacts, not code) |
@@ -128,7 +128,7 @@ FlowForge is the **only product in the cohort where a running agent can author a
 | Conductor | Manual PR review in-app | ⚠️ | ❌ |
 | Kiro | Approval prompts + tool approval + hooks | ⚠️ file-event approvals | ❌ |
 
-**FlowForge is the HITL leader** — `request_changes` with `retry_target` rewind + Slack integration + checkpoint-based semantics is unique.
+**Allen is the HITL leader** — `request_changes` with `retry_target` rewind + Slack integration + checkpoint-based semantics is unique.
 
 ---
 
@@ -136,7 +136,7 @@ FlowForge is the **only product in the cohort where a running agent can author a
 
 | Product | Chat | IDE | CLI | Web | Slack | Cron | MCP | Git worktrees |
 |---|---|---|---|---|---|---|---|---|
-| **FlowForge** | ✅ first-class | ⚠️ no IDE extension | ⚠️ engine CLI only | ✅ | ✅ DM + channel + webhook | ✅ **only one** | ✅ server + client | ✅ built-in |
+| **Allen** | ✅ first-class | ⚠️ no IDE extension | ⚠️ engine CLI only | ✅ | ✅ DM + channel + webhook | ✅ **only one** | ✅ server + client | ✅ built-in |
 | Factory | ✅ Slack/Teams | ✅ VS Code/JetBrains/Vim | ✅ Droid Exec | ✅ | ✅ | ❌ | ✅ client | ❌ uses VMs |
 | Letta | ⚠️ API | ⚠️ Letta Code app | ✅ npm CLI | ✅ ADE | ❌ | ❌ | ✅ client | ❌ |
 | 8090 | ⚠️ | ❌ | ❌ | ✅ | ⚠️ | ❌ | ✅ (Planner) | ❌ |
@@ -144,13 +144,13 @@ FlowForge is the **only product in the cohort where a running agent can author a
 | Conductor | ✅ in-app | ⚠️ wraps Claude Code | ❌ | ❌ | ❌ | ❌ | ✅ | ✅ core |
 | Kiro | ✅ IDE chat | ✅ Code OSS fork | ✅ kiro-cli | ❌ | ⚠️ via MCP | ❌ | ✅ **native** | ❌ |
 
-**FlowForge has the widest integration surface** with **cron as a unique**. Only Factory and Kiro match on IDE reach; only Letta matches on chat + API + CLI.
+**Allen has the widest integration surface** with **cron as a unique**. Only Factory and Kiro match on IDE reach; only Letta matches on chat + API + CLI.
 
 ---
 
 ## 9. Full feature matrix
 
-| Feature | FlowForge | Factory | Letta | 8090 | ProductNow | Conductor | Kiro |
+| Feature | Allen | Factory | Letta | 8090 | ProductNow | Conductor | Kiro |
 |---|---|---|---|---|---|---|---|
 | Declarative workflow graph | ✅ (5 node types) | ❌ | ❌ | ✅ (modules) | ❌ | ❌ | ❌ |
 | Parallel with merge strategies | ✅ | ✅ | ✅ | ⚠️ | ❌ | ✅ | ✅ |
@@ -185,19 +185,19 @@ FlowForge is the **only product in the cohort where a running agent can author a
 
 | Axis | Winner | Runner-up |
 |---|---|---|
-| Declarative orchestration | **FlowForge** | 8090 (artifact-gated) |
-| Agent self-service | **FlowForge** | Letta |
-| Memory architecture | **Letta** | FlowForge (planned blocks) |
+| Declarative orchestration | **Allen** | 8090 (artifact-gated) |
+| Agent self-service | **Allen** | Letta |
+| Memory architecture | **Letta** | Allen (planned blocks) |
 | Autonomous planning (pass@k) | **Factory** | Kiro (autonomous agent preview) |
-| Upstream spec rigor | **Kiro** (EARS) / **8090** (PRD/Blueprint/WO) | FlowForge (design docs) |
-| Parallel-agent UX | **Conductor** | FlowForge (has the model, not the UI) |
+| Upstream spec rigor | **Kiro** (EARS) / **8090** (PRD/Blueprint/WO) | Allen (design docs) |
+| Parallel-agent UX | **Conductor** | Allen (has the model, not the UI) |
 | Event-driven hooks | **Kiro** | — |
-| Multi-agent messaging | **FlowForge** ≈ **Letta** | — |
-| Claude Code ecosystem interop | **FlowForge** | Conductor |
-| Cron scheduled agent workflows | **FlowForge** (only) | — |
-| HITL with retry-target semantics | **FlowForge** | Factory |
+| Multi-agent messaging | **Allen** ≈ **Letta** | — |
+| Claude Code ecosystem interop | **Allen** | Conductor |
+| Cron scheduled agent workflows | **Allen** (only) | — |
+| HITL with retry-target semantics | **Allen** | Factory |
 | Enterprise compliance | **Kiro** (GovCloud) / **Factory** | 8090 |
-| Open source | **Letta** | FlowForge (self-host, closed) |
+| Open source | **Letta** | Allen (self-host, closed) |
 | Persistent per-agent compute | **Factory** (droid VMs) | Conductor (worktrees) |
 | PM / upstream-of-code | **ProductNow** | 8090 (Refinery) |
 
@@ -207,26 +207,26 @@ FlowForge is the **only product in the cohort where a running agent can author a
 
 | Buyer profile | Best choice | Why |
 |---|---|---|
-| Self-hosting startup / mid-market eng team | **FlowForge** or **Letta** | FlowForge if coding SDLC, Letta if building memory-first agent products |
+| Self-hosting startup / mid-market eng team | **Allen** or **Letta** | Allen if coding SDLC, Letta if building memory-first agent products |
 | Fortune 500 SDLC modernization | **Factory** or **8090** | Factory = benchmarks + speed; 8090 = audit + compliance |
 | Solo dev running many Claude Codes on Mac | **Conductor** | Zero-friction, free |
 | Dev inside AWS org | **Kiro** | Bedrock-native, cross-platform, GovCloud |
 | Product team (non-engineering) | **ProductNow** | Only PM play in the cohort |
 | AI engineer building a memory-first consumer agent | **Letta** | Only real stateful-memory framework |
 | Eng team + strong PM/audit culture | **8090** | Artifacts + Knowledge Graph across SDLC |
-| Team already on Claude Code wanting to orchestrate multi-agent workflows at org scale | **FlowForge** | Imports `.claude/agents/*.md`; MCP server exposes self-service tools |
+| Team already on Claude Code wanting to orchestrate multi-agent workflows at org scale | **Allen** | Imports `.claude/agents/*.md`; MCP server exposes self-service tools |
 | Enterprise needing autonomous engineering droids with trajectory planning | **Factory** | Only product with pass@k + published benchmarks |
 
 ---
 
-## 12. Honest weaknesses of FlowForge (confirmed from real comparisons)
+## 12. Honest weaknesses of Allen (confirmed from real comparisons)
 
 1. **Memory is Mem0-style, not Letta-style.** Users who want blocks/archival/recall with agent-editable pinned context will pick Letta.
 2. **No autonomous trajectory planning.** Factory's published SWE-bench / Terminal-Bench numbers are a marketing disadvantage we can't refute.
-3. **No EARS / spec artifacts.** Kiro's `.kiro/specs/*` trio is a cleaner upstream artifact than FlowForge's design-doc built-in.
-4. **No event hooks.** Kiro's on-save / on-tool-use triggers are genuinely absent in FlowForge.
+3. **No EARS / spec artifacts.** Kiro's `.kiro/specs/*` trio is a cleaner upstream artifact than Allen's design-doc built-in.
+4. **No event hooks.** Kiro's on-save / on-tool-use triggers are genuinely absent in Allen.
 5. **Parallel-agent UI less polished than Conductor.** The data model supports it; the UX doesn't showcase it.
-6. **No public benchmark number.** Factory's Terminal-Bench #1 and SWE-bench numbers dominate conversations; FlowForge has none.
+6. **No public benchmark number.** Factory's Terminal-Bench #1 and SWE-bench numbers dominate conversations; Allen has none.
 7. **Closed source** — Letta's Apache-2.0 licensing is a pull in certain OSS-first orgs.
 8. **No enterprise compliance stamp** — no SOC 2 / GovCloud / SSO-SAML documented yet.
 
@@ -260,7 +260,7 @@ In order of cheapest to ship × biggest competitive close:
 
 ## 15. Bottom line
 
-FlowForge competes credibly against Factory (multi-agent SDLC) and Letta (self-host + agent primitives) in a space none of the six competitors fully occupies: **self-hosted, declarative, multi-agent coordination with agents that can extend the system at runtime.**
+Allen competes credibly against Factory (multi-agent SDLC) and Letta (self-host + agent primitives) in a space none of the six competitors fully occupies: **self-hosted, declarative, multi-agent coordination with agents that can extend the system at runtime.**
 
 The clearest risks are: (a) Letta closing the coding-product gap with Letta Code, (b) Kiro shipping a declarative workflow layer on top of specs, (c) Factory going down-market with a smaller droid plan.
 
@@ -270,7 +270,7 @@ The clearest opportunities are: (a) ship memory blocks and skill library fast, (
 
 ## References
 
-- `docs/competitive/00-flowforge.md`
+- `docs/competitive/00-allen.md`
 - `docs/competitive/01-factory.md`
 - `docs/competitive/02-letta.md`
 - `docs/competitive/03-8090.md`

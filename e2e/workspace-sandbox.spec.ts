@@ -1,12 +1,12 @@
 import { test, expect } from '@playwright/test';
 
 import { API, UI } from './helpers';
-const FLOWFORGE_REPO_ID = '69cee6f2c841d0d60a1239ba';
+const ALLEN_REPO_ID = '69cee6f2c841d0d60a1239ba';
 
 test.describe('Workspace Sandbox & Config', () => {
 
   test('workspace config API — read saved config', async ({ request }) => {
-    const res = await request.get(`${API}/api/workspaces/config/${FLOWFORGE_REPO_ID}`);
+    const res = await request.get(`${API}/api/workspaces/config/${ALLEN_REPO_ID}`);
     expect(res.ok()).toBeTruthy();
     const config = await res.json();
     expect(config.setupScript.length).toBeGreaterThan(0);
@@ -19,16 +19,16 @@ test.describe('Workspace Sandbox & Config', () => {
 
   test('workspace config API — update and verify', async ({ request }) => {
     // Update autoStart
-    const res = await request.put(`${API}/api/workspaces/config/${FLOWFORGE_REPO_ID}`, {
+    const res = await request.put(`${API}/api/workspaces/config/${ALLEN_REPO_ID}`, {
       data: { autoStart: true },
     });
     expect(res.ok()).toBeTruthy();
 
-    const config = await (await request.get(`${API}/api/workspaces/config/${FLOWFORGE_REPO_ID}`)).json();
+    const config = await (await request.get(`${API}/api/workspaces/config/${ALLEN_REPO_ID}`)).json();
     expect(config.autoStart).toBe(true);
 
     // Reset
-    await request.put(`${API}/api/workspaces/config/${FLOWFORGE_REPO_ID}`, { data: { autoStart: false } });
+    await request.put(`${API}/api/workspaces/config/${ALLEN_REPO_ID}`, { data: { autoStart: false } });
   });
 
   test('port assignment returns free ports', async ({ request }) => {
@@ -47,7 +47,7 @@ test.describe('Workspace Sandbox & Config', () => {
   test('workspace has services from config', async ({ request }) => {
     const wsRes = await request.get(`${API}/api/workspaces`);
     const workspaces = await wsRes.json();
-    const ws = workspaces.find((w: any) => w.repoId === FLOWFORGE_REPO_ID);
+    const ws = workspaces.find((w: any) => w.repoId === ALLEN_REPO_ID);
     if (ws) {
       console.log('Workspace:', ws.name, 'services:', ws.services?.length);
       if (ws.services?.length > 0) {
@@ -70,9 +70,9 @@ test.describe('Workspace Sandbox & Config', () => {
     await page.locator('button:has-text("New Workspace")').click();
     await page.waitForTimeout(300);
 
-    // Select flowforge repo
+    // Select allen repo
     const repoSelect = page.locator('select').first();
-    await repoSelect.selectOption({ label: 'flowforge' });
+    await repoSelect.selectOption({ label: 'allen' });
     await page.waitForTimeout(300);
 
     // "Configure Workspace" button should appear

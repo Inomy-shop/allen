@@ -1,8 +1,8 @@
-# Slack Bot Integration for FlowForge
+# Slack Bot Integration for Allen
 
 ## Context
 
-FlowForge needs a Slack bot so users can interact with FlowForge agents directly from Slack. When someone mentions `@flowforge` in a Slack thread, the server creates (or continues) a chat session, runs the agent, and posts the response back to the thread. This enables controlling FlowForge from Slack without opening the UI.
+Allen needs a Slack bot so users can interact with Allen agents directly from Slack. When someone mentions `@allen` in a Slack thread, the server creates (or continues) a chat session, runs the agent, and posts the response back to the thread. This enables controlling Allen from Slack without opening the UI.
 
 **Key design decisions:**
 - **Reuse existing chat pipeline** — add a thin `sendMessageForSlack()` method on `ChatService` that uses the same `runLLM()` pipeline but returns a Promise instead of streaming via SSE.
@@ -76,7 +76,7 @@ This is better than mocking an Express `Response` because:
 - The `activeQueries` entry is real, so concurrency protection works correctly
 - If `runLLM()` throws, the error propagates naturally to `processAndReply()`
 
-**Flow for new thread (first `@flowforge` mention):**
+**Flow for new thread (first `@allen` mention):**
 1. Check idempotency via `slack_processed_events` collection
 2. Fetch all thread messages via Slack `conversations.replies` API
 3. Combine thread context + user's message into a single string:
@@ -85,7 +85,7 @@ This is better than mocking an Express `Response` because:
    [Message 1]: <text>
    [Message 2]: <text>
    ...
-   User's request: <the @flowforge message with mention stripped>
+   User's request: <the @allen message with mention stripped>
    ```
 4. Create new chat session via `chatService.createSession()` with `source: 'slack'` and `slackContext`
 5. Save mapping in `slack_thread_mappings { slackTeamId, slackChannelId, slackThreadTs → chatSessionId }`
@@ -229,7 +229,7 @@ interface SlackThreadMapping {
   slackTeamId: string;       // Slack workspace ID
   slackChannelId: string;    // Channel where the mention happened
   slackThreadTs: string;     // Thread timestamp (unique thread identifier)
-  chatSessionId: string;     // FlowForge chat_sessions._id
+  chatSessionId: string;     // Allen chat_sessions._id
   createdAt: Date;
   lastActivityAt: Date;
 }
@@ -278,10 +278,10 @@ Uses Node.js native `fetch` (Node 18+) and `crypto`. No npm packages needed.
 
 1. Start server → `GET /api/health` still works
 2. Set Slack app Event Subscription URL → `POST /api/slack/events` passes URL verification challenge
-3. Mention `@flowforge` in a Slack channel → creates chat session (visible in UI), adds hourglass reaction
+3. Mention `@allen` in a Slack channel → creates chat session (visible in UI), adds hourglass reaction
 4. Agent processes → conversation streams in UI in real-time
 5. Agent completes → posts reply in Slack thread, swaps hourglass for checkmark
 6. Open session in UI → full conversation visible, input disabled with "Managed via Slack" note
-7. Reply in same Slack thread with `@flowforge` → continues same session
+7. Reply in same Slack thread with `@allen` → continues same session
 8. New thread mention → creates new session
 9. Check `slack_thread_mappings` collection for correct entries

@@ -6,7 +6,7 @@ terraform {
 
   backend "s3" {
     bucket  = "es-pipeline-terraform-state-dev"
-    key     = "flowforge/terraform.tfstate"
+    key     = "allen/terraform.tfstate"
     region  = "us-east-1"
     encrypt = true
   }
@@ -18,7 +18,7 @@ provider "aws" {
 
 locals {
   tags = {
-    Project     = "flowforge"
+    Project     = "allen"
     Environment = var.environment
     ManagedBy   = "Terraform"
   }

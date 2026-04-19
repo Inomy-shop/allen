@@ -15,7 +15,7 @@ import type { Db } from 'mongodb';
 import { SecretService } from './secret.service.js';
 
 /** Secret key under which the GitHub token is stored. Matches the MCP preset. */
-export const GITHUB_TOKEN_SECRET_KEY = 'FLOWFORGE_GITHUB_PERSONAL_ACCESS_TOKEN';
+export const GITHUB_TOKEN_SECRET_KEY = 'ALLEN_GITHUB_PERSONAL_ACCESS_TOKEN';
 /** Legacy key kept for backward compatibility during migration. */
 const LEGACY_GITHUB_TOKEN_KEY = 'GITHUB_PERSONAL_ACCESS_TOKEN';
 

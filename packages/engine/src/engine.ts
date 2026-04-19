@@ -42,7 +42,7 @@ export interface RunOptions {
   workflowId?: string;
 }
 
-export class FlowForgeEngine {
+export class AllenEngine {
   private stateManager: StateManager;
   private learningManager: LearningManager;
   private config: EngineConfig;

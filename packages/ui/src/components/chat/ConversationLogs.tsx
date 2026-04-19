@@ -50,7 +50,7 @@ function TraceEventRow({ event }: { event: TraceEvent }) {
   const style = TYPE_STYLE[event.type] ?? { icon: MessageSquare, color: 'text-theme-muted', label: event.type };
   const Icon = style.icon;
   const time = new Date(event.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
-  const toolName = event.tool?.replace('mcp__flowforge__', 'ff:').replace('mcp__linear__', 'linear:').replace('mcp__postgres__', 'pg:').replace('mcp__mongodb__', 'mongo:') ?? '';
+  const toolName = event.tool?.replace('mcp__allen__', 'al:').replace('mcp__linear__', 'linear:').replace('mcp__postgres__', 'pg:').replace('mcp__mongodb__', 'mongo:') ?? '';
   const hasDetail = event.args || event.result || (event.text && event.text.length > 80);
 
   return (

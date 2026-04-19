@@ -513,7 +513,7 @@ export const AGENT_ICON_PRESETS: AgentIconPreset[] = [
 
 /* ─── Store ─── */
 
-const STORAGE_KEY = 'flowforge-settings';
+const STORAGE_KEY = 'allen-settings';
 
 interface PersistedSettings {
   colorMode: ColorMode;
@@ -600,10 +600,10 @@ function applyThemeColors(theme: ThemePreset, customAccent: string | null, color
 }
 
 function applyFontPreset(preset: FontPreset) {
-  let link = document.getElementById('flowforge-fonts') as HTMLLinkElement | null;
+  let link = document.getElementById('allen-fonts') as HTMLLinkElement | null;
   if (!link) {
     link = document.createElement('link');
-    link.id = 'flowforge-fonts';
+    link.id = 'allen-fonts';
     link.rel = 'stylesheet';
     document.head.appendChild(link);
   }

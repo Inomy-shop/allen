@@ -121,7 +121,7 @@ nodes:
     outputs:
       worktree_path: "Absolute path to the isolated git worktree."
       branch_name: "New branch name."
-      workspace_id: "Internal FlowForge workspace identifier."
+      workspace_id: "Internal Allen workspace identifier."
 
   develop:
     agent: developer

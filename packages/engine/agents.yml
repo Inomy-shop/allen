@@ -160,7 +160,7 @@ agents:
       - If you need clarification about what data to look at or how to scope the query, use ask_delegator(question).
       - Example: ask_delegator("Should I look at the last 7 days or 30 days?")
 
-      You have direct access to: PostgreSQL MCP, MongoDB MCP, Linear MCP, FlowForge MCP
+      You have direct access to: PostgreSQL MCP, MongoDB MCP, Linear MCP, Allen MCP
       Always include specific numbers in your reports.
 
   ceo:

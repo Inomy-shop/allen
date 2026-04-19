@@ -1,7 +1,8 @@
+import { GIT_BRANCH_PREFIX } from '../brand.js';
 import type { BuiltInFunction } from '../types.js';
 
 /**
- * Create a FlowForge workspace — identical to the "New Workspace" flow on the
+ * Create an Allen workspace — identical to the "New Workspace" flow on the
  * Repos page in the UI. Takes a repo (by id or name) and a branch, calls the
  * internal /api/workspaces endpoint, then polls until setup completes.
  *
@@ -40,7 +41,7 @@ export const createWorkspace: BuiltInFunction = async (config, state, ctx) => {
   if (!ctx.db) throw new Error('create-workspace requires a database connection');
 
   // Resolve repo — accept id, name, or absolute path. The repo MUST be
-  // registered in FlowForge; unregistered paths are not supported.
+  // registered in Allen; unregistered paths are not supported.
   const repoId = nonEmpty(config.repo_id) ?? nonEmpty(state.repo_id);
   const repoName = nonEmpty(config.repo_name) ?? nonEmpty(state.repo_name);
   const repoPath = nonEmpty(config.repo_path) ?? nonEmpty(state.repo_path);
@@ -98,7 +99,7 @@ export const createWorkspace: BuiltInFunction = async (config, state, ctx) => {
   const branch =
     nonEmpty(config.branch) ??
     nonEmpty(state.branch) ??
-    `flowforge/${taskSlug}-${Date.now().toString(36)}`;
+    `${GIT_BRANCH_PREFIX}/${taskSlug}-${Date.now().toString(36)}`;
   const baseBranch =
     nonEmpty(config.base_branch) ?? nonEmpty(state.base_branch) ?? defaultBranch;
   const workspaceName = nonEmpty(config.name) ?? branch;
@@ -130,7 +131,7 @@ export const createWorkspace: BuiltInFunction = async (config, state, ctx) => {
   if (!wsService) {
     throw new Error(
       'create-workspace: no workspace service bound on the engine context. ' +
-      'The host must pass `services.workspaces` when constructing FlowForgeEngine.',
+      'The host must pass `services.workspaces` when constructing AllenEngine.',
     );
   }
 

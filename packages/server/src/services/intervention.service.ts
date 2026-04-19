@@ -282,7 +282,7 @@ export class InterventionService {
   }
 
   private async dispatchSlack(doc: InterventionDoc): Promise<void> {
-    const appBaseUrl = process.env.FLOWFORGE_APP_BASE_URL ?? undefined;
+    const appBaseUrl = process.env.ALLEN_APP_BASE_URL ?? undefined;
     const cardInput: InterventionCardInput = {
       intervention_id: doc.intervention_id,
       workflow_run_id: doc.workflow_run_id,

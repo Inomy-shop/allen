@@ -1,8 +1,8 @@
-# Terraform Plan: FlowForge on AWS (flowforge.inomy.shop)
+# Terraform Plan: Allen on AWS (allen.inomy.ai)
 
 ## Context
 
-Deploy FlowForge to existing EC2 `i-086efc3e8ad92eb7f` (private subnet), route `flowforge.inomy.shop` through the existing ALB used by the Inomy ECS cluster. Both frontend and backend run on the single EC2. Deploy via a shell script on the box triggered by GitHub Actions via SSM. MongoDB via existing DocumentDB cluster.
+Deploy Allen to existing EC2 `i-086efc3e8ad92eb7f` (private subnet), route `allen.inomy.ai` through the existing ALB used by the Inomy ECS cluster. Both frontend and backend run on the single EC2. Deploy via a shell script on the box triggered by GitHub Actions via SSM. MongoDB via existing DocumentDB cluster.
 
 ## Discovered Infrastructure
 
@@ -28,8 +28,8 @@ DocumentDB:  es-pipeline-dev-docdb-cluster
   Engine:    5.0.0
   SG:        sg-0dd9e489d1d90e62b (already allows EC2's SG ✓)
 
-DNS:         inomy.shop managed at GoDaddy. No flowforge.inomy.shop zone yet.
-ACM:         No cert for flowforge.inomy.shop yet.
+DNS:         inomy.shop managed at GoDaddy. No allen.inomy.ai zone yet.
+ACM:         No cert for allen.inomy.ai yet.
 ```
 
 ## Workspace Preview — Shareable URLs via Subdomains
@@ -37,7 +37,7 @@ ACM:         No cert for flowforge.inomy.shop yet.
 Each workspace gets a public URL that anyone can open:
 
 ```
-https://<workspace-id>.flowforge.inomy.shop
+https://<workspace-id>.allen.inomy.ai
 ```
 
 Full interactivity: HMR, WebSockets, forms, navigation — works exactly like opening `localhost:15237` directly. Shareable with teammates, clients, or for testing on other devices.
@@ -45,18 +45,18 @@ Full interactivity: HMR, WebSockets, forms, navigation — works exactly like op
 ### How it works
 
 ```
-Friend opens: https://abc123.flowforge.inomy.shop
+Friend opens: https://abc123.allen.inomy.ai
   │
   ▼
-DNS: *.flowforge.inomy.shop → ALB  (wildcard A record)
+DNS: *.allen.inomy.ai → ALB  (wildcard A record)
   │
   ▼
 ALB (HTTPS:443)
-  cert: *.flowforge.inomy.shop     (wildcard ACM cert)
-  rule: *.flowforge.inomy.shop → flowforge-dev-tg
+  cert: *.allen.inomy.ai     (wildcard ACM cert)
+  rule: *.allen.inomy.ai → allen-dev-tg
   │
   ▼
-nginx :80  (catches *.flowforge.inomy.shop)
+nginx :80  (catches *.allen.inomy.ai)
   extracts subdomain "abc123"
   proxy_pass → http://127.0.0.1:4023/api/workspaces/abc123/preview/
   │
@@ -74,20 +74,20 @@ Workspace dev server :15237  (Vite, Next.js, etc.)
 
 | Component | Base plan | With shareable previews |
 |---|---|---|
-| **ACM cert** | `flowforge.inomy.shop` only | `flowforge.inomy.shop` + `*.flowforge.inomy.shop` (SAN) |
+| **ACM cert** | `allen.inomy.ai` only | `allen.inomy.ai` + `*.allen.inomy.ai` (SAN) |
 | **Route53** | 1 A record | 2 A records (apex + wildcard) |
-| **ALB rule** | host = `flowforge.inomy.shop` | host = `flowforge.inomy.shop` OR `*.flowforge.inomy.shop` |
+| **ALB rule** | host = `allen.inomy.ai` | host = `allen.inomy.ai` OR `*.allen.inomy.ai` |
 | **nginx** | 1 server block | 2 server blocks (main app + wildcard workspace proxy) |
 | **Express** | existing `createWorkspaceProxy` on `/api/workspaces/:id/preview` | same — nginx rewrites the subdomain request to hit this path |
 
 ### nginx workspace proxy block (added alongside the main server block)
 
 ```nginx
-# Workspace preview subdomains: <workspace-id>.flowforge.inomy.shop
+# Workspace preview subdomains: <workspace-id>.allen.inomy.ai
 # Proxies to Express which handles the workspace → port resolution internally.
 server {
     listen 80;
-    server_name ~^(?<workspace_id>[a-f0-9]+)\.flowforge\.inomy\.shop$;
+    server_name ~^(?<workspace_id>[a-f0-9]+)\.allen\.inomy\.shop$;
 
     location / {
         # Rewrite to the existing workspace preview path on Express
@@ -111,7 +111,7 @@ server {
 
 ---
 
-## FlowForge Port Map (all services on the EC2)
+## Allen Port Map (all services on the EC2)
 
 | Port | Service | Protocol | Description |
 |---|---|---|---|
@@ -161,15 +161,15 @@ This ensures workspace services are ONLY reachable from Express on localhost, ev
 ## Architecture
 
 ```
-GoDaddy:  flowforge.inomy.shop NS → Route53 zone (4 NS records)
-Route53:  flowforge.inomy.shop A  → ALB (alias)
+GoDaddy:  allen.inomy.ai NS → Route53 zone (4 NS records)
+Route53:  allen.inomy.ai A  → ALB (alias)
 
 ALB (HTTPS:443)
-  ├── Host: flowforge.inomy.shop → flowforge-dev-tg (NEW, p50)
+  ├── Host: allen.inomy.ai → allen-dev-tg (NEW, p50)
   ├── Host: marketing.inomy.shop → marketing TG    (existing, p100)
   └── Default → Inomy API TG                       (existing)
 
-flowforge-dev-tg (port 80, instance type)
+allen-dev-tg (port 80, instance type)
   └── EC2 i-086efc3e8ad92eb7f (192.168.3.140)
 
         nginx :80  ←─── only port exposed to ALB
@@ -184,7 +184,7 @@ flowforge-dev-tg (port 80, instance type)
                              ├── /ws/workspaces/:id/terminal/:termId
                              └── /ws/file-watch (file change events)
 
-        FlowForge server :4023  ←─── only reachable from nginx (127.0.0.1)
+        Allen server :4023  ←─── only reachable from nginx (127.0.0.1)
         Terminal WS :4024       ←─── only reachable from nginx (127.0.0.1)
         Workspace services :15000-19999  ←─── only reachable from Express (127.0.0.1)
 
@@ -199,13 +199,13 @@ flowforge-dev-tg (port 80, instance type)
 
 | # | Resource | Type | Touches existing? | Impact on Inomy API / marketing.inomy.shop |
 |---|----------|------|-------------------|-------------------------------------------|
-| 1 | Route53 zone `flowforge.inomy.shop` | **NEW** | ❌ No | None. Brand-new hosted zone. No existing zones touched. |
-| 2 | ACM cert `flowforge.inomy.shop` | **NEW** | ❌ No | None. New cert, doesn't modify `api.dev.inomy.shop` cert. |
+| 1 | Route53 zone `allen.inomy.ai` | **NEW** | ❌ No | None. Brand-new hosted zone. No existing zones touched. |
+| 2 | ACM cert `allen.inomy.ai` | **NEW** | ❌ No | None. New cert, doesn't modify `api.dev.inomy.shop` cert. |
 | 3 | ALB listener cert attachment | **ADD to existing** | ⚠️ Yes — adds a secondary cert to the HTTPS listener | **SAFE:** ALB supports multiple certs via SNI. The existing `api.dev.inomy.shop` cert stays as the default. The new cert is a secondary. No listener config changes. No downtime. |
-| 4 | Target group `flowforge-dev-tg` | **NEW** | ❌ No | None. New TG with its own name. `InomyA-ApiSe-C4SYHKCDO3FA` and `inomy-marketing-dev-tg` are untouched. |
-| 5 | ALB listener rule (priority 50) | **ADD to existing** | ⚠️ Yes — adds a new rule to the HTTPS listener | **SAFE:** host-header match for `flowforge.inomy.shop` ONLY. Traffic to `api.dev.inomy.shop` (default rule) and `marketing.inomy.shop` (p100) is unaffected because host headers don't match. Rule is purely additive — no existing rules are reordered or modified. |
+| 4 | Target group `allen-dev-tg` | **NEW** | ❌ No | None. New TG with its own name. `InomyA-ApiSe-C4SYHKCDO3FA` and `inomy-marketing-dev-tg` are untouched. |
+| 5 | ALB listener rule (priority 50) | **ADD to existing** | ⚠️ Yes — adds a new rule to the HTTPS listener | **SAFE:** host-header match for `allen.inomy.ai` ONLY. Traffic to `api.dev.inomy.shop` (default rule) and `marketing.inomy.shop` (p100) is unaffected because host headers don't match. Rule is purely additive — no existing rules are reordered or modified. |
 | 6 | SG rule on EC2's SG | **ADD to existing** | ⚠️ Yes — adds an ingress rule to `sg-0d65b89f1c8fe1ba1` | **SAFE:** adds TCP port 80 from ALB's SG. The existing rule (TCP 3001 from `sg-02c7f1ce324ce0ab2`) is untouched. The `es-pipeline-dev-self-healing` service on port 3001 continues to work. |
-| 7 | Route53 A record `flowforge.inomy.shop` | **NEW** | ❌ No | None. Created inside the new zone from step 1. |
+| 7 | Route53 A record `allen.inomy.ai` | **NEW** | ❌ No | None. Created inside the new zone from step 1. |
 
 **What is NOT touched (read-only via `data` sources):**
 - ❌ The ALB itself — no modification to the load balancer resource
@@ -220,9 +220,9 @@ flowforge-dev-tg (port 80, instance type)
 
 **EC2 side (non-Terraform, manual):**
 - nginx on port 80 — new process, new port. Does NOT conflict with existing self-healing agent on port 3001.
-- FlowForge on port 4023, Terminal WS on 4024 — new processes, new ports. No conflicts.
+- Allen on port 4023, Terminal WS on 4024 — new processes, new ports. No conflicts.
 - Workspace dynamic ports 15000-19999 — new, internal only. No conflicts.
-- DocumentDB: new `flowforge` database. Existing databases untouched. Same cluster, different database name.
+- DocumentDB: new `allen` database. Existing databases untouched. Same cluster, different database name.
 
 ---
 
@@ -251,7 +251,7 @@ infra/
 │   ├── bootstrap.sh             # one-shot EC2 setup: install nginx + node, clone repo,
 │   │                              write configs, build, start. Idempotent — safe to re-run.
 │   ├── nginx.conf.tftpl         # nginx config (templated — ${domain} substituted)
-│   ├── flowforge.service        # systemd unit file (static)
+│   ├── allen.service        # systemd unit file (static)
 │   └── env.production.tftpl     # .env (templated — ${docdb_uri}, ${master_key} substituted)
 │
 ├── outputs.tf                   # NS records for GoDaddy, cert ARN, TG ARN, domain
@@ -282,11 +282,11 @@ terraform apply
         │       ├── Install nginx, Node.js 20 (if not present)
         │       ├── git clone / git pull (https://github.com/Kalpai-poc/flowforge)
         │       ├── git checkout main
-        │       ├── Write nginx.conf, .env.production, flowforge.service
+        │       ├── Write nginx.conf, .env.production, allen.service
         │       ├── Download DocumentDB CA cert
         │       ├── Set iptables rules (block 15000-20000 externally)
         │       ├── npm ci && npm run build (engine, server, ui)
-        │       ├── systemctl enable + start flowforge
+        │       ├── systemctl enable + start allen
         │       ├── systemctl reload nginx
         │       └── curl localhost:4023/api/health → verify
         └── terraform waits for SSM command to complete
@@ -306,9 +306,9 @@ resource "null_resource" "deploy_app" {
 
   # Wait for ALB wiring to be ready before deploying
   depends_on = [
-    aws_lb_listener_rule.flowforge,
-    aws_lb_target_group_attachment.flowforge,
-    aws_security_group_rule.alb_to_flowforge,
+    aws_lb_listener_rule.allen,
+    aws_lb_target_group_attachment.allen,
+    aws_security_group_rule.alb_to_allen,
   ]
 
   provisioner "local-exec" {
@@ -340,9 +340,9 @@ resource "null_resource" "deploy_app" {
         --document-name "AWS-RunShellScript" \
         --timeout-seconds 600 \
         --parameters "commands=[
-          \"bash -c 'cat > /tmp/flowforge-nginx.conf << ENDNGINX\n$${NGINX_CONF}\nENDNGINX'\",
-          \"bash -c 'cat > /tmp/flowforge-env << ENDENV\n$${ENV_FILE}\nENDENV'\",
-          \"sudo -u ubuntu bash /opt/flowforge/infra/templates/bootstrap.sh 2>&1 | tee /tmp/flowforge-bootstrap.log\"
+          \"bash -c 'cat > /tmp/allen-nginx.conf << ENDNGINX\n$${NGINX_CONF}\nENDNGINX'\",
+          \"bash -c 'cat > /tmp/allen-env << ENDENV\n$${ENV_FILE}\nENDENV'\",
+          \"sudo -u ubuntu bash /opt/allen/infra/templates/bootstrap.sh 2>&1 | tee /tmp/allen-bootstrap.log\"
         ]" \
         --query 'Command.CommandId' --output text)
 
@@ -380,7 +380,7 @@ resource "null_resource" "deploy_app" {
 #!/bin/bash
 set -euo pipefail
 
-REPO_DIR=/opt/flowforge
+REPO_DIR=/opt/allen
 REPO_URL=https://github.com/Kalpai-poc/flowforge.git
 BRANCH=main
 
@@ -406,19 +406,19 @@ git pull origin "$BRANCH"
 
 echo "=== [3/8] Write configs ==="
 # nginx (rendered by Terraform, placed at /tmp by SSM)
-sudo cp /tmp/flowforge-nginx.conf /etc/nginx/sites-available/flowforge
-sudo ln -sf /etc/nginx/sites-available/flowforge /etc/nginx/sites-enabled/
+sudo cp /tmp/allen-nginx.conf /etc/nginx/sites-available/allen
+sudo ln -sf /etc/nginx/sites-available/allen /etc/nginx/sites-enabled/
 sudo rm -f /etc/nginx/sites-enabled/default
 
 # .env.production (rendered by Terraform)
-cp /tmp/flowforge-env "$REPO_DIR/.env.production"
+cp /tmp/allen-env "$REPO_DIR/.env.production"
 chmod 600 "$REPO_DIR/.env.production"
 
 # systemd service
-sudo cp "$REPO_DIR/infra/templates/flowforge.service" \
-        /etc/systemd/system/flowforge.service
+sudo cp "$REPO_DIR/infra/templates/allen.service" \
+        /etc/systemd/system/allen.service
 sudo systemctl daemon-reload
-sudo systemctl enable flowforge
+sudo systemctl enable allen
 
 echo "=== [4/8] Download DocumentDB CA cert ==="
 if [ ! -f "$REPO_DIR/rds-combined-ca-bundle.pem" ]; then
@@ -436,20 +436,20 @@ echo "=== [6/8] Install dependencies ==="
 npm ci
 
 echo "=== [7/8] Build ==="
-npm run build --workspace=@flowforge/engine
-npm run build --workspace=@flowforge/server
-npm run build --workspace=@flowforge/ui
+npm run build --workspace=@allen/engine
+npm run build --workspace=@allen/server
+npm run build --workspace=@allen/ui
 
 echo "=== [8/8] Start services ==="
 sudo nginx -t && sudo systemctl reload nginx
-sudo systemctl restart flowforge
+sudo systemctl restart allen
 
 sleep 5
 if curl -sf http://localhost:4023/api/health > /dev/null; then
-  echo "✅ FlowForge is healthy"
+  echo "✅ Allen is healthy"
 else
   echo "❌ Health check failed"
-  sudo journalctl -u flowforge --no-pager -n 20
+  sudo journalctl -u allen --no-pager -n 20
   exit 1
 fi
 ```
@@ -466,7 +466,7 @@ server {
     listen 80;
     server_name ${domain};
 
-    root /opt/flowforge/packages/ui/dist;
+    root /opt/allen/packages/ui/dist;
     index index.html;
 
     location / {
@@ -506,21 +506,21 @@ server {
 PORT=${port}
 TERMINAL_WS_PORT=${ws_port}
 MONGODB_URI=${docdb_uri}
-FLOWFORGE_MASTER_KEY=${master_key}
+ALLEN_MASTER_KEY=${master_key}
 ```
 
-### `templates/flowforge.service`
+### `templates/allen.service`
 
 ```ini
 [Unit]
-Description=FlowForge Server
+Description=Allen Server
 After=network.target
 
 [Service]
 Type=simple
 User=ubuntu
-WorkingDirectory=/opt/flowforge/packages/server
-EnvironmentFile=/opt/flowforge/.env.production
+WorkingDirectory=/opt/allen/packages/server
+EnvironmentFile=/opt/allen/.env.production
 ExecStart=/usr/bin/node dist/app.js
 Restart=always
 RestartSec=5
@@ -541,13 +541,13 @@ variable "deploy_version" {
 }
 
 variable "app_port" {
-  description = "FlowForge API server port"
+  description = "Allen API server port"
   type        = number
   default     = 4023
 }
 
 variable "ws_port" {
-  description = "FlowForge terminal WebSocket port"
+  description = "Allen terminal WebSocket port"
   type        = number
   default     = 4024
 }
@@ -568,13 +568,13 @@ variable "master_key" {
 ### Updated `terraform.tfvars`
 
 ```hcl
-domain         = "flowforge.inomy.shop"
+domain         = "allen.inomy.ai"
 alb_arn        = "arn:aws:elasticloadbalancing:us-east-1:257394465633:loadbalancer/app/InomyA-ApiSe-7LeVvZDFml8I/7bc0ff09e912f0c1"
 instance_id    = "i-086efc3e8ad92eb7f"
 vpc_id         = "vpc-033eec7eb19e904f0"
 environment    = "dev"
 deploy_version = "1"
-docdb_uri      = "mongodb://flowforge_user:PASSWORD@es-pipeline-dev-docdb-cluster.cluster-c980k0oqiox4.us-east-1.docdb.amazonaws.com:27017/flowforge?tls=true&tlsCAFile=/opt/flowforge/rds-combined-ca-bundle.pem&retryWrites=false&directConnection=true"
+docdb_uri      = "mongodb://allen_user:PASSWORD@es-pipeline-dev-docdb-cluster.cluster-c980k0oqiox4.us-east-1.docdb.amazonaws.com:27017/allen?tls=true&tlsCAFile=/opt/allen/rds-combined-ca-bundle.pem&retryWrites=false&directConnection=true"
 master_key     = "<generate: node -e \"console.log(require('crypto').randomBytes(32).toString('base64'))\">"
 ```
 
@@ -603,7 +603,7 @@ data "aws_lb_listener" "https" {
   port              = 443
 }
 
-data "aws_instance" "flowforge" {
+data "aws_instance" "allen" {
   instance_id = "i-086efc3e8ad92eb7f"
 }
 ```
@@ -612,9 +612,9 @@ data "aws_instance" "flowforge" {
 
 ```hcl
 variable "domain" {
-  description = "Domain name for FlowForge"
+  description = "Domain name for Allen"
   type        = string
-  default     = "flowforge.inomy.shop"
+  default     = "allen.inomy.ai"
 }
 
 variable "alb_arn" {
@@ -623,7 +623,7 @@ variable "alb_arn" {
 }
 
 variable "instance_id" {
-  description = "EC2 instance ID for FlowForge"
+  description = "EC2 instance ID for Allen"
   type        = string
 }
 
@@ -648,7 +648,7 @@ variable "listener_rule_priority" {
 ### File: `infra/terraform.tfvars` (GITIGNORED)
 
 ```hcl
-domain      = "flowforge.inomy.shop"
+domain      = "allen.inomy.ai"
 alb_arn     = "arn:aws:elasticloadbalancing:us-east-1:257394465633:loadbalancer/app/InomyA-ApiSe-7LeVvZDFml8I/7bc0ff09e912f0c1"
 instance_id = "i-086efc3e8ad92eb7f"
 vpc_id      = "vpc-033eec7eb19e904f0"
@@ -658,14 +658,14 @@ environment = "dev"
 ### File: `infra/dns.tf`
 
 ```hcl
-resource "aws_route53_zone" "flowforge" {
+resource "aws_route53_zone" "allen" {
   name    = var.domain
-  comment = "FlowForge ${var.environment} — managed by Terraform"
+  comment = "Allen ${var.environment} — managed by Terraform"
   tags    = local.tags
 }
 
-resource "aws_route53_record" "flowforge" {
-  zone_id = aws_route53_zone.flowforge.zone_id
+resource "aws_route53_record" "allen" {
+  zone_id = aws_route53_zone.allen.zone_id
   name    = var.domain
   type    = "A"
 
@@ -680,7 +680,7 @@ resource "aws_route53_record" "flowforge" {
 ### File: `infra/cert.tf`
 
 ```hcl
-resource "aws_acm_certificate" "flowforge" {
+resource "aws_acm_certificate" "allen" {
   domain_name       = var.domain
   validation_method = "DNS"
   tags              = local.tags
@@ -689,7 +689,7 @@ resource "aws_acm_certificate" "flowforge" {
 
 resource "aws_route53_record" "cert_validation" {
   for_each = {
-    for dvo in aws_acm_certificate.flowforge.domain_validation_options :
+    for dvo in aws_acm_certificate.allen.domain_validation_options :
     dvo.domain_name => {
       name  = dvo.resource_record_name
       type  = dvo.resource_record_type
@@ -697,15 +697,15 @@ resource "aws_route53_record" "cert_validation" {
     }
   }
 
-  zone_id = aws_route53_zone.flowforge.zone_id
+  zone_id = aws_route53_zone.allen.zone_id
   name    = each.value.name
   type    = each.value.type
   records = [each.value.value]
   ttl     = 60
 }
 
-resource "aws_acm_certificate_validation" "flowforge" {
-  certificate_arn         = aws_acm_certificate.flowforge.arn
+resource "aws_acm_certificate_validation" "allen" {
+  certificate_arn         = aws_acm_certificate.allen.arn
   validation_record_fqdns = [for r in aws_route53_record.cert_validation : r.fqdn]
 }
 ```
@@ -714,14 +714,14 @@ resource "aws_acm_certificate_validation" "flowforge" {
 
 ```hcl
 # Attach cert to ALB HTTPS listener (SNI — additive, doesn't change existing cert)
-resource "aws_lb_listener_certificate" "flowforge" {
+resource "aws_lb_listener_certificate" "allen" {
   listener_arn    = data.aws_lb_listener.https.arn
-  certificate_arn = aws_acm_certificate_validation.flowforge.certificate_arn
+  certificate_arn = aws_acm_certificate_validation.allen.certificate_arn
 }
 
 # Target Group (instance type, port 80 → nginx on the EC2)
-resource "aws_lb_target_group" "flowforge" {
-  name        = "flowforge-${var.environment}-tg"
+resource "aws_lb_target_group" "allen" {
+  name        = "allen-${var.environment}-tg"
   port        = 80
   protocol    = "HTTP"
   vpc_id      = var.vpc_id
@@ -747,20 +747,20 @@ resource "aws_lb_target_group" "flowforge" {
   tags = local.tags
 }
 
-resource "aws_lb_target_group_attachment" "flowforge" {
-  target_group_arn = aws_lb_target_group.flowforge.arn
+resource "aws_lb_target_group_attachment" "allen" {
+  target_group_arn = aws_lb_target_group.allen.arn
   target_id        = var.instance_id
   port             = 80
 }
 
-# Host-header routing rule — ONLY fires for flowforge.inomy.shop
-resource "aws_lb_listener_rule" "flowforge" {
+# Host-header routing rule — ONLY fires for allen.inomy.ai
+resource "aws_lb_listener_rule" "allen" {
   listener_arn = data.aws_lb_listener.https.arn
   priority     = var.listener_rule_priority
 
   action {
     type             = "forward"
-    target_group_arn = aws_lb_target_group.flowforge.arn
+    target_group_arn = aws_lb_target_group.allen.arn
   }
 
   condition {
@@ -776,14 +776,14 @@ resource "aws_lb_listener_rule" "flowforge" {
 ```hcl
 # Allow ALB to reach the EC2 on port 80 (nginx).
 # ADDITIVE — does NOT touch the existing port 3001 rule.
-resource "aws_security_group_rule" "alb_to_flowforge" {
+resource "aws_security_group_rule" "alb_to_allen" {
   type                     = "ingress"
   from_port                = 80
   to_port                  = 80
   protocol                 = "tcp"
   source_security_group_id = tolist(data.aws_lb.inomy.security_groups)[0]
-  security_group_id        = tolist(data.aws_instance.flowforge.vpc_security_group_ids)[0]
-  description              = "Allow ALB to reach FlowForge nginx on port 80"
+  security_group_id        = tolist(data.aws_instance.allen.vpc_security_group_ids)[0]
+  description              = "Allow ALB to reach Allen nginx on port 80"
 }
 ```
 
@@ -791,16 +791,16 @@ resource "aws_security_group_rule" "alb_to_flowforge" {
 
 ```hcl
 output "ns_records_for_godaddy" {
-  description = "Add these as NS records for 'flowforge' subdomain at GoDaddy"
-  value       = aws_route53_zone.flowforge.name_servers
+  description = "Add these as NS records for 'allen' subdomain at GoDaddy"
+  value       = aws_route53_zone.allen.name_servers
 }
 
 output "acm_cert_arn" {
-  value = aws_acm_certificate.flowforge.arn
+  value = aws_acm_certificate.allen.arn
 }
 
 output "target_group_arn" {
-  value = aws_lb_target_group.flowforge.arn
+  value = aws_lb_target_group.allen.arn
 }
 
 output "alb_dns" {
@@ -828,7 +828,7 @@ provider "aws" {
 
 locals {
   tags = {
-    Project     = "flowforge"
+    Project     = "allen"
     Environment = var.environment
     ManagedBy   = "Terraform"
   }
@@ -845,7 +845,7 @@ data "aws_lb_listener" "https" {
   port              = 443
 }
 
-data "aws_instance" "flowforge" {
+data "aws_instance" "allen" {
   instance_id = var.instance_id
 }
 ```
@@ -854,7 +854,7 @@ data "aws_instance" "flowforge" {
 
 ## EC2 Setup (on the machine itself)
 
-### nginx config: `/etc/nginx/sites-available/flowforge`
+### nginx config: `/etc/nginx/sites-available/allen`
 
 ```nginx
 # Required for conditional WebSocket upgrade headers
@@ -865,10 +865,10 @@ map $http_upgrade $connection_upgrade {
 
 server {
     listen 80;
-    server_name flowforge.inomy.shop;
+    server_name allen.inomy.ai;
 
     # ── Frontend (Vite-built static files) ──
-    root /opt/flowforge/packages/ui/dist;
+    root /opt/allen/packages/ui/dist;
     index index.html;
 
     # SPA fallback — all non-API, non-WS routes serve index.html
@@ -922,23 +922,23 @@ server {
 ```
 
 ```bash
-sudo ln -sf /etc/nginx/sites-available/flowforge /etc/nginx/sites-enabled/
+sudo ln -sf /etc/nginx/sites-available/allen /etc/nginx/sites-enabled/
 sudo rm -f /etc/nginx/sites-enabled/default
 sudo nginx -t && sudo systemctl reload nginx
 ```
 
-### systemd: `/etc/systemd/system/flowforge.service`
+### systemd: `/etc/systemd/system/allen.service`
 
 ```ini
 [Unit]
-Description=FlowForge Server
+Description=Allen Server
 After=network.target
 
 [Service]
 Type=simple
 User=ubuntu
-WorkingDirectory=/opt/flowforge/packages/server
-EnvironmentFile=/opt/flowforge/.env.production
+WorkingDirectory=/opt/allen/packages/server
+EnvironmentFile=/opt/allen/.env.production
 ExecStart=/usr/bin/node dist/app.js
 Restart=always
 RestartSec=5
@@ -947,31 +947,31 @@ RestartSec=5
 WantedBy=multi-user.target
 ```
 
-### env: `/opt/flowforge/.env.production`
+### env: `/opt/allen/.env.production`
 
 ```bash
 PORT=4023
 TERMINAL_WS_PORT=4024
-MONGODB_URI=mongodb://flowforge_user:PASSWORD@es-pipeline-dev-docdb-cluster.cluster-c980k0oqiox4.us-east-1.docdb.amazonaws.com:27017/flowforge?tls=true&tlsCAFile=/opt/flowforge/rds-combined-ca-bundle.pem&retryWrites=false&directConnection=true
-FLOWFORGE_MASTER_KEY=<base64-encoded-32-bytes>
+MONGODB_URI=mongodb://allen_user:PASSWORD@es-pipeline-dev-docdb-cluster.cluster-c980k0oqiox4.us-east-1.docdb.amazonaws.com:27017/allen?tls=true&tlsCAFile=/opt/allen/rds-combined-ca-bundle.pem&retryWrites=false&directConnection=true
+ALLEN_MASTER_KEY=<base64-encoded-32-bytes>
 ```
 
 **DocumentDB notes:**
 - Download the AWS RDS CA bundle:
   ```bash
-  wget -O /opt/flowforge/rds-combined-ca-bundle.pem \
+  wget -O /opt/allen/rds-combined-ca-bundle.pem \
     https://truststore.pki.rds.amazonaws.com/global/global-bundle.pem
   ```
 - `retryWrites=false` is required — DocumentDB doesn't support retryable writes
 - `directConnection=true` avoids replica set discovery issues
-- Create a DocumentDB user `flowforge_user` with readWrite on the `flowforge` database (or use the existing admin user for dev)
+- Create a DocumentDB user `allen_user` with readWrite on the `allen` database (or use the existing admin user for dev)
 
-### Deploy script: `/opt/flowforge/deploy.sh`
+### Deploy script: `/opt/allen/deploy.sh`
 
 ```bash
 #!/bin/bash
 set -euo pipefail
-cd /opt/flowforge
+cd /opt/allen
 
 echo "=== Pulling latest code ==="
 git pull origin main
@@ -980,12 +980,12 @@ echo "=== Installing dependencies ==="
 npm ci
 
 echo "=== Building ==="
-npm run build --workspace=@flowforge/engine
-npm run build --workspace=@flowforge/server
-npm run build --workspace=@flowforge/ui
+npm run build --workspace=@allen/engine
+npm run build --workspace=@allen/server
+npm run build --workspace=@allen/ui
 
 echo "=== Restarting server ==="
-sudo systemctl restart flowforge
+sudo systemctl restart allen
 
 echo "=== Waiting for health check ==="
 sleep 5
@@ -995,8 +995,8 @@ curl -sf http://localhost:4023/api/health && echo " ✓ healthy" || echo " ✗ u
 ### GitHub Actions deploy via SSM
 
 ```yaml
-# .github/workflows/deploy-flowforge.yml
-name: Deploy FlowForge
+# .github/workflows/deploy-allen.yml
+name: Deploy Allen
 on:
   workflow_dispatch:
   push:
@@ -1021,9 +1021,9 @@ jobs:
           aws ssm send-command \
             --instance-ids i-086efc3e8ad92eb7f \
             --document-name "AWS-RunShellScript" \
-            --parameters 'commands=["sudo -u ubuntu bash /opt/flowforge/deploy.sh 2>&1 | tee /tmp/flowforge-deploy.log"]' \
+            --parameters 'commands=["sudo -u ubuntu bash /opt/allen/deploy.sh 2>&1 | tee /tmp/allen-deploy.log"]' \
             --timeout-seconds 300 \
-            --comment "FlowForge deploy from GitHub Actions"
+            --comment "Allen deploy from GitHub Actions"
 ```
 
 **Prerequisite:** create an IAM role `github-deploy-role` with `ssm:SendCommand` permission on the target instance, and set up GitHub OIDC trust.
@@ -1035,7 +1035,7 @@ jobs:
 ### Phase 1: Terraform (first apply — creates Route53 zone)
 
 ```bash
-cd terraform/flowforge
+cd terraform/allen
 terraform init
 terraform apply    # Creates Route53 zone, outputs NS records
                    # ACM cert will be PENDING (DNS not yet delegated)
@@ -1044,12 +1044,12 @@ terraform apply    # Creates Route53 zone, outputs NS records
 ### Phase 2: GoDaddy NS delegation (manual, one-time)
 
 1. Log into GoDaddy → DNS management for `inomy.shop`
-2. Add NS records for the `flowforge` subdomain:
-   - **Host**: `flowforge`
+2. Add NS records for the `allen` subdomain:
+   - **Host**: `allen`
    - **Type**: NS
    - **Values**: each of the 4 nameservers from `terraform output ns_records_for_godaddy`
 3. Wait 5-30 min for propagation
-4. Verify: `dig flowforge.inomy.shop NS` returns the AWS nameservers
+4. Verify: `dig allen.inomy.ai NS` returns the AWS nameservers
 
 ### Phase 3: Terraform (second apply — cert validates, infra completes)
 
@@ -1070,13 +1070,13 @@ sudo apt update && sudo apt install -y nginx
 curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
 sudo apt install -y nodejs
 
-# Clone FlowForge
-sudo mkdir -p /opt/flowforge && sudo chown ubuntu:ubuntu /opt/flowforge
-git clone https://github.com/Kalpai-poc/flowforge.git /opt/flowforge
-cd /opt/flowforge && npm ci
+# Clone Allen
+sudo mkdir -p /opt/allen && sudo chown ubuntu:ubuntu /opt/allen
+git clone https://github.com/Kalpai-poc/flowforge.git /opt/allen
+cd /opt/allen && npm ci
 
 # Download DocumentDB CA cert
-wget -O /opt/flowforge/rds-combined-ca-bundle.pem \
+wget -O /opt/allen/rds-combined-ca-bundle.pem \
   https://truststore.pki.rds.amazonaws.com/global/global-bundle.pem
 
 # Restrict workspace dynamic ports (15000-20000) to localhost only
@@ -1085,60 +1085,60 @@ sudo apt install -y iptables-persistent
 sudo iptables-save | sudo tee /etc/iptables/rules.v4
 
 # Create .env.production (fill in actual values)
-cat > /opt/flowforge/.env.production << 'EOF'
+cat > /opt/allen/.env.production << 'EOF'
 PORT=4023
 TERMINAL_WS_PORT=4024
-MONGODB_URI=mongodb://flowforge_user:PASSWORD@es-pipeline-dev-docdb-cluster.cluster-c980k0oqiox4.us-east-1.docdb.amazonaws.com:27017/flowforge?tls=true&tlsCAFile=/opt/flowforge/rds-combined-ca-bundle.pem&retryWrites=false&directConnection=true
-FLOWFORGE_MASTER_KEY=<generate-with: node -e "console.log(require('crypto').randomBytes(32).toString('base64'))">
+MONGODB_URI=mongodb://allen_user:PASSWORD@es-pipeline-dev-docdb-cluster.cluster-c980k0oqiox4.us-east-1.docdb.amazonaws.com:27017/allen?tls=true&tlsCAFile=/opt/allen/rds-combined-ca-bundle.pem&retryWrites=false&directConnection=true
+ALLEN_MASTER_KEY=<generate-with: node -e "console.log(require('crypto').randomBytes(32).toString('base64'))">
 EOF
 
 # Set up nginx config (copy from plan above)
-sudo nano /etc/nginx/sites-available/flowforge
-sudo ln -sf /etc/nginx/sites-available/flowforge /etc/nginx/sites-enabled/
+sudo nano /etc/nginx/sites-available/allen
+sudo ln -sf /etc/nginx/sites-available/allen /etc/nginx/sites-enabled/
 sudo rm -f /etc/nginx/sites-enabled/default
 sudo nginx -t && sudo systemctl reload nginx
 
 # Set up systemd service (copy from plan above)
-sudo nano /etc/systemd/system/flowforge.service
+sudo nano /etc/systemd/system/allen.service
 sudo systemctl daemon-reload
-sudo systemctl enable flowforge
+sudo systemctl enable allen
 
 # Build + start
-bash /opt/flowforge/deploy.sh
+bash /opt/allen/deploy.sh
 ```
 
 ### Phase 5: Verify
 
 ```bash
 # From your local machine:
-curl -I https://flowforge.inomy.shop/api/health      # → 200 OK
-curl -s https://flowforge.inomy.shop/ | head -5       # → HTML (SPA)
+curl -I https://allen.inomy.ai/api/health      # → 200 OK
+curl -s https://allen.inomy.ai/ | head -5       # → HTML (SPA)
 
 # In the AWS console:
-# EC2 → Target Groups → flowforge-dev-tg → Targets tab → healthy
+# EC2 → Target Groups → allen-dev-tg → Targets tab → healthy
 ```
 
 ### Phase 6: Update Slack webhook URL (permanent URL, no more ngrok)
 
 In api.slack.com → Event Subscriptions → Request URL:
 ```
-https://flowforge.inomy.shop/api/slack/events
+https://allen.inomy.ai/api/slack/events
 ```
 
 ---
 
 ## Verification Checklist
 
-- [ ] `dig flowforge.inomy.shop` resolves to ALB IPs
+- [ ] `dig allen.inomy.ai` resolves to ALB IPs
 - [ ] ACM cert status is ISSUED in the AWS console
-- [ ] `curl -I https://flowforge.inomy.shop/api/health` → 200 OK
-- [ ] FlowForge UI loads at `https://flowforge.inomy.shop`
+- [ ] `curl -I https://allen.inomy.ai/api/health` → 200 OK
+- [ ] Allen UI loads at `https://allen.inomy.ai`
 - [ ] Chat session works (create, send message, get streaming response — tests SSE)
 - [ ] Workspace terminal works (open workspace, launch terminal — tests WebSocket /ws/)
 - [ ] Workspace preview works (start a service in a workspace — tests internal proxy on 15000+)
-- [ ] Slack bot works via `@flowforge` mention using the permanent URL
+- [ ] Slack bot works via `@allen` mention using the permanent URL
 - [ ] ALB target group shows instance as healthy in AWS console
 - [ ] `es-pipeline-dev-self-healing` service on port 3001 still works (no regression)
 - [ ] Inomy API at `api.dev.inomy.shop` still works (no regression)
 - [ ] Marketing at `marketing.inomy.shop` still works (no regression)
-- [ ] GitHub Actions deploy works: push to `main` → SSM command → FlowForge restarts
+- [ ] GitHub Actions deploy works: push to `main` → SSM command → Allen restarts

@@ -1,6 +1,6 @@
 import { Router, type Request, type Response } from 'express';
 import { LearningService } from '../services/learning.service.js';
-import { LearningManager } from '@flowforge/engine';
+import { LearningManager } from '@allen/engine';
 import { embedAndSave } from '../services/embedding.service.js';
 import { param } from '../types.js';
 import type { Db } from 'mongodb';

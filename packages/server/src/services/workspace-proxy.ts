@@ -1,6 +1,6 @@
 /**
  * Workspace Preview Proxy
- * Reverse-proxies to workspace services so browser only talks to FlowForge origin.
+ * Reverse-proxies to workspace services so browser only talks to Allen origin.
  */
 
 import type { Request, Response, NextFunction } from 'express';

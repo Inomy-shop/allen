@@ -1,7 +1,7 @@
 variable "domain" {
-  description = "Domain name for FlowForge"
+  description = "Domain name for Allen"
   type        = string
-  default     = "flowforge.inomy.shop"
+  default     = "allen.inomy.ai"
 }
 
 variable "alb_arn" {
@@ -10,7 +10,7 @@ variable "alb_arn" {
 }
 
 variable "instance_id" {
-  description = "EC2 instance ID where FlowForge runs"
+  description = "EC2 instance ID where Allen runs"
   type        = string
 }
 
@@ -38,13 +38,13 @@ variable "deploy_version" {
 }
 
 variable "app_port" {
-  description = "FlowForge Express API server port"
+  description = "Allen Express API server port"
   type        = number
   default     = 4023
 }
 
 variable "ws_port" {
-  description = "FlowForge terminal WebSocket server port"
+  description = "Allen terminal WebSocket server port"
   type        = number
   default     = 4024
 }
@@ -99,7 +99,7 @@ variable "refresh_token_ttl" {
 }
 
 variable "repo_url" {
-  description = "Git repo URL for FlowForge"
+  description = "Git repo URL for Allen"
   type        = string
   default     = "https://github.com/Kalpai-poc/flowforge.git"
 }

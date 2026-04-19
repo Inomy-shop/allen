@@ -179,7 +179,7 @@ export class PullRequestService {
       branch,
       baseBranch,
       status: 'open',
-      author: 'flowforge',
+      author: 'allen',
       url: result.url,
       additions: result.additions ?? 0,
       deletions: result.deletions ?? 0,

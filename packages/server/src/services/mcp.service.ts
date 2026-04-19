@@ -224,8 +224,8 @@ export const MCP_PRESETS: McpPreset[] = [
     type: 'stdio',
     command: 'npx',
     args: ['-y', 'mcp-server-linear'],
-    envKeys: ['FLOWFORGE_LINEAR_ACCESS_TOKEN'],
-    envVarOverrides: { FLOWFORGE_LINEAR_ACCESS_TOKEN: 'LINEAR_ACCESS_TOKEN' },
+    envKeys: ['ALLEN_LINEAR_ACCESS_TOKEN'],
+    envVarOverrides: { ALLEN_LINEAR_ACCESS_TOKEN: 'LINEAR_ACCESS_TOKEN' },
     docsUrl: 'https://github.com/dvcrn/mcp-server-linear',
   },
   {
@@ -235,14 +235,14 @@ export const MCP_PRESETS: McpPreset[] = [
     // — which the health checker reports as a spawn failure. Using the npm
     // package matches how the slack preset is wired and removes the gh version
     // dependency entirely. The package reads GITHUB_PERSONAL_ACCESS_TOKEN from
-    // the env, which we map from the FlowForge-prefixed secret.
+    // the env, which we map from the Allen-prefixed secret.
     name: 'github',
     description: 'GitHub — repos, issues, PRs, code search',
     type: 'stdio',
     command: 'npx',
     args: ['-y', '@modelcontextprotocol/server-github'],
-    envKeys: ['FLOWFORGE_GITHUB_PERSONAL_ACCESS_TOKEN'],
-    envVarOverrides: { FLOWFORGE_GITHUB_PERSONAL_ACCESS_TOKEN: 'GITHUB_PERSONAL_ACCESS_TOKEN' },
+    envKeys: ['ALLEN_GITHUB_PERSONAL_ACCESS_TOKEN'],
+    envVarOverrides: { ALLEN_GITHUB_PERSONAL_ACCESS_TOKEN: 'GITHUB_PERSONAL_ACCESS_TOKEN' },
     docsUrl: 'https://github.com/modelcontextprotocol/servers-archived/tree/main/src/github',
   },
   {
@@ -255,7 +255,7 @@ export const MCP_PRESETS: McpPreset[] = [
     // flag is fixed and stays as a literal.
     args: ['-y', '@henkey/postgres-mcp-server', '--connection-string'],
     envKeys: [],
-    argKeys: ['FLOWFORGE_POSTGRES_CONNECTION_STRING'],
+    argKeys: ['ALLEN_POSTGRES_CONNECTION_STRING'],
     docsUrl: 'https://github.com/HenkDz/postgresql-mcp-server',
   },
   {
@@ -265,7 +265,7 @@ export const MCP_PRESETS: McpPreset[] = [
     command: 'npx',
     args: ['-y', 'mcp-mongo-server'],
     envKeys: [],
-    argKeys: ['FLOWFORGE_MONGODB_CONNECTION_STRING'],
+    argKeys: ['ALLEN_MONGODB_CONNECTION_STRING'],
     docsUrl: 'https://github.com/kiliczsh/mcp-mongo-server',
   },
   {
@@ -278,8 +278,8 @@ export const MCP_PRESETS: McpPreset[] = [
     type: 'stdio',
     command: 'npx',
     args: ['-y', '@modelcontextprotocol/server-slack'],
-    envKeys: ['FLOWFORGE_SLACK_BOT_TOKEN', 'FLOWFORGE_SLACK_TEAM_ID'],
-    envVarOverrides: { FLOWFORGE_SLACK_BOT_TOKEN: 'SLACK_BOT_TOKEN', FLOWFORGE_SLACK_TEAM_ID: 'SLACK_TEAM_ID' },
+    envKeys: ['ALLEN_SLACK_BOT_TOKEN', 'ALLEN_SLACK_TEAM_ID'],
+    envVarOverrides: { ALLEN_SLACK_BOT_TOKEN: 'SLACK_BOT_TOKEN', ALLEN_SLACK_TEAM_ID: 'SLACK_TEAM_ID' },
     docsUrl: 'https://github.com/modelcontextprotocol/servers-archived/tree/main/src/slack',
   },
   {
@@ -546,7 +546,7 @@ export class McpService {
       }
       delete env.GH_TOKEN;
       if (!env.GITHUB_PERSONAL_ACCESS_TOKEN) {
-        env.GITHUB_PERSONAL_ACCESS_TOKEN = `${MCP_SECRET_PREFIX}FLOWFORGE_GITHUB_PERSONAL_ACCESS_TOKEN`;
+        env.GITHUB_PERSONAL_ACCESS_TOKEN = `${MCP_SECRET_PREFIX}ALLEN_GITHUB_PERSONAL_ACCESS_TOKEN`;
       }
       await this.collection.updateOne(
         { _id: doc._id },
@@ -583,7 +583,7 @@ export class McpService {
       if (env.GH_TOKEN) continue; // already configured
       const newEnv = {
         ...env,
-        GH_TOKEN: `${MCP_SECRET_PREFIX}FLOWFORGE_GITHUB_PERSONAL_ACCESS_TOKEN`,
+        GH_TOKEN: `${MCP_SECRET_PREFIX}ALLEN_GITHUB_PERSONAL_ACCESS_TOKEN`,
       };
       await this.collection.updateOne(
         { _id: doc._id },

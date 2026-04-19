@@ -13,6 +13,7 @@ import { useAuthStore } from './stores/authStore';
 import { useChat, type ChatSession } from './hooks/useChat';
 import DeleteConfirmDialog from './components/common/DeleteConfirmDialog';
 import { LogOut, ShieldCheck } from 'lucide-react';
+import { BRAND_NAME } from './lib/brand';
 import { auth as authApi } from './services/api';
 
 interface SettingsTab {
@@ -278,7 +279,7 @@ export default function App() {
               <Activity className="w-5 h-5 text-accent-blue" />
               <div className="absolute inset-0 blur-md bg-accent-blue/30 rounded-full" />
             </div>
-            <span className="font-heading text-[15px] font-bold text-theme-primary tracking-widest uppercase">FlowForge</span>
+            <span className="font-heading text-[15px] font-bold text-theme-primary tracking-widest uppercase">{BRAND_NAME}</span>
           </NavLink>
         </div>
 

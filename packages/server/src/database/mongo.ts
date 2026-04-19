@@ -1,4 +1,5 @@
 import { MongoClient, type Db } from 'mongodb';
+import { DB_NAME_DEFAULT } from '@allen/engine';
 
 let client: MongoClient | null = null;
 let db: Db | null = null;
@@ -6,7 +7,7 @@ let db: Db | null = null;
 export async function connectDB(uri?: string): Promise<Db> {
   if (db) return db;
 
-  const mongoUri = uri ?? process.env.MONGODB_URI ?? 'mongodb://localhost:27017/flowforge';
+  const mongoUri = uri ?? process.env.MONGODB_URI ?? `mongodb://localhost:27017/${DB_NAME_DEFAULT}`;
   client = new MongoClient(mongoUri);
   await client.connect();
   db = client.db();

@@ -63,7 +63,7 @@ function formatDuration(ms: number): string {
 
 function ToolItem({ tc }: { tc: { tool: string; args?: Record<string, unknown>; result?: Record<string, unknown>; durationMs?: number } }) {
   const [open, setOpen] = useState(false);
-  const short = tc.tool.replace('mcp__flowforge__', 'ff:').replace('mcp__linear__', 'linear:').replace('mcp__postgres__', 'pg:');
+  const short = tc.tool.replace('mcp__allen__', 'al:').replace('mcp__linear__', 'linear:').replace('mcp__postgres__', 'pg:');
   const isErr = tc.result && 'error' in tc.result;
   const hasDetail = (tc.args && Object.keys(tc.args).length > 0) || (tc.result && Object.keys(tc.result).length > 0);
 
@@ -178,8 +178,8 @@ function LiveFeed({ activity, agentName }: { activity: ThreadActivityItem[]; age
         <div key={i} className="flex items-center gap-1.5 text-[10px] font-mono animate-in fade-in duration-200">
           {act.type === 'thinking' && <><Brain className="w-2.5 h-2.5 text-purple-400 animate-pulse shrink-0" /><span className="text-purple-400/60 truncate">{act.content?.slice(0, 80)}</span></>}
           {act.type === 'text' && <><span className="w-1 h-1 rounded-full bg-theme-muted shrink-0" /><span className="text-theme-muted truncate">{act.content?.slice(0, 100)}</span></>}
-          {act.type === 'tool_call' && <><Loader2 className="w-2.5 h-2.5 text-accent-yellow animate-spin shrink-0" /><span className="text-accent-yellow/70">{act.tool?.replace('mcp__flowforge__', 'ff:')}</span></>}
-          {act.type === 'tool_result' && <><CheckCircle className="w-2.5 h-2.5 text-accent-green/40 shrink-0" /><span className="text-theme-subtle">{act.tool?.replace('mcp__flowforge__', 'ff:')}</span></>}
+          {act.type === 'tool_call' && <><Loader2 className="w-2.5 h-2.5 text-accent-yellow animate-spin shrink-0" /><span className="text-accent-yellow/70">{act.tool?.replace('mcp__allen__', 'al:')}</span></>}
+          {act.type === 'tool_result' && <><CheckCircle className="w-2.5 h-2.5 text-accent-green/40 shrink-0" /><span className="text-theme-subtle">{act.tool?.replace('mcp__allen__', 'al:')}</span></>}
         </div>
       ))}
       <div className="flex items-center gap-1.5 text-[10px] text-accent-cyan">

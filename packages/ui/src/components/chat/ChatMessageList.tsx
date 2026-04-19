@@ -8,6 +8,7 @@ import { AgentThread } from './AgentThread';
 import { AgentQuestionPrompt } from './AgentQuestionPrompt';
 import RoleIcon from '../common/RoleIcon';
 import { useSettingsStore } from '../../stores/settingsStore';
+import { CHAT_EMPTY_PROMPT } from '../../lib/brand';
 import MermaidChatBlock from './MermaidChatBlock';
 
 const AGENT_ICONS: Record<string, React.ElementType> = {
@@ -659,7 +660,7 @@ function ActiveToolCallsSection({ calls, liveThreads, agentMap }: { calls: Activ
         <div className="flex items-center gap-1.5 text-[10px] font-mono text-theme-subtle py-0.5">
           <Loader2 className="w-2.5 h-2.5 text-accent-yellow animate-spin shrink-0" />
           <Wrench className="w-2.5 h-2.5 text-accent-yellow shrink-0" />
-          <span className="text-accent-yellow/70">{TOOL_LABELS[runningTool.tool]?.label ?? runningTool.tool.replace('mcp__flowforge__', 'ff:')}</span>
+          <span className="text-accent-yellow/70">{TOOL_LABELS[runningTool.tool]?.label ?? runningTool.tool.replace('mcp__allen__', 'al:')}</span>
           {completedCount > 0 && <span className="text-theme-subtle">· {completedCount} done</span>}
         </div>
       )}
@@ -752,7 +753,7 @@ export default function ChatMessageList({ messages, streamText, thinkingText, st
             <AgentIcon className="w-7 h-7 text-accent-blue/50" />
           </div>
           <p className="text-sm text-theme-secondary font-body">
-            Start a conversation with FlowForge Assistant.
+            {CHAT_EMPTY_PROMPT}
           </p>
           <p className="text-xs text-theme-subtle mt-2 font-body max-w-xs">
             Use <span className="text-accent-blue font-mono">@mentions</span> to reference workflows, repos, and agents.
@@ -780,7 +781,7 @@ export default function ChatMessageList({ messages, streamText, thinkingText, st
         const msgThreads = msg._id ? threadsByMessage[msg._id] : undefined;
         return (<React.Fragment key={msg._id || i}>
         <div
-          className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'} ff-msg-enter`}
+          className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'} al-msg-enter`}
         >
           <div className={`group/msg flex gap-3 ${msg.role === 'user' ? 'flex-row-reverse max-w-[75%]' : 'max-w-[90%]'}`}>
             {/* Avatar — only for user messages */}
@@ -894,7 +895,7 @@ export default function ChatMessageList({ messages, streamText, thinkingText, st
         const sAgentColor = activeAgent && agentMap[activeAgent]?.color ? agentMap[activeAgent].color : '#6b7280';
         const sAgentInfo = activeAgent ? agentMap[activeAgent] : undefined;
         return (
-          <div className="ff-msg-enter max-w-[90%]">
+          <div className="al-msg-enter max-w-[90%]">
             {/* Agent header */}
             <div className="flex items-center gap-2 mb-1.5">
               {sAgentInfo ? (

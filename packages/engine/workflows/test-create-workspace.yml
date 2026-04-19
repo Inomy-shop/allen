@@ -40,7 +40,7 @@ nodes:
       branch_prefix: "smoke"
       task_summary: "create-workspace smoke test"
     outputs:
-      workspace_id: "Internal FlowForge workspace identifier."
+      workspace_id: "Internal Allen workspace identifier."
       worktree_path: "Absolute path to the isolated git worktree."
       branch_name: "New branch name."
       base_port: "Allocated base port for the workspace."

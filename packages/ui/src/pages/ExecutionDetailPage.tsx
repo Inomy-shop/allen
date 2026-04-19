@@ -344,7 +344,7 @@ function AgentExecutionView({ execution, agentName, trace, id }: {
           </button>
           {showResponse && (
             <div className="px-4 pb-4 border-t border-border/20">
-              <div className="text-sm text-theme-secondary font-body mt-2 leading-relaxed max-h-[60vh] overflow-y-auto prose-flowforge">
+              <div className="text-sm text-theme-secondary font-body mt-2 leading-relaxed max-h-[60vh] overflow-y-auto prose-allen">
                 {response
                   ? renderMarkdown(response)
                   : <span className="text-theme-muted">{execution.status === 'running' ? 'Agent is working...' : execution.errorMessage || '(no response)'}</span>

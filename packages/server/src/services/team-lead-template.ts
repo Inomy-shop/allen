@@ -3,7 +3,7 @@
  *
  * Generates the system prompt for an auto-created team lead agent. Used by the
  * UI-driven "Create Team" flow — when an operator spins up a new team from the
- * agents page, FlowForge creates a lead of record on their behalf instead of
+ * agents page, Allen creates a lead of record on their behalf instead of
  * asking them to hand-write a lead agent first.
  *
  * The output intentionally mirrors the shape of hand-written leads in

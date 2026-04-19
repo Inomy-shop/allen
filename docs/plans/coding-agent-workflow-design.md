@@ -1,4 +1,4 @@
-# FlowForge Coding Agent Workflow Design
+# Allen Coding Agent Workflow Design
 
 ## Research Summary
 

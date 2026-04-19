@@ -1,4 +1,4 @@
-# FlowForge Skill Library — Design
+# Allen Skill Library — Design
 
 **Date:** 2026-04-14
 **Status:** Design. Companion to `memory-system-gap-analysis-2026.md` (Phase D).
@@ -15,11 +15,11 @@ A **skill** is a reusable procedure the agent follows to accomplish a discrete, 
 | Concept | Rigidity | Length | Invocation | Storage | Purpose |
 |---------|----------|--------|------------|---------|---------|
 | Workflow node | Deterministic — executor runs it | code | `workflow.yml` | TS code | Hard guarantees |
-| **Skill** | Recipe — agent follows it | 200–2000 tok | Agent calls `skill_load()` via MCP | `.flowforge/skills/*.md` | Repeatable procedures |
-| Memory block | Synthesized truth | 100–800 tok | Prompt injection at spawn | `.flowforge/blocks/*.md` | What we know about an entity |
-| Learning | Atomic fact | 30–100 tok | Prompt injection at spawn | Mongo + `.flowforge/learnings/*.md` | Delta facts from one execution |
+| **Skill** | Recipe — agent follows it | 200–2000 tok | Agent calls `skill_load()` via MCP | `.allen/skills/*.md` | Repeatable procedures |
+| Memory block | Synthesized truth | 100–800 tok | Prompt injection at spawn | `.allen/blocks/*.md` | What we know about an entity |
+| Learning | Atomic fact | 30–100 tok | Prompt injection at spawn | Mongo + `.allen/learnings/*.md` | Delta facts from one execution |
 
-**Explicit non-goal:** skills are not executable code. Voyager executes code; FlowForge does not. Reasons:
+**Explicit non-goal:** skills are not executable code. Voyager executes code; Allen does not. Reasons:
 - Sandboxing executable skills is a full security surface.
 - The agent already has `bash` and file tools — the skill's job is to tell it *what to run*, not to run it itself.
 - Markdown recipes are reviewable by non-engineers.
@@ -30,12 +30,12 @@ If a procedure needs deterministic invocation (not "the agent might deviate"), i
 
 ## 2. Storage — Dual Write (Markdown + Mongo Index)
 
-Same pattern as memory blocks and learnings: **markdown on the `flowforge/memory` orphan branch is the source of truth; Mongo is the query index.**
+Same pattern as memory blocks and learnings: **markdown on the `allen/memory` orphan branch is the source of truth; Mongo is the query index.**
 
 ### 2.1 File layout
 
 ```
-<WORKSPACE_BASE>/_memory/<repoId>/.flowforge/skills/
+<WORKSPACE_BASE>/_memory/<repoId>/.allen/skills/
     run-tests.md
     deploy-staging.md
     pricing-update.md
@@ -49,7 +49,7 @@ Same pattern as memory blocks and learnings: **markdown on the `flowforge/memory
         morning-standup-summary.md
 ```
 
-- Lives on the `flowforge/memory` orphan branch (see `memory-system-gap-analysis-2026.md §5` and the memory-storage discussion).
+- Lives on the `allen/memory` orphan branch (see `memory-system-gap-analysis-2026.md §5` and the memory-storage discussion).
 - `_global/` is mirrored across all repos at read time by the retrieval layer, not by file duplication.
 - `_users/<userId>/` is scoped to a single user across all their repos.
 - `_archive/` keeps superseded versions findable by name; git history provides point-in-time queries for free.
@@ -201,7 +201,7 @@ AVAILABLE SKILLS (call `skill_load(name)` to get full recipe):
 The agent calls `skill_load(name)` mid-task when it decides to use a skill. The server:
 
 1. Looks up `SkillIndex` by `(repoId, name, status: active)`.
-2. Reads `.flowforge/skills/<name>.md` from the memory worktree.
+2. Reads `.allen/skills/<name>.md` from the memory worktree.
 3. Verifies `sha256(body) === contentHash` — if mismatched, reindex the file and retry (catches manual edits that bypassed the service).
 4. Strips frontmatter, substitutes `{{ inputs.* }}` from the tool-call's `inputs` arg, returns the body as a string.
 5. Records a `skill_loaded` event: `{ executionId, nodeName, skillId, loadedAt }` — used later for confirm/contradict.
@@ -268,7 +268,7 @@ async function retrieveSkillsForNode(
 
 ## 4. MCP Tools
 
-All skill access goes through `flowforge-mcp-server.ts`. No raw filesystem reads by the agent.
+All skill access goes through `allen-mcp-server.ts`. No raw filesystem reads by the agent.
 
 ```ts
 skill_list(filter?: { scope?, keywords? }) → Array<{ name, description }>
@@ -302,7 +302,7 @@ The MCP session already knows `repoId`, `userId`, and `executionId` from the eng
 
 ### 5.1 Human-authored (the most important one)
 
-User drops `my-skill.md` into `.flowforge/skills/` directly (or edits an existing one). A file watcher on the memory worktree (reuse the `workspace-watcher.ts` pattern) sees the change, parses frontmatter, reindexes into Mongo, lands as `status: active` with `confidence: 0.9` (trusted source).
+User drops `my-skill.md` into `.allen/skills/` directly (or edits an existing one). A file watcher on the memory worktree (reuse the `workspace-watcher.ts` pattern) sees the change, parses frontmatter, reindexes into Mongo, lands as `status: active` with `confidence: 0.9` (trusted source).
 
 **Why this is first:** the best skills come from humans writing them once. A hand-written `run-tests.md` with the actual command, the actual gotchas, and the actual verification step beats any amount of auto-discovery. The library only becomes useful if humans can seed it.
 
@@ -353,12 +353,12 @@ This is tracked per-`(execution, node)`, not per-execution — solving the same 
 
 ### 6.2 Versioning
 
-Every edit bumps `version: N` in frontmatter and produces a new git commit on `flowforge/memory`. Full history is free.
+Every edit bumps `version: N` in frontmatter and produces a new git commit on `allen/memory`. Full history is free.
 
 **Semantic version bumps (major semantic change):**
-- Create the new version at `.flowforge/skills/<name>.md` (same filename — Mongo `name` + `status: active` is unique).
-- Move the previous active version to `.flowforge/skills/_archive/<name>-v<oldVersion>.md` with `status: superseded`, `supersededBy: <newId>`.
-- Point-in-time queries are free via git: `git show flowforge/memory@{2026-03-01}:.flowforge/skills/run-tests.md`.
+- Create the new version at `.allen/skills/<name>.md` (same filename — Mongo `name` + `status: active` is unique).
+- Move the previous active version to `.allen/skills/_archive/<name>-v<oldVersion>.md` with `status: superseded`, `supersededBy: <newId>`.
+- Point-in-time queries are free via git: `git show allen/memory@{2026-03-01}:.allen/skills/run-tests.md`.
 
 ### 6.3 Deprecation
 
@@ -412,7 +412,7 @@ for (const skillId of loaded) {
 }
 ```
 
-### 7.2 `server/src/services/flowforge-mcp-server.ts`
+### 7.2 `server/src/services/allen-mcp-server.ts`
 
 Register the four MCP tools from §4. Each resolves `repoId` / `userId` / `executionId` from the MCP session context (same mechanism memory_* tools use — see the memory storage discussion).
 
@@ -437,7 +437,7 @@ Writes go through the memory service (`memoryService.write(repoId, path, content
 ### 7.4 File watcher
 
 Extend `workspace-watcher.ts` or add a dedicated `memory-watcher.ts` that tails the memory worktree:
-- On `.md` add/change under `.flowforge/skills/` → `skillManager.reindex(path)`.
+- On `.md` add/change under `.allen/skills/` → `skillManager.reindex(path)`.
 - On `.md` delete → mark the Mongo row as `status: archived`.
 
 ### 7.5 UI
@@ -478,11 +478,11 @@ Before building the full design, ship this slice to prove the shape works:
 
 | # | Item | Where |
 |---|------|-------|
-| 1 | `.flowforge/skills/*.md` directory on the memory branch (no `_global`, `_users`, `_archive` yet) | Memory worktree setup |
+| 1 | `.allen/skills/*.md` directory on the memory branch (no `_global`, `_users`, `_archive` yet) | Memory worktree setup |
 | 2 | Minimal `SkillIndex`: `name`, `description`, `trigger.keywords`, `filePath`, `contentHash`, `confidence`, `status`, `usageCount`, `successRate` | `server/database/indexes.ts` |
 | 3 | `SkillManager.retrieve / load / reindex` — keyword-only scoring, no embeddings yet | `server/services/skill-manager.ts` |
 | 4 | File watcher that reindexes `.md` files on change | extend `workspace-watcher.ts` |
-| 5 | `skill_load` + `skill_list` MCP tools (no `propose`, no `report_outcome` yet) | `flowforge-mcp-server.ts` |
+| 5 | `skill_load` + `skill_list` MCP tools (no `propose`, no `report_outcome` yet) | `allen-mcp-server.ts` |
 | 6 | Stage-1 injection in `engine.ts` — top 5 skills by keyword match, appended to `nodeContext` | `engine.ts` |
 | 7 | Confirm/contradict hooks on node success/failure, tracking `__loadedSkills` per-node | `engine.ts` |
 | 8 | 10 hand-written skills for one test repo — the bar that proves the system works end to end | manual |

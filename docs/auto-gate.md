@@ -1,6 +1,6 @@
 # Auto-Gate — Intelligent Workflow Flow Control
 
-Auto-gate is FlowForge's mechanism for agents to control workflow execution — stopping, pausing for human input, or skipping steps — without requiring manual configuration per node.
+Auto-gate is Allen's mechanism for agents to control workflow execution — stopping, pausing for human input, or skipping steps — without requiring manual configuration per node.
 
 ---
 

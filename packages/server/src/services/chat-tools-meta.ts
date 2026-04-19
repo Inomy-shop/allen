@@ -2,7 +2,7 @@
  * Meta team chat tools — phase 4 of the teams architecture.
  *
  * These tools let the team-builder-agent and agent-builder-agent extend the
- * FlowForge org chart by creating teams and agents. They are gated by a
+ * Allen org chart by creating teams and agents. They are gated by a
  * per-agent allow-list (see `assertCallerIsBuilder` below) — only the two
  * builder agents can call them. Every other agent gets a permission error.
  *
@@ -25,7 +25,7 @@ import type { ChatTool } from './chat-tools.js';
 import { getAnyActiveSession } from './chat-tools.js';
 import { TeamService } from './team.service.js';
 import { WorkflowService } from './workflow.service.js';
-import type { WorkflowDef } from '@flowforge/engine';
+import type { WorkflowDef } from '@allen/engine';
 import yaml from 'js-yaml';
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
@@ -115,7 +115,7 @@ function assertCallerCanCall(toolName: string): { ok: true; caller: string } | {
 
 const listTeamsTool: ChatTool = {
   name: 'list_teams',
-  description: 'List all teams in the FlowForge org chart. Returns name, displayName, mission, leadAgentName, parentTeamName, and isBuiltIn for each. Read-only — no permission required.',
+  description: 'List all teams in the Allen org chart. Returns name, displayName, mission, leadAgentName, parentTeamName, and isBuiltIn for each. Read-only — no permission required.',
   inputSchema: { type: 'object', properties: {}, additionalProperties: false },
   async execute(_args, db) {
     const teams = await new TeamService(db).list();

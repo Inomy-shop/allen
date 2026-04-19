@@ -111,7 +111,7 @@ export default function AnalyticsPage() {
             {topTools.map(([tool, count]) => {
               const max = topTools[0][1];
               const pct = (count / max) * 100;
-              const name = tool.replace('mcp__flowforge__', 'ff:').replace('mcp__linear__', 'linear:');
+              const name = tool.replace('mcp__allen__', 'al:').replace('mcp__linear__', 'linear:');
               return (
                 <div key={tool} className="flex items-center gap-3">
                   <span className="text-xs font-mono text-theme-secondary w-40 truncate" title={tool}>{name}</span>

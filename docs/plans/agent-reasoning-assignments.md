@@ -1,7 +1,7 @@
 # Agent Reasoning Effort & Plan Mode — Per-Agent Assignment Plan
 
 This plan defines the **default** `model`, `reasoningEffort`, and `planMode`
-settings to apply to every existing built-in agent in the FlowForge org seed
+settings to apply to every existing built-in agent in the Allen org seed
 (`packages/server/src/services/org-seed.ts`).
 
 ## Guiding rules (from product)

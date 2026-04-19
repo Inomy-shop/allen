@@ -1,15 +1,15 @@
 #!/bin/bash
-# FlowForge EC2 bootstrap + deploy script.
+# Allen EC2 bootstrap + deploy script.
 # Idempotent — safe to re-run on every deploy.
 # Called by Terraform's null_resource.deploy_app via SSM send-command.
 set -euo pipefail
 
-REPO_DIR=/home/ubuntu/flowforge
+REPO_DIR=/home/ubuntu/allen
 REPO_URL="${REPO_URL:-https://github.com/Kalpai-poc/flowforge.git}"
 BRANCH="${BRANCH:-main}"
 
 echo "========================================"
-echo "FlowForge Deploy — $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+echo "Allen Deploy — $(date -u +%Y-%m-%dT%H:%M:%SZ)"
 echo "========================================"
 
 # ── 1. System dependencies ──────────────────────────────────────────────────
@@ -46,28 +46,28 @@ echo "  branch: $(git branch --show-current)  commit: $(git rev-parse --short HE
 echo "=== [3/8] Write configs ==="
 
 # nginx (rendered by Terraform, placed at /tmp by SSM)
-if [ -f /tmp/flowforge-nginx.conf ]; then
-  sudo cp /tmp/flowforge-nginx.conf /etc/nginx/sites-available/flowforge
-  sudo ln -sf /etc/nginx/sites-available/flowforge /etc/nginx/sites-enabled/
+if [ -f /tmp/allen-nginx.conf ]; then
+  sudo cp /tmp/allen-nginx.conf /etc/nginx/sites-available/allen
+  sudo ln -sf /etc/nginx/sites-available/allen /etc/nginx/sites-enabled/
   sudo rm -f /etc/nginx/sites-enabled/default
   echo "  nginx config: updated"
 else
-  echo "  nginx config: /tmp/flowforge-nginx.conf not found, skipping"
+  echo "  nginx config: /tmp/allen-nginx.conf not found, skipping"
 fi
 
 # .env.production (rendered by Terraform)
-if [ -f /tmp/flowforge-env ]; then
-  cp /tmp/flowforge-env "$REPO_DIR/.env.production"
+if [ -f /tmp/allen-env ]; then
+  cp /tmp/allen-env "$REPO_DIR/.env.production"
   chmod 600 "$REPO_DIR/.env.production"
   echo "  .env.production: updated"
 else
-  echo "  .env.production: /tmp/flowforge-env not found, skipping"
+  echo "  .env.production: /tmp/allen-env not found, skipping"
 fi
 
 # systemd service
-sudo cp "$REPO_DIR/infra/templates/flowforge.service" /etc/systemd/system/flowforge.service
+sudo cp "$REPO_DIR/infra/templates/allen.service" /etc/systemd/system/allen.service
 sudo systemctl daemon-reload
-sudo systemctl enable flowforge
+sudo systemctl enable allen
 echo "  systemd: enabled"
 
 # ── 4. DocumentDB CA cert ──────────────────────────────────────────────────
@@ -80,9 +80,9 @@ else
   echo "  already exists"
 fi
 
-# ── 4b. Create /tmp/flowforge working dir (used as default cwd for agents) ──
-sudo mkdir -p /tmp/flowforge
-sudo chown ubuntu:ubuntu /tmp/flowforge
+# ── 4b. Create /tmp/allen working dir (used as default cwd for agents) ──
+sudo mkdir -p /tmp/allen
+sudo chown ubuntu:ubuntu /tmp/allen
 
 
 # ── 5. iptables — restrict workspace ports 15000-20000 to localhost ────────
@@ -126,9 +126,9 @@ fi
 # "npm error command sh -c tsc" line, which tells us nothing about the
 # actual compile failure. Full output makes deploy debugging possible.
 echo "=== [7/9] Build ==="
-npm run build --workspace=@flowforge/engine
-npm run build --workspace=@flowforge/server
-npm run build --workspace=@flowforge/ui
+npm run build --workspace=@allen/engine
+npm run build --workspace=@allen/server
+npm run build --workspace=@allen/ui
 echo "  build complete"
 
 # ── 8. Start / restart services ────────────────────────────────────────────
@@ -137,14 +137,14 @@ sudo nginx -t 2>&1
 sudo systemctl reload nginx
 echo "  nginx: reloaded"
 
-sudo systemctl restart flowforge
-echo "  flowforge: restarted"
+sudo systemctl restart allen
+echo "  allen: restarted"
 
 # Health check — wait up to 15 seconds
 echo "Waiting for health check..."
 for i in $(seq 1 15); do
   if curl -sf http://localhost:4023/api/health > /dev/null 2>&1; then
-    echo "✅ FlowForge is healthy (attempt $i)"
+    echo "✅ Allen is healthy (attempt $i)"
     echo ""
     echo "Deploy complete: $(git rev-parse --short HEAD) on $(git branch --show-current)"
     exit 0
@@ -154,5 +154,5 @@ done
 
 echo "❌ Health check failed after 15 seconds"
 echo "--- journalctl output ---"
-sudo journalctl -u flowforge --no-pager -n 30
+sudo journalctl -u allen --no-pager -n 30
 exit 1

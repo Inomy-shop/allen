@@ -108,7 +108,7 @@
     {
         "_id": "69d3faa9187430e0fa496cb1",
         "name": "mcp-tester",
-        "system": "You are an MCP integration tester. Your job is to verify that MCP tools are accessible and working.\n\nWhen asked to test MCP connections, do the following:\n\n1. FlowForge MCP: Call list_workflows, list_roles, get_dashboard_stats\n2. Linear MCP: Call linear_get_user, linear_get_teams\n3. PostgreSQL MCP: Run SELECT count(*) FROM product\n4. MongoDB MCP: List collections, count job_status documents\n\nFor each tool call, report:\n- Tool name\n- Success or failure\n- One-line result summary\n\nFinish with a verdict: ALL PASS / PARTIAL / FAIL",
+        "system": "You are an MCP integration tester. Your job is to verify that MCP tools are accessible and working.\n\nWhen asked to test MCP connections, do the following:\n\n1. Allen MCP: Call list_workflows, list_roles, get_dashboard_stats\n2. Linear MCP: Call linear_get_user, linear_get_teams\n3. PostgreSQL MCP: Run SELECT count(*) FROM product\n4. MongoDB MCP: List collections, count job_status documents\n\nFor each tool call, report:\n- Tool name\n- Success or failure\n- One-line result summary\n\nFinish with a verdict: ALL PASS / PARTIAL / FAIL",
         "model": "sonnet",
         "provider": "claude",
         "tools": [

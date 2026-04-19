@@ -202,7 +202,7 @@
   }
 
   /* ─── Prose typography for markdown rendering (execution responses, docs) ─── */
-  .prose-flowforge .markdown-body h1 {
+  .prose-allen .markdown-body h1 {
     font-size: 1.25rem;
     font-weight: 700;
     margin-top: 1.5rem;
@@ -210,93 +210,93 @@
     color: rgb(var(--color-text-primary));
     letter-spacing: 0.01em;
   }
-  .prose-flowforge .markdown-body h2 {
+  .prose-allen .markdown-body h2 {
     font-size: 1.1rem;
     font-weight: 600;
     margin-top: 1.25rem;
     margin-bottom: 0.4rem;
     color: rgb(var(--color-text-primary));
   }
-  .prose-flowforge .markdown-body h3 {
+  .prose-allen .markdown-body h3 {
     font-size: 0.95rem;
     font-weight: 600;
     margin-top: 1rem;
     margin-bottom: 0.3rem;
     color: rgb(var(--color-text-primary));
   }
-  .prose-flowforge .markdown-body h4,
-  .prose-flowforge .markdown-body h5,
-  .prose-flowforge .markdown-body h6 {
+  .prose-allen .markdown-body h4,
+  .prose-allen .markdown-body h5,
+  .prose-allen .markdown-body h6 {
     font-size: 0.85rem;
     font-weight: 600;
     margin-top: 0.75rem;
     margin-bottom: 0.25rem;
     color: rgb(var(--color-text-secondary));
   }
-  .prose-flowforge .markdown-body p {
+  .prose-allen .markdown-body p {
     margin-top: 0.4rem;
     margin-bottom: 0.4rem;
     line-height: 1.65;
   }
-  .prose-flowforge .markdown-body ul,
-  .prose-flowforge .markdown-body ol {
+  .prose-allen .markdown-body ul,
+  .prose-allen .markdown-body ol {
     margin-top: 0.3rem;
     margin-bottom: 0.3rem;
     padding-left: 1.5rem;
   }
-  .prose-flowforge .markdown-body ul {
+  .prose-allen .markdown-body ul {
     list-style: disc;
   }
-  .prose-flowforge .markdown-body ol {
+  .prose-allen .markdown-body ol {
     list-style: decimal;
   }
-  .prose-flowforge .markdown-body li {
+  .prose-allen .markdown-body li {
     margin-top: 0.15rem;
     margin-bottom: 0.15rem;
     line-height: 1.55;
   }
-  .prose-flowforge .markdown-body strong {
+  .prose-allen .markdown-body strong {
     font-weight: 600;
     color: rgb(var(--color-text-primary));
   }
-  .prose-flowforge .markdown-body code:not(pre code) {
+  .prose-allen .markdown-body code:not(pre code) {
     font-size: 0.85em;
     padding: 0.15em 0.35em;
     border-radius: 3px;
     background: rgb(var(--color-surface-200) / 0.6);
     color: rgb(var(--color-text-secondary));
   }
-  .prose-flowforge .markdown-body hr {
+  .prose-allen .markdown-body hr {
     border: none;
     border-top: 1px solid rgb(var(--color-border) / 0.3);
     margin: 1rem 0;
   }
-  .prose-flowforge .markdown-body table {
+  .prose-allen .markdown-body table {
     border-collapse: collapse;
     margin: 0.5rem 0;
     font-size: 0.8rem;
     width: 100%;
   }
-  .prose-flowforge .markdown-body th,
-  .prose-flowforge .markdown-body td {
+  .prose-allen .markdown-body th,
+  .prose-allen .markdown-body td {
     border: 1px solid rgb(var(--color-border) / 0.3);
     padding: 0.35rem 0.6rem;
     text-align: left;
   }
-  .prose-flowforge .markdown-body th {
+  .prose-allen .markdown-body th {
     background: rgb(var(--color-surface-200) / 0.4);
     font-weight: 600;
     color: rgb(var(--color-text-primary));
   }
 
   /* ─── Chat message entry animation ─── */
-  .ff-msg-enter {
-    animation: ff-msg-enter 0.3s ease-out;
+  .al-msg-enter {
+    animation: al-msg-enter 0.3s ease-out;
   }
 
   /* ─── Agent icon streaming animation ─── */
-  .ff-agent-thinking {
-    animation: ff-agent-glow 2s ease-in-out infinite, ff-agent-spin 3s linear infinite;
+  .al-agent-thinking {
+    animation: al-agent-glow 2s ease-in-out infinite, al-agent-spin 3s linear infinite;
   }
 }
 
@@ -318,17 +318,17 @@
   }
 }
 
-@keyframes ff-msg-enter {
+@keyframes al-msg-enter {
   from { opacity: 0; transform: translateY(0.5rem); }
   to { opacity: 1; transform: translateY(0); }
 }
 
-@keyframes ff-agent-glow {
+@keyframes al-agent-glow {
   0%, 100% { filter: drop-shadow(0 0 2px rgb(var(--color-accent) / 0.3)); }
   50% { filter: drop-shadow(0 0 8px rgb(var(--color-accent) / 0.6)); }
 }
 
-@keyframes ff-agent-spin {
+@keyframes al-agent-spin {
   0% { transform: rotate(0deg) scale(1); }
   25% { transform: rotate(5deg) scale(1.05); }
   50% { transform: rotate(0deg) scale(1); }

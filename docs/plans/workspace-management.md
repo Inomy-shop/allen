@@ -3,7 +3,7 @@
 ## Goal
 
 1. **Workspaces** — isolated git worktrees with terminal, diff, preview, and agent integration
-2. **PR Management** — view, create, test, and manage PRs from FlowForge
+2. **PR Management** — view, create, test, and manage PRs from Allen
 3. **Configurable lifecycle hooks** — setup/cleanup scripts per repo
 4. **Sandbox preview** — run full-stack apps in workspace, preview through reverse proxy
 5. **Works everywhere** — same behavior on localhost and deployed EC2/server
@@ -12,20 +12,20 @@
 
 ## Core Architecture: Everything Through One Origin
 
-All workspace features (terminal, preview, API) are proxied through the FlowForge server. The browser ONLY talks to the FlowForge URL — never to internal ports directly.
+All workspace features (terminal, preview, API) are proxied through the Allen server. The browser ONLY talks to the Allen URL — never to internal ports directly.
 
 ```
-Browser (localhost:4023 OR flowforge.company.com)
+Browser (localhost:4023 OR allen.company.com)
   │
-  ├─ /app/*                              → FlowForge UI (static)
-  ├─ /api/*                              → FlowForge API
+  ├─ /app/*                              → Allen UI (static)
+  ├─ /api/*                              → Allen API
   ├─ /api/workspaces/:id/preview/*       → Reverse proxy → internal port on same machine
   ├─ /api/workspaces/:id/preview-ws/*    → WebSocket proxy (HMR/live reload)
   └─ /ws/workspaces/:id/terminal/:tid    → WebSocket PTY (terminal)
 ```
 
 **Why this works on both local and deployed:**
-- Browser connects to FlowForge server URL (only changes between environments)
+- Browser connects to Allen server URL (only changes between environments)
 - Express server proxies to `localhost:{port}` internally on the SAME machine
 - Terminal WebSocket goes through the same origin
 - Vite HMR WebSocket also proxied — no CORS, no port exposure
@@ -44,7 +44,7 @@ interface Workspace {
   repoId: string;
   repoName: string;
   repoPath: string;                // original repo path
-  worktreePath: string;            // /tmp/flowforge-workspaces/<id>
+  worktreePath: string;            // /tmp/allen-workspaces/<id>
   branch: string;                  // "feature/light-theme"
   baseBranch: string;              // "main"
   status: 'creating' | 'setting_up' | 'active' | 'running' | 'archiving' | 'archived' | 'failed';
@@ -145,7 +145,7 @@ interface PullRequest {
   author: string;
   url: string;
   
-  // FlowForge metadata
+  // Allen metadata
   createdByAgent?: string;
   chatSessionId?: string;
   workspaceId?: string;
@@ -167,7 +167,7 @@ interface PullRequest {
 ## Workspace Config UI (Repo Settings)
 
 ```
-┌─ Repo: flowforge ─────────────────────────────────────────────┐
+┌─ Repo: allen ─────────────────────────────────────────────┐
 │                                                                │
 │  WORKSPACE CONFIGURATION                                       │
 │                                                                │
@@ -222,7 +222,7 @@ interface PullRequest {
 ## Workspace Detail Page
 
 ```
-┌─ feature/light-theme ─── flowforge ─── ● active ─────────────────────┐
+┌─ feature/light-theme ─── allen ─── ● active ─────────────────────┐
 │ Branch: feature/light-theme → main  |  3 files changed  |  +145 -23  │
 │ [Commit]  [Push]  [Create PR]  [Archive]                              │
 ├───────────────┬───────────────────────────────────────────────────────┤
@@ -247,9 +247,9 @@ interface PullRequest {
 ├───────────────┴───────────────────────────────────────────────────────┤
 │ Terminal 1  [Terminal 2]  [+]                                          │
 │ ┌─────────────────────────────────────────────────────────────────┐   │
-│ │ ~/flowforge-workspaces/abc123 $                                  │   │
+│ │ ~/allen-workspaces/abc123 $                                  │   │
 │ │ $ npm run dev                                                    │   │
-│ │ > flowforge-ui@1.0.0 dev                                        │   │
+│ │ > allen-ui@1.0.0 dev                                        │   │
 │ │ > vite                                                           │   │
 │ │ VITE v5.0.0 ready in 340ms                                      │   │
 │ │   ➜ Local: http://localhost:15000/                               │   │
@@ -275,7 +275,7 @@ interface PullRequest {
 ├──────────────────────────────────────────────────────────────────────┤
 │                                                                       │
 │  #42  Add light theme support                              ● Open    │
-│  flowforge · feature/light-theme → main · 🤖 agent:engineer          │
+│  allen · feature/light-theme → main · 🤖 agent:engineer          │
 │  2h ago · 3 files · +145 -23                                          │
 │  [Open Workspace]  [View Diff]  [GitHub ↗]                           │
 │  ──────────────────────────────────────────────────────────────────   │
@@ -287,7 +287,7 @@ interface PullRequest {
 │  ──────────────────────────────────────────────────────────────────   │
 │                                                                       │
 │  #35  Update API documentation                            ✅ Merged   │
-│  flowforge · docs/api-update → main · 🤖 agent:coding-writer         │
+│  allen · docs/api-update → main · 🤖 agent:coding-writer         │
 │  3d ago · 5 files · +89 -12                                           │
 │                                                                       │
 └──────────────────────────────────────────────────────────────────────┘
@@ -298,7 +298,7 @@ interface PullRequest {
 ```
 1. Click "Open Workspace" on PR #42
 2. → git fetch origin feature/light-theme
-3. → git worktree add /tmp/flowforge-workspaces/<id> feature/light-theme
+3. → git worktree add /tmp/allen-workspaces/<id> feature/light-theme
 4. → Run repo's setupScript (npm install, etc.)
 5. → Auto-start services if configured
 6. → Link workspace to PR
@@ -341,7 +341,7 @@ app.use('/api/workspaces/:id/preview-ws', async (req, res, next) => {
 ### How HMR Works Through Proxy
 
 1. Vite dev server runs on `localhost:15000` inside workspace
-2. Vite's HMR WebSocket connects to the same origin (the FlowForge URL)
+2. Vite's HMR WebSocket connects to the same origin (the Allen URL)
 3. Browser sends WS to `/api/workspaces/:id/preview-ws/`
 4. Express proxies WS to `localhost:15000`
 5. Vite sends file change notification → browser hot-reloads

@@ -76,7 +76,7 @@ async function syncAllToCodex(service: McpService, db: Db): Promise<void> {
     const lines = existing.split('\n').filter(l => l.trim() && !l.startsWith('Name'));
     for (const line of lines) {
       const name = line.split(/\s+/)[0];
-      if (name && !dbNames.has(name) && name !== 'flowforge') {
+      if (name && !dbNames.has(name) && name !== 'allen') {
         await execFileAsync('codex', ['mcp', 'remove', name], { timeout: 5000 }).catch(() => {});
       }
     }

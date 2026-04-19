@@ -1,6 +1,6 @@
 # Authentication
 
-FlowForge is **invite-only**. There is no public signup. An admin bootstraps
+Allen is **invite-only**. There is no public signup. An admin bootstraps
 the first account from environment variables, then invites additional team
 members from the UI.
 
@@ -47,7 +47,7 @@ Passwords must be at least **8 characters** and contain:
 
 ## Sessions & tokens
 
-FlowForge uses JWT access + refresh tokens:
+Allen uses JWT access + refresh tokens:
 
 - **Access token**: 1 day (`ACCESS_TOKEN_TTL`). Held in memory in the browser.
 - **Refresh token**: 7 days (`REFRESH_TOKEN_TTL`). Stored in `localStorage`.

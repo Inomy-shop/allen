@@ -3,6 +3,7 @@ import { promisify } from 'node:util';
 import { mkdtemp } from 'node:fs/promises';
 import { join } from 'node:path';
 import { resolveWorktreeCacheDir } from '../paths.js';
+import { BRAND_NAME, GIT_BRANCH_PREFIX } from '../brand.js';
 import type { BuiltInFunction } from '../types.js';
 
 const exec = promisify(execFile);
@@ -19,9 +20,9 @@ export const gitCreateBranch: BuiltInFunction = async (config, state) => {
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, '-')
     .slice(0, 40);
-  const branchName = `flowforge/${taskSlug}-${Date.now().toString(36)}`;
+  const branchName = `${GIT_BRANCH_PREFIX}/${taskSlug}-${Date.now().toString(36)}`;
 
-  // Worktree goes under the persistent flowforge root — same parent as
+  // Worktree goes under the persistent allen root — same parent as
   // user-managed workspaces/repos so nothing lands in tmpfs-mounted /tmp.
   const worktreePath = await mkdtemp(join(resolveWorktreeCacheDir(), 'exec-'));
 
@@ -32,7 +33,7 @@ export const gitCreateBranch: BuiltInFunction = async (config, state) => {
 
 export const gitCommit: BuiltInFunction = async (config, state) => {
   const cwd = (state.worktree_path as string) ?? process.cwd();
-  const message = (config.message as string) ?? (state.summary as string) ?? 'FlowForge: automated changes';
+  const message = (config.message as string) ?? (state.summary as string) ?? `${BRAND_NAME}: automated changes`;
 
   await git(['add', '-A'], cwd);
   const status = await git(['status', '--porcelain'], cwd);
@@ -53,7 +54,7 @@ export const gitPush: BuiltInFunction = async (_config, state) => {
 
 export const gitCreatePR: BuiltInFunction = async (config, state) => {
   const cwd = (state.worktree_path as string) ?? process.cwd();
-  const title = (config.title as string) ?? (state.summary as string) ?? 'FlowForge PR';
+  const title = (config.title as string) ?? (state.summary as string) ?? `${BRAND_NAME} PR`;
   const body = (config.body as string) ?? '';
   const base = (config.base as string) ?? 'main';
 

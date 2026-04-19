@@ -3,7 +3,7 @@ import { basename, join } from 'node:path';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import type { Collection, Db } from 'mongodb';
-import { resolveRepositoriesDir } from '@flowforge/engine';
+import { resolveRepositoriesDir } from '@allen/engine';
 import { scanRepo } from './repo-scanner.js';
 import { RepoContextScannerService } from './repo-context-scanner.service.js';
 
@@ -113,7 +113,7 @@ export class RepoService {
    * Clone a repo from a GitHub URL and register it.
    * 1. Parse URL → SSH clone URL + repo name
    * 2. Check for duplicates (name in DB + directory on disk)
-   * 3. git clone via SSH to <FLOWFORGE_HOME>/repositories/<repo-name>
+   * 3. git clone via SSH to <ALLEN_HOME>/repositories/<repo-name>
    * 4. git checkout the specified branch
    * 5. Scan the repo
    * 6. Save to DB

@@ -18,13 +18,13 @@ export function chatRoutes(db: Db): Router {
     res.json({ cancelled, sessionId });
   });
 
-  // POST /api/chat/spawn-agent — Execute spawn_agent tool via API (used by FlowForge MCP server)
+  // POST /api/chat/spawn-agent — Execute spawn_agent tool via API (used by Allen MCP server)
   router.post('/spawn-agent', async (req: Request, res: Response) => {
     try {
       const {
         agent_name, prompt, repo_path, session_id,
-        // Spawn-tree linkage forwarded from the FlowForge MCP server's env.
-        // The MCP server reads FLOWFORGE_PARENT_EXECUTION_ID / _CALLER /
+        // Spawn-tree linkage forwarded from the Allen MCP server's env.
+        // The MCP server reads ALLEN_PARENT_EXECUTION_ID / _CALLER /
         // _ROOT_EXECUTION_ID from its subprocess env and puts them here so
         // chat-tools can build the caller-qualified workflowName and set
         // parentExecutionId / rootExecutionId on the spawned row.
@@ -42,10 +42,10 @@ export function chatRoutes(db: Db): Router {
   });
 
   // POST /api/chat/tools/:toolName — Generic chat-tool dispatcher.
-  // The FlowForge MCP server forwards unknown tool calls here, so any tool
+  // The Allen MCP server forwards unknown tool calls here, so any tool
   // registered in chatTools[] (including the phase-4 meta tools like
   // create_team, create_agent, etc.) is auto-callable from spawned agents
-  // without needing a hardcoded case in flowforge-mcp-server.ts.
+  // without needing a hardcoded case in allen-mcp-server.ts.
   // Permission gating happens INSIDE each tool's execute() function — meta
   // tools check the active session's currentAgent against an allow-list.
   router.post('/tools/:toolName', async (req: Request, res: Response) => {
@@ -59,7 +59,7 @@ export function chatRoutes(db: Db): Router {
     }
   });
 
-  // POST /api/chat/delegate — Execute delegation tools via API (used by FlowForge MCP server)
+  // POST /api/chat/delegate — Execute delegation tools via API (used by Allen MCP server)
   router.post('/delegate', async (req: Request, res: Response) => {
     try {
       const { tool, agent_name, task, context, conversation_id, answer } = req.body;

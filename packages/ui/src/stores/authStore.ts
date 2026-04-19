@@ -23,7 +23,7 @@ interface AuthState {
   clear: () => void;
 }
 
-const STORAGE_KEY = 'flowforge.auth.v1';
+const STORAGE_KEY = 'allen.auth.v1';
 
 interface StoredSession {
   accessToken: string;

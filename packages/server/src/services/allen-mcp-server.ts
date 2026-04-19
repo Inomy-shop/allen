@@ -1,18 +1,20 @@
 #!/usr/bin/env node
 /**
- * FlowForge MCP Server
+ * Allen MCP Server
  * Exposes all 16 built-in chat tools as an MCP server (stdio transport).
  * Both Codex CLI and Claude CLI can connect to this as a native MCP server.
  *
- * Usage: node flowforge-mcp-server.js
- * Env: FLOWFORGE_API_URL (default: http://localhost:4023)
+ * Usage: node allen-mcp-server.js
+ * Env: ALLEN_API_URL (default: http://localhost:4023)
  */
 
 // This runs as a standalone process — communicates via stdin/stdout JSON-RPC.
-// It calls the FlowForge API (HTTP) to execute tools instead of importing chat-tools.ts directly.
+// It calls the Allen API (HTTP) to execute tools instead of importing chat-tools.ts directly.
 // This way it works without a database connection — just needs the API server running.
 
-const API_BASE = process.env.FLOWFORGE_API_URL ?? `http://localhost:${process.env.PORT ?? '4023'}`;
+import { BRAND_NAME, MCP_SERVER_NAME } from '@allen/engine';
+
+const API_BASE = process.env.ALLEN_API_URL ?? `http://localhost:${process.env.PORT ?? '4023'}`;
 
 // Spawn-tree context — passed in by whoever launched this MCP server (a
 // workflow node's claude-cli, or an already-spawned agent's claude-cli).
@@ -20,9 +22,9 @@ const API_BASE = process.env.FLOWFORGE_API_URL ?? `http://localhost:${process.en
 // env to its stdio MCP children. When this process invokes `spawn_agent`,
 // we forward them to the HTTP endpoint so chat-tools can record
 // parent/root linkage on the newly-created execution row.
-const SPAWN_PARENT_EXECUTION_ID = process.env.FLOWFORGE_PARENT_EXECUTION_ID || undefined;
-const SPAWN_PARENT_CALLER = process.env.FLOWFORGE_PARENT_CALLER || undefined;
-const SPAWN_ROOT_EXECUTION_ID = process.env.FLOWFORGE_ROOT_EXECUTION_ID || undefined;
+const SPAWN_PARENT_EXECUTION_ID = process.env.ALLEN_PARENT_EXECUTION_ID || undefined;
+const SPAWN_PARENT_CALLER = process.env.ALLEN_PARENT_CALLER || undefined;
+const SPAWN_ROOT_EXECUTION_ID = process.env.ALLEN_ROOT_EXECUTION_ID || undefined;
 
 // ── Auth: mint a short-lived JWT using the shared secret ──
 // The MCP server runs as a child process of the main server and shares
@@ -59,7 +61,7 @@ function getAuthToken(): string | null {
 
 // Wrap the global fetch so every call made from this module — including
 // the many ad-hoc fetch(...) calls in executeTool — automatically carries
-// the Authorization header when talking to the FlowForge API.
+// the Authorization header when talking to the Allen API.
 type FetchInput = Parameters<typeof fetch>[0];
 const originalFetch = globalThis.fetch.bind(globalThis);
 globalThis.fetch = async (input: FetchInput, init?: RequestInit): Promise<Response> => {
@@ -164,7 +166,7 @@ const TOOLS = [
   { name: 'query_database', description: 'Read-only MongoDB query. Allowed collections: workflows, executions, agents, repos, learnings, chat_sessions, execution_logs, node_traces.', params: { collection: 'string (required)', filter: 'object', projection: 'object', sort: 'object', limit: 'number (max 20)' } },
 
   // ── File upload ──
-  { name: 'upload_file', description: 'Upload a file to FlowForge storage. Returns a permanent public URL.', params: { content: 'string (required) — file content', filename: 'string (required) — e.g. "report.md"', mime_type: 'string — MIME type (default: text/plain)' } },
+  { name: 'upload_file', description: 'Upload a file to Allen storage. Returns a permanent public URL.', params: { content: 'string (required) — file content', filename: 'string (required) — e.g. "report.md"', mime_type: 'string — MIME type (default: text/plain)' } },
 ];
 
 // ── API Call Helper ──
@@ -530,7 +532,7 @@ async function handleMessage(msg: { jsonrpc: string; id: string | number; method
       return {
         protocolVersion: '2024-11-05',
         capabilities: { tools: {} },
-        serverInfo: { name: 'flowforge', version: '1.0.0' },
+        serverInfo: { name: MCP_SERVER_NAME, version: '1.0.0' },
       };
 
     case 'notifications/initialized':
@@ -575,7 +577,7 @@ async function handleMessage(msg: { jsonrpc: string; id: string | number; method
 
 // ── Stdio Transport ──
 
-process.stderr.write('FlowForge MCP server running on stdio\n');
+process.stderr.write(`${BRAND_NAME} MCP server running on stdio\n`);
 
 let buffer = '';
 process.stdin.setEncoding('utf8');

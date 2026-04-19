@@ -5,6 +5,7 @@ import ChatInput from '../components/chat/ChatInput';
 import ChatMessageList from '../components/chat/ChatMessageList';
 import CommandPalette from '../components/chat/CommandPalette';
 import ConversationLogs from '../components/chat/ConversationLogs';
+import { CHAT_TITLE, CHAT_EMPTY_PROMPT } from '../lib/brand';
 import {
   MessageSquare, Command, Server, ScrollText, Users,
   Sparkles, Zap, BarChart3, Terminal, FolderOpen, AlertTriangle, Bot,
@@ -194,7 +195,7 @@ export default function ChatPage() {
         <div className="flex items-center gap-2">
           <MessageSquare className="w-4 h-4 text-accent-blue" />
           <span className="font-heading text-sm font-bold text-theme-primary tracking-wider">
-            {activeSessionId ? activeSession?.title ?? 'Chat' : 'FlowForge Chat'}
+            {activeSessionId ? activeSession?.title ?? 'Chat' : CHAT_TITLE}
           </span>
           {activeSessionId && activeProvider && (
             <span className={`text-[10px] font-mono px-1.5 py-0.5 rounded bg-surface-200/40 ${PROVIDER_DISPLAY[activeProvider]?.color ?? 'text-theme-muted'}`}>
@@ -243,7 +244,7 @@ export default function ChatPage() {
 
           {/* Headline */}
           <h2 className="font-heading text-xl text-theme-primary tracking-wide mb-2">
-            Start a conversation with FlowForge Assistant.
+            {CHAT_EMPTY_PROMPT}
           </h2>
           <p className="text-sm text-theme-muted font-body mb-10">
             Use <span className="text-accent-blue font-mono">@mentions</span> to reference workflows, repos, and agents.

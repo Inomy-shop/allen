@@ -2,7 +2,7 @@
 
 ## Overview
 
-Simplify FlowForge's org chart from 11 teams / 62 agents to **5 teams / 20 agents**.
+Simplify Allen's org chart from 11 teams / 62 agents to **5 teams / 20 agents**.
 Replace all 7 existing workflow YAMLs with a single universal `coding-workflow.yml` that:
 
 - Works on any repo type (fullstack, backend-only, frontend-only, mobile, CLI, infra, data, library)
@@ -680,7 +680,7 @@ system: |
      - No hardcoded secrets, API keys, passwords, or tokens anywhere
      - Secrets loaded from environment variables or secret manager
      - Secrets never logged, never in error messages, never in git history
-     - New secrets properly added to secret storage (FlowForge's secrets collection)
+     - New secrets properly added to secret storage (Allen's secrets collection)
 
   5. CRYPTOGRAPHY
      - Strong algorithms only (AES-256-GCM, not DES/RC4)
@@ -1265,7 +1265,7 @@ Replace the hand-written delegation sections in every lead's `system` prompt wit
     * Output style:
     *   - Flat (no `### Team` subheads — one section per team as a bold line)
     *   - Every agent shows `name — description` (no capability tags)
-    *   - Meta team included so CEO / FlowForge Assistant know the builders exist
+    *   - Meta team included so CEO / Allen Assistant know the builders exist
     */
    export async function buildOrgContextBlock(
      db: Db,
@@ -1416,13 +1416,13 @@ Replace the hand-written delegation sections in every lead's `system` prompt wit
    Pick the most specific target. Do NOT do the work yourself if a specialist exists.
    ```
 
-   **For `FlowForge Assistant` (default, no agent selected):** only the `## Organisation` block (no `## Your delegation targets` section, since the Assistant uses `spawn_agent` / `run_workflow` not `delegate_to_agent`).
+   **For `Allen Assistant` (default, no agent selected):** only the `## Organisation` block (no `## Your delegation targets` section, since the Assistant uses `spawn_agent` / `run_workflow` not `delegate_to_agent`).
 
 3. **Modify `chat.service.ts`**
 
    - **`buildAgentSystemPrompt` (line 692-777):** replace the flat `canDelegateTo.join(', ')` line (712-713) with a call to `buildOrgContextBlock(db, { forAgent: agentName, includeFullChart: true })`. Every chat message to a lead (ceo, engineering-lead, product-manager, qa-lead) now gets the live org chart + description-rich per-target list.
 
-   - **`getSystemPrompt` (FlowForge Assistant default, line 117-229):** after the `base` prompt and before the `reposBlock`, insert the org chart via `buildOrgContextBlock(db, { includeFullChart: true })`. The assistant no longer needs the hand-written "TEAM BUILDER ROUTING" hints to know which lead handles which domain — it reads it from the DB every request.
+   - **`getSystemPrompt` (Allen Assistant default, line 117-229):** after the `base` prompt and before the `reposBlock`, insert the org chart via `buildOrgContextBlock(db, { includeFullChart: true })`. The assistant no longer needs the hand-written "TEAM BUILDER ROUTING" hints to know which lead handles which domain — it reads it from the DB every request.
 
 4. **Modify `packages/engine/src/node-executor.ts`** (workflow agent calls)
 
@@ -1466,7 +1466,7 @@ Replace the hand-written delegation sections in every lead's `system` prompt wit
 | Add a new specialist | Edit lead's `system` prompt text + `canDelegateTo` | Edit `canDelegateTo` only |
 | Rename an agent | Edit every mention in every `system` prompt | Zero edits (read from DB) |
 | Lead knows specialist capabilities | No — just a name | Yes — capabilities injected per call |
-| FlowForge Assistant knows org chart | No (hardcoded hints) | Yes (live chart) |
+| Allen Assistant knows org chart | No (hardcoded hints) | Yes (live chart) |
 | Consistent chat vs workflow behavior | No — different prompt assembly | Yes — same `buildOrgContextBlock` helper |
 | Cost | One extra DB read per message (~5ms) | Negligible |
 
@@ -1486,7 +1486,7 @@ When the user approves this plan doc, the following file changes will be made.
 | File | What |
 |---|---|
 | `packages/server/src/services/org-seed.ts` | Remove 47 agents, remove 7 teams, add 1 team (`engineering`), add 7 agents, move 2 agents to engineering team, update `canDelegateTo` lists on remaining leads, strip hand-written delegation target descriptions from all lead `system` prompts, **add `description: string` field to every remaining agent (20) and every remaining team (5)** — one-sentence explanation used by `buildOrgContextBlock` |
-| `packages/server/src/services/chat.service.ts` | `buildAgentSystemPrompt` (line 692) — replace flat `canDelegateTo.join(', ')` (line 713) with `buildOrgContextBlock(db, { forAgent, includeFullChart: true })`. `getSystemPrompt` (line 117) — inject `buildOrgContextBlock(db, { includeFullChart: true })` into the FlowForge Assistant default prompt before `reposBlock` |
+| `packages/server/src/services/chat.service.ts` | `buildAgentSystemPrompt` (line 692) — replace flat `canDelegateTo.join(', ')` (line 713) with `buildOrgContextBlock(db, { forAgent, includeFullChart: true })`. `getSystemPrompt` (line 117) — inject `buildOrgContextBlock(db, { includeFullChart: true })` into the Allen Assistant default prompt before `reposBlock` |
 | `packages/engine/src/node-executor.ts` | When building `customSystemPrompt` for a workflow agent call, append `buildOrgContextBlock(db, { forAgent: agent.name, includeFullChart: true })` so workflow-mode agents see the same live org chart as chat-mode agents |
 | `packages/server/src/app.ts` | Import and call `cleanupOrphanedSeedEntities` after seed |
 | `packages/server/src/services/execution.service.ts` OR `packages/engine/src/engine.ts` | Save failure report to DB when status becomes `failed` |

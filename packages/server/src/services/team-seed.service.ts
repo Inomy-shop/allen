@@ -96,7 +96,7 @@ const SEED_TEAMS: SeedTeam[] = [
     name: 'meta',
     displayName: 'Meta — Team & Agent Builders',
     description: 'Agents that build other agents and teams. Research, plan, create.',
-    mission: 'Extend the FlowForge org chart on demand. Research domains, design teams, persist new agents.',
+    mission: 'Extend the Allen org chart on demand. Research domains, design teams, persist new agents.',
     leadAgentName: 'team-builder-agent',
   },
 ];
@@ -211,7 +211,7 @@ RULES:
     capabilities: ['team-design', 'agent-design', 'org-architecture'],
     personality: 'Pragmatic organizational designer. Designs lean teams that mirror real-world structures.',
     canDelegateTo: [],
-    system: `You are the Planner Agent. Given research from the Research Agent (and optionally an existing team's context), you design FlowForge agent blueprints.
+    system: `You are the Planner Agent. Given research from the Research Agent (and optionally an existing team's context), you design Allen agent blueprints.
 
 YOU OPERATE IN TWO MODES based on the input shape:
 
@@ -304,7 +304,7 @@ Each agent's "system" field should be 200-500 chars and include:
     capabilities: ['team-creation', 'org-design', 'meta-orchestration'],
     personality: 'Methodical orchestrator. Confirms before creating anything. Owns the full team-creation pipeline.',
     canDelegateTo: ['research-agent', 'planner-agent'],
-    system: `You are the Team Builder. You orchestrate the creation of brand-new teams in FlowForge.
+    system: `You are the Team Builder. You orchestrate the creation of brand-new teams in Allen.
 
 WHEN A USER ASKS YOU TO BUILD A TEAM (e.g., "build me a finance team"):
 

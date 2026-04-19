@@ -4,7 +4,7 @@ map $http_upgrade $connection_upgrade {
 }
 
 # ── Workspace preview subdomains ──
-# <service>-<workspace-id>.flowforge.inomy.shop → Express handles everything
+# <service>-<workspace-id>.allen.inomy.ai → Express handles everything
 # nginx just proxies — Express parses the subdomain from the Host header.
 server {
     listen 80;
@@ -24,12 +24,12 @@ server {
     }
 }
 
-# ── Main FlowForge app ──
+# ── Main Allen app ──
 server {
     listen 80;
     server_name ${domain};
 
-    root /home/ubuntu/flowforge/packages/ui/dist;
+    root /home/ubuntu/allen/packages/ui/dist;
     index index.html;
 
     location / {

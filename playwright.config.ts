@@ -58,7 +58,7 @@ export default defineConfig({
     ? undefined
     : [
         {
-          command: 'npm run dev --workspace=@flowforge/server',
+          command: 'npm run dev --workspace=@allen/server',
           url: `http://localhost:${API_PORT}/api/health`,
           timeout: 120_000,
           reuseExistingServer: true,
@@ -67,7 +67,7 @@ export default defineConfig({
           env: { PORT: API_PORT },
         },
         {
-          command: 'npm run dev --workspace=@flowforge/ui',
+          command: 'npm run dev --workspace=@allen/ui',
           url: `http://localhost:${UI_PORT}`,
           timeout: 120_000,
           reuseExistingServer: true,

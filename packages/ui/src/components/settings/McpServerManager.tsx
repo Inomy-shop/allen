@@ -179,7 +179,7 @@ function ServerCard({
 
 /** Sentinel used in env/arg values to indicate "look up this secret at spawn time" */
 const SECRET_REF_PREFIX = '@secret:';
-const FLOWFORGE_PREFIX = 'FLOWFORGE_';
+const ALLEN_PREFIX = 'ALLEN_';
 
 /**
  * One field in the preset form. Always references a secret (by key).
@@ -189,7 +189,7 @@ const FLOWFORGE_PREFIX = 'FLOWFORGE_';
 type FieldState = { selectedKey: string };
 
 /**
- * Inline dialog to create a new FLOWFORGE_-prefixed secret without leaving
+ * Inline dialog to create a new ALLEN_-prefixed secret without leaving
  * the MCP add-server flow.
  */
 function NewSecretDialog({
@@ -206,7 +206,7 @@ function NewSecretDialog({
 
   const handleSave = async () => {
     if (!key.trim() || !value.trim()) return;
-    const finalKey = key.startsWith(FLOWFORGE_PREFIX) ? key : FLOWFORGE_PREFIX + key;
+    const finalKey = key.startsWith(ALLEN_PREFIX) ? key : ALLEN_PREFIX + key;
     setSaving(true); setError('');
     try {
       await secretsApi.create(finalKey, value);
@@ -229,11 +229,11 @@ function NewSecretDialog({
             <input
               value={key}
               onChange={e => setKey(e.target.value.toUpperCase().replace(/[^A-Z0-9_]/g, ''))}
-              placeholder="FLOWFORGE_MY_TOKEN"
+              placeholder="ALLEN_MY_TOKEN"
               autoFocus
               className="w-full bg-surface-200/50 border border-border/30 rounded-sm px-3 py-1.5 text-sm text-theme-primary font-mono"
             />
-            <p className="text-[9px] text-theme-subtle mt-0.5">Auto-prefixed with FLOWFORGE_ if missing.</p>
+            <p className="text-[9px] text-theme-subtle mt-0.5">Auto-prefixed with ALLEN_ if missing.</p>
           </div>
           <div>
             <label className="text-[10px] font-label uppercase tracking-wider text-theme-muted mb-1 block">Value</label>
@@ -260,22 +260,22 @@ function NewSecretDialog({
 }
 
 /**
- * Dropdown to pick an existing FLOWFORGE_-prefixed secret, with an inline
+ * Dropdown to pick an existing ALLEN_-prefixed secret, with an inline
  * "+ New secret" option that opens NewSecretDialog.
  */
 function SecretPicker({
-  fieldKey, state, flowforgeSecrets, onChange, onSecretCreated,
+  fieldKey, state, allenSecrets, onChange, onSecretCreated,
 }: {
   fieldKey: string;
   state: FieldState;
-  flowforgeSecrets: string[];
+  allenSecrets: string[];
   onChange: (next: FieldState) => void;
   onSecretCreated: (key: string) => void;
 }) {
   const [showNew, setShowNew] = useState(false);
-  // Default key suggestion: if fieldKey already starts with FLOWFORGE_, use it;
+  // Default key suggestion: if fieldKey already starts with ALLEN_, use it;
   // otherwise prefix it.
-  const defaultNewKey = fieldKey.startsWith(FLOWFORGE_PREFIX) ? fieldKey : FLOWFORGE_PREFIX + fieldKey;
+  const defaultNewKey = fieldKey.startsWith(ALLEN_PREFIX) ? fieldKey : ALLEN_PREFIX + fieldKey;
 
   return (
     <div>
@@ -290,7 +290,7 @@ function SecretPicker({
           className="flex-1 bg-surface-200/50 border border-border/30 rounded-sm px-3 py-1.5 text-sm text-theme-primary font-mono focus:outline-none focus:border-accent-blue/50"
         >
           <option value="">— select secret —</option>
-          {flowforgeSecrets.map(k => (
+          {allenSecrets.map(k => (
             <option key={k} value={k}>{k}</option>
           ))}
           <option value="__new__">+ New secret…</option>
@@ -317,10 +317,10 @@ function SecretPicker({
 }
 
 function AddFromPreset({
-  presets, flowforgeSecrets, onSecretCreated, onAdd,
+  presets, allenSecrets, onSecretCreated, onAdd,
 }: {
   presets: McpPreset[];
-  flowforgeSecrets: string[];
+  allenSecrets: string[];
   onSecretCreated: (key: string) => void;
   onAdd: (preset: McpPreset, envFields: Record<string, FieldState>, argFields: Record<string, FieldState>) => void;
 }) {
@@ -329,16 +329,16 @@ function AddFromPreset({
   const [argFields, setArgFields] = useState<Record<string, FieldState>>({});
 
   // Initialize fields when a preset is picked. Auto-select a matching
-  // FLOWFORGE_-prefixed secret if one exists, otherwise leave empty (user
+  // ALLEN_-prefixed secret if one exists, otherwise leave empty (user
   // must pick one from the dropdown or create a new secret).
   const choosePreset = (p: McpPreset) => {
     const initEnv: Record<string, FieldState> = {};
     for (const k of p.envKeys) {
-      initEnv[k] = { selectedKey: flowforgeSecrets.includes(k) ? k : '' };
+      initEnv[k] = { selectedKey: allenSecrets.includes(k) ? k : '' };
     }
     const initArgs: Record<string, FieldState> = {};
     for (const k of (p.argKeys ?? [])) {
-      initArgs[k] = { selectedKey: flowforgeSecrets.includes(k) ? k : '' };
+      initArgs[k] = { selectedKey: allenSecrets.includes(k) ? k : '' };
     }
     setSelected(p);
     setEnvFields(initEnv);
@@ -381,7 +381,7 @@ function AddFromPreset({
           key={key}
           fieldKey={key}
           state={argFields[key] ?? { selectedKey: '' }}
-          flowforgeSecrets={flowforgeSecrets}
+          allenSecrets={allenSecrets}
           onSecretCreated={onSecretCreated}
           onChange={next => setArgFields(prev => ({ ...prev, [key]: next }))}
         />
@@ -393,7 +393,7 @@ function AddFromPreset({
           key={key}
           fieldKey={key}
           state={envFields[key] ?? { selectedKey: '' }}
-          flowforgeSecrets={flowforgeSecrets}
+          allenSecrets={allenSecrets}
           onSecretCreated={onSecretCreated}
           onChange={next => setEnvFields(prev => ({ ...prev, [key]: next }))}
         />
@@ -431,9 +431,9 @@ interface BundleMeta {
 type EnvRow = { id: number; name: string; selectedKey: string };
 
 function UploadBundleForm({
-  flowforgeSecrets, onSecretCreated, onAdded,
+  allenSecrets, onSecretCreated, onAdded,
 }: {
-  flowforgeSecrets: string[];
+  allenSecrets: string[];
   onSecretCreated: (key: string) => void;
   onAdded: () => void;
 }) {
@@ -689,7 +689,7 @@ function UploadBundleForm({
                 <SecretPicker
                   fieldKey={row.name || 'SECRET'}
                   state={{ selectedKey: row.selectedKey }}
-                  flowforgeSecrets={flowforgeSecrets}
+                  allenSecrets={allenSecrets}
                   onSecretCreated={onSecretCreated}
                   onChange={next => updateEnvRow(row.id, { selectedKey: next.selectedKey })}
                 />
@@ -732,7 +732,7 @@ function UploadBundleForm({
 export default function McpServerManager() {
   const [servers, setServers] = useState<McpServer[]>([]);
   const [presets, setPresets] = useState<McpPreset[]>([]);
-  const [flowforgeSecrets, setFlowforgeSecrets] = useState<string[]>([]);
+  const [allenSecrets, setAllenSecrets] = useState<string[]>([]);
   const [loading, setLoading] = useState(true);
   const [showAdd, setShowAdd] = useState(false);
   const [addMode, setAddMode] = useState<'preset' | 'bundle'>('preset');
@@ -747,8 +747,8 @@ export default function McpServerManager() {
       ]);
       setServers(s);
       setPresets(p);
-      // Only expose FLOWFORGE_-prefixed secrets to the MCP picker
-      setFlowforgeSecrets((secretsList ?? []).filter(k => k.startsWith(FLOWFORGE_PREFIX)).sort());
+      // Only expose ALLEN_-prefixed secrets to the MCP picker
+      setAllenSecrets((secretsList ?? []).filter(k => k.startsWith(ALLEN_PREFIX)).sort());
     } catch (e) {
       console.error('Failed to load MCP servers:', e);
     } finally {
@@ -757,7 +757,7 @@ export default function McpServerManager() {
   };
 
   const handleSecretCreated = (key: string) => {
-    setFlowforgeSecrets(prev => prev.includes(key) ? prev : [...prev, key].sort());
+    setAllenSecrets(prev => prev.includes(key) ? prev : [...prev, key].sort());
   };
 
   useEffect(() => { loadServers(); }, []);
@@ -873,14 +873,14 @@ export default function McpServerManager() {
           </div>
           {addMode === 'preset' && (
             availablePresets.length > 0 ? (
-              <AddFromPreset presets={availablePresets} flowforgeSecrets={flowforgeSecrets} onSecretCreated={handleSecretCreated} onAdd={handleAddPreset} />
+              <AddFromPreset presets={availablePresets} allenSecrets={allenSecrets} onSecretCreated={handleSecretCreated} onAdd={handleAddPreset} />
             ) : (
               <div className="text-xs text-theme-subtle">All preset servers have been added.</div>
             )
           )}
           {addMode === 'bundle' && (
             <UploadBundleForm
-              flowforgeSecrets={flowforgeSecrets}
+              allenSecrets={allenSecrets}
               onSecretCreated={handleSecretCreated}
               onAdded={() => { setShowAdd(false); void loadServers(); }}
             />

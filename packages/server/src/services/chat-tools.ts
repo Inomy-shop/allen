@@ -1,5 +1,5 @@
 /**
- * Chat Tools — Functions available to the FlowForge Chat assistant.
+ * Chat Tools — Functions available to the Allen Chat assistant.
  * Each tool has a name, description, input schema, and execute function.
  * The chat service registers these with the Anthropic Messages API for native tool calling.
  */
@@ -12,6 +12,7 @@ import { AgentConversationService } from './agent-conversation.service.js';
 import { metaChatTools, META_DESTRUCTIVE_TOOLS } from './chat-tools-meta.js';
 import { buildRepoContextBlock } from './repo-context-builder.js';
 import { AGENT_FALLBACK_CWD } from './chat-providers.js';
+import { MCP_SERVER_NAME } from '@allen/engine';
 
 /** Resolve cwd for agent/chat spawns. Never falls back to process.cwd() —
  * we don't want agents running inside the server's own source tree. */
@@ -29,7 +30,7 @@ function resolveAgentCwd(...candidates: Array<string | undefined>): string {
 export interface ActiveSessionContext {
   chatSessionId: string;
   parentMessageId: string;
-  /** Which agent is currently responding (undefined = FlowForge Assistant) */
+  /** Which agent is currently responding (undefined = Allen Assistant) */
   currentAgent?: string;
   /** Current delegation depth (0 = top-level chat, 1+ = delegated) */
   delegationDepth: number;
@@ -103,7 +104,7 @@ function toolDescription(tool: string, args: Record<string, unknown>): string {
     const parts = tool.split('__');
     const server = parts[1] ?? '';
     const fn = parts.slice(2).join('__');
-    // FlowForge MCP tools
+    // Allen MCP tools
     if (fn === 'list_workflows') return 'List workflows';
     if (fn === 'list_agents') return 'List agents';
     if (fn === 'list_repos') return 'List repos';
@@ -487,7 +488,7 @@ const spawnAgent: ChatTool = {
 
     // ── Spawn-tree linkage (Phase 1 of the workflow-spawn visibility plan) ──
     //
-    // The FlowForge MCP server propagates these three fields via env vars
+    // The Allen MCP server propagates these three fields via env vars
     // captured from whichever claude-cli subprocess launched it. For
     // workflow-node-initiated spawns they're set by node-executor.ts; for
     // nested spawns (a spawned agent spawning another) they're set below
@@ -673,11 +674,11 @@ async function runSpawnInBackground(
       });
     }
   };
-  liveLog({ type: 'started', content: `Agent ${agentName} spawned in ${repoPath || '/tmp/flowforge'}` });
+  liveLog({ type: 'started', content: `Agent ${agentName} spawned in ${repoPath || '/tmp/allen'}` });
 
   // Inject workspace constraint with port info
   let workspaceConstraint = '';
-  if (repoPath && repoPath !== '/tmp/flowforge') {
+  if (repoPath && repoPath !== '/tmp/allen') {
     let portInfo = '';
     try {
       const ws = await db.collection('workspaces').findOne({ worktreePath: repoPath, status: { $nin: ['archived', 'failed'] } });
@@ -825,7 +826,7 @@ async function runSpawnInBackground(
     } else {
       // ── Claude CLI with MCP ──
       const { query } = await import('@anthropic-ai/claude-code');
-      const { loadAllMcpServers } = await import('@flowforge/engine');
+      const { loadAllMcpServers } = await import('@allen/engine');
 
       // Spawn-tree env propagation for any grandchild spawn this agent
       // initiates. From the grandchild's perspective:
@@ -836,13 +837,13 @@ async function runSpawnInBackground(
       // Top-level chat-initiated spawns still populate these so grandchild
       // spawns form a proper tree rooted at this execution.
       const spawnContextEnv: Record<string, string> = {
-        FLOWFORGE_PARENT_EXECUTION_ID: executionId,
-        FLOWFORGE_PARENT_CALLER: agentName,
-        FLOWFORGE_ROOT_EXECUTION_ID: spawnTree?.rootExecutionId ?? executionId,
+        ALLEN_PARENT_EXECUTION_ID: executionId,
+        ALLEN_PARENT_CALLER: agentName,
+        ALLEN_ROOT_EXECUTION_ID: spawnTree?.rootExecutionId ?? executionId,
       };
 
       // Pass the spawn context directly into the MCP config loader so the
-      // FlowForge MCP server subprocess gets the vars in its own env dict —
+      // Allen MCP server subprocess gets the vars in its own env dict —
       // not relying on claude-cli's parent-env inheritance for MCP
       // children, which is implementation-defined.
       const mcpServers = await loadAllMcpServers(db, spawnContextEnv);
@@ -1013,7 +1014,7 @@ const getLearnings: ChatTool = {
 
 const queryDatabase: ChatTool = {
   name: 'query_database',
-  description: 'Run a read-only query against the FlowForge MongoDB database. Can query collections: workflows, executions, agents, repos, learnings, chat_sessions. Returns up to 20 results.',
+  description: 'Run a read-only query against the Allen MongoDB database. Can query collections: workflows, executions, agents, repos, learnings, chat_sessions. Returns up to 20 results.',
   inputSchema: {
     type: 'object',
     properties: {
@@ -1210,7 +1211,7 @@ const getExecutionLogs: ChatTool = {
 
 const getDashboardStats: ChatTool = {
   name: 'get_dashboard_stats',
-  description: 'Get FlowForge dashboard statistics: total workflows, executions, success rate, cost totals, active agents, registered repos.',
+  description: 'Get Allen dashboard statistics: total workflows, executions, success rate, cost totals, active agents, registered repos.',
   inputSchema: {
     type: 'object',
     properties: {},
@@ -1909,13 +1910,13 @@ async function runAgentTurn(
       const { resolve, dirname } = await import('node:path');
 
       const mcpServers: Record<string, unknown> = {};
-      const serverPath = resolve(dirname(new URL(import.meta.url).pathname), 'flowforge-mcp-server.ts');
-      mcpServers.flowforge = {
+      const serverPath = resolve(dirname(new URL(import.meta.url).pathname), 'allen-mcp-server.ts');
+      mcpServers[MCP_SERVER_NAME] = {
         type: 'stdio',
         command: 'npx',
         args: ['tsx', serverPath],
         env: {
-          FLOWFORGE_API_URL: `http://localhost:${process.env.PORT ?? '4023'}`,
+          ALLEN_API_URL: `http://localhost:${process.env.PORT ?? '4023'}`,
           JWT_ACCESS_SECRET: process.env.JWT_ACCESS_SECRET ?? '',
         },
       };
@@ -2034,7 +2035,7 @@ NEVER fabricate analysis. Every technical claim must come from an agent's actual
 
   parts.push(`\nBe concise. You are collaborating with another agent. Use structured output with headers and bullets.`);
 
-  if (cwd && cwd !== '/tmp/flowforge') {
+  if (cwd && cwd !== '/tmp/allen') {
     parts.push(`
 WORKSPACE CONSTRAINT:
 Your working directory is: ${cwd}
@@ -2150,7 +2151,7 @@ const createPullRequest: ChatTool = {
         repoId: ws.repoId, repoName: ws.repoName, repoPath: ws.repoPath,
         number: result.number, title, description: body,
         branch: ws.branch, baseBranch: ws.baseBranch,
-        status: 'open', author: 'flowforge-agent',
+        status: 'open', author: 'allen-agent',
         url: result.url, additions: 0, deletions: 0, changedFiles: 0, labels: [],
         createdByAgent: activeCtx?.currentAgent ?? 'assistant',
         chatSessionId: activeCtx?.chatSessionId,

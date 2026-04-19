@@ -1,5 +1,5 @@
 /**
- * Re-export embedding service from @flowforge/engine.
+ * Re-export embedding service from @allen/engine.
  * Single source of truth — engine and server use the same implementation.
  */
 export {
@@ -13,4 +13,4 @@ export {
   setEmbeddingProvider,
   getActiveProvider,
   type EmbeddingProvider,
-} from '@flowforge/engine';
+} from '@allen/engine';

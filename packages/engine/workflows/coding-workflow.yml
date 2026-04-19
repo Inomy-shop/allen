@@ -166,8 +166,8 @@ nodes:
       wait_for_setup: true
     outputs:
       worktree_path: "Absolute path to the isolated git worktree created for this execution. All implementers and validators work inside this directory."
-      branch_name: "Name of the new git branch created in the worktree (e.g. 'feature/ff-abc123-add-webhook')."
-      workspace_id: "Internal FlowForge workspace identifier for tracking and cleanup."
+      branch_name: "Name of the new git branch created in the worktree (e.g. 'allen/add-webhook-abc123')."
+      workspace_id: "Internal Allen workspace identifier for tracking and cleanup."
 
   # ─────────────────────────────────────────────────────────────────────
   # Phase 5 — Develop (engineering-lead coordinates backend / frontend

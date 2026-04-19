@@ -1,9 +1,9 @@
-# FlowForge Learning System: Comprehensive Research Report
+# Allen Learning System: Comprehensive Research Report
 
 ## Agent Memory & Learning Systems Across Industry and Open Source
 
 **Date:** April 2026
-**Purpose:** Research how leading AI agent platforms implement learning/memory systems, to inform FlowForge's learning system design.
+**Purpose:** Research how leading AI agent platforms implement learning/memory systems, to inform Allen's learning system design.
 **Scope:** 15+ systems analyzed across production platforms, open-source frameworks, academic research, and AI coding agents.
 
 ---
@@ -30,7 +30,7 @@
    - 2.16 [Cursor AI](#216-cursor-ai)
 3. [Comparative Analysis Table](#3-comparative-analysis-table)
 4. [Cross-Cutting Themes and Patterns](#4-cross-cutting-themes-and-patterns)
-5. [Recommendations for FlowForge](#5-recommendations-for-flowforge)
+5. [Recommendations for Allen](#5-recommendations-for-allen)
 6. [Sources](#6-sources)
 
 ---
@@ -41,11 +41,11 @@ The AI agent memory landscape in 2025-2026 has matured significantly. Systems ha
 
 **Convergence on tiered memory.** Nearly every production system now implements at least two tiers: in-context (working) memory and out-of-context (persistent) memory. The best systems add a third tier -- graph-structured or relational memory for entity relationships and temporal facts.
 
-**Extraction is the hardest problem.** Systems diverge most on how learnings are extracted. Three approaches exist: (a) agent self-reports learnings (Claude Code, FlowForge's current system), (b) a separate LLM pass extracts facts from conversation (Mem0, Zep, Bedrock AgentCore), (c) structured outputs are logged as skills (Voyager). Approach (b) is gaining traction as the most reliable.
+**Extraction is the hardest problem.** Systems diverge most on how learnings are extracted. Three approaches exist: (a) agent self-reports learnings (Claude Code, Allen's current system), (b) a separate LLM pass extracts facts from conversation (Mem0, Zep, Bedrock AgentCore), (c) structured outputs are logged as skills (Voyager). Approach (b) is gaining traction as the most reliable.
 
 **Contradiction handling separates production from prototype.** Mem0's ADD/UPDATE/DELETE/NOOP operations and Zep's temporal knowledge graph are the two leading approaches for handling facts that change over time. Systems without explicit contradiction handling (early LangGraph, basic CrewAI) accumulate conflicting memories that degrade agent performance.
 
-**Scoping is essential at scale.** Every multi-agent system that works in production has some form of memory scoping -- agent-level, team-level, project-level, or organization-level. FlowForge's existing three-tier scoping (agent/team/org) is well-aligned with industry best practice.
+**Scoping is essential at scale.** Every multi-agent system that works in production has some form of memory scoping -- agent-level, team-level, project-level, or organization-level. Allen's existing three-tier scoping (agent/team/org) is well-aligned with industry best practice.
 
 **The OS metaphor is winning.** Letta/MemGPT's framing of LLM context as RAM and external storage as disk has become the dominant mental model, adopted explicitly or implicitly by LangGraph, Bedrock AgentCore, and others.
 
@@ -473,7 +473,7 @@ Voyager's core innovation is an ever-growing skill library of executable code:
 - Vector similarity for retrieval
 - No weight updates -- all learning happens in the skill library
 
-**Relevance to FlowForge:** The Voyager pattern of "verified executable procedures as memory" maps directly to agent playbooks and procedures. The self-verification pattern (agent checks its own output before storing as a learning) is applicable to FlowForge's memory extraction.
+**Relevance to Allen:** The Voyager pattern of "verified executable procedures as memory" maps directly to agent playbooks and procedures. The self-verification pattern (agent checks its own output before storing as a learning) is applicable to Allen's memory extraction.
 
 ---
 
@@ -535,7 +535,7 @@ This produces specific, actionable feedback like "I should have checked for null
 - External evaluator over self-evaluation for the reward signal
 - Episode-based learning (per-task) over continuous learning
 
-**Relevance to FlowForge:** Reflexion's pattern maps closely to FlowForge's current `<agent_learnings>` extraction. The key insight is that reflections should be grounded in actual execution outcomes (success/failure), not just self-assessment. Adding an evaluator step before extracting learnings would improve quality.
+**Relevance to Allen:** Reflexion's pattern maps closely to Allen's current `<agent_learnings>` extraction. The key insight is that reflections should be grounded in actual execution outcomes (success/failure), not just self-assessment. Adding an evaluator step before extracting learnings would improve quality.
 
 ---
 
@@ -603,7 +603,7 @@ This is "self-managed memory" -- no external extraction pipeline.
 - Tool-based memory access (standard function calling)
 - In-context vs. out-of-context as the fundamental distinction
 
-**Relevance to FlowForge:** Letta's three-tier model (core/recall/archival) maps well to FlowForge's needs. The "agent manages its own memory" approach is what FlowForge's `<agent_learnings>` pattern does. The key lesson is that this should be complemented by an external extraction pipeline (like Mem0) for higher-quality learning capture.
+**Relevance to Allen:** Letta's three-tier model (core/recall/archival) maps well to Allen's needs. The "agent manages its own memory" approach is what Allen's `<agent_learnings>` pattern does. The key lesson is that this should be complemented by an external extraction pipeline (like Mem0) for higher-quality learning capture.
 
 ---
 
@@ -697,7 +697,7 @@ Project-level configuration (v1.0.3, January 2026) allows tuning:
 - Framework-agnostic layer over framework-specific module
 - Actor-aware tagging for multi-agent scenarios
 
-**Relevance to FlowForge:** Mem0's ADD/UPDATE/DELETE/NOOP model is the single most important pattern for FlowForge to adopt. The current system's `supersede` operation is a manual version of this -- making it automatic with LLM classification would significantly improve memory quality. The actor-aware tagging is also relevant for FlowForge's multi-agent scenarios.
+**Relevance to Allen:** Mem0's ADD/UPDATE/DELETE/NOOP model is the single most important pattern for Allen to adopt. The current system's `supersede` operation is a manual version of this -- making it automatic with LLM classification would significantly improve memory quality. The actor-aware tagging is also relevant for Allen's multi-agent scenarios.
 
 ---
 
@@ -759,7 +759,7 @@ This enables queries like "what did we know about this product group as of last 
 - Invalidation over deletion (never lose history)
 - Episode -> Entity -> Community hierarchy for progressive abstraction
 
-**Relevance to FlowForge:** Zep's temporal awareness is directly relevant to FlowForge's pipeline debugging use case. When investigating why an agent made a bad decision, temporal queries ("what did the agent know at that point?") are invaluable. The invalidation-over-deletion pattern preserves audit trails that FlowForge's `supersede` operation partially implements.
+**Relevance to Allen:** Zep's temporal awareness is directly relevant to Allen's pipeline debugging use case. When investigating why an agent made a bad decision, temporal queries ("what did the agent know at that point?") are invaluable. The invalidation-over-deletion pattern preserves audit trails that Allen's `supersede` operation partially implements.
 
 ---
 
@@ -883,7 +883,7 @@ Two distinct memory systems:
 - Separation of human-authored (CLAUDE.md) from agent-authored (MEMORY.md)
 - Periodic consolidation (Auto Dream) over real-time pruning
 
-**Relevance to FlowForge:** The CLAUDE.md / MEMORY.md separation mirrors FlowForge's distinction between agent instructions and agent memory. The Auto Dream consolidation pattern is relevant -- FlowForge should consider periodic memory consolidation to prevent noise accumulation. The 200-line injection limit is a practical lesson: at some point, injecting everything becomes wasteful and selective retrieval is needed.
+**Relevance to Allen:** The CLAUDE.md / MEMORY.md separation mirrors Allen's distinction between agent instructions and agent memory. The Auto Dream consolidation pattern is relevant -- Allen should consider periodic memory consolidation to prevent noise accumulation. The 200-line injection limit is a practical lesson: at some point, injecting everything becomes wasteful and selective retrieval is needed.
 
 ---
 
@@ -984,12 +984,12 @@ All production multi-agent systems implement some form of scoping:
 | Scope Level | Description | Used By |
 |-------------|-------------|---------|
 | **Agent** | Private to a single agent | All systems |
-| **Team/Crew** | Shared within a team of agents | CrewAI, FlowForge |
+| **Team/Crew** | Shared within a team of agents | CrewAI, Allen |
 | **User/Session** | Scoped to a user or conversation | Mem0, Bedrock, OpenAI |
 | **Project/Repository** | Scoped to a codebase or project | Claude Code, Devin, Cursor |
-| **Organization** | Global across all agents and users | Mem0, Claude Code, FlowForge |
+| **Organization** | Global across all agents and users | Mem0, Claude Code, Allen |
 
-**Finding:** FlowForge's existing three-tier scoping (agent/team/org) is well-aligned with industry practice. Adding a project/task scope would match Devin's Playbook pattern.
+**Finding:** Allen's existing three-tier scoping (agent/team/org) is well-aligned with industry practice. Adding a project/task scope would match Devin's Playbook pattern.
 
 ### 4.5 Retrieval Strategies
 
@@ -998,10 +998,10 @@ All production multi-agent systems implement some form of scoping:
 | **Full Injection** | Load all memories into context | Claude Code | Simple but wasteful |
 | **Semantic Search** | Vector similarity over memories | LangGraph, Mem0, CrewAI | Flexible but can miss structured facts |
 | **Graph Traversal** | Follow entity relationships | Zep, Mem0 | Captures relationships but complex |
-| **Composite Scoring** | Blend similarity + recency + importance | CrewAI, FlowForge | Best overall but requires tuning |
+| **Composite Scoring** | Blend similarity + recency + importance | CrewAI, Allen | Best overall but requires tuning |
 | **Agent-Driven** | Agent decides when to search | Letta | Autonomous but unpredictable |
 
-**Finding:** Composite scoring (FlowForge's current approach) is well-regarded. Adding graph-based retrieval for entity relationships would further improve precision.
+**Finding:** Composite scoring (Allen's current approach) is well-regarded. Adding graph-based retrieval for entity relationships would further improve precision.
 
 ### 4.6 The Quality Gate Pattern
 
@@ -1014,13 +1014,13 @@ Multiple systems implement a verification or quality check before storing learni
 | Mem0 | NOOP classification (reject noise) |
 | Devin | Human-curated Playbooks |
 | Claude Code | Auto Dream consolidation |
-| FlowForge | Confidence scoring + manual validation |
+| Allen | Confidence scoring + manual validation |
 
-**Finding:** The most robust systems have two quality gates: one at extraction time (Mem0's NOOP) and one periodic (Claude Code's Auto Dream). FlowForge should implement both.
+**Finding:** The most robust systems have two quality gates: one at extraction time (Mem0's NOOP) and one periodic (Claude Code's Auto Dream). Allen should implement both.
 
 ---
 
-## 5. Recommendations for FlowForge
+## 5. Recommendations for Allen
 
 Based on the research findings, here are specific recommendations organized by priority.
 
@@ -1028,7 +1028,7 @@ Based on the research findings, here are specific recommendations organized by p
 
 #### R1: Implement Automated Contradiction Handling (Mem0 Pattern)
 
-**Current state:** FlowForge uses manual `supersede` operation for outdated memories.
+**Current state:** Allen uses manual `supersede` operation for outdated memories.
 
 **Recommendation:** Implement Mem0's four-operation model (ADD/UPDATE/DELETE/NOOP) as an automated pipeline:
 
@@ -1068,7 +1068,7 @@ Consolidation Cron (weekly or configurable):
 
 #### R3: Add Dual Extraction Pipeline (Agent Self-Report + LLM Extraction)
 
-**Current state:** FlowForge relies on agent self-reported `<agent_learnings>` tags.
+**Current state:** Allen relies on agent self-reported `<agent_learnings>` tags.
 
 **Recommendation:** Keep self-reported learnings but add a parallel LLM extraction pipeline:
 
@@ -1105,7 +1105,7 @@ interface TemporalMemoryEntry extends AgentMemoryEntry {
 
 #### R5: Add Skill/Procedure Memory Type (Voyager Pattern)
 
-**Current state:** FlowForge has `procedure` as a memory type but does not verify procedures before storage.
+**Current state:** Allen has `procedure` as a memory type but does not verify procedures before storage.
 
 **Recommendation:** Enhance procedure memory with Voyager's verification pattern:
 
@@ -1118,7 +1118,7 @@ Agent discovers a successful approach
   -> Procedures compose: complex procedures reference simpler ones
 ```
 
-**Why:** Voyager's key insight is that only verified successful skills should enter the library. FlowForge's current procedures are stored without verification. Adding execution tracking (was this procedure actually useful?) would enable natural quality ranking.
+**Why:** Voyager's key insight is that only verified successful skills should enter the library. Allen's current procedures are stored without verification. Adding execution tracking (was this procedure actually useful?) would enable natural quality ranking.
 
 #### R6: Add Project/Task Scope (Devin Pattern)
 

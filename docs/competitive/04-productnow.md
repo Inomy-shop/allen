@@ -18,11 +18,11 @@
 
 ProductNow is the **only non-coding product** in the 7-way comparison. It sits **upstream of engineering work**:
 
-- **Factory / Letta / Conductor / Kiro / FlowForge** → engineering-facing (write code, run tests, open PRs).
+- **Factory / Letta / Conductor / Kiro / Allen** → engineering-facing (write code, run tests, open PRs).
 - **8090** → covers PRD-to-code pipeline, but optimized for enterprise SDLC.
 - **ProductNow** → PM-facing: synthesizes fragmented product information (Slack, decks, PRDs, roadmaps, OKRs) into coordinated execution plans.
 
-It's best framed as a **complementary tool** — PM upstream of FlowForge / Factory / Kiro's engineering workflows — not a direct competitor.
+It's best framed as a **complementary tool** — PM upstream of Allen / Factory / Kiro's engineering workflows — not a direct competitor.
 
 ## 3. What it does
 
@@ -102,17 +102,17 @@ No publicly named MCP support; integration model is presumably native connectors
 - **Enterprises that need SOC 2** as a baseline for any new SaaS.
 - **Early-stage startups probably not** — the ROI requires enough PM volume to justify the platform cost.
 
-## 11. Interaction model with FlowForge (integration, not competition)
+## 11. Interaction model with Allen (integration, not competition)
 
-If FlowForge is the engineering workflow engine and ProductNow is the PM upstream engine:
+If Allen is the engineering workflow engine and ProductNow is the PM upstream engine:
 
 - ProductNow generates an epic / PRD via its AI teammates.
-- A webhook / MCP bridge hands the PRD to FlowForge.
-- FlowForge routes it (via `router.ts`) to the appropriate coding workflow.
-- FlowForge runs the coding agent workflow, produces a PR.
+- A webhook / MCP bridge hands the PRD to Allen.
+- Allen routes it (via `router.ts`) to the appropriate coding workflow.
+- Allen runs the coding agent workflow, produces a PR.
 - Back-reports status to ProductNow for roadmap tracking.
 
-This is the natural shape of a "best-of-breed" stack — ProductNow + FlowForge cover end-to-end, without overlap.
+This is the natural shape of a "best-of-breed" stack — ProductNow + Allen cover end-to-end, without overlap.
 
 ## 12. Recent news
 

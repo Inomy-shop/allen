@@ -141,7 +141,7 @@ export function ContentViewer({ title, content, defaultMode, onClose }: {
       {/* Content */}
       {mode === 'markdown' ? (
         <div className="flex-1 overflow-auto p-8">
-          <div className="max-w-4xl mx-auto text-sm text-theme-secondary leading-relaxed prose-flowforge">
+          <div className="max-w-4xl mx-auto text-sm text-theme-secondary leading-relaxed prose-allen">
             {renderMarkdown(content)}
           </div>
         </div>

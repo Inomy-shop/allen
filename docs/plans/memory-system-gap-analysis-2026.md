@@ -1,14 +1,14 @@
-# FlowForge Memory/Learnings: 2026 Gap Analysis & Improvement Plan
+# Allen Memory/Learnings: 2026 Gap Analysis & Improvement Plan
 
 **Date:** 2026-04-14
-**Purpose:** Audit FlowForge's current learning system against the April 2026 state-of-the-art (Letta Memory Blocks, Mem0 v1, Zep, GBrain, Ramp Inspect, the "Agent Memory Race of 2026" cohort), identify concrete gaps, and lay out a phased plan to close them.
+**Purpose:** Audit Allen's current learning system against the April 2026 state-of-the-art (Letta Memory Blocks, Mem0 v1, Zep, GBrain, Ramp Inspect, the "Agent Memory Race of 2026" cohort), identify concrete gaps, and lay out a phased plan to close them.
 **Scope:** Design doc. No code in this pass — this is the blueprint that feeds follow-up implementation plans.
 
 ---
 
 ## 1. TL;DR
 
-FlowForge already ships a production-shape learning system: domain-agnostic scoping, Mem0-style ADD/UPDATE/DELETE/NOOP classification, token-budgeted injection, retry/auto-gate/clarify/explicit/post-exec extraction, and a confirmation/contradiction feedback loop. Phases 1–5 of `learning-system-design.md` are ~90% done; Phase 6 is ~25%.
+Allen already ships a production-shape learning system: domain-agnostic scoping, Mem0-style ADD/UPDATE/DELETE/NOOP classification, token-budgeted injection, retry/auto-gate/clarify/explicit/post-exec extraction, and a confirmation/contradiction feedback loop. Phases 1–5 of `learning-system-design.md` are ~90% done; Phase 6 is ~25%.
 
 The 2026 frontier (Letta, Mem0, GBrain, Zep) has moved past "atomic learning records" toward:
 
@@ -19,7 +19,7 @@ The 2026 frontier (Letta, Mem0, GBrain, Zep) has moved past "atomic learning rec
 5. **Tiered memory with agent-managed promotion** (MemGPT/Letta core ↔ archival) — the agent decides what to page in.
 6. **LOCOMO-style evaluation** — memory systems are benchmarked on accuracy, token cost, and latency jointly.
 
-FlowForge's biggest concrete gaps are: **no consolidation cron**, **no skill library**, **no memory blocks abstraction**, **no graph/entity layer**, **no evaluation harness**, and **per-execution (not per-node) injection tracking** that blunts the confirmation loop.
+Allen's biggest concrete gaps are: **no consolidation cron**, **no skill library**, **no memory blocks abstraction**, **no graph/entity layer**, **no evaluation harness**, and **per-execution (not per-node) injection tracking** that blunts the confirmation loop.
 
 ---
 
@@ -132,9 +132,9 @@ All five fail on the same point: **no one has proven longitudinal memory improve
 
 ---
 
-## 4. Gap Analysis — FlowForge vs. 2026 Frontier
+## 4. Gap Analysis — Allen vs. 2026 Frontier
 
-| Area | FlowForge today | Frontier | Gap severity |
+| Area | Allen today | Frontier | Gap severity |
 |------|-----------------|----------|:-:|
 | Atomic facts vs memory blocks | Flat `Learning` rows, ranked at query time | Letta memory blocks — structured, agent-editable, per-entity | **High** |
 | Procedural memory / skills | `type: skill` exists but is just text; no execution, no skill library | Voyager / GBrain `skills/` — reusable recipes agents "adopt permanently" | **High** |
@@ -182,7 +182,7 @@ Introduce structured memory blocks alongside the existing atomic learnings. Bloc
 |---|------|-------------|
 | B1 | `MemoryBlock` schema | `{ _id, label, value, sizeLimit, description, readOnly, scope, ownerEntity, tokenCount, version, updatedAt, updatedByExecutionId }` |
 | B2 | **Block labels** shipped by default | `persona`, `user-profile`, `repo:<path>`, `workflow:<name>`, `project-brief`, `conventions` |
-| B3 | **Agent self-edit tools** | Wire `memory_append`, `rethink_block`, `archive_block` into the MCP server (`flowforge-mcp-server.ts`) and into the agent tool surface in `node-executor.ts`. Agents can explicitly rewrite their working memory. |
+| B3 | **Agent self-edit tools** | Wire `memory_append`, `rethink_block`, `archive_block` into the MCP server (`allen-mcp-server.ts`) and into the agent tool surface in `node-executor.ts`. Agents can explicitly rewrite their working memory. |
 | B4 | **Block injection** | At node start, load the N most relevant blocks by scope into prompt under `WORKING MEMORY:` header, separate from `LEARNINGS`. Share the 800-token budget: 400 blocks + 400 learnings. |
 | B5 | **Block vs Learning boundary** | Blocks = synthesized truth per entity, rewritten in place (e.g. "what we know about repo X"). Learnings = append-only delta facts from a single execution. Blocks are built *from* learnings by the consolidation cron. |
 | B6 | **Human edit UI** | `MemoryBlocksPage.tsx` — textarea with size meter and history. Critical for trust. |
@@ -284,7 +284,7 @@ Keeping these out of scope to avoid complexity without proven value:
 ## 8. Open Questions
 
 1. **Should memory blocks replace learnings, or coexist?** Current plan says coexist (blocks = synthesized, learnings = raw deltas). Letta is moving toward blocks-only for Letta Code. Worth a spike after Phase A to see if atomic learnings still pull weight once blocks exist.
-2. **Where does the markdown/git storage layer live?** In the workspace directory (where it's human-editable next to code) or in a central `~/.flowforge/brain/` (where it survives workspace resets)? GBrain picked the latter; Letta Context Repositories picked the former.
+2. **Where does the markdown/git storage layer live?** In the workspace directory (where it's human-editable next to code) or in a central `~/.allen/brain/` (where it survives workspace resets)? GBrain picked the latter; Letta Context Repositories picked the former.
 3. **User scope (A3) — per-human-user or per-API-key?** Likely per-human-user, but depends on how auth context flows into the engine today. Confirm in `org-context.ts` before implementing.
 4. **Extraction primacy.** Mem0 and Zep say separate-LLM-pass wins. We chose agent-self-report + optional post-exec. Phase F should settle this empirically before we invest more in either.
 5. **Skill execution sandbox.** Phase D1 stores skills as markdown with a JSONSchema input. Do we actually *execute* them (like Voyager) or only reference them as prompt recipes? Start with prompt recipes; add execution only if the replay suite shows a meaningful gap.

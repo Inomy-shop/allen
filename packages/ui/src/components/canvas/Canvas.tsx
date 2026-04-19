@@ -31,17 +31,17 @@ import NodePalette from './NodePalette';
 import NodeProperties from './NodeProperties';
 
 const nodeTypes = {
-  'ff-agent': AgentNode,
-  'ff-code': CodeNode,
-  'ff-human': HumanNode,
-  'ff-workflow': WorkflowNode,
-  'ff-condition': ConditionNode,
-  'ff-terminal': TerminalNode,
+  'al-agent': AgentNode,
+  'al-code': CodeNode,
+  'al-human': HumanNode,
+  'al-workflow': WorkflowNode,
+  'al-condition': ConditionNode,
+  'al-terminal': TerminalNode,
 };
 
 const edgeTypes = {
-  'ff-conditional': ConditionalEdge,
-  'ff-retry': RetryEdge,
+  'al-conditional': ConditionalEdge,
+  'al-retry': RetryEdge,
 };
 
 // ── Simple undo/redo stack ──────────────────────────────────────────────────
@@ -152,7 +152,7 @@ export default function Canvas({ nodes, edges, onNodesChange, onEdgesChange, wor
     const id = `${type}_${Date.now().toString(36)}`;
     const newNode: Node = {
       id,
-      type: `ff-${type}`,
+      type: `al-${type}`,
       position: { x: 250, y: 150 + nodes.length * 80 },
       data: { ...defaults, label: id },
     };

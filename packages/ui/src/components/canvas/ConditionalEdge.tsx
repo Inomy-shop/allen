@@ -17,7 +17,7 @@ export default function ConditionalEdge(props: EdgeProps) {
       {/* Custom arrow marker definition */}
       <defs>
         <marker
-          id="ff-arrow-purple"
+          id="al-arrow-purple"
           markerWidth="16"
           markerHeight="16"
           viewBox="-5 -5 10 10"

@@ -168,7 +168,7 @@ Above the model selector, add an agent picker:
 [@PM ▾] [Codex/gpt-5.4 ▾]   Message...   shift+enter   [Send]
 ```
 
-- Default: none (direct chat with FlowForge Assistant)
+- Default: none (direct chat with Allen Assistant)
 - Select PM, Engineer, QA, etc. to route your message through that agent
 - Agent avatar shows in the chat header when selected
 
@@ -187,7 +187,7 @@ PM → Engineer: Analyzed dark mode feasibility. 2 days, CSS variables. (23s)
 │ PM: We need dark mode for the app. Analyze       │
 │     feasibility and effort.                      │
 │                                                   │
-│ 🔧 mcp__flowforge__list_repos                    │
+│ 🔧 mcp__allen__list_repos                    │
 │ 🔧 spawn_role(coding-reviewer, "analyze...")      │
 │                                                   │
 │ Engineer: CSS variables approach. ~2 days.        │
@@ -252,7 +252,7 @@ In the conversation logs panel, agent-to-agent threads show as nested entries wi
 **Changes:**
 - New tool: `delegate_to_agent` in `chat-tools.ts`
 - New tool: `report_to_user` in `chat-tools.ts`
-- Add both to FlowForge MCP server
+- Add both to Allen MCP server
 - Agent conversation creation and tracking
 - Recursive delegation support (Engineer → QA)
 - Max delegation depth limit (configurable, default 3)
@@ -260,7 +260,7 @@ In the conversation logs panel, agent-to-agent threads show as nested entries wi
 
 **Files:**
 - `chat-tools.ts` — new tools
-- `flowforge-mcp-server.ts` — expose new tools
+- `allen-mcp-server.ts` — expose new tools
 - `chat.service.ts` — handle agent thread SSE events
 - New: `agent-conversation.service.ts` — manage agent conversations
 

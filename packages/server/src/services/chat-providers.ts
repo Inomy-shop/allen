@@ -1,6 +1,6 @@
 /**
  * Chat LLM Providers
- * FlowForge runs LLMs exclusively through CLI tools — no API-key-based providers.
+ * Allen runs LLMs exclusively through CLI tools — no API-key-based providers.
  * Two providers: `codex` (OpenAI Codex CLI) and `claude-cli` (Anthropic Claude Code CLI).
  * Both authenticate via their CLI's local auth, both support MCP for tool access.
  */
@@ -9,11 +9,12 @@ import type { Db } from 'mongodb';
 import type { ChatTraceEvent } from './chat-llm.js';
 import { resolve, dirname } from 'node:path';
 import { existsSync, mkdirSync } from 'node:fs';
+import { MCP_SERVER_NAME } from '@allen/engine';
 
 /** Fallback cwd for chat/agent spawns when no workspace/repo is in scope.
  * Intentionally NOT `process.cwd()` — we don't want agents running inside
  * the server's own source tree by accident. Auto-created on use. */
-export const AGENT_FALLBACK_CWD = '/tmp/flowforge';
+export const AGENT_FALLBACK_CWD = '/tmp/allen';
 import { fileURLToPath } from 'node:url';
 
 // ── Shared Types ──
@@ -95,17 +96,17 @@ function log(msg: string, data?: unknown): void {
 
 // ── Sync MCP servers to Codex CLI ──
 
-/** Path to the FlowForge MCP server script.
+/** Path to the Allen MCP server script.
  * Uses import.meta.url to resolve relative to THIS file — works regardless of
- * process.cwd(). App is deployed under ~/flowforge/ so snap-installed codex
+ * process.cwd(). App is deployed under ~/allen/ so snap-installed codex
  * can access it (snap has home dir access). */
-function getFlowForgeMcpServerPath(): string {
+function getAllenMcpServerPath(): string {
   const thisDir = dirname(fileURLToPath(import.meta.url));
   // In dev (tsx): thisDir = .../src/services, script is in the same dir
-  const tsPath = resolve(thisDir, 'flowforge-mcp-server.ts');
+  const tsPath = resolve(thisDir, 'allen-mcp-server.ts');
   if (existsSync(tsPath)) return tsPath;
   // In prod (compiled): thisDir = .../dist/services, script is in the same dir
-  return resolve(thisDir, 'flowforge-mcp-server.js');
+  return resolve(thisDir, 'allen-mcp-server.js');
 }
 
 export async function syncMcpToCodex(db: Db): Promise<void> {
@@ -123,28 +124,28 @@ export async function syncMcpToCodex(db: Db): Promise<void> {
     existingOutput = stdout;
   } catch { /* no servers yet */ }
 
-  // Always remove + re-add the FlowForge MCP entry so env changes (port,
+  // Always remove + re-add the Allen MCP entry so env changes (port,
   // JWT_ACCESS_SECRET rotations, etc.) propagate to Codex on every sync.
   // Older registrations won't have JWT_ACCESS_SECRET and would silently
   // 401 on every tool call — this is how we heal that drift.
   try {
-    if (existingOutput.includes('flowforge')) {
-      await execFileAsync('codex', ['mcp', 'remove', 'flowforge'], { timeout: 10000 }).catch(() => {});
+    if (existingOutput.includes(MCP_SERVER_NAME)) {
+      await execFileAsync('codex', ['mcp', 'remove', MCP_SERVER_NAME], { timeout: 10000 }).catch(() => {});
     }
-    const serverPath = getFlowForgeMcpServerPath();
+    const serverPath = getAllenMcpServerPath();
     // In dev: .ts file → run with npx tsx. In prod: .js file → run with node.
     const runner = serverPath.endsWith('.ts') ? ['npx', 'tsx'] : ['node'];
     await execFileAsync('codex', [
-      'mcp', 'add', 'flowforge',
-      '--env', `FLOWFORGE_API_URL=http://localhost:${process.env.PORT ?? '4023'}`,
+      'mcp', 'add', MCP_SERVER_NAME,
+      '--env', `ALLEN_API_URL=http://localhost:${process.env.PORT ?? '4023'}`,
       // Shared with the MCP subprocess so it can mint its own access token
-      // when calling back into /api/* — see flowforge-mcp-server.ts.
+      // when calling back into /api/* — see allen-mcp-server.ts.
       '--env', `JWT_ACCESS_SECRET=${process.env.JWT_ACCESS_SECRET ?? ''}`,
       '--', ...runner, serverPath,
     ], { timeout: 10000 });
-    log('Registered FlowForge MCP server with Codex CLI');
+    log('Registered Allen MCP server with Codex CLI');
   } catch (err) {
-    log(`Failed to register FlowForge MCP with Codex: ${(err as Error).message}`);
+    log(`Failed to register Allen MCP with Codex: ${(err as Error).message}`);
   }
 
   // Register external MCP servers — resolve @secret: refs in env AND args
@@ -293,7 +294,7 @@ export async function runCodexCLI(
             if (text) { rawResponse = text; callbacks.onText(rawResponse); }
           }
 
-          // MCP tool calls (Linear, FlowForge, GitHub, etc.)
+          // MCP tool calls (Linear, Allen, GitHub, etc.)
           if (event.type === 'item.started' && event.item?.type === 'mcp_tool_call') {
             const server = event.item.server ?? '';
             const tool = event.item.tool ?? '';

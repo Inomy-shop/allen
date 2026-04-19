@@ -1,15 +1,15 @@
-# Route53 hosted zone for flowforge.inomy.shop
+# Route53 hosted zone for allen.inomy.ai
 # After apply, add the NS records from the output to GoDaddy.
 
-resource "aws_route53_zone" "flowforge" {
+resource "aws_route53_zone" "allen" {
   name    = var.domain
-  comment = "FlowForge ${var.environment} — managed by Terraform"
+  comment = "Allen ${var.environment} — managed by Terraform"
   tags    = local.tags
 }
 
 # A record (alias) pointing the domain at the existing ALB
-resource "aws_route53_record" "flowforge" {
-  zone_id = aws_route53_zone.flowforge.zone_id
+resource "aws_route53_record" "allen" {
+  zone_id = aws_route53_zone.allen.zone_id
   name    = var.domain
   type    = "A"
 
@@ -21,9 +21,9 @@ resource "aws_route53_record" "flowforge" {
 }
 
 # Wildcard A record for workspace preview subdomains
-# e.g., abc123.flowforge.inomy.shop → same ALB
-resource "aws_route53_record" "flowforge_wildcard" {
-  zone_id = aws_route53_zone.flowforge.zone_id
+# e.g., abc123.allen.inomy.ai → same ALB
+resource "aws_route53_record" "allen_wildcard" {
+  zone_id = aws_route53_zone.allen.zone_id
   name    = "*.${var.domain}"
   type    = "A"
 

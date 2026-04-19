@@ -6,7 +6,7 @@
  *   - the Intervention detail page (/interventions/:id)
  *   - the workflow execution page's pending-intervention indicator
  *   - the chat intervention card's action buttons
- *   - the Slack "Review in FlowForge →" link-through
+ *   - the Slack "Review in Allen →" link-through
  *
  * Response handling:
  *   POST /api/interventions/:id/respond with body:

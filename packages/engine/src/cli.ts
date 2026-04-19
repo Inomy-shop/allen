@@ -10,7 +10,7 @@ dotenv.config({ path: resolve(__dirname, '..', '..', '..', '.env') });
 import { readFileSync } from 'node:fs';
 import yaml from 'js-yaml';
 import { MongoClient } from 'mongodb';
-import { FlowForgeEngine } from './engine.js';
+import { AllenEngine } from './engine.js';
 import { loadAgents } from './agents-loader.js';
 import { loadRouter, autoRoute } from './router.js';
 import { getBuiltIns } from './built-ins/index.js';
@@ -23,20 +23,20 @@ const command = args[0];
 
 function usage(): void {
   console.log(`
-FlowForge CLI
+Allen CLI
 
 Usage:
-  flowforge run <workflow.yml> --input '{"key":"value"}'
-  flowforge run --task "description" [--repo /path]
-  flowforge validate <workflow.yml>
-  flowforge visualize <workflow.yml>
-  flowforge list
+  allen run <workflow.yml> --input '{"key":"value"}'
+  allen run --task "description" [--repo /path]
+  allen validate <workflow.yml>
+  allen visualize <workflow.yml>
+  allen list
 
 Options:
   --input     JSON input for the workflow
   --task      Task description (for auto-routing)
   --repo      Repository path
-  --db        MongoDB URI (default: mongodb://localhost:27017/flowforge)
+  --db        MongoDB URI (default: mongodb://localhost:27017/allen)
   `);
 }
 
@@ -98,7 +98,7 @@ async function main(): Promise<void> {
 
   if (command === 'validate') {
     const file = args[1];
-    if (!file) { console.error('Usage: flowforge validate <workflow.yml>'); process.exit(1); }
+    if (!file) { console.error('Usage: allen validate <workflow.yml>'); process.exit(1); }
     const workflow = loadWorkflow(file);
     const agents = loadAgents();
     const builtIns = getBuiltIns();
@@ -119,14 +119,14 @@ async function main(): Promise<void> {
 
   if (command === 'visualize') {
     const file = args[1];
-    if (!file) { console.error('Usage: flowforge visualize <workflow.yml>'); process.exit(1); }
+    if (!file) { console.error('Usage: allen visualize <workflow.yml>'); process.exit(1); }
     const workflow = loadWorkflow(file);
     console.log(generateMermaid(workflow));
     process.exit(0);
   }
 
   if (command === 'run') {
-    const dbUri = getArg('db') ?? process.env.MONGODB_URI ?? 'mongodb://localhost:27017/flowforge';
+    const dbUri = getArg('db') ?? process.env.MONGODB_URI ?? 'mongodb://localhost:27017/allen';
     const client = new MongoClient(dbUri);
     await client.connect();
     const db = client.db();
@@ -193,7 +193,7 @@ async function main(): Promise<void> {
     if (task) input.task = task;
     if (repoPath) input.repo_path = repoPath;
 
-    const engine = new FlowForgeEngine({
+    const engine = new AllenEngine({
       db,
       agents,
       builtIns,

@@ -1,11 +1,11 @@
 {
-  "name": "@flowforge/engine",
+  "name": "@allen/engine",
   "version": "0.1.0",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "bin": {
-    "flowforge": "./dist/cli.js"
+    "allen": "./dist/cli.js"
   },
   "scripts": {
     "build": "tsc",

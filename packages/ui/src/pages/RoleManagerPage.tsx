@@ -101,7 +101,7 @@ function AgentDetailPanel({ agent, onClose }: { agent: Record<string, unknown>; 
         {/* System prompt — rendered as markdown */}
         <div className="flex-1 overflow-y-auto px-6 py-5">
           <div className="text-[10px] font-label uppercase tracking-widest text-theme-subtle mb-3">System Instructions</div>
-          <div className="text-sm text-theme-secondary leading-relaxed prose-flowforge">
+          <div className="text-sm text-theme-secondary leading-relaxed prose-allen">
             {system ? renderMarkdown(system) : <span className="text-theme-muted italic">No system prompt defined.</span>}
           </div>
         </div>

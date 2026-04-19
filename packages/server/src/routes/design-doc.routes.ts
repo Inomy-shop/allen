@@ -3,7 +3,7 @@
  *
  * Manual CRUD over the `design_docs` collection. These endpoints back
  * the Design Docs list / detail pages in the UI and are called by the
- * producer agents (via the flowforge MCP server) to persist their
+ * producer agents (via the Allen MCP server) to persist their
  * output.
  *
  * Write endpoints are intended to be called by workflow nodes running

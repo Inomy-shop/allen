@@ -10,8 +10,8 @@ description: >
     2. The Interventions list page (/interventions) shows the pending row.
     3. The Interventions detail page renders the card with the right action
        buttons per severity (Approve/Reject vs Answer vs Accept/Abort).
-    4. The Slack notification fires (if FLOWFORGE_SLACK_BOT_TOKEN and
-       FLOWFORGE_SLACK_INTERVENTIONS_CHANNEL are configured) — DM to the
+    4. The Slack notification fires (if ALLEN_SLACK_BOT_TOKEN and
+       ALLEN_SLACK_INTERVENTIONS_CHANNEL are configured) — DM to the
        starter + channel post.
     5. Submitting a response resumes the workflow and advances to the next
        human node.

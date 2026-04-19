@@ -1,14 +1,14 @@
 import { randomUUID } from 'node:crypto';
 import type { Db } from 'mongodb';
 import {
-  FlowForgeEngine,
+  AllenEngine,
   StateManager,
   loadAgents,
   getBuiltIns,
   type WorkflowDef,
   type EngineConfig,
   type ExecutionState,
-} from '@flowforge/engine';
+} from '@allen/engine';
 import { createSSEEmitter } from './stream.service.js';
 import {
   InterventionService,
@@ -16,7 +16,7 @@ import {
   type InterventionDocLink,
   type InterventionField,
 } from './intervention.service.js';
-import type { AgentDef } from '@flowforge/engine';
+import type { AgentDef } from '@allen/engine';
 import { WorkspaceManager } from './workspace.service.js';
 
 /**
@@ -42,7 +42,7 @@ function buildEngineServices(db: Db): EngineConfig['services'] {
 }
 
 // Track running engines by executionId
-const runningEngines = new Map<string, FlowForgeEngine>();
+const runningEngines = new Map<string, AllenEngine>();
 
 /** Load agents from YAML + database (DB is source of truth, YAML is fallback). */
 async function loadAllAgents(db: Db): Promise<Record<string, AgentDef>> {
@@ -218,7 +218,7 @@ export class ExecutionService {
       services: buildEngineServices(this.db),
     };
 
-    const engine = new FlowForgeEngine(config);
+    const engine = new AllenEngine(config);
     runningEngines.set(executionId, engine);
 
     engine.run(workflow, input, 0, { executionId, workflowId })
@@ -364,7 +364,7 @@ export class ExecutionService {
       services: buildEngineServices(this.db),
     };
 
-    const engine = new FlowForgeEngine(config);
+    const engine = new AllenEngine(config);
     runningEngines.set(executionId, engine);
 
     engine.retryFromNode(workflow, executionId, nodeName)

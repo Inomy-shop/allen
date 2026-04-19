@@ -1,5 +1,5 @@
 /**
- * Monaco editor YAML completion suggestions for FlowForge workflow schema.
+ * Monaco editor YAML completion suggestions for Allen workflow schema.
  */
 import type { languages } from 'monaco-editor';
 

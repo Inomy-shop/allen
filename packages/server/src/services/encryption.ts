@@ -5,8 +5,8 @@
  * 12-byte IV and stored together with its 16-byte auth tag, base64-encoded.
  *
  * Master key resolution order:
- *   1. FLOWFORGE_MASTER_KEY env var (base64-encoded 32 bytes) — preferred for production
- *   2. ~/.flowforge/master.key file (auto-generated, mode 0600) — fallback for local dev
+ *   1. ALLEN_MASTER_KEY env var (base64-encoded 32 bytes) — preferred for production
+ *   2. ~/.allen/master.key file (auto-generated, mode 0600) — fallback for local dev
  *
  * Storage format: `enc:v1:<base64-iv>:<base64-authTag>:<base64-ciphertext>`
  * Values that don't start with `enc:v1:` are treated as legacy plaintext (for migration).
@@ -28,22 +28,22 @@ function loadMasterKey(): Buffer {
   if (cachedKey) return cachedKey;
 
   // 1. Environment variable (production)
-  const envKey = process.env.FLOWFORGE_MASTER_KEY;
+  const envKey = process.env.ALLEN_MASTER_KEY;
   if (envKey) {
     const buf = Buffer.from(envKey, 'base64');
     if (buf.length !== KEY_LENGTH) {
       throw new Error(
-        `FLOWFORGE_MASTER_KEY must decode to ${KEY_LENGTH} bytes (base64), got ${buf.length}. ` +
+        `ALLEN_MASTER_KEY must decode to ${KEY_LENGTH} bytes (base64), got ${buf.length}. ` +
           `Generate one with: node -e "console.log(require('crypto').randomBytes(32).toString('base64'))"`,
       );
     }
     cachedKey = buf;
-    console.log('[crypto] Loaded master key from FLOWFORGE_MASTER_KEY env var');
+    console.log('[crypto] Loaded master key from ALLEN_MASTER_KEY env var');
     return buf;
   }
 
-  // 2. File at ~/.flowforge/master.key (local dev)
-  const dir = path.join(os.homedir(), '.flowforge');
+  // 2. File at ~/.allen/master.key (local dev)
+  const dir = path.join(os.homedir(), '.allen');
   const file = path.join(dir, 'master.key');
 
   if (fs.existsSync(file)) {
@@ -65,7 +65,7 @@ function loadMasterKey(): Buffer {
   fs.writeFileSync(file, newKey, { mode: 0o600 });
   console.warn(
     `[crypto] Generated new master key at ${file} (mode 0600).\n` +
-      `[crypto] For production, set FLOWFORGE_MASTER_KEY env var instead so secrets survive home-dir resets.\n` +
+      `[crypto] For production, set ALLEN_MASTER_KEY env var instead so secrets survive home-dir resets.\n` +
       `[crypto] To export this key for production: base64 < ${file}`,
   );
   cachedKey = newKey;

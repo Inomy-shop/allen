@@ -912,7 +912,7 @@ export default function WorkspaceDetailPage() {
                 <ServicesPanel
                   workspaceId={id!}
                   services={workspace.services ?? []}
-                  domain="flowforge.inomy.shop"
+                  domain="allen.inomy.ai"
                   onRefresh={refreshWorkspace}
                 />
               </div>

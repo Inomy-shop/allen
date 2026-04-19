@@ -3,8 +3,8 @@ import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import yaml from 'js-yaml';
 import type { Db } from 'mongodb';
-import { loadAgents, validateWorkflow, getBuiltIns } from '@flowforge/engine';
-import type { WorkflowDef } from '@flowforge/engine';
+import { loadAgents, validateWorkflow, getBuiltIns } from '@allen/engine';
+import type { WorkflowDef } from '@allen/engine';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 

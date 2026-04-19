@@ -155,7 +155,7 @@ Plus:
 | 8090 | 8090 is enterprise SDLC with artifacts; Conductor is individual productivity. |
 | ProductNow | Non-overlapping — different buyer, different job. |
 | Kiro | Kiro is IDE with specs; Conductor is many IDEs (sessions) running in parallel. |
-| FlowForge | FlowForge is declarative server-side workflows; Conductor is ephemeral local sessions. Both could be used together — FlowForge server runs long workflows, dev uses Conductor for interactive parallel work. |
+| Allen | Allen is declarative server-side workflows; Conductor is ephemeral local sessions. Both could be used together — Allen server runs long workflows, dev uses Conductor for interactive parallel work. |
 
 ## 16. Sources
 

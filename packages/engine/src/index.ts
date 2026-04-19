@@ -1,4 +1,4 @@
-export { FlowForgeEngine, type EngineConfig, type RunOptions } from './engine.js';
+export { AllenEngine, type EngineConfig, type RunOptions } from './engine.js';
 export { StateManager } from './state-manager.js';
 export { renderTemplate } from './template.js';
 export { evaluateCondition, validateCondition } from './condition-parser.js';
@@ -13,5 +13,9 @@ export type { NodeResult } from './node-executor.js';
 export { LearningManager, type ExtractionContext } from './learning-manager.js';
 export * from './types.js';
 export { embed, embedAndSave, searchSimilarLearnings, backfillEmbeddings, invalidateEmbeddingCache, cosineSimilarity, registerEmbeddingProvider, setEmbeddingProvider, getActiveProvider, type EmbeddingProvider } from './embedding.js';
-export { loadMcpServers, loadAllMcpServers, getFlowForgeMcpConfig } from './mcp-loader.js';
-export { resolveFlowForgeHome, resolveRepositoriesDir, resolveWorkspacesDir, resolveWorktreeCacheDir } from './paths.js';
+export { loadMcpServers, loadAllMcpServers, getAllenMcpConfig } from './mcp-loader.js';
+export { resolveAllenHome, resolveRepositoriesDir, resolveWorkspacesDir, resolveWorktreeCacheDir } from './paths.js';
+export {
+  BRAND_NAME, BRAND_SLUG, DB_NAME_DEFAULT, MCP_SERVER_NAME,
+  GIT_BRANCH_PREFIX, GIT_COMMIT_AUTHOR_NAME, GIT_COMMIT_AUTHOR_EMAIL, LOG_TAG,
+} from './brand.js';

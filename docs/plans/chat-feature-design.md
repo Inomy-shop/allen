@@ -1,4 +1,4 @@
-# FlowForge Chat Feature -- Design Plan
+# Allen Chat Feature -- Design Plan
 
 ## Table of Contents
 
@@ -28,7 +28,7 @@
 
 **How long-running operations work:** Composer uses a streaming diff syntax for edits and shows progress inline. The agent runs in a loop, taking actions, observing results, and deciding next steps.
 
-**Key takeaway for FlowForge:** The @mention autocomplete pattern is the gold standard. Index entities (workflows, repos, roles) and make them @-mentionable with structured context injection.
+**Key takeaway for Allen:** The @mention autocomplete pattern is the gold standard. Index entities (workflows, repos, roles) and make them @-mentionable with structured context injection.
 
 Sources: [How Cursor Works](https://blog.sshh.io/p/how-cursor-ai-ide-works), [Context Management Strategies](https://datalakehousehub.com/blog/2026-03-context-management-cursor/), [Cursor Features](https://cursor.com/features)
 
@@ -38,7 +38,7 @@ Sources: [How Cursor Works](https://blog.sshh.io/p/how-cursor-ai-ide-works), [Co
 
 **How @mentions work:** Directives like `@workspace`, `@terminal`, `@vscode` route to specialized context providers. Each directive injects a different shape of context (project files, terminal output, editor state).
 
-**Key takeaway for FlowForge:** The directive routing pattern -- `@workspace` maps to a context provider function -- is clean and extensible. We should have each @mention type map to a specific context loader.
+**Key takeaway for Allen:** The directive routing pattern -- `@workspace` maps to a context provider function -- is clean and extensible. We should have each @mention type map to a specific context loader.
 
 Sources: [Copilot Chat Explained](https://devblogs.microsoft.com/all-things-azure/github-copilot-chat-explained-the-life-of-a-prompt/), [Copilot Features](https://docs.github.com/en/copilot/get-started/features)
 
@@ -50,7 +50,7 @@ Sources: [Copilot Chat Explained](https://devblogs.microsoft.com/all-things-azur
 
 **How long-running operations work:** Iterative debugging loop -- write code, run it, analyze errors, fix, re-run -- all within the same chat context. If code fails, the agent self-corrects without user intervention.
 
-**Key takeaway for FlowForge:** The background planning agent + foreground execution agent pattern is excellent for multi-step tasks. We should show a Todo/progress list in chat for workflow executions.
+**Key takeaway for Allen:** The background planning agent + foreground execution agent pattern is excellent for multi-step tasks. We should show a Todo/progress list in chat for workflow executions.
 
 Sources: [Cascade Overview](https://windsurf.com/cascade), [Windsurf Docs](https://docs.windsurf.com/windsurf/cascade/cascade)
 
@@ -62,7 +62,7 @@ Sources: [Cascade Overview](https://windsurf.com/cascade), [Windsurf Docs](https
 
 **How actions are triggered:** Tool use via function calling. Each MCP server exposes tools that Claude can call. Three transport types: stdio (local), HTTP (remote), SSE (legacy).
 
-**Key takeaway for FlowForge:** Our chat agent should use the same MCP tool-calling pattern. Since FlowForge already uses Claude Code SDK, the chat agent is essentially a persistent Claude Code session with FlowForge-specific tools registered.
+**Key takeaway for Allen:** Our chat agent should use the same MCP tool-calling pattern. Since Allen already uses Claude Code SDK, the chat agent is essentially a persistent Claude Code session with Allen-specific tools registered.
 
 Sources: [Claude Code MCP Docs](https://code.claude.com/docs/en/mcp), [Claude Code Architecture](https://dev.to/shekharp1536/what-claude-codes-leaked-architecture-reveals-about-building-production-mcp-servers-2026-10on)
 
@@ -70,7 +70,7 @@ Sources: [Claude Code MCP Docs](https://code.claude.com/docs/en/mcp), [Claude Co
 
 **How chat-driven execution works:** Natural language prompts are converted into code generation tasks. v0 uses Claude optimized for code generation, focusing on component-level output. Bolt.new generates full-stack applications from prompts, with "Ultra Mode" for extended context and multi-step reasoning.
 
-**Key takeaway for FlowForge:** The instant preview pattern -- user describes what they want, system builds it and shows a live preview -- should inspire how we show workflow execution results inline in chat.
+**Key takeaway for Allen:** The instant preview pattern -- user describes what they want, system builds it and shows a live preview -- should inspire how we show workflow execution results inline in chat.
 
 Sources: [AI-Driven Prototyping Comparison](https://addyo.substack.com/p/ai-driven-prototyping-v0-bolt-and), [v0 Guide 2026](https://www.nxcode.io/resources/news/v0-by-vercel-complete-guide-2026)
 
@@ -80,7 +80,7 @@ Sources: [AI-Driven Prototyping Comparison](https://addyo.substack.com/p/ai-driv
 
 **How streaming works:** Real-time data streaming back to the user as the workflow processes, supported by AI agent nodes.
 
-**Key takeaway for FlowForge:** The Chat Trigger -> Agent -> Respond to Chat pipeline is a clean model. Our chat messages should be able to trigger workflow executions and stream progress back.
+**Key takeaway for Allen:** The Chat Trigger -> Agent -> Respond to Chat pipeline is a clean model. Our chat messages should be able to trigger workflow executions and stream progress back.
 
 Sources: [n8n Chat Trigger Docs](https://docs.n8n.io/integrations/builtin/core-nodes/n8n-nodes-langchain.chattrigger/), [n8n AI Agent Docs](https://docs.n8n.io/integrations/builtin/cluster-nodes/root-nodes/n8n-nodes-langchain.agent/)
 
@@ -90,7 +90,7 @@ Sources: [n8n Chat Trigger Docs](https://docs.n8n.io/integrations/builtin/core-n
 
 **How it integrates:** Linear MCP server allows external AI tools (Claude, ChatGPT, Cursor) to query issues, create tasks, update statuses through natural conversation.
 
-**Key takeaway for FlowForge:** The `Cmd+J` quick-open chat panel is the ideal UX for a command center. Full workspace context injection makes the AI useful without users needing to specify what context to load.
+**Key takeaway for Allen:** The `Cmd+J` quick-open chat panel is the ideal UX for a command center. Full workspace context injection makes the AI useful without users needing to specify what context to load.
 
 Sources: [Linear AI](https://linear.app/ai), [Linear Agent Launch](https://thehuman2ai.com/product/radar/linear-agent-launch)
 
@@ -101,7 +101,7 @@ Sources: [Linear AI](https://linear.app/ai), [Linear Agent Launch](https://thehu
 | @mention autocomplete | Cursor | Index workflows, repos, roles as @-mentionable entities |
 | Directive routing | GitHub Copilot | Each @mention type maps to a context loader function |
 | Persistent agent with flow awareness | Windsurf | Chat agent maintains session context across messages |
-| Tool-based actions via MCP | Claude Code | Register FlowForge tools (run_workflow, query_db, etc.) |
+| Tool-based actions via MCP | Claude Code | Register Allen tools (run_workflow, query_db, etc.) |
 | Chat-triggered workflow execution | n8n | Messages can trigger workflows, stream progress back |
 | Natural language command center | Linear Agent | `Cmd+K` quick panel, full workspace context |
 | Inline progress/preview | v0 / Bolt.new | Show execution progress, results, diffs inline in chat |
@@ -139,15 +139,15 @@ The chat is a **resizable right-side panel** that can be toggled from any page, 
 | **Quick command** | `Cmd+K` | Centered overlay (like Linear's `Cmd+J`). Single input. Disappears after action. |
 | **Full page** | Navigate to `/chat` or click "expand" in panel | Full-width chat page with session list sidebar. For complex conversations. |
 
-**Why not floating bubble?** FlowForge is a power-user tool, not a customer support widget. A panel provides real estate for execution embeds, code blocks, and inline results.
+**Why not floating bubble?** Allen is a power-user tool, not a customer support widget. A panel provides real estate for execution embeds, code blocks, and inline results.
 
 ### 2.2 Backend Connection
 
-**SSE for streaming responses + REST for actions.** This reuses FlowForge's existing SSE infrastructure.
+**SSE for streaming responses + REST for actions.** This reuses Allen's existing SSE infrastructure.
 
 ```
                           REST API
-  UI (Chat Panel)  ────────────────►  FlowForge Server
+  UI (Chat Panel)  ────────────────►  Allen Server
         │                                    │
         │         SSE (chat stream)          │
         ◄────────────────────────────────────┘
@@ -170,7 +170,7 @@ The chat is a **resizable right-side panel** that can be toggled from any page, 
 5. When the LLM makes tool calls, the server executes them and streams results
 6. Final assistant message is persisted to `chat_messages`
 
-**Why SSE over WebSocket?** FlowForge already uses SSE for execution streaming (`stream.service.ts`). SSE is simpler, unidirectional (server-to-client), and sufficient since client-to-server communication uses REST.
+**Why SSE over WebSocket?** Allen already uses SSE for execution streaming (`stream.service.ts`). SSE is simpler, unidirectional (server-to-client), and sufficient since client-to-server communication uses REST.
 
 ### 2.3 Conversation History Storage
 
@@ -283,7 +283,7 @@ Messages are rendered as Markdown with extensions:
 | Mention | Syntax | What It Injects | Example |
 |---------|--------|----------------|---------|
 | `@workflow` | `@workflow-name` | Workflow YAML definition, node list, edge list, context requirements | `@coding-agent` |
-| `@repo` | `@repo-name` | Repo metadata (path, language, framework, tags, recent executions) | `@flowforge` |
+| `@repo` | `@repo-name` | Repo metadata (path, language, framework, tags, recent executions) | `@allen` |
 | `@role` | `@role-name` | Role system prompt, model, tools, capabilities | `@developer` |
 | `@execution` | `@exec-id` or `@latest` | Execution state, traces, logs, outputs, cost | `@latest` |
 | `@linear` | `@linear` | Signals the chat to use Linear MCP for ticket operations | `@linear` |
@@ -294,20 +294,20 @@ Messages are rendered as Markdown with extensions:
 #### @workflow mentions
 
 ```
-User: Run @coding-agent on @flowforge to fix the SSE disconnection bug
+User: Run @coding-agent on @allen to fix the SSE disconnection bug
 
 System resolves:
   @coding-agent -> workflow "coding-agent" (id: 6654abc...)
     Injects: { name, nodes, edges, input schema, description }
-  @flowforge -> repo "flowforge" (path: /Users/shreemantkumar/flowforge)
+  @allen -> repo "allen" (path: /Users/shreemantkumar/allen)
     Injects: { path, language: TypeScript, framework: Express+React, detected info }
 
 Action: Triggers coding-agent workflow execution with:
-  input: { task: "fix the SSE disconnection bug", repo_path: "/Users/shreemantkumar/flowforge" }
+  input: { task: "fix the SSE disconnection bug", repo_path: "/Users/shreemantkumar/allen" }
 
 Response: Shows live execution embed in chat:
   +--------------------------------------------------+
-  | EXECUTION: coding-agent on flowforge              |
+  | EXECUTION: coding-agent on allen              |
   | Status: RUNNING                                   |
   | [===========                    ] 3/8 nodes       |
   |                                                   |
@@ -477,7 +477,7 @@ The search is fuzzy -- "cod" matches "coding-agent", "coding-reviewer", "codex".
 
 ### 4.1 Context Sources
 
-The chat agent has access to the full FlowForge data model. Context is injected into the LLM prompt based on mentions, conversation history, and automatic relevance detection.
+The chat agent has access to the full Allen data model. Context is injected into the LLM prompt based on mentions, conversation history, and automatic relevance detection.
 
 | Source | Collection/Table | What Gets Injected | When |
 |--------|-----------------|-------------------|------|
@@ -537,7 +537,7 @@ Overflow strategy:
 ### 4.4 System Prompt Structure
 
 ```
-You are FlowForge Assistant, the command center for the FlowForge workflow
+You are Allen Assistant, the command center for the Allen workflow
 orchestration system. You help users:
 
 - Run and monitor workflows
@@ -571,7 +571,7 @@ orchestration system. You help users:
 
 | Category | Trigger Pattern | What Happens |
 |----------|----------------|--------------|
-| **Run workflow** | "Run @coding-agent on @flowforge to fix X" | Creates execution, streams progress inline |
+| **Run workflow** | "Run @coding-agent on @allen to fix X" | Creates execution, streams progress inline |
 | **One-shot role** | "@reviewer review this code" | Spawns role as single-turn agent, shows output inline |
 | **Create ticket** | "@linear create ticket: X" | Calls Linear MCP, shows ticket card |
 | **Query data** | "How many executions failed this week?" | Queries MongoDB, shows result as table/number |
@@ -638,7 +638,7 @@ Tool call: create_linear_ticket({
 })
 
 -> Calls Linear MCP: save_issue(...)
--> Returns: { id: "FLO-142", url: "https://linear.app/flowforge/issue/FLO-142" }
+-> Returns: { id: "FLO-142", url: "https://linear.app/allen/issue/FLO-142" }
 
 Chat renders ticket card inline.
 ```
@@ -741,7 +741,7 @@ The chat agent has access to these tools, registered as function definitions for
 
 ### 6.2 Tool Implementation Pattern
 
-Each tool is a simple async function that calls the existing FlowForge services:
+Each tool is a simple async function that calls the existing Allen services:
 
 ```typescript
 // tools/run-workflow.ts
@@ -1046,7 +1046,7 @@ ChatPanel/
 
 ```
 +-------------------------------------------------------------------+
-| @coding-agent fix the login timeout in @flowforge                  |
+| @coding-agent fix the login timeout in @allen                  |
 |  ^^^^^^^^^^^^^                         ^^^^^^^^^                   |
 |  [workflow chip]                       [repo chip]                 |
 +-------------------------------------------------------------------+
@@ -1075,7 +1075,7 @@ When user types "@":
 +-------------------------------------------------------------------+
 | [User avatar]  You                              2 min ago          |
 |                                                                    |
-| Run @coding-agent on @flowforge to fix the SSE disconnection bug   |
+| Run @coding-agent on @allen to fix the SSE disconnection bug   |
 |      ^^^^^^^^^^^^    ^^^^^^^^^                                     |
 |      [blue chip]     [green chip]                                  |
 +-------------------------------------------------------------------+
@@ -1084,9 +1084,9 @@ When user types "@":
 **Assistant message (streaming):**
 ```
 +-------------------------------------------------------------------+
-| [Bot avatar]  FlowForge                        just now            |
+| [Bot avatar]  Allen                        just now            |
 |                                                                    |
-| Starting the **coding-agent** workflow on the **flowforge** repo.  |
+| Starting the **coding-agent** workflow on the **allen** repo.  |
 |                                                                    |
 | Task: "Fix the SSE disconnection bug"                              |
 |                                                                    |
@@ -1112,7 +1112,7 @@ When user types "@":
 **Tool call indicator:**
 ```
 +-------------------------------------------------------------------+
-| [Bot avatar]  FlowForge                                            |
+| [Bot avatar]  Allen                                            |
 |                                                                    |
 |   [spinner] Calling run_workflow...                                 |
 |   [spinner] Querying execution history...                          |
@@ -1122,7 +1122,7 @@ When user types "@":
 **Ticket card:**
 ```
 +-------------------------------------------------------------------+
-| [Bot avatar]  FlowForge                                            |
+| [Bot avatar]  Allen                                            |
 |                                                                    |
 | Created the ticket:                                                |
 |                                                                    |
@@ -1141,12 +1141,12 @@ When user types "@":
 ```
 (dimmed overlay)
 +---------------------------------------------------+
-|  FlowForge Command                          Esc   |
+|  Allen Command                          Esc   |
 |                                                    |
-|  > Run coding-agent on flowforge to fix login_     |
+|  > Run coding-agent on allen to fix login_     |
 |                                                    |
 |  SUGGESTIONS:                                      |
-|    Run @coding-agent on @flowforge                 |
+|    Run @coding-agent on @allen                 |
 |    Show recent executions                          |
 |    Create Linear ticket                            |
 +---------------------------------------------------+
@@ -1347,14 +1347,14 @@ packages/ui/src/
 ### Example 1: Feature Implementation Request
 
 ```
-User: Run @coding-agent on @flowforge to add rate limiting to the
+User: Run @coding-agent on @allen to add rate limiting to the
       execution API. Max 10 concurrent executions per workflow.
 
-Assistant: [tool: run_workflow] Starting coding-agent on flowforge...
+Assistant: [tool: run_workflow] Starting coding-agent on allen...
 
   Workflow completed successfully in 8 minutes.
   - Branch: feat/rate-limit-execution-api
-  - PR: https://github.com/flowforge/flowforge/pull/87
+  - PR: https://github.com/allen/allen/pull/87
   - Changed: execution.service.ts, execution.routes.ts, execution.test.ts
   - Tests: 12 passed, 0 failed
 ```
@@ -1387,7 +1387,7 @@ Assistant: [tool: run_workflow] Starting coding-agent with context from the
 ### Example 3: PR Review
 
 ```
-User: @reviewer review PR #42 on @flowforge
+User: @reviewer review PR #42 on @allen
 
 Assistant: [tool: spawn_role] Spawning reviewer role with PR #42 context...
 
@@ -1432,7 +1432,7 @@ Assistant: [tool: create_linear_ticket] Creating Linear issue...
   | LINEAR: FLO-142                                               |
   | Fix SSE memory leak when clients disconnect without closing   |
   | Priority: HIGH  |  Label: Bug  |  Status: Backlog            |
-  | https://linear.app/flowforge/issue/FLO-142                    |
+  | https://linear.app/allen/issue/FLO-142                    |
   +---------------------------------------------------------------+
 ```
 
@@ -1471,15 +1471,15 @@ Assistant: [tool: get_execution_traces] Loading traces for implement node...
 ### Example 7: Cross-Repo Task
 
 ```
-User: Compare the SSE implementation in @flowforge with @es-data-pipeline.
+User: Compare the SSE implementation in @allen with @es-data-pipeline.
       Which one handles client cleanup better?
 
-Assistant: [tool: get_repo] Loading flowforge metadata...
+Assistant: [tool: get_repo] Loading allen metadata...
   [tool: get_repo] Loading es-data-pipeline metadata...
 
   Both repos use SSE for streaming, but with different patterns:
 
-  **FlowForge** (packages/server/src/services/stream.service.ts):
+  **Allen** (packages/server/src/services/stream.service.ts):
   - Uses a flat array of SSE clients
   - Cleans up on both 'close' and 'error' events
   - Broadcasts by executionId with wildcard '*' support
@@ -1491,7 +1491,7 @@ Assistant: [tool: get_repo] Loading flowforge metadata...
 
   **Verdict:** ES Data Pipeline handles cleanup better due to the
   heartbeat mechanism that detects stale connections proactively.
-  FlowForge should add a similar heartbeat.
+  Allen should add a similar heartbeat.
 ```
 
 ### Example 8: Learning Insights Query
@@ -1600,7 +1600,7 @@ Assistant: I will handle this in three steps:
 **Decision: Claude via Claude Code SDK (primary), with Codex as fallback for code-heavy one-shot tasks.**
 
 Rationale:
-- FlowForge already uses Claude Code SDK for workflow agent nodes
+- Allen already uses Claude Code SDK for workflow agent nodes
 - Claude has native tool-use support with structured outputs
 - Claude Sonnet provides a good balance of speed and quality for chat
 - For one-shot role spawning with the Codex provider, use the existing codex-executor.ts
@@ -1642,7 +1642,7 @@ const session = await claudeSDK.createSession({
 **Decision: SSE from existing infrastructure, with a dedicated chat stream endpoint.**
 
 Rationale:
-- FlowForge already has SSE infrastructure in stream.service.ts
+- Allen already has SSE infrastructure in stream.service.ts
 - The chat stream is separate from execution streams
 - Chat SSE carries: text tokens, tool_call events, tool_result events, attachments
 - Execution embeds subscribe to their own execution SSE streams independently
@@ -1670,7 +1670,7 @@ data: { sessionId, error: 'Rate limit exceeded' }
 **Decision: MongoDB, two collections: chat_sessions and chat_messages.**
 
 Rationale:
-- MongoDB is already the primary datastore for FlowForge
+- MongoDB is already the primary datastore for Allen
 - Flexible schema accommodates varying attachment types
 - Messages can be large (tool results, code blocks) -- MongoDB handles well
 - Indexing: sessionId + createdAt for message retrieval, text index on content for search
@@ -1711,7 +1711,7 @@ db.collection('chat_messages').createIndex({ content: 'text' });
 
 For workflow execution and ticket creation, the chat agent should ask for
 confirmation before executing: 'I will start the coding-agent workflow on
-flowforge. Proceed? [Yes/No]'. This prevents accidental expensive operations.
+allen. Proceed? [Yes/No]'. This prevents accidental expensive operations.
 
 ### 11.7 How to Inject System Context Without Bloating the Prompt?
 
@@ -1720,16 +1720,16 @@ flowforge. Proceed? [Yes/No]'. This prevents accidental expensive operations.
 The system prompt includes a lightweight context summary:
 ```
 ## System State Summary
-- Registered repos: flowforge (TypeScript/Express+React), es-data-pipeline (TypeScript/Express)
+- Registered repos: allen (TypeScript/Express+React), es-data-pipeline (TypeScript/Express)
 - Available workflows: coding-agent, coding-reviewer, plan-and-review
-- Active executions: 1 running (coding-agent on flowforge)
+- Active executions: 1 running (coding-agent on allen)
 - Recent failures: 2 in last 24h (both test node failures)
 - Learnings: 142 active (38 patterns, 22 mistakes, 82 domain knowledge)
 ```
 
 When the LLM needs more detail, it calls tools:
 - `get_workflow('coding-agent')` to get the full YAML definition
-- `get_repo('flowforge')` to get full repo metadata
+- `get_repo('allen')` to get full repo metadata
 - `search_learnings('test failures')` to get relevant learnings
 
 This keeps the base prompt under 5K tokens while giving the LLM access to
@@ -1740,7 +1740,7 @@ the full system state on demand.
 | Aspect | Chat Agent | Workflow Agent Node |
 |--------|-----------|-------------------|
 | Session | Persistent across messages | Created per node execution |
-| Tools | FlowForge system tools (20+) | filesystem, terminal, git (role-defined) |
+| Tools | Allen system tools (20+) | filesystem, terminal, git (role-defined) |
 | Purpose | Command center, orchestration | Execute a specific coding task |
 | CWD | None (operates via tools/APIs) | Repo worktree path |
 | Output | Markdown + attachments | Structured JSON (output_format) |

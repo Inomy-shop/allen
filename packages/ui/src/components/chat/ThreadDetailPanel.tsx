@@ -95,7 +95,7 @@ function renderSpan(text: string): React.ReactNode {
 
 function ToolCallBadge({ tool }: { tool: string }) {
   const shortName = tool
-    .replace('mcp__flowforge__', 'ff:')
+    .replace('mcp__allen__', 'al:')
     .replace('mcp__linear__', 'linear:')
     .replace('mcp__postgres__', 'pg:')
     .replace('mcp__mongodb__', 'mongo:');

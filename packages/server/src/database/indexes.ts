@@ -153,7 +153,7 @@ export async function ensureIndexes(db: Db): Promise<void> {
     { expireAfterSeconds: 0 },
   );
 
-  // Slack Thread Mappings (Slack thread → FlowForge chat session)
+  // Slack Thread Mappings (Slack thread → Allen chat session)
   await db.collection('slack_thread_mappings').createIndex(
     { slackTeamId: 1, slackChannelId: 1, slackThreadTs: 1 },
     { unique: true },

@@ -2,6 +2,7 @@ import { useState, useRef, useCallback, useEffect, forwardRef, useImperativeHand
 import { Send, Square, ChevronDown, Paperclip, Loader2, X, Sparkles, ShieldCheck } from 'lucide-react';
 import MentionAutocomplete, { type MentionOption } from './MentionAutocomplete';
 import { authHeaders } from '../../services/api';
+import { CHAT_PLACEHOLDER } from '../../lib/brand';
 
 export type ReasoningEffortValue = 'off' | 'low' | 'medium' | 'high' | 'max';
 
@@ -288,7 +289,7 @@ const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function ChatInput
           onChange={handleChange}
           onKeyDown={handleKeyDown}
           onPaste={handlePaste}
-          placeholder="Message FlowForge..."
+          placeholder={CHAT_PLACEHOLDER}
           disabled={streaming || disabled}
           rows={1}
           className="w-full resize-none bg-transparent px-3 pt-2.5 pb-10 text-sm text-theme-primary placeholder-gray-600 font-body focus:outline-none disabled:opacity-50 disabled:cursor-not-allowed"

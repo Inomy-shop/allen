@@ -4,7 +4,7 @@
 
 API="http://localhost:4023"
 
-echo "=== FlowForge Learning System Test ==="
+echo "=== Allen Learning System Test ==="
 echo ""
 
 # Check server
@@ -15,7 +15,7 @@ count_learnings() {
   node -e "
     const { MongoClient } = require('mongodb');
     async function main() {
-      const client = new MongoClient('mongodb://localhost:27017/flowforge');
+      const client = new MongoClient('mongodb://localhost:27017/allen');
       await client.connect();
       const count = await client.db().collection('learnings').countDocuments({status:'active'});
       console.log(count);
@@ -30,7 +30,7 @@ show_learnings() {
   node -e "
     const { MongoClient } = require('mongodb');
     async function main() {
-      const client = new MongoClient('mongodb://localhost:27017/flowforge');
+      const client = new MongoClient('mongodb://localhost:27017/allen');
       await client.connect();
       const learnings = await client.db().collection('learnings').find({status:'active'}).sort({createdAt:-1}).limit(10).toArray();
       for (const l of learnings) {
@@ -62,7 +62,7 @@ echo "Active learnings before: $BEFORE"
 echo ""
 
 echo "Step 2: Run a workflow (this will create learnings)"
-echo "Go to the FlowForge UI and run one of these:"
+echo "Go to the Allen UI and run one of these:"
 echo ""
 echo "  Option A: Run 'smart-answer' with question 'asdfghjkl'"
 echo "    → Tests: auto-gate stop → creates a 'fact' learning"

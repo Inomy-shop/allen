@@ -1,4 +1,4 @@
-# FlowForge — Deep Dive (baseline doc for comparison)
+# Allen — Deep Dive (baseline doc for comparison)
 
 **Last reviewed:** 2026-04-17
 **Category:** Self-hosted multi-agent workflow orchestration platform
@@ -46,7 +46,7 @@
   Plus **agent-resume retry** — re-asks the same session for properly-formatted JSON (max 2 attempts, 5s cooldown).
 - **`learning-manager.ts`** — Mem0-style ADD/UPDATE/DELETE/NOOP classification. See §3.
 - **`org-context.ts`** — `buildOrgContextBlock(db, opts)` generates live markdown org-chart + delegation graph, stamped onto every agent's system prompt at runtime. Not persisted.
-- **`mcp-loader.ts`** — loads enabled stdio MCP servers from Mongo, resolves `@secret:KEY` references via AES-256-GCM decryption (master key from `FLOWFORGE_MASTER_KEY` env or `~/.flowforge/master.key`). Bundles the FlowForge MCP server (see §4b).
+- **`mcp-loader.ts`** — loads enabled stdio MCP servers from Mongo, resolves `@secret:KEY` references via AES-256-GCM decryption (master key from `ALLEN_MASTER_KEY` env or `~/.allen/master.key`). Bundles the Allen MCP server (see §4b).
 - **`state-manager.ts`** — writes to 4 Mongo collections: `executions`, `checkpoints`, `execution_traces`, `execution_failure_reports`.
 - **`parallel.ts`** — merge-strategy resolver for parallel branch outputs.
 - **`embedding.ts`** — `all-MiniLM-L6-v2` (384-dim) via `@xenova/transformers` — **local embeddings, no API key**. Auto-downloads ~23 MB on first use. LRU cache (1000).
@@ -66,7 +66,7 @@
 | `classify-task` | Claude Haiku tags incoming task (bug/feature/refactor) |
 | `prompt-user` | Pause and ask user for text |
 | `create-workspace` | In-process call into `WorkspaceManager` (no HTTP hop) — polls until setup complete |
-| `persist-design-docs` | Commit generated design docs to a FlowForge branch |
+| `persist-design-docs` | Commit generated design docs to an Allen branch |
 
 ### 2e. Learning system (`learning-manager.ts`)
 - **5 extraction sources** (all fire-and-forget, non-blocking):
@@ -104,8 +104,8 @@
 | **Stream** | GET /:id/stream (SSE, mounted BEFORE requireAuth) |
 | **Dashboard / Analytics / Design-Docs / Files / Alerts / Secrets** | Standard CRUD |
 
-### 3b. FlowForge MCP server (`flowforge-mcp-server.ts`, 32 KB)
-A standalone MCP server spawned via `npx tsx flowforge-mcp-server.ts`. Proxies **16 chat tools** over stdio JSON-RPC to the running FlowForge server. Key design choices:
+### 3b. Allen MCP server (`allen-mcp-server.ts`, 32 KB)
+A standalone MCP server spawned via `npx tsx allen-mcp-server.ts`. Proxies **16 chat tools** over stdio JSON-RPC to the running Allen server. Key design choices:
 
 - **JWT auth** — mints a token using `JWT_ACCESS_SECRET` (cached 1h, refreshed 30s before expiry). Wraps global fetch to inject Authorization header.
 - **Spawn-tree context propagation** — passes parent executionId, caller node, root executionId via env vars so the next agent sees the spawn-tree.
@@ -119,7 +119,7 @@ A standalone MCP server spawned via `npx tsx flowforge-mcp-server.ts`. Proxies *
 - **Repo**: `list_repos`, `get_repo_context`.
 - **Delegation**: `delegate_to_agent`, `wait_for_delegation`, `answer_delegator`.
 
-This is FlowForge's defining feature: **agents can create agents, author workflows, recruit teammates, and delegate mid-task.**
+This is Allen's defining feature: **agents can create agents, author workflows, recruit teammates, and delegate mid-task.**
 
 ### 3c. Services (50+ modules)
 Highlights:
@@ -131,7 +131,7 @@ Highlights:
 - **`intervention.service.ts`** — wraps emitter with `wrapEmitterWithInterventionHook`: on `input_required`, dedupes + creates a `workflow_interventions` row, fires Slack DM + channel post.
 - **`workspace.service.ts`** — `git worktree add`, setup polling (npm install), base-port assignment, cleanup.
 - **`repo-context-scanner.service.ts`** — analyses registered repos, generates markdown brief (tech stack, module map).
-- **`claude-agents-importer.ts`** — scans `.claude/agents/*.md` in registered repos, parses frontmatter, imports as FlowForge agents.
+- **`claude-agents-importer.ts`** — scans `.claude/agents/*.md` in registered repos, parses frontmatter, imports as Allen agents.
 - **`org-seed.ts`** (121 KB) — seeds default teams, agents, delegation edges from YAML.
 - **`cron.service.ts`** — `node-cron` scheduling for workflows.
 - **`encryption.ts`** — AES-256-GCM for secrets with master key.
@@ -169,7 +169,7 @@ Chat, Execution List, Execution Detail, Interventions, Learnings, Workflow List,
 1. **Engine runs in-process with the server** — no network hop. Built-ins reach server infra via `EngineServices` DI. Agent subprocesses are the only network hop (over MCP stdio).
 2. **Claude Code SDK's `query()`, not the raw CLI** — allows passing a `stderr` callback (critical; the SDK otherwise pipes stderr to `"ignore"` and masks all errors).
 3. **Agent sessions live in `~/.claude/`** — so migrating executions across machines invalidates resumed sessions. Documented sharp edge.
-4. **`cwd` resolution is a fallback chain** — `worktree_path → repo_path → agent.sourceRepoPath → /tmp/flowforge`. **Never `process.cwd()`** (that's the server source tree).
+4. **`cwd` resolution is a fallback chain** — `worktree_path → repo_path → agent.sourceRepoPath → /tmp/allen`. **Never `process.cwd()`** (that's the server source tree).
 5. **Workflow YAML is diffable** — the declarative artifact is the source of truth; the visual builder is a view on top.
 6. **Every SSE event is persisted** — `execution_log` rows in Mongo let historical and sub-agent-spawn views rebuild full log streams.
 7. **Secrets encrypted at rest** — AES-256-GCM with master key from env or file.
@@ -179,7 +179,7 @@ Chat, Execution List, Execution Detail, Interventions, Learnings, Workflow List,
 ### Shipped (code + tests)
 - 5 node types, parallel execution with merge strategies, 3-layer retry, checkpoints, auto-gate
 - Chat system (multi-turn, streaming, delegation)
-- 16 MCP tools on FlowForge MCP server
+- 16 MCP tools on Allen MCP server
 - Learning system (5 sources, ADD/UPDATE/DELETE/NOOP, embedding search)
 - Org context live injection
 - Workspace management (git worktrees, port assignment, setup polling)
@@ -198,7 +198,7 @@ Chat, Execution List, Execution Detail, Interventions, Learnings, Workflow List,
 - Memory blocks (Letta-inspired) — `docs/plans/memory-system-gap-analysis-2026.md`
 - Skill library (markdown recipes on orphan branch) — `docs/plans/skill-library-design.md`
 - Bidirectional agent conversations (ask mid-task) — `docs/plans/bidirectional-agent-conversations.md`
-- AWS deployment (ECS + RDS + ALB) — `docs/plans/aws-deployment-flowforge.md`
+- AWS deployment (ECS + RDS + ALB) — `docs/plans/aws-deployment-allen.md`
 - Slack bot integration (commands + approvals beyond notifications) — `docs/plans/slack-bot-integration.md`
 - Full per-node reasoning assignments — `docs/plans/agent-reasoning-assignments.md` (partial)
 
@@ -218,11 +218,11 @@ Chat, Execution List, Execution Detail, Interventions, Learnings, Workflow List,
 ## 9. Weaknesses (honest self-assessment)
 
 1. **No structured memory blocks** — learnings are Mem0-style delta facts, not Letta-class core/recall/archival tiers. Biggest confirmed gap.
-2. **No autonomous trajectory planning (pass@k)** — Factory's published-benchmark approach beats FlowForge's single-path design.
-3. **No spec-driven planning artifact** — Kiro's EARS requirements + design + tasks pipeline is cleaner than FlowForge's design-doc built-in for greenfield work.
+2. **No autonomous trajectory planning (pass@k)** — Factory's published-benchmark approach beats Allen's single-path design.
+3. **No spec-driven planning artifact** — Kiro's EARS requirements + design + tasks pipeline is cleaner than Allen's design-doc built-in for greenfield work.
 4. **No event hooks** — only edges and cron; no file-save / PR-opened / tool-use triggers like Kiro.
 5. **Parallel-agent UX less polished than Conductor** — data model supports it, UI doesn't showcase it.
-6. **No published benchmark number** — Factory publishes SWE-bench; FlowForge doesn't.
+6. **No published benchmark number** — Factory publishes SWE-bench; Allen doesn't.
 7. **MongoDB + Node dependency** — lighter than many, but not as OS-friendly as pure-Node or pure-Go.
 8. **Skill library design-stage** — markdown recipe system planned but not shipped.
 
@@ -253,7 +253,7 @@ Chat, Execution List, Execution Detail, Interventions, Learnings, Workflow List,
 - `packages/engine/src/mcp-loader.ts` — MCP servers + secrets.
 - `packages/engine/src/org-context.ts` — live org-chart injection.
 - `packages/engine/src/output-extractor.ts` — 4-layer extraction + LLM fallback.
-- `packages/server/src/services/flowforge-mcp-server.ts` — 16 MCP tools + JWT + spawn-tree propagation.
+- `packages/server/src/services/allen-mcp-server.ts` — 16 MCP tools + JWT + spawn-tree propagation.
 - `packages/server/src/services/chat-tools.ts` — tool implementations.
 - `packages/server/src/services/execution.service.ts` — launch / wrap / queue.
 - `packages/server/src/services/workspace.service.ts` — git worktree lifecycle.

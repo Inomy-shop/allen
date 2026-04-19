@@ -116,7 +116,7 @@ async function connectServer(server: McpServerRecord, db: Db): Promise<McpConnec
   await sendRpc(conn, 'initialize', {
     protocolVersion: '2024-11-05',
     capabilities: {},
-    clientInfo: { name: 'flowforge-chat', version: '1.0.0' },
+    clientInfo: { name: 'allen-chat', version: '1.0.0' },
   });
 
   // Discover tools

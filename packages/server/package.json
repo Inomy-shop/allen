@@ -1,5 +1,5 @@
 {
-  "name": "@flowforge/server",
+  "name": "@allen/server",
   "version": "0.1.0",
   "type": "module",
   "main": "./dist/app.js",
@@ -13,7 +13,7 @@
   },
   "dependencies": {
     "@anthropic-ai/claude-code": "1.0.128",
-    "@flowforge/engine": "*",
+    "@allen/engine": "*",
     "@types/node-cron": "^3.0.11",
     "@xenova/transformers": "^2.17.2",
     "adm-zip": "^0.5.17",

@@ -159,7 +159,7 @@ async function checkStdioServer(server: McpServerRecord, db: Db): Promise<Health
         const initResult = await sendRpc('initialize', {
           protocolVersion: '2024-11-05',
           capabilities: {},
-          clientInfo: { name: 'flowforge-health-monitor', version: '1.0.0' },
+          clientInfo: { name: 'allen-health-monitor', version: '1.0.0' },
         });
 
         const toolsResult = await sendRpc('tools/list') as {

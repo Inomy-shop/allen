@@ -1,8 +1,8 @@
 /**
  * Slack Service
- * Bridges Slack Events API with FlowForge ChatService.
+ * Bridges Slack Events API with Allen ChatService.
  *
- * When a user mentions @flowforge in a Slack thread:
+ * When a user mentions @allen in a Slack thread:
  *  - First mention: fetch the entire thread, combine into one message, create a new chat session,
  *    run the agent, and post the response back to the thread.
  *  - Follow-up mentions in the same thread: continue the same chat session.
@@ -75,14 +75,14 @@ export class SlackService {
    * falls back to environment variables for local dev.
    */
   async getBotToken(): Promise<string | null> {
-    return (await this.secrets.get('FLOWFORGE_SLACK_BOT_TOKEN'))
+    return (await this.secrets.get('ALLEN_SLACK_BOT_TOKEN'))
       ?? (await this.secrets.get('SLACK_BOT_TOKEN'))
       ?? process.env.SLACK_BOT_TOKEN
       ?? null;
   }
 
   async getSigningSecret(): Promise<string | null> {
-    return (await this.secrets.get('FLOWFORGE_SLACK_SIGNING_SECRET'))
+    return (await this.secrets.get('ALLEN_SLACK_SIGNING_SECRET'))
       ?? (await this.secrets.get('SLACK_SIGNING_SECRET'))
       ?? process.env.SLACK_SIGNING_SECRET
       ?? null;

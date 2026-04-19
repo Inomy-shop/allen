@@ -101,7 +101,7 @@ function AddRepoDialog({ open, onClose, onCreated }: { open: boolean; onClose: (
             </label>
             <input type="text" value={url} onChange={e => setUrl(e.target.value)}
               placeholder="https://github.com/owner/repo or git@github.com:owner/repo.git" className="input w-full font-mono text-sm" />
-            <p className="text-[10px] text-theme-muted mt-1">HTTPS or SSH URL. Clones via SSH into the FlowForge repositories directory (default: ~/.flowforge/repositories/&lt;repo-name&gt;).</p>
+            <p className="text-[10px] text-theme-muted mt-1">HTTPS or SSH URL. Clones via SSH into the Allen repositories directory (default: ~/.allen/repositories/&lt;repo-name&gt;).</p>
           </div>
           <div>
             <label className="flex items-center gap-1 text-xs font-label font-semibold text-theme-secondary mb-2 uppercase tracking-widest">
@@ -573,7 +573,7 @@ function RepoContextViewer({ repoId, repoName, onClose }: { repoId: string; repo
                 {context.scanCostUsd != null && <span>Cost: <span className="text-theme-secondary">${context.scanCostUsd.toFixed(4)}</span></span>}
               </div>
               {/* Rendered markdown */}
-              <div className="prose-flowforge text-sm text-theme-secondary leading-relaxed">
+              <div className="prose-allen text-sm text-theme-secondary leading-relaxed">
                 {renderMarkdown(context.contextMarkdown)}
               </div>
             </div>

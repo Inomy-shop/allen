@@ -2,7 +2,7 @@
  * MCP Server Loader (shared)
  * Loads enabled MCP server configs from MongoDB and returns them
  * in the format expected by Claude Code SDK's mcpServers option.
- * Also builds the FlowForge MCP server config.
+ * Also builds the Allen MCP server config.
  */
 
 import type { Db } from 'mongodb';
@@ -18,17 +18,17 @@ let cachedMasterKey: Buffer | null = null;
 
 function loadMasterKey(): Buffer {
   if (cachedMasterKey) return cachedMasterKey;
-  const envKey = process.env.FLOWFORGE_MASTER_KEY;
+  const envKey = process.env.ALLEN_MASTER_KEY;
   if (envKey) {
     const buf = Buffer.from(envKey, 'base64');
     if (buf.length === 32) { cachedMasterKey = buf; return buf; }
   }
-  const file = join(homedir(), '.flowforge', 'master.key');
+  const file = join(homedir(), '.allen', 'master.key');
   if (existsSync(file)) {
     const buf = readFileSync(file);
     if (buf.length === 32) { cachedMasterKey = buf; return buf; }
   }
-  throw new Error('Master key not found — set FLOWFORGE_MASTER_KEY or create ~/.flowforge/master.key');
+  throw new Error('Master key not found — set ALLEN_MASTER_KEY or create ~/.allen/master.key');
 }
 
 function decryptValue(value: string): string {
@@ -103,41 +103,41 @@ export async function loadMcpServers(db: Db): Promise<Record<string, unknown>> {
 }
 
 /**
- * Get the FlowForge MCP server config.
+ * Get the Allen MCP server config.
  * This provides our built-in tools (list_workflows, wait_for_execution, etc.)
- * via a local MCP server that calls the FlowForge API.
+ * via a local MCP server that calls the Allen API.
  *
  * `extraEnv` lets callers stamp additional environment variables onto the
  * MCP server's subprocess env — used for spawn-tree propagation so the
- * MCP server can read FLOWFORGE_PARENT_EXECUTION_ID / _CALLER /
+ * MCP server can read ALLEN_PARENT_EXECUTION_ID / _CALLER /
  * _ROOT_EXECUTION_ID at startup and forward them into every `spawn_agent`
  * HTTP call. Passing them explicitly here (rather than relying on
  * claude-cli's parent-env inheritance for MCP children) keeps the chain
  * working regardless of whether the SDK merges or replaces env.
  */
-export function getFlowForgeMcpConfig(
+export function getAllenMcpConfig(
   extraEnv?: Record<string, string>,
 ): Record<string, unknown> | null {
-  const apiUrl = process.env.FLOWFORGE_API_URL ?? `http://localhost:${process.env.PORT ?? '4023'}`;
+  const apiUrl = process.env.ALLEN_API_URL ?? `http://localhost:${process.env.PORT ?? '4023'}`;
 
-  // Find the FlowForge MCP server script
+  // Find the Allen MCP server script
   const candidates = [
-    resolve(process.cwd(), 'src/services/flowforge-mcp-server.ts'),
-    resolve(process.cwd(), '../server/src/services/flowforge-mcp-server.ts'),
-    resolve(process.cwd(), 'dist/services/flowforge-mcp-server.js'),
+    resolve(process.cwd(), 'src/services/allen-mcp-server.ts'),
+    resolve(process.cwd(), '../server/src/services/allen-mcp-server.ts'),
+    resolve(process.cwd(), 'dist/services/allen-mcp-server.js'),
   ];
 
   const serverPath = candidates.find(p => existsSync(p));
   if (!serverPath) return null;
 
   // The MCP server needs JWT_ACCESS_SECRET to mint authenticated HTTP calls
-  // back into the FlowForge API. Previous versions relied on claude-cli
+  // back into the Allen API. Previous versions relied on claude-cli
   // merging parent env with our `env` field, which is an undocumented
   // assumption — we now pass JWT_ACCESS_SECRET explicitly so the MCP
   // server works even under an SDK/CLI version that replaces env instead
   // of merging.
   const env: Record<string, string> = {
-    FLOWFORGE_API_URL: apiUrl,
+    ALLEN_API_URL: apiUrl,
     PATH: process.env.PATH ?? '',
     HOME: process.env.HOME ?? '',
     ...(process.env.JWT_ACCESS_SECRET ? { JWT_ACCESS_SECRET: process.env.JWT_ACCESS_SECRET } : {}),
@@ -153,8 +153,8 @@ export function getFlowForgeMcpConfig(
 }
 
 /**
- * Load ALL MCP servers: FlowForge built-in + user-configured external.
- * `extraEnv` is forwarded to the FlowForge MCP server's env so callers
+ * Load ALL MCP servers: Allen built-in + user-configured external.
+ * `extraEnv` is forwarded to the Allen MCP server's env so callers
  * (node-executor, chat-tools.runSpawnInBackground) can stamp the
  * spawn-tree propagation vars without reaching inside the config dict.
  */
@@ -164,9 +164,9 @@ export async function loadAllMcpServers(
 ): Promise<Record<string, unknown>> {
   const config: Record<string, unknown> = {};
 
-  // FlowForge built-in tools
-  const ffConfig = getFlowForgeMcpConfig(extraEnv);
-  if (ffConfig) config.flowforge = ffConfig;
+  // Allen built-in tools
+  const ffConfig = getAllenMcpConfig(extraEnv);
+  if (ffConfig) config.allen = ffConfig;
 
   // External servers (Linear, Postgres, MongoDB, etc.)
   const external = await loadMcpServers(db);

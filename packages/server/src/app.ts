@@ -58,7 +58,7 @@ const PORT = parseInt(process.env.PORT ?? '4000', 10);
 // errors that propagate up through async boundaries and bypass normal
 // try/catch blocks in Express handlers. Without these top-level
 // handlers, a single pty spawn failure or an awaited Promise rejection
-// takes down the entire FlowForge server process — killing every chat
+// takes down the entire Allen server process — killing every chat
 // session, every running workflow, and every MCP health check.
 //
 // Log loudly and KEEP GOING. Individual request handlers are still
@@ -85,7 +85,7 @@ async function main(): Promise<void> {
   await bootstrapAdmin(db);
   const secretSvc = new SecretService(db);
   await secretSvc.migrateLegacyPlaintext();
-  await secretSvc.migrateToFlowforgePrefix(db);
+  await secretSvc.migrateToAllenPrefix(db);
   const mcpSvc = new McpService(db);
   await mcpSvc.migrateLegacyEnvLiterals();
   // Must run before migrateGhCliServersToSecret — that one touches `gh`
@@ -223,7 +223,7 @@ async function main(): Promise<void> {
 
 
   app.listen(PORT, () => {
-    console.log(`FlowForge server running on http://localhost:${PORT}`);
+    console.log(`Allen server running on http://localhost:${PORT}`);
   });
 
   // Start the MCP server health monitor (5-min background loop, alerts on outages)

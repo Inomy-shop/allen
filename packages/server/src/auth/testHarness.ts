@@ -40,7 +40,7 @@ export async function makeTestApp(options?: {
   const mongo = await MongoMemoryServer.create();
   const client = new MongoClient(mongo.getUri());
   await client.connect();
-  const db = client.db('flowforge-test');
+  const db = client.db('allen-test');
 
   // Minimal indexes for auth-only tests (matches production shape).
   await db.collection('users').createIndex({ email: 1 }, { unique: true });

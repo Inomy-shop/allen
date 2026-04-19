@@ -132,7 +132,7 @@ This is Kiro's push into "autonomous engineering agent" territory, closer to Fac
 
 - **Kiro autonomous agent** coordinates three sub-agent roles: research/planning, coding, verification.
 - **Agent hooks** can trigger specialized sub-agents on events.
-- **Not a general-purpose multi-agent framework** — not like Letta or FlowForge where you define arbitrary agents. Roles are opinionated to the spec-driven workflow.
+- **Not a general-purpose multi-agent framework** — not like Letta or Allen where you define arbitrary agents. Roles are opinionated to the spec-driven workflow.
 
 ## 10. Integrations
 

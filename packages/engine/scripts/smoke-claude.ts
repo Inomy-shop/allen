@@ -56,7 +56,7 @@ function parseArgs(argv: string[]): Args {
   --cwd DIR        working directory for claude-cli (default: process.cwd())
   --model NAME     model alias (default: sonnet)
   --prompt TEXT    user prompt (default: trivial PONG ping)
-  --mcp            attach the FlowForge MCP server (tests MCP handshake too)
+  --mcp            attach the Allen MCP server (tests MCP handshake too)
   --agent NAME     load this agent's system prompt + tools from Mongo
                    (default: plain call with no customSystemPrompt)
 `);
@@ -136,7 +136,7 @@ async function main(): Promise<void> {
     try {
       const { MongoClient } = await import('mongodb');
       const url = process.env.MONGODB_URI ?? 'mongodb://localhost:27017';
-      const dbName = process.env.MONGODB_DB ?? 'flowforge';
+      const dbName = process.env.MONGODB_DB ?? 'allen';
       const client = new MongoClient(url);
       await client.connect();
       const db = client.db(dbName);
@@ -156,21 +156,21 @@ async function main(): Promise<void> {
     }
   }
 
-  // 3. Optional: attach FlowForge MCP server (tests the stdio handshake)
+  // 3. Optional: attach Allen MCP server (tests the stdio handshake)
   let mcpServers: Record<string, unknown> | undefined;
   if (args.useMcp) {
-    h1('3. Building FlowForge MCP server config');
-    const mcpScript = resolvePath(process.cwd(), 'packages/server/src/services/flowforge-mcp-server.ts');
+    h1('3. Building Allen MCP server config');
+    const mcpScript = resolvePath(process.cwd(), 'packages/server/src/services/allen-mcp-server.ts');
     if (!existsSync(mcpScript)) {
       fail(`MCP server script not found at ${mcpScript} — run from repo root or adjust path`);
       process.exit(1);
     }
     mcpServers = {
-      flowforge: {
+      allen: {
         type: 'stdio',
         command: 'npx',
         args: ['tsx', mcpScript],
-        env: { FLOWFORGE_API_URL: process.env.FLOWFORGE_API_URL ?? 'http://localhost:4023' },
+        env: { ALLEN_API_URL: process.env.ALLEN_API_URL ?? 'http://localhost:4023' },
       },
     };
     ok(`MCP server: npx tsx ${mcpScript}`);
@@ -285,7 +285,7 @@ function interpret(err: Error, stderr: string): void {
   } else if (/unauthorized|401|credential|api key/.test(blob)) {
     warn('Authentication failed. Check ANTHROPIC_API_KEY or ~/.claude/credentials.json.');
   } else if (/mcp|handshake|jsonrpc/.test(blob)) {
-    warn('MCP handshake failure. The FlowForge MCP server failed to initialize. Check JWT_ACCESS_SECRET, FLOWFORGE_API_URL, and that `npx tsx` works from the server\'s PATH.');
+    warn('MCP handshake failure. The Allen MCP server failed to initialize. Check JWT_ACCESS_SECRET, ALLEN_API_URL, and that `npx tsx` works from the server\'s PATH.');
   } else if (/exited with code 1/.test(blob) && !stderr) {
     warn('Opaque exit-1 with no stderr captured. The subprocess crashed before the SDK wired up stderr piping.');
     warn('Try: DEBUG=1 tsx scripts/smoke-claude.ts … to force the SDK into debug mode.');

@@ -29,7 +29,7 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = resolve(__dirname, '..');
 const AUTH_DIR = resolve(REPO_ROOT, 'e2e/.auth');
 
-const MONGODB_URI = process.env.MONGODB_URI || 'mongodb://localhost:27017/flowforge';
+const MONGODB_URI = process.env.MONGODB_URI || 'mongodb://localhost:27017/allen';
 const JWT_ACCESS_SECRET = process.env.JWT_ACCESS_SECRET;
 const JWT_REFRESH_SECRET = process.env.JWT_REFRESH_SECRET;
 
@@ -139,7 +139,7 @@ async function main(): Promise<void> {
           origin: UI_ORIGIN,
           localStorage: [
             {
-              name: 'flowforge.auth.v1',
+              name: 'allen.auth.v1',
               value: JSON.stringify({ accessToken, refreshToken, user: publicUser }),
             },
           ],

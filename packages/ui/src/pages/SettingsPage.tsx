@@ -94,7 +94,7 @@ function ProfileTab() {
     <div className="space-y-6">
       <div>
         <h1 className="font-heading text-xl text-theme-primary tracking-wider">Profile</h1>
-        <p className="text-sm text-theme-muted font-body mt-1">Your FlowForge account</p>
+        <p className="text-sm text-theme-muted font-body mt-1">Your Allen account</p>
       </div>
 
       {/* Identity card */}
@@ -223,7 +223,7 @@ function LivePreview() {
         <h4 className="font-heading text-base text-accent-blue">Heading Font Sample</h4>
         <p className="font-body text-sm text-theme-secondary">This is body text rendered in the currently selected body font with longer content for readability testing.</p>
         <pre className="font-mono text-xs text-accent-green bg-surface-200/60 p-3 rounded-sm border border-border/40 overflow-x-auto">
-{`const pipeline = await FlowForge.execute({
+{`const pipeline = await Allen.execute({
   workflow: "data-enrichment",
   batchSize: 250,
 });`}
@@ -383,7 +383,7 @@ function McpTab() {
       <div>
         <h1 className="font-heading text-xl text-theme-primary tracking-wider">MCP Servers</h1>
         <p className="text-sm text-theme-muted font-body mt-1">
-          Connect external tools to the FlowForge Chat agent via Model Context Protocol servers.
+          Connect external tools to the Allen Chat agent via Model Context Protocol servers.
         </p>
       </div>
       <McpServerManager />
@@ -632,7 +632,7 @@ function SecretsTab() {
         <div className="text-xs text-theme-secondary font-body leading-relaxed">
           Secrets are encrypted at rest with AES-256-GCM. Saved values are never displayed in this UI or
           returned by the API — to update a secret, you must enter the new value. The master key lives
-          outside the database (in <span className="font-mono text-theme-primary">FLOWFORGE_MASTER_KEY</span>),
+          outside the database (in <span className="font-mono text-theme-primary">ALLEN_MASTER_KEY</span>),
           so even direct database access only reveals ciphertext.
         </div>
       </div>

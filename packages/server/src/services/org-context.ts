@@ -11,7 +11,7 @@
  *
  * Used by:
  *   - chat.service.ts buildAgentSystemPrompt (when a lead/agent is selected)
- *   - chat.service.ts getSystemPrompt (FlowForge Assistant default)
+ *   - chat.service.ts getSystemPrompt (Allen Assistant default)
  *   - engine/node-executor.ts (workflow-mode agent calls)
  */
 

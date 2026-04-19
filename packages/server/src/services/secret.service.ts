@@ -2,12 +2,12 @@ import type { Collection, Db } from 'mongodb';
 import { encrypt, decrypt, isEncrypted } from './encryption.js';
 
 /** Prefix applied to all MCP-referenced secrets. */
-export const FLOWFORGE_SECRET_PREFIX = 'FLOWFORGE_';
+export const ALLEN_SECRET_PREFIX = 'ALLEN_';
 
 /** Keys that should never be renamed (system-level vars). */
-const DO_NOT_RENAME = new Set(['FLOWFORGE_MASTER_KEY']);
+const DO_NOT_RENAME = new Set(['ALLEN_MASTER_KEY']);
 
-/** Keys that should be renamed to FLOWFORGE_<key> on migration. */
+/** Keys that should be renamed to ALLEN_<key> on migration. */
 const KEYS_TO_PREFIX = [
   'GITHUB_PERSONAL_ACCESS_TOKEN',
   'GH_TOKEN',
@@ -72,15 +72,15 @@ export class SecretService {
    */
   /**
    * One-shot migration: rename known non-prefixed secret keys to their
-   * FLOWFORGE_-prefixed form. Also rewrites any @secret:OLD references in
+   * ALLEN_-prefixed form. Also rewrites any @secret:OLD references in
    * the mcp_servers collection so existing MCP server configs keep working.
    * Idempotent — no-op once migration is complete.
    */
-  async migrateToFlowforgePrefix(db: Db): Promise<number> {
+  async migrateToAllenPrefix(db: Db): Promise<number> {
     let migrated = 0;
     for (const oldKey of KEYS_TO_PREFIX) {
       if (DO_NOT_RENAME.has(oldKey)) continue;
-      const newKey = FLOWFORGE_SECRET_PREFIX + oldKey;
+      const newKey = ALLEN_SECRET_PREFIX + oldKey;
 
       const oldDoc = await this.col.findOne({ key: oldKey });
       if (!oldDoc) continue;
@@ -125,7 +125,7 @@ export class SecretService {
       console.log(`[secrets] Migrated ${oldKey} → ${newKey}`);
     }
     if (migrated > 0) {
-      console.log(`[secrets] Renamed ${migrated} secret(s) to FLOWFORGE_ prefix`);
+      console.log(`[secrets] Renamed ${migrated} secret(s) to ALLEN_ prefix`);
     }
     return migrated;
   }

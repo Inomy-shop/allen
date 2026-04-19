@@ -1,8 +1,8 @@
 # Feature & Bug Workflows — Design Plan
 
-> Status: draft · owner: flowforge · last updated: 2026-04-15
+> Status: draft · owner: allen · last updated: 2026-04-15
 >
-> This document plans the two primary orchestration paths FlowForge needs to
+> This document plans the two primary orchestration paths Allen needs to
 > support: one for **new features** (plan → review → implement → validate →
 > test → PR) and one for **bug fixes** (investigate → fix → review → PR). It
 > is written with the "why" inline so later reviewers can understand the
@@ -10,7 +10,7 @@
 
 ## 1. Executive summary
 
-FlowForge needs two orchestration paths, not one. Mashing them into a single
+Allen needs two orchestration paths, not one. Mashing them into a single
 workflow produces either a bloated process for bug fixes or a flimsy process
 for features. Keeping them separate lets each one be sized to its actual
 risk profile.
@@ -147,7 +147,7 @@ start
  │    workflow state. All downstream coding, testing, validation,
  │    and review work happens inside `worktree_path` — nothing ever
  │    touches the main clone. Branch name derived from the PRD title
- │    + execution ID (e.g. `feature/ff-abc123-bookmark-workflows`).
+ │    + execution ID (e.g. `allen/bookmark-workflows-abc123`).
  │    Same built-in the existing coding-workflow.yml uses.
  │
  ├─▶ develop
@@ -681,7 +681,7 @@ provider: claude-cli
 model: sonnet
 reasoningEffort: high
 planMode: false
-tools: []         # relies on spawn_agent (from flowforge MCP) + delegate_to_agent
+tools: []         # relies on spawn_agent (from Allen MCP) + delegate_to_agent
 capabilities:
   - orchestration
   - parallel-coordination
@@ -943,7 +943,7 @@ start
  │    (code node, function: create-workspace — EXISTING built-in)
  │    Creates a git worktree + new branch for the bug fix. Branch
  │    name derived from the root cause + execution ID
- │    (e.g. `fix/ff-xyz456-null-deref-webhook`). All fix, test, review
+ │    (e.g. `allen/null-deref-webhook-xyz456`). All fix, test, review
  │    work happens in `worktree_path`. Same built-in the feature
  │    workflow and the existing coding-workflow use — zero new code.
  │
@@ -1280,7 +1280,7 @@ being the primary cwd resolver. No engine changes.
 
 **PR opened from the worktree's branch.** The `open_pr` node pushes the
 worktree branch to the remote and opens the PR. On PR merge (external
-to FlowForge), the worktree is kept for post-merge inspection until the
+to Allen), the worktree is kept for post-merge inspection until the
 workspace TTL expires or the user explicitly archives it via the
 workspaces UI.
 
@@ -1404,7 +1404,7 @@ does it match what we asked for" without reopening the chat session.
 
 - The workflow engine (agent / code / condition / human / workflow
   nodes, retries, parallel branches, state flow, mermaid preview).
-- The `secret` and `FLOWFORGE_` prefix pattern.
+- The `secret` and `ALLEN_` prefix pattern.
 - The `design_docs` collection shape from the previous plan (three sections,
   now clearly populated by three different producer agents instead of one).
 - The public `/api/files` download path for doc links in chat.
@@ -1514,7 +1514,7 @@ DOCS
 
 ACTION REQUIRED
 <rendered options as inline buttons in chat,
- or "Reply in chat, or click → [Review in FlowForge]" in Slack>
+ or "Reply in chat, or click → [Review in Allen]" in Slack>
 ```
 
 **Severity emojis (consistent everywhere):**
@@ -1557,7 +1557,7 @@ DOCS
 (none yet — docs will be produced after clarification)
 
 ACTION REQUIRED
-Reply in chat, or click → [Review in FlowForge](/executions/abc123)
+Reply in chat, or click → [Review in Allen](/executions/abc123)
 ```
 
 **Example rendering (plan approval gate):**
@@ -1584,7 +1584,7 @@ ACTION REQUIRED
 Approve → Start coding
 Request changes (inline comment)
 Reject
-or click → [Review in FlowForge](/executions/abc123)
+or click → [Review in Allen](/executions/abc123)
 ```
 
 **Example rendering (validator escalation):**
@@ -1612,7 +1612,7 @@ DOCS
 
 ACTION REQUIRED
 Accept / Abort / Mark follow-up
-or click → [Review in FlowForge](/executions/abc123)
+or click → [Review in Allen](/executions/abc123)
 ```
 
 ### 9.3 Slack notifications — delivery policy
@@ -1621,9 +1621,9 @@ Every intervention that the workflow pauses at fires a Slack message,
 **always**. Policy:
 
 - **User DM first.** If the user who started the workflow has a linked
-  Slack user ID (stored on their FlowForge user profile, or discovered
+  Slack user ID (stored on their Allen user profile, or discovered
   via `users.lookupByEmail`), DM them the formatted card.
-- **Channel post, if configured.** If a `FLOWFORGE_SLACK_INTERVENTIONS_CHANNEL`
+- **Channel post, if configured.** If a `ALLEN_SLACK_INTERVENTIONS_CHANNEL`
   secret is set, the same card is also posted to that channel. Useful
   for teams who want shared visibility.
 - **Both, when both are set.** DM for the owner, channel for visibility.
@@ -1632,13 +1632,13 @@ Every intervention that the workflow pauses at fires a Slack message,
 
 The Slack message body mirrors the chat card exactly (same emoji, same
 section headers, same docs list). The only delivery-specific difference
-is the action block: Slack gets a single *"Review in FlowForge →"* link
+is the action block: Slack gets a single *"Review in Allen →"* link
 button; the chat card has inline action buttons (Approve / Reject / etc.)
-because the chat UI is already wired to the flowforge backend for
+because the chat UI is already wired to the Allen backend for
 direct action capture.
 
 **Why link-through instead of Slack interactive buttons (for v1):** Slack
-interactivity requires wiring a signed webhook back to flowforge for
+interactivity requires wiring a signed webhook back to Allen for
 every button click, plus state management for the interaction token.
 It's a real piece of work. Link-through is one line — a URL to the
 interventions page. Upgrade path: add Slack interactivity later as an
@@ -1723,7 +1723,7 @@ When a user responds to an intervention, the response shape is:
 **Resume-with-feedback semantics for loop-back targets:**
 
 When an intervention response causes a loop back to an earlier node,
-the engine reuses FlowForge's existing retry-with-feedback machinery
+the engine reuses Allen's existing retry-with-feedback machinery
 (already in `node-executor.ts:146-161` for auto-retry from condition
 gates). Specifically:
 
@@ -1988,8 +1988,8 @@ analyst` stays in `product`. Closed.
 
 - DM the user who started the workflow run (resolved via
   `users.lookupByEmail` first, falling back to a stored `slackUserId`
-  on the FlowForge profile).
-- Also post to the channel in `FLOWFORGE_SLACK_INTERVENTIONS_CHANNEL`
+  on the Allen profile).
+- Also post to the channel in `ALLEN_SLACK_INTERVENTIONS_CHANNEL`
   if that secret is set.
 - Neither is required — if both are missing, the intervention still
   surfaces in chat; Slack is additive.
@@ -2068,13 +2068,13 @@ the `code_review` step so the reviewer checks docs and code together.
 
 **Q8. ~~PR auto-merge on green CI~~ — RESOLVED (A: never auto-merge)**
 
-- FlowForge never merges PRs. The workflow ends at "PR open, CI
+- Allen never merges PRs. The workflow ends at "PR open, CI
   queued, summary posted."
 - The human always sees the diff on GitHub with syntax highlighting,
   CI status, branch protection rules, and team-specific merge checks
   before clicking merge.
 - GitHub's own auto-merge feature is independent — if the user enables
-  it on the PR manually or via a repo setting, FlowForge doesn't
+  it on the PR manually or via a repo setting, Allen doesn't
   interfere. We just don't participate in the merge decision at all.
 - Revisit as a per-workflow or per-repo setting if the manual merge
   ever becomes an actual bottleneck. YAGNI for v1.
@@ -2095,7 +2095,7 @@ Three surfaces, all backed by the same backend (§9.7):
    dedicated page. A sidebar on the execution page also lists every
    intervention from that run in chronological order.
 
-**Resume-with-feedback:** all loop-back actions use FlowForge's
+**Resume-with-feedback:** all loop-back actions use Allen's
 existing retry-with-feedback machinery in `node-executor.ts`. The
 intervention service sets `state.__retry_target`, `state.retry_context`,
 and `state.__retry_attempt`, and the executor handles the rest — the
@@ -2132,7 +2132,7 @@ This applies to:
 - human-triggered retries from intervention responses (§9.6a)
 - retries from `resume_on_retry: true` node config (the default)
 
-**Zero engine changes.** The existing FlowForge retry-with-feedback
+**Zero engine changes.** The existing Allen retry-with-feedback
 machinery already behaves this way; this entry just makes it explicit
 so there's no ambiguity later about whether the system prompt gets
 re-injected on retry. It does not.
@@ -2232,4 +2232,4 @@ sub-agents.
 - No multi-language support in the plan documents — docs are generated in
   whatever language the user requests come in, but we don't translate.
 - No learning from past validator failures — the learning system (existing
-  in flowforge) could feed back, but wiring it up is a separate concern.
+  in allen) could feed back, but wiring it up is a separate concern.

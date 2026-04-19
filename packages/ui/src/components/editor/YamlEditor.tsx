@@ -66,7 +66,7 @@ export default function YamlEditor({ value, onChange, errors, warnings, readOnly
     if (!monacoRef.current) return;
 
     const resolvedMode = resolveColorMode(colorMode);
-    monacoRef.current.editor.defineTheme('flowforge-active', {
+    monacoRef.current.editor.defineTheme('allen-active', {
       base: resolvedMode === 'dark' ? 'vs-dark' : 'vs',
       inherit: true,
       rules: [],
@@ -81,7 +81,7 @@ export default function YamlEditor({ value, onChange, errors, warnings, readOnly
         'editorCursor.foreground': getCssVarHex('--color-accent', '#00d4ff'),
       },
     });
-    monacoRef.current.editor.setTheme('flowforge-active');
+    monacoRef.current.editor.setTheme('allen-active');
   }, [colorMode]);
 
   const handleMount: OnMount = useCallback((editor, monaco) => {
@@ -130,7 +130,7 @@ export default function YamlEditor({ value, onChange, errors, warnings, readOnly
       });
     }
 
-    monacoRef.current.editor.setModelMarkers(model, 'flowforge', markers);
+    monacoRef.current.editor.setModelMarkers(model, 'allen', markers);
   }, [errors, warnings, value]);
 
   useEffect(() => {

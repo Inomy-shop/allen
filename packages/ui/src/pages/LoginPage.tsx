@@ -3,6 +3,7 @@ import { useNavigate, useSearchParams } from 'react-router-dom';
 import { Activity } from 'lucide-react';
 import { auth } from '../services/api';
 import { useAuthStore } from '../stores/authStore';
+import { BRAND_NAME, BRAND_TAGLINE } from '../lib/brand';
 
 export default function LoginPage() {
   const navigate = useNavigate();
@@ -45,7 +46,7 @@ export default function LoginPage() {
             <div className="absolute inset-0 blur-md bg-accent-blue/30 rounded-full" />
           </div>
           <span className="font-heading text-lg font-bold text-theme-primary tracking-widest uppercase">
-            FlowForge
+            {BRAND_NAME}
           </span>
         </div>
         <form
@@ -87,7 +88,7 @@ export default function LoginPage() {
             {loading ? 'Signing in…' : 'Sign in'}
           </button>
           <p className="text-[11px] text-theme-subtle text-center pt-2">
-            FlowForge is invite-only. Ask an admin for an account.
+            {BRAND_TAGLINE}
           </p>
         </form>
       </div>

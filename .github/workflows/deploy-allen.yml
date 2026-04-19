@@ -1,4 +1,4 @@
-name: Deploy FlowForge
+name: Deploy Allen
 
 on:
   workflow_dispatch:
@@ -22,7 +22,7 @@ env:
 jobs:
   deploy:
     runs-on: ubuntu-latest
-    # FlowForge-specific secrets come from repo secrets.
+    # Allen-specific secrets come from repo secrets.
     # AWS creds come from org secrets (AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY).
     env:
       AWS_ACCESS_KEY_ID:     ${{ secrets.AWS_ACCESS_KEY_ID }}
@@ -30,7 +30,7 @@ jobs:
       AWS_DEFAULT_REGION:    us-east-1
       # Terraform sensitive vars — from repo secrets
       TF_VAR_docdb_uri:      ${{ secrets.DOCDB_URI }}
-      TF_VAR_master_key:     ${{ secrets.FLOWFORGE_MASTER_KEY }}
+      TF_VAR_master_key:     ${{ secrets.ALLEN_MASTER_KEY }}
 
     steps:
       - name: Checkout code
@@ -62,8 +62,8 @@ jobs:
             --instance-ids "$INSTANCE_ID" \
             --document-name "AWS-RunShellScript" \
             --timeout-seconds 600 \
-            --comment "FlowForge deploy (commit: ${{ github.sha }})" \
-            --parameters 'commands=["sudo -u ubuntu bash /opt/flowforge/infra/templates/bootstrap.sh 2>&1 | tee /tmp/flowforge-deploy.log"]' \
+            --comment "Allen deploy (commit: ${{ github.sha }})" \
+            --parameters 'commands=["sudo -u ubuntu bash /opt/allen/infra/templates/bootstrap.sh 2>&1 | tee /tmp/allen-deploy.log"]' \
             --query 'Command.CommandId' --output text)
 
           echo "SSM Command: $COMMAND_ID"

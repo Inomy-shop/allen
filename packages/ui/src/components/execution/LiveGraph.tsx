@@ -146,14 +146,14 @@ function ExecutionNode({ data, selected }: NodeProps) {
 
 import TerminalNode from '../canvas/TerminalNode';
 
-const nodeTypes = { 'exec-node': ExecutionNode, 'ff-terminal': TerminalNode };
+const nodeTypes = { 'exec-node': ExecutionNode, 'al-terminal': TerminalNode };
 
 import ConditionalEdge from '../canvas/ConditionalEdge';
 import RetryEdge from '../canvas/RetryEdge';
 
 const edgeTypes = {
-  'ff-conditional': ConditionalEdge,
-  'ff-retry': RetryEdge,
+  'al-conditional': ConditionalEdge,
+  'al-retry': RetryEdge,
 };
 
 // ── Dagre Layout ──
@@ -252,7 +252,7 @@ export default function LiveGraph({ workflow, nodeStates, selectedNode, onSelect
             sourceHandle: isRetry ? retrySide : 'bottom',
             target: to,
             targetHandle: isRetry ? retrySide : 'top',
-            type: isRetry ? 'ff-retry' : edge.condition ? 'ff-conditional' : 'default',
+            type: isRetry ? 'al-retry' : edge.condition ? 'al-conditional' : 'default',
             label: edge.condition ?? (edge.parallel ? '∥ parallel' : undefined),
             labelStyle: { fill: 'rgb(var(--color-text-secondary))', fontSize: 10, fontFamily: 'var(--font-mono)' },
             labelBgStyle: { fill: 'rgb(var(--color-surface-100))', fillOpacity: 0.95 },
@@ -308,7 +308,7 @@ export default function LiveGraph({ workflow, nodeStates, selectedNode, onSelect
 
     const rfNodes: Node[] = [
       // START terminal
-      { id: 'START', type: 'ff-terminal', position: { x: 0, y: 0 }, data: { label: 'START' }, selectable: false, draggable: true },
+      { id: 'START', type: 'al-terminal', position: { x: 0, y: 0 }, data: { label: 'START' }, selectable: false, draggable: true },
     ];
 
     rfNodes.push(...nodeEntries.map(([name, nodeDef]) => ({
@@ -326,7 +326,7 @@ export default function LiveGraph({ workflow, nodeStates, selectedNode, onSelect
     })));
 
     // END terminal
-    rfNodes.push({ id: 'END', type: 'ff-terminal', position: { x: 0, y: 0 }, data: { label: 'END' }, selectable: false, draggable: true });
+    rfNodes.push({ id: 'END', type: 'al-terminal', position: { x: 0, y: 0 }, data: { label: 'END' }, selectable: false, draggable: true });
 
     return layoutGraph(rfNodes, edges);
   }, [workflowNodes, edges]);

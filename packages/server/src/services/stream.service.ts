@@ -1,5 +1,5 @@
 import type { Response } from 'express';
-import type { SSEEvent, EngineEventEmitter } from '@flowforge/engine';
+import type { SSEEvent, EngineEventEmitter } from '@allen/engine';
 import type { Db } from 'mongodb';
 
 type SSEClient = {

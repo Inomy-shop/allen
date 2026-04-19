@@ -343,7 +343,7 @@ Appears inline in the chat (not a modal). Has:
 
 ### Phase 1: Data model + ask_caller + answer_question
 
-**Files:** `agent-conversation.service.ts`, `chat-tools.ts`, `flowforge-mcp-server.ts`
+**Files:** `agent-conversation.service.ts`, `chat-tools.ts`, `allen-mcp-server.ts`
 
 1. Add `pendingQuestion` field to `AgentConversation` interface and service
 2. Add `waiting_for_answer` status
@@ -358,7 +358,7 @@ Appears inline in the chat (not a modal). Has:
 
 ### Phase 2: ask_user + user answer API
 
-**Files:** `chat-tools.ts`, `chat.service.ts`, `chat.routes.ts`, `flowforge-mcp-server.ts`
+**Files:** `chat-tools.ts`, `chat.service.ts`, `chat.routes.ts`, `allen-mcp-server.ts`
 
 1. Add `pendingUserQuestion` to chat session model
 2. Implement `ask_user` tool — emit SSE, block until answered
@@ -420,7 +420,7 @@ Appears inline in the chat (not a modal). Has:
 |------|--------|
 | `agent-conversation.service.ts` | Add pendingQuestion, waiting_for_answer, sessions map, findActiveConversation |
 | `chat-tools.ts` | Add ask_caller, answer_question, ask_user. Enhance get_delegation_result, delegate_to_agent |
-| `flowforge-mcp-server.ts` | Add 3 new tools + MCP handlers |
+| `allen-mcp-server.ts` | Add 3 new tools + MCP handlers |
 | `chat.routes.ts` | Add POST /sessions/:id/agent-answer |
 | `chat.service.ts` | Add pendingUserQuestion handling |
 | `useChat.ts` | Handle new SSE events, pending user questions |

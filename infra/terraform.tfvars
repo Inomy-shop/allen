@@ -3,7 +3,7 @@
 #   - Local:  source infra/.env then run infra/apply.sh
 #   - GitHub: set in GitHub Environment secrets (auto-exported as TF_VAR_*)
 
-domain         = "flowforge.inomy.shop"
+domain         = "allen.inomy.ai"
 alb_arn        = "arn:aws:elasticloadbalancing:us-east-1:257394465633:loadbalancer/app/InomyA-ApiSe-7LeVvZDFml8I/7bc0ff09e912f0c1"
 instance_id    = "i-086efc3e8ad92eb7f"
 vpc_id         = "vpc-033eec7eb19e904f0"

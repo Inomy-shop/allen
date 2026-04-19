@@ -350,7 +350,7 @@ export function useExecution(id: string | undefined) {
     }
 
     // Spawn-tree freshness. Two triggers:
-    //   1. `agent_tool_start` for `mcp__flowforge__spawn_agent` — the orchestrator
+    //   1. `agent_tool_start` for `mcp__allen__spawn_agent` — the orchestrator
     //      just called spawn_agent, so a new child row is landing in Mongo.
     //      Schedule a fetch ~400ms out to let the insert settle.
     //   2. `node_completed` / `node_failed` — catches terminal state for any

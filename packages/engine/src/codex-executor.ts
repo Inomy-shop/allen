@@ -6,7 +6,7 @@ import { extractOutputs, buildOutputInstruction } from './output-extractor.js';
 
 /** Scratch dir when no worktree/repo is in scope. Never fall back to
  * process.cwd() — that's the engine's own source tree. */
-const AGENT_FALLBACK_CWD = '/tmp/flowforge';
+const AGENT_FALLBACK_CWD = '/tmp/allen';
 
 interface CodexResult {
   outputs: Record<string, unknown>;

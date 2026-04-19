@@ -1,6 +1,6 @@
 # Workflow Execution — How It Actually Works
 
-An end-to-end reference for how FlowForge runs a workflow: entry points, graph
+An end-to-end reference for how Allen runs a workflow: entry points, graph
 traversal, node execution for each of the five node types, the retry system
 (both in-engine edge retries and operator-initiated retry-from-node), log
 streaming, checkpoints, and all the surrounding machinery.
@@ -25,7 +25,7 @@ The engine runs **in-process** with the server. There is no network hop
 between them — built-ins can reach server infrastructure via the in-process
 `services` hook (`packages/engine/src/types.ts:EngineServices`). There **is**
 a network hop between agent subprocesses (claude-cli / codex-cli) and the
-engine, which goes through the FlowForge MCP server over stdio JSON-RPC.
+engine, which goes through the Allen MCP server over stdio JSON-RPC.
 
 ---
 
@@ -150,7 +150,7 @@ through before the engine starts.
                                          nodes can resolve by name
 4. Build EngineConfig:
      { db, agents, builtIns, workflows, emitter, services }
-5. new FlowForgeEngine(config)
+5. new AllenEngine(config)
 6. runningEngines.set(executionId, engine)  — so cancel/pause can find it
 7. engine.run(workflow, input, 0, { executionId, workflowId })  — fire-and-forget
      .finally(() => {
@@ -463,8 +463,8 @@ The big one. Walkthrough:
    live-injected via `buildOrgContextBlock(db, { forAgent, includeFullChart,
    includeMeta })` — this is the runtime-injected org chart + delegation
    targets.
-6. Load MCP servers via `loadAllMcpServers(db)`. This includes the FlowForge
-   MCP server (stdio-launched via `npx tsx flowforge-mcp-server.ts`) plus any
+6. Load MCP servers via `loadAllMcpServers(db)`. This includes the Allen
+   MCP server (stdio-launched via `npx tsx allen-mcp-server.ts`) plus any
    external MCP servers from the `mcp_servers` collection.
 7. Call the Claude Code SDK via `query()`:
    ```ts
@@ -659,8 +659,8 @@ being handed to the engine. The wrapper's `emit`:
      right input controls.
    - Inserts a `workflow_interventions` row via `InterventionService.create()`,
      which also fires a Slack DM (to the run starter) + channel post via
-     `SlackNotifier` if `FLOWFORGE_SLACK_BOT_TOKEN` and
-     `FLOWFORGE_SLACK_INTERVENTIONS_CHANNEL` are configured.
+     `SlackNotifier` if `ALLEN_SLACK_BOT_TOKEN` and
+     `ALLEN_SLACK_INTERVENTIONS_CHANNEL` are configured.
 
 The engine itself knows nothing about interventions. It just emits
 `input_required` and waits on `waitForInput`. The wrapper is what bridges
@@ -775,7 +775,7 @@ HTTP POST /api/executions
   → launchExecution(execId, workflowId, workflow, input)
     → createSSEEmitter(execId)
     → wrapEmitterWithInterventionHook(...)
-    → new FlowForgeEngine(config)
+    → new AllenEngine(config)
     → engine.run(workflow, input, 0, { executionId, workflowId })
       [FIRE AND FORGET — HTTP returns { id, status: 'running' }]
 
@@ -792,7 +792,7 @@ engine.run:
           → cwd = state.repo_path (validated, exists)
           → resume = undefined (sessions empty)
           → full prompt built from template
-          → loadAllMcpServers(db) → flowforge
+          → loadAllMcpServers(db) → allen
           → query({ prompt, options: { stderr: callback, ... } })
           → for await message: agent_text events, tool_use events
           → result: { sessionId, cost: 5.99, turns: 12 }
@@ -920,7 +920,7 @@ Every emit above is:
 
 ```
 packages/engine/src/
-├── engine.ts              # FlowForgeEngine class, executeGraph, executeSingleNode,
+├── engine.ts              # AllenEngine class, executeGraph, executeSingleNode,
 │                          # getNextNodes, retryFromNode, synthesiseRetryContext
 ├── node-executor.ts       # executeNode dispatch; executeAgentNode (the big one),
 │                          # executeCodeNode, executeHumanNode, executeWorkflowNode,
@@ -937,7 +937,7 @@ packages/engine/src/
 ├── parallel.ts            # mergeParallelOutputs — merges branch outputs with
 │                          # conflict handling
 ├── mcp-loader.ts          # loadAllMcpServers — builds the mcpServers config for
-│                          # query(), including the FlowForge MCP server
+│                          # query(), including the Allen MCP server
 ├── org-context.ts         # buildOrgContextBlock — live-injected org chart for
 │                          # system prompts
 ├── learning-manager.ts    # LearningManager — query, confirm, contradict,
@@ -956,7 +956,7 @@ packages/server/src/
 │   │                            # addSSEClient, setStreamDb
 │   ├── intervention.service.ts  # InterventionService — create, recordResponse,
 │   │                            # list, listForWorkflowRun
-│   ├── flowforge-mcp-server.ts  # The MCP server claude-cli connects to —
+│   ├── allen-mcp-server.ts  # The MCP server claude-cli connects to —
 │   │                            # proxies 16 chat tools over stdio JSON-RPC
 │   ├── chat-tools.ts            # spawn_agent, run_workflow, cancel_execution,
 │   │                            # get_execution, etc. — the tool registry

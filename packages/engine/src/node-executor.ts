@@ -18,7 +18,7 @@ import { statSync, mkdirSync } from 'node:fs';
  * AGENT_FALLBACK_CWD — duplicated here because the engine package can't
  * import from the server package. Never fall back to process.cwd() because
  * that's the server's source tree. */
-const AGENT_FALLBACK_CWD = '/tmp/flowforge';
+const AGENT_FALLBACK_CWD = '/tmp/allen';
 
 function emitLog(
   deps: NodeExecutorDeps,
@@ -388,20 +388,20 @@ ${context}
   const { query } = await import('@anthropic-ai/claude-code');
 
   // Spawn-tree context vars — propagated to claude-cli (and on to the
-  // FlowForge MCP server it spawns) so any `spawn_agent` tool call made
+  // Allen MCP server it spawns) so any `spawn_agent` tool call made
   // inside this agent's session can tag the resulting execution row with
   // its caller. Root id lets the Phase 3 log fan-out broadcast grandchild
   // events up to the top of the tree in one indexed lookup. See
   // chat-tools.ts:spawnAgent for where these are consumed.
   const spawnContextEnv: Record<string, string> = {
-    FLOWFORGE_PARENT_EXECUTION_ID: deps.executionId ?? '',
-    FLOWFORGE_PARENT_CALLER: nodeName,
-    FLOWFORGE_ROOT_EXECUTION_ID:
-      process.env.FLOWFORGE_ROOT_EXECUTION_ID || deps.executionId || '',
+    ALLEN_PARENT_EXECUTION_ID: deps.executionId ?? '',
+    ALLEN_PARENT_CALLER: nodeName,
+    ALLEN_ROOT_EXECUTION_ID:
+      process.env.ALLEN_ROOT_EXECUTION_ID || deps.executionId || '',
   };
 
   // Load MCP servers so agent nodes can access Linear, Postgres, etc.
-  // We stamp the spawn-tree context onto the FlowForge MCP server's env
+  // We stamp the spawn-tree context onto the Allen MCP server's env
   // block here so it's carried as a first-class subprocess env, not left
   // to the SDK's undocumented merge behavior.
   let mcpServers: Record<string, unknown> | undefined;

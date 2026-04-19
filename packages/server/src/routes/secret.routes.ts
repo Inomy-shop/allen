@@ -7,7 +7,7 @@ export function secretRoutes(db: Db): Router {
   const router = Router();
   const service = new SecretService(db);
 
-  // GET /api/secrets — list keys only; supports ?prefix=FLOWFORGE_ filter
+  // GET /api/secrets — list keys only; supports ?prefix=ALLEN_ filter
   router.get('/', async (req: Request, res: Response) => {
     try {
       const keys = await service.list();

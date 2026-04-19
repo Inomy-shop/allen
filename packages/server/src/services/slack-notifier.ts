@@ -7,18 +7,19 @@
  *
  *   1. DM the user who started the workflow run (resolved via
  *      users.lookupByEmail or a stored Slack user ID).
- *   2. If FLOWFORGE_SLACK_INTERVENTIONS_CHANNEL is set, also post
+ *   2. If ALLEN_SLACK_INTERVENTIONS_CHANNEL is set, also post
  *      to that channel.
  *   3. Neither is required — if both are missing, the intervention
  *      still surfaces in chat; Slack is additive.
  *
  * This module is separate from `slack.service.ts` so the event-
- * handling path (Slack → FlowForge) and the notification path
- * (FlowForge → Slack) can evolve independently. They share the same
+ * handling path (Slack → Allen) and the notification path
+ * (Allen → Slack) can evolve independently. They share the same
  * bot token, resolved via the SecretService.
  */
 
 import type { Db } from 'mongodb';
+import { BRAND_NAME } from '@allen/engine';
 import { SecretService } from './secret.service.js';
 
 const SLACK_API = 'https://slack.com/api';
@@ -118,7 +119,7 @@ export class SlackNotifier {
 
   private async getBotToken(): Promise<string | null> {
     return (
-      (await this.secrets.get('FLOWFORGE_SLACK_BOT_TOKEN')) ??
+      (await this.secrets.get('ALLEN_SLACK_BOT_TOKEN')) ??
       (await this.secrets.get('SLACK_BOT_TOKEN')) ??
       process.env.SLACK_BOT_TOKEN ??
       null
@@ -127,8 +128,8 @@ export class SlackNotifier {
 
   private async getChannel(): Promise<string | null> {
     return (
-      (await this.secrets.get('FLOWFORGE_SLACK_INTERVENTIONS_CHANNEL')) ??
-      process.env.FLOWFORGE_SLACK_INTERVENTIONS_CHANNEL ??
+      (await this.secrets.get('ALLEN_SLACK_INTERVENTIONS_CHANNEL')) ??
+      process.env.ALLEN_SLACK_INTERVENTIONS_CHANNEL ??
       null
     );
   }
@@ -224,7 +225,7 @@ export class SlackNotifier {
     const reviewUrl = appBaseUrl
       ? `${appBaseUrl}/interventions/${input.intervention_id}`
       : `/interventions/${input.intervention_id}`;
-    lines.push(`Review in FlowForge → ${reviewUrl}`);
+    lines.push(`Review in ${BRAND_NAME} → ${reviewUrl}`);
     return lines.join('\n');
   }
 
@@ -293,7 +294,7 @@ export class SlackNotifier {
       elements: [
         {
           type: 'button',
-          text: { type: 'plain_text', text: 'Review in FlowForge', emoji: true },
+          text: { type: 'plain_text', text: `Review in ${BRAND_NAME}`, emoji: true },
           url: reviewUrl,
           style: 'primary',
         },

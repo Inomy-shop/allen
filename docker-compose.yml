@@ -12,7 +12,7 @@ services:
     ports:
       - "4000:4000"
     environment:
-      MONGODB_URI: mongodb://mongodb:27017/flowforge
+      MONGODB_URI: mongodb://mongodb:27017/allen
     volumes:
       - ~/.claude:/root/.claude:ro
     depends_on:

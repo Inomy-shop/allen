@@ -253,7 +253,7 @@ function InlineMarkdown({
 }) {
   return (
     <div
-      className={`rounded-md border border-border/30 bg-surface-100/50 p-3 overflow-auto prose-flowforge ${fill ? 'h-full min-h-0' : ''}`}
+      className={`rounded-md border border-border/30 bg-surface-100/50 p-3 overflow-auto prose-allen ${fill ? 'h-full min-h-0' : ''}`}
       style={fill ? undefined : { maxHeight }}
     >
       <div className="text-xs text-theme-secondary leading-relaxed break-words">

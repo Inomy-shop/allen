@@ -44,7 +44,7 @@ export function yamlToReactFlow(
             sourceHandle: isRetry ? retrySide : 'bottom',
             target: to,
             targetHandle: isRetry ? retrySide : 'top',
-            type: isRetry ? 'ff-retry' : edge.condition ? 'ff-conditional' : 'default',
+            type: isRetry ? 'al-retry' : edge.condition ? 'al-conditional' : 'default',
             label: edge.condition ?? (edge.parallel ? '∥' : undefined),
             data: {
               condition: edge.condition,
@@ -96,7 +96,7 @@ export function yamlToReactFlow(
   const startPos = g.node('START');
   rfNodes.push({
     id: 'START',
-    type: 'ff-terminal',
+    type: 'al-terminal',
     position: { x: (startPos?.x ?? 0) - 60, y: (startPos?.y ?? 0) - 20 },
     data: { label: 'START' },
     deletable: false,
@@ -109,7 +109,7 @@ export function yamlToReactFlow(
 
     rfNodes.push({
       id: name,
-      type: `ff-${type}`,
+      type: `al-${type}`,
       position: {
         x: (dagreNode?.x ?? 0) - NODE_WIDTH / 2,
         y: (dagreNode?.y ?? 0) - NODE_HEIGHT / 2,
@@ -122,7 +122,7 @@ export function yamlToReactFlow(
   const endPos = g.node('END');
   rfNodes.push({
     id: 'END',
-    type: 'ff-terminal',
+    type: 'al-terminal',
     position: { x: (endPos?.x ?? 0) - 60, y: (endPos?.y ?? 0) - 20 },
     data: { label: 'END' },
     deletable: false,
