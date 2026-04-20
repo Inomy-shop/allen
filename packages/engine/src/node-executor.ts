@@ -485,10 +485,18 @@ ${context}
       }
     }
 
+    // System-prompt wiring. `append` (default) layers the agent prompt on top
+    // of Claude Code's built-in agentic scaffolding so the model keeps iterating
+    // until the task is done. Set ALLEN_SYSTEM_PROMPT_MODE=custom to revert
+    // to full replacement (previous behavior).
+    const systemPromptMode = process.env.ALLEN_SYSTEM_PROMPT_MODE === 'custom' ? 'custom' : 'append';
+
     const conv = query({
       prompt: effectivePrompt,
       options: {
-        customSystemPrompt: effectiveSystem,
+        ...(systemPromptMode === 'custom'
+          ? { customSystemPrompt: effectiveSystem }
+          : { appendSystemPrompt: effectiveSystem }),
         model: resolvedModel,
         cwd,
         resume: opts.resumeSession,

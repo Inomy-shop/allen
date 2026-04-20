@@ -868,7 +868,14 @@ async function runSpawnInBackground(
         ...(Object.keys(mcpServers).length > 0 ? { mcpServers } : {}),
       };
       if (currentResumeSession) sdkOptions.resume = currentResumeSession;
-      else sdkOptions.customSystemPrompt = `${(role.system as string) ?? ''}${repoContextBlock}${workspaceConstraint}`;
+      else {
+        // ALLEN_SYSTEM_PROMPT_MODE: 'append' (default) preserves Claude
+        // Code's built-in agentic scaffolding; 'custom' reverts to the old
+        // full-replacement behavior. Matches node-executor.ts wiring.
+        const systemPromptBody = `${(role.system as string) ?? ''}${repoContextBlock}${workspaceConstraint}`;
+        if (process.env.ALLEN_SYSTEM_PROMPT_MODE === 'custom') sdkOptions.customSystemPrompt = systemPromptBody;
+        else sdkOptions.appendSystemPrompt = systemPromptBody;
+      }
 
       // Register abort controller for cancel support
       const abortController = new AbortController();
@@ -2010,7 +2017,8 @@ async function runAgentTurn(
       const abortController = new AbortController();
       const sdkOptions: Record<string, unknown> = { model, maxTurns: 50, permissionMode: 'bypassPermissions', cwd: resolveAgentCwd(cwd), mcpServers, abortController };
       if (resumeSessionId) sdkOptions.resume = resumeSessionId;
-      else sdkOptions.customSystemPrompt = systemPrompt;
+      else if (process.env.ALLEN_SYSTEM_PROMPT_MODE === 'custom') sdkOptions.customSystemPrompt = systemPrompt;
+      else sdkOptions.appendSystemPrompt = systemPrompt;
       registerExecutionProcess(convId, process.pid, () => abortController.abort());
 
       for await (const message of query({ prompt, options: sdkOptions as any })) {
