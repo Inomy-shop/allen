@@ -222,7 +222,7 @@ export async function runCodexCLI(
     args.push('resume', '--json', '--dangerously-bypass-approvals-and-sandbox', '--skip-git-repo-check');
     // Apply resume-safe overrides (effort only) BEFORE the session id + prompt.
     if (resumeSafeArgs.length > 0) args.push(...resumeSafeArgs);
-    args.push(resumeSessionId, prompt);
+    args.push('--', resumeSessionId, prompt);
   } else {
     args.push('--json', '--dangerously-bypass-approvals-and-sandbox', '--skip-git-repo-check');
     if (resolvedArgs.length > 0) {
