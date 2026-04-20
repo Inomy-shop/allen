@@ -5,7 +5,7 @@
 
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { existsSync, mkdirSync } from 'node:fs';
+import { existsSync, mkdirSync, rmSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { spawn, type ChildProcess } from 'node:child_process';
 import type { Db, ObjectId } from 'mongodb';
@@ -370,6 +370,10 @@ export class WorkspaceManager {
 
     // Remove worktree
     try { await exec('git', ['worktree', 'remove', ws.worktreePath, '--force'], { cwd: ws.repoPath }); } catch {}
+    // Fallback: ensure the worktree directory is gone even if `git worktree remove` failed
+    if (ws.worktreePath && existsSync(ws.worktreePath)) {
+      try { rmSync(ws.worktreePath, { recursive: true, force: true }); } catch {}
+    }
 
     await this.col.updateOne({ _id: new ObjectId(id) }, { $set: { status: 'archived', updatedAt: new Date() } });
   }

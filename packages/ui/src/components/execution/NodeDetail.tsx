@@ -9,6 +9,7 @@ import StreamOutput from './StreamOutput';
 import { useSettingsStore } from '../../stores/settingsStore';
 import { resolveColorMode } from '../../lib/theme';
 import { Wrench, CheckCircle, Send, MessageSquare, ChevronDown, ChevronRight } from 'lucide-react';
+import { ToolCallLog } from '../common/ToolCallLog';
 
 // ── Inline Monaco (read-only, compact) ──
 
@@ -692,6 +693,10 @@ export default function NodeDetail({
     : (activeTrace?.renderedPrompt ?? nodeState?.renderedPrompt);
   const streamText = viewAttempt != null ? (activeTrace?.rawResponse ?? '') : (nodeState?.streamText ?? activeTrace?.rawResponse ?? '');
   const activity: ActivityEntry[] = viewAttempt != null ? (activeTrace?.activity ?? []) : (nodeState?.activity ?? activeTrace?.activity ?? []);
+  // Persisted tool-call records for this attempt. Rendered as an expandable
+  // log so the user can see full input + output per tool invocation, same
+  // as the AgentExecutionView's tool log.
+  const toolCalls: any[] = activeTrace?.toolCalls ?? [];
   const inputState = viewAttempt != null
     ? activeTrace?.inputState
     : (activeTrace?.inputState ?? nodeState?.inputState);
@@ -920,11 +925,19 @@ export default function NodeDetail({
           </section>
         )}
 
-        {/* Bottom secondary region — activity + spawned agents. Bounded
+        {/* Bottom secondary region — tool calls + activity + spawned agents. Bounded
             max-height with its own scroll so it doesn't compete with the
-            tabs for vertical space. Hidden entirely when both are empty. */}
-        {(activity.length > 0 || spawnedChildren.length > 0 || descendantsMode) && (
+            tabs for vertical space. Hidden entirely when all are empty. */}
+        {(toolCalls.length > 0 || activity.length > 0 || spawnedChildren.length > 0 || descendantsMode) && (
           <div className="shrink-0 overflow-auto" style={{ maxHeight: '40%' }}>
+            {/* Tool calls — expandable per-row I/O, same component as the
+                AgentExecutionView panel. */}
+            {toolCalls.length > 0 && (
+              <Section title={`Tool Calls (${toolCalls.length})`} defaultOpen={false}>
+                <ToolCallLog calls={toolCalls} title="Tool Calls" />
+              </Section>
+            )}
+
             {/* Activity log */}
             {activity.length > 0 && (
               <Section title={`Activity (${activity.length})`} defaultOpen={false}>

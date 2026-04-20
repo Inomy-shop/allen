@@ -5,9 +5,10 @@ import { repos as reposApi } from '../services/api';
 import {
   GitPullRequest, RefreshCw, Loader2, ExternalLink,
   GitMerge, XCircle, FolderGit2, Clock, FileDiff,
-  Plus, Minus, ArrowRight,
+  Plus, Minus, ArrowRight, Wrench, X,
 } from 'lucide-react';
 import { SetupProgressDialog } from '../components/workspace/SetupProgressDialog';
+import { workflows as workflowsApi, executions as executionsApi } from '../services/api';
 
 export default function PullRequestListPage() {
   const navigate = useNavigate();
@@ -17,6 +18,11 @@ export default function PullRequestListPage() {
   const [statusFilter, setStatusFilter] = useState<string>('open');
   const [pendingWsId, setPendingWsId] = useState<string | null>(null);
   const [repos, setRepos] = useState<any[]>([]);
+  // Resolve-CodeRabbit manual trigger state
+  const [resolveOpen, setResolveOpen] = useState(false);
+  const [resolveUrl, setResolveUrl] = useState('');
+  const [resolveBusy, setResolveBusy] = useState(false);
+  const [resolveError, setResolveError] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -48,6 +54,31 @@ export default function PullRequestListPage() {
     } catch (err: any) { alert(err.message); }
   }
 
+  /** Kick off the resolve-pr-reviews workflow for a PR URL — either a
+   *  workflow-owned PR (Flow A) or an external one (Flow B). The server
+   *  built-in handles the branching; the UI just submits the URL. */
+  async function handleTriggerResolve(prUrl: string, navigateAfter = true) {
+    setResolveBusy(true);
+    setResolveError(null);
+    try {
+      const list = await workflowsApi.list();
+      const workflow = list.find((w: any) => w.name === 'resolve-pr-reviews');
+      if (!workflow) throw new Error('resolve-pr-reviews workflow not found on the server');
+      const exec = await executionsApi.start(workflow._id, {
+        pr_url: prUrl.trim(),
+        review_bot_logins: 'coderabbitai,coderabbitai[bot]',
+        already_processed_comment_ids: '[]',
+      });
+      setResolveOpen(false);
+      setResolveUrl('');
+      if (navigateAfter) navigate(`/executions/${exec.id}`);
+    } catch (err: any) {
+      setResolveError(err?.message ?? 'Failed to trigger resolution');
+    } finally {
+      setResolveBusy(false);
+    }
+  }
+
   function statusIcon(status: string) {
     if (status === 'merged') return <GitMerge className="w-4 h-4 text-purple-400" />;
     if (status === 'closed') return <XCircle className="w-4 h-4 text-red-400" />;
@@ -77,6 +108,14 @@ export default function PullRequestListPage() {
           <GitPullRequest className="w-5 h-5 text-blue-400" />
           <h1 className="text-lg font-heading font-semibold text-theme-primary">Pull Requests</h1>
           <span className="flex-1" />
+          <button
+            onClick={() => { setResolveOpen(true); setResolveUrl(''); setResolveError(null); }}
+            className="btn-ghost text-xs py-1.5 px-3 flex items-center gap-1.5"
+            title="Manually trigger CodeRabbit review resolution for any PR URL (including external ones)"
+          >
+            <Wrench className="w-3.5 h-3.5" />
+            Resolve CodeRabbit
+          </button>
           <button onClick={handleSync} disabled={syncing} className="btn-ghost text-xs py-1.5 px-3 flex items-center gap-1.5 disabled:opacity-50">
             <RefreshCw className={`w-3.5 h-3.5 ${syncing ? 'animate-spin' : ''}`} />
             {syncing ? 'Syncing...' : 'Sync from GitHub'}
@@ -138,6 +177,15 @@ export default function PullRequestListPage() {
                         <FolderGit2 className="w-3.5 h-3.5" /> Open Workspace
                       </button>
                     )}
+                    {pr.status === 'open' && pr.url && (
+                      <button
+                        onClick={(e) => { e.stopPropagation(); handleTriggerResolve(pr.url, true); }}
+                        className="btn-ghost text-[11px] py-1 px-2 flex items-center gap-1"
+                        title="Trigger the resolve-pr-reviews workflow for this PR"
+                      >
+                        <Wrench className="w-3.5 h-3.5" /> Resolve CodeRabbit
+                      </button>
+                    )}
                     {pr.url && (
                       <a href={pr.url} target="_blank" rel="noopener noreferrer" className="btn-ghost p-1.5" title="View on GitHub">
                         <ExternalLink className="w-3.5 h-3.5" />
@@ -156,6 +204,63 @@ export default function PullRequestListPage() {
           onComplete={(ws) => { setPendingWsId(null); navigate(`/workspaces/${ws._id}`); }}
           onFailed={() => setPendingWsId(null)}
         />
+      )}
+
+      {resolveOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-md">
+          <div className="card w-full max-w-lg overflow-hidden shadow-glow-blue/20 animate-in fade-in zoom-in-95 duration-200">
+            <div className="px-6 py-5 border-b border-border/60 flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-sm bg-accent-yellow/10 border border-accent-yellow/30 flex items-center justify-center">
+                  <Wrench className="w-5 h-5 text-accent-yellow" />
+                </div>
+                <div>
+                  <h2 className="font-heading text-sm font-bold text-theme-primary tracking-wider uppercase">Resolve CodeRabbit Comments</h2>
+                  <p className="text-[11px] text-theme-muted font-mono">Paste any GitHub PR URL — external PRs create a fresh workspace automatically.</p>
+                </div>
+              </div>
+              <button onClick={() => setResolveOpen(false)} className="p-2 rounded-sm hover:bg-surface-200 text-theme-muted hover:text-theme-secondary">
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+            <div className="px-6 py-5 space-y-3">
+              {resolveError && (
+                <div className="text-xs text-accent-red bg-accent-red/10 border border-accent-red/20 rounded-sm px-3 py-2">{resolveError}</div>
+              )}
+              <label className="flex items-center gap-1 text-xs font-label font-semibold text-theme-secondary uppercase tracking-widest">
+                PR URL <span className="text-accent-red normal-case text-[10px]">*</span>
+              </label>
+              <input
+                type="text"
+                value={resolveUrl}
+                onChange={e => setResolveUrl(e.target.value)}
+                placeholder="https://github.com/owner/repo/pull/123"
+                className="input w-full font-mono text-sm"
+                autoFocus
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' && resolveUrl.trim() && !resolveBusy) {
+                    handleTriggerResolve(resolveUrl, true);
+                  }
+                }}
+              />
+              <p className="text-[10px] text-theme-muted">
+                <strong>Flow A:</strong> if this PR was created by an Allen workflow, the original workspace will be reused. <br />
+                <strong>Flow B:</strong> otherwise, the repo must be registered at /repos — a fresh workspace will be created and archived after the fix lands.
+              </p>
+            </div>
+            <div className="flex items-center gap-3 px-6 py-5 border-t border-border/60 bg-surface-50/50">
+              <button onClick={() => setResolveOpen(false)} className="flex-1 btn-ghost">Cancel</button>
+              <button
+                onClick={() => handleTriggerResolve(resolveUrl, true)}
+                disabled={resolveBusy || !resolveUrl.trim()}
+                className="flex-1 btn-primary inline-flex items-center justify-center gap-2"
+              >
+                {resolveBusy ? <Loader2 className="w-4 h-4 animate-spin" /> : <Wrench className="w-4 h-4" />}
+                {resolveBusy ? 'Starting…' : 'Run Workflow'}
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );

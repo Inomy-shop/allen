@@ -146,6 +146,15 @@ const TOOLS = [
   // ── Repos ──
   { name: 'list_repos', description: 'List registered repositories with tech stack.', params: {} },
   { name: 'get_repo_context', description: 'Get the deep agent-generated context document for a repo (markdown describing each module).', params: { repo_path: 'string (required) — absolute path of a registered repo or workspace worktree' } },
+  { name: 'find_repo_for_pr_url', description: 'Given a GitHub PR URL, find the registered Allen repo whose remote matches (owner/repo). Returns null if the repo is not registered.', params: { pr_url: 'string (required) — https://github.com/<owner>/<repo>/pull/<n>' } },
+
+  // ── Pull Requests ──
+  { name: 'find_pr_by_url', description: 'Look up a pull_requests row by full PR URL. Returns the stored metadata (workspaceId, originatingExecutionId, processedCommentIds, resolutionAttempts, …) or null.', params: { pr_url: 'string (required)' } },
+  { name: 'mark_pr_synced', description: 'Stamp a pull_requests row with a completed CodeRabbit-resolution round. Appends processedCommentIds, increments resolutionAttempts, records lastReviewedHeadSha.', params: { pr_id: 'string (required) — pull_requests _id', head_sha: 'string (required)', processed_comment_ids: 'object — array of GH comment id strings that were applied' } },
+
+  // ── Workspaces ──
+  { name: 'get_workspace', description: 'Fetch a workspace row by id. Returns worktreePath, branch, baseBranch, status, repoId, prUrl, services, and more.', params: { workspace_id: 'string (required) — workspaces _id' } },
+  { name: 'create_workspace_for_pr', description: 'Create a fresh workspace from a PR branch (Flow B). Used when a PR has no linked workspace. Polls until setup completes. Returns { workspace_id, worktree_path, branch, base_branch }.', params: { pr_url: 'string (required)', repo_id: 'string (required)', branch: 'string (required) — PR head branch', base_branch: 'string (required) — PR base branch', pr_number: 'number (required)', pr_title: 'string — optional display name' } },
 
   // ── Delegation & Communication ──
   { name: 'delegate_to_agent', description: 'Delegate a task to another agent. Pass conversation_id to continue an existing thread.', params: { agent_name: 'string (required)', task: 'string (required)', context: 'object — relevant context', conversation_id: 'string — existing conversation ID to continue' } },
@@ -251,6 +260,76 @@ async function executeTool(name: string, args: Record<string, unknown>): Promise
         return { error: `API ${res.status}: ${await res.text().catch(() => 'unknown')}` };
       }
       return res.json();
+    }
+    case 'find_repo_for_pr_url': {
+      const prUrl = String(args.pr_url ?? '');
+      if (!prUrl) return { error: 'pr_url is required' };
+      return callAPI(`/api/repos/by-pr-url?url=${encodeURIComponent(prUrl)}`);
+    }
+    case 'find_pr_by_url': {
+      const prUrl = String(args.pr_url ?? '');
+      if (!prUrl) return { error: 'pr_url is required' };
+      return callAPI(`/api/pull-requests/by-url?url=${encodeURIComponent(prUrl)}`);
+    }
+    case 'mark_pr_synced': {
+      const prId = String(args.pr_id ?? '');
+      const headSha = String(args.head_sha ?? '');
+      const processedCommentIds = Array.isArray(args.processed_comment_ids)
+        ? (args.processed_comment_ids as unknown[]).map(String)
+        : [];
+      if (!prId) return { error: 'pr_id is required' };
+      return callAPI(`/api/pull-requests/${encodeURIComponent(prId)}/mark-synced`, 'POST', {
+        headSha, processedCommentIds,
+      });
+    }
+    case 'get_workspace': {
+      const wsId = String(args.workspace_id ?? '');
+      if (!wsId) return { error: 'workspace_id is required' };
+      return callAPI(`/api/workspaces/${encodeURIComponent(wsId)}`);
+    }
+    case 'create_workspace_for_pr': {
+      const prUrl = String(args.pr_url ?? '');
+      const repoId = String(args.repo_id ?? '');
+      const branch = String(args.branch ?? '');
+      const baseBranch = String(args.base_branch ?? '');
+      const prNumber = Number(args.pr_number);
+      const prTitle = (args.pr_title as string | undefined) ?? `PR #${prNumber}`;
+      if (!prUrl || !repoId || !branch || !baseBranch || !prNumber) {
+        return { error: 'pr_url, repo_id, branch, base_branch, pr_number are all required' };
+      }
+      // Look up the repo for name/path metadata required by the workspace
+      // creation endpoint.
+      const repo = await callAPI(`/api/repos/${encodeURIComponent(repoId)}`) as any;
+      if (!repo || repo.error) return { error: `Repo ${repoId} not found` };
+      const ws = await callAPI('/api/workspaces', 'POST', {
+        repoId,
+        repoName: repo.name,
+        repoPath: repo.path,
+        branch, baseBranch,
+        name: `coderabbit-pr-${prNumber}`,
+        source: 'pr',
+        prNumber, prTitle, prUrl,
+        meta: { coderabbitOnly: true, createdForPrUrl: prUrl },
+      }) as any;
+      if (ws?.error) return { error: ws.error };
+      // Poll until status=active (≤10 min).
+      const wsId = String(ws._id ?? ws.id);
+      const deadline = Date.now() + 600_000;
+      while (Date.now() < deadline) {
+        const cur = await callAPI(`/api/workspaces/${encodeURIComponent(wsId)}`) as any;
+        if (cur?.status === 'active' || cur?.status === 'running') {
+          return {
+            workspace_id: wsId,
+            worktree_path: cur.worktreePath,
+            branch: cur.branch,
+            base_branch: cur.baseBranch,
+            status: cur.status,
+          };
+        }
+        if (cur?.status === 'failed') return { error: 'workspace setup failed' };
+        await new Promise(r => setTimeout(r, 2000));
+      }
+      return { error: 'workspace setup timed out (10 min)' };
     }
     case 'list_agents': {
       // Return minimal fields — full details via get_agent

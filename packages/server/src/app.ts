@@ -44,6 +44,7 @@ import { createMcpBundleCleanupAction } from './services/mcp-bundle.service.js';
 import { cronRoutes } from './routes/cron.routes.js';
 import { designDocRoutes } from './routes/design-doc.routes.js';
 import { interventionRoutes } from './routes/intervention.routes.js';
+import { linearRoutes } from './routes/linear.routes.js';
 import { authRoutes } from './routes/auth.routes.js';
 import { userRoutes } from './routes/users.routes.js';
 import { bootstrapAdmin } from './services/adminBootstrap.js';
@@ -124,6 +125,7 @@ async function main(): Promise<void> {
       'coding-workflow',
       'feature-plan-and-implement',
       'bug-investigate-and-fix',
+      'resolve-pr-reviews',
       'test-human-intervention',
       'test-chat-loop',
       'test-create-workspace',
@@ -137,6 +139,8 @@ async function main(): Promise<void> {
   cronService.registerSystemAction(createRepoScanIfChangedAction(db));
   cronService.registerSystemAction(createRepoPullAllAction(db));
   cronService.registerSystemAction(createMcpBundleCleanupAction(db));
+  const { createCodeRabbitSweepAction } = await import('./services/coderabbit-sweep.service.js');
+  cronService.registerSystemAction(createCodeRabbitSweepAction(db));
   await cronService.start();
 
   const app = express();
@@ -216,6 +220,7 @@ async function main(): Promise<void> {
   app.use('/api/crons', cronRoutes(db, cronService));
   app.use('/api/design-docs', designDocRoutes(db));
   app.use('/api/interventions', interventionRoutes(db));
+  app.use('/api/linear', linearRoutes(db));
   app.use('/api/files', fileRoutes());
 
   // Preview reverse proxy — must be after json middleware but catches /api/workspaces/:id/preview/*

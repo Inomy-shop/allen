@@ -54,6 +54,24 @@ export function repoRoutes(db: Db): Router {
     }
   });
 
+  // GET /api/repos/by-pr-url?url=<pr_url>
+  // Identify the registered repo whose remote matches the GitHub PR URL.
+  // Used by the pr-workspace-resolver agent via Allen MCP's
+  // find_repo_for_pr_url tool.
+  router.get('/by-pr-url', async (req: Request, res: Response) => {
+    try {
+      const url = String(req.query.url ?? '');
+      if (!url) return res.status(400).json({ error: 'url query param is required' });
+      const { PullRequestService } = await import('../services/pull-request.service.js');
+      const prService = new PullRequestService(db);
+      const repo = await prService.identifyRepoForPrUrl(url);
+      if (!repo) return res.status(404).json({ error: 'No registered repo matches this PR URL' });
+      res.json(repo);
+    } catch (err: unknown) {
+      res.status(500).json({ error: (err as Error).message });
+    }
+  });
+
   // GET /api/repos/:id
   router.get('/:id', async (req: Request, res: Response) => {
     try {

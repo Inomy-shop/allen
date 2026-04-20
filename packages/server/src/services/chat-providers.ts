@@ -269,6 +269,14 @@ export async function runCodexCLI(
     let threadId: string | undefined = resumeSessionId;
     let lineBuffer = '';
 
+    // Codex emits `item.started` and `item.completed` separately for
+    // MCP tools and shell commands. Pair them by item.id so duration
+    // can be computed properly. Function calls (OpenAI-style) have only
+    // a `completed` event — we stash them by call_id for pairing with
+    // the matching `function_call_output` event.
+    type PendingStart = { tool: string; args: Record<string, unknown>; startMs: number };
+    const pendingStarts = new Map<string, PendingStart>();
+
     proc.stdout.on('data', (chunk: Buffer) => {
       lineBuffer += chunk.toString();
       const lines = lineBuffer.split('\n');
@@ -294,21 +302,26 @@ export async function runCodexCLI(
             if (text) { rawResponse = text; callbacks.onText(rawResponse); }
           }
 
-          // MCP tool calls (Linear, Allen, GitHub, etc.)
+          // ── MCP tool calls (Linear, Allen, GitHub, etc.) ─────────────
           if (event.type === 'item.started' && event.item?.type === 'mcp_tool_call') {
             const server = event.item.server ?? '';
             const tool = event.item.tool ?? '';
             const fullName = `mcp__${server}__${tool}`;
-            const args = event.item.arguments ?? {};
+            const args = (event.item.arguments && typeof event.item.arguments === 'object') ? event.item.arguments : {};
+            const id = event.item.id ?? '';
+            pendingStarts.set(id, { tool: fullName, args, startMs: Date.now() });
             log(`🔧 MCP tool call: ${fullName}`, args);
-            trace.push({ timestamp: new Date(), type: 'tool_call', tool: fullName, toolUseId: event.item.id, args });
-            callbacks.onToolStart(fullName, args, event.item.id ?? '');
+            trace.push({ timestamp: new Date(), type: 'tool_call', tool: fullName, toolUseId: id, args });
+            callbacks.onToolStart(fullName, args, id);
           }
 
           if (event.type === 'item.completed' && event.item?.type === 'mcp_tool_call') {
             const server = event.item.server ?? '';
             const tool = event.item.tool ?? '';
             const fullName = `mcp__${server}__${tool}`;
+            const id = event.item.id ?? '';
+            const started = pendingStarts.get(id);
+            const durationMs = started ? Date.now() - started.startMs : 0;
             let resultData: Record<string, unknown> = {};
             if (event.item.result?.content) {
               const text = event.item.result.content.filter((c: any) => c.type === 'text').map((c: any) => c.text).join('');
@@ -317,35 +330,65 @@ export async function runCodexCLI(
             if (event.item.error) {
               resultData = { error: event.item.error.message ?? JSON.stringify(event.item.error) };
             }
-            const isError = event.item.status === 'failed';
+            const isError = event.item.status === 'failed' || event.item.error !== undefined;
             log(`${isError ? '❌' : '✅'} MCP tool result: ${fullName}`, resultData);
-            trace.push({ timestamp: new Date(), type: 'tool_result', tool: fullName, toolUseId: event.item.id, result: resultData, isError });
-            callbacks.onToolResult(fullName, resultData, event.item.id ?? '', 0);
+            trace.push({ timestamp: new Date(), type: 'tool_result', tool: fullName, toolUseId: id, result: resultData, isError, durationMs });
+            callbacks.onToolResult(fullName, resultData, id, durationMs);
+            pendingStarts.delete(id);
           }
 
-          // Function calls (OpenAI-style)
+          // ── Function calls (OpenAI-style) ────────────────────────────
+          // Codex emits function_call (with args) and function_call_output
+          // (with result) as two separate `item.completed` events, paired
+          // by call_id. Capture both sides so we don't silently drop the
+          // tool's return value.
           if (event.type === 'item.completed' && event.item?.type === 'function_call') {
             const tn = event.item.name ?? 'unknown';
+            const callId = event.item.call_id ?? event.item.id ?? '';
             let ta: Record<string, unknown> = {};
             try { ta = JSON.parse(event.item.arguments ?? '{}'); } catch {}
+            pendingStarts.set(callId, { tool: tn, args: ta, startMs: Date.now() });
             log(`🔧 Codex tool: ${tn}`, ta);
-            trace.push({ timestamp: new Date(), type: 'tool_call', tool: tn, args: ta });
-            callbacks.onToolStart(tn, ta, event.item.call_id ?? '');
+            trace.push({ timestamp: new Date(), type: 'tool_call', tool: tn, toolUseId: callId, args: ta });
+            callbacks.onToolStart(tn, ta, callId);
           }
 
           if (event.type === 'item.completed' && event.item?.type === 'function_call_output') {
+            const callId = event.item.call_id ?? event.item.id ?? '';
+            const started = pendingStarts.get(callId);
+            const durationMs = started ? Date.now() - started.startMs : 0;
+            const tn = started?.tool ?? event.item.name ?? '';
             let rd: Record<string, unknown> = {};
-            try { rd = JSON.parse(event.item.output ?? '{}'); } catch { rd = { raw: event.item.output }; }
-            trace.push({ timestamp: new Date(), type: 'tool_result', tool: event.item.name ?? '', result: rd });
-            callbacks.onToolResult(event.item.name ?? '', rd, event.item.call_id ?? '', 0);
+            try { rd = JSON.parse(event.item.output ?? '{}'); }
+            catch { rd = { raw: String(event.item.output ?? '') }; }
+            const isError = event.item.status === 'failed' || event.item.error !== undefined;
+            trace.push({ timestamp: new Date(), type: 'tool_result', tool: tn, toolUseId: callId, result: rd, isError, durationMs });
+            callbacks.onToolResult(tn, rd, callId, durationMs);
+            pendingStarts.delete(callId);
           }
 
-          // Command executions (Bash)
-          if (event.type === 'item.completed' && event.item?.type === 'command_execution') {
+          // ── Command executions (Bash) — pair started/completed ─────
+          if (event.type === 'item.started' && event.item?.type === 'command_execution') {
             const cmd = event.item.command ?? '';
+            const id = event.item.id ?? '';
+            pendingStarts.set(id, { tool: 'Bash', args: { command: cmd }, startMs: Date.now() });
             log(`🔧 Codex command: ${cmd}`);
-            trace.push({ timestamp: new Date(), type: 'tool_call', tool: 'Bash', args: { command: cmd } });
-            callbacks.onToolStart('Bash', { command: cmd }, event.item.id ?? '');
+            trace.push({ timestamp: new Date(), type: 'tool_call', tool: 'Bash', toolUseId: id, args: { command: cmd } });
+            callbacks.onToolStart('Bash', { command: cmd }, id);
+          }
+
+          if (event.type === 'item.completed' && event.item?.type === 'command_execution') {
+            const id = event.item.id ?? '';
+            const started = pendingStarts.get(id);
+            const durationMs = started ? Date.now() - started.startMs : 0;
+            const cmd = event.item.command ?? started?.args.command ?? '';
+            const output = event.item.aggregated_output ?? '';
+            const isError = event.item.status !== 'completed';
+            const result: Record<string, unknown> = { output: String(output).slice(0, 10_000) };
+            if (event.item.exit_code !== undefined) result.exit_code = event.item.exit_code;
+            trace.push({ timestamp: new Date(), type: 'tool_result', tool: 'Bash', toolUseId: id, result, isError, durationMs });
+            callbacks.onToolResult('Bash', result, id, durationMs);
+            pendingStarts.delete(id);
           }
         } catch { /* skip non-JSON */ }
       }

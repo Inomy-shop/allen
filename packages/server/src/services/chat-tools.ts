@@ -599,6 +599,10 @@ async function runSpawnInBackground(
   db: Db, role: Record<string, unknown>, agentName: string, prompt: string,
   executionId: string, resumeSession: string | undefined, repoPath: string | undefined,
   spawnTree?: SpawnTreeContext,
+  /** 1 for a fresh execution; >1 when this invocation continues an existing
+   *  execution (agent resume). Threaded into trace inserts so the execution
+   *  detail page can show per-attempt tabs. */
+  baseAttempt: number = 1,
 ): Promise<void> {
   const activeCtx = getAnyActiveSession();
   if (activeCtx) activeCtx.pendingBackgroundTasks++;
@@ -631,7 +635,7 @@ async function runSpawnInBackground(
   const spawnTreeParentCaller = spawnTree?.parentCaller ?? null;
   const fanOutEnabled = !!spawnTree?.parentExecutionId || spawnTreeRoot !== executionId;
   const streamSvc = await import('./stream.service.js');
-  const liveLog = (entry: { type: string; tool?: string; command?: string; content?: string }) => {
+  const liveLog = (entry: { type: string; tool?: string; command?: string; content?: string; toolUseId?: string; args?: Record<string, unknown> }) => {
     const now = new Date();
     // Primary write — child's own execution_logs row, unchanged schema.
     db.collection('execution_logs').insertOne({
@@ -773,12 +777,13 @@ async function runSpawnInBackground(
                 const tool = evt.item.tool ?? evt.item.name ?? '';
                 const name = server ? `mcp__${server}__${tool}` : tool;
                 const args = evt.item.arguments ?? evt.item.input ?? {};
+                const itemId = evt.item.id ?? '';
                 toolCalls.push({ tool: name, args });
                 activity.push({ type: 'tool_call', tool: name, timestamp: new Date() });
                 // Build description from args for readability
                 const desc = toolDescription(name, args);
-                if (onEvent) onEvent('spawn_activity', { executionId, agent: agentName, type: 'tool_start', tool: name, content: desc });
-                liveLog({ type: 'tool_start', tool: name, content: desc });
+                if (onEvent) onEvent('spawn_activity', { executionId, agent: agentName, type: 'tool_start', tool: name, content: desc, toolUseId: itemId });
+                liveLog({ type: 'tool_start', tool: name, content: desc, toolUseId: itemId, args });
               }
               if (evt.type === 'item.completed' && (evt.item?.type === 'mcp_tool_call' || evt.item?.type === 'collab_tool_call')) {
                 const server = evt.item.server ?? evt.item.serverLabel ?? '';
@@ -786,26 +791,29 @@ async function runSpawnInBackground(
                 const name = server ? `mcp__${server}__${tool}` : tool;
                 const output = evt.item.output ?? evt.item.result ?? '';
                 const outStr = typeof output === 'string' ? output.slice(0, 150) : JSON.stringify(output).slice(0, 150);
+                const itemId = evt.item.id ?? '';
                 activity.push({ type: 'tool_result', tool: name, timestamp: new Date() });
-                if (onEvent) onEvent('spawn_activity', { executionId, agent: agentName, type: 'tool_done', tool: name, content: outStr });
-                liveLog({ type: 'tool_done', tool: name, content: outStr });
+                if (onEvent) onEvent('spawn_activity', { executionId, agent: agentName, type: 'tool_done', tool: name, content: outStr, toolUseId: itemId });
+                liveLog({ type: 'tool_done', tool: name, content: outStr, toolUseId: itemId });
               }
               if (evt.type === 'item.completed' && evt.item?.type === 'function_call') {
                 const fn = evt.item.name ?? 'unknown';
                 const fnArgs = evt.item.arguments ? JSON.parse(evt.item.arguments) : {};
                 const desc = toolDescription(fn, fnArgs);
+                const callId = evt.item.call_id ?? evt.item.id ?? '';
                 toolCalls.push({ tool: fn, args: fnArgs });
                 activity.push({ type: 'tool_call', tool: fn, timestamp: new Date() });
-                if (onEvent) onEvent('spawn_activity', { executionId, agent: agentName, type: 'tool_done', tool: fn, content: desc });
-                liveLog({ type: 'tool_done', tool: fn, content: desc });
+                if (onEvent) onEvent('spawn_activity', { executionId, agent: agentName, type: 'tool_done', tool: fn, content: desc, toolUseId: callId });
+                liveLog({ type: 'tool_done', tool: fn, content: desc, toolUseId: callId, args: fnArgs });
               }
               if (evt.type === 'item.completed' && evt.item?.type === 'command_execution') {
                 const cmd = (evt.item.command ?? '').slice(0, 200);
                 const exitCode = evt.item.exit_code ?? '';
+                const itemId = evt.item.id ?? '';
                 toolCalls.push({ tool: 'Bash', args: { command: cmd } });
                 activity.push({ type: 'tool_call', tool: 'Bash', timestamp: new Date() });
-                if (onEvent) onEvent('spawn_activity', { executionId, agent: agentName, type: 'tool_done', tool: 'Bash', command: cmd });
-                liveLog({ type: 'tool_done', tool: 'Bash', command: cmd, content: exitCode !== '' ? `exit ${exitCode}` : undefined });
+                if (onEvent) onEvent('spawn_activity', { executionId, agent: agentName, type: 'tool_done', tool: 'Bash', command: cmd, toolUseId: itemId });
+                liveLog({ type: 'tool_done', tool: 'Bash', command: cmd, content: exitCode !== '' ? `exit ${exitCode}` : undefined, toolUseId: itemId, args: { command: cmd } });
               }
               // Broadcast thinking
               if (evt.type === 'item.started' && evt.item?.type === 'agent_reasoning') {
@@ -882,10 +890,11 @@ async function runSpawnInBackground(
             if (block.type === 'tool_use' && block.name) {
               const args = (block.input as Record<string, unknown>) ?? {};
               const desc = toolDescription(block.name, args);
+              const toolUseId = block.id ?? '';
               toolCalls.push({ tool: block.name, args });
               activity.push({ type: 'tool_call', tool: block.name, timestamp: new Date() });
-              if (onEvent) onEvent('spawn_activity', { executionId, agent: agentName, type: 'tool_start', tool: block.name, content: desc });
-              liveLog({ type: 'tool_start', tool: block.name, content: desc });
+              if (onEvent) onEvent('spawn_activity', { executionId, agent: agentName, type: 'tool_start', tool: block.name, content: desc, toolUseId });
+              liveLog({ type: 'tool_start', tool: block.name, content: desc, toolUseId, args });
             }
             if (block.type === 'thinking' && block.text) {
               if (onEvent) onEvent('spawn_activity', { executionId, agent: agentName, type: 'thinking', content: block.text.slice(-200) });
@@ -896,9 +905,10 @@ async function runSpawnInBackground(
 
         if ((msg as any).type === 'tool_result' || ((msg as any).message?.role === 'tool')) {
           const toolName = (msg as any).tool_name ?? (msg as any).name ?? '';
+          const toolUseId = (msg as any).tool_use_id ?? (msg as any).id ?? '';
           activity.push({ type: 'tool_result', tool: toolName, timestamp: new Date() });
-          if (onEvent) onEvent('spawn_activity', { executionId, agent: agentName, type: 'tool_done', tool: toolName });
-          liveLog({ type: 'tool_done', tool: toolName });
+          if (onEvent) onEvent('spawn_activity', { executionId, agent: agentName, type: 'tool_done', tool: toolName, toolUseId });
+          liveLog({ type: 'tool_done', tool: toolName, toolUseId });
         }
 
         if (msg.type === 'result') {
@@ -928,9 +938,14 @@ async function runSpawnInBackground(
     if (onEvent) onEvent('spawn_completed', { executionId, agent: agentName, durationMs, toolCount: toolCalls.length, response: response.slice(0, 300) });
     liveLog({ type: 'completed', content: `Done in ${(durationMs/1000).toFixed(1)}s, ${toolCalls.length} tools` });
 
-    // Save full trace with response, tool calls, and activity
+    // Save full trace with response, tool calls, and activity.
+    // `baseAttempt` is the attempt number for THIS invocation of the agent
+    // (1 for a fresh execution, 2+ for a user-triggered resume). The inner
+    // retry counter (`attempt`) is the auto-retry count within this
+    // invocation — add it so an invocation that auto-recovers doesn't
+    // collide with the base attempt of the run that spawned it.
     await db.collection('execution_traces').insertOne({
-      executionId, node: agentName, attempt: 1, status: 'completed', type: 'agent', agent: agentName,
+      executionId, node: agentName, attempt: baseAttempt + attempt, status: 'completed', type: 'agent', agent: agentName,
       inputState: { prompt }, renderedPrompt: prompt, rawResponse: response,
       output: { response, session_id: sessionId },
       toolCalls,
@@ -956,7 +971,7 @@ async function runSpawnInBackground(
       { $set: { status: 'failed', errorMessage: errorMsg, durationMs, completedAt: new Date() } },
     );
     await db.collection('execution_traces').insertOne({
-      executionId, node: agentName, attempt: attempt + 1, status: 'failed', type: 'agent', agent: agentName,
+      executionId, node: agentName, attempt: baseAttempt + attempt, status: 'failed', type: 'agent', agent: agentName,
       inputState: { prompt }, renderedPrompt: prompt, rawResponse: '',
       output: { error: errorMsg },
       activity: activity.map(a => ({ ...a, type: a.type as any, content: a.tool ?? '' })),
@@ -970,6 +985,75 @@ async function runSpawnInBackground(
 
   // If we exhausted retries without success or explicit return, decrement
   if (activeCtx) activeCtx.pendingBackgroundTasks--;
+}
+
+/**
+ * Resume a completed/failed agent execution as a new attempt on the SAME
+ * executionId. Computes the next attempt number from existing traces, sets
+ * the execution back to running, and spawns the agent in the background
+ * resuming its prior session. The UI stays on the same execution page and
+ * renders attempts as tabs.
+ */
+export async function resumeAgentExecution(
+  db: Db,
+  executionId: string,
+  prompt: string,
+): Promise<{ execution_id: string; attempt: number } | { error: string }> {
+  const exec = await db.collection('executions').findOne({ id: executionId });
+  if (!exec) return { error: `Execution ${executionId} not found` };
+
+  // Agent name is the sole currentNode/completedNode for a spawn_agent execution.
+  const agentName =
+    (exec.completedNodes as string[] | undefined)?.[0] ??
+    (exec.currentNodes as string[] | undefined)?.[0];
+  if (!agentName) return { error: 'Cannot resolve agent name for this execution' };
+
+  const role = await db.collection('agents').findOne({ name: agentName });
+  if (!role) return { error: `Agent "${agentName}" not found` };
+
+  const sessionId = (exec.sessions as Record<string, string> | undefined)?.[agentName];
+  if (!sessionId) return { error: 'No session id on this execution — agent cannot resume' };
+
+  // Next attempt = max(existing attempts) + 1.
+  const lastTrace = await db.collection('execution_traces')
+    .find({ executionId })
+    .sort({ attempt: -1 })
+    .limit(1)
+    .toArray();
+  const nextAttempt = ((lastTrace[0]?.attempt as number | undefined) ?? 0) + 1;
+
+  const meta = (exec.meta as Record<string, unknown> | undefined) ?? {};
+  const repoPath = (meta.cwd as string | undefined)
+    ?? ((exec.input as Record<string, unknown> | undefined)?.repo_path as string | undefined);
+
+  // Re-open the execution for a new attempt.
+  await db.collection('executions').updateOne(
+    { id: executionId },
+    {
+      $set: {
+        status: 'running',
+        completedNodes: [],
+        currentNodes: [agentName],
+        errorMessage: null,
+        completedAt: null,
+      },
+      $unset: { durationMs: '' },
+    },
+  );
+
+  runSpawnInBackground(
+    db,
+    role as Record<string, unknown>,
+    agentName,
+    prompt,
+    executionId,
+    sessionId,
+    repoPath,
+    undefined, // no spawn-tree context — this is a top-level resume
+    nextAttempt,
+  ).catch(() => { /* errors already logged + persisted */ });
+
+  return { execution_id: executionId, attempt: nextAttempt };
 }
 
 const getLearnings: ChatTool = {

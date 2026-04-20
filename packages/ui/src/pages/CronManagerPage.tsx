@@ -687,7 +687,18 @@ export default function CronManagerPage() {
       )}
 
       {/* Dialogs */}
-      <CronFormDialog job={editJob} open={formOpen} onClose={() => { setFormOpen(false); setEditJob(null); }} onSaved={refresh} />
+      {/* key forces React to remount the dialog whenever we switch between
+          creating and editing, or between two different edit targets.
+          Without the key, CronFormDialog's useState(job?.xxx ...) initializers
+          only fire on first mount and stale-state the form for subsequent
+          edits. */}
+      <CronFormDialog
+        key={editJob?._id ?? 'new'}
+        job={editJob}
+        open={formOpen}
+        onClose={() => { setFormOpen(false); setEditJob(null); }}
+        onSaved={refresh}
+      />
       {historyJob && <HistoryDialog job={historyJob} onClose={() => setHistoryJob(null)} />}
       <DeleteConfirmDialog
         open={!!deletingJob}

@@ -1,15 +1,16 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAgents } from '../hooks/useAgents';
-import { agents as agentsApi, teams as teamsApi } from '../services/api';
+import { agents as agentsApi, teams as teamsApi, repos as reposApi } from '../services/api';
 import RoleIcon from '../components/common/RoleIcon';
 import RoleDialog from '../components/common/RoleDialog';
 import DeleteConfirmDialog from '../components/common/DeleteConfirmDialog';
 import { useToast } from '../components/common/Toast';
 import { renderMarkdown } from '../components/chat/ChatMessageList';
 import {
-  RefreshCw, Sparkles, Pencil, Trash2, Users, Crown,
-  Search, Play, ArrowRight, X, Eye, FolderGit2, Plus,
+  RefreshCw, Sparkles, Users, Crown, Search, Play, ArrowRight,
+  X, FolderGit2, Plus, Pencil, Trash2, LayoutGrid, Info, Home,
+  ChevronRight,
 } from 'lucide-react';
 import { DelegationGraph } from '../components/agents/DelegationGraph';
 import {
@@ -17,97 +18,133 @@ import {
   AssignToTeamDialog,
   CreateTeamFromAgentsDialog,
 } from '../components/agents/ImportAndTeamDialogs';
+import {
+  TeamDialog,
+  TeamDeleteConfirm,
+  type Team,
+  type TeamDialogMode,
+} from '../components/agents/TeamDialogs';
+import { AgentCard } from '../components/agents/AgentCard';
 
-interface TeamSummary {
-  name: string;
-  displayName: string;
-  description: string;
-  mission?: string;
-  leadAgentName: string;
-  parentTeamName?: string;
-  isBuiltIn: boolean;
-}
+type Agent = Record<string, unknown>;
+type Selection = { kind: 'overview' } | { kind: 'team'; name: string } | { kind: 'unassigned' };
 
-// ── Agent Detail Panel (markdown viewer for instructions) ────────────────────
+// ── Agent detail panel (markdown viewer) ──────────────────────────────────
 
-function AgentDetailPanel({ agent, onClose }: { agent: Record<string, unknown>; onClose: () => void }) {
+function AgentDetailPanel({ agent, onClose }: { agent: Agent; onClose: () => void }) {
   const system = (agent.system as string) ?? '';
   const capabilities = (agent.capabilities as string[] | undefined) ?? [];
   const delegateTargets = (agent.canDelegateTo as string[] | undefined) ?? [];
   const tools = (agent.tools as string[] | undefined) ?? [];
 
+  const provider = String(agent.provider ?? 'claude');
+  const model = String(agent.model ?? 'sonnet');
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-md" onClick={onClose}>
-      <div className="card w-full max-w-3xl max-h-[90vh] overflow-hidden shadow-glow-blue/20 animate-in fade-in zoom-in-95 duration-200 flex flex-col" onClick={e => e.stopPropagation()}>
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-md p-6" onClick={onClose}>
+      <div className="card w-full max-w-5xl h-[92vh] overflow-hidden shadow-glow-blue/20 animate-in fade-in zoom-in-95 duration-200 flex flex-col" onClick={e => e.stopPropagation()}>
         {/* Header */}
-        <div className="px-6 py-5 border-b border-border/60 shrink-0">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-3">
+        <div className="px-7 py-5 border-b border-border/60 shrink-0">
+          <div className="flex items-center justify-between gap-4">
+            <div className="flex items-center gap-4 min-w-0">
               <div
-                className="w-10 h-10 rounded-lg flex items-center justify-center border border-border/30"
-                style={{ backgroundColor: ((agent.color as string) ?? '#666') + '15' }}
+                className="w-14 h-14 rounded-xl flex items-center justify-center border border-border/30 shrink-0"
+                style={{ backgroundColor: ((agent.color as string) ?? '#666') + '18' }}
               >
-                <RoleIcon icon={agent.icon as string} color={agent.color as string} size={22} />
+                <RoleIcon icon={agent.icon as string} color={agent.color as string} size={30} />
               </div>
-              <div>
-                <h2 className="font-heading text-sm font-bold text-theme-primary tracking-wider uppercase">
-                  {(agent.displayName as string) ?? (agent.name as string)}
-                </h2>
-                <div className="flex items-center gap-2 mt-0.5">
-                  <span className="text-[10px] text-theme-subtle font-mono">{agent.name as string}</span>
-                  <span className={`text-[9px] font-mono px-1.5 py-0.5 rounded border ${
-                    agent.provider === 'codex' ? 'bg-green-500/10 text-green-500 border-green-500/20' : 'bg-blue-500/10 text-blue-500 border-blue-500/20'
-                  }`}>{String(agent.provider ?? 'claude')}</span>
-                  <span className="text-[9px] font-mono text-theme-subtle">{String(agent.model ?? 'sonnet')}</span>
-                  {agent.teamRole === 'lead' && <Crown className="w-3 h-3 text-accent-yellow" />}
+              <div className="min-w-0">
+                <div className="flex items-center gap-2">
+                  <h2 className="font-heading text-lg font-bold text-theme-primary tracking-wide truncate">
+                    {(agent.displayName as string) ?? (agent.name as string)}
+                  </h2>
+                  {agent.teamRole === 'lead' && (
+                    <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-[10px] font-mono bg-accent-yellow/10 text-accent-yellow border border-accent-yellow/30">
+                      <Crown className="w-3 h-3" /> Lead
+                    </span>
+                  )}
+                </div>
+                <div className="flex items-center gap-2 mt-1 flex-wrap">
+                  <span className="text-[11px] text-theme-subtle font-mono">{agent.name as string}</span>
+                  {agent.teamName ? (
+                    <span className="text-[11px] font-mono text-theme-muted">· team: <span className="text-theme-secondary">{String(agent.teamName)}</span></span>
+                  ) : null}
                 </div>
               </div>
             </div>
-            <button onClick={onClose} className="p-2 rounded-sm hover:bg-surface-200 text-theme-muted hover:text-theme-secondary transition-colors">
-              <X className="w-4 h-4" />
-            </button>
+            <div className="flex items-center gap-3 shrink-0">
+              <div
+                className={`rounded-lg border overflow-hidden text-center ${
+                  provider === 'codex' ? 'bg-accent-green/10 text-accent-green border-accent-green/30'
+                  : provider === 'openai' ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/30'
+                  : 'bg-accent-blue/10 text-accent-blue border-accent-blue/30'
+                }`}
+                style={{ minWidth: '8rem' }}
+              >
+                <div className="text-[10px] font-label uppercase tracking-widest px-3 py-1 border-b border-current/20 opacity-80">{provider}</div>
+                <div className="text-xs font-mono px-3 py-1.5 text-theme-primary bg-surface-100/40">{model}</div>
+              </div>
+              <button onClick={onClose} className="p-2 rounded-md hover:bg-surface-200 text-theme-muted hover:text-theme-secondary transition-colors">
+                <X className="w-4 h-4" />
+              </button>
+            </div>
           </div>
         </div>
 
-        {/* Metadata bar */}
-        <div className="px-6 py-3 border-b border-border/30 flex items-center gap-4 flex-wrap shrink-0 bg-surface-200/15">
-          {agent.teamName ? (
-            <div className="text-[10px]">
-              <span className="text-theme-subtle">Team:</span>{' '}
-              <span className="text-theme-secondary font-mono">{String(agent.teamName)}</span>
-            </div>
-          ) : null}
-          {capabilities.length > 0 && (
-            <div className="flex items-center gap-1 flex-wrap">
-              {capabilities.map(cap => (
-                <span key={cap} className="text-[8px] font-mono px-1.5 py-0.5 rounded bg-accent-purple/8 text-accent-purple/70 border border-accent-purple/15">{cap}</span>
-              ))}
-            </div>
-          )}
-          {tools.length > 0 && (
-            <div className="text-[10px]">
-              <span className="text-theme-subtle">Tools:</span>{' '}
-              <span className="text-theme-secondary font-mono">{tools.join(', ')}</span>
-            </div>
-          )}
-          {delegateTargets.length > 0 && (
-            <div className="text-[10px]">
-              <span className="text-theme-subtle">Delegates to:</span>{' '}
-              <span className="text-theme-secondary font-mono">{delegateTargets.join(', ')}</span>
-            </div>
-          )}
-        </div>
+        {/* Metadata strip */}
+        {(capabilities.length > 0 || tools.length > 0 || delegateTargets.length > 0) && (
+          <div className="px-7 py-3 border-b border-border/30 flex items-center gap-5 flex-wrap shrink-0 bg-surface-200/15">
+            {capabilities.length > 0 && (
+              <div className="flex items-center gap-2">
+                <span className="text-[9px] font-label uppercase tracking-widest text-theme-subtle">Capabilities:</span>
+                <div className="flex items-center gap-1 flex-wrap">
+                  {capabilities.map(cap => (
+                    <span key={cap} className="text-[9px] font-mono px-1.5 py-0.5 rounded bg-accent-purple/8 text-accent-purple/80 border border-accent-purple/20">{cap}</span>
+                  ))}
+                </div>
+              </div>
+            )}
+            {tools.length > 0 && (
+              <div className="flex items-center gap-2">
+                <span className="text-[9px] font-label uppercase tracking-widest text-theme-subtle">Tools:</span>
+                <span className="text-[11px] text-theme-secondary font-mono">{tools.join(', ')}</span>
+              </div>
+            )}
+            {delegateTargets.length > 0 && (
+              <div className="flex items-center gap-2">
+                <span className="text-[9px] font-label uppercase tracking-widest text-theme-subtle">Delegates to:</span>
+                <span className="text-[11px] text-theme-secondary font-mono">{delegateTargets.join(', ')}</span>
+              </div>
+            )}
+          </div>
+        )}
 
-        {/* System prompt — rendered as markdown */}
-        <div className="flex-1 overflow-y-auto px-6 py-5">
-          <div className="text-[10px] font-label uppercase tracking-widest text-theme-subtle mb-3">System Instructions</div>
-          <div className="text-sm text-theme-secondary leading-relaxed prose-allen">
-            {system ? renderMarkdown(system) : <span className="text-theme-muted italic">No system prompt defined.</span>}
+        {/* System instructions — big, readable reader */}
+        <div className="flex-1 overflow-y-auto min-h-0">
+          <div className="max-w-3xl mx-auto px-8 py-8">
+            <div className="flex items-center gap-2 mb-5">
+              <div className="h-px flex-1 bg-border/40" />
+              <div className="text-[10px] font-label uppercase tracking-widest text-theme-subtle font-semibold">
+                Agent Instructions · README.md
+              </div>
+              <div className="h-px flex-1 bg-border/40" />
+            </div>
+            {system ? (
+              <div className="text-[15px] text-theme-secondary leading-[1.75] prose-allen prose-lg">
+                {renderMarkdown(system)}
+              </div>
+            ) : (
+              <div className="text-center py-16 text-theme-muted italic font-body">
+                No system prompt defined for this agent.
+              </div>
+            )}
           </div>
         </div>
 
         {/* Footer */}
-        <div className="px-6 py-4 border-t border-border/60 bg-surface-200/10 shrink-0">
+        <div className="px-7 py-4 border-t border-border/60 bg-surface-200/10 shrink-0 flex items-center justify-between">
+          <div className="text-[10px] font-mono text-theme-subtle">
+            Read-only view. Use Edit to modify.
+          </div>
           <button onClick={onClose} className="btn-ghost text-xs">Close</button>
         </div>
       </div>
@@ -115,147 +152,58 @@ function AgentDetailPanel({ agent, onClose }: { agent: Record<string, unknown>; 
   );
 }
 
-// ── Agent Row ────────────────────────────────────────────────────────────────
-
-function AgentRow({ agent, onEdit, onDelete, onRun, onView, selected, onToggleSelect }: {
-  agent: Record<string, unknown>;
-  onEdit: (agent: Record<string, unknown>) => void;
-  onDelete: (name: string) => void;
-  onRun: (agent: Record<string, unknown>) => void;
-  onView: (agent: Record<string, unknown>) => void;
-  selected?: boolean;
-  onToggleSelect?: (name: string) => void;
-}) {
-  const isLead = agent.teamRole === 'lead';
-  const isBuiltIn = !!agent.isBuiltIn;
-  const capabilities = (agent.capabilities as string[] | undefined) ?? [];
-  const delegateTargets = (agent.canDelegateTo as string[] | undefined) ?? [];
-  const fromRepo = !!agent.sourceRepoId;
-
-  return (
-    <div className={`flex items-center gap-4 px-4 py-3 border-b border-border/10 hover:bg-surface-200/10 transition-colors ${
-      isLead ? 'bg-accent-yellow/[0.02]' : ''
-    } ${selected ? 'bg-accent-blue/5' : ''}`}>
-      {/* Checkbox — disabled for built-ins */}
-      <input
-        type="checkbox"
-        checked={!!selected}
-        disabled={isBuiltIn}
-        onChange={() => onToggleSelect?.(agent.name as string)}
-        title={isBuiltIn ? 'Built-in agents cannot be moved' : 'Select'}
-        className="shrink-0"
-      />
-
-      {/* Icon with colored bg */}
-      <button
-        onClick={() => onView(agent)}
-        className="w-8 h-8 rounded-lg flex items-center justify-center shrink-0 hover:opacity-80 transition-opacity"
-        style={{ backgroundColor: ((agent.color as string) ?? '#666') + '15' }}
-        title="View instructions"
-      >
-        <RoleIcon icon={agent.icon as string} color={agent.color as string} size={16} />
-      </button>
-
-      {/* Name */}
-      <button onClick={() => onView(agent)} className="w-48 min-w-0 text-left shrink-0">
-        <div className="flex items-center gap-1.5">
-          <span className="text-[13px] text-theme-primary font-body font-medium truncate">{(agent.displayName as string) ?? (agent.name as string)}</span>
-          {isLead && <Crown className="w-3 h-3 text-accent-yellow shrink-0" />}
-          {fromRepo && (
-            <span
-              title={`Imported from ${agent.sourceFile ?? 'repo'}`}
-              className="inline-flex items-center gap-0.5 text-[8px] font-mono px-1 py-0 rounded-full bg-accent-purple/10 text-accent-purple"
-            >
-              <FolderGit2 className="w-2.5 h-2.5" /> repo
-            </span>
-          )}
-        </div>
-        <span className="text-[10px] text-theme-subtle font-mono block truncate">{agent.name as string}</span>
-      </button>
-
-      {/* Provider badge */}
-      <span className={`text-[9px] font-mono px-2 py-0.5 rounded-full shrink-0 ${
-        agent.provider === 'codex' ? 'bg-accent-green/10 text-accent-green' : 'bg-accent-blue/10 text-accent-blue'
-      }`}>{String(agent.provider ?? 'claude')}</span>
-
-      {/* Model badge */}
-      <span className="text-[9px] font-mono px-2 py-0.5 rounded-full bg-surface-200/50 text-theme-muted shrink-0">
-        {String(agent.model ?? 'sonnet')}
-      </span>
-
-      {/* Capabilities tags */}
-      <div className="flex-1 min-w-0 flex items-center gap-1 flex-wrap">
-        {capabilities.slice(0, 3).map(cap => (
-          <span key={cap} className="text-[8px] font-mono px-1.5 py-0.5 rounded-full bg-accent-purple/8 text-accent-purple/60 border border-accent-purple/10">{cap}</span>
-        ))}
-        {capabilities.length > 3 && <span className="text-[8px] text-theme-subtle">+{capabilities.length - 3}</span>}
-      </div>
-
-      {/* Delegation count stat */}
-      {delegateTargets.length > 0 && (
-        <div className="flex items-center gap-1 text-[10px] font-mono text-theme-muted shrink-0">
-          <ArrowRight className="w-3 h-3 text-accent-blue" /> {delegateTargets.length}
-        </div>
-      )}
-
-      {/* Action buttons — always visible */}
-      <div className="flex items-center gap-1.5 shrink-0">
-        <button onClick={() => onView(agent)} className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[10px] font-mono bg-accent-blue/10 text-accent-blue hover:bg-accent-blue/20 transition-colors">
-          <Eye className="w-3 h-3" /> View
-        </button>
-        <button onClick={() => onRun(agent)} className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[10px] font-mono bg-accent-green/10 text-accent-green hover:bg-accent-green/20 transition-colors">
-          <Play className="w-3 h-3" /> Run
-        </button>
-        <button onClick={() => onEdit(agent)} className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[10px] font-mono bg-accent-yellow/10 text-accent-yellow hover:bg-accent-yellow/20 transition-colors">
-          <Pencil className="w-3 h-3" /> Edit
-        </button>
-        {!agent.isBuiltIn && (
-          <button onClick={() => onDelete(agent.name as string)} className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[10px] font-mono bg-accent-red/10 text-accent-red hover:bg-accent-red/20 transition-colors">
-            <Trash2 className="w-3 h-3" /> Delete
-          </button>
-        )}
-      </div>
-    </div>
-  );
-}
-
-// ── Run Agent Dialog ─────────────────────────────────────────────────────────
-//
-// Fires POST /api/agents/:name/run, which calls the same `spawn_agent` chat
-// tool that orchestrator agents use internally — so the execution row shape,
-// background runner, and tracing are identical to an MCP-initiated spawn.
+// ── Run-agent dialog ────────────────────────────────────────────────────────
 
 function RunAgentDialog({
-  agent,
-  onClose,
-  onStarted,
+  agent, onClose, onStarted,
 }: {
-  agent: Record<string, unknown>;
+  agent: Agent;
   onClose: () => void;
   onStarted: (executionId: string) => void;
 }) {
   const [prompt, setPrompt] = useState('');
-  const [repoPath, setRepoPath] = useState(((agent.sourceRepoPath as string) ?? '').trim());
+  const [repoId, setRepoId] = useState<string>('');
+  const [repoList, setRepoList] = useState<any[]>([]);
+  const [loadingRepos, setLoadingRepos] = useState(true);
   const [submitting, setSubmitting] = useState(false);
   const toast = useToast();
 
+  useEffect(() => {
+    let cancelled = false;
+    setLoadingRepos(true);
+    reposApi.list()
+      .then((list: any[]) => {
+        if (cancelled) return;
+        const repos = (list ?? []).slice().sort((a, b) =>
+          String(a.name ?? '').localeCompare(String(b.name ?? '')),
+        );
+        setRepoList(repos);
+        // Pre-select the agent's source repo if it matches a known repo
+        const sourceId = (agent.sourceRepoId as string | undefined) ?? '';
+        const sourcePath = (agent.sourceRepoPath as string | undefined) ?? '';
+        const matched = repos.find(r =>
+          (sourceId && String(r._id) === sourceId)
+          || (sourcePath && r.path === sourcePath),
+        );
+        if (matched) setRepoId(String(matched._id));
+      })
+      .catch(() => setRepoList([]))
+      .finally(() => { if (!cancelled) setLoadingRepos(false); });
+    return () => { cancelled = true; };
+  }, [agent]);
+
+  const selectedRepo = repoList.find(r => String(r._id) === repoId);
+
   async function submit() {
     const trimmed = prompt.trim();
-    if (!trimmed) {
-      toast.error('Prompt is required');
-      return;
-    }
+    if (!trimmed) { toast.error('Prompt is required'); return; }
     setSubmitting(true);
     try {
       const result = await agentsApi.run(agent.name as string, {
         prompt: trimmed,
-        repo_path: repoPath.trim() || undefined,
+        repo_path: selectedRepo?.path || undefined,
       });
-      if (result.error) {
-        toast.error(result.error);
-        setSubmitting(false);
-        return;
-      }
+      if (result.error) { toast.error(result.error); setSubmitting(false); return; }
       toast.success(`Agent "${agent.name as string}" started.`);
       onStarted(result.execution_id);
     } catch (err: unknown) {
@@ -295,9 +243,7 @@ function RunAgentDialog({
               autoFocus
               value={prompt}
               onChange={e => setPrompt(e.target.value)}
-              onKeyDown={e => {
-                if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') submit();
-              }}
+              onKeyDown={e => { if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') submit(); }}
               rows={8}
               placeholder="Describe the task for the agent…"
               className="w-full px-3 py-2 rounded-lg bg-surface-200/40 border border-border/50 text-sm text-theme-primary placeholder:text-theme-subtle focus:outline-none focus:border-accent-blue/50"
@@ -305,24 +251,37 @@ function RunAgentDialog({
           </div>
           <div>
             <label className="block text-[10px] font-mono text-theme-muted uppercase tracking-wider mb-1.5">
-              Repo path <span className="text-theme-subtle normal-case">(optional — defaults to the agent's source repo)</span>
+              Repository <span className="text-theme-subtle normal-case">(optional)</span>
             </label>
-            <input
-              type="text"
-              value={repoPath}
-              onChange={e => setRepoPath(e.target.value)}
-              placeholder="/absolute/path/to/repo"
-              className="w-full px-3 py-2 rounded-lg bg-surface-200/40 border border-border/50 text-sm text-theme-primary placeholder:text-theme-subtle focus:outline-none focus:border-accent-blue/50"
-            />
+            <select
+              value={repoId}
+              onChange={e => setRepoId(e.target.value)}
+              disabled={loadingRepos}
+              className="w-full px-3 py-2 rounded-lg bg-surface-200/40 border border-border/50 text-sm text-theme-primary focus:outline-none focus:border-accent-blue/50 disabled:opacity-50"
+            >
+              <option value="">
+                {loadingRepos ? 'Loading repos…' : '— No repository (agent runs without a repo) —'}
+              </option>
+              {repoList.map(r => (
+                <option key={String(r._id)} value={String(r._id)}>
+                  {r.name}{r.path ? ` · ${r.path}` : ''}
+                </option>
+              ))}
+            </select>
+            {selectedRepo?.path && (
+              <div className="mt-1.5 text-[10px] font-mono text-theme-subtle">
+                Path: <span className="text-theme-muted">{selectedRepo.path}</span>
+              </div>
+            )}
+            {!loadingRepos && repoList.length === 0 && (
+              <div className="mt-1.5 text-[10px] font-mono text-theme-muted italic">
+                No repos registered. Add one on the Repos page to attach it here.
+              </div>
+            )}
           </div>
         </div>
         <div className="px-6 py-4 border-t border-border/60 flex items-center justify-end gap-2">
-          <button
-            onClick={onClose}
-            className="px-4 py-2 rounded-lg text-[11px] font-mono text-theme-muted hover:text-theme-primary hover:bg-surface-200/40 transition-colors"
-          >
-            Cancel
-          </button>
+          <button onClick={onClose} className="px-4 py-2 rounded-lg text-[11px] font-mono text-theme-muted hover:text-theme-primary hover:bg-surface-200/40 transition-colors">Cancel</button>
           <button
             onClick={submit}
             disabled={submitting || !prompt.trim()}
@@ -336,49 +295,34 @@ function RunAgentDialog({
   );
 }
 
-// ── Loading Row Skeleton ────────────────────────────────────────────────────
-
-function RowSkeleton() {
-  return (
-    <div className="flex items-center gap-4 px-4 py-3 border-b border-border/10 animate-pulse">
-      <div className="w-8 h-8 rounded-lg bg-surface-200/50" />
-      <div className="w-48 space-y-1.5">
-        <div className="h-3.5 w-32 bg-surface-200/50 rounded" />
-        <div className="h-2.5 w-20 bg-surface-200/30 rounded" />
-      </div>
-      <div className="h-4 w-12 bg-surface-200/30 rounded-full" />
-      <div className="h-4 w-12 bg-surface-200/30 rounded-full" />
-      <div className="flex-1 flex gap-1">
-        <div className="h-4 w-16 bg-surface-200/20 rounded-full" />
-        <div className="h-4 w-16 bg-surface-200/20 rounded-full" />
-      </div>
-      <div className="flex gap-1.5">
-        <div className="h-6 w-14 bg-surface-200/30 rounded-full" />
-        <div className="h-6 w-14 bg-surface-200/30 rounded-full" />
-        <div className="h-6 w-14 bg-surface-200/30 rounded-full" />
-      </div>
-    </div>
-  );
-}
-
-// ── Main Page ────────────────────────────────────────────────────────────────
+// ── Main Page ───────────────────────────────────────────────────────────────
 
 export default function RoleManagerPage() {
   const navigate = useNavigate();
   const { agents: allAgents, loading, refresh } = useAgents();
-  const [allTeams, setAllTeams] = useState<TeamSummary[]>([]);
+  const toast = useToast();
+
+  // Team data
+  const [allTeams, setAllTeams] = useState<Team[]>([]);
+  // Selection + search
+  const [selection, setSelection] = useState<Selection>({ kind: 'overview' });
+  const [sidebarSearch, setSidebarSearch] = useState('');
+  const [memberSearch, setMemberSearch] = useState('');
+
+  // Agent CRUD dialog state
   const [dialogOpen, setDialogOpen] = useState(false);
-  const [editingRole, setEditingRole] = useState<Record<string, unknown> | null>(null);
+  const [editingRole, setEditingRole] = useState<Agent | null>(null);
   const [deletingRole, setDeletingRole] = useState<string | null>(null);
-  const [viewingAgent, setViewingAgent] = useState<Record<string, unknown> | null>(null);
-  const [runningAgent, setRunningAgent] = useState<Record<string, unknown> | null>(null);
-  const [searchQuery, setSearchQuery] = useState('');
-  // Import + team-assignment state
+  const [viewingAgent, setViewingAgent] = useState<Agent | null>(null);
+  const [runningAgent, setRunningAgent] = useState<Agent | null>(null);
+  // Import + bulk selection
   const [importOpen, setImportOpen] = useState(false);
   const [assignOpen, setAssignOpen] = useState(false);
   const [createTeamOpen, setCreateTeamOpen] = useState(false);
   const [selectedAgents, setSelectedAgents] = useState<Set<string>>(new Set());
-  const toast = useToast();
+  // Team CRUD dialog state
+  const [teamDialog, setTeamDialog] = useState<TeamDialogMode>({ type: 'closed' });
+  const [deletingTeam, setDeletingTeam] = useState<Team | null>(null);
 
   function toggleAgentSelection(name: string) {
     setSelectedAgents(prev => {
@@ -389,249 +333,505 @@ export default function RoleManagerPage() {
     });
   }
 
-  function clearSelection() {
-    setSelectedAgents(new Set());
+  function clearSelection() { setSelectedAgents(new Set()); }
+
+  async function reloadTeams() {
+    try {
+      const t: Team[] = await teamsApi.list();
+      setAllTeams((t ?? []).slice().sort((a, b) => a.name.localeCompare(b.name)));
+    } catch {
+      setAllTeams([]);
+    }
   }
 
   useEffect(() => {
-    teamsApi.list()
-      .then((t: TeamSummary[]) => setAllTeams((t ?? []).slice().sort((a, b) => a.name.localeCompare(b.name))))
-      .catch(() => setAllTeams([]));
+    void reloadTeams();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [allAgents]);
+
+  // ── Handlers ──────────────────────────────────────────────────────────────
 
   function handleCreate() {
     const teamList = allTeams.length > 0 ? allTeams.map(t => t.name).join(', ') : '(no teams yet)';
     navigate(`/chat?${new URLSearchParams({ agent: 'agent-builder-agent', prompt: `Add a new agent. Available teams: ${teamList}` }).toString()}`);
   }
 
-  function handleRun(agent: Record<string, unknown>) {
-    setRunningAgent(agent);
-  }
+  function handleRun(agent: Agent) { setRunningAgent(agent); }
+  function handleEdit(role: Agent) { setEditingRole(role); setDialogOpen(true); }
 
-  function handleEdit(role: Record<string, unknown>) { setEditingRole(role); setDialogOpen(true); }
-
-  async function handleDelete() {
+  async function handleDeleteAgent() {
     if (!deletingRole) return;
     try {
       await agentsApi.delete(deletingRole);
       toast.success(`Agent "${deletingRole}" deleted.`);
       setDeletingRole(null);
       refresh();
-    } catch (err: unknown) { toast.error(err instanceof Error ? err.message : 'Failed to delete'); }
+    } catch (err) { toast.error(err instanceof Error ? err.message : 'Failed to delete'); }
   }
 
-  async function handleSave(data: Record<string, unknown>) {
+  async function handleSaveAgent(data: Record<string, unknown>) {
     if (!editingRole) return;
     await agentsApi.update(data.name as string, data);
     toast.success('Agent updated.');
     refresh();
   }
 
-  // Group by team
-  const agentsByTeam = new Map<string, any[]>();
-  const unassigned: any[] = [];
-  for (const a of allAgents) {
-    const tn = (a as any).teamName as string | undefined;
-    if (!tn) { unassigned.push(a); continue; }
-    (agentsByTeam.get(tn) ?? (agentsByTeam.set(tn, []), agentsByTeam.get(tn)!)).push(a);
-  }
-  for (const list of agentsByTeam.values()) {
-    list.sort((x: any, y: any) => {
-      if (x.teamRole === 'lead' && y.teamRole !== 'lead') return -1;
-      if (x.teamRole !== 'lead' && y.teamRole === 'lead') return 1;
-      return ((x.displayName ?? x.name) as string).localeCompare((y.displayName ?? y.name) as string);
-    });
+  async function handleSubmitTeam(input: Partial<Team>) {
+    if (teamDialog.type === 'edit') {
+      await teamsApi.update(teamDialog.team.name, input);
+      toast.success(`"${input.displayName}" updated.`);
+    } else {
+      await teamsApi.create(input);
+      toast.success(`"${input.displayName}" created.`);
+    }
+    await reloadTeams();
+    refresh();
   }
 
-  // Search
-  const q = searchQuery.trim().toLowerCase();
-  const filteredAgents = q
-    ? allAgents.filter((a: any) =>
-        (a.name as string).toLowerCase().includes(q)
-        || (a.displayName as string)?.toLowerCase().includes(q)
-        || (a.teamName as string)?.toLowerCase().includes(q))
-    : null;
+  async function handleDeleteTeam() {
+    if (!deletingTeam) return;
+    try {
+      await teamsApi.delete(deletingTeam.name);
+      toast.success(`"${deletingTeam.displayName}" deleted.`);
+      const wasSelected = selection.kind === 'team' && selection.name === deletingTeam.name;
+      setDeletingTeam(null);
+      if (wasSelected) setSelection({ kind: 'overview' });
+      await reloadTeams();
+      refresh();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Failed to delete team');
+    }
+  }
+
+  function handleAddAgentToTeamWithAi(team: Team) {
+    const memberNames =
+      allAgents
+        .filter((a: any) => a.teamName === team.name)
+        .map((m: any) => m.displayName ?? m.name)
+        .join(', ') || '(no members yet)';
+    const prompt = `Add a new agent to the "${team.displayName}" team.\n\nCurrent members: ${memberNames}\nMission: ${team.mission ?? team.description}\n\nWhat role would you like to add?`;
+    navigate(`/chat?${new URLSearchParams({ agent: 'agent-builder-agent', prompt }).toString()}`);
+  }
+
+  function handleBuildTeamWithAi() {
+    const prompt =
+      "Build me a new team. Tell me what kind of team you want (e.g. 'finance', 'marketing', 'design ops') and I'll research the domain, design the team structure, and create the agents after you approve.";
+    navigate(`/chat?${new URLSearchParams({ agent: 'team-builder-agent', prompt }).toString()}`);
+  }
+
+  // ── Derived data ──────────────────────────────────────────────────────────
+
+  const agentsByTeam = useMemo(() => {
+    const m = new Map<string, any[]>();
+    for (const a of allAgents) {
+      const tn = (a as any).teamName as string | undefined;
+      if (!tn) continue;
+      (m.get(tn) ?? (m.set(tn, []), m.get(tn)!)).push(a);
+    }
+    for (const list of m.values()) {
+      list.sort((x: any, y: any) => {
+        if (x.teamRole === 'lead' && y.teamRole !== 'lead') return -1;
+        if (x.teamRole !== 'lead' && y.teamRole === 'lead') return 1;
+        return ((x.displayName ?? x.name) as string).localeCompare((y.displayName ?? y.name) as string);
+      });
+    }
+    return m;
+  }, [allAgents]);
+
+  const unassigned = useMemo(
+    () => allAgents.filter((a: any) => !a.teamName),
+    [allAgents],
+  );
 
   const total = allAgents.length;
+  const assignedCount = total - unassigned.length;
+
+  // Sidebar search — filters teams AND surfaces matching agents
+  const q = sidebarSearch.trim().toLowerCase();
+  const filteredTeams = useMemo(() => {
+    if (!q) return allTeams;
+    return allTeams.filter(t =>
+      t.name.toLowerCase().includes(q)
+      || t.displayName.toLowerCase().includes(q)
+      || (t.mission ?? '').toLowerCase().includes(q)
+      || t.leadAgentName.toLowerCase().includes(q),
+    );
+  }, [allTeams, q]);
+
+  const matchingAgents = useMemo(() => {
+    if (!q) return [];
+    return allAgents.filter((a: any) =>
+      (a.name as string).toLowerCase().includes(q)
+      || ((a.displayName as string) ?? '').toLowerCase().includes(q),
+    ).slice(0, 8);
+  }, [allAgents, q]);
+
+  // Global stats: provider/model distribution
+  const globalProviders = useMemo(() => {
+    const map = new Map<string, number>();
+    for (const a of allAgents) {
+      const p = ((a as any).provider as string) ?? 'claude';
+      map.set(p, (map.get(p) ?? 0) + 1);
+    }
+    return [...map.entries()].sort((a, b) => b[1] - a[1]);
+  }, [allAgents]);
+
+  const globalModels = useMemo(() => {
+    const map = new Map<string, number>();
+    for (const a of allAgents) {
+      const m = ((a as any).model as string) ?? 'sonnet';
+      map.set(m, (map.get(m) ?? 0) + 1);
+    }
+    return [...map.entries()].sort((a, b) => b[1] - a[1]);
+  }, [allAgents]);
+
+  const topTeams = useMemo(() => {
+    return allTeams
+      .map(t => ({ team: t, count: agentsByTeam.get(t.name)?.length ?? 0 }))
+      .sort((a, b) => b.count - a.count)
+      .slice(0, 6);
+  }, [allTeams, agentsByTeam]);
+
+  // Team detail derived data
+  const activeTeam = selection.kind === 'team' ? allTeams.find(t => t.name === selection.name) : null;
+  const activeMembers: any[] = activeTeam ? (agentsByTeam.get(activeTeam.name) ?? []) : [];
+  const activeLead = activeMembers.find(m => m.teamRole === 'lead');
+
+  const activeTeamProviders = useMemo(() => {
+    const map = new Map<string, number>();
+    for (const a of activeMembers) {
+      const p = (a.provider as string) ?? 'claude';
+      map.set(p, (map.get(p) ?? 0) + 1);
+    }
+    return [...map.entries()].sort((a, b) => b[1] - a[1]);
+  }, [activeMembers]);
+
+  const activeTeamModels = useMemo(() => {
+    const map = new Map<string, number>();
+    for (const a of activeMembers) {
+      const m = (a.model as string) ?? 'sonnet';
+      map.set(m, (map.get(m) ?? 0) + 1);
+    }
+    return [...map.entries()].sort((a, b) => b[1] - a[1]);
+  }, [activeMembers]);
+
+  const filteredActiveMembers = useMemo(() => {
+    const mq = memberSearch.trim().toLowerCase();
+    if (!mq) return activeMembers;
+    return activeMembers.filter((a: any) =>
+      (a.name as string).toLowerCase().includes(mq)
+      || ((a.displayName as string) ?? '').toLowerCase().includes(mq)
+      || ((a.capabilities as string[]) ?? []).some(c => c.toLowerCase().includes(mq)),
+    );
+  }, [activeMembers, memberSearch]);
+
+  // Jump helper — select the team that owns an agent
+  function jumpToAgent(a: any) {
+    if (a.teamName) setSelection({ kind: 'team', name: a.teamName });
+    else setSelection({ kind: 'unassigned' });
+    setMemberSearch('');
+    setViewingAgent(a);
+  }
+
+  // ── Render ───────────────────────────────────────────────────────────────
 
   if (loading) {
     return (
       <div className="p-6">
-        <h1 className="font-heading text-xl font-bold text-theme-primary tracking-widest uppercase mb-6">Agents</h1>
-        <div>{Array.from({ length: 6 }).map((_, i) => <RowSkeleton key={i} />)}</div>
+        <h1 className="font-heading text-xl font-bold text-theme-primary tracking-widest uppercase mb-6">Agents & Teams</h1>
+        <div className="grid grid-cols-[18rem_1fr] gap-4">
+          <div className="space-y-2">
+            {Array.from({ length: 6 }).map((_, i) => (
+              <div key={i} className="h-12 rounded-lg bg-surface-200/30 animate-pulse" />
+            ))}
+          </div>
+          <div className="space-y-3">
+            {Array.from({ length: 4 }).map((_, i) => (
+              <div key={i} className="h-24 rounded-xl bg-surface-200/30 animate-pulse" />
+            ))}
+          </div>
+        </div>
       </div>
     );
   }
 
   return (
-    <div className="p-6">
-      {/* Header */}
-      <div className="flex items-center justify-between mb-5">
-        <div className="flex items-center gap-4">
-          <h1 className="font-heading text-xl font-bold text-theme-primary tracking-widest uppercase">Agents</h1>
-          <div className="flex items-center gap-3">
-            <div className="flex items-center gap-1 text-[10px] font-mono text-theme-muted">
-              <Users className="w-3 h-3 text-accent-blue" /> {total} agents
-            </div>
-            <div className="flex items-center gap-1 text-[10px] font-mono text-theme-muted">
-              <Users className="w-3 h-3 text-accent-purple" /> {allTeams.length} teams
-            </div>
-          </div>
-        </div>
-        <div className="flex items-center gap-2">
-          <div className="relative">
-            <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-theme-subtle" />
-            <input type="text" value={searchQuery} onChange={e => setSearchQuery(e.target.value)}
-              placeholder="Search agents..." className="input text-xs pl-8 pr-3 py-1.5 w-44" />
-          </div>
-          <button title="Refresh" onClick={refresh} className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[10px] font-mono bg-surface-200/30 text-theme-muted hover:bg-surface-200/50 transition-colors">
-            <RefreshCw className="w-3 h-3" />
-          </button>
-          <button onClick={() => setImportOpen(true)} className="inline-flex items-center gap-1 px-3 py-1.5 rounded-full text-[10px] font-mono bg-accent-purple/10 text-accent-purple hover:bg-accent-purple/20 transition-colors">
-            <FolderGit2 className="w-3 h-3" /> Import from Repo
-          </button>
+    <div className="flex h-full min-h-0">
+      {/* ── Left sidebar ─────────────────────────────────────────────────── */}
+      <aside className="w-72 shrink-0 border-r border-border/40 bg-surface-50/40 flex flex-col min-h-0">
+        {/* Title + refresh */}
+        <div className="px-4 py-4 border-b border-border/40 flex items-center justify-between">
+          <h1 className="font-heading text-sm font-bold text-theme-primary tracking-widest uppercase">Agents & Teams</h1>
           <button
-            onClick={() => {
-              // No agents selected → scaffold an empty team. Otherwise the
-              // selected agents become the initial members.
-              setCreateTeamOpen(true);
-            }}
-            className="inline-flex items-center gap-1 px-3 py-1.5 rounded-full text-[10px] font-mono bg-accent-green/10 text-accent-green hover:bg-accent-green/20 transition-colors"
+            title="Refresh"
+            onClick={() => { refresh(); void reloadTeams(); }}
+            className="p-1.5 rounded-md text-theme-muted hover:text-theme-primary hover:bg-surface-200/50 transition-colors"
           >
-            <Plus className="w-3 h-3" /> Create Team
-          </button>
-          <button onClick={handleCreate} className="inline-flex items-center gap-1 px-3 py-1.5 rounded-full text-[10px] font-mono bg-accent-blue/10 text-accent-blue hover:bg-accent-blue/20 transition-colors">
-            <Sparkles className="w-3 h-3" /> Create Agent
+            <RefreshCw className="w-3.5 h-3.5" />
           </button>
         </div>
-      </div>
 
-      {/* Selection bar — appears when any agent is checked */}
-      {selectedAgents.size > 0 && (
-        <div className="flex items-center justify-between gap-3 mb-4 px-4 py-2 rounded-lg bg-accent-blue/5 border border-accent-blue/20">
-          <span className="text-[11px] font-mono text-accent-blue">
-            {selectedAgents.size} selected
-          </span>
-          <div className="flex items-center gap-2">
-            <button
-              onClick={() => setAssignOpen(true)}
-              className="inline-flex items-center gap-1 px-3 py-1 rounded-full text-[10px] font-mono bg-accent-blue/10 text-accent-blue hover:bg-accent-blue/20"
-            >
-              <ArrowRight className="w-3 h-3" /> Assign to team
-            </button>
-            <button
-              onClick={() => setCreateTeamOpen(true)}
-              className="inline-flex items-center gap-1 px-3 py-1 rounded-full text-[10px] font-mono bg-accent-green/10 text-accent-green hover:bg-accent-green/20"
-            >
-              <Plus className="w-3 h-3" /> Create team with these
-            </button>
-            <button
-              onClick={clearSelection}
-              className="inline-flex items-center gap-1 px-3 py-1 rounded-full text-[10px] font-mono bg-surface-200/30 text-theme-muted hover:bg-surface-200/50"
-            >
-              <X className="w-3 h-3" /> Clear
-            </button>
+        {/* Search */}
+        <div className="px-4 py-3 border-b border-border/40">
+          <div className="relative">
+            <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-theme-subtle pointer-events-none" />
+            <input
+              type="text"
+              value={sidebarSearch}
+              onChange={e => setSidebarSearch(e.target.value)}
+              placeholder="Search teams or agents…"
+              className="input text-xs pl-8 pr-3 py-1.5 w-full"
+            />
           </div>
         </div>
-      )}
 
-      {/* Org Chart */}
-      {!searchQuery && allAgents.length > 0 && (
-        <div className="mb-6"><DelegationGraph agents={allAgents} /></div>
-      )}
+        {/* Scrollable list */}
+        <div className="flex-1 overflow-y-auto min-h-0 py-2">
+          {/* Overview entry */}
+          <button
+            onClick={() => setSelection({ kind: 'overview' })}
+            className={`w-full flex items-center gap-2 px-4 py-2 text-left transition-colors ${
+              selection.kind === 'overview'
+                ? 'bg-accent-blue/10 text-accent-blue border-l-2 border-accent-blue'
+                : 'text-theme-secondary hover:bg-surface-200/30 border-l-2 border-transparent'
+            }`}
+          >
+            <Home className="w-3.5 h-3.5" />
+            <span className="text-[12px] font-heading font-semibold tracking-wide">Overview</span>
+          </button>
 
-      {/* Search results */}
-      {filteredAgents && (
-        <div className="mb-6">
-          <span className="text-[10px] text-theme-muted font-mono block mb-2">{filteredAgents.length} result{filteredAgents.length !== 1 ? 's' : ''}</span>
-          {/* Column headers */}
-          <div className="flex items-center gap-4 px-4 py-2 border-b border-border/20 text-[10px] font-label uppercase tracking-widest text-theme-subtle">
-            <span className="w-4" />
-            <span className="w-8" />
-            <span className="w-48">Name</span>
-            <span className="w-16">Provider</span>
-            <span className="w-16">Model</span>
-            <span className="flex-1">Capabilities</span>
-            <span className="w-12 text-right">Deleg.</span>
-            <span className="text-right">Actions</span>
+          <div className="px-4 py-2 text-[9px] font-label uppercase tracking-widest text-theme-subtle">
+            Teams
           </div>
-          {filteredAgents.map((agent: any) => (
-            <AgentRow key={agent.name} agent={agent} onEdit={handleEdit} onDelete={setDeletingRole} onRun={handleRun} onView={setViewingAgent} selected={selectedAgents.has(agent.name)} onToggleSelect={toggleAgentSelection} />
-          ))}
-        </div>
-      )}
 
-      {/* Team list */}
-      {!searchQuery && (
-        <div>
-          {allTeams.map(team => {
-            const members = agentsByTeam.get(team.name) ?? [];
-            if (members.length === 0) return null;
-            return (
-              <div key={team.name}>
-                {/* Team section header */}
-                <div className="flex items-center gap-3 px-4 py-3 mt-4 first:mt-0">
-                  <div className="w-8 h-8 rounded-lg bg-accent-blue/10 flex items-center justify-center">
-                    <Users className="w-4 h-4 text-accent-blue" />
-                  </div>
-                  <span className="text-sm font-heading font-semibold text-theme-primary tracking-wide">{team.displayName}</span>
-                  <div className="flex items-center gap-1 text-[10px] font-mono text-theme-muted">
-                    <Users className="w-3 h-3 text-accent-blue" /> {members.length}
-                  </div>
-                  {team.description && (
-                    <span className="text-[11px] text-theme-muted font-body truncate">{team.description}</span>
-                  )}
-                </div>
-                {/* Column headers */}
-                <div className="flex items-center gap-4 px-4 py-2 border-b border-border/20 text-[10px] font-label uppercase tracking-widest text-theme-subtle">
-                  <span className="w-8" />
-                  <span className="w-48">Name</span>
-                  <span className="w-16">Provider</span>
-                  <span className="w-16">Model</span>
-                  <span className="flex-1">Capabilities</span>
-                  <span className="w-12 text-right">Deleg.</span>
-                  <span className="text-right">Actions</span>
-                </div>
-                {/* Agent rows */}
-                {members.map((agent: any) => (
-                  <AgentRow key={agent.name} agent={agent} onEdit={handleEdit} onDelete={setDeletingRole} onRun={handleRun} onView={setViewingAgent} selected={selectedAgents.has(agent.name)} onToggleSelect={toggleAgentSelection} />
-                ))}
-              </div>
-            );
-          })}
-          {unassigned.length > 0 && (
-            <div>
-              <div className="flex items-center gap-3 px-4 py-3 mt-4">
-                <div className="w-8 h-8 rounded-lg bg-surface-200/30 flex items-center justify-center">
-                  <Users className="w-4 h-4 text-theme-muted" />
-                </div>
-                <span className="text-sm font-heading font-semibold text-theme-muted tracking-wide">Unassigned</span>
-                <div className="flex items-center gap-1 text-[10px] font-mono text-theme-muted">
-                  <Users className="w-3 h-3 text-theme-subtle" /> {unassigned.length}
-                </div>
-              </div>
-              <div className="flex items-center gap-4 px-4 py-2 border-b border-border/20 text-[10px] font-label uppercase tracking-widest text-theme-subtle">
-                <span className="w-8" />
-                <span className="w-48">Name</span>
-                <span className="w-16">Provider</span>
-                <span className="w-16">Model</span>
-                <span className="flex-1">Capabilities</span>
-                <span className="w-12 text-right">Deleg.</span>
-                <span className="text-right">Actions</span>
-              </div>
-              {unassigned.map((agent: any) => (
-                <AgentRow key={agent.name} agent={agent} onEdit={handleEdit} onDelete={setDeletingRole} onRun={handleRun} onView={setViewingAgent} selected={selectedAgents.has(agent.name)} onToggleSelect={toggleAgentSelection} />
-              ))}
+          {filteredTeams.length === 0 && (
+            <div className="px-4 py-3 text-[11px] text-theme-muted italic font-body">
+              {q ? 'No teams match your search.' : 'No teams yet.'}
             </div>
           )}
+
+          {filteredTeams.map(team => {
+            const members = agentsByTeam.get(team.name) ?? [];
+            const lead = members.find((m: any) => m.teamRole === 'lead');
+            const isActive = selection.kind === 'team' && selection.name === team.name;
+            return (
+              <button
+                key={team.name}
+                onClick={() => { setSelection({ kind: 'team', name: team.name }); setMemberSearch(''); }}
+                className={`w-full flex items-start gap-2.5 px-4 py-2.5 text-left transition-colors border-l-2 ${
+                  isActive
+                    ? 'bg-accent-blue/10 border-accent-blue'
+                    : 'border-transparent hover:bg-surface-200/30'
+                }`}
+              >
+                <div className="w-7 h-7 rounded-md bg-accent-blue/10 flex items-center justify-center shrink-0 mt-0.5">
+                  <Users className="w-3.5 h-3.5 text-accent-blue" />
+                </div>
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-1.5">
+                    <span className={`text-[12px] font-heading font-semibold tracking-wide truncate ${
+                      isActive ? 'text-accent-blue' : 'text-theme-primary'
+                    }`}>{team.displayName}</span>
+                    {team.isBuiltIn && (
+                      <span className="text-[8px] font-mono px-1 py-0 rounded-full bg-surface-200/60 text-theme-muted">BI</span>
+                    )}
+                  </div>
+                  <div className="flex items-center gap-2 mt-0.5">
+                    <span className="text-[10px] font-mono text-theme-muted">{members.length} {members.length === 1 ? 'member' : 'members'}</span>
+                    {lead && (
+                      <span className="flex items-center gap-1 text-[10px] font-mono text-theme-subtle truncate">
+                        <Crown className="w-2.5 h-2.5 text-accent-yellow shrink-0" />
+                        <span className="truncate">{lead.displayName ?? lead.name}</span>
+                      </span>
+                    )}
+                  </div>
+                </div>
+                {isActive && <ChevronRight className="w-3.5 h-3.5 text-accent-blue shrink-0 mt-2" />}
+              </button>
+            );
+          })}
+
+          {/* Unassigned */}
+          {unassigned.length > 0 && (
+            <>
+              <div className="px-4 pt-4 pb-2 text-[9px] font-label uppercase tracking-widest text-theme-subtle">
+                Other
+              </div>
+              <button
+                onClick={() => { setSelection({ kind: 'unassigned' }); setMemberSearch(''); }}
+                className={`w-full flex items-center gap-2.5 px-4 py-2.5 text-left transition-colors border-l-2 ${
+                  selection.kind === 'unassigned'
+                    ? 'bg-accent-yellow/10 border-accent-yellow'
+                    : 'border-transparent hover:bg-surface-200/30'
+                }`}
+              >
+                <div className="w-7 h-7 rounded-md bg-surface-200/40 flex items-center justify-center shrink-0">
+                  <Users className="w-3.5 h-3.5 text-theme-muted" />
+                </div>
+                <div className="flex-1 min-w-0">
+                  <div className="text-[12px] font-heading font-semibold text-theme-secondary tracking-wide">Unassigned</div>
+                  <div className="text-[10px] font-mono text-theme-muted mt-0.5">
+                    {unassigned.length} {unassigned.length === 1 ? 'agent' : 'agents'}
+                  </div>
+                </div>
+              </button>
+            </>
+          )}
+
+          {/* Matching agent results during search */}
+          {q && matchingAgents.length > 0 && (
+            <>
+              <div className="px-4 pt-4 pb-2 text-[9px] font-label uppercase tracking-widest text-theme-subtle">
+                Matching agents
+              </div>
+              {matchingAgents.map(a => (
+                <button
+                  key={a.name as string}
+                  onClick={() => jumpToAgent(a)}
+                  className="w-full flex items-center gap-2.5 px-4 py-2 text-left hover:bg-surface-200/30 transition-colors"
+                >
+                  <div
+                    className="w-6 h-6 rounded flex items-center justify-center shrink-0"
+                    style={{ backgroundColor: (((a as any).color as string) ?? '#666') + '18' }}
+                  >
+                    <RoleIcon icon={(a as any).icon} color={(a as any).color} size={12} />
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <div className="text-[11px] text-theme-primary font-body truncate">
+                      {((a as any).displayName as string) ?? (a.name as string)}
+                    </div>
+                    <div className="text-[9px] font-mono text-theme-subtle truncate">
+                      {(a as any).teamName ? `${(a as any).teamName} · ` : 'unassigned · '}
+                      {String((a as any).provider ?? 'claude')}/{String((a as any).model ?? 'sonnet')}
+                    </div>
+                  </div>
+                </button>
+              ))}
+            </>
+          )}
         </div>
-      )}
 
-      {/* Agent detail viewer (markdown) */}
+        {/* Footer CTAs */}
+        <div className="p-3 border-t border-border/40 flex flex-col gap-2">
+          <button
+            onClick={handleCreate}
+            className="w-full inline-flex items-center justify-center gap-1.5 px-3 py-2 rounded-lg text-[11px] font-mono bg-accent-blue/10 text-accent-blue hover:bg-accent-blue/20 transition-colors"
+          >
+            <Sparkles className="w-3 h-3" /> Create Agent
+          </button>
+          <button
+            onClick={() => setCreateTeamOpen(true)}
+            className="w-full inline-flex items-center justify-center gap-1.5 px-3 py-2 rounded-lg text-[11px] font-mono bg-accent-green/10 text-accent-green hover:bg-accent-green/20 transition-colors"
+          >
+            <Plus className="w-3 h-3" /> New Team
+          </button>
+          <div className="flex gap-2">
+            <button
+              onClick={handleBuildTeamWithAi}
+              title="Build a team with AI"
+              className="flex-1 inline-flex items-center justify-center gap-1 px-2 py-1.5 rounded-lg text-[10px] font-mono bg-surface-200/40 text-theme-muted hover:bg-surface-200/60 transition-colors"
+            >
+              <Sparkles className="w-3 h-3" /> AI
+            </button>
+            <button
+              onClick={() => setImportOpen(true)}
+              title="Import agents from a repository"
+              className="flex-1 inline-flex items-center justify-center gap-1 px-2 py-1.5 rounded-lg text-[10px] font-mono bg-surface-200/40 text-theme-muted hover:bg-surface-200/60 transition-colors"
+            >
+              <FolderGit2 className="w-3 h-3" /> Import
+            </button>
+          </div>
+        </div>
+      </aside>
+
+      {/* ── Right pane ───────────────────────────────────────────────────── */}
+      <main className="flex-1 overflow-y-auto min-h-0">
+        {/* Bulk selection bar */}
+        {selectedAgents.size > 0 && (
+          <div className="sticky top-0 z-10 flex items-center justify-between gap-3 px-6 py-3 bg-accent-blue/10 border-b border-accent-blue/30">
+            <span className="text-[11px] font-mono text-accent-blue">
+              {selectedAgents.size} selected
+            </span>
+            <div className="flex items-center gap-2">
+              <button
+                onClick={() => setAssignOpen(true)}
+                className="inline-flex items-center gap-1 px-3 py-1 rounded-full text-[10px] font-mono bg-accent-blue/10 text-accent-blue hover:bg-accent-blue/20"
+              >
+                <ArrowRight className="w-3 h-3" /> Assign to team
+              </button>
+              <button
+                onClick={() => setCreateTeamOpen(true)}
+                className="inline-flex items-center gap-1 px-3 py-1 rounded-full text-[10px] font-mono bg-accent-green/10 text-accent-green hover:bg-accent-green/20"
+              >
+                <Plus className="w-3 h-3" /> Create team with these
+              </button>
+              <button
+                onClick={clearSelection}
+                className="inline-flex items-center gap-1 px-3 py-1 rounded-full text-[10px] font-mono bg-surface-200/30 text-theme-muted hover:bg-surface-200/50"
+              >
+                <X className="w-3 h-3" /> Clear
+              </button>
+            </div>
+          </div>
+        )}
+
+        {selection.kind === 'overview' && (
+          <OverviewContent
+            total={total}
+            teamsCount={allTeams.length}
+            assignedCount={assignedCount}
+            unassignedCount={unassigned.length}
+            providers={globalProviders}
+            models={globalModels}
+            topTeams={topTeams}
+            allAgents={allAgents}
+            onSelectTeam={(name) => { setSelection({ kind: 'team', name }); setMemberSearch(''); }}
+          />
+        )}
+
+        {selection.kind === 'team' && activeTeam && (
+          <TeamDetailContent
+            team={activeTeam}
+            members={activeMembers}
+            filteredMembers={filteredActiveMembers}
+            lead={activeLead}
+            providers={activeTeamProviders}
+            models={activeTeamModels}
+            memberSearch={memberSearch}
+            onMemberSearch={setMemberSearch}
+            selectedAgents={selectedAgents}
+            onToggleSelect={toggleAgentSelection}
+            onView={setViewingAgent}
+            onEdit={handleEdit}
+            onDelete={setDeletingRole}
+            onRun={handleRun}
+            onEditTeam={() => setTeamDialog({ type: 'edit', team: activeTeam })}
+            onDeleteTeam={() => setDeletingTeam(activeTeam)}
+            onAddAgentWithAi={() => handleAddAgentToTeamWithAi(activeTeam)}
+          />
+        )}
+
+        {selection.kind === 'team' && !activeTeam && (
+          <div className="p-8 text-center text-theme-muted text-sm">
+            Team not found. <button className="text-accent-blue underline" onClick={() => setSelection({ kind: 'overview' })}>Back to overview</button>
+          </div>
+        )}
+
+        {selection.kind === 'unassigned' && (
+          <UnassignedContent
+            agents={unassigned}
+            selectedAgents={selectedAgents}
+            onToggleSelect={toggleAgentSelection}
+            onView={setViewingAgent}
+            onEdit={handleEdit}
+            onDelete={setDeletingRole}
+            onRun={handleRun}
+          />
+        )}
+      </main>
+
+      {/* Modals */}
       {viewingAgent && <AgentDetailPanel agent={viewingAgent} onClose={() => setViewingAgent(null)} />}
-
-      {/* Run-agent dialog — replaces the old chat redirect. Calls the same
-          spawn_agent tool orchestrators use, then jumps to the execution page. */}
       {runningAgent && (
         <RunAgentDialog
           agent={runningAgent}
@@ -642,10 +842,8 @@ export default function RoleManagerPage() {
           }}
         />
       )}
-
-      {/* Dialogs */}
-      <RoleDialog open={dialogOpen} onClose={() => setDialogOpen(false)} onSave={handleSave} role={editingRole} />
-      <DeleteConfirmDialog open={!!deletingRole} resourceType="agent" resourceName={deletingRole ?? ''} onConfirm={handleDelete} onCancel={() => setDeletingRole(null)} />
+      <RoleDialog open={dialogOpen} onClose={() => setDialogOpen(false)} onSave={handleSaveAgent} role={editingRole} />
+      <DeleteConfirmDialog open={!!deletingRole} resourceType="agent" resourceName={deletingRole ?? ''} onConfirm={handleDeleteAgent} onCancel={() => setDeletingRole(null)} />
       <ImportAgentsFromRepoDialog
         open={importOpen}
         onClose={() => setImportOpen(false)}
@@ -661,8 +859,361 @@ export default function RoleManagerPage() {
         open={createTeamOpen}
         onClose={() => setCreateTeamOpen(false)}
         memberAgentNames={Array.from(selectedAgents)}
-        onCreated={() => { clearSelection(); refresh(); }}
+        onCreated={() => { clearSelection(); refresh(); void reloadTeams(); }}
       />
+      <TeamDialog
+        mode={teamDialog}
+        allAgents={allAgents as any}
+        allTeams={allTeams}
+        onClose={() => setTeamDialog({ type: 'closed' })}
+        onSubmit={handleSubmitTeam}
+      />
+      <TeamDeleteConfirm
+        team={deletingTeam}
+        memberCount={deletingTeam ? (agentsByTeam.get(deletingTeam.name)?.length ?? 0) : 0}
+        onCancel={() => setDeletingTeam(null)}
+        onConfirm={handleDeleteTeam}
+      />
+    </div>
+  );
+}
+
+// ── Overview pane ──────────────────────────────────────────────────────────
+
+function OverviewContent({
+  total, teamsCount, assignedCount, unassignedCount, providers, models, topTeams, allAgents, onSelectTeam,
+}: {
+  total: number;
+  teamsCount: number;
+  assignedCount: number;
+  unassignedCount: number;
+  providers: [string, number][];
+  models: [string, number][];
+  topTeams: { team: Team; count: number }[];
+  allAgents: any[];
+  onSelectTeam: (name: string) => void;
+}) {
+  return (
+    <div className="p-6 space-y-6">
+      <div className="flex items-center gap-3">
+        <Home className="w-5 h-5 text-accent-blue" />
+        <h2 className="font-heading text-lg font-bold text-theme-primary tracking-widest uppercase">Overview</h2>
+      </div>
+
+      {/* Global stats grid */}
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+        <StatTile label="Agents" value={total} accent="blue" />
+        <StatTile label="Teams" value={teamsCount} accent="purple" />
+        <StatTile label="Assigned" value={assignedCount} accent="green" />
+        <StatTile label="Unassigned" value={unassignedCount} accent="yellow" />
+      </div>
+
+      {/* Providers / Models distribution */}
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+        <DistributionCard title="Providers" entries={providers} accent="blue" />
+        <DistributionCard title="Models" entries={models} accent="purple" />
+      </div>
+
+      {/* Org chart */}
+      <div className="rounded-xl border border-border/40 bg-surface-100/30 p-4">
+        <div className="flex items-center gap-2 mb-3">
+          <LayoutGrid className="w-4 h-4 text-accent-blue" />
+          <span className="text-[11px] font-label uppercase tracking-widest text-theme-secondary">Delegation Graph</span>
+        </div>
+        {allAgents.length > 0 ? (
+          <DelegationGraph agents={allAgents} />
+        ) : (
+          <div className="text-[11px] text-theme-muted italic font-body py-8 text-center">
+            No agents yet. Create one to get started.
+          </div>
+        )}
+      </div>
+
+      {/* Largest teams */}
+      <div className="rounded-xl border border-border/40 bg-surface-100/30 p-4">
+        <div className="flex items-center gap-2 mb-3">
+          <Users className="w-4 h-4 text-accent-purple" />
+          <span className="text-[11px] font-label uppercase tracking-widest text-theme-secondary">Largest Teams</span>
+        </div>
+        {topTeams.length === 0 ? (
+          <div className="text-[11px] text-theme-muted italic font-body py-2">No teams yet.</div>
+        ) : (
+          <div className="space-y-2">
+            {topTeams.map(({ team, count }) => {
+              const max = Math.max(1, topTeams[0].count);
+              const pct = (count / max) * 100;
+              return (
+                <button
+                  key={team.name}
+                  onClick={() => onSelectTeam(team.name)}
+                  className="w-full flex items-center gap-3 px-2 py-1.5 rounded-md hover:bg-surface-200/40 transition-colors group"
+                >
+                  <span className="w-32 text-[11px] font-heading font-semibold text-theme-primary tracking-wide truncate text-left">
+                    {team.displayName}
+                  </span>
+                  <div className="flex-1 h-2 rounded-full bg-surface-200/30 overflow-hidden">
+                    <div className="h-full bg-accent-blue/40 group-hover:bg-accent-blue/60 transition-colors" style={{ width: `${pct}%` }} />
+                  </div>
+                  <span className="w-14 text-right text-[10px] font-mono text-theme-muted">{count} {count === 1 ? 'agent' : 'agents'}</span>
+                </button>
+              );
+            })}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function StatTile({ label, value, accent }: { label: string; value: number; accent: 'blue' | 'purple' | 'green' | 'yellow' }) {
+  const tone =
+    accent === 'blue' ? 'border-accent-blue/30 bg-accent-blue/5'
+    : accent === 'purple' ? 'border-accent-purple/30 bg-accent-purple/5'
+    : accent === 'green' ? 'border-accent-green/30 bg-accent-green/5'
+    : 'border-accent-yellow/30 bg-accent-yellow/5';
+  const text =
+    accent === 'blue' ? 'text-accent-blue'
+    : accent === 'purple' ? 'text-accent-purple'
+    : accent === 'green' ? 'text-accent-green'
+    : 'text-accent-yellow';
+  return (
+    <div className={`rounded-xl border ${tone} p-4`}>
+      <div className="text-[10px] font-label uppercase tracking-widest text-theme-subtle mb-1">{label}</div>
+      <div className={`text-3xl font-heading font-bold ${text}`}>{value}</div>
+    </div>
+  );
+}
+
+function DistributionCard({ title, entries, accent }: { title: string; entries: [string, number][]; accent: 'blue' | 'purple' }) {
+  const tone = accent === 'blue' ? 'text-accent-blue' : 'text-accent-purple';
+  return (
+    <div className="rounded-xl border border-border/40 bg-surface-100/30 p-4">
+      <div className="text-[10px] font-label uppercase tracking-widest text-theme-subtle mb-3">{title}</div>
+      {entries.length === 0 ? (
+        <div className="text-[11px] text-theme-muted italic font-body">—</div>
+      ) : (
+        <div className="space-y-2">
+          {entries.map(([key, count]) => (
+            <div key={key} className="flex items-center justify-between text-[11px]">
+              <span className={`font-mono ${tone}`}>{key}</span>
+              <span className="font-mono text-theme-muted">{count}</span>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── Team detail pane ───────────────────────────────────────────────────────
+
+function TeamDetailContent({
+  team, members, filteredMembers, lead, providers, models,
+  memberSearch, onMemberSearch,
+  selectedAgents, onToggleSelect,
+  onView, onEdit, onDelete, onRun,
+  onEditTeam, onDeleteTeam, onAddAgentWithAi,
+}: {
+  team: Team;
+  members: any[];
+  filteredMembers: any[];
+  lead: any;
+  providers: [string, number][];
+  models: [string, number][];
+  memberSearch: string;
+  onMemberSearch: (v: string) => void;
+  selectedAgents: Set<string>;
+  onToggleSelect: (name: string) => void;
+  onView: (a: Agent) => void;
+  onEdit: (a: Agent) => void;
+  onDelete: (name: string) => void;
+  onRun: (a: Agent) => void;
+  onEditTeam: () => void;
+  onDeleteTeam: () => void;
+  onAddAgentWithAi: () => void;
+}) {
+  const canAddAgent = team.name !== 'meta';
+  return (
+    <div className="p-6 space-y-5">
+      {/* Team header */}
+      <div className="rounded-xl border border-border/40 bg-surface-100/30 p-5">
+        <div className="flex items-start gap-4">
+          <div className="w-12 h-12 rounded-lg bg-accent-blue/10 flex items-center justify-center shrink-0">
+            <Users className="w-6 h-6 text-accent-blue" />
+          </div>
+          <div className="flex-1 min-w-0">
+            <div className="flex items-center gap-2 flex-wrap">
+              <h2 className="font-heading text-lg font-bold text-theme-primary tracking-wide">{team.displayName}</h2>
+              {team.isBuiltIn && (
+                <span className="text-[9px] font-mono px-1.5 py-0.5 rounded-full bg-surface-200/60 text-theme-muted">built-in</span>
+              )}
+              <span className="text-[11px] font-mono text-theme-subtle">{team.name}</span>
+            </div>
+            {team.description && (
+              <p className="text-[12px] text-theme-muted font-body mt-1">{team.description}</p>
+            )}
+            {team.mission && (
+              <div className="mt-3 flex items-start gap-2 px-3 py-2 rounded-md bg-surface-200/25 border border-border/30">
+                <Info className="w-3.5 h-3.5 text-accent-blue shrink-0 mt-0.5" />
+                <div className="text-[12px] text-theme-secondary font-body italic">{team.mission}</div>
+              </div>
+            )}
+            <div className="flex items-center gap-4 mt-3 flex-wrap">
+              {lead ? (
+                <div className="flex items-center gap-1.5 text-[11px]">
+                  <span className="text-theme-subtle font-label uppercase tracking-widest text-[9px]">Lead:</span>
+                  <Crown className="w-3.5 h-3.5 text-accent-yellow" />
+                  <span className="font-mono text-theme-secondary">{lead.displayName ?? lead.name}</span>
+                </div>
+              ) : (
+                <div className="flex items-center gap-1.5 text-[11px] text-accent-yellow/80">
+                  <Crown className="w-3.5 h-3.5" /> <span>No lead assigned</span>
+                </div>
+              )}
+              {team.parentTeamName && (
+                <div className="flex items-center gap-1.5 text-[11px]">
+                  <span className="text-theme-subtle font-label uppercase tracking-widest text-[9px]">Parent:</span>
+                  <span className="font-mono text-theme-secondary">{team.parentTeamName}</span>
+                </div>
+              )}
+            </div>
+          </div>
+          <div className="flex items-center gap-1.5 shrink-0">
+            {canAddAgent && (
+              <button
+                onClick={onAddAgentWithAi}
+                className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[10px] font-mono bg-accent-purple/10 text-accent-purple hover:bg-accent-purple/20 transition-colors"
+              >
+                <Sparkles className="w-3 h-3" /> Add Agent
+              </button>
+            )}
+            {!team.isBuiltIn && (
+              <>
+                <button
+                  onClick={onEditTeam}
+                  className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[10px] font-mono bg-accent-yellow/10 text-accent-yellow hover:bg-accent-yellow/20 transition-colors"
+                >
+                  <Pencil className="w-3 h-3" /> Edit
+                </button>
+                <button
+                  onClick={onDeleteTeam}
+                  className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[10px] font-mono bg-accent-red/10 text-accent-red hover:bg-accent-red/20 transition-colors"
+                >
+                  <Trash2 className="w-3 h-3" /> Delete
+                </button>
+              </>
+            )}
+          </div>
+        </div>
+      </div>
+
+      {/* Stats row */}
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+        <StatTile label="Members" value={members.length} accent="blue" />
+        <DistributionCard title="Providers" entries={providers} accent="blue" />
+        <DistributionCard title="Models" entries={models} accent="purple" />
+      </div>
+
+      {/* Member search + list */}
+      <div className="space-y-3">
+        <div className="flex items-center justify-between gap-3">
+          <div className="text-[11px] font-label uppercase tracking-widest text-theme-secondary">
+            Members ({filteredMembers.length}{filteredMembers.length !== members.length ? ` of ${members.length}` : ''})
+          </div>
+          <div className="relative">
+            <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-theme-subtle pointer-events-none" />
+            <input
+              type="text"
+              value={memberSearch}
+              onChange={e => onMemberSearch(e.target.value)}
+              placeholder="Search members…"
+              className="input text-xs pl-8 pr-3 py-1.5 w-56"
+            />
+          </div>
+        </div>
+
+        {members.length === 0 ? (
+          <div className="rounded-xl border border-dashed border-border/40 p-8 text-center">
+            <div className="text-[13px] text-theme-muted font-body">No members in this team yet.</div>
+            {canAddAgent && (
+              <button
+                onClick={onAddAgentWithAi}
+                className="mt-3 inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-[11px] font-mono bg-accent-purple/10 text-accent-purple hover:bg-accent-purple/20 transition-colors"
+              >
+                <Sparkles className="w-3 h-3" /> Add the first agent
+              </button>
+            )}
+          </div>
+        ) : filteredMembers.length === 0 ? (
+          <div className="rounded-xl border border-dashed border-border/40 p-6 text-center text-[12px] text-theme-muted font-body italic">
+            No members match "{memberSearch}".
+          </div>
+        ) : (
+          <div className="space-y-2">
+            {filteredMembers.map((agent: any) => (
+              <AgentCard
+                key={agent.name}
+                agent={agent}
+                onEdit={onEdit}
+                onDelete={onDelete}
+                onRun={onRun}
+                onView={onView}
+                selected={selectedAgents.has(agent.name)}
+                onToggleSelect={onToggleSelect}
+              />
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ── Unassigned pane ────────────────────────────────────────────────────────
+
+function UnassignedContent({
+  agents, selectedAgents, onToggleSelect, onView, onEdit, onDelete, onRun,
+}: {
+  agents: any[];
+  selectedAgents: Set<string>;
+  onToggleSelect: (name: string) => void;
+  onView: (a: Agent) => void;
+  onEdit: (a: Agent) => void;
+  onDelete: (name: string) => void;
+  onRun: (a: Agent) => void;
+}) {
+  return (
+    <div className="p-6 space-y-4">
+      <div className="flex items-center gap-3">
+        <Users className="w-5 h-5 text-theme-muted" />
+        <h2 className="font-heading text-lg font-bold text-theme-primary tracking-widest uppercase">Unassigned</h2>
+        <span className="text-[11px] font-mono text-theme-muted">
+          {agents.length} {agents.length === 1 ? 'agent' : 'agents'}
+        </span>
+      </div>
+      <p className="text-[12px] text-theme-muted font-body">
+        These agents aren't members of any team. Select them to assign to an existing team or create a new one.
+      </p>
+      {agents.length === 0 ? (
+        <div className="rounded-xl border border-dashed border-border/40 p-8 text-center text-[12px] text-theme-muted font-body italic">
+          No unassigned agents.
+        </div>
+      ) : (
+        <div className="space-y-2">
+          {agents.map((agent: any) => (
+            <AgentCard
+              key={agent.name}
+              agent={agent}
+              onEdit={onEdit}
+              onDelete={onDelete}
+              onRun={onRun}
+              onView={onView}
+              selected={selectedAgents.has(agent.name)}
+              onToggleSelect={onToggleSelect}
+            />
+          ))}
+        </div>
+      )}
     </div>
   );
 }

@@ -15,6 +15,7 @@ import { renderMarkdown } from '../components/chat/ChatMessageList';
 import LiveGraph from '../components/execution/LiveGraph';
 import Timeline from '../components/execution/Timeline';
 import NodeDetail from '../components/execution/NodeDetail';
+import { ToolCallLog, type ToolCall } from '../components/common/ToolCallLog';
 
 /**
  * Human-friendly duration format:
@@ -34,11 +35,179 @@ function formatDuration(ms: number | null | undefined): string {
   return `${hours}h ${remainMin}m`;
 }
 
+
+// ── Single log row in the Activity Log ──
+// Tool entries are expandable — click to see full input/output pulled
+// from the matching ToolCallRecord (matched by toolUseId, or by tool+ts
+// proximity as a fallback).
+function LogRow({ log, toolCall }: { log: any; toolCall?: ToolCall }) {
+  const [open, setOpen] = useState(false);
+  const isTool =
+    log.type === 'tool_start' || log.type === 'tool_done' ||
+    log.type === 'tool_call' || log.type === 'tool_complete';
+  // Every tool row is expandable — even if args/result aren't persisted yet.
+  // The expanded panel surfaces whatever's available (log content, matched
+  // ToolCallRecord, or an explicit "no data captured" note).
+  const canExpand = isTool;
+  const ts = log.timestamp
+    ? new Date(log.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })
+    : '--:--:--';
+
+  const iconChar =
+    log.type === 'tool_start' ? '⚡' :
+    log.type === 'tool_done' ? '✓' :
+    log.type === 'tool_call' ? '🔧' :
+    log.type === 'tool_complete' ? '✓' :
+    log.type === 'thinking' ? '💭' :
+    log.type === 'text' ? '💬' :
+    log.type === 'started' ? '▶' :
+    log.type === 'completed' ? '✅' : '·';
+  const iconColor =
+    log.type === 'tool_start' || log.type === 'tool_call' ? 'text-amber-400 shrink-0' :
+    log.type === 'tool_done' || log.type === 'tool_complete' ? 'text-emerald-400 shrink-0' :
+    log.type === 'thinking' ? 'text-purple-400 shrink-0' :
+    log.type === 'text' ? 'text-blue-400 shrink-0' :
+    log.type === 'started' ? 'text-blue-400 shrink-0' :
+    log.type === 'completed' ? 'text-emerald-400 shrink-0' :
+    'text-theme-muted shrink-0';
+
+  // Build the one-line description to show next to the tool name.
+  // Prefer the persisted ToolCallRecord's description (the "Bash: pwd",
+  // "Read /path" form produced by describeTool on the server). Fall back
+  // to log.content or log.command. Strip a leading duplicate of the tool
+  // name so "Read Read /path" renders as just "Read /path".
+  const toolName = log.tool ?? toolCall?.tool ?? '';
+  const rawDesc = toolCall?.description ?? log.content ?? (log.command ? `$ ${log.command}` : '');
+  const shortDesc = toolName && rawDesc.startsWith(toolName)
+    ? rawDesc.slice(toolName.length).trimStart().replace(/^[:\-—]\s*/, '')
+    : rawDesc;
+  return (
+    <div className={`py-1 text-[11px] font-mono ${canExpand && open ? 'bg-surface-100/30 -mx-2 px-2 rounded-sm' : ''}`}>
+      <div
+        className={`flex items-start gap-2 ${canExpand ? 'cursor-pointer hover:bg-surface-200/30 -mx-1 px-1 rounded-sm' : ''}`}
+        onClick={canExpand ? () => setOpen(o => !o) : undefined}
+      >
+        {canExpand ? (
+          open ? <ChevronDown className="w-3 h-3 mt-1 text-theme-muted shrink-0" />
+               : <ChevronRight className="w-3 h-3 mt-1 text-theme-muted shrink-0" />
+        ) : <span className="w-3 shrink-0" />}
+        <span className="text-theme-subtle w-16 shrink-0">{ts}</span>
+        <span className={iconColor}>{iconChar}</span>
+        <div className="flex-1 min-w-0">
+          {isTool ? (
+            <>
+              <span className="text-theme-muted">{toolName}</span>
+              {shortDesc && <span className="text-theme-secondary ml-1.5">{shortDesc}</span>}
+              {toolCall?.durationMs ? (
+                <span className="text-[10px] text-theme-subtle ml-2">({toolCall.durationMs < 1000 ? toolCall.durationMs + 'ms' : (toolCall.durationMs / 1000).toFixed(2) + 's'})</span>
+              ) : null}
+            </>
+          ) : log.type === 'thinking' ? (
+            <span className="text-purple-400/70">{log.content ?? 'thinking...'}</span>
+          ) : log.type === 'text' ? (
+            <span className="text-theme-secondary line-clamp-2">{log.content}</span>
+          ) : (
+            <span className="text-theme-secondary">{log.content ?? log.type}</span>
+          )}
+        </div>
+      </div>
+      {canExpand && open && (
+        <div className="ml-[84px] mt-1 mb-1 space-y-1.5">
+          {/* INPUT */}
+          {(() => {
+            // Prefer the full ToolCallRecord.args (persisted or live-streamed).
+            // Fall back to whatever the log row itself carries: log.args
+            // (engine path), log.command (Bash), log.content (preview from
+            // chat-tools). Skip entirely if nothing useful is available.
+            const argsObj = toolCall?.args ?? log.args;
+            if (argsObj && Object.keys(argsObj).length > 0) {
+              return (
+                <div>
+                  <div className="text-[9px] font-label uppercase tracking-wider text-theme-subtle mb-0.5">
+                    Input{toolCall?.truncated?.args && <span className="text-accent-yellow ml-1">(truncated)</span>}
+                  </div>
+                  <pre className="text-[10px] font-mono text-theme-secondary whitespace-pre-wrap bg-surface-50/50 rounded-sm p-2 max-h-48 overflow-auto">
+                    {JSON.stringify(argsObj, null, 2)}
+                  </pre>
+                </div>
+              );
+            }
+            if (log.command) {
+              return (
+                <div>
+                  <div className="text-[9px] font-label uppercase tracking-wider text-theme-subtle mb-0.5">Command</div>
+                  <pre className="text-[10px] font-mono text-theme-secondary whitespace-pre-wrap bg-surface-50/50 rounded-sm p-2 max-h-48 overflow-auto">$ {log.command}</pre>
+                </div>
+              );
+            }
+            if (log.content && log.type !== 'tool_done' && log.type !== 'tool_complete') {
+              return (
+                <div>
+                  <div className="text-[9px] font-label uppercase tracking-wider text-theme-subtle mb-0.5">Input</div>
+                  <pre className="text-[10px] font-mono text-theme-secondary whitespace-pre-wrap bg-surface-50/50 rounded-sm p-2 max-h-48 overflow-auto">{log.content}</pre>
+                </div>
+              );
+            }
+            return null;
+          })()}
+
+          {/* OUTPUT */}
+          {(() => {
+            const recordResult = toolCall?.result;
+            const logResult = (log.type === 'tool_done' || log.type === 'tool_complete')
+              ? (log.content ?? undefined)
+              : undefined;
+            const hasRecord = recordResult !== undefined;
+            const hasLog = logResult !== undefined && logResult !== '';
+            if (hasRecord && toolCall) {
+              const isError = toolCall.isError === true;
+              return (
+                <div>
+                  <div className="text-[9px] font-label uppercase tracking-wider text-theme-subtle mb-0.5">
+                    {isError ? 'Error' : 'Output'}{toolCall.truncated?.result && <span className="text-accent-yellow ml-1">(truncated)</span>}
+                  </div>
+                  <pre className={`text-[10px] font-mono whitespace-pre-wrap rounded-sm p-2 max-h-64 overflow-auto ${isError ? 'text-accent-red bg-accent-red/5' : 'text-theme-secondary bg-surface-50/50'}`}>
+                    {typeof recordResult === 'string' ? recordResult : JSON.stringify(recordResult, null, 2)}
+                  </pre>
+                </div>
+              );
+            }
+            if (hasLog) {
+              return (
+                <div>
+                  <div className="text-[9px] font-label uppercase tracking-wider text-theme-subtle mb-0.5">Output (preview)</div>
+                  <pre className="text-[10px] font-mono text-theme-secondary whitespace-pre-wrap bg-surface-50/50 rounded-sm p-2 max-h-48 overflow-auto">{logResult}</pre>
+                </div>
+              );
+            }
+            return null;
+          })()}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ── Agent Execution View (single-node) ──
 
-function AgentExecutionView({ execution, agentName, trace, id }: {
-  execution: any; agentName: string; trace: any; id: string;
+function AgentExecutionView({ execution, agentName, traces, id, liveToolCalls, refresh }: {
+  execution: any; agentName: string; traces: any[]; id: string; liveToolCalls?: any[]; refresh: () => void;
 }) {
+  // Attempt selector — when the user has resumed the agent at least once,
+  // traces has multiple rows (one per attempt). The latest attempt is
+  // selected by default; earlier attempts are viewable via tabs.
+  const sortedTraces = [...traces].sort((a, b) => (a.attempt ?? 1) - (b.attempt ?? 1));
+  const [selectedAttempt, setSelectedAttempt] = useState<number>(() =>
+    sortedTraces.length > 0 ? (sortedTraces[sortedTraces.length - 1].attempt ?? 1) : 1,
+  );
+  // Keep the selection on the latest attempt when new ones stream in.
+  useEffect(() => {
+    if (sortedTraces.length === 0) return;
+    const latest = sortedTraces[sortedTraces.length - 1].attempt ?? 1;
+    setSelectedAttempt(prev => (prev === (sortedTraces[sortedTraces.length - 2]?.attempt ?? latest) ? latest : prev));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sortedTraces.length]);
+  const trace = sortedTraces.find(t => (t.attempt ?? 1) === selectedAttempt) ?? sortedTraces[sortedTraces.length - 1] ?? null;
   const navigate = useNavigate();
   const [showPrompt, setShowPrompt] = useState(false);
   const [showResponse, setShowResponse] = useState(true);
@@ -52,7 +221,22 @@ function AgentExecutionView({ execution, agentName, trace, id }: {
   const prompt = trace?.renderedPrompt ?? execution.input?.prompt ?? '';
   const response = trace?.rawResponse ?? '';
   const cost = trace?.cost ?? execution.cost ?? {};
-  const toolCalls = trace?.toolCalls ?? [];
+  // Merge persisted tool calls (from trace) with live-streaming ones (SSE),
+  // deduping by toolUseId so we don't double-count once the trace lands.
+  const toolCalls = (() => {
+    const persisted = trace?.toolCalls ?? [];
+    const live = liveToolCalls ?? [];
+    if (live.length === 0) return persisted;
+    const seen = new Set<string>();
+    for (const tc of persisted) if (tc.toolUseId) seen.add(tc.toolUseId);
+    const merged = [...persisted];
+    for (const tc of live) {
+      if (tc.toolUseId && seen.has(tc.toolUseId)) continue;
+      merged.push(tc);
+    }
+    merged.sort((a, b) => new Date(a.startedAt).getTime() - new Date(b.startedAt).getTime());
+    return merged;
+  })();
   const durationMs = trace?.durationMs ?? execution.durationMs ?? 0;
   const meta = execution.meta ?? {};
 
@@ -69,19 +253,20 @@ function AgentExecutionView({ execution, agentName, trace, id }: {
     if (!trimmed || !sessionId) return;
     setResumeBusy(true);
     try {
-      const { agents } = await import('../services/api');
-      const result = await agents.run(agentName, {
-        prompt: trimmed,
-        session_id: sessionId,
-        repo_path: meta.cwd || execution.input?.repo_path,
-      });
-      if (result.error) {
-        alert(`Resume failed: ${result.error}`);
+      // Append a new attempt to this same execution — preserves the
+      // execution page and accumulates attempt rows rather than creating
+      // sibling executions the user has to tab between.
+      const result = await api.resumeAgent(id, trimmed);
+      if ((result as any).error) {
+        alert(`Resume failed: ${(result as any).error}`);
         setResumeBusy(false);
         return;
       }
-      // Navigate to the new execution
-      navigate(`/executions/${result.execution_id}`);
+      setResumePrompt('');
+      setResumeOpen(false);
+      setResumeBusy(false);
+      // Wait briefly for the backend to flip status → running, then refresh.
+      setTimeout(() => refresh(), 400);
     } catch (err) {
       alert(`Resume failed: ${(err as Error).message}`);
       setResumeBusy(false);
@@ -123,30 +308,61 @@ function AgentExecutionView({ execution, agentName, trace, id }: {
     return () => { alive = false; };
   }, [id, execution.status]);
 
-  // For completed executions: if live logs are sparse, merge in trace activity + tool calls
+  // Build the Activity Log stream. Order of precedence:
+  //   1. persisted execution_logs rows (liveLogs)
+  //   2. live SSE tool-call records (liveToolCalls) — injected as
+  //      synthetic log rows so tool events + their full input/output
+  //      show up INLINE during live execution, not only after the trace
+  //      persists.
+  //   3. trace activity/toolCalls — the completed-execution backstop.
+  //
+  // Dedup by toolUseId: if a persisted log row already carries the same
+  // toolUseId, the live injection is skipped to avoid double entries.
   const allLogs = (() => {
-    // Start with persisted logs
-    const logs = [...liveLogs];
-    // If trace has activity not in logs, add them
+    const logs: any[] = [...liveLogs];
+    const live = liveToolCalls ?? [];
+
+    const seenUseIds = new Set<string>();
+    for (const l of logs) if (l.toolUseId) seenUseIds.add(l.toolUseId);
+
+    // Inject each live tool-call record as a synthetic log row so the
+    // Activity Log reflects tool activity as it happens.
+    for (const tc of live) {
+      if (tc.toolUseId && seenUseIds.has(tc.toolUseId)) continue;
+      logs.push({
+        type: 'tool_complete',
+        tool: tc.tool,
+        toolUseId: tc.toolUseId,
+        content: tc.description,
+        args: tc.args,
+        timestamp: tc.startedAt,
+      });
+      if (tc.toolUseId) seenUseIds.add(tc.toolUseId);
+    }
+
+    // Legacy backstop: if persisted logs are sparse, fall back to the
+    // saved trace's tool/activity arrays (post-completion view).
     const traceActivity = trace?.activity ?? [];
     const traceTools = trace?.toolCalls ?? [];
     if (logs.length < 3 && (traceActivity.length > 0 || traceTools.length > 0)) {
-      // Build from trace data
       const traceLogs: any[] = [];
       for (const tc of traceTools) {
-        traceLogs.push({ type: 'tool_call', tool: tc.tool, args: tc.args, timestamp: tc.timestamp ?? trace?.startedAt });
+        if (tc.toolUseId && seenUseIds.has(tc.toolUseId)) continue;
+        traceLogs.push({
+          type: 'tool_complete', tool: tc.tool, toolUseId: tc.toolUseId,
+          content: tc.description, args: tc.args,
+          timestamp: tc.startedAt ?? tc.timestamp ?? trace?.startedAt,
+        });
       }
       for (const a of traceActivity) {
         traceLogs.push({ type: a.type, tool: a.tool ?? a.content, content: a.content, timestamp: a.timestamp ?? trace?.startedAt });
       }
-      // Only add trace logs if persisted logs are sparse (less than tool call count)
       if (logs.length < traceLogs.length + 2) {
-        // Replace with trace data since it's more complete
         const persistedStartEnd = logs.filter(l => l.type === 'started' || l.type === 'completed');
         return [...persistedStartEnd, ...traceLogs].sort((a, b) => new Date(a.timestamp || 0).getTime() - new Date(b.timestamp || 0).getTime());
       }
     }
-    return logs.sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
+    return logs.sort((a, b) => new Date(a.timestamp || 0).getTime() - new Date(b.timestamp || 0).getTime());
   })();
 
   // Auto-scroll logs
@@ -267,6 +483,34 @@ function AgentExecutionView({ execution, agentName, trace, id }: {
           </div>
         </div>
 
+        {/* Attempt tabs — shown when the agent has been resumed at least once.
+            Each tab switches which trace (rawResponse / toolCalls / cost /
+            duration) the rest of the page reflects. */}
+        {sortedTraces.length > 1 && (
+          <div className="flex items-center gap-1 border-b border-border/30 -mx-1 px-1 overflow-x-auto">
+            {sortedTraces.map(t => {
+              const n = t.attempt ?? 1;
+              const failed = t.status === 'failed';
+              const active = n === selectedAttempt;
+              return (
+                <button
+                  key={n}
+                  onClick={() => setSelectedAttempt(n)}
+                  className={`flex items-center gap-1.5 px-3 py-2 text-[11px] font-mono tracking-wider uppercase border-b-2 transition-colors shrink-0 ${
+                    active
+                      ? 'border-accent-blue text-theme-primary'
+                      : 'border-transparent text-theme-muted hover:text-theme-secondary'
+                  }`}
+                  title={`${failed ? 'Failed' : 'Completed'} · ${new Date(t.startedAt).toLocaleString()}`}
+                >
+                  {failed ? <AlertCircle className="w-3 h-3 text-accent-red" /> : <CheckCircle className="w-3 h-3 text-accent-green/70" />}
+                  Attempt {n}
+                </button>
+              );
+            })}
+          </div>
+        )}
+
         {/* Live Logs — shown by default for running, togglable for completed */}
         <div className="card overflow-hidden">
           <button title="Toggle logs" onClick={() => setShowLogs(!showLogs)} className="w-full flex items-center gap-2 px-4 py-3 hover:bg-surface-200/30 transition-colors text-left">
@@ -281,39 +525,41 @@ function AgentExecutionView({ execution, agentName, trace, id }: {
               {allLogs.length === 0 && execution.status === 'running' && (
                 <div className="text-xs text-theme-subtle font-mono py-3 animate-pulse">Waiting for activity...</div>
               )}
-              {allLogs.map((log: any, i: number) => (
-                <div key={i} className="flex items-start gap-2 py-1 text-[11px] font-mono">
-                  <span className="text-theme-subtle w-16 shrink-0">{log.timestamp ? new Date(log.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }) : '--:--:--'}</span>
-                  <span className={
-                    log.type === 'tool_start' ? 'text-amber-400 shrink-0' :
-                    log.type === 'tool_done' ? 'text-emerald-400 shrink-0' :
-                    log.type === 'tool_call' ? 'text-amber-400 shrink-0' :
-                    log.type === 'thinking' ? 'text-purple-400 shrink-0' :
-                    log.type === 'text' ? 'text-blue-400 shrink-0' :
-                    log.type === 'started' ? 'text-blue-400 shrink-0' :
-                    log.type === 'completed' ? 'text-emerald-400 shrink-0' :
-                    'text-theme-muted shrink-0'
-                  }>
-                    {log.type === 'tool_start' ? '⚡' : log.type === 'tool_done' ? '✓' : log.type === 'tool_call' ? '🔧' : log.type === 'thinking' ? '💭' : log.type === 'text' ? '💬' : log.type === 'started' ? '▶' : log.type === 'completed' ? '✅' : '·'}
-                  </span>
-                  <div className="flex-1 min-w-0">
-                    {(log.type === 'tool_start' || log.type === 'tool_done' || log.type === 'tool_call') ? (
-                      <>
-                        <span className="text-theme-muted">{log.tool}</span>
-                        {log.content && <span className="text-theme-secondary ml-1.5">{log.content}</span>}
-                        {!log.content && log.command && <span className="text-theme-secondary ml-1.5">$ {log.command}</span>}
-                        {log.args && <pre className="text-theme-subtle text-[9px] mt-0.5 truncate">{JSON.stringify(log.args).slice(0, 150)}</pre>}
-                      </>
-                    ) : log.type === 'thinking' ? (
-                      <span className="text-purple-400/70">{log.content ?? 'thinking...'}</span>
-                    ) : log.type === 'text' ? (
-                      <span className="text-theme-secondary line-clamp-2">{log.content}</span>
-                    ) : (
-                      <span className="text-theme-secondary">{log.content ?? log.type}</span>
-                    )}
-                  </div>
-                </div>
-              ))}
+              {(() => {
+                // Build two lookups so tool log rows can resolve to their
+                // full ToolCallRecord (with args + result):
+                //   - byUseId: exact match (the common case — both the log
+                //     emitter and the trace store carry toolUseId).
+                //   - byToolNearestTs: fallback — match by tool name and
+                //     the closest startedAt within ±5s.
+                const byUseId = new Map<string, ToolCall>();
+                const byTool = new Map<string, ToolCall[]>();
+                for (const tc of toolCalls as ToolCall[]) {
+                  if (tc.toolUseId) byUseId.set(tc.toolUseId, tc);
+                  const arr = byTool.get(tc.tool) ?? [];
+                  arr.push(tc);
+                  byTool.set(tc.tool, arr);
+                }
+                const resolve = (log: any): ToolCall | undefined => {
+                  if (log.toolUseId && byUseId.has(log.toolUseId)) return byUseId.get(log.toolUseId);
+                  if (log.tool) {
+                    const candidates = byTool.get(log.tool) ?? [];
+                    if (candidates.length === 0) return undefined;
+                    if (!log.timestamp) return candidates[0];
+                    const logTs = new Date(log.timestamp).getTime();
+                    let best: ToolCall | undefined; let bestDelta = Infinity;
+                    for (const c of candidates) {
+                      const d = Math.abs(new Date(c.startedAt).getTime() - logTs);
+                      if (d < bestDelta) { best = c; bestDelta = d; }
+                    }
+                    return bestDelta <= 5000 ? best : undefined;
+                  }
+                  return undefined;
+                };
+                return allLogs.map((log: any, i: number) => (
+                  <LogRow key={i} log={log} toolCall={resolve(log)} />
+                ));
+              })()}
               <div ref={logsEndRef} />
             </div>
           )}
@@ -355,27 +601,7 @@ function AgentExecutionView({ execution, agentName, trace, id }: {
         </div>
 
         {/* Tool Calls */}
-        {toolCalls.length > 0 && (
-          <div className="card overflow-hidden">
-            <div className="flex items-center gap-2 px-4 py-3 border-b border-border/20">
-              <Wrench className="w-4 h-4 text-accent-yellow" />
-              <span className="text-xs font-label uppercase tracking-widest text-theme-secondary">Tool Calls</span>
-              <span className="text-[10px] text-theme-subtle font-mono ml-auto">{toolCalls.length}</span>
-            </div>
-            <div className="max-h-[50vh] overflow-y-auto">
-              {toolCalls.map((tc: any, i: number) => (
-                <div key={i} className="px-4 py-2 border-b border-border/10 last:border-0">
-                  <div className="flex items-center gap-2">
-                    <span className="text-[11px] font-mono text-amber-400">{tc.tool}</span>
-                  </div>
-                  {tc.args && Object.keys(tc.args).length > 0 && (
-                    <pre className="text-[10px] font-mono text-theme-subtle mt-1 whitespace-pre-wrap max-h-24 overflow-y-auto">{JSON.stringify(tc.args, null, 2).slice(0, 500)}</pre>
-                  )}
-                </div>
-              ))}
-            </div>
-          </div>
-        )}
+        {toolCalls.length > 0 && <ToolCallLog calls={toolCalls} />}
 
         {/* Timestamps */}
         <div className="text-[10px] text-theme-subtle font-mono flex gap-4 flex-wrap">
@@ -397,6 +623,7 @@ export default function ExecutionDetailPage() {
     logs, logFilter, setLogFilter,
     loading, connected, isLive, refresh,
     children, descendantsMode, toggleDescendants,
+    liveToolCallsByNode,
   } = useExecution(id);
 
   const [selectedNode, setSelectedNode] = useState<string | null>(null);
@@ -573,8 +800,14 @@ export default function ExecutionDetailPage() {
     const agentName = wfName.includes(':spawn_agent/')
       ? wfName.split(':spawn_agent/')[1]
       : wfName.replace('chat:spawn_agent/', '') || 'unknown';
-    const agentTrace = traces.length > 0 ? traces[traces.length - 1] : null;
-    return <AgentExecutionView execution={execution} agentName={agentName} trace={agentTrace} id={id!} />;
+    return <AgentExecutionView
+      execution={execution}
+      agentName={agentName}
+      traces={traces}
+      id={id!}
+      liveToolCalls={liveToolCallsByNode.get(agentName)}
+      refresh={refresh}
+    />;
   }
 
   const selectedTraces = traces.filter((t: any) => t.node === selectedNode);
@@ -898,6 +1131,7 @@ export default function ExecutionDetailPage() {
               nodeFilter={logFilter}
               onNodeFilterChange={setLogFilter}
               workflowNodes={workflow?.parsed?.nodes ? Object.keys(workflow.parsed.nodes) : []}
+              traces={traces}
             />
           </div>
 

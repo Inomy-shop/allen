@@ -265,6 +265,10 @@ export interface NodeTrace {
   durationMs: number;
   startedAt: Date;
   completedAt?: Date;
+  /** Every tool invocation the agent made during this node attempt —
+   *  captured from both Claude SDK and Codex CLI providers. See
+   *  ./tool-call.ts for the record shape. */
+  toolCalls?: import('./tool-call.js').ToolCallRecord[];
 }
 
 export interface ActivityEntry {

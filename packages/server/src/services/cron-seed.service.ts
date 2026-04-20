@@ -58,6 +58,21 @@ const SEED_JOBS: Omit<CronJob, '_id' | 'nextRunAt' | 'lastRunAt' | 'lastRunStatu
     isBuiltIn: true,
     createdBy: 'seed',
   },
+  {
+    name: 'coderabbit-sweep-15min',
+    displayName: 'CodeRabbit Review Sweep',
+    description:
+      'Every 15 minutes, scans open workflow-owned PRs for unresolved CodeRabbit comments and triggers the resolve-pr-reviews workflow. External PRs (not created by a workflow) are skipped — trigger those manually from the Pull Requests page.',
+    enabled: true,
+    schedule: '*/15 * * * *',
+    timezone: 'UTC',
+    target: {
+      type: 'system',
+      systemAction: 'coderabbit-sweep',
+    },
+    isBuiltIn: true,
+    createdBy: 'seed',
+  },
 ];
 
 export async function seedCronJobs(db: Db): Promise<number> {

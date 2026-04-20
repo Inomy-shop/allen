@@ -94,5 +94,34 @@ export function pullRequestRoutes(db: Db): Router {
     } catch (err: unknown) { res.status(500).json({ error: (err as Error).message }); }
   });
 
+  // GET /api/pull-requests/by-url?url=<pr_url>
+  // Lookup a PR row by its full GitHub URL. Used by the pr-workspace-resolver
+  // agent via Allen MCP's find_pr_by_url tool.
+  router.get('/by-url', async (req: Request, res: Response) => {
+    try {
+      const url = String(req.query.url ?? '');
+      if (!url) return res.status(400).json({ error: 'url is required' });
+      const pr = await prService.findByPrUrl(url);
+      if (!pr) return res.status(404).json({ error: 'PR not found' });
+      res.json(pr);
+    } catch (err: unknown) { res.status(500).json({ error: (err as Error).message }); }
+  });
+
+  // POST /api/pull-requests/:id/mark-synced
+  // Called by the resolve-pr-reviews workflow after a successful apply
+  // round. Records which CodeRabbit comment ids have been addressed so
+  // the next sweep skips them and stamps the cooldown timer.
+  router.post('/:id/mark-synced', async (req: Request, res: Response) => {
+    try {
+      const id = p(req, 'id');
+      const headSha = (req.body?.headSha as string | undefined) ?? '';
+      const processedCommentIds = Array.isArray(req.body?.processedCommentIds)
+        ? (req.body.processedCommentIds as unknown[]).map(String)
+        : [];
+      await prService.markReviewsSynced(id, processedCommentIds, headSha);
+      res.json({ status: 'ok', processedCount: processedCommentIds.length });
+    } catch (err: unknown) { res.status(500).json({ error: (err as Error).message }); }
+  });
+
   return router;
 }

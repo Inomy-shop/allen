@@ -19,3 +19,6 @@ export {
   BRAND_NAME, BRAND_SLUG, DB_NAME_DEFAULT, MCP_SERVER_NAME,
   GIT_BRANCH_PREFIX, GIT_COMMIT_AUTHOR_NAME, GIT_COMMIT_AUTHOR_EMAIL, LOG_TAG,
 } from './brand.js';
+export {
+  type ToolCallRecord, describeTool, truncatePayload, buildToolCallRecord,
+} from './tool-call.js';

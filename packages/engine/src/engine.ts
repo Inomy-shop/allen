@@ -773,6 +773,7 @@ export class AllenEngine {
         durationMs: result.durationMs,
         startedAt: traceStart,
         completedAt: new Date(),
+        toolCalls: result.toolCalls,
       };
 
       await this.stateManager.saveTrace({ ...trace, executionId: exec.id });
@@ -1070,6 +1071,7 @@ export class AllenEngine {
         durationMs: br.result.durationMs,
         startedAt: br.traceStart,
         completedAt: new Date(),
+        toolCalls: br.result.toolCalls,
       };
       await this.stateManager.saveTrace({ ...trace, executionId: exec.id });
 

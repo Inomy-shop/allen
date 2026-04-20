@@ -5,10 +5,11 @@ import ChatInput from '../components/chat/ChatInput';
 import ChatMessageList from '../components/chat/ChatMessageList';
 import CommandPalette from '../components/chat/CommandPalette';
 import ConversationLogs from '../components/chat/ConversationLogs';
+import { ToolCallLog } from '../components/common/ToolCallLog';
 import { CHAT_TITLE, CHAT_EMPTY_PROMPT } from '../lib/brand';
 import {
   MessageSquare, Command, Server, ScrollText, Users,
-  Sparkles, Zap, BarChart3, Terminal, FolderOpen, AlertTriangle, Bot,
+  Sparkles, Zap, BarChart3, Terminal, FolderOpen, AlertTriangle, Bot, Wrench,
 } from 'lucide-react';
 import { chat as chatApi, mcp as mcpApi, learnings as learningsApi, agents as agentsApi } from '../services/api';
 
@@ -23,6 +24,7 @@ export default function ChatPage() {
   const [searchParams, setSearchParams] = useSearchParams();
   const [cmdPaletteOpen, setCmdPaletteOpen] = useState(false);
   const [logsOpen, setLogsOpen] = useState(false);
+  const [toolLogOpen, setToolLogOpen] = useState(false);
   const [mcpCount, setMcpCount] = useState<{ enabled: number; connected: number }>({ enabled: 0, connected: 0 });
   const [providers, setProviders] = useState<any[]>([]);
   const [selectedProvider, setSelectedProvider] = useState('codex');
@@ -129,7 +131,6 @@ export default function ChatPage() {
   }, [activeSessionId]);
 
   // Deep-link support: ?agent=NAME&prompt=PREFILL
-  // Used by the "Build Team with AI" / "Add Agent with AI" buttons in TeamManagerPage.
   // We preselect the agent and prefill the input, then strip the query params
   // so a refresh doesn't re-apply them. The user must click Send themselves
   // — no auto-submit, so they can review/edit the proposed prompt first.
@@ -224,6 +225,11 @@ export default function ChatPage() {
           {activeSessionId && (
             <button onClick={() => setLogsOpen(true)} className="p-1.5 rounded-md bg-surface-200/30 hover:bg-surface-200/60 text-theme-muted hover:text-theme-secondary transition-all" title="Logs">
               <ScrollText className="w-3.5 h-3.5" />
+            </button>
+          )}
+          {activeSessionId && (
+            <button onClick={() => setToolLogOpen(o => !o)} className="p-1.5 rounded-md bg-surface-200/30 hover:bg-surface-200/60 text-theme-muted hover:text-theme-secondary transition-all" title="Tool Log">
+              <Wrench className="w-3.5 h-3.5" />
             </button>
           )}
           <button onClick={() => setCmdPaletteOpen(true)} className="p-1.5 rounded-md bg-surface-200/30 hover:bg-surface-200/60 text-theme-muted hover:text-theme-secondary transition-all" title="Commands">
@@ -334,6 +340,20 @@ export default function ChatPage() {
 
       <CommandPalette open={cmdPaletteOpen} onClose={() => setCmdPaletteOpen(false)} onSelect={handleCommandSelect} />
       {logsOpen && activeSessionId && <ConversationLogs sessionId={activeSessionId} onClose={() => setLogsOpen(false)} />}
+      {toolLogOpen && activeSessionId && (
+        <div className="fixed inset-y-0 right-0 w-full max-w-xl border-l border-border/40 bg-surface-50 shadow-2xl flex flex-col z-40">
+          <div className="flex items-center justify-between px-4 py-3 border-b border-border/20">
+            <span className="text-xs font-label uppercase tracking-widest text-theme-secondary">Tool Log</span>
+            <button onClick={() => setToolLogOpen(false)} className="text-[11px] text-theme-muted hover:text-theme-secondary">Close</button>
+          </div>
+          <div className="flex-1 overflow-y-auto p-3">
+            <ToolCallLog
+              calls={messages.flatMap(m => (m.toolCalls as any[]) ?? [])}
+              emptyText="No tool calls yet in this conversation."
+            />
+          </div>
+        </div>
+      )}
     </div>
   );
 }

@@ -6,7 +6,7 @@ import {
   LayoutDashboard, GitBranch, Play, Users, Activity, Settings,
   FolderGit2, Brain, MessageSquare, BarChart3, Plus, Trash2,
   Server, Palette, Key, User, ChevronRight, ChevronUp, ChevronDown,
-  GitPullRequest, Clock, HelpCircle,
+  GitPullRequest, Clock, HelpCircle, Ticket,
 } from 'lucide-react';
 import { useSettingsStore } from './stores/settingsStore';
 import { useAuthStore } from './stores/authStore';
@@ -32,9 +32,9 @@ const NAV_GROUPS = [
   ]},
   { label: 'Build', items: [
     { to: '/workflows', icon: GitBranch, label: 'Agent Workflows' },
-    { to: '/teams', icon: Users, label: 'Teams' },
-    { to: '/agents', icon: Users, label: 'Agents' },
+    { to: '/agents', icon: Users, label: 'Agents & Teams' },
     { to: '/repos', icon: FolderGit2, label: 'Repos' },
+    { to: '/tickets', icon: Ticket, label: 'Linear' },
   ]},
   { label: 'Develop', items: [
     { to: '/workspaces', icon: FolderGit2, label: 'Workspaces' },

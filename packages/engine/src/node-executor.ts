@@ -12,6 +12,7 @@ import { renderTemplate } from './template.js';
 import { extractOutputs, buildOutputInstruction, outputKeys } from './output-extractor.js';
 import { evaluateCondition } from './condition-parser.js';
 import { executeCodexNode } from './codex-executor.js';
+import { buildToolCallRecord, type ToolCallRecord } from './tool-call.js';
 import { statSync, mkdirSync } from 'node:fs';
 
 /** Agent-safe fallback cwd. Kept in sync with chat-providers.ts's
@@ -65,6 +66,9 @@ export interface NodeResult {
   sessionId?: string;
   cost: CostInfo;
   durationMs: number;
+  /** Per-tool-call log captured during the node's agent turn(s). Empty
+   *  for non-agent node types. See tool-call.ts for record shape. */
+  toolCalls?: ToolCallRecord[];
 }
 
 export async function executeNode(
@@ -441,11 +445,20 @@ ${context}
     maxTurns?: number;
     emitText?: boolean; // whether to stream text as agent_text events
   };
-  const callAgent = async (opts: CallAgentOpts): Promise<{ text: string; sessionId?: string; cost: number | null; turns: number }> => {
+  type CallAgentResult = {
+    text: string;
+    sessionId?: string;
+    cost: number | null;
+    turns: number;
+    toolCalls: ToolCallRecord[];
+  };
+  const callAgent = async (opts: CallAgentOpts): Promise<CallAgentResult> => {
     let text = '';
     let localSessionId: string | undefined;
     let localTurns = 0;
     let localCost: number | null = null;
+    const localToolCalls: ToolCallRecord[] = [];
+    const pendingTools = new Map<string, { tool: string; args: Record<string, unknown>; startedAt: Date; startMs: number }>();
 
     // Resolve per-node agent settings overrides. The node may specify
     // `agentOverrides` to override the agent's default model / reasoning
@@ -507,21 +520,69 @@ ${context}
                 agentTextBuffer = '';
               }
             }
-          } else if (block.type === 'tool_use' && opts.emitText) {
-            deps.emitter.emit({
-              event: 'agent_tool_start',
-              data: { node: nodeName, tool: block.name, args: block.input },
-            });
-            const toolArgs = block.input as Record<string, unknown> | undefined;
-            const argSummary = toolArgs ? Object.keys(toolArgs).join(', ') : '';
-            emitLog(deps, nodeName, {
-              category: 'tool',
-              message: `Tool: ${block.name}${argSummary ? ` (${argSummary})` : ''}`,
-              data: { tool: block.name, args: toolArgs },
-            });
+          } else if (block.type === 'tool_use' && block.name && block.id) {
+            const toolArgs = (block.input as Record<string, unknown>) ?? {};
+            const startedAt = new Date();
+            pendingTools.set(block.id, { tool: block.name, args: toolArgs, startedAt, startMs: Date.now() });
+            if (opts.emitText) {
+              deps.emitter.emit({
+                event: 'agent_tool_start',
+                data: { node: nodeName, tool: block.name, args: toolArgs, toolUseId: block.id },
+              });
+              const argSummary = Object.keys(toolArgs).join(', ');
+              emitLog(deps, nodeName, {
+                category: 'tool',
+                message: `Tool: ${block.name}${argSummary ? ` (${argSummary})` : ''}`,
+                // Include toolUseId so the UI's persisted-log resolver can
+                // exact-match this row to the streamed ToolCallRecord.
+                data: { tool: block.name, args: toolArgs, toolUseId: block.id },
+              });
+            }
           }
         }
         localTurns++;
+      } else if (message.type === 'user') {
+        // tool_result blocks are delivered back to the assistant as a user
+        // message in the SDK's transcript. We pair each by tool_use_id
+        // with the pending start we recorded above so durationMs and the
+        // final result land on the same record.
+        const content = (message as any).message?.content;
+        if (Array.isArray(content)) {
+          for (const block of content) {
+            if (block.type === 'tool_result' && block.tool_use_id) {
+              const pending = pendingTools.get(block.tool_use_id);
+              if (!pending) continue;
+              const durationMs = Date.now() - pending.startMs;
+              let resultData: unknown;
+              try {
+                const rc = Array.isArray(block.content)
+                  ? block.content.map((c: any) => c.text || '').join('')
+                  : typeof block.content === 'string' ? block.content
+                  : JSON.stringify(block.content);
+                resultData = JSON.parse(rc);
+              } catch {
+                resultData = { raw: String(block.content) };
+              }
+              const record = buildToolCallRecord({
+                tool: pending.tool,
+                args: pending.args,
+                result: resultData,
+                durationMs,
+                startedAt: pending.startedAt,
+                isError: block.is_error === true,
+                toolUseId: block.tool_use_id,
+              });
+              localToolCalls.push(record);
+              pendingTools.delete(block.tool_use_id);
+              if (opts.emitText) {
+                deps.emitter.emit({
+                  event: 'agent_tool_complete',
+                  data: { node: nodeName, toolUseId: block.tool_use_id, record },
+                });
+              }
+            }
+          }
+        }
       } else if (message.type === 'result') {
         localSessionId = (message as any).session_id;
         localCost = (message as any).total_cost_usd ?? null;
@@ -529,8 +590,26 @@ ${context}
       }
     }
 
-    return { text, sessionId: localSessionId, cost: localCost, turns: localTurns };
+    // Any tool_use that never got a tool_result (SDK crashed mid-flight or
+    // was aborted) — flush with what we have so the log shows the attempt.
+    for (const [id, pending] of pendingTools) {
+      localToolCalls.push(buildToolCallRecord({
+        tool: pending.tool,
+        args: pending.args,
+        durationMs: Date.now() - pending.startMs,
+        startedAt: pending.startedAt,
+        isError: true,
+        toolUseId: id,
+      }));
+    }
+
+    return { text, sessionId: localSessionId, cost: localCost, turns: localTurns, toolCalls: localToolCalls };
   };
+
+  // Accumulator for every tool call across the main turn + any extraction
+  // retry turns below. Persisted on the NodeTrace so the UI can render a
+  // per-execution tool log.
+  const allToolCalls: ToolCallRecord[] = [];
 
   // ── Initial agent call (with transient-error retry) ──────────────────
   // The Claude Code SDK sometimes exits with code 1 when multiple subprocesses
@@ -570,6 +649,7 @@ ${context}
   if (!initial) {
     throw lastMainError ?? new Error('Agent call failed after retries');
   }
+  allToolCalls.push(...initial.toolCalls);
 
   rawResponse = initial.text;
   sessionId = initial.sessionId;
@@ -659,6 +739,7 @@ Use auto-gate only if the original prompt's workflow context explicitly allowed 
         if (retry.sessionId) sessionId = retry.sessionId;
         if (retry.cost != null) actualCost = (actualCost ?? 0) + retry.cost;
         turns += retry.turns;
+        allToolCalls.push(...retry.toolCalls);
 
         if (retry.text) {
           rawResponse += '\n\n--- Agent retry ' + attempt + ' ---\n' + retry.text;
@@ -762,6 +843,7 @@ Use auto-gate only if the original prompt's workflow context explicitly allowed 
       method: actualCost != null ? 'sdk_reported' : 'estimated',
     },
     durationMs: Date.now() - start,
+    toolCalls: allToolCalls,
   };
 }
 

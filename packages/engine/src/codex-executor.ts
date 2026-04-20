@@ -3,6 +3,7 @@ import { mkdirSync } from 'node:fs';
 import type { NodeDef, AgentDef, EngineEventEmitter } from './types.js';
 import { renderTemplate } from './template.js';
 import { extractOutputs, buildOutputInstruction } from './output-extractor.js';
+import { buildToolCallRecord, type ToolCallRecord } from './tool-call.js';
 
 /** Scratch dir when no worktree/repo is in scope. Never fall back to
  * process.cwd() — that's the engine's own source tree. */
@@ -20,6 +21,14 @@ interface CodexResult {
     method: 'sdk_reported' | 'estimated';
   };
   durationMs: number;
+  toolCalls?: ToolCallRecord[];
+}
+
+interface PendingCodexTool {
+  tool: string;
+  args: Record<string, unknown>;
+  startedAt: Date;
+  startMs: number;
 }
 
 /**
@@ -118,6 +127,8 @@ export async function executeCodexNode(
     let rawResponse = '';
     let turns = 0;
     let threadId: string | undefined = isResume ? sessionId : undefined;
+    const toolCalls: ToolCallRecord[] = [];
+    const pendingTools = new Map<string, PendingCodexTool>();
 
     // Parse JSONL from stdout
     let lineBuffer = '';
@@ -154,7 +165,7 @@ export async function executeCodexNode(
 
           handleCodexEvent(event, nodeName, emitter, executionId, (text) => {
             rawResponse += text;
-          });
+          }, toolCalls, pendingTools);
           if (event.type === 'turn.completed') {
             turns++;
           }
@@ -211,6 +222,18 @@ export async function executeCodexNode(
           },
         });
 
+        // Flush any tool still marked pending (subprocess died mid-call).
+        for (const [id, pending] of pendingTools) {
+          toolCalls.push(buildToolCallRecord({
+            tool: pending.tool,
+            args: pending.args,
+            durationMs: Date.now() - pending.startMs,
+            startedAt: pending.startedAt,
+            isError: true,
+            toolUseId: id,
+          }));
+        }
+
         resolve({
           outputs,
           rawResponse,
@@ -223,6 +246,7 @@ export async function executeCodexNode(
             method: 'estimated',
           },
           durationMs: Date.now() - start,
+          toolCalls,
         });
       } catch (err: unknown) {
         reject(err);
@@ -242,6 +266,8 @@ function handleCodexEvent(
   emitter: EngineEventEmitter,
   executionId: string,
   appendText: (text: string) => void,
+  toolCalls: ToolCallRecord[],
+  pendingTools: Map<string, PendingCodexTool>,
 ) {
   const type = event.type;
   const item = event.item;
@@ -266,45 +292,136 @@ function handleCodexEvent(
     });
   }
 
-  // Command/tool started
+  // ── Bash / shell command ─────────────────────────────────────────────
   if (type === 'item.started' && item?.type === 'command_execution') {
     const cmd = item.command ?? 'unknown';
+    pendingTools.set(item.id, {
+      tool: 'Bash',
+      args: { command: cmd },
+      startedAt: new Date(),
+      startMs: Date.now(),
+    });
     emitter.emit({
       event: 'agent_tool_start',
-      data: { node: nodeName, tool: 'shell', args: { command: cmd } },
+      data: { node: nodeName, tool: 'Bash', args: { command: cmd }, toolUseId: item.id },
     });
     emitter.emit({
       event: 'execution_log',
       data: {
-        executionId,
-        timestamp: new Date(),
-        level: 'info',
-        category: 'tool',
+        executionId, timestamp: new Date(), level: 'info', category: 'tool',
+        node: nodeName, message: `Running: ${cmd.slice(0, 150)}`,
+      },
+    });
+  }
+  if (type === 'item.completed' && item?.type === 'command_execution') {
+    const pending = pendingTools.get(item.id);
+    const startedAt = pending?.startedAt ?? new Date();
+    const startMs = pending?.startMs ?? Date.now();
+    const cmd = item.command ?? pending?.args.command ?? 'unknown';
+    const output = item.aggregated_output ?? '';
+    const isError = item.status !== 'completed';
+    const record = buildToolCallRecord({
+      tool: 'Bash',
+      args: { command: cmd },
+      result: output,
+      durationMs: Date.now() - startMs,
+      startedAt,
+      isError,
+      toolUseId: item.id,
+    });
+    toolCalls.push(record);
+    pendingTools.delete(item.id);
+    emitter.emit({
+      event: 'agent_tool_complete',
+      data: { node: nodeName, toolUseId: item.id, record },
+    });
+    emitter.emit({
+      event: 'execution_log',
+      data: {
+        executionId, timestamp: new Date(),
+        level: isError ? 'warn' : 'info', category: 'tool',
         node: nodeName,
-        message: `Running: ${cmd.slice(0, 150)}`,
+        message: `${isError ? '✗' : '✓'} ${String(cmd).slice(0, 100)}${output ? ' → ' + String(output).slice(0, 100) : ''}`,
       },
     });
   }
 
-  // Command/tool completed
-  if (type === 'item.completed' && item?.type === 'command_execution') {
-    const cmd = item.command ?? 'unknown';
-    const output = item.aggregated_output ?? '';
-    const status = item.status === 'completed' ? 'completed' : 'failed';
+  // ── MCP tool call (mcp__<server>__<tool>) ────────────────────────────
+  if (type === 'item.started' && item?.type === 'mcp_tool_call') {
+    const server = item.server ?? 'unknown';
+    const fn = item.tool ?? 'call';
+    const tool = `mcp__${server}__${fn}`;
+    const args = (item.arguments && typeof item.arguments === 'object') ? item.arguments : {};
+    pendingTools.set(item.id, { tool, args, startedAt: new Date(), startMs: Date.now() });
+    emitter.emit({
+      event: 'agent_tool_start',
+      data: { node: nodeName, tool, args, toolUseId: item.id },
+    });
+  }
+  if (type === 'item.completed' && item?.type === 'mcp_tool_call') {
+    const pending = pendingTools.get(item.id);
+    const startedAt = pending?.startedAt ?? new Date();
+    const startMs = pending?.startMs ?? Date.now();
+    const tool = pending?.tool ?? `mcp__${item.server ?? 'unknown'}__${item.tool ?? 'call'}`;
+    const args = pending?.args ?? {};
+    const resultText = Array.isArray(item.result?.content)
+      ? item.result.content.map((c: any) => c.text ?? '').join('')
+      : item.result;
+    let resultData: unknown = resultText;
+    if (typeof resultText === 'string') {
+      try { resultData = JSON.parse(resultText); } catch { /* keep as string */ }
+    }
+    const isError = item.isError === true || item.error !== undefined;
+    const record = buildToolCallRecord({
+      tool, args, result: resultData,
+      durationMs: Date.now() - startMs,
+      startedAt,
+      isError,
+      toolUseId: item.id,
+    });
+    toolCalls.push(record);
+    pendingTools.delete(item.id);
     emitter.emit({
       event: 'agent_tool_complete',
-      data: { node: nodeName, tool: 'shell', summary: `${status}: ${cmd.slice(0, 80)}` },
+      data: { node: nodeName, toolUseId: item.id, record },
+    });
+  }
+
+  // ── Function calls (OpenAI-style function/tool) ──────────────────────
+  if (type === 'item.completed' && item?.type === 'function_call') {
+    let args: Record<string, unknown> = {};
+    try {
+      args = typeof item.arguments === 'string' ? JSON.parse(item.arguments) : (item.arguments ?? {});
+    } catch { args = { __raw__: String(item.arguments) }; }
+    pendingTools.set(item.id, {
+      tool: item.name ?? 'function',
+      args,
+      startedAt: new Date(),
+      startMs: Date.now(),
     });
     emitter.emit({
-      event: 'execution_log',
-      data: {
-        executionId,
-        timestamp: new Date(),
-        level: status === 'failed' ? 'warn' : 'info',
-        category: 'tool',
-        node: nodeName,
-        message: `${status === 'failed' ? '✗' : '✓'} ${cmd.slice(0, 100)}${output ? ' → ' + output.slice(0, 100) : ''}`,
-      },
+      event: 'agent_tool_start',
+      data: { node: nodeName, tool: item.name, args, toolUseId: item.id },
+    });
+  }
+  if (type === 'item.completed' && item?.type === 'function_call_output') {
+    // Paired with an earlier function_call via item.call_id (or id).
+    const id = item.call_id ?? item.id;
+    const pending = pendingTools.get(id);
+    if (!pending) return;
+    const record = buildToolCallRecord({
+      tool: pending.tool,
+      args: pending.args,
+      result: item.output,
+      durationMs: Date.now() - pending.startMs,
+      startedAt: pending.startedAt,
+      toolUseId: id,
+    });
+    toolCalls.push(record);
+    pendingTools.delete(id);
+    emitter.emit({
+      event: 'agent_tool_complete',
+      data: { node: nodeName, toolUseId: id, record },
     });
   }
 

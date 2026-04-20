@@ -1,4 +1,4 @@
-import { existsSync, statSync } from 'node:fs';
+import { existsSync, rmSync, statSync } from 'node:fs';
 import { basename, join } from 'node:path';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
@@ -291,9 +291,19 @@ export class RepoService {
 
   async delete(id: string): Promise<void> {
     const { ObjectId } = await import('mongodb');
+    const existing = await this.col.findOne({ _id: new ObjectId(id) });
     await this.col.deleteOne({ _id: new ObjectId(id) });
     // Cascade-delete the deep context row so we don't leave orphans
     await this.db.collection('repo_contexts').deleteOne({ repoId: id }).catch(() => {});
+    // Remove the cloned directory from disk
+    const clonePath = existing?.path as string | undefined;
+    if (clonePath && existsSync(clonePath)) {
+      try {
+        rmSync(clonePath, { recursive: true, force: true });
+      } catch (err) {
+        console.error(`[repos] failed to remove clone directory ${clonePath}:`, err);
+      }
+    }
   }
 
   /**

@@ -61,6 +61,10 @@ export function useExecution(id: string | undefined) {
   //                    the user toggles "Show all descendants".
   const [children, setChildren] = useState<SpawnedChild[]>([]);
   const [descendantsMode, setDescendantsMode] = useState(false);
+  /** Live-streamed tool calls keyed by node name. Populated from SSE
+   *  agent_tool_complete events so the tool log panel updates in real time
+   *  while the node is still running (before the trace is persisted). */
+  const [liveToolCallsByNode, setLiveToolCallsByNode] = useState<Map<string, any[]>>(new Map());
   const eventCounter = useRef(0);
 
   // Fetch initial data
@@ -494,10 +498,21 @@ export function useExecution(id: string | undefined) {
                 {
                   timestamp: new Date(),
                   type: 'tool_complete',
-                  tool: e.data.tool,
-                  content: e.data.summary ?? `Tool completed: ${e.data.tool}`,
+                  tool: e.data.tool ?? e.data.record?.tool,
+                  content: e.data.summary ?? `Tool completed: ${e.data.tool ?? e.data.record?.tool ?? ''}`,
                 },
               ],
+            });
+          }
+          // Append the full tool-call record to the per-node live log. The
+          // server-persisted trace.toolCalls will include the same records
+          // after the node completes; we de-dupe by toolUseId in the UI.
+          if (e.data.record) {
+            setLiveToolCallsByNode(prev => {
+              const m = new Map(prev);
+              const existing = m.get(node) ?? [];
+              m.set(node, [...existing, e.data.record]);
+              return m;
             });
           }
           break;
@@ -649,5 +664,6 @@ export function useExecution(id: string | undefined) {
     children,
     descendantsMode,
     toggleDescendants,
+    liveToolCallsByNode,
   };
 }

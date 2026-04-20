@@ -91,6 +91,26 @@ export function executionRoutes(db: Db): Router {
     }
   });
 
+  // POST /api/executions/:id/resume-agent  { prompt }
+  // Resume a completed/failed agent execution as a new attempt on the SAME
+  // executionId. Unlike /resume (workflow checkpoint resume), this variant is
+  // specific to spawn_agent-initiated executions and appends attempt #N to
+  // the existing trace stream so the UI can show attempt tabs.
+  router.post('/:id/resume-agent', async (req: Request, res: Response) => {
+    try {
+      const prompt = req.body?.prompt as string | undefined;
+      if (!prompt || !prompt.trim()) {
+        return res.status(400).json({ error: 'prompt is required' });
+      }
+      const { resumeAgentExecution } = await import('../services/chat-tools.js');
+      const result = await resumeAgentExecution(db, param(req, 'id'), prompt.trim());
+      if ('error' in result) return res.status(400).json(result);
+      res.status(202).json(result);
+    } catch (err: unknown) {
+      res.status(500).json({ error: (err as Error).message });
+    }
+  });
+
   // POST /api/executions/:id/input
   router.post('/:id/input', async (req: Request, res: Response) => {
     try {

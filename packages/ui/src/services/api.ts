@@ -165,6 +165,14 @@ export const executions = {
     request<any>(`/executions/${id}/pause`, { method: 'POST' }),
   resume: (id: string) =>
     request<any>(`/executions/${id}/resume`, { method: 'POST' }),
+  /** Agent-execution resume: appends a new attempt (attempt N+1) to the
+   *  existing execution instead of creating a fresh one. See
+   *  execution.routes.ts:/resume-agent for details. */
+  resumeAgent: (id: string, prompt: string) =>
+    request<{ execution_id: string; attempt: number }>(`/executions/${id}/resume-agent`, {
+      method: 'POST',
+      body: JSON.stringify({ prompt }),
+    }),
   submitInput: (id: string, node: string, data: Record<string, unknown>) =>
     request<any>(`/executions/${id}/input`, { method: 'POST', body: JSON.stringify({ node, data }) }),
   retryFrom: (id: string, node: string) =>
@@ -497,6 +505,37 @@ export const auth = {
       body: JSON.stringify({ currentPassword, newPassword }),
     }),
   me: () => request<{ user: AuthUser }>('/auth/me'),
+};
+
+// ── Linear ────────────────────────────────────────────────────────────────
+export const linear = {
+  status: () => request<{
+    configured: boolean;
+    workspaceName?: string;
+    workspaceUrlKey?: string;
+    error?: string;
+  }>('/linear/status'),
+  projects: () => request<any[]>('/linear/projects'),
+  issues: (filters: { projectId?: string; state?: string; q?: string; limit?: number } = {}) => {
+    const qs = new URLSearchParams();
+    if (filters.projectId) qs.set('projectId', filters.projectId);
+    if (filters.state) qs.set('state', filters.state);
+    if (filters.q) qs.set('q', filters.q);
+    if (filters.limit) qs.set('limit', String(filters.limit));
+    const query = qs.toString();
+    return request<any[]>(`/linear/issues${query ? `?${query}` : ''}`);
+  },
+  issue: (id: string) => request<any>(`/linear/issues/${id}`),
+  assignAgent: (id: string, agentName: string | null) =>
+    request<{ assignment: any | null }>(`/linear/issues/${id}/assign-agent`, {
+      method: 'PATCH',
+      body: JSON.stringify({ agentName }),
+    }),
+  dispatch: (id: string, body: { agentName: string; repoId: string; extraInstructions?: string }) =>
+    request<{ assignment: any }>(`/linear/issues/${id}/dispatch`, {
+      method: 'POST',
+      body: JSON.stringify(body),
+    }),
 };
 
 // ── Users (admin-only) ───────────────────────────────────────────────────
