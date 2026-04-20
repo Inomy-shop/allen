@@ -731,7 +731,7 @@ async function runSpawnInBackground(
 
       const args: string[] = ['exec'];
       if (currentResumeSession) {
-        args.push('resume', '--json', '--dangerously-bypass-approvals-and-sandbox', '--skip-git-repo-check', currentResumeSession, prompt);
+        args.push('resume', '--json', '--dangerously-bypass-approvals-and-sandbox', '--skip-git-repo-check', '--', currentResumeSession, prompt);
       } else {
         args.push('--json', '--dangerously-bypass-approvals-and-sandbox', '--skip-git-repo-check');
         if (model) args.push('-c', `model="${model}"`);
@@ -1909,7 +1909,7 @@ async function runAgentTurn(
 
       const args: string[] = ['exec'];
       if (resumeSessionId) {
-        args.push('resume', '--json', '--dangerously-bypass-approvals-and-sandbox', '--skip-git-repo-check', resumeSessionId, prompt);
+        args.push('resume', '--json', '--dangerously-bypass-approvals-and-sandbox', '--skip-git-repo-check', '--', resumeSessionId, prompt);
       } else {
         args.push('--json', '--dangerously-bypass-approvals-and-sandbox', '--skip-git-repo-check');
         if (model) args.push('-c', `model="${model}"`);
