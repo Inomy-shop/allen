@@ -857,7 +857,7 @@ async function runSpawnInBackground(
       const mcpServers = await loadAllMcpServers(db, spawnContextEnv);
 
       const sdkOptions: Record<string, unknown> = {
-        model, maxTurns: 50, permissionMode: 'bypassPermissions',
+        model, permissionMode: 'bypassPermissions',
         // Pin cwd so the SDK doesn't implicitly inherit the server's own
         // process.cwd() — agents should never run in the server source tree.
         cwd: resolveAgentCwd(repoPath),
@@ -2015,7 +2015,7 @@ async function runAgentTurn(
       Object.assign(mcpServers, await loadExternalMcpServers(db));
 
       const abortController = new AbortController();
-      const sdkOptions: Record<string, unknown> = { model, maxTurns: 50, permissionMode: 'bypassPermissions', cwd: resolveAgentCwd(cwd), mcpServers, abortController };
+      const sdkOptions: Record<string, unknown> = { model, permissionMode: 'bypassPermissions', cwd: resolveAgentCwd(cwd), mcpServers, abortController };
       if (resumeSessionId) sdkOptions.resume = resumeSessionId;
       else if (process.env.ALLEN_SYSTEM_PROMPT_MODE === 'custom') sdkOptions.customSystemPrompt = systemPrompt;
       else sdkOptions.appendSystemPrompt = systemPrompt;

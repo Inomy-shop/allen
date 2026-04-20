@@ -25,9 +25,6 @@ export const SCAN_VERSION = 1;
 /** Hard wall-time cap for a single scan. Generous — deep scans on large repos can take a while. */
 const SCAN_TIMEOUT_MS = 60 * 60 * 1000; // 60 minutes
 
-/** Max turns the scanner agent gets. */
-const SCAN_MAX_TURNS = 300;
-
 /**
  * Patterns we redact from the agent output as a defense-in-depth pass.
  * Only well-known token prefixes — never a generic length-based catch-all,
@@ -198,7 +195,6 @@ export class RepoContextScannerService {
 
       const sdkOptions: Record<string, unknown> = {
         model,
-        maxTurns: SCAN_MAX_TURNS,
         permissionMode: 'bypassPermissions',
         cwd: repoPath,
         customSystemPrompt: agent.system as string,

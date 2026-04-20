@@ -145,7 +145,6 @@ async function runClaudeCLI(
 
   const sdkOptions: Record<string, unknown> = {
     model,
-    maxTurns: 30,
     permissionMode: 'bypassPermissions',
     cwd: resolvedCwd,
   };

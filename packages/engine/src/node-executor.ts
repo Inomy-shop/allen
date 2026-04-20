@@ -442,7 +442,6 @@ ${context}
   type CallAgentOpts = {
     promptText: string;
     resumeSession?: string;
-    maxTurns?: number;
     emitText?: boolean; // whether to stream text as agent_text events
   };
   type CallAgentResult = {
@@ -500,7 +499,6 @@ ${context}
         model: resolvedModel,
         cwd,
         resume: opts.resumeSession,
-        maxTurns: opts.maxTurns ?? 50,
         permissionMode: resolvedPlanMode ? 'plan' : 'bypassPermissions',
         // Merge parent env so PATH / HOME / ANTHROPIC_API_KEY / etc survive,
         // then overlay our spawn-tree vars.
@@ -640,7 +638,6 @@ ${context}
       initial = await callAgent({
         promptText: prompt,
         resumeSession: resume,
-        maxTurns: 50,
         emitText: true,
       });
       break; // success
@@ -740,7 +737,6 @@ Use auto-gate only if the original prompt's workflow context explicitly allowed 
         const retry = await callAgent({
           promptText: reprompt,
           resumeSession: sessionId,
-          maxTurns: 2,
           emitText: false,
         });
 

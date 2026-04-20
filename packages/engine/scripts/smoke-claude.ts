@@ -208,7 +208,6 @@ async function main(): Promise<void> {
       options: {
         model: args.model,
         cwd: reqCwd,
-        maxTurns: 3,
         permissionMode: 'bypassPermissions',
         customSystemPrompt,
         allowedTools,

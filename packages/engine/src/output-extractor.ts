@@ -273,7 +273,6 @@ Return JSON only, no explanation.`;
     prompt,
     options: {
       model: 'haiku',
-      maxTurns: 1,
       permissionMode: 'plan',
     },
   });

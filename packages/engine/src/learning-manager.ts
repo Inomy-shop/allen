@@ -542,7 +542,6 @@ export class LearningManager {
         prompt,
         options: {
           model: 'sonnet',
-          maxTurns: 1,
           permissionMode: 'plan',
         },
       })) {
@@ -856,7 +855,6 @@ export class LearningManager {
         prompt,
         options: {
           model: 'sonnet',
-          maxTurns: 1,
           permissionMode: 'plan',
         },
       })) {
