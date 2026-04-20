@@ -1,13 +1,14 @@
 /**
- * One-way sync of `teams`, `agents`, `users`, `learnings`, and `secrets`
- * collections from a source DocumentDB to a destination one. Inserts only
- * what's missing in the destination (matched per-collection by a business
- * key). Existing docs in the destination are NEVER modified — this is
- * strictly additive.
+ * One-way sync of `teams`, `agents`, `workflows`, `users`, `learnings`, and
+ * `secrets` collections from a source DocumentDB to a destination one.
+ * Inserts only what's missing in the destination (matched per-collection
+ * by a business key). Existing docs in the destination are NEVER modified
+ * — this is strictly additive.
  *
  * Dedup keys per collection:
  *   teams     → `name`   (unique slug)
  *   agents    → `name`   (unique slug)
+ *   workflows → `name`   (unique slug — the YAML workflow name)
  *   users     → `email`  (unique business key; _id would not match across DBs)
  *   learnings → `_id`    (no natural key; ObjectId preservation is the dedup)
  *   secrets   → `key`    (unique slug — the ALLEN_-prefixed env var name)
@@ -113,6 +114,11 @@ interface SyncConfig {
 const SYNC_PLAN: SyncConfig[] = [
   { collName: 'teams',     matchField: 'name',  label: d => String(d.name ?? d._id) },
   { collName: 'agents',    matchField: 'name',  label: d => String(d.name ?? d._id) },
+  { collName: 'workflows', matchField: 'name',  label: d => {
+      const name = typeof d.name === 'string' ? d.name : String(d._id);
+      const ver = typeof d.version === 'number' ? ` v${d.version}` : '';
+      return `${name}${ver}`;
+    } },
   { collName: 'users',     matchField: 'email', label: d => String(d.email ?? d._id) },
   { collName: 'learnings', matchField: '_id',   label: d => {
       const content = typeof d.content === 'string' ? (d.content as string) : '';
