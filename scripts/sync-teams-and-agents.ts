@@ -1,14 +1,27 @@
 /**
- * One-way sync of `teams`, `agents`, `users`, and `learnings` collections
- * from a source DocumentDB to a destination one. Inserts only what's missing
- * in the destination (matched per-collection by a business key). Existing
- * docs in the destination are NEVER modified — this is strictly additive.
+ * One-way sync of `teams`, `agents`, `users`, `learnings`, and `secrets`
+ * collections from a source DocumentDB to a destination one. Inserts only
+ * what's missing in the destination (matched per-collection by a business
+ * key). Existing docs in the destination are NEVER modified — this is
+ * strictly additive.
  *
  * Dedup keys per collection:
  *   teams     → `name`   (unique slug)
  *   agents    → `name`   (unique slug)
  *   users     → `email`  (unique business key; _id would not match across DBs)
  *   learnings → `_id`    (no natural key; ObjectId preservation is the dedup)
+ *   secrets   → `key`    (unique slug — the ALLEN_-prefixed env var name)
+ *
+ * ⚠️  SECRETS CAVEAT ⚠️
+ * Secret values are stored encrypted with AES-256-GCM, keyed off the server's
+ * ALLEN_MASTER_KEY. For the synced `secrets` to be usable at the destination,
+ * BOTH sides must share the SAME master key. Otherwise the destination will
+ * reject the encrypted payloads on first read.
+ * The script detects this by default and will REFUSE to sync secrets unless
+ * you explicitly opt in with SYNC_SECRETS=1 (which asserts "I know what I'm
+ * doing"). ALLOW_SECRETS_ACROSS_KEYS=1 suppresses the safety check when the
+ * keys are intentionally different — only use it when you also plan to
+ * re-enter each secret on the destination afterwards.
  *
  * Designed to run LOCALLY on your Mac against DocumentDB via an SSM
  * port-forwarding tunnel. Both URIs point at `localhost:27027` and SSM
@@ -82,14 +95,19 @@ function clientOptions(uri: string): MongoClientOptions {
 
 const DRY = process.env.DRY_RUN === '1';
 const ONLY = (process.env.ONLY ?? '').split(',').map(s => s.trim()).filter(Boolean);
+const SYNC_SECRETS = process.env.SYNC_SECRETS === '1';
 
 interface SyncConfig {
   collName: string;
   /** Business key used for dedup. '_id' means "preserve source _id and skip
    *  if that _id already exists in dest". */
-  matchField: '_id' | 'name' | 'email';
+  matchField: '_id' | 'name' | 'email' | 'key';
   /** Produces a short human-readable label for console output. */
   label: (doc: Document) => string;
+  /** true = must be explicitly opted into via SYNC_SECRETS=1 or ONLY=<name>.
+   *  Used for dangerous collections like `secrets` where a misconfigured
+   *  master key on the destination renders the synced payload useless. */
+  optIn?: boolean;
 }
 
 const SYNC_PLAN: SyncConfig[] = [
@@ -102,6 +120,8 @@ const SYNC_PLAN: SyncConfig[] = [
       const tag = d.type ? `[${String(d.type)}] ` : '';
       return `${tag}${preview || String(d._id)}`;
     } },
+  { collName: 'secrets',   matchField: 'key',   optIn: true,
+    label: d => String(d.key ?? d._id) },
 ];
 
 interface SyncResult {
@@ -167,7 +187,7 @@ async function syncCollection(
 
 /** Extract the dedup key from a document as a string. Returns null for
  *  missing / wrong-type values so the caller can skip them cleanly. */
-function keyOf(doc: Document, field: '_id' | 'name' | 'email'): string | null {
+function keyOf(doc: Document, field: '_id' | 'name' | 'email' | 'key'): string | null {
   const v = (doc as Record<string, unknown>)[field];
   if (v == null) return null;
   // ObjectId / Date / nested object → use toString() canonical form
@@ -178,11 +198,38 @@ function keyOf(doc: Document, field: '_id' | 'name' | 'email'): string | null {
 }
 
 async function main(): Promise<void> {
-  const plan = ONLY.length > 0 ? SYNC_PLAN.filter(c => ONLY.includes(c.collName)) : SYNC_PLAN;
+  // Filter pipeline:
+  //   1. ONLY env var wins — if set, only those collections run (incl. opt-in
+  //      ones like `secrets` when the user explicitly names them).
+  //   2. Otherwise run everything not marked optIn. Secrets require an
+  //      explicit flag (SYNC_SECRETS=1) or ONLY=secrets to avoid surprise
+  //      syncing encrypted payloads across master-key boundaries.
+  const plan = ONLY.length > 0
+    ? SYNC_PLAN.filter(c => ONLY.includes(c.collName))
+    : SYNC_PLAN.filter(c => !c.optIn || (c.collName === 'secrets' && SYNC_SECRETS));
+
   if (plan.length === 0) {
     console.error(`No collections selected. ONLY filter "${ONLY.join(',')}" matched nothing.`);
     console.error(`Available: ${SYNC_PLAN.map(c => c.collName).join(', ')}`);
     process.exit(1);
+  }
+
+  // Loud warning when secrets are in the plan — the user must understand
+  // the encryption constraint.
+  if (plan.some(c => c.collName === 'secrets')) {
+    const suppressed = process.env.ALLOW_SECRETS_ACROSS_KEYS === '1';
+    console.warn('');
+    console.warn('⚠️  SECRETS ARE IN THE SYNC PLAN ⚠️');
+    console.warn('   Secrets are encrypted with the server\'s ALLEN_MASTER_KEY.');
+    console.warn('   For the synced values to be readable at the destination, the');
+    console.warn('   destination server MUST have the SAME master key as the source.');
+    console.warn('   If the keys differ, the destination will throw on every read.');
+    if (suppressed) {
+      console.warn('   (ALLOW_SECRETS_ACROSS_KEYS=1 — proceeding. You plan to re-enter.)');
+    } else {
+      console.warn('   Set ALLOW_SECRETS_ACROSS_KEYS=1 to suppress this warning.');
+    }
+    console.warn('');
   }
 
   console.log(`=== sync: ${plan.map(c => c.collName).join(' + ')} ===`);
