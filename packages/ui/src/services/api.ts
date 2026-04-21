@@ -178,6 +178,29 @@ export const executions = {
   retryFrom: (id: string, node: string) =>
     request<any>(`/executions/${id}/retry-from/${node}`, { method: 'POST' }),
   /**
+   * Checkpoint inspection + editing + resume/fork from a specific checkpoint.
+   */
+  checkpoints: {
+    list: (id: string) => request<any[]>(`/executions/${id}/checkpoints`),
+    get: (id: string, cid: string) =>
+      request<any>(`/executions/${id}/checkpoints/${cid}`),
+    update: (id: string, cid: string, body: { state?: Record<string, unknown> }) =>
+      request<any>(`/executions/${id}/checkpoints/${cid}`, {
+        method: 'PATCH',
+        body: JSON.stringify(body),
+      }),
+    run: (id: string, cid: string) =>
+      request<{ id: string; status: string; resumingFromCheckpoint: string }>(
+        `/executions/${id}/checkpoints/${cid}/run`,
+        { method: 'POST' },
+      ),
+    fork: (id: string, cid: string) =>
+      request<{ sourceExecutionId: string; newExecutionId: string; status: string }>(
+        `/executions/${id}/checkpoints/${cid}/fork`,
+        { method: 'POST' },
+      ),
+  },
+  /**
    * Fetch spawn-tree children of an execution.
    *   mode 'direct'      → only children spawned directly by this execution
    *   mode 'descendants' → every row in the subtree (children, grandchildren, …)

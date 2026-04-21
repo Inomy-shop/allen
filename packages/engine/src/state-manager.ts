@@ -1,4 +1,5 @@
-import type { Collection, Db } from 'mongodb';
+import type { Collection, Db, Filter } from 'mongodb';
+import { ObjectId } from 'mongodb';
 import type { Checkpoint, ExecutionState } from './types.js';
 
 export class StateManager {
@@ -86,6 +87,25 @@ export class StateManager {
     await this.executionsCol.updateOne({ id }, { $set: update });
   }
 
+  /**
+   * Like updateExecution, but also supports clearing fields via `$unset`.
+   * Used when re-running / resuming an execution to clear prior error fields
+   * (errorMessage, failedNode) so the UI doesn't show stale failure info.
+   */
+  async updateExecutionWithUnset(
+    id: string,
+    setUpdate: Partial<ExecutionState>,
+    unsetFields: string[],
+  ): Promise<void> {
+    const op: Record<string, unknown> = {};
+    if (Object.keys(setUpdate).length > 0) op.$set = setUpdate;
+    if (unsetFields.length > 0) {
+      op.$unset = Object.fromEntries(unsetFields.map((f) => [f, '']));
+    }
+    if (Object.keys(op).length === 0) return;
+    await this.executionsCol.updateOne({ id }, op);
+  }
+
   async saveCheckpoint(checkpoint: Checkpoint): Promise<void> {
     await this.checkpointsCol.insertOne(checkpoint);
   }
@@ -108,6 +128,67 @@ export class StateManager {
       .limit(1)
       .toArray();
     return (checkpoints[0] as unknown as Checkpoint) ?? null;
+  }
+
+  /**
+   * List every checkpoint for an execution, newest first. Returns full docs
+   * (state can be large — callers wanting a list view should project fields
+   * client-side).
+   */
+  async listCheckpoints(executionId: string): Promise<Array<Checkpoint & { _id: ObjectId }>> {
+    const docs = await this.checkpointsCol
+      .find({ executionId })
+      .sort({ createdAt: -1 })
+      .toArray();
+    return docs as unknown as Array<Checkpoint & { _id: ObjectId }>;
+  }
+
+  /**
+   * Look up a single checkpoint by its Mongo _id, scoped to the given
+   * executionId (defense-in-depth: prevents fetching checkpoints across
+   * executions via id guessing).
+   */
+  async getCheckpointById(
+    executionId: string,
+    checkpointId: string,
+  ): Promise<(Checkpoint & { _id: ObjectId }) | null> {
+    let oid: ObjectId;
+    try { oid = new ObjectId(checkpointId); } catch { return null; }
+    const doc = await this.checkpointsCol.findOne({ _id: oid, executionId });
+    return (doc as unknown as (Checkpoint & { _id: ObjectId })) ?? null;
+  }
+
+  /**
+   * Update a checkpoint. Only whitelisted fields are writable:
+   *   - `state`: the node-state blob, edited by the user
+   *   - `editedAt`, `editedBy`: audit trail
+   * Other fields (executionId, afterNode, createdAt, completedNodes, sessions,
+   * retryCounts) are immutable in v1 to prevent corruption. Returns the
+   * updated document or null if the checkpoint doesn't exist / doesn't
+   * belong to the given execution.
+   */
+  async updateCheckpoint(
+    executionId: string,
+    checkpointId: string,
+    updates: { state?: Record<string, unknown>; editedBy?: ObjectId | string },
+  ): Promise<(Checkpoint & { _id: ObjectId }) | null> {
+    let oid: ObjectId;
+    try { oid = new ObjectId(checkpointId); } catch { return null; }
+    const $set: Record<string, unknown> = { editedAt: new Date() };
+    if (updates.state !== undefined) $set.state = updates.state;
+    if (updates.editedBy !== undefined) {
+      $set.editedBy = typeof updates.editedBy === 'string'
+        ? new ObjectId(updates.editedBy)
+        : updates.editedBy;
+    }
+    const filter: Filter<Record<string, unknown>> = { _id: oid, executionId };
+    const result = await this.checkpointsCol.findOneAndUpdate(
+      filter as Filter<any>,
+      { $set },
+      { returnDocument: 'after' },
+    );
+    if (!result) return null;
+    return result as unknown as (Checkpoint & { _id: ObjectId });
   }
 
   /**

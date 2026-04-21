@@ -48,6 +48,9 @@ resource "aws_ssm_parameter" "env_production" {
     allen_aws_session_token            = var.allen_aws_session_token
     allen_api_base_url                 = var.allen_api_base_url
     allen_api_auth_token               = var.allen_api_auth_token
+
+    # Node.js TLS verification flag — global, not MCP-specific
+    node_tls_reject_unauthorized       = var.node_tls_reject_unauthorized
   })
   tags = local.tags
 }

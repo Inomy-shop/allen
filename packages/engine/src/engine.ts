@@ -16,7 +16,7 @@ import type {
 } from './types.js';
 import { executeNode, type NodeExecutorDeps, type NodeResult } from './node-executor.js';
 import { evaluateCondition } from './condition-parser.js';
-import { renderTemplate } from './template.js';
+import { renderTemplate, renderTemplateWithBindings } from './template.js';
 import { mergeParallelOutputs } from './parallel.js';
 import { extractAutoGateFields, buildNodeContext } from './output-extractor.js';
 import { StateManager } from './state-manager.js';
@@ -107,6 +107,12 @@ export class AllenEngine {
     // Derive context tags for the learning system
     const contextTags = this.learningManager.deriveContextTags(input, workflow);
     exec.state.__contextTags = contextTags;
+
+    // Snapshot the workflow definition at execution start. Frozen DAG so the
+    // UI can render traces against exactly the shape the engine ran against,
+    // even if the workflow is edited later. Stored on the executions row as
+    // an extra field (not in ExecutionState type, intentionally out-of-band).
+    (exec as unknown as Record<string, unknown>).workflowSnapshot = workflow;
 
     await this.stateManager.createExecution(exec);
     this.emit({ event: 'execution_started', data: { executionId, workflowName: workflow.name } });
@@ -270,13 +276,17 @@ export class AllenEngine {
       ? checkpoint.completedNodes.slice(0, nodeIdx)
       : [...checkpoint.completedNodes];
 
+    // Carry `input` forward from the existing execution record so any node
+    // that reads `${input.*}` templates still resolves correctly on retry.
+    // The previous behavior reset to `{}` which silently broke such templates.
+    const existing = await this.stateManager.getExecution(executionId);
     const exec: ExecutionState = {
       id: executionId,
-      workflowId: '',
+      workflowId: existing?.workflowId ?? '',
       workflowName: workflow.name,
       workflowVersion: workflow.version ?? 1,
       status: 'running',
-      input: {},
+      input: existing?.input ?? {},
       state: { ...checkpoint.state } as Record<string, unknown>,
       sessions: { ...checkpoint.sessions },
       retryCounts: { ...checkpoint.retryCounts },
@@ -326,6 +336,186 @@ export class AllenEngine {
       this.emit({
         event: 'execution_failed',
         data: { executionId, failedNode: exec.failedNode, error: message },
+      });
+      throw err;
+    }
+  }
+
+  /**
+   * Resume execution from a SPECIFIC checkpoint (by id), not "the last
+   * checkpoint before this node." Used by the Editable Checkpoints UI flow:
+   * user edits a checkpoint's state, then clicks "Run from here" — the
+   * edited state is loaded verbatim and the graph runs forward.
+   *
+   * Differs from retryFromNode:
+   *   - Keyed by checkpoint._id instead of a node name
+   *   - Uses checkpoint.completedNodes AS-IS (the checkpoint already
+   *     represents the correct cut-point; no need to trim downstream)
+   *   - Carries `input` forward from the existing execution record (same
+   *     fix as retryFromNode)
+   *
+   * Runs against the SAME execution id — not a fork. Status transitions
+   * `failed`/`cancelled` → `running` → `completed`/`failed` as normal.
+   */
+  async runFromCheckpoint(
+    workflow: WorkflowDef,
+    executionId: string,
+    checkpointId: string,
+  ): Promise<Record<string, unknown>> {
+    const checkpoint = await this.stateManager.getCheckpointById(executionId, checkpointId);
+    if (!checkpoint) {
+      throw new Error(`Checkpoint ${checkpointId} not found for execution ${executionId}`);
+    }
+
+    const existing = await this.stateManager.getExecution(executionId);
+    const exec: ExecutionState = {
+      id: executionId,
+      workflowId: existing?.workflowId ?? '',
+      workflowName: workflow.name,
+      workflowVersion: workflow.version ?? 1,
+      status: 'running',
+      input: existing?.input ?? {},
+      state: { ...checkpoint.state } as Record<string, unknown>,
+      sessions: { ...checkpoint.sessions },
+      retryCounts: { ...checkpoint.retryCounts },
+      currentNodes: [],
+      completedNodes: [...checkpoint.completedNodes],
+      cost: { actual: null, estimated: 0 },
+      durationMs: 0,
+      startedAt: new Date(),
+    };
+
+    // Clear prior error fields via $unset so the UI no longer shows them
+    // after the re-run starts.
+    await this.stateManager.updateExecutionWithUnset(
+      executionId,
+      {
+        status: 'running',
+        state: exec.state,
+        completedNodes: exec.completedNodes,
+      },
+      ['errorMessage', 'failedNode'],
+    );
+
+    this.emit({ event: 'execution_started', data: { executionId, workflowName: workflow.name } });
+
+    try {
+      const result = await this.executeGraph(workflow, exec, 0);
+      exec.status = 'completed';
+      exec.completedAt = new Date();
+      exec.durationMs = Date.now() - exec.startedAt.getTime();
+      await this.stateManager.updateExecution(executionId, {
+        status: 'completed',
+        completedAt: exec.completedAt,
+        durationMs: exec.durationMs,
+        state: exec.state,
+        cost: exec.cost,
+        completedNodes: exec.completedNodes,
+      });
+      this.emit({
+        event: 'execution_completed',
+        data: { executionId, durationMs: exec.durationMs, cost: exec.cost },
+      });
+      return result;
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err);
+      exec.status = 'failed';
+      exec.errorMessage = message;
+      await this.stateManager.updateExecution(executionId, {
+        status: 'failed',
+        errorMessage: message,
+        failedNode: exec.failedNode,
+      });
+      await this.stateManager.saveFailureReport(exec, err as Error);
+      this.emit({
+        event: 'execution_failed',
+        data: { executionId, failedNode: exec.failedNode, error: message },
+      });
+      throw err;
+    }
+  }
+
+  /**
+   * Fork from a specific checkpoint into a NEW execution id. The new run
+   * inherits the checkpoint's state/sessions/retryCounts/completedNodes but
+   * gets its own executions row, own trace stream, own cost counter.
+   * Useful for "try this state edit without destroying the original run."
+   * Returns the new execution id.
+   */
+  async forkFromCheckpoint(
+    workflow: WorkflowDef,
+    sourceExecutionId: string,
+    checkpointId: string,
+    options?: { ownerId?: string; newExecutionId?: string },
+  ): Promise<{ newExecutionId: string; result: Record<string, unknown> }> {
+    const checkpoint = await this.stateManager.getCheckpointById(sourceExecutionId, checkpointId);
+    if (!checkpoint) {
+      throw new Error(`Checkpoint ${checkpointId} not found for execution ${sourceExecutionId}`);
+    }
+    const source = await this.stateManager.getExecution(sourceExecutionId);
+    if (!source) {
+      throw new Error(`Source execution ${sourceExecutionId} not found`);
+    }
+
+    // Caller may preallocate the id (service layer does this so the HTTP
+    // response can return the id without awaiting execution completion).
+    const newExecutionId = options?.newExecutionId ?? randomUUID();
+    const exec: ExecutionState = {
+      id: newExecutionId,
+      workflowId: source.workflowId ?? '',
+      workflowName: workflow.name,
+      workflowVersion: workflow.version ?? 1,
+      status: 'running',
+      input: source.input ?? {},
+      state: { ...checkpoint.state } as Record<string, unknown>,
+      sessions: { ...checkpoint.sessions },
+      retryCounts: { ...checkpoint.retryCounts },
+      currentNodes: [],
+      completedNodes: [...checkpoint.completedNodes],
+      cost: { actual: null, estimated: 0 },
+      durationMs: 0,
+      startedAt: new Date(),
+    } as ExecutionState;
+    // Stamp ownerId + fork lineage as extra metadata. ExecutionState's type
+    // doesn't declare these, so write via a plain object cast.
+    const execAny = exec as unknown as Record<string, unknown>;
+    if (options?.ownerId) execAny.ownerId = options.ownerId;
+    execAny.forkedFrom = { executionId: sourceExecutionId, checkpointId };
+
+    await this.stateManager.createExecution(exec);
+    this.emit({ event: 'execution_started', data: { executionId: newExecutionId, workflowName: workflow.name } });
+
+    try {
+      const result = await this.executeGraph(workflow, exec, 0);
+      exec.status = 'completed';
+      exec.completedAt = new Date();
+      exec.durationMs = Date.now() - exec.startedAt.getTime();
+      await this.stateManager.updateExecution(newExecutionId, {
+        status: 'completed',
+        completedAt: exec.completedAt,
+        durationMs: exec.durationMs,
+        state: exec.state,
+        cost: exec.cost,
+        completedNodes: exec.completedNodes,
+      });
+      this.emit({
+        event: 'execution_completed',
+        data: { executionId: newExecutionId, durationMs: exec.durationMs, cost: exec.cost },
+      });
+      return { newExecutionId, result };
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err);
+      exec.status = 'failed';
+      exec.errorMessage = message;
+      await this.stateManager.updateExecution(newExecutionId, {
+        status: 'failed',
+        errorMessage: message,
+        failedNode: exec.failedNode,
+      });
+      await this.stateManager.saveFailureReport(exec, err as Error);
+      this.emit({
+        event: 'execution_failed',
+        data: { executionId: newExecutionId, failedNode: exec.failedNode, error: message },
       });
       throw err;
     }
@@ -661,6 +851,9 @@ export class AllenEngine {
     // memory-tool reads, with no engine-side learning-context injection.
     const contextTags = (exec.state.__contextTags as string[]) ?? [];
     let injectedLearningIds: any[] = [];
+    /** Trace-friendly snapshot of injected learnings, pinned to THIS node's
+     *  trace row so the UI can display them inline with the prompt. */
+    let learningsInjectedTrace: Array<{ id?: string; content: string; contextTags?: string[] }> = [];
     const skipLearnings = process.env.ALLEN_AGENT_SKIP_LEARNINGS === 'true';
     if (nodeType === 'agent' && !skipLearnings) {
       try {
@@ -674,6 +867,11 @@ export class AllenEngine {
         if (learnings.length > 0) {
           nodeContext += this.learningManager.buildLearningsPrompt(learnings);
           injectedLearningIds = learnings.map(l => l._id).filter(Boolean);
+          learningsInjectedTrace = learnings.map((l) => ({
+            id: l._id ? String(l._id) : undefined,
+            content: (l.content ?? '').slice(0, 500),
+            contextTags: (l as unknown as { contextTags?: string[] }).contextTags,
+          }));
           const totalTokens = learnings.reduce((sum, l) => sum + l.tokenCount, 0);
           const previews = learnings.map(l => `"${l.content.slice(0, 50)}..."`).join(', ');
           this.log(exec.id, {
@@ -780,7 +978,19 @@ export class AllenEngine {
 
       exec.completedNodes.push(nodeName);
 
-      // Save trace
+      // Save trace.
+      //
+      // Phase 2 enrichments are all optional and additive:
+      // - templateBindings: placeholder → resolved values from nodeDef.prompt
+      // - learningsInjected: learnings attached to this specific node spawn
+      // - runtimeContext / agentOverrides / toolsAvailable / tokenUsagePerTool /
+      //   gateDecision: populated by node-executor and bubbled up via NodeResult
+      // - retryReason: set on retry rows only (attempt > 1). For attempt 1 of
+      //   a normal first run it stays undefined.
+      const promptRender = nodeDef.prompt
+        ? renderTemplateWithBindings(nodeDef.prompt, exec.state)
+        : undefined;
+      const resultExt = result as unknown as NodeResult;
       const trace: NodeTrace = {
         node: nodeName,
         attempt,
@@ -788,7 +998,7 @@ export class AllenEngine {
         type: nodeDef.type ?? 'agent',
         agent: nodeDef.agent,
         inputState: { ...exec.state },
-        renderedPrompt: nodeDef.prompt ? renderTemplate(nodeDef.prompt, exec.state) : undefined,
+        renderedPrompt: promptRender?.rendered,
         output: result.outputs,
         rawResponse: result.rawResponse,
         activity: [],
@@ -798,6 +1008,14 @@ export class AllenEngine {
         startedAt: traceStart,
         completedAt: new Date(),
         toolCalls: result.toolCalls,
+        // Enrichments — any still-undefined fields are dropped by Mongo on $set.
+        templateBindings: promptRender?.bindings,
+        learningsInjected: learningsInjectedTrace.length > 0 ? learningsInjectedTrace : undefined,
+        runtimeContext: resultExt.runtimeContext,
+        agentOverrides: resultExt.agentOverrides,
+        toolsAvailable: resultExt.toolsAvailable,
+        tokenUsagePerTool: resultExt.tokenUsagePerTool,
+        gateDecision: resultExt.gateDecision,
       };
 
       await this.stateManager.saveTrace({ ...trace, executionId: exec.id });

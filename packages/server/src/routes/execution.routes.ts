@@ -136,6 +136,80 @@ export function executionRoutes(db: Db): Router {
     }
   });
 
+  // ── Editable checkpoints ────────────────────────────────────────────────
+  // GET /api/executions/:id/checkpoints — list all checkpoints for a run
+  router.get('/:id/checkpoints', async (req: Request, res: Response) => {
+    try {
+      const list = await service.listCheckpoints(param(req, 'id'));
+      res.json(list);
+    } catch (err: unknown) {
+      res.status(500).json({ error: (err as Error).message });
+    }
+  });
+
+  // GET /api/executions/:id/checkpoints/:checkpointId — single checkpoint
+  router.get('/:id/checkpoints/:checkpointId', async (req: Request, res: Response) => {
+    try {
+      const doc = await service.getCheckpoint(param(req, 'id'), param(req, 'checkpointId'));
+      if (!doc) return res.status(404).json({ error: 'Checkpoint not found' });
+      res.json(doc);
+    } catch (err: unknown) {
+      res.status(500).json({ error: (err as Error).message });
+    }
+  });
+
+  // PATCH /api/executions/:id/checkpoints/:checkpointId — edit state
+  router.patch('/:id/checkpoints/:checkpointId', async (req: Request, res: Response) => {
+    try {
+      const { state } = req.body ?? {};
+      const editedBy = (req as unknown as { user?: { sub?: string } }).user?.sub;
+      const updated = await service.updateCheckpoint(
+        param(req, 'id'),
+        param(req, 'checkpointId'),
+        { state },
+        editedBy,
+      );
+      if (!updated) return res.status(404).json({ error: 'Checkpoint not found' });
+      res.json(updated);
+    } catch (err: unknown) {
+      const status = (err as { statusCode?: number }).statusCode ?? 500;
+      res.status(status).json({ error: (err as Error).message });
+    }
+  });
+
+  // POST /api/executions/:id/checkpoints/:checkpointId/run — resume same
+  // execution id from this checkpoint. Only allowed when status is failed
+  // or cancelled.
+  router.post('/:id/checkpoints/:checkpointId/run', async (req: Request, res: Response) => {
+    try {
+      const result = await service.runFromCheckpoint(
+        param(req, 'id'),
+        param(req, 'checkpointId'),
+      );
+      res.json(result);
+    } catch (err: unknown) {
+      const status = (err as { statusCode?: number }).statusCode ?? 500;
+      res.status(status).json({ error: (err as Error).message });
+    }
+  });
+
+  // POST /api/executions/:id/checkpoints/:checkpointId/fork — create a NEW
+  // execution id seeded from this checkpoint. Safe even when source is
+  // running (won't disturb it).
+  router.post('/:id/checkpoints/:checkpointId/fork', async (req: Request, res: Response) => {
+    try {
+      const ownerId = (req as unknown as { user?: { sub?: string } }).user?.sub;
+      const result = await service.forkFromCheckpoint(
+        param(req, 'id'),
+        param(req, 'checkpointId'),
+        ownerId,
+      );
+      res.status(201).json(result);
+    } catch (err: unknown) {
+      res.status(500).json({ error: (err as Error).message });
+    }
+  });
+
   // POST /api/executions/:id/cancel-subtree
   //
   // Cancels this execution AND every spawn-tree descendant via the

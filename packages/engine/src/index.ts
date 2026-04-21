@@ -1,7 +1,7 @@
 export { AllenEngine, type EngineConfig, type RunOptions } from './engine.js';
 export { StateManager } from './state-manager.js';
-export { renderTemplate } from './template.js';
-export { evaluateCondition, validateCondition } from './condition-parser.js';
+export { renderTemplate, renderTemplateWithBindings, type TemplateBinding } from './template.js';
+export { evaluateCondition, evaluateConditionVerbose, validateCondition } from './condition-parser.js';
 export { extractOutputs, extractOutputsSync, buildOutputInstruction, buildNodeContext } from './output-extractor.js';
 export { mergeParallelOutputs } from './parallel.js';
 export { validateWorkflow } from './validator.js';

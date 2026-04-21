@@ -337,6 +337,178 @@ export class ExecutionService {
     return false;
   }
 
+  /**
+   * List every checkpoint for an execution. Lightweight — returns docs as-is
+   * from Mongo with _id serialized as string. Caller decides whether to
+   * preview `state` or fetch full.
+   */
+  async listCheckpoints(executionId: string): Promise<Record<string, unknown>[]> {
+    const docs = await this.stateManager.listCheckpoints(executionId);
+    return docs.map((d) => ({
+      ...d,
+      _id: d._id.toString(),
+      editedBy: (d as unknown as { editedBy?: unknown }).editedBy
+        ? String((d as unknown as { editedBy: unknown }).editedBy)
+        : undefined,
+    }));
+  }
+
+  async getCheckpoint(
+    executionId: string,
+    checkpointId: string,
+  ): Promise<Record<string, unknown> | null> {
+    const doc = await this.stateManager.getCheckpointById(executionId, checkpointId);
+    if (!doc) return null;
+    return {
+      ...doc,
+      _id: doc._id.toString(),
+      editedBy: (doc as unknown as { editedBy?: unknown }).editedBy
+        ? String((doc as unknown as { editedBy: unknown }).editedBy)
+        : undefined,
+    };
+  }
+
+  /**
+   * Edit a checkpoint's state. Refuses while the execution is actively
+   * running or waiting on human input — would race with the engine that's
+   * about to write a new checkpoint.
+   */
+  async updateCheckpoint(
+    executionId: string,
+    checkpointId: string,
+    updates: { state?: Record<string, unknown> },
+    editedBy?: string,
+  ): Promise<Record<string, unknown> | null> {
+    const exec = await this.stateManager.getExecution(executionId);
+    if (!exec) throw new Error('Execution not found');
+    if (exec.status === 'running' || exec.status === 'waiting_for_input') {
+      const err = new Error('Cannot edit a checkpoint while execution is active');
+      (err as unknown as { statusCode: number }).statusCode = 409;
+      throw err;
+    }
+    if (updates.state !== undefined && (typeof updates.state !== 'object' || updates.state === null)) {
+      const err = new Error('`state` must be a plain object');
+      (err as unknown as { statusCode: number }).statusCode = 400;
+      throw err;
+    }
+    const updated = await this.stateManager.updateCheckpoint(
+      executionId,
+      checkpointId,
+      { state: updates.state, editedBy },
+    );
+    if (!updated) return null;
+    return {
+      ...updated,
+      _id: updated._id.toString(),
+      editedBy: (updated as unknown as { editedBy?: unknown }).editedBy
+        ? String((updated as unknown as { editedBy: unknown }).editedBy)
+        : undefined,
+    };
+  }
+
+  /**
+   * Resume the SAME execution from a specific checkpoint. Only allowed when
+   * the execution is failed or cancelled — matches the user-facing rule.
+   */
+  async runFromCheckpoint(
+    executionId: string,
+    checkpointId: string,
+  ): Promise<Record<string, unknown>> {
+    const exec = await this.stateManager.getExecution(executionId);
+    if (!exec) throw new Error('Execution not found');
+    if (exec.status !== 'failed' && exec.status !== 'cancelled') {
+      const err = new Error(`Can only run-from-checkpoint when status is failed or cancelled (was: ${exec.status})`);
+      (err as unknown as { statusCode: number }).statusCode = 409;
+      throw err;
+    }
+
+    const workflowDoc = exec.workflowId
+      ? await this.db.collection('workflows').findOne({ _id: (await import('mongodb')).ObjectId.createFromHexString(exec.workflowId) })
+      : await this.db.collection('workflows').findOne({ name: exec.workflowName });
+    if (!workflowDoc) throw new Error('Workflow not found');
+
+    const workflow = workflowDoc.parsed as WorkflowDef;
+    const emitter = createSSEEmitter(executionId);
+
+    const allWorkflowDocs = await this.db.collection('workflows').find({}).toArray();
+    const workflows: Record<string, WorkflowDef> = {};
+    for (const doc of allWorkflowDocs) {
+      workflows[(doc.parsed as WorkflowDef).name] = doc.parsed as WorkflowDef;
+    }
+
+    const config: EngineConfig = {
+      db: this.db,
+      agents: await loadAllAgents(this.db),
+      builtIns: getBuiltIns(),
+      workflows,
+      emitter,
+      services: buildEngineServices(this.db),
+    };
+
+    const engine = new AllenEngine(config);
+    runningEngines.set(executionId, engine);
+
+    engine.runFromCheckpoint(workflow, executionId, checkpointId)
+      .catch(() => {})
+      .finally(() => runningEngines.delete(executionId));
+
+    return { id: executionId, status: 'running', resumingFromCheckpoint: checkpointId };
+  }
+
+  /**
+   * Fork a new execution from a specific checkpoint. Creates a fresh
+   * execution id inheriting the checkpoint's state. Fire-and-forget — the
+   * HTTP response returns the new id immediately; execution runs in the
+   * background.
+   */
+  async forkFromCheckpoint(
+    executionId: string,
+    checkpointId: string,
+    ownerId?: string,
+  ): Promise<Record<string, unknown>> {
+    const exec = await this.stateManager.getExecution(executionId);
+    if (!exec) throw new Error('Execution not found');
+
+    const workflowDoc = exec.workflowId
+      ? await this.db.collection('workflows').findOne({ _id: (await import('mongodb')).ObjectId.createFromHexString(exec.workflowId) })
+      : await this.db.collection('workflows').findOne({ name: exec.workflowName });
+    if (!workflowDoc) throw new Error('Workflow not found');
+
+    const workflow = workflowDoc.parsed as WorkflowDef;
+    const allWorkflowDocs = await this.db.collection('workflows').find({}).toArray();
+    const workflows: Record<string, WorkflowDef> = {};
+    for (const doc of allWorkflowDocs) {
+      workflows[(doc.parsed as WorkflowDef).name] = doc.parsed as WorkflowDef;
+    }
+
+    // Preallocate the new execution id so we can return it synchronously
+    // and register the SSE emitter before the engine starts emitting.
+    const { randomUUID } = await import('node:crypto');
+    const newExecutionId = randomUUID();
+    const emitter = createSSEEmitter(newExecutionId);
+
+    const config: EngineConfig = {
+      db: this.db,
+      agents: await loadAllAgents(this.db),
+      builtIns: getBuiltIns(),
+      workflows,
+      emitter,
+      services: buildEngineServices(this.db),
+    };
+
+    const engine = new AllenEngine(config);
+    runningEngines.set(newExecutionId, engine);
+
+    // Fire-and-forget — the forked workflow runs independently. HTTP
+    // response returns the id immediately so the caller can navigate to
+    // /executions/<newExecutionId> and watch the stream.
+    engine.forkFromCheckpoint(workflow, executionId, checkpointId, { ownerId, newExecutionId })
+      .catch(() => { /* engine writes failure report; route already returned */ })
+      .finally(() => runningEngines.delete(newExecutionId));
+
+    return { sourceExecutionId: executionId, newExecutionId, status: 'running' };
+  }
+
   async retryFromNode(executionId: string, nodeName: string): Promise<Record<string, unknown>> {
     const exec = await this.stateManager.getExecution(executionId);
     if (!exec) throw new Error('Execution not found');
