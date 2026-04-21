@@ -12,7 +12,7 @@ import { AgentConversationService } from './agent-conversation.service.js';
 import { metaChatTools, META_DESTRUCTIVE_TOOLS } from './chat-tools-meta.js';
 import { buildRepoContextBlock } from './repo-context-builder.js';
 import { AGENT_FALLBACK_CWD } from './chat-providers.js';
-import { MCP_SERVER_NAME } from '@allen/engine';
+import { MCP_SERVER_NAME, normalizeModelAlias } from '@allen/engine';
 
 /** Resolve cwd for agent/chat spawns. Never falls back to process.cwd() —
  * we don't want agents running inside the server's own source tree. */
@@ -641,7 +641,10 @@ async function runSpawnInBackground(
   const onEvent = activeCtx?.broadcastEvent;
   const startMs = Date.now();
   const provider = role.provider ?? 'claude';
-  const model = (role.model as string) ?? 'sonnet';
+  // Normalize alias → full model ID. The bundled Claude Code CLI (used in SDK
+  // mode) has stale alias tables that resolve `haiku` → claude-3-5-haiku-20241022
+  // which returns 404. We pin current IDs in packages/engine/src/model-alias.ts.
+  const model = normalizeModelAlias((role.model as string) ?? 'sonnet') ?? 'sonnet';
   const activity: { type: string; tool?: string; timestamp: Date }[] = [];
 
   // Broadcast spawn started + persist log
@@ -1902,7 +1905,7 @@ async function runAgentTurn(
 ): Promise<{ responseText: string; costUsd: number; sessionId?: string; toolCalls: { tool: string; args: Record<string, unknown> }[] }> {
   const targetName = targetAgent.name as string;
   const provider = targetAgent.provider ?? 'claude';
-  const model = targetAgent.model ?? 'sonnet';
+  const model = normalizeModelAlias((targetAgent.model as string | undefined) ?? 'sonnet') ?? 'sonnet';
   // Capture fromAgent BEFORE mutating activeCtx (fixes stale context bug)
   const fromAgent = activeCtx?.currentAgent ?? 'assistant';
 

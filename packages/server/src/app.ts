@@ -84,17 +84,9 @@ async function main(): Promise<void> {
   const db = await connectDB();
   await ensureIndexes(db);
   await bootstrapAdmin(db);
-  const secretSvc = new SecretService(db);
-  await secretSvc.migrateLegacyPlaintext();
-  await secretSvc.migrateToAllenPrefix(db);
-  const mcpSvc = new McpService(db);
-  await mcpSvc.migrateLegacyEnvLiterals();
-  // Must run before migrateGhCliServersToSecret — that one touches `gh`
-  // rows specifically to wire GH_TOKEN, which is irrelevant once we've
-  // rewritten the command away from `gh mcp`.
-  await mcpSvc.migrateGhMcpServerToNpx();
-  await mcpSvc.migrateGhCliServersToSecret();
-  await mcpSvc.syncPresetDescriptions();
+  // Secrets + @secret:KEY migrations removed. MCP env now comes straight
+  // from Allen's root .env via the ALLEN_ prefix convention — see
+  // packages/engine/src/mcp-loader.ts.
 
   // Sync MCP servers into Codex CLI's global config ONCE on boot.
   // Per-chat sync is disabled to avoid races between parallel sessions

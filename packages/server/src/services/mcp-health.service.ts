@@ -18,7 +18,8 @@
 import type { Db } from 'mongodb';
 import { spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import { McpService, type McpServerRecord, resolveEnvSecrets, resolveArgSecrets } from './mcp.service.js';
+import { McpService, type McpServerRecord } from './mcp.service.js';
+import { buildSingleServerConfig } from '@allen/engine';
 import { AlertService } from './alert.service.js';
 
 // ── Config ──
@@ -50,16 +51,27 @@ type PartialResult = Omit<HealthCheckResult, 'durationMs'>;
 
 async function checkStdioServer(server: McpServerRecord, db: Db): Promise<HealthCheckResult> {
   const startMs = Date.now();
-  const command = server.command;
-  if (!command) {
-    return { ok: false, error: 'No command configured', durationMs: 0 };
+
+  // Route through the shared spawn-config resolver so source-based records
+  // (preset / repo) AND legacy bundle records both work — same logic the
+  // loader uses at agent-execution time.
+  let spawnCfg: Record<string, unknown> | null = null;
+  try {
+    spawnCfg = await buildSingleServerConfig(server as unknown as Record<string, unknown>, db);
+  } catch (err) {
+    return { ok: false, error: `failed to resolve spawn config: ${(err as Error).message}`, durationMs: Date.now() - startMs };
+  }
+  if (!spawnCfg) {
+    return { ok: false, error: 'spawn config could not be resolved', durationMs: Date.now() - startMs };
   }
 
-  // Resolve any @secret: references in env and args before spawning
-  const [env, args] = await Promise.all([
-    resolveEnvSecrets(server.env, db),
-    resolveArgSecrets(server.args, db),
-  ]);
+  const command = (spawnCfg.command as string | undefined) ?? '';
+  if (!command) {
+    return { ok: false, error: 'No command configured', durationMs: Date.now() - startMs };
+  }
+  const args = (spawnCfg.args as string[]) ?? [];
+  const env = (spawnCfg.env as Record<string, string>) ?? {};
+  const cwd = spawnCfg.cwd as string | undefined;
 
   return new Promise<HealthCheckResult>((resolve) => {
     let proc: ReturnType<typeof spawn> | null = null;
@@ -80,8 +92,8 @@ async function checkStdioServer(server: McpServerRecord, db: Db): Promise<Health
 
     try {
       proc = spawn(command, args, {
-        cwd: server.bundlePath,
-        env: { ...process.env, ...env, DOTENV_CONFIG_QUIET: 'true' },
+        cwd,
+        env: { ...process.env, ...env },
         stdio: ['pipe', 'pipe', 'pipe'],
       });
     } catch (err) {

@@ -1,20 +1,21 @@
-import { Router, type Request, type Response } from 'express';
+import { Router, type Response } from 'express';
+import type { AuthedRequest } from '../middleware/requireAuth.js';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { existsSync, mkdirSync, unlinkSync } from 'node:fs';
-import { join } from 'node:path';
+import { existsSync, mkdirSync, unlinkSync, readdirSync, readFileSync, statSync } from 'node:fs';
+import { join, relative, resolve as resolvePath, extname } from 'node:path';
 import multer from 'multer';
+import { ObjectId, type Db } from 'mongodb';
+import { forgetInstall, ensureInstalled } from '@allen/engine';
 import { param } from '../types.js';
 import {
   McpService,
-  resolveEnvSecrets,
-  resolveArgSecrets,
-  storeEnvLiteralsAsSecrets,
-  storeArgLiteralsAsSecretsForPreset,
+  MCP_PRESETS,
+  type McpServerRecord,
+  type McpServerSource,
 } from '../services/mcp.service.js';
 import { McpBundleService } from '../services/mcp-bundle.service.js';
 import { healthCheckMcpServer } from '../services/mcp-health.service.js';
-import type { Db } from 'mongodb';
 
 const BUNDLE_UPLOAD_TMP = '/tmp/mcp-bundle-uploads';
 if (!existsSync(BUNDLE_UPLOAD_TMP)) mkdirSync(BUNDLE_UPLOAD_TMP, { recursive: true });
@@ -33,72 +34,137 @@ const bundleUpload = multer({
 
 const execFileAsync = promisify(execFile);
 
-/** Sync all enabled MCP servers to Codex CLI config */
-async function syncAllToCodex(service: McpService, db: Db): Promise<void> {
+/** Current user's ObjectId from the auth middleware. */
+function ownerIdOf(req: AuthedRequest): ObjectId {
+  const sub = req.user?.sub;
+  if (!sub) throw new Error('authenticated user required');
+  return new ObjectId(sub);
+}
+
+/** True if the authenticated user is admin. Used only to gate the "all records
+ * in Codex sync" admin path — MCP CRUD is strict user-scoped regardless. */
+function isAdmin(req: AuthedRequest): boolean {
+  return req.user?.role === 'admin';
+}
+
+/** Build a Mongo filter scoped to the request's user. MCP has ZERO admin
+ * override — even admins see and manage only their own MCP servers. */
+function userScopedFilter(req: AuthedRequest, extra: Record<string, unknown> = {}): Record<string, unknown> {
+  return { ownerId: ownerIdOf(req), ...extra };
+}
+
+/** Sync a single user's enabled MCP servers to that user's Codex CLI config.
+ * Still translates to `codex mcp add/remove` — the external interface is
+ * unchanged. Pulls env from process.env via the shared resolver. */
+async function syncUserToCodex(service: McpService, req: AuthedRequest): Promise<void> {
   try {
-    const servers = await service.list();
+    const ownerFilter = userScopedFilter(req);
+    // Use the service list (no scope) but re-filter here so syncUserToCodex
+    // works even if the service is shared for multiple users later.
+    const servers = (await service.list()).filter(
+      (s) => String(s.ownerId ?? '') === String(ownerFilter.ownerId ?? ''),
+    );
+
+    const { buildSingleServerConfig } = await import('@allen/engine');
     let existing = '';
     try { existing = (await execFileAsync('codex', ['mcp', 'list'], { timeout: 5000 })).stdout; } catch {}
 
     for (const s of servers) {
       if (s.type !== 'stdio') continue;
       const isRegistered = existing.includes(s.name);
-      // Resolve @secret: references in both env and args — Codex needs plaintext
-      const [env, serverArgs] = await Promise.all([
-        resolveEnvSecrets(s.env, db),
-        resolveArgSecrets(s.args, db),
-      ]);
-
-      // Silence dotenv banner on stdout — corrupts Codex's strict rmcp client
-      const envWithQuiet = { ...env, DOTENV_CONFIG_QUIET: 'true' };
-
-      if (s.enabled && !isRegistered) {
-        // Add
-        const args = ['mcp', 'add', s.name];
-        for (const [k, v] of Object.entries(envWithQuiet)) args.push('--env', `${k}=${v}`);
-        args.push('--', s.command!, ...serverArgs);
-        await execFileAsync('codex', args, { timeout: 10000 });
-      } else if (!s.enabled && isRegistered) {
-        // Remove
+      if (!s.enabled && !isRegistered) continue;
+      if (!s.enabled && isRegistered) {
         await execFileAsync('codex', ['mcp', 'remove', s.name], { timeout: 5000 });
-      } else if (s.enabled && isRegistered) {
-        // Update: remove + re-add
-        await execFileAsync('codex', ['mcp', 'remove', s.name], { timeout: 5000 });
-        const args = ['mcp', 'add', s.name];
-        for (const [k, v] of Object.entries(envWithQuiet)) args.push('--env', `${k}=${v}`);
-        args.push('--', s.command!, ...serverArgs);
-        await execFileAsync('codex', args, { timeout: 10000 });
+        continue;
       }
-    }
 
-    // Remove servers from Codex that no longer exist in DB
-    const dbNames = new Set(servers.map(s => s.name));
-    const lines = existing.split('\n').filter(l => l.trim() && !l.startsWith('Name'));
-    for (const line of lines) {
-      const name = line.split(/\s+/)[0];
-      if (name && !dbNames.has(name) && name !== 'allen') {
-        await execFileAsync('codex', ['mcp', 'remove', name], { timeout: 5000 }).catch(() => {});
+      // Resolve the spawn config using the same path the loader uses, so new
+      // source-based records and legacy bundle records both translate correctly.
+      const cfg = await buildSingleServerConfig(
+        s as unknown as Record<string, unknown>,
+        (service as unknown as { db: Db }).db ?? (req as unknown as { app: { locals: { db: Db } } }).app.locals.db,
+      );
+      if (!cfg) continue;
+
+      const envMap = (cfg.env as Record<string, string>) ?? {};
+      const cmd = (cfg.command as string) ?? 'node';
+      const cmdArgs = (cfg.args as string[]) ?? [];
+
+      if (isRegistered) {
+        await execFileAsync('codex', ['mcp', 'remove', s.name], { timeout: 5000 });
       }
+      const args = ['mcp', 'add', s.name];
+      for (const [k, v] of Object.entries(envMap)) args.push('--env', `${k}=${v}`);
+      args.push('--', cmd, ...cmdArgs);
+      await execFileAsync('codex', args, { timeout: 10000 });
     }
   } catch (err) {
     console.error('[mcp] Codex sync failed:', (err as Error).message);
   }
 }
 
+/** Scan a repo for candidate MCP entry files. Heuristics: files matching
+ * `*.mcp.{ts,js,mjs}`, files inside a `.claude/mcp/*` subtree, or files that
+ * reference `@modelcontextprotocol/sdk` as a header import. Skips node_modules
+ * and .git. Returns absolute + repo-relative paths sorted by path. */
+function discoverMcpEntries(repoPath: string, maxDepth = 4): Array<{ entry: string; repoRelative: string }> {
+  const out: Array<{ entry: string; repoRelative: string }> = [];
+  const SDK_IMPORT = '@modelcontextprotocol/sdk';
+
+  function walk(dir: string, depth: number) {
+    if (depth > maxDepth) return;
+    let entries: string[];
+    try { entries = readdirSync(dir); } catch { return; }
+    for (const name of entries) {
+      if (name === 'node_modules' || name === '.git' || name.startsWith('.DS_')) continue;
+      const full = join(dir, name);
+      let st;
+      try { st = statSync(full); } catch { continue; }
+      if (st.isDirectory()) {
+        walk(full, depth + 1);
+        continue;
+      }
+      if (!st.isFile()) continue;
+      const ext = extname(name).toLowerCase();
+      if (!['.ts', '.tsx', '.js', '.mjs', '.cjs'].includes(ext)) continue;
+
+      // Convention-based pickup: *.mcp.{ts,js,mjs} or .claude/mcp/**
+      const byConvention =
+        /\.mcp\.(ts|tsx|js|mjs|cjs)$/.test(name) ||
+        full.includes('/.claude/mcp/');
+
+      // Content-based pickup: file imports the MCP SDK
+      let byContent = false;
+      if (!byConvention && st.size < 200 * 1024) {
+        try {
+          const sample = readFileSync(full, 'utf8').slice(0, 4096);
+          byContent = sample.includes(SDK_IMPORT);
+        } catch { /* ignore */ }
+      }
+
+      if (byConvention || byContent) {
+        out.push({ entry: full, repoRelative: relative(repoPath, full) });
+      }
+    }
+  }
+
+  walk(repoPath, 0);
+  out.sort((a, b) => a.repoRelative.localeCompare(b.repoRelative));
+  return out;
+}
+
 export function mcpRoutes(db: Db): Router {
   const router = Router();
   const service = new McpService(db);
+  (service as unknown as { db: Db }).db = db;
   const bundleService = new McpBundleService(db);
 
-  // ── Bundle upload routes ──
-
-  // POST /api/mcp/servers/upload — upload a zip bundle, extract, run npm install
-  router.post('/servers/upload', bundleUpload.single('file'), async (req: Request, res: Response) => {
+  // ── Bundle upload routes (legacy, kept for backward compat) ──
+  router.post('/servers/upload', bundleUpload.single('file'), async (req: AuthedRequest, res: Response) => {
     const file = req.file;
     if (!file) return res.status(400).json({ error: 'No file uploaded' });
     try {
       const meta = await bundleService.extractZip(file.path, file.originalname);
-      // Delete the temp uploaded file — it's been extracted
       try { unlinkSync(file.path); } catch {}
       res.status(201).json(meta);
     } catch (err: unknown) {
@@ -107,15 +173,13 @@ export function mcpRoutes(db: Db): Router {
     }
   });
 
-  // GET /api/mcp/servers/upload/:bundleId — get current status (for polling)
-  router.get('/servers/upload/:bundleId', (req: Request, res: Response) => {
+  router.get('/servers/upload/:bundleId', (req: AuthedRequest, res: Response) => {
     const meta = bundleService.getMeta(param(req, 'bundleId'));
     if (!meta) return res.status(404).json({ error: 'Bundle not found' });
     res.json(meta);
   });
 
-  // PATCH /api/mcp/servers/upload/:bundleId — override entry point
-  router.patch('/servers/upload/:bundleId', (req: Request, res: Response) => {
+  router.patch('/servers/upload/:bundleId', (req: AuthedRequest, res: Response) => {
     try {
       const { entry } = req.body;
       if (!entry) return res.status(400).json({ error: 'entry is required' });
@@ -126,48 +190,134 @@ export function mcpRoutes(db: Db): Router {
     }
   });
 
-  // DELETE /api/mcp/servers/upload/:bundleId — discard an uploaded bundle
-  router.delete('/servers/upload/:bundleId', (req: Request, res: Response) => {
+  router.delete('/servers/upload/:bundleId', (req: AuthedRequest, res: Response) => {
     bundleService.delete(param(req, 'bundleId'));
     res.status(204).send();
   });
 
-  // GET /api/mcp/servers — List all MCP servers
-  router.get('/servers', async (_req: Request, res: Response) => {
+  // ── MCP CRUD (user-scoped, strict) ──
+
+  // GET /api/mcp/servers — List caller's own MCP servers
+  router.get('/servers', async (req: AuthedRequest, res: Response) => {
     try {
-      const servers = await service.list();
+      const filter = userScopedFilter(req);
+      const servers = await db.collection('mcp_servers').find(filter).sort({ name: 1 }).toArray();
       res.json(servers);
     } catch (err: unknown) {
       res.status(500).json({ error: (err as Error).message });
     }
   });
 
-  // GET /api/mcp/presets — List available presets
-  router.get('/presets', (_req: Request, res: Response) => {
-    res.json(service.getPresets());
+  // GET /api/mcp/presets — list hardcoded presets (global, no scoping)
+  router.get('/presets', (_req: AuthedRequest, res: Response) => {
+    res.json(MCP_PRESETS);
   });
 
-  // POST /api/mcp/servers — Create MCP server
-  router.post('/servers', async (req: Request, res: Response) => {
+  // GET /api/mcp/servers/discover/:repoId — scan the repo for MCP entry candidates
+  router.get('/servers/discover/:repoId', async (req: AuthedRequest, res: Response) => {
     try {
-      const { name, description, type, enabled, command, args, env, url, headers, bundleId } = req.body;
+      const repoId = param(req, 'repoId');
+      let oid: ObjectId;
+      try { oid = new ObjectId(repoId); } catch { return res.status(400).json({ error: 'invalid repoId' }); }
+      const repo = await db.collection('repos').findOne({ _id: oid });
+      if (!repo) return res.status(404).json({ error: 'repo not found' });
+      if (typeof repo.path !== 'string' || !existsSync(repo.path)) {
+        return res.status(400).json({ error: 'repo path does not exist on disk' });
+      }
+      const candidates = discoverMcpEntries(repo.path);
+      res.json({ repoId, repoPath: repo.path, candidates });
+    } catch (err: unknown) {
+      res.status(500).json({ error: (err as Error).message });
+    }
+  });
+
+  // POST /api/mcp/servers — Create (new: accepts `source`, `envKeys`, `argKeys`)
+  router.post('/servers', async (req: AuthedRequest, res: Response) => {
+    try {
+      const {
+        name, description, type, enabled,
+        source, envKeys, argKeys,
+        command, args, env, url, headers,
+        bundleId,
+      } = req.body as {
+        name?: string; description?: string; type?: McpServerRecord['type']; enabled?: boolean;
+        source?: McpServerSource;
+        envKeys?: string[]; argKeys?: string[];
+        command?: string; args?: string[]; env?: Record<string, string>;
+        url?: string; headers?: Record<string, string>;
+        bundleId?: string;
+      };
       if (!name || !type) return res.status(400).json({ error: 'name and type are required' });
 
-      const existing = await service.getByName(name);
-      if (existing) return res.status(409).json({ error: `MCP server "${name}" already exists` });
+      const ownerId = ownerIdOf(req);
 
-      // Resolve bundle if bundleId is present — command/args/cwd come from the bundle
+      // Collision check within this user's namespace
+      const duplicate = await db.collection('mcp_servers').findOne({ ownerId, name });
+      if (duplicate) return res.status(409).json({ error: `MCP server "${name}" already exists in your servers` });
+
+      // Preset resolution — if source.kind==='preset', copy command/args/envKeys/argKeys from the preset.
       let finalCommand = command;
-      let finalArgs: string[] = args ?? [];
+      let finalArgs: string[] | undefined = args;
+      let finalEnvKeys: string[] | undefined = envKeys;
+      let finalArgKeys: string[] | undefined = argKeys;
+
+      if (source?.kind === 'preset') {
+        const preset = MCP_PRESETS.find((p) => p.name === source.presetName);
+        if (!preset) return res.status(400).json({ error: `unknown preset: ${source.presetName}` });
+        finalCommand = finalCommand ?? preset.command;
+        finalArgs = finalArgs ?? preset.args;
+        finalEnvKeys = finalEnvKeys ?? preset.envKeys;
+        finalArgKeys = finalArgKeys ?? preset.argKeys;
+
+        // Validate that every ALLEN_* env var the preset needs is present in
+        // Allen's root .env. If missing, refuse to create the record and list
+        // exactly what the user needs to add — no secret prompt, no
+        // database-stored credentials, just .env + restart.
+        const missing = [
+          ...(preset.envKeys ?? []).map((k) => `ALLEN_${k}`),
+          ...(preset.argKeys ?? []).map((k) => `ALLEN_${k}`),
+        ].filter((k) => process.env[k] === undefined || process.env[k] === '');
+        if (missing.length > 0) {
+          return res.status(400).json({
+            error: `Missing required env var${missing.length > 1 ? 's' : ''} in Allen's .env: ${missing.join(', ')}. Add ${missing.length > 1 ? 'them' : 'it'} to /Users/shreemantkumar/flowforge/.env and restart the server.`,
+            missing,
+          });
+        }
+      } else if (source?.kind === 'repo') {
+        // Validate repo belongs to the same user (or is admin-owned/implicit)
+        let repoOid: ObjectId;
+        try { repoOid = new ObjectId(source.repoId); } catch { return res.status(400).json({ error: 'invalid source.repoId' }); }
+        const repo = await db.collection('repos').findOne({ _id: repoOid });
+        if (!repo) return res.status(404).json({ error: 'repo not found' });
+        if (repo.ownerId && String(repo.ownerId) !== String(ownerId)) {
+          return res.status(403).json({ error: 'repo belongs to another user' });
+        }
+        if (!source.entryPath || typeof source.entryPath !== 'string') {
+          return res.status(400).json({ error: 'source.entryPath is required for repo-sourced MCP' });
+        }
+        // Validate the user-listed env var allowlist against Allen's .env.
+        // For repo MCPs, `envKeys`/`argKeys` come from the request body — the
+        // user declared what their MCP needs. Fail fast if Allen can't provide.
+        const needed = [
+          ...(finalEnvKeys ?? []).map((k) => `ALLEN_${k}`),
+          ...(finalArgKeys ?? []).map((k) => `ALLEN_${k}`),
+        ];
+        const missing = needed.filter((k) => process.env[k] === undefined || process.env[k] === '');
+        if (missing.length > 0) {
+          return res.status(400).json({
+            error: `Missing required env var${missing.length > 1 ? 's' : ''} in Allen's .env: ${missing.join(', ')}. Add ${missing.length > 1 ? 'them' : 'it'} to /Users/shreemantkumar/flowforge/.env and restart the server.`,
+            missing,
+          });
+        }
+      }
+
+      // Legacy bundle path — unchanged; kept for backward compat.
       let bundlePath: string | undefined;
       let bundleEntry: string | undefined;
-
       if (bundleId) {
         const meta = bundleService.getMeta(bundleId);
         if (!meta) return res.status(404).json({ error: `Bundle ${bundleId} not found` });
-        if (meta.status !== 'ready') {
-          return res.status(400).json({ error: `Bundle is not ready (status: ${meta.status})` });
-        }
+        if (meta.status !== 'ready') return res.status(400).json({ error: `Bundle is not ready (status: ${meta.status})` });
         const entryPath = bundleService.getEntryPath(bundleId);
         if (!entryPath) return res.status(400).json({ error: 'Bundle has no entry point' });
         finalCommand = 'node';
@@ -176,49 +326,60 @@ export function mcpRoutes(db: Db): Router {
         bundleEntry = meta.entry;
       }
 
-      // Move any literal env values AND preset-defined sensitive args into the
-      // encrypted secrets store, replacing them with `@secret:` references.
-      const [envWithRefs, argsWithRefs] = await Promise.all([
-        storeEnvLiteralsAsSecrets(env, db),
-        storeArgLiteralsAsSecretsForPreset(name, finalArgs, db),
-      ]);
-
       const server = await service.create({
-        name, description: description ?? '', type, enabled: enabled ?? true,
-        command: finalCommand, args: argsWithRefs, env: envWithRefs, url, headers,
+        ownerId,
+        name,
+        description: description ?? '',
+        type,
+        enabled: enabled ?? true,
+        source,
+        envKeys: finalEnvKeys,
+        argKeys: finalArgKeys,
+        command: finalCommand,
+        args: finalArgs,
+        env,            // legacy literal env — passthrough, may contain @secret:KEY refs
+        url, headers,
         bundleId, bundlePath, bundleEntry,
-      });
+      } as Parameters<typeof service.create>[0]);
 
-      // Link the bundle so the cleanup cron keeps it
-      if (bundleId && server._id) {
-        bundleService.markLinked(bundleId, server._id.toString());
-      }
+      if (bundleId && server._id) bundleService.markLinked(bundleId, server._id.toString());
 
-      syncAllToCodex(service, db).catch(() => {});
+      syncUserToCodex(service, req).catch(() => {});
       res.status(201).json(server);
     } catch (err: unknown) {
       res.status(500).json({ error: (err as Error).message });
     }
   });
 
-  // PUT /api/mcp/servers/:id — Update MCP server
-  router.put('/servers/:id', async (req: Request, res: Response) => {
+  // PUT /api/mcp/servers/:id — Update (owner-only)
+  router.put('/servers/:id', async (req: AuthedRequest, res: Response) => {
     try {
       const id = param(req, 'id');
-      // If env or args are being updated, run literals through the secrets store first.
-      const update = { ...req.body };
-      if (update.env !== undefined) {
-        update.env = await storeEnvLiteralsAsSecrets(update.env, db);
+      const existing = await service.getById(id);
+      if (!existing) return res.status(404).json({ error: 'MCP server not found' });
+      if (String(existing.ownerId ?? '') !== String(ownerIdOf(req)) && !(isAdmin(req) && !existing.ownerId)) {
+        return res.status(403).json({ error: 'you can only edit your own MCP servers' });
       }
-      if (update.args !== undefined) {
-        // Need the server name to look up the preset's argKeys
-        const existing = await service.getById(id);
-        const presetName = update.name ?? existing?.name;
-        update.args = await storeArgLiteralsAsSecretsForPreset(presetName, update.args, db);
-      }
+
+      const update: Partial<McpServerRecord> = { ...req.body };
+      // Strip fields that should never be mutated via PUT
+      delete (update as Record<string, unknown>)._id;
+      delete (update as Record<string, unknown>).ownerId;
+      delete (update as Record<string, unknown>).createdAt;
+
       const server = await service.update(id, update);
       if (!server) return res.status(404).json({ error: 'MCP server not found' });
-      syncAllToCodex(service, db).catch(() => {});
+
+      // If installPath changed or source changed, bust the install cache.
+      const oldInstall = (existing.source?.kind === 'repo')
+        ? (existing.source.installPath ?? null)
+        : null;
+      const newInstall = (server.source?.kind === 'repo')
+        ? (server.source.installPath ?? null)
+        : null;
+      if (oldInstall && oldInstall !== newInstall) forgetInstall(oldInstall);
+
+      syncUserToCodex(service, req).catch(() => {});
       res.json(server);
     } catch (err: unknown) {
       res.status(500).json({ error: (err as Error).message });
@@ -226,44 +387,50 @@ export function mcpRoutes(db: Db): Router {
   });
 
   // PATCH /api/mcp/servers/:id/toggle — Toggle enabled/disabled
-  router.patch('/servers/:id/toggle', async (req: Request, res: Response) => {
+  router.patch('/servers/:id/toggle', async (req: AuthedRequest, res: Response) => {
     try {
       const id = param(req, 'id');
+      const existing = await service.getById(id);
+      if (!existing) return res.status(404).json({ error: 'MCP server not found' });
+      if (String(existing.ownerId ?? '') !== String(ownerIdOf(req)) && !(isAdmin(req) && !existing.ownerId)) {
+        return res.status(403).json({ error: 'you can only toggle your own MCP servers' });
+      }
       const server = await service.toggle(id);
-      if (!server) return res.status(404).json({ error: 'MCP server not found' });
-      syncAllToCodex(service, db).catch(() => {});
+      syncUserToCodex(service, req).catch(() => {});
       res.json(server);
     } catch (err: unknown) {
       res.status(500).json({ error: (err as Error).message });
     }
   });
 
-  // DELETE /api/mcp/servers/:id — Delete MCP server
-  router.delete('/servers/:id', async (req: Request, res: Response) => {
+  // DELETE /api/mcp/servers/:id
+  router.delete('/servers/:id', async (req: AuthedRequest, res: Response) => {
     try {
       const id = param(req, 'id');
       const existing = await service.getById(id);
-      await service.delete(id);
-      // Clean up the bundle directory if this server had one
-      if (existing?.bundleId) {
-        bundleService.delete(existing.bundleId);
+      if (!existing) return res.status(404).json({ error: 'MCP server not found' });
+      if (String(existing.ownerId ?? '') !== String(ownerIdOf(req)) && !(isAdmin(req) && !existing.ownerId)) {
+        return res.status(403).json({ error: 'you can only delete your own MCP servers' });
       }
-      syncAllToCodex(service, db).catch(() => {});
+      await service.delete(id);
+      if (existing.bundleId) bundleService.delete(existing.bundleId);
+      syncUserToCodex(service, req).catch(() => {});
       res.status(204).send();
     } catch (err: unknown) {
       res.status(500).json({ error: (err as Error).message });
     }
   });
 
-  // POST /api/mcp/servers/:id/test — Test connection via a real MCP handshake
-  router.post('/servers/:id/test', async (req: Request, res: Response) => {
+  // POST /api/mcp/servers/:id/test — MCP handshake (initialize + tools/list)
+  router.post('/servers/:id/test', async (req: AuthedRequest, res: Response) => {
     const id = param(req, 'id');
     try {
       const server = await service.getById(id);
       if (!server) return res.status(404).json({ error: 'MCP server not found' });
+      if (String(server.ownerId ?? '') !== String(ownerIdOf(req)) && !(isAdmin(req) && !server.ownerId)) {
+        return res.status(403).json({ error: 'you can only test your own MCP servers' });
+      }
 
-      // Spawn the server and do an actual MCP handshake (initialize + tools/list)
-      // to count the real number of tools. Avoids relying on an LLM round-trip.
       const result = await healthCheckMcpServer(server, db);
 
       if (result.ok) {
@@ -288,5 +455,40 @@ export function mcpRoutes(db: Db): Router {
     }
   });
 
+  // POST /api/mcp/servers/:id/reinstall — bust install cache + re-run npm install
+  router.post('/servers/:id/reinstall', async (req: AuthedRequest, res: Response) => {
+    try {
+      const id = param(req, 'id');
+      const server = await service.getById(id);
+      if (!server) return res.status(404).json({ error: 'MCP server not found' });
+      if (String(server.ownerId ?? '') !== String(ownerIdOf(req)) && !(isAdmin(req) && !server.ownerId)) {
+        return res.status(403).json({ error: 'you can only reinstall your own MCP servers' });
+      }
+
+      if (server.source?.kind !== 'repo') {
+        return res.status(400).json({ error: 'reinstall only applies to repo-sourced MCP servers' });
+      }
+      const repo = await db.collection('repos').findOne({ _id: new ObjectId(server.source.repoId) });
+      if (!repo || typeof repo.path !== 'string') {
+        return res.status(404).json({ error: 'repo not found' });
+      }
+      const installDir = server.source.installPath
+        ? resolvePath(repo.path, server.source.installPath)
+        : resolvePath(repo.path, server.source.entryPath, '..');
+
+      forgetInstall(installDir);
+      const result = await ensureInstalled(installDir);
+      res.json({
+        installDir: result.installDir,
+        packageManager: result.packageManager,
+        durationMs: result.durationMs,
+        skipped: result.skipped,
+      });
+    } catch (err: unknown) {
+      res.status(500).json({ error: (err as Error).message });
+    }
+  });
+
   return router;
 }
+

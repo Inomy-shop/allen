@@ -13,6 +13,7 @@ import { extractOutputs, buildOutputInstruction, outputKeys } from './output-ext
 import { evaluateCondition } from './condition-parser.js';
 import { executeCodexNode } from './codex-executor.js';
 import { buildToolCallRecord, type ToolCallRecord } from './tool-call.js';
+import { normalizeModelAlias } from './model-alias.js';
 import { statSync, mkdirSync } from 'node:fs';
 
 /** Agent-safe fallback cwd. Kept in sync with chat-providers.ts's
@@ -464,7 +465,11 @@ ${context}
     // effort / plan mode for just this node. The agent document itself is
     // read-only from here.
     const override = nodeDef.agentOverrides ?? {};
-    const resolvedModel = (override.model ?? role?.model) ?? 'sonnet';
+    // Normalize aliases (haiku/sonnet/opus) to fully-qualified model IDs so
+    // we don't depend on Claude Code CLI's (possibly stale) alias tables and
+    // trigger API 404s on deprecated versions like claude-3-5-haiku-20241022.
+    const rawModel = (override.model ?? role?.model) ?? 'sonnet';
+    const resolvedModel = normalizeModelAlias(rawModel) ?? rawModel;
     const resolvedEffort = override.reasoningEffort ?? role?.reasoningEffort;
     const resolvedPlanMode = override.planMode ?? role?.planMode ?? false;
 

@@ -152,7 +152,8 @@ export class RepoContextScannerService {
       const agent = await this.db.collection('agents').findOne({ name: 'repo-scanner' });
       if (!agent) throw new Error('repo-scanner agent not seeded');
 
-      model = (agent.model as string) ?? 'sonnet';
+      const { normalizeModelAlias } = await import('@allen/engine');
+      model = normalizeModelAlias((agent.model as string) ?? 'sonnet') ?? 'sonnet';
 
       // Trace the scan as an agent execution — same shape as chat:spawn_agent
       // so the UI renders the agent execution view with tool calls and logs.

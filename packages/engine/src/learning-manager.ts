@@ -1,5 +1,6 @@
 import type { Db, Collection, ObjectId } from 'mongodb';
 import type { Learning, LearningType, WorkflowDef } from './types.js';
+import { normalizeModelAlias } from './model-alias.js';
 
 // ── Extraction Context ─────────────────────────────────────────────────────
 
@@ -541,7 +542,7 @@ export class LearningManager {
       for await (const msg of query({
         prompt,
         options: {
-          model: 'sonnet',
+          model: normalizeModelAlias('sonnet'),
           permissionMode: 'plan',
         },
       })) {
@@ -854,7 +855,7 @@ export class LearningManager {
       for await (const msg of query({
         prompt,
         options: {
-          model: 'sonnet',
+          model: normalizeModelAlias('sonnet'),
           permissionMode: 'plan',
         },
       })) {

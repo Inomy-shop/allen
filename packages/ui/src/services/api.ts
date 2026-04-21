@@ -313,17 +313,6 @@ export const designDocs = {
     request<any>(`/design-docs/by-workflow-run/${workflowRunId}`),
 };
 
-// ── Secrets ────────────────────────────────────────────────────────────────
-export const secrets = {
-  list: () => request<string[]>('/secrets'),
-  create: (key: string, value: string) =>
-    request<any>('/secrets', { method: 'POST', body: JSON.stringify({ key, value }) }),
-  update: (key: string, value: string) =>
-    request<any>(`/secrets/${key}`, { method: 'PUT', body: JSON.stringify({ value }) }),
-  delete: (key: string) =>
-    request<void>(`/secrets/${key}`, { method: 'DELETE' }),
-};
-
 // ── Repos ─────────────────────────────────────────────────────────────────
 export const repos = {
   list: () => request<any[]>('/repos'),
@@ -393,36 +382,95 @@ export const alerts = {
 };
 
 // ── MCP Servers ──────────────────────────────────────────────────────────
+// MCP records come from either a hardcoded preset or a registered repo.
+// Env/args never carry credentials — users put `ALLEN_<KEY>` vars in Allen's
+// root .env and the server strips the prefix at spawn. `create()` returns
+// 400 with `{ missing: string[] }` if any required ALLEN_* var is absent.
+export type McpServerSource =
+  | { kind: 'preset'; presetName: string }
+  | { kind: 'repo'; repoId: string; entryPath: string; installPath?: string };
+
+export interface McpServer {
+  _id: string;
+  ownerId?: string;
+  name: string;
+  description: string;
+  type: 'stdio' | 'sse' | 'http';
+  enabled: boolean;
+  source?: McpServerSource;
+  envKeys?: string[];
+  argKeys?: string[];
+  command?: string;
+  args?: string[];
+  url?: string;
+  headers?: Record<string, string>;
+  status: 'connected' | 'failed' | 'untested' | 'disabled';
+  lastTestedAt?: string;
+  lastError?: string;
+  serverInfo?: { name: string; version: string };
+  toolCount?: number;
+  // legacy fields (tolerated on read, never sent on create)
+  bundleId?: string; bundlePath?: string; bundleEntry?: string;
+  env?: Record<string, string>;
+}
+
+export interface McpPreset {
+  name: string;
+  description: string;
+  type: 'stdio' | 'sse';
+  command?: string;
+  args?: string[];
+  envKeys: string[];
+  argKeys?: string[];
+  docsUrl: string;
+}
+
+export interface McpDiscoverResult {
+  repoId: string;
+  repoPath: string;
+  candidates: Array<{ entry: string; repoRelative: string }>;
+}
+
 export const mcp = {
-  list: () => request<any[]>('/mcp/servers'),
-  presets: () => request<any[]>('/mcp/presets'),
-  create: (body: any) =>
-    request<any>('/mcp/servers', { method: 'POST', body: JSON.stringify(body) }),
-  update: (id: string, body: any) =>
-    request<any>(`/mcp/servers/${id}`, { method: 'PUT', body: JSON.stringify(body) }),
+  list: () => request<McpServer[]>('/mcp/servers'),
+  presets: () => request<McpPreset[]>('/mcp/presets'),
+  /**
+   * Create an MCP server. Preset flow: send `{ name, type, source: { kind: 'preset', presetName } }`
+   * — backend copies command/args/envKeys from the preset and validates ALLEN_* env.
+   * Repo flow: send `{ name, type, source: { kind: 'repo', repoId, entryPath, installPath? }, envKeys }`.
+   */
+  create: (body: {
+    name: string;
+    type: 'stdio' | 'sse' | 'http';
+    description?: string;
+    enabled?: boolean;
+    source?: McpServerSource;
+    envKeys?: string[];
+    argKeys?: string[];
+    command?: string;
+    args?: string[];
+    url?: string;
+    headers?: Record<string, string>;
+  }) => request<McpServer>('/mcp/servers', { method: 'POST', body: JSON.stringify(body) }),
+  update: (id: string, body: Partial<McpServer>) =>
+    request<McpServer>(`/mcp/servers/${id}`, { method: 'PUT', body: JSON.stringify(body) }),
   toggle: (id: string) =>
-    request<any>(`/mcp/servers/${id}/toggle`, { method: 'PATCH' }),
+    request<McpServer>(`/mcp/servers/${id}/toggle`, { method: 'PATCH' }),
   delete: (id: string) =>
     request<void>(`/mcp/servers/${id}`, { method: 'DELETE' }),
   test: (id: string) =>
-    request<any>(`/mcp/servers/${id}/test`, { method: 'POST' }),
-  // Bundle upload
-  uploadBundle: async (file: File) => {
-    const form = new FormData();
-    form.append('file', file);
-    const res = await fetch(`/api/mcp/servers/upload`, { method: 'POST', headers: authHeaders(), body: form });
-    if (!res.ok) {
-      const body = await res.json().catch(() => ({}));
-      throw new Error(body.error ?? `Upload failed: ${res.status}`);
-    }
-    return res.json();
-  },
-  getBundle: (bundleId: string) =>
-    request<any>(`/mcp/servers/upload/${bundleId}`),
-  setBundleEntry: (bundleId: string, entry: string) =>
-    request<any>(`/mcp/servers/upload/${bundleId}`, { method: 'PATCH', body: JSON.stringify({ entry }) }),
-  deleteBundle: (bundleId: string) =>
-    request<void>(`/mcp/servers/upload/${bundleId}`, { method: 'DELETE' }),
+    request<{ status: string; serverInfo?: { name: string; version: string }; toolCount?: number; error?: string; durationMs: number }>(
+      `/mcp/servers/${id}/test`,
+      { method: 'POST' },
+    ),
+  /** Scan a registered repo for likely MCP entry files. */
+  discover: (repoId: string) => request<McpDiscoverResult>(`/mcp/servers/discover/${repoId}`),
+  /** Bust the install cache + re-run `npm install` for a repo-sourced MCP. */
+  reinstall: (id: string) =>
+    request<{ installDir: string; packageManager: string; durationMs: number; skipped: boolean }>(
+      `/mcp/servers/${id}/reinstall`,
+      { method: 'POST' },
+    ),
 };
 
 // ── Learnings ─────────────────────────────────────────────────────────────

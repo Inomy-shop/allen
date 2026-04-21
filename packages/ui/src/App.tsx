@@ -5,7 +5,7 @@ import NotificationBell from './components/common/NotificationBell';
 import {
   LayoutDashboard, GitBranch, Play, Users, Activity, Settings,
   FolderGit2, Brain, MessageSquare, BarChart3, Plus, Trash2,
-  Server, Palette, Key, User, ChevronRight, ChevronUp, ChevronDown,
+  Server, Palette, User, ChevronRight, ChevronUp, ChevronDown,
   GitPullRequest, Clock, HelpCircle, Ticket,
 } from 'lucide-react';
 import { useSettingsStore } from './stores/settingsStore';
@@ -54,7 +54,6 @@ const SETTINGS_TABS: SettingsTab[] = [
   { id: 'users', label: 'Users', icon: ShieldCheck, adminOnly: true },
   { id: 'mcp', label: 'MCP Servers', icon: Server },
   { id: 'theme', label: 'Appearance', icon: Palette },
-  { id: 'secrets', label: 'Secrets', icon: Key },
 ];
 
 // Provider display

@@ -17,6 +17,7 @@
  */
 import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
 import { writeAgentFile, type AgentSpec, type MaterializedAgent } from './agent-file-writer.js';
+import { normalizeModelAlias } from './model-alias.js';
 
 export type CliQueryOptions = {
   /** Agent definition — materialized to ~/.claude/agents/ before spawn. */
@@ -97,7 +98,8 @@ export async function* queryViaCli(opts: CliQueryOptions): AsyncGenerator<any, v
     // body carries the full agent persona.
     '--agent', materialized.subagentName,
   ];
-  if (opts.model) args.push('--model', opts.model);
+  const normalizedModel = normalizeModelAlias(opts.model);
+  if (normalizedModel) args.push('--model', normalizedModel);
   if (opts.resume) args.push('--resume', opts.resume);
   if (opts.mcpServers && Object.keys(opts.mcpServers).length > 0) {
     args.push('--mcp-config', JSON.stringify({ mcpServers: opts.mcpServers }));
