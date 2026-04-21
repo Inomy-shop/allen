@@ -7,7 +7,8 @@
 import { spawn, type ChildProcess } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import type { Db } from 'mongodb';
-import { McpService, type McpServerRecord, resolveEnvSecrets, resolveArgSecrets } from './mcp.service.js';
+import { buildSingleServerConfig } from '@allen/engine';
+import { McpService, type McpServerRecord } from './mcp.service.js';
 
 // ── Types ──
 
@@ -79,16 +80,18 @@ async function connectServer(server: McpServerRecord, db: Db): Promise<McpConnec
     throw new Error(`MCP client only supports stdio servers, got: ${server.type}`);
   }
 
-  // Resolve any @secret: references in both env and args from the encrypted
-  // secrets store before passing them to the spawned process.
-  const [resolvedEnv, resolvedArgs] = await Promise.all([
-    resolveEnvSecrets(server.env, db),
-    resolveArgSecrets(server.args, db),
-  ]);
+  // Resolve via the shared spawn-config resolver so source-based (preset/repo)
+  // and legacy bundle records both spawn through a single code path.
+  const cfg = await buildSingleServerConfig(server as unknown as Record<string, unknown>, db);
+  if (!cfg) throw new Error(`Could not resolve spawn config for MCP server "${server.name}"`);
+  const resolvedArgs = (cfg.args as string[]) ?? [];
+  const resolvedEnv = (cfg.env as Record<string, string>) ?? {};
+  const resolvedCwd = cfg.cwd as string | undefined;
+  const resolvedCmd = (cfg.command as string) ?? server.command ?? '';
 
-  const proc = spawn(server.command!, resolvedArgs, {
-    cwd: server.bundlePath,
-    env: { ...process.env, ...resolvedEnv, DOTENV_CONFIG_QUIET: 'true' },
+  const proc = spawn(resolvedCmd, resolvedArgs, {
+    cwd: resolvedCwd,
+    env: { ...process.env, ...resolvedEnv },
     stdio: ['pipe', 'pipe', 'pipe'],
   });
 

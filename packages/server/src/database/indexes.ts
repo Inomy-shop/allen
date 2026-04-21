@@ -75,6 +75,17 @@ export async function ensureIndexes(db: Db): Promise<void> {
   await db.collection('repos').createIndex({ tags: 1 });
   await db.collection('repos').createIndex({ status: 1, lastUsedAt: -1 });
 
+  // MCP servers — user-scoped. Compound unique (ownerId, name) lets
+  // different users register MCP servers with the same name without colliding.
+  // `ownerId: null` counts as a distinct value, matching the "implicit admin
+  // ownership" rule for pre-refactor legacy records.
+  await db.collection('mcp_servers').createIndex(
+    { ownerId: 1, name: 1 },
+    { unique: true },
+  );
+  // Hot lookup at agent-execution time: enabled servers for a given user.
+  await db.collection('mcp_servers').createIndex({ ownerId: 1, enabled: 1 });
+
   // Repo Contexts (deep agent-generated markdown context)
   // Lookup by repoId is hot — every agent spawn into a registered repo hits this.
   await db.collection('repo_contexts').createIndex({ repoId: 1 }, { unique: true });

@@ -1,51 +1,25 @@
-import { useState, useEffect, useRef } from 'react';
-import { mcp as api, secrets as secretsApi } from '../../services/api';
+import { useState, useEffect, useMemo } from 'react';
+import { createPortal } from 'react-dom';
+import {
+  mcp as api,
+  repos as reposApi,
+  type McpServer,
+  type McpPreset,
+  type McpDiscoverResult,
+} from '../../services/api';
 import {
   Server, Plus, Trash2, RefreshCw, Power, PowerOff,
   CheckCircle, XCircle, HelpCircle, ExternalLink, ChevronDown, ChevronRight, Wrench,
-  Lock, Upload, Loader2, Package, AlertCircle, X as XIcon,
+  Package, FolderGit2, Loader2, AlertCircle, X as XIcon, Copy, Check,
 } from 'lucide-react';
 
-interface McpServer {
-  _id: string;
-  name: string;
-  description: string;
-  type: 'stdio' | 'sse' | 'http';
-  enabled: boolean;
-  command?: string;
-  args?: string[];
-  env?: Record<string, string>;
-  url?: string;
-  headers?: Record<string, string>;
-  status: 'connected' | 'failed' | 'untested' | 'disabled';
-  lastTestedAt?: string;
-  lastError?: string;
-  serverInfo?: { name: string; version: string };
-  toolCount?: number;
-}
-
-interface McpPreset {
-  name: string;
-  description: string;
-  type: 'stdio' | 'sse';
-  command?: string;
-  args?: string[];
-  envKeys: string[];
-  /**
-   * Map secret-key → actual env var name passed to the spawned child process.
-   * Used when a single shared secret needs to appear under a different env var
-   * name for one consumer (e.g. GITHUB_PERSONAL_ACCESS_TOKEN → GH_TOKEN for `gh`).
-   */
-  envVarOverrides?: Record<string, string>;
-  argKeys?: string[];
-  docsUrl: string;
-}
+// ── Status badge ────────────────────────────────────────────────────────────
 
 const STATUS_STYLES: Record<string, { icon: React.ReactNode; color: string; label: string }> = {
   connected: { icon: <CheckCircle className="w-3.5 h-3.5" />, color: 'text-accent-green', label: 'Connected' },
-  failed: { icon: <XCircle className="w-3.5 h-3.5" />, color: 'text-accent-red', label: 'Failed' },
-  untested: { icon: <HelpCircle className="w-3.5 h-3.5" />, color: 'text-theme-muted', label: 'Untested' },
-  disabled: { icon: <PowerOff className="w-3.5 h-3.5" />, color: 'text-theme-subtle', label: 'Disabled' },
+  failed:    { icon: <XCircle className="w-3.5 h-3.5" />, color: 'text-accent-red', label: 'Failed' },
+  untested:  { icon: <HelpCircle className="w-3.5 h-3.5" />, color: 'text-theme-muted', label: 'Untested' },
+  disabled:  { icon: <PowerOff className="w-3.5 h-3.5" />, color: 'text-theme-subtle', label: 'Disabled' },
 };
 
 function StatusBadge({ status }: { status: string }) {
@@ -57,17 +31,71 @@ function StatusBadge({ status }: { status: string }) {
   );
 }
 
+// ── One server card ─────────────────────────────────────────────────────────
+
 function ServerCard({
-  server, onToggle, onTest, onDelete, testing,
+  server,
+  onChange,
 }: {
-  server: McpServer; onToggle: () => void; onTest: () => void; onDelete: () => void; testing: boolean;
+  server: McpServer;
+  onChange: () => void;
 }) {
   const [expanded, setExpanded] = useState(false);
+  const [busy, setBusy] = useState<null | 'test' | 'toggle' | 'delete' | 'reinstall'>(null);
+  const [flash, setFlash] = useState<{ kind: 'ok' | 'err'; text: string } | null>(null);
+
+  const sourceKind = server.source?.kind ?? (server.bundleId ? 'bundle (legacy)' : 'custom');
+  const sourceLabel =
+    server.source?.kind === 'preset' ? `preset · ${server.source.presetName}`
+    : server.source?.kind === 'repo'  ? `repo · ${server.source.entryPath}`
+    : sourceKind;
+
+  async function handleTest() {
+    setBusy('test');
+    try {
+      const result = await api.test(server._id);
+      setFlash(result.status === 'connected'
+        ? { kind: 'ok', text: `${result.toolCount ?? 0} tool${result.toolCount === 1 ? '' : 's'}` }
+        : { kind: 'err', text: result.error ?? 'failed' });
+      onChange();
+    } finally {
+      setBusy(null);
+      setTimeout(() => setFlash(null), 4000);
+    }
+  }
+
+  async function handleToggle() {
+    setBusy('toggle');
+    try { await api.toggle(server._id); onChange(); } finally { setBusy(null); }
+  }
+
+  async function handleReinstall() {
+    setBusy('reinstall');
+    try {
+      const r = await api.reinstall(server._id);
+      setFlash({ kind: 'ok', text: r.skipped ? 'already installed' : `installed via ${r.packageManager} (${Math.round(r.durationMs / 1000)}s)` });
+    } catch (e) {
+      setFlash({ kind: 'err', text: (e as Error).message });
+    } finally {
+      setBusy(null);
+      setTimeout(() => setFlash(null), 5000);
+    }
+  }
+
+  async function handleDelete() {
+    if (!confirm(`Delete MCP server "${server.name}"?`)) return;
+    setBusy('delete');
+    try { await api.delete(server._id); onChange(); } finally { setBusy(null); }
+  }
 
   return (
     <div className={`border rounded-lg overflow-hidden transition-colors ${server.enabled ? 'border-border/40 bg-surface-100/60' : 'border-border/20 bg-surface-100/30 opacity-60'}`}>
       <div className="flex items-center gap-3 px-4 py-3">
-        <button onClick={() => setExpanded(!expanded)} className="text-theme-muted hover:text-theme-secondary" title={expanded ? 'Collapse details' : 'Expand details'}>
+        <button
+          onClick={() => setExpanded(!expanded)}
+          className="text-theme-muted hover:text-theme-secondary"
+          title={expanded ? 'Collapse details' : 'Expand details'}
+        >
           {expanded ? <ChevronDown className="w-4 h-4" /> : <ChevronRight className="w-4 h-4" />}
         </button>
         <Server className={`w-4 h-4 shrink-0 ${server.enabled ? 'text-accent-blue' : 'text-theme-subtle'}`} />
@@ -81,28 +109,45 @@ function ServerCard({
               </span>
             )}
           </div>
-          <div className="text-[11px] text-theme-muted font-body truncate">{server.description}</div>
+          <div className="text-[11px] text-theme-muted font-body truncate">{server.description || sourceLabel}</div>
         </div>
+        {flash && (
+          <span className={`text-[11px] font-mono ${flash.kind === 'ok' ? 'text-accent-green' : 'text-red-400'}`}>
+            {flash.kind === 'ok' ? '✓' : '✗'} {flash.text}
+          </span>
+        )}
         <StatusBadge status={server.status} />
         <div className="flex items-center gap-1">
           <button
-            onClick={onTest}
-            disabled={!server.enabled || testing}
+            onClick={handleTest}
+            disabled={!!busy || !server.enabled}
             className="p-1.5 rounded-md hover:bg-surface-200/60 text-theme-muted hover:text-accent-blue disabled:opacity-30 transition-colors"
             title="Test connection"
           >
-            <RefreshCw className={`w-3.5 h-3.5 ${testing ? 'animate-spin' : ''}`} />
+            {busy === 'test' ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <RefreshCw className="w-3.5 h-3.5" />}
           </button>
+          {server.source?.kind === 'repo' && (
+            <button
+              onClick={handleReinstall}
+              disabled={!!busy}
+              className="p-1.5 rounded-md hover:bg-surface-200/60 text-theme-muted hover:text-accent-blue disabled:opacity-30 transition-colors"
+              title="Reinstall dependencies"
+            >
+              {busy === 'reinstall' ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Package className="w-3.5 h-3.5" />}
+            </button>
+          )}
           <button
-            onClick={onToggle}
-            className="p-1.5 rounded-md hover:bg-surface-200/60 text-theme-muted hover:text-accent-yellow transition-colors"
+            onClick={handleToggle}
+            disabled={!!busy}
+            className="p-1.5 rounded-md hover:bg-surface-200/60 text-theme-muted hover:text-accent-yellow disabled:opacity-30 transition-colors"
             title={server.enabled ? 'Disable' : 'Enable'}
           >
             {server.enabled ? <Power className="w-3.5 h-3.5" /> : <PowerOff className="w-3.5 h-3.5" />}
           </button>
           <button
-            onClick={onDelete}
-            className="p-1.5 rounded-md hover:bg-red-500/10 text-theme-muted hover:text-red-400 transition-colors"
+            onClick={handleDelete}
+            disabled={!!busy}
+            className="p-1.5 rounded-md hover:bg-red-500/10 text-theme-muted hover:text-red-400 disabled:opacity-30 transition-colors"
             title="Delete"
           >
             <Trash2 className="w-3.5 h-3.5" />
@@ -112,64 +157,50 @@ function ServerCard({
 
       {expanded && (
         <div className="px-4 py-3 border-t border-border/20 bg-surface-200/20 space-y-2 text-xs">
-          {server.type === 'stdio' && (
-            <>
-              {/* Command with secret refs masked */}
-              <div>
-                <span className="text-theme-muted">Command:</span>{' '}
-                <span className="text-theme-secondary font-mono">
-                  {server.command}{' '}
-                  {(server.args ?? []).map((a, i) => {
-                    if (typeof a === 'string' && a.startsWith('@secret:')) {
-                      const key = a.slice('@secret:'.length);
-                      return (
-                        <span key={i} className="inline-flex items-center gap-1 bg-accent-green/10 text-accent-green px-1.5 py-0.5 rounded mr-1" title={`Linked to secret: ${key}`}>
-                          <Lock className="w-2.5 h-2.5" /> {key}
-                        </span>
-                      );
-                    }
-                    return <span key={i} className="mr-1">{a}</span>;
-                  })}
-                </span>
-              </div>
-              {/* Env vars with secret linkage */}
-              {server.env && Object.keys(server.env).length > 0 && (
-                <div>
-                  <span className="text-theme-muted">Env vars:</span>
-                  <div className="mt-1 space-y-0.5 pl-2">
-                    {Object.entries(server.env).map(([envName, val]) => {
-                      const isSecret = typeof val === 'string' && val.startsWith('@secret:');
-                      const secretKey = isSecret ? val.slice('@secret:'.length) : null;
-                      return (
-                        <div key={envName} className="flex items-center gap-2 font-mono text-[11px]">
-                          <span className="text-theme-secondary">{envName}</span>
-                          <span className="text-theme-subtle">→</span>
-                          {isSecret ? (
-                            <span className="inline-flex items-center gap-1 bg-accent-green/10 text-accent-green px-1.5 py-0.5 rounded">
-                              <Lock className="w-2.5 h-2.5" /> {secretKey}
-                            </span>
-                          ) : (
-                            <span className="text-amber-400">{val as string} (literal)</span>
-                          )}
-                        </div>
-                      );
-                    })}
-                  </div>
-                </div>
-              )}
-            </>
+          <DetailRow label="Source">{sourceLabel}</DetailRow>
+          {server.command && (
+            <DetailRow label="Command">
+              <span className="font-mono text-theme-secondary">
+                {server.command}{server.args?.length ? ' ' + server.args.slice(0, 3).join(' ') + (server.args.length > 3 ? ' …' : '') : ''}
+              </span>
+            </DetailRow>
           )}
-          {(server.type === 'sse' || server.type === 'http') && (
-            <div><span className="text-theme-muted">URL:</span> <span className="text-theme-secondary font-mono">{server.url}</span></div>
+          {(server.envKeys?.length ?? 0) > 0 && (
+            <DetailRow label="Env">
+              <div className="font-mono text-[11px] space-y-0.5">
+                {server.envKeys!.map((k) => (
+                  <div key={k} className="text-theme-secondary">
+                    <span className="text-theme-subtle">ALLEN_</span>{k}
+                  </div>
+                ))}
+              </div>
+            </DetailRow>
+          )}
+          {(server.argKeys?.length ?? 0) > 0 && (
+            <DetailRow label="Arg keys">
+              <div className="font-mono text-[11px] space-y-0.5">
+                {server.argKeys!.map((k) => (
+                  <div key={k} className="text-theme-secondary">
+                    <span className="text-theme-subtle">ALLEN_</span>{k}
+                  </div>
+                ))}
+              </div>
+            </DetailRow>
           )}
           {server.serverInfo && (
-            <div><span className="text-theme-muted">Server:</span> <span className="text-theme-secondary">{server.serverInfo.name} v{server.serverInfo.version}</span></div>
+            <DetailRow label="Server info">
+              <span className="text-theme-secondary">{server.serverInfo.name} v{server.serverInfo.version}</span>
+            </DetailRow>
           )}
           {server.lastError && (
-            <div className="text-red-400 font-mono">{server.lastError}</div>
+            <DetailRow label="Last error">
+              <span className="text-red-400 font-mono whitespace-pre-wrap">{server.lastError}</span>
+            </DetailRow>
           )}
           {server.lastTestedAt && (
-            <div className="text-theme-subtle">Last tested: {new Date(server.lastTestedAt).toLocaleString()}</div>
+            <DetailRow label="Last tested">
+              <span className="text-theme-subtle">{new Date(server.lastTestedAt).toLocaleString()}</span>
+            </DetailRow>
           )}
         </div>
       )}
@@ -177,725 +208,471 @@ function ServerCard({
   );
 }
 
-/** Sentinel used in env/arg values to indicate "look up this secret at spawn time" */
-const SECRET_REF_PREFIX = '@secret:';
-const ALLEN_PREFIX = 'ALLEN_';
-
-/**
- * One field in the preset form. Always references a secret (by key).
- * The key MUST already exist in the secret store — enforced by the UI,
- * which only lets users pick existing secrets or create new ones via dialog.
- */
-type FieldState = { selectedKey: string };
-
-/**
- * Inline dialog to create a new ALLEN_-prefixed secret without leaving
- * the MCP add-server flow.
- */
-function NewSecretDialog({
-  defaultKey, onClose, onCreated,
-}: {
-  defaultKey: string;
-  onClose: () => void;
-  onCreated: (key: string) => void;
-}) {
-  const [key, setKey] = useState(defaultKey);
-  const [value, setValue] = useState('');
-  const [saving, setSaving] = useState(false);
-  const [error, setError] = useState('');
-
-  const handleSave = async () => {
-    if (!key.trim() || !value.trim()) return;
-    const finalKey = key.startsWith(ALLEN_PREFIX) ? key : ALLEN_PREFIX + key;
-    setSaving(true); setError('');
-    try {
-      await secretsApi.create(finalKey, value);
-      onCreated(finalKey);
-    } catch (e: any) {
-      setError(e.message ?? 'Failed to create secret');
-      setSaving(false);
-    }
-  };
-
+function DetailRow({ label, children }: { label: string; children: React.ReactNode }) {
   return (
-    <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50" onClick={onClose}>
-      <div className="bg-surface-100 border border-border/40 rounded-lg p-4 w-[440px]" onClick={e => e.stopPropagation()}>
-        <h3 className="text-sm font-body text-theme-primary mb-3 flex items-center gap-2">
-          <Lock className="w-4 h-4 text-accent-green" /> New Secret
-        </h3>
-        <div className="space-y-2">
-          <div>
-            <label className="text-[10px] font-label uppercase tracking-wider text-theme-muted mb-1 block">Key</label>
-            <input
-              value={key}
-              onChange={e => setKey(e.target.value.toUpperCase().replace(/[^A-Z0-9_]/g, ''))}
-              placeholder="ALLEN_MY_TOKEN"
-              autoFocus
-              className="w-full bg-surface-200/50 border border-border/30 rounded-sm px-3 py-1.5 text-sm text-theme-primary font-mono"
-            />
-            <p className="text-[9px] text-theme-subtle mt-0.5">Auto-prefixed with ALLEN_ if missing.</p>
+    <div className="flex gap-3">
+      <div className="w-24 text-[10px] font-label uppercase tracking-[0.15em] text-theme-muted shrink-0 pt-0.5">
+        {label}
+      </div>
+      <div className="flex-1 min-w-0">{children}</div>
+    </div>
+  );
+}
+
+// ── Missing-env error box ───────────────────────────────────────────────────
+
+function MissingEnvError({ missing, onDismiss }: { missing: string[]; onDismiss: () => void }) {
+  const [copied, setCopied] = useState(false);
+  const block = missing.map((k) => `${k}=`).join('\n');
+  async function copy() {
+    await navigator.clipboard.writeText(block);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  }
+  return (
+    <div className="border border-red-500/40 bg-red-500/5 rounded-lg p-3 text-xs">
+      <div className="flex items-start gap-2">
+        <AlertCircle className="w-4 h-4 text-red-400 shrink-0 mt-0.5" />
+        <div className="flex-1 min-w-0">
+          <div className="font-body font-semibold text-red-400 mb-1">
+            Missing required env var{missing.length > 1 ? 's' : ''} in Allen's .env
           </div>
-          <div>
-            <label className="text-[10px] font-label uppercase tracking-wider text-theme-muted mb-1 block">Value</label>
-            <input
-              type="password"
-              value={value}
-              onChange={e => setValue(e.target.value)}
-              placeholder="secret value..."
-              autoComplete="new-password"
-              className="w-full bg-surface-200/50 border border-border/30 rounded-sm px-3 py-1.5 text-sm text-theme-primary font-mono"
-            />
+          <div className="text-theme-muted mb-2">
+            Add the following to <code className="font-mono text-theme-secondary">.env</code> at the Allen project root, then restart the server:
           </div>
-          {error && <p className="text-[11px] text-red-400">{error}</p>}
+          <pre className="bg-surface-200/40 border border-border/20 rounded p-2 font-mono text-[11px] text-theme-secondary select-all overflow-x-auto">{block}</pre>
+          <div className="flex gap-2 mt-2">
+            <button
+              onClick={copy}
+              className="px-2 py-1 rounded-md border border-border/40 hover:bg-surface-200/60 text-theme-secondary flex items-center gap-1 text-[11px] transition-colors"
+            >
+              {copied ? <Check className="w-3 h-3 text-accent-green" /> : <Copy className="w-3 h-3" />}
+              {copied ? 'Copied' : 'Copy'}
+            </button>
+            <button
+              onClick={onDismiss}
+              className="px-2 py-1 rounded-md border border-border/40 hover:bg-surface-200/60 text-theme-muted text-[11px] transition-colors"
+            >
+              Dismiss
+            </button>
+          </div>
         </div>
-        <div className="flex items-center gap-2 justify-end mt-3">
-          <button onClick={onClose} className="btn-ghost text-xs py-1.5 px-3">Cancel</button>
-          <button onClick={handleSave} disabled={!key.trim() || !value.trim() || saving} className="btn-primary text-xs py-1.5 px-4 disabled:opacity-50">
-            {saving ? 'Saving...' : 'Create Secret'}
+      </div>
+    </div>
+  );
+}
+
+// ── Add MCP: choose Preset or Repo ──────────────────────────────────────────
+
+type AddMode = 'preset' | 'repo';
+
+function AddServerModal({ onClose, onAdded }: { onClose: () => void; onAdded: () => void }) {
+  const [mode, setMode] = useState<AddMode>('preset');
+
+  // Lock body scroll while modal is open + close on Escape.
+  useEffect(() => {
+    const prevOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
+    window.addEventListener('keydown', onKey);
+    return () => {
+      document.body.style.overflow = prevOverflow;
+      window.removeEventListener('keydown', onKey);
+    };
+  }, [onClose]);
+
+  // Portal to document.body so no ancestor's backdrop-filter / transform /
+  // contain / filter creates a containing block that clips a `position:
+  // fixed` overlay. The McpServerManager card uses `backdrop-blur-sm` on
+  // both the sticky header and the `.card` class itself — either would trap
+  // a fixed modal rendered as a direct child of the card.
+  return createPortal(
+    <div
+      className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-start justify-center z-[9999] p-4 overflow-y-auto"
+      onClick={onClose}
+    >
+      <div
+        className="bg-surface-50 border border-border/40 rounded-lg w-full max-w-2xl max-h-[85vh] overflow-hidden flex flex-col shadow-2xl mt-[8vh]"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="flex items-center justify-between px-5 py-3.5 border-b border-border/20">
+          <h3 className="font-heading text-sm text-theme-primary tracking-wider">Add MCP Server</h3>
+          <button onClick={onClose} className="p-1 rounded-md hover:bg-surface-200/60 text-theme-muted hover:text-theme-secondary transition-colors">
+            <XIcon className="w-4 h-4" />
           </button>
         </div>
+        <div className="flex gap-1 px-5 pt-3 border-b border-border/20">
+          <TabButton active={mode === 'preset'} onClick={() => setMode('preset')} icon={<Package className="w-3.5 h-3.5" />}>From Preset</TabButton>
+          <TabButton active={mode === 'repo'} onClick={() => setMode('repo')} icon={<FolderGit2 className="w-3.5 h-3.5" />}>From Repo</TabButton>
+        </div>
+        <div className="flex-1 overflow-y-auto p-5">
+          {mode === 'preset' ? <AddFromPreset onAdded={onAdded} onClose={onClose} /> : <AddFromRepo onAdded={onAdded} onClose={onClose} />}
+        </div>
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 }
 
-/**
- * Dropdown to pick an existing ALLEN_-prefixed secret, with an inline
- * "+ New secret" option that opens NewSecretDialog.
- */
-function SecretPicker({
-  fieldKey, state, allenSecrets, onChange, onSecretCreated,
-}: {
-  fieldKey: string;
-  state: FieldState;
-  allenSecrets: string[];
-  onChange: (next: FieldState) => void;
-  onSecretCreated: (key: string) => void;
-}) {
-  const [showNew, setShowNew] = useState(false);
-  // Default key suggestion: if fieldKey already starts with ALLEN_, use it;
-  // otherwise prefix it.
-  const defaultNewKey = fieldKey.startsWith(ALLEN_PREFIX) ? fieldKey : ALLEN_PREFIX + fieldKey;
+function TabButton({ active, onClick, icon, children }: { active: boolean; onClick: () => void; icon: React.ReactNode; children: React.ReactNode }) {
+  return (
+    <button
+      onClick={onClick}
+      className={`flex items-center gap-1.5 px-3 py-1.5 text-[11px] font-label uppercase tracking-[0.15em] rounded-t border-b-2 transition-colors ${
+        active
+          ? 'border-accent-blue text-theme-primary'
+          : 'border-transparent text-theme-muted hover:text-theme-secondary'
+      }`}
+    >
+      {icon}{children}
+    </button>
+  );
+}
+
+// ── Preset picker ───────────────────────────────────────────────────────────
+
+function AddFromPreset({ onAdded, onClose }: { onAdded: () => void; onClose: () => void }) {
+  const [presets, setPresets] = useState<McpPreset[]>([]);
+  const [busy, setBusy] = useState<string | null>(null);
+  const [missing, setMissing] = useState<string[] | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => { api.presets().then(setPresets).catch((e) => setError(e.message)); }, []);
+
+  async function add(p: McpPreset) {
+    setMissing(null);
+    setError(null);
+    setBusy(p.name);
+    try {
+      await api.create({
+        name: p.name,
+        type: p.type,
+        description: p.description,
+        enabled: true,
+        source: { kind: 'preset', presetName: p.name },
+      });
+      onAdded();
+      onClose();
+    } catch (e) {
+      const err = e as Error;
+      const match = err.message.match(/Missing required env vars? in Allen's \.env: ([^.]+)\./);
+      if (match) setMissing(match[1].split(',').map((s) => s.trim()));
+      else setError(err.message);
+    } finally {
+      setBusy(null);
+    }
+  }
 
   return (
-    <div>
-      <label className="text-[10px] font-label uppercase tracking-wider text-theme-muted mb-1 block">{fieldKey}</label>
-      <div className="flex items-center gap-2">
-        <select
-          value={state.selectedKey}
-          onChange={e => {
-            if (e.target.value === '__new__') setShowNew(true);
-            else onChange({ selectedKey: e.target.value });
-          }}
-          className="flex-1 bg-surface-200/50 border border-border/30 rounded-sm px-3 py-1.5 text-sm text-theme-primary font-mono focus:outline-none focus:border-accent-blue/50"
-        >
-          <option value="">— select secret —</option>
-          {allenSecrets.map(k => (
-            <option key={k} value={k}>{k}</option>
-          ))}
-          <option value="__new__">+ New secret…</option>
-        </select>
-        {state.selectedKey && (
-          <span className="flex items-center gap-1 text-[10px] text-accent-green">
-            <Lock className="w-3 h-3" /> linked
-          </span>
-        )}
-      </div>
-      {showNew && (
-        <NewSecretDialog
-          defaultKey={defaultNewKey}
-          onClose={() => setShowNew(false)}
-          onCreated={(key) => {
-            onSecretCreated(key);
-            onChange({ selectedKey: key });
-            setShowNew(false);
-          }}
-        />
-      )}
-    </div>
-  );
-}
-
-function AddFromPreset({
-  presets, allenSecrets, onSecretCreated, onAdd,
-}: {
-  presets: McpPreset[];
-  allenSecrets: string[];
-  onSecretCreated: (key: string) => void;
-  onAdd: (preset: McpPreset, envFields: Record<string, FieldState>, argFields: Record<string, FieldState>) => void;
-}) {
-  const [selected, setSelected] = useState<McpPreset | null>(null);
-  const [envFields, setEnvFields] = useState<Record<string, FieldState>>({});
-  const [argFields, setArgFields] = useState<Record<string, FieldState>>({});
-
-  // Initialize fields when a preset is picked. Auto-select a matching
-  // ALLEN_-prefixed secret if one exists, otherwise leave empty (user
-  // must pick one from the dropdown or create a new secret).
-  const choosePreset = (p: McpPreset) => {
-    const initEnv: Record<string, FieldState> = {};
-    for (const k of p.envKeys) {
-      initEnv[k] = { selectedKey: allenSecrets.includes(k) ? k : '' };
-    }
-    const initArgs: Record<string, FieldState> = {};
-    for (const k of (p.argKeys ?? [])) {
-      initArgs[k] = { selectedKey: allenSecrets.includes(k) ? k : '' };
-    }
-    setSelected(p);
-    setEnvFields(initEnv);
-    setArgFields(initArgs);
-  };
-
-  if (!selected) {
-    return (
-      <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
-        {presets.map(p => (
+    <div className="space-y-3">
+      <p className="text-xs text-theme-muted font-body">
+        Click a preset to add it. If any <code className="font-mono text-theme-secondary">ALLEN_*</code> env vars are missing from Allen's <code className="font-mono text-theme-secondary">.env</code>, we'll tell you exactly which ones.
+      </p>
+      {missing && <MissingEnvError missing={missing} onDismiss={() => setMissing(null)} />}
+      {error && <div className="text-xs text-red-400 font-mono">{error}</div>}
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+        {presets.map((p) => (
           <button
             key={p.name}
-            onClick={() => choosePreset(p)}
-            className="flex flex-col gap-1 px-3 py-2.5 rounded-lg bg-surface-200/30 border border-border/30 hover:bg-surface-200/60 hover:border-accent-blue/30 transition-all text-left"
+            onClick={() => add(p)}
+            disabled={!!busy}
+            className="text-left p-3 rounded-lg border border-border/40 bg-surface-100/40 hover:border-accent-blue/60 hover:bg-surface-100/60 disabled:opacity-50 transition-colors"
           >
-            <span className="text-sm font-body text-theme-primary">{p.name}</span>
-            <span className="text-[10px] text-theme-muted font-body">{p.description}</span>
+            <div className="flex items-center justify-between gap-2">
+              <div className="font-mono text-xs text-theme-primary font-semibold">{p.name}</div>
+              {busy === p.name ? (
+                <Loader2 className="w-3 h-3 animate-spin text-accent-blue" />
+              ) : (
+                <a
+                  href={p.docsUrl}
+                  target="_blank"
+                  rel="noreferrer"
+                  onClick={(e) => e.stopPropagation()}
+                  className="text-theme-subtle hover:text-accent-blue transition-colors"
+                  title="Docs"
+                >
+                  <ExternalLink className="w-3 h-3" />
+                </a>
+              )}
+            </div>
+            <div className="text-[11px] text-theme-muted font-body mt-0.5">{p.description}</div>
+            {(p.envKeys.length > 0 || (p.argKeys?.length ?? 0) > 0) && (
+              <div className="text-[10px] text-theme-subtle font-mono mt-1.5">
+                needs: {[...p.envKeys, ...(p.argKeys ?? [])].map((k) => `ALLEN_${k}`).join(', ')}
+              </div>
+            )}
           </button>
         ))}
       </div>
-    );
-  }
-
-  // A field is "filled" if the user has picked a secret
-  const isFilled = (s?: FieldState) => !!s && !!s.selectedKey;
-  const allEnvFilled = selected.envKeys.every(k => isFilled(envFields[k]));
-  const allArgsFilled = (selected.argKeys ?? []).every(k => isFilled(argFields[k]));
-
-  return (
-    <div className="border border-border/40 rounded-lg p-4 bg-surface-200/20 space-y-3">
-      <div className="flex items-center justify-between">
-        <h4 className="text-sm font-body text-theme-primary">Configure {selected.name}</h4>
-        <button onClick={() => setSelected(null)} className="text-xs text-theme-muted hover:text-theme-secondary">Cancel</button>
-      </div>
-      <p className="text-[11px] text-theme-muted">{selected.description}</p>
-
-      {/* Connection strings (positional args) */}
-      {(selected.argKeys ?? []).map(key => (
-        <SecretPicker
-          key={key}
-          fieldKey={key}
-          state={argFields[key] ?? { selectedKey: '' }}
-          allenSecrets={allenSecrets}
-          onSecretCreated={onSecretCreated}
-          onChange={next => setArgFields(prev => ({ ...prev, [key]: next }))}
-        />
-      ))}
-
-      {/* Env vars (API keys, tokens) */}
-      {selected.envKeys.map(key => (
-        <SecretPicker
-          key={key}
-          fieldKey={key}
-          state={envFields[key] ?? { selectedKey: '' }}
-          allenSecrets={allenSecrets}
-          onSecretCreated={onSecretCreated}
-          onChange={next => setEnvFields(prev => ({ ...prev, [key]: next }))}
-        />
-      ))}
-
-      <div className="flex items-center gap-2">
-        <button
-          onClick={() => { onAdd(selected, envFields, argFields); setSelected(null); }}
-          disabled={!allEnvFilled || !allArgsFilled}
-          className="btn-primary text-xs px-3 py-1.5 disabled:opacity-30"
-        >
-          Add Server
-        </button>
-        <a href={selected.docsUrl} target="_blank" rel="noopener noreferrer" className="text-[10px] text-accent-blue hover:text-accent-blue/80 flex items-center gap-1">
-          <ExternalLink className="w-3 h-3" /> Docs
-        </a>
-      </div>
     </div>
   );
 }
 
-// ─── Upload Bundle Form ──────────────────────────────────────────────────
+// ── Repo picker ─────────────────────────────────────────────────────────────
 
-interface BundleMeta {
-  bundleId: string;
-  originalName: string;
-  uploadedAt: string;
-  entry: string;
-  candidateEntries: string[];
-  status: 'extracting' | 'installing' | 'ready' | 'failed';
-  error?: string;
-  installLog?: string;
-}
+interface RepoSummary { _id: string; name: string; path: string; }
 
-type EnvRow = { id: number; name: string; selectedKey: string };
-
-function UploadBundleForm({
-  allenSecrets, onSecretCreated, onAdded,
-}: {
-  allenSecrets: string[];
-  onSecretCreated: (key: string) => void;
-  onAdded: () => void;
-}) {
-  const [bundle, setBundle] = useState<BundleMeta | null>(null);
-  const [uploading, setUploading] = useState(false);
-  const [uploadError, setUploadError] = useState('');
-  const [dragOver, setDragOver] = useState(false);
-
-  // Form fields (stage 4)
+function AddFromRepo({ onAdded, onClose }: { onAdded: () => void; onClose: () => void }) {
+  const [userRepos, setUserRepos] = useState<RepoSummary[]>([]);
+  const [selectedRepo, setSelectedRepo] = useState<RepoSummary | null>(null);
+  const [discover, setDiscover] = useState<McpDiscoverResult | null>(null);
+  const [discovering, setDiscovering] = useState(false);
+  const [entryPath, setEntryPath] = useState('');
+  const [installPath, setInstallPath] = useState('');
   const [name, setName] = useState('');
-  const [description, setDescription] = useState('');
-  const [envRows, setEnvRows] = useState<EnvRow[]>([]);
-  const [submitting, setSubmitting] = useState(false);
-  const [submitError, setSubmitError] = useState('');
-  const fileInputRef = useRef<HTMLInputElement>(null);
+  const [envKeysInput, setEnvKeysInput] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [missing, setMissing] = useState<string[] | null>(null);
+  const [error, setError] = useState<string | null>(null);
 
-  // Poll for install status
   useEffect(() => {
-    if (!bundle || (bundle.status !== 'extracting' && bundle.status !== 'installing')) return;
-    const interval = setInterval(async () => {
-      try {
-        const updated = await api.getBundle(bundle.bundleId);
-        setBundle(updated);
-        if (updated.status === 'ready' || updated.status === 'failed') {
-          clearInterval(interval);
-        }
-      } catch {}
-    }, 2000);
-    return () => clearInterval(interval);
-  }, [bundle]);
+    reposApi.list().then((list) =>
+      setUserRepos((list ?? []).map((r: any) => ({ _id: r._id, name: r.name, path: r.path }))),
+    );
+  }, []);
 
-  const handleUpload = async (file: File) => {
-    setUploading(true);
-    setUploadError('');
+  async function onPickRepo(repo: RepoSummary) {
+    setSelectedRepo(repo);
+    setDiscovering(true);
+    setDiscover(null);
+    try { setDiscover(await api.discover(repo._id)); }
+    catch (e) { setError((e as Error).message); }
+    finally { setDiscovering(false); }
+  }
+
+  const envKeys = useMemo(
+    () => envKeysInput.split(/[\s,]+/).map((s) => s.trim()).filter(Boolean),
+    [envKeysInput],
+  );
+
+  async function submit() {
+    if (!selectedRepo) { setError('pick a repo'); return; }
+    if (!entryPath) { setError('entry path required'); return; }
+    if (!name.trim()) { setError('name required'); return; }
+    setMissing(null);
+    setError(null);
+    setBusy(true);
     try {
-      const meta = await api.uploadBundle(file);
-      setBundle(meta);
-      // Auto-derive name from filename (strip .zip)
-      const baseName = file.name.replace(/\.zip$/i, '').replace(/[^a-z0-9-_]/gi, '-').toLowerCase();
-      setName(baseName);
-    } catch (e: any) {
-      setUploadError(e.message ?? 'Upload failed');
-    }
-    setUploading(false);
-  };
-
-  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const f = e.target.files?.[0];
-    if (f) handleUpload(f);
-    e.target.value = '';
-  };
-
-  const handleDrop = (e: React.DragEvent) => {
-    e.preventDefault();
-    setDragOver(false);
-    const f = e.dataTransfer.files[0];
-    if (f) handleUpload(f);
-  };
-
-  const handleDiscard = async () => {
-    if (!bundle) return;
-    try { await api.deleteBundle(bundle.bundleId); } catch {}
-    setBundle(null);
-    setName('');
-    setDescription('');
-    setEnvRows([]);
-    setUploadError('');
-    setSubmitError('');
-  };
-
-  const handleEntryChange = async (entry: string) => {
-    if (!bundle) return;
-    try {
-      const updated = await api.setBundleEntry(bundle.bundleId, entry);
-      setBundle(updated);
-    } catch (e: any) {
-      setUploadError(e.message ?? 'Failed to update entry');
-    }
-  };
-
-  const addEnvRow = () => {
-    setEnvRows(prev => [...prev, { id: Date.now() + Math.random(), name: '', selectedKey: '' }]);
-  };
-  const updateEnvRow = (id: number, patch: Partial<EnvRow>) => {
-    setEnvRows(prev => prev.map(r => r.id === id ? { ...r, ...patch } : r));
-  };
-  const removeEnvRow = (id: number) => {
-    setEnvRows(prev => prev.filter(r => r.id !== id));
-  };
-
-  const handleSubmit = async () => {
-    if (!bundle) return;
-    if (!name.trim()) { setSubmitError('Name is required'); return; }
-    setSubmitting(true);
-    setSubmitError('');
-    try {
-      const env: Record<string, string> = {};
-      for (const row of envRows) {
-        if (row.name.trim() && row.selectedKey) {
-          env[row.name.trim()] = `@secret:${row.selectedKey}`;
-        }
-      }
       await api.create({
         name: name.trim(),
-        description: description.trim(),
         type: 'stdio',
+        description: '',
         enabled: true,
-        env,
-        bundleId: bundle.bundleId,
+        source: {
+          kind: 'repo',
+          repoId: selectedRepo._id,
+          entryPath,
+          installPath: installPath || undefined,
+        },
+        envKeys,
       });
       onAdded();
-    } catch (e: any) {
-      setSubmitError(e.message ?? 'Failed to create server');
-    }
-    setSubmitting(false);
-  };
-
-  // ── Render stages ──
-
-  // Stage 1: no bundle yet — drop zone
-  if (!bundle) {
-    return (
-      <div>
-        <input ref={fileInputRef} type="file" accept=".zip" className="hidden" onChange={handleFileChange} />
-        <div
-          onDragOver={e => { e.preventDefault(); setDragOver(true); }}
-          onDragLeave={() => setDragOver(false)}
-          onDrop={handleDrop}
-          onClick={() => fileInputRef.current?.click()}
-          className={`border-2 border-dashed rounded-lg p-8 text-center cursor-pointer transition-colors ${dragOver ? 'border-accent-blue bg-accent-blue/5' : 'border-border/40 hover:border-accent-blue/30 hover:bg-surface-200/30'}`}
-        >
-          {uploading ? (
-            <div className="flex items-center justify-center gap-2 text-theme-secondary">
-              <Loader2 className="w-5 h-5 animate-spin" />
-              <span className="text-sm">Uploading & extracting...</span>
-            </div>
-          ) : (
-            <>
-              <Upload className="w-8 h-8 mx-auto mb-2 text-theme-muted" />
-              <p className="text-sm text-theme-secondary font-body">Drop .zip file here or click to browse</p>
-              <p className="text-[11px] text-theme-subtle mt-1">Max 100MB. Do not include node_modules/ — we install it for you.</p>
-            </>
-          )}
-        </div>
-        {uploadError && (
-          <div className="mt-2 flex items-start gap-2 text-[11px] text-red-400">
-            <AlertCircle className="w-3.5 h-3.5 shrink-0 mt-0.5" />
-            <span>{uploadError}</span>
-          </div>
-        )}
-      </div>
-    );
-  }
-
-  // Stage 2/3: extracting or installing
-  if (bundle.status === 'extracting' || bundle.status === 'installing') {
-    return (
-      <div className="border border-border/30 rounded-lg p-4 space-y-2">
-        <div className="flex items-center gap-2">
-          <Package className="w-4 h-4 text-theme-muted" />
-          <span className="text-sm text-theme-secondary">{bundle.originalName}</span>
-          <span className="flex-1" />
-          <button onClick={handleDiscard} className="text-[10px] text-theme-muted hover:text-red-400">Discard</button>
-        </div>
-        <div className="flex items-center gap-2 text-xs text-theme-muted">
-          <Loader2 className="w-3.5 h-3.5 animate-spin" />
-          {bundle.status === 'extracting' ? 'Extracting bundle...' : 'Running npm install...'}
-        </div>
-      </div>
-    );
-  }
-
-  // Stage 5: failed
-  if (bundle.status === 'failed') {
-    return (
-      <div className="border border-red-500/30 bg-red-500/5 rounded-lg p-4 space-y-2">
-        <div className="flex items-center gap-2">
-          <AlertCircle className="w-4 h-4 text-red-400" />
-          <span className="text-sm text-red-400">{bundle.originalName} — Failed</span>
-          <span className="flex-1" />
-          <button onClick={handleDiscard} className="text-[10px] text-theme-muted hover:text-red-400">Discard</button>
-        </div>
-        <div className="text-xs text-red-400 font-mono">{bundle.error}</div>
-        {bundle.installLog && (
-          <pre className="text-[10px] text-theme-muted bg-black/30 p-2 rounded max-h-40 overflow-auto font-mono whitespace-pre-wrap">{bundle.installLog}</pre>
-        )}
-      </div>
-    );
-  }
-
-  // Stage 4: ready — show config form
-  return (
-    <div className="border border-border/40 rounded-lg p-4 bg-surface-200/20 space-y-3">
-      <div className="flex items-center gap-2">
-        <Package className="w-4 h-4 text-accent-green" />
-        <span className="text-sm text-theme-primary font-body">{bundle.originalName}</span>
-        <span className="text-[10px] text-theme-subtle">({bundle.candidateEntries.length} entry point{bundle.candidateEntries.length !== 1 ? 's' : ''})</span>
-        <span className="flex-1" />
-        <button onClick={handleDiscard} className="text-[10px] text-theme-muted hover:text-red-400">Discard</button>
-      </div>
-
-      {/* Entry point dropdown */}
-      <div>
-        <label className="text-[10px] font-label uppercase tracking-wider text-theme-muted mb-1 block">Entry Point</label>
-        <select
-          value={bundle.entry}
-          onChange={e => handleEntryChange(e.target.value)}
-          className="w-full bg-surface-200/50 border border-border/30 rounded-sm px-3 py-1.5 text-sm text-theme-primary font-mono"
-        >
-          {bundle.candidateEntries.map(e => <option key={e} value={e}>{e}</option>)}
-        </select>
-      </div>
-
-      {/* Name */}
-      <div>
-        <label className="text-[10px] font-label uppercase tracking-wider text-theme-muted mb-1 block">Name</label>
-        <input
-          value={name}
-          onChange={e => setName(e.target.value)}
-          placeholder="my-custom-server"
-          className="w-full bg-surface-200/50 border border-border/30 rounded-sm px-3 py-1.5 text-sm text-theme-primary font-mono"
-        />
-      </div>
-
-      {/* Description */}
-      <div>
-        <label className="text-[10px] font-label uppercase tracking-wider text-theme-muted mb-1 block">Description</label>
-        <input
-          value={description}
-          onChange={e => setDescription(e.target.value)}
-          placeholder="What does this server do?"
-          className="w-full bg-surface-200/50 border border-border/30 rounded-sm px-3 py-1.5 text-sm text-theme-primary"
-        />
-      </div>
-
-      {/* Env vars */}
-      <div>
-        <label className="text-[10px] font-label uppercase tracking-wider text-theme-muted mb-1 block">Environment Variables</label>
-        {envRows.length === 0 && (
-          <p className="text-[10px] text-theme-subtle mb-2">No env vars. Click "+ Add env var" if your server needs any.</p>
-        )}
-        <div className="space-y-2">
-          {envRows.map(row => (
-            <div key={row.id} className="flex items-start gap-2">
-              <input
-                value={row.name}
-                onChange={e => updateEnvRow(row.id, { name: e.target.value.toUpperCase().replace(/[^A-Z0-9_]/g, '') })}
-                placeholder="API_BASE_URL"
-                className="w-40 bg-surface-200/50 border border-border/30 rounded-sm px-2 py-1.5 text-xs text-theme-primary font-mono"
-              />
-              <span className="text-theme-subtle text-sm leading-8">→</span>
-              <div className="flex-1">
-                <SecretPicker
-                  fieldKey={row.name || 'SECRET'}
-                  state={{ selectedKey: row.selectedKey }}
-                  allenSecrets={allenSecrets}
-                  onSecretCreated={onSecretCreated}
-                  onChange={next => updateEnvRow(row.id, { selectedKey: next.selectedKey })}
-                />
-              </div>
-              <button onClick={() => removeEnvRow(row.id)} className="p-1.5 text-theme-muted hover:text-red-400">
-                <XIcon className="w-3 h-3" />
-              </button>
-            </div>
-          ))}
-        </div>
-        <button onClick={addEnvRow} className="mt-2 text-[11px] text-accent-blue hover:text-accent-blue/80 flex items-center gap-1">
-          <Plus className="w-3 h-3" /> Add env var
-        </button>
-      </div>
-
-      {/* Command preview */}
-      <div className="text-[10px] text-theme-subtle font-mono bg-surface-200/30 p-2 rounded">
-        node <span className="text-theme-muted">&lt;bundle&gt;/</span>{bundle.entry}
-      </div>
-
-      {submitError && (
-        <div className="text-[11px] text-red-400 flex items-center gap-1">
-          <AlertCircle className="w-3 h-3" /> {submitError}
-        </div>
-      )}
-
-      <div className="flex items-center gap-2">
-        <button
-          onClick={handleSubmit}
-          disabled={!name.trim() || submitting}
-          className="btn-primary text-xs px-3 py-1.5 disabled:opacity-30"
-        >
-          {submitting ? 'Adding...' : 'Add Server'}
-        </button>
-      </div>
-    </div>
-  );
-}
-
-export default function McpServerManager() {
-  const [servers, setServers] = useState<McpServer[]>([]);
-  const [presets, setPresets] = useState<McpPreset[]>([]);
-  const [allenSecrets, setAllenSecrets] = useState<string[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [showAdd, setShowAdd] = useState(false);
-  const [addMode, setAddMode] = useState<'preset' | 'bundle'>('preset');
-  const [testingId, setTestingId] = useState<string | null>(null);
-
-  const loadServers = async () => {
-    try {
-      const [s, p, secretsList] = await Promise.all([
-        api.list(),
-        api.presets(),
-        secretsApi.list().catch(() => [] as string[]),
-      ]);
-      setServers(s);
-      setPresets(p);
-      // Only expose ALLEN_-prefixed secrets to the MCP picker
-      setAllenSecrets((secretsList ?? []).filter(k => k.startsWith(ALLEN_PREFIX)).sort());
+      onClose();
     } catch (e) {
-      console.error('Failed to load MCP servers:', e);
+      const err = e as Error;
+      const match = err.message.match(/Missing required env vars? in Allen's \.env: ([^.]+)\./);
+      if (match) setMissing(match[1].split(',').map((s) => s.trim()));
+      else setError(err.message);
     } finally {
-      setLoading(false);
+      setBusy(false);
     }
-  };
-
-  const handleSecretCreated = (key: string) => {
-    setAllenSecrets(prev => prev.includes(key) ? prev : [...prev, key].sort());
-  };
-
-  useEffect(() => { loadServers(); }, []);
-
-  const handleAddPreset = async (
-    preset: McpPreset,
-    envFields: Record<string, FieldState>,
-    argFields: Record<string, FieldState>,
-  ) => {
-    try {
-      // Each field references an existing secret (guaranteed by the UI).
-      // Build env: <envVarName>: '@secret:<selectedSecretKey>'. The env var
-      // name is the override target if specified, else the preset's declared key.
-      const env: Record<string, string> = {};
-      for (const presetKey of preset.envKeys) {
-        const f = envFields[presetKey];
-        if (!f?.selectedKey) continue;
-        const envVarName = preset.envVarOverrides?.[presetKey] ?? presetKey;
-        env[envVarName] = `${SECRET_REF_PREFIX}${f.selectedKey}`;
-      }
-
-      // Build args. Positional args appended in preset order.
-      const args = [...(preset.args ?? [])];
-      for (const presetKey of (preset.argKeys ?? [])) {
-        const f = argFields[presetKey];
-        if (!f?.selectedKey) continue;
-        args.push(`${SECRET_REF_PREFIX}${f.selectedKey}`);
-      }
-
-      await api.create({
-        name: preset.name,
-        description: preset.description,
-        type: preset.type,
-        enabled: true,
-        command: preset.command,
-        args,
-        env,
-      });
-      setShowAdd(false);
-      void loadServers();
-    } catch (e) {
-      console.error('Failed to add MCP server:', e);
-    }
-  };
-
-  const handleToggle = async (id: string) => {
-    await api.toggle(id);
-    loadServers();
-  };
-
-  const handleTest = async (id: string) => {
-    setTestingId(id);
-    try {
-      await api.test(id);
-    } catch {}
-    setTestingId(null);
-    loadServers();
-  };
-
-  const handleDelete = async (id: string) => {
-    await api.delete(id);
-    loadServers();
-  };
-
-  // Filter presets that aren't already added
-  const availablePresets = presets.filter(p => !servers.some(s => s.name === p.name));
-
-  if (loading) return <div className="text-xs text-theme-subtle animate-pulse py-4">Loading MCP servers...</div>;
+  }
 
   return (
     <div className="space-y-4">
-      {/* Server list */}
-      {servers.length === 0 && !showAdd && (
-        <div className="text-center py-6 text-xs text-theme-subtle">
-          No MCP servers configured. Add one to give the chat agent access to external tools.
-        </div>
+      <Field label="Repo">
+        <select
+          className="w-full px-2.5 py-1.5 rounded-md border border-border/40 bg-surface-100/60 text-theme-primary text-sm font-body focus:outline-none focus:border-accent-blue/60"
+          value={selectedRepo?._id ?? ''}
+          onChange={(e) => {
+            const repo = userRepos.find((r) => r._id === e.target.value);
+            if (repo) onPickRepo(repo);
+          }}
+        >
+          <option value="">Pick a repo…</option>
+          {userRepos.map((r) => <option key={r._id} value={r._id}>{r.name}</option>)}
+        </select>
+      </Field>
+
+      {selectedRepo && (
+        <Field label="Entry file">
+          {discovering ? (
+            <div className="text-xs text-theme-muted flex items-center gap-2">
+              <Loader2 className="w-3 h-3 animate-spin" /> scanning repo…
+            </div>
+          ) : (
+            <div className="space-y-1.5">
+              {(discover?.candidates ?? []).length > 0 && (
+                <select
+                  className="w-full px-2.5 py-1.5 rounded-md border border-border/40 bg-surface-100/60 text-theme-primary text-sm font-mono focus:outline-none focus:border-accent-blue/60"
+                  value={entryPath}
+                  onChange={(e) => {
+                    setEntryPath(e.target.value);
+                    const last = e.target.value.lastIndexOf('/');
+                    if (last > 0) setInstallPath(e.target.value.slice(0, last));
+                  }}
+                >
+                  <option value="">Pick a candidate…</option>
+                  {discover!.candidates.map((c) => (
+                    <option key={c.repoRelative} value={c.repoRelative}>{c.repoRelative}</option>
+                  ))}
+                </select>
+              )}
+              <input
+                type="text"
+                placeholder="or type path, e.g. .claude/mcp/postgres/server.mjs"
+                value={entryPath}
+                onChange={(e) => setEntryPath(e.target.value)}
+                className="w-full px-2.5 py-1.5 rounded-md border border-border/40 bg-surface-100/60 text-theme-primary text-sm font-mono placeholder:text-theme-subtle focus:outline-none focus:border-accent-blue/60"
+              />
+            </div>
+          )}
+        </Field>
       )}
 
-      <div className="space-y-2">
-        {servers.map(s => (
-          <ServerCard
-            key={s._id}
-            server={s}
-            onToggle={() => handleToggle(s._id)}
-            onTest={() => handleTest(s._id)}
-            onDelete={() => handleDelete(s._id)}
-            testing={testingId === s._id}
-          />
-        ))}
+      {selectedRepo && entryPath && (
+        <>
+          <Field label="Install dir">
+            <input
+              type="text"
+              placeholder="auto (entry file's directory)"
+              value={installPath}
+              onChange={(e) => setInstallPath(e.target.value)}
+              className="w-full px-2.5 py-1.5 rounded-md border border-border/40 bg-surface-100/60 text-theme-primary text-sm font-mono placeholder:text-theme-subtle focus:outline-none focus:border-accent-blue/60"
+            />
+            <div className="text-[10px] text-theme-subtle mt-1 font-body">
+              Directory containing <code className="font-mono text-theme-muted">package.json</code>. Leave blank to use the entry file's folder.
+            </div>
+          </Field>
+
+          <Field label="Name">
+            <input
+              type="text"
+              placeholder="e.g. inomy-postgres"
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              className="w-full px-2.5 py-1.5 rounded-md border border-border/40 bg-surface-100/60 text-theme-primary text-sm font-mono placeholder:text-theme-subtle focus:outline-none focus:border-accent-blue/60"
+            />
+          </Field>
+
+          <Field label="Env keys">
+            <textarea
+              placeholder="Bare env var names (comma or newline separated) — e.g. POSTGRES_HOST, POSTGRES_PORT"
+              value={envKeysInput}
+              onChange={(e) => setEnvKeysInput(e.target.value)}
+              className="w-full px-2.5 py-1.5 rounded-md border border-border/40 bg-surface-100/60 text-theme-primary text-sm font-mono placeholder:text-theme-subtle focus:outline-none focus:border-accent-blue/60 min-h-[60px]"
+            />
+            {envKeys.length > 0 && (
+              <div className="text-[10px] text-theme-subtle mt-1 font-mono">
+                Allen will look these up as: <span className="text-theme-muted">{envKeys.map((k) => `ALLEN_${k}`).join(', ')}</span>
+              </div>
+            )}
+          </Field>
+        </>
+      )}
+
+      {missing && <MissingEnvError missing={missing} onDismiss={() => setMissing(null)} />}
+      {error && <div className="text-xs text-red-400 font-mono">{error}</div>}
+
+      <div className="flex justify-end gap-2 pt-2">
+        <button
+          onClick={onClose}
+          className="px-3 py-1.5 rounded-md border border-border/40 text-theme-secondary hover:bg-surface-200/60 text-sm font-body transition-colors"
+        >
+          Cancel
+        </button>
+        <button
+          onClick={submit}
+          disabled={busy || !selectedRepo || !entryPath || !name.trim()}
+          className="px-3 py-1.5 rounded-md bg-accent-blue text-white hover:opacity-90 disabled:opacity-40 text-sm font-body flex items-center gap-1.5 transition-opacity"
+        >
+          {busy && <Loader2 className="w-3 h-3 animate-spin" />}
+          Add
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function Field({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <div>
+      <label className="block text-[10px] font-label uppercase tracking-[0.15em] text-theme-muted mb-1.5">
+        {label}
+      </label>
+      {children}
+    </div>
+  );
+}
+
+// ── Main ────────────────────────────────────────────────────────────────────
+
+export default function McpServerManager() {
+  const [servers, setServers] = useState<McpServer[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [err, setErr] = useState<string | null>(null);
+  const [adding, setAdding] = useState(false);
+
+  async function refresh() {
+    setLoading(true);
+    setErr(null);
+    try { setServers(await api.list()); }
+    catch (e) { setErr((e as Error).message); }
+    finally { setLoading(false); }
+  }
+  useEffect(() => { refresh(); }, []);
+
+  return (
+    <div className="card">
+      {/* Sticky header — Add button stays visible as the list scrolls.
+          `top-0` sticks to the nearest scroll ancestor (SettingsPage's
+          overflow-auto container). Solid bg-surface-100 masks list rows
+          scrolling underneath, and z-20 keeps it above ServerCards. */}
+      <div className="sticky top-0 z-20 bg-surface-100/95 backdrop-blur-sm border-b border-border/40 rounded-t-sm px-6 py-4">
+        <div className="flex items-center justify-between gap-3">
+          <div className="min-w-0">
+            <div className="flex items-center gap-2 mb-1">
+              <Server className="w-4 h-4 text-accent-blue" />
+              <h2 className="font-label text-xs uppercase tracking-widest text-theme-muted">Configured Servers</h2>
+            </div>
+            <p className="text-[11px] text-theme-muted font-body">
+              Env vars go in Allen's <code className="font-mono text-theme-secondary">.env</code> with an <code className="font-mono text-theme-secondary">ALLEN_</code> prefix. Restart after editing.
+            </p>
+          </div>
+          <button
+            onClick={() => setAdding(true)}
+            className="px-3 py-1.5 rounded-md bg-accent-blue text-white hover:opacity-90 text-sm font-body flex items-center gap-1.5 transition-opacity shrink-0"
+          >
+            <Plus className="w-4 h-4" /> Add
+          </button>
+        </div>
       </div>
 
-      {/* Add server */}
-      {showAdd ? (
-        <div className="space-y-3">
-          <div className="flex items-center justify-between">
-            <h3 className="text-xs font-label uppercase tracking-widest text-theme-secondary">Add MCP Server</h3>
-            <button onClick={() => setShowAdd(false)} className="text-xs text-theme-muted hover:text-theme-secondary">Cancel</button>
+      <div className="p-6 space-y-3">
+        {err && <div className="text-xs text-red-400 font-mono">{err}</div>}
+
+        {loading ? (
+          <div className="text-xs text-theme-muted flex items-center gap-2">
+            <Loader2 className="w-3 h-3 animate-spin" /> loading…
           </div>
-          {/* Tab selector */}
-          <div className="flex items-center gap-1 border-b border-border/20">
-            <button
-              onClick={() => setAddMode('preset')}
-              className={`px-3 py-1.5 text-xs font-body border-b-2 transition-colors ${addMode === 'preset' ? 'border-accent-blue text-accent-blue' : 'border-transparent text-theme-muted hover:text-theme-secondary'}`}
-            >
-              From Preset
-            </button>
-            <button
-              onClick={() => setAddMode('bundle')}
-              className={`px-3 py-1.5 text-xs font-body border-b-2 transition-colors ${addMode === 'bundle' ? 'border-accent-blue text-accent-blue' : 'border-transparent text-theme-muted hover:text-theme-secondary'}`}
-            >
-              Upload Bundle
-            </button>
+        ) : servers.length === 0 ? (
+          <div className="border border-dashed border-border/40 rounded-lg p-8 text-center">
+            <Server className="w-6 h-6 mx-auto text-theme-subtle mb-2" />
+            <div className="text-sm text-theme-secondary font-body mb-1">No MCP servers yet</div>
+            <div className="text-xs text-theme-muted font-body">
+              Click <span className="font-semibold text-theme-secondary">Add</span> to register one from a preset or from a repo.
+            </div>
           </div>
-          {addMode === 'preset' && (
-            availablePresets.length > 0 ? (
-              <AddFromPreset presets={availablePresets} allenSecrets={allenSecrets} onSecretCreated={handleSecretCreated} onAdd={handleAddPreset} />
-            ) : (
-              <div className="text-xs text-theme-subtle">All preset servers have been added.</div>
-            )
-          )}
-          {addMode === 'bundle' && (
-            <UploadBundleForm
-              allenSecrets={allenSecrets}
-              onSecretCreated={handleSecretCreated}
-              onAdded={() => { setShowAdd(false); void loadServers(); }}
-            />
-          )}
-        </div>
-      ) : (
-        <button
-          onClick={() => setShowAdd(true)}
-          title="Add MCP server"
-          className="flex items-center gap-2 px-3 py-2 rounded-lg border border-dashed border-border/40 hover:border-accent-blue/30 hover:bg-surface-200/30 transition-all text-theme-muted hover:text-theme-secondary w-full"
-        >
-          <Plus className="w-4 h-4" />
-          <span className="text-xs font-body">Add MCP Server</span>
-        </button>
-      )}
+        ) : (
+          <div className="space-y-2">
+            {servers.map((s) => (
+              <ServerCard key={s._id} server={s} onChange={refresh} />
+            ))}
+          </div>
+        )}
+      </div>
+
+      {adding && <AddServerModal onClose={() => setAdding(false)} onAdded={refresh} />}
     </div>
   );
 }

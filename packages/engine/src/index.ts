@@ -13,7 +13,12 @@ export type { NodeResult } from './node-executor.js';
 export { LearningManager, type ExtractionContext } from './learning-manager.js';
 export * from './types.js';
 export { embed, embedAndSave, searchSimilarLearnings, backfillEmbeddings, invalidateEmbeddingCache, cosineSimilarity, registerEmbeddingProvider, setEmbeddingProvider, getActiveProvider, type EmbeddingProvider } from './embedding.js';
-export { loadMcpServers, loadAllMcpServers, getAllenMcpConfig } from './mcp-loader.js';
+export { loadMcpServers, loadAllMcpServers, getAllenMcpConfig, buildSingleServerConfig, type LoadMcpOptions } from './mcp-loader.js';
+export { queryViaCli, type CliQueryOptions } from './cli-runner.js';
+export { writeAgentFile, renderAgentFile, type AgentSpec, type MaterializedAgent } from './agent-file-writer.js';
+export { expandToClaudeTools } from './tool-mapping.js';
+export { ensureInstalled, forgetInstall, type InstallStatus } from './mcp-install.js';
+export { normalizeModelAlias } from './model-alias.js';
 export { resolveAllenHome, resolveRepositoriesDir, resolveWorkspacesDir, resolveWorktreeCacheDir } from './paths.js';
 export {
   BRAND_NAME, BRAND_SLUG, DB_NAME_DEFAULT, MCP_SERVER_NAME,

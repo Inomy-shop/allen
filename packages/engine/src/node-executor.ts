@@ -13,6 +13,7 @@ import { extractOutputs, buildOutputInstruction, outputKeys } from './output-ext
 import { evaluateCondition } from './condition-parser.js';
 import { executeCodexNode } from './codex-executor.js';
 import { buildToolCallRecord, type ToolCallRecord } from './tool-call.js';
+import { normalizeModelAlias } from './model-alias.js';
 import { statSync, mkdirSync } from 'node:fs';
 
 /** Agent-safe fallback cwd. Kept in sync with chat-providers.ts's
@@ -464,7 +465,11 @@ ${context}
     // effort / plan mode for just this node. The agent document itself is
     // read-only from here.
     const override = nodeDef.agentOverrides ?? {};
-    const resolvedModel = (override.model ?? role?.model) ?? 'sonnet';
+    // Normalize aliases (haiku/sonnet/opus) to fully-qualified model IDs so
+    // we don't depend on Claude Code CLI's (possibly stale) alias tables and
+    // trigger API 404s on deprecated versions like claude-3-5-haiku-20241022.
+    const rawModel = (override.model ?? role?.model) ?? 'sonnet';
+    const resolvedModel = normalizeModelAlias(rawModel) ?? rawModel;
     const resolvedEffort = override.reasoningEffort ?? role?.reasoningEffort;
     const resolvedPlanMode = override.planMode ?? role?.planMode ?? false;
 
@@ -490,23 +495,64 @@ ${context}
     // to full replacement (previous behavior).
     const systemPromptMode = process.env.ALLEN_SYSTEM_PROMPT_MODE === 'custom' ? 'custom' : 'append';
 
-    const conv = query({
-      prompt: effectivePrompt,
-      options: {
-        ...(systemPromptMode === 'custom'
-          ? { customSystemPrompt: effectiveSystem }
-          : { appendSystemPrompt: effectiveSystem }),
-        model: resolvedModel,
+    // Execution mode. Auto-picks based on cwd: real repo/workspace → CLI
+    // (file-based agent spawn via `claude --agent allen-<name>`, best when
+    // the agent has filesystem access), ephemeral /tmp → SDK. Explicit
+    // ALLEN_AGENT_EXECUTION_MODE=cli|sdk overrides. Both modes yield the
+    // same SDKMessage stream so the consumer loop below is identical.
+    const explicitMode = process.env.ALLEN_AGENT_EXECUTION_MODE;
+    const isEphemeral = (() => {
+      if (!cwd) return false;
+      const n = cwd.replace(/\/+$/, '');
+      return n === '/tmp' || n.startsWith('/tmp/') ||
+        n === '/var/tmp' || n.startsWith('/var/tmp/') ||
+        n === '/private/tmp' || n.startsWith('/private/tmp/');
+    })();
+    const executionMode: 'sdk' | 'cli' =
+      explicitMode === 'cli' ? 'cli' :
+      explicitMode === 'sdk' ? 'sdk' :
+      isEphemeral ? 'sdk' : 'cli';
+
+    let conv: AsyncIterable<any>;
+    if (executionMode === 'cli') {
+      const { queryViaCli } = await import('./cli-runner.js');
+      conv = queryViaCli({
+        agent: {
+          name: nodeDef.agent ?? 'unknown',
+          description: (role as any)?.description,
+          system: effectiveSystem ?? '',
+          model: resolvedModel,
+          tools: Array.isArray((role as any)?.tools) ? (role as any).tools : undefined,
+        },
+        prompt: effectivePrompt,
         cwd,
+        model: resolvedModel,
         resume: opts.resumeSession,
         permissionMode: resolvedPlanMode ? 'plan' : 'bypassPermissions',
-        // Merge parent env so PATH / HOME / ANTHROPIC_API_KEY / etc survive,
-        // then overlay our spawn-tree vars.
         env: { ...process.env, ...spawnContextEnv },
-        ...(mcpServers && Object.keys(mcpServers).length > 0 ? { mcpServers: mcpServers as any } : {}),
-        ...(deps.abortSignal ? { abortController: { signal: deps.abortSignal, abort() { /* handled by engine */ } } as any } : {}),
-      } as Record<string, unknown>,
-    });
+        mcpServers: mcpServers && Object.keys(mcpServers).length > 0 ? (mcpServers as Record<string, unknown>) : undefined,
+        abortSignal: deps.abortSignal,
+        stderr: (chunk) => emitLog(deps, nodeName, { level: 'debug', category: 'system', message: `[claude-cli stderr] ${chunk.slice(0, 300)}` }),
+      });
+    } else {
+      conv = query({
+        prompt: effectivePrompt,
+        options: {
+          ...(systemPromptMode === 'custom'
+            ? { customSystemPrompt: effectiveSystem }
+            : { appendSystemPrompt: effectiveSystem }),
+          model: resolvedModel,
+          cwd,
+          resume: opts.resumeSession,
+          permissionMode: resolvedPlanMode ? 'plan' : 'bypassPermissions',
+          // Merge parent env so PATH / HOME / ANTHROPIC_API_KEY / etc survive,
+          // then overlay our spawn-tree vars.
+          env: { ...process.env, ...spawnContextEnv },
+          ...(mcpServers && Object.keys(mcpServers).length > 0 ? { mcpServers: mcpServers as any } : {}),
+          ...(deps.abortSignal ? { abortController: { signal: deps.abortSignal, abort() { /* handled by engine */ } } as any } : {}),
+        } as Record<string, unknown>,
+      });
+    }
 
     for await (const message of conv) {
       if (message.type === 'assistant') {

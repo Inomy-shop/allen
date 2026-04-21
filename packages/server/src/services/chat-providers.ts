@@ -148,25 +148,28 @@ export async function syncMcpToCodex(db: Db): Promise<void> {
     log(`Failed to register Allen MCP with Codex: ${(err as Error).message}`);
   }
 
-  // Register external MCP servers — resolve @secret: refs in env AND args
-  // so Codex gets plaintext values. Also silence dotenv's stdout banner.
-  // Always remove and re-add so config drift (e.g. missing DOTENV_CONFIG_QUIET
-  // from older registrations) gets corrected every sync.
-  const { resolveEnvSecrets, resolveArgSecrets } = await import('./mcp.service.js');
+  // Register external MCP servers using the shared spawn-config resolver so
+  // preset, repo-sourced, and legacy bundle records all translate to Codex's
+  // `codex mcp add` with the right command/args/env. Always remove + re-add
+  // so config drift gets corrected on each sync.
+  const { buildSingleServerConfig } = await import('@allen/engine');
   for (const server of servers) {
     try {
-      const [resolvedEnv, resolvedArgs] = await Promise.all([
-        resolveEnvSecrets(server.env, db),
-        resolveArgSecrets(server.args, db),
-      ]);
-      const envWithQuiet = { ...resolvedEnv, DOTENV_CONFIG_QUIET: 'true' };
+      const cfg = await buildSingleServerConfig(server as unknown as Record<string, unknown>, db);
+      if (!cfg) {
+        log(`Skipped ${server.name}: spawn config could not be resolved`);
+        continue;
+      }
+      const resolvedCmd = (cfg.command as string) ?? server.command ?? '';
+      const resolvedArgs = (cfg.args as string[]) ?? [];
+      const resolvedEnv = (cfg.env as Record<string, string>) ?? {};
       // Remove first (may fail if not registered — that's fine)
       if (existingOutput.includes(server.name)) {
         await execFileAsync('codex', ['mcp', 'remove', server.name], { timeout: 5000 }).catch(() => {});
       }
       const cmdArgs = ['mcp', 'add', server.name];
-      for (const [k, v] of Object.entries(envWithQuiet)) cmdArgs.push('--env', `${k}=${v}`);
-      cmdArgs.push('--', server.command!, ...resolvedArgs);
+      for (const [k, v] of Object.entries(resolvedEnv)) cmdArgs.push('--env', `${k}=${v}`);
+      cmdArgs.push('--', resolvedCmd, ...resolvedArgs);
       await execFileAsync('codex', cmdArgs, { timeout: 10000 });
       log(`Registered MCP server with Codex CLI: ${server.name}`);
     } catch (err) {

@@ -6,7 +6,7 @@
  */
 
 import type { Db } from 'mongodb';
-import { MCP_SERVER_NAME } from '@allen/engine';
+import { MCP_SERVER_NAME, normalizeModelAlias } from '@allen/engine';
 import {
   type ChatProvider,
   type ProviderCallbacks,
@@ -143,8 +143,10 @@ async function runClaudeCLI(
   const { mkdirSync } = await import('node:fs');
   mkdirSync(resolvedCwd, { recursive: true });
 
+  // Normalize model alias to full ID (haiku → claude-haiku-4-5-20251001 etc.)
+  // so we don't rely on the bundled Claude Code CLI's stale alias table.
   const sdkOptions: Record<string, unknown> = {
-    model,
+    model: normalizeModelAlias(model) ?? model,
     permissionMode: 'bypassPermissions',
     cwd: resolvedCwd,
   };
@@ -157,7 +159,9 @@ async function runClaudeCLI(
   //   mechanism that actually works. See agent-settings.ts for details.
   if (resolved) {
     const fragment = toClaudeSdkOptions(resolved);
-    if (fragment.model) sdkOptions.model = fragment.model;
+    // Re-normalize — fragment.model may carry a raw alias (haiku/sonnet/opus)
+    // that would reintroduce the bundled-CLI stale-alias 404.
+    if (fragment.model) sdkOptions.model = normalizeModelAlias(fragment.model) ?? fragment.model;
     if (fragment.permissionMode === 'plan') sdkOptions.permissionMode = 'plan';
     if (fragment.promptPrefix) {
       lastUserMsg = `${fragment.promptPrefix}\n\n${lastUserMsg}`;

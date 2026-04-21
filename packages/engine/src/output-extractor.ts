@@ -1,4 +1,5 @@
 import type { NodeDef, OutputsSpec } from './types.js';
+import { normalizeModelAlias } from './model-alias.js';
 
 /**
  * Extract structured outputs from agent response text.
@@ -272,7 +273,7 @@ Return JSON only, no explanation.`;
   const conversation = query({
     prompt,
     options: {
-      model: 'haiku',
+      model: normalizeModelAlias('haiku'),
       permissionMode: 'plan',
     },
   });
