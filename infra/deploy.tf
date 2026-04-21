@@ -26,6 +26,28 @@ resource "aws_ssm_parameter" "env_production" {
     refresh_token_ttl  = var.refresh_token_ttl
     admin_email        = var.admin_email
     admin_password     = var.admin_password
+
+    # MCP preset credentials — flow into the EC2 runtime .env via SSM
+    # Parameter Store. All optional (default "" in variables.tf); empty
+    # values produce empty lines in .env which Allen's loader treats as
+    # "ALLEN_<KEY> not set" → the corresponding MCP simply can't be added.
+    allen_linear_access_token          = var.allen_linear_access_token
+    allen_slack_bot_token              = var.allen_slack_bot_token
+    allen_slack_team_id                = var.allen_slack_team_id
+    allen_slack_signing_secret         = var.allen_slack_signing_secret
+    allen_slack_interventions_channel  = var.allen_slack_interventions_channel
+    allen_github_personal_access_token = var.allen_github_personal_access_token
+    allen_postgres_connection_string   = var.allen_postgres_connection_string
+    allen_mongodb_connection_string    = var.allen_mongodb_connection_string
+    allen_oxylabs_username             = var.allen_oxylabs_username
+    allen_oxylabs_password             = var.allen_oxylabs_password
+    allen_oxylabs_endpoint             = var.allen_oxylabs_endpoint
+    allen_aws_region                   = var.allen_aws_region
+    allen_aws_access_key_id            = var.allen_aws_access_key_id
+    allen_aws_secret_access_key        = var.allen_aws_secret_access_key
+    allen_aws_session_token            = var.allen_aws_session_token
+    allen_api_base_url                 = var.allen_api_base_url
+    allen_api_auth_token               = var.allen_api_auth_token
   })
   tags = local.tags
 }

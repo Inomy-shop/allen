@@ -109,3 +109,122 @@ variable "repo_branch" {
   type        = string
   default     = "main"
 }
+
+# ── MCP preset credentials (ALLEN_ prefix convention) ──────────────────────
+# Every MCP preset declares which ALLEN_<KEY> env vars it needs. The Allen
+# loader strips the prefix and passes <KEY> to the MCP subprocess. All
+# default to "" so you can deploy with only the presets you actually use
+# filled in; missing ones just mean the corresponding MCP can't be added.
+
+variable "allen_linear_access_token" {
+  description = "Linear MCP preset: personal API token (lin_api_...)"
+  type        = string
+  sensitive   = true
+  default     = ""
+}
+
+variable "allen_slack_bot_token" {
+  description = "Slack MCP + integrations: bot user OAuth token (xoxb-...)"
+  type        = string
+  sensitive   = true
+  default     = ""
+}
+
+variable "allen_slack_team_id" {
+  description = "Slack MCP preset: workspace team ID (T...)"
+  type        = string
+  default     = ""
+}
+
+variable "allen_slack_signing_secret" {
+  description = "Slack webhook signature verification (required for inbound events)"
+  type        = string
+  sensitive   = true
+  default     = ""
+}
+
+variable "allen_slack_interventions_channel" {
+  description = "Optional channel/DM ID for human-intervention Slack notifications"
+  type        = string
+  default     = ""
+}
+
+variable "allen_github_personal_access_token" {
+  description = "GitHub MCP preset: personal access token (ghp_...)"
+  type        = string
+  sensitive   = true
+  default     = ""
+}
+
+variable "allen_postgres_connection_string" {
+  description = "PostgreSQL MCP preset: full connection string (postgres://...)"
+  type        = string
+  sensitive   = true
+  default     = ""
+}
+
+variable "allen_mongodb_connection_string" {
+  description = "MongoDB MCP preset: full connection string (mongodb://...)"
+  type        = string
+  sensitive   = true
+  default     = ""
+}
+
+variable "allen_oxylabs_username" {
+  description = "Oxylabs MCP: realtime API username"
+  type        = string
+  default     = ""
+}
+
+variable "allen_oxylabs_password" {
+  description = "Oxylabs MCP: realtime API password"
+  type        = string
+  sensitive   = true
+  default     = ""
+}
+
+variable "allen_oxylabs_endpoint" {
+  description = "Oxylabs MCP: API endpoint (default https://realtime.oxylabs.io/v1/queries)"
+  type        = string
+  default     = ""
+}
+
+variable "allen_aws_region" {
+  description = "AWS MCP: region (default us-east-1)"
+  type        = string
+  default     = ""
+}
+
+variable "allen_aws_access_key_id" {
+  description = "AWS MCP: access key ID. If unset, SDK uses the default credential chain."
+  type        = string
+  sensitive   = true
+  default     = ""
+}
+
+variable "allen_aws_secret_access_key" {
+  description = "AWS MCP: secret access key"
+  type        = string
+  sensitive   = true
+  default     = ""
+}
+
+variable "allen_aws_session_token" {
+  description = "AWS MCP: optional STS session token (temporary credentials only)"
+  type        = string
+  sensitive   = true
+  default     = ""
+}
+
+variable "allen_api_base_url" {
+  description = "Pipeline API Server MCP: base URL (default http://localhost:4000)"
+  type        = string
+  default     = ""
+}
+
+variable "allen_api_auth_token" {
+  description = "Pipeline API Server MCP: Cognito JWT if the API requires auth"
+  type        = string
+  sensitive   = true
+  default     = ""
+}
