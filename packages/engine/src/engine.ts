@@ -55,6 +55,20 @@ export class AllenEngine {
     this.config = config;
     this.stateManager = new StateManager(config.db);
     this.learningManager = new LearningManager(config.db);
+    // Best-effort cleanup of allen-*.md agent files left over in
+    // ~/.claude/agents/ by crashed prior runs in CLI mode. Silent — never
+    // blocks engine startup.
+    try {
+      // Dynamic import so this stays tree-shakable and doesn't slow boot for
+      // non-CLI-mode deployments.
+      import('./orphan-sweeper.js').then(({ sweepOrphanAgentFiles }) => {
+        const result = sweepOrphanAgentFiles();
+        if (result.removed > 0) {
+          // eslint-disable-next-line no-console
+          console.log(`[engine] swept ${result.removed} orphan agent file(s) from ~/.claude/agents/`);
+        }
+      }).catch(() => { /* swallow */ });
+    } catch { /* swallow */ }
   }
 
   get state(): StateManager {
@@ -641,10 +655,14 @@ export class AllenEngine {
       ? buildNodeContext(nodeName, { nodes: workflow.nodes as Record<string, unknown>, edges: workflow.edges as unknown as Array<Record<string, unknown>> })
       : '';
 
-    // Learning injection: query and inject relevant learnings before execution
+    // Learning injection: query and inject relevant learnings before execution.
+    // Skip entirely when ALLEN_AGENT_SKIP_LEARNINGS=true — useful when you want
+    // the agent's behavior to depend only on its system prompt + explicit
+    // memory-tool reads, with no engine-side learning-context injection.
     const contextTags = (exec.state.__contextTags as string[]) ?? [];
     let injectedLearningIds: any[] = [];
-    if (nodeType === 'agent') {
+    const skipLearnings = process.env.ALLEN_AGENT_SKIP_LEARNINGS === 'true';
+    if (nodeType === 'agent' && !skipLearnings) {
       try {
         const learnings = await this.learningManager.query(
           contextTags,
@@ -667,6 +685,12 @@ export class AllenEngine {
       } catch {
         // Fire-and-forget — never block execution
       }
+    } else if (nodeType === 'agent' && skipLearnings) {
+      this.log(exec.id, {
+        category: 'system',
+        node: nodeName,
+        message: `[learning] skipped (ALLEN_AGENT_SKIP_LEARNINGS=true)`,
+      });
     }
 
     // Create abort controller for this node — cancelled via cancelExecution()

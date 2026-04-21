@@ -165,7 +165,11 @@ Allen is the **only product in the cohort where a running agent can author a new
 | Spec-driven artifacts (PRD / requirements) | ❌ | ❌ | ❌ | ✅ | ✅ | ❌ | ✅ EARS |
 | Event hooks (file/tool/task) | ❌ | ⚠️ CI | ❌ | ❌ | ❌ | ❌ | ✅ |
 | Git worktree isolation | ✅ | ⚠️ VMs | ❌ | ❌ | ❌ | ✅ | ❌ |
-| MCP server (exposed to agents) | ✅ 16 tools | ❌ | ⚠️ SDK | ❌ | ❌ | ❌ | ❌ |
+| MCP server (exposed to agents) | ✅ 21 tools | ❌ | ⚠️ SDK | ❌ | ❌ | ❌ | ❌ |
+| Auto-resolve review-bot comments (CodeRabbit etc.) | ✅ cron + manual | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ |
+| Per-execution tool-call log with expandable I/O | ✅ | ⚠️ activity view | ⚠️ traces | ⚠️ | ❌ | ⚠️ | ⚠️ |
+| Persistent workspace filesystem (survives reboots) | ✅ `~/.allen/` | ✅ cloud VMs | ⚠️ server | ✅ | ❌ | ✅ worktrees | ⚠️ local |
+| AWS production deploy (Terraform) | ✅ EC2+ALB+Route53+ACM | ⚠️ managed only | ⚠️ BYO | ⚠️ | ⚠️ SaaS | ❌ desktop-only | ✅ Bedrock |
 | MCP client (consume external servers) | ✅ + secrets | ✅ | ✅ | ✅ | ⚠️ | ✅ | ✅ |
 | Cron scheduling | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ |
 | Claude Code ecosystem interop | ✅ imports `.claude/agents/*.md` | ⚠️ AGENTS.md | ❌ | ❌ | ❌ | ✅ native | ⚠️ compat |
@@ -196,6 +200,8 @@ Allen is the **only product in the cohort where a running agent can author a new
 | Claude Code ecosystem interop | **Allen** | Conductor |
 | Cron scheduled agent workflows | **Allen** (only) | — |
 | HITL with retry-target semantics | **Allen** | Factory |
+| Auto-resolve review-bot comments | **Allen** (only) | — |
+| Per-tool expandable execution log | **Allen** | Factory (activity pane) |
 | Enterprise compliance | **Kiro** (GovCloud) / **Factory** | 8090 |
 | Open source | **Letta** | Allen (self-host, closed) |
 | Persistent per-agent compute | **Factory** (droid VMs) | Conductor (worktrees) |
@@ -232,7 +238,7 @@ Allen is the **only product in the cohort where a running agent can author a new
 
 ## 13. Strengths no other product in the cohort has
 
-1. **Agents authoring agents, teams, and workflows at runtime** via 16 MCP tools.
+1. **Agents authoring agents, teams, and workflows at runtime** via 21 MCP tools (now incl. PR + workspace + sync primitives that let agents drive the CodeRabbit resolution loop end-to-end).
 2. **Live org-chart injection at prompt time** — every agent sees current team structure.
 3. **Mid-workflow delegation with checkpoint-rewound HITL** — `delegate_to_agent` + `wait_for_delegation` + `request_changes` retry.
 4. **Cron-scheduled multi-agent workflows** — none of the six competitors ship this.

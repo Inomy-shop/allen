@@ -22,6 +22,38 @@ function resolveAgentCwd(...candidates: Array<string | undefined>): string {
   return picked;
 }
 
+/**
+ * True when the given path is an ephemeral /tmp-style location. Used to gate
+ * repo-context injection: when an agent's cwd is a real repo or workspace
+ * clone, it can Read files directly — context is redundant. Only /tmp-based
+ * cwds (where the agent has no filesystem access to the repo) still need the
+ * injected summary. Handles Linux, macOS (`/private/tmp`), and `/var/tmp`.
+ */
+function isEphemeralCwd(path: string | undefined): boolean {
+  if (!path) return false;
+  const normalized = path.replace(/\/+$/, '');
+  return (
+    normalized === '/tmp' || normalized.startsWith('/tmp/') ||
+    normalized === '/var/tmp' || normalized.startsWith('/var/tmp/') ||
+    normalized === '/private/tmp' || normalized.startsWith('/private/tmp/')
+  );
+}
+
+/**
+ * Decide whether Claude agent execution uses the CLI (file-materialized)
+ * path or the in-process SDK path. Resolution order:
+ *   1. Explicit ALLEN_AGENT_EXECUTION_MODE=cli|sdk wins.
+ *   2. Otherwise auto: CLI when cwd is a real repo/workspace path (agent has
+ *      filesystem access; file-based --agent flow is ideal), SDK when cwd is
+ *      ephemeral /tmp (no repo files on disk anyway).
+ */
+function resolveExecutionMode(cwd: string | undefined): 'sdk' | 'cli' {
+  const explicit = process.env.ALLEN_AGENT_EXECUTION_MODE;
+  if (explicit === 'cli') return 'cli';
+  if (explicit === 'sdk') return 'sdk';
+  return isEphemeralCwd(cwd) ? 'sdk' : 'cli';
+}
+
 // ── Active Session Registry ──────────────────────────────────────────────────
 // When chat.service starts processing a message, it registers the session context.
 // delegation tools (delegate_to_agent, report_to_user) read from this registry
@@ -694,9 +726,13 @@ async function runSpawnInBackground(
     workspaceConstraint = `\n\nWORKSPACE CONSTRAINT:\nYour working directory is: ${repoPath}\nCRITICAL: ALL file operations (Read, Write, Edit, Grep, Glob, Bash) MUST use paths within this directory.\n- Use relative paths or absolute paths starting with "${repoPath}/"\n- NEVER read, write, or modify files outside this directory\n- If search results show paths outside this directory, replace the base with "${repoPath}/"${portInfo}\n`;
   }
 
-  // Inject the deep repo context block (skip for the scanner itself to avoid circularity)
+  // Inject the deep repo context block only when the agent's cwd is an
+  // ephemeral /tmp location where it can't Read repo files directly. When cwd
+  // is the repo or a workspace clone (the common case), the agent has
+  // filesystem access via Read/Grep/Glob — context injection is redundant and
+  // burns tokens. Always skip for the scanner itself to avoid circularity.
   let repoContextBlock = '';
-  if (repoPath && agentName !== 'repo-scanner') {
+  if (repoPath && agentName !== 'repo-scanner' && isEphemeralCwd(repoPath)) {
     try {
       repoContextBlock = await buildRepoContextBlock(db, repoPath);
       if (repoContextBlock) {
@@ -882,7 +918,37 @@ async function runSpawnInBackground(
       sdkOptions.abortController = abortController;
       registerExecutionProcess(executionId, process.pid, () => abortController.abort());
 
-      for await (const msg of query({ prompt, options: sdkOptions as any })) {
+      // Execution mode. Auto-picks based on cwd: real repo/workspace → CLI
+      // (file-based agent spawn, best when the agent has filesystem access);
+      // /tmp → SDK (no benefit from the file detour). Explicit
+      // ALLEN_AGENT_EXECUTION_MODE=cli|sdk overrides. See cli-runner.ts.
+      const useCliMode = resolveExecutionMode(sdkOptions.cwd as string | undefined) === 'cli';
+      let msgStream: AsyncIterable<any>;
+      if (useCliMode) {
+        const { queryViaCli } = await import('@allen/engine');
+        msgStream = queryViaCli({
+          agent: {
+            name: agentName,
+            description: (role as any)?.description,
+            system: `${(role.system as string) ?? ''}${repoContextBlock}${workspaceConstraint}`,
+            model: sdkOptions.model as string | undefined,
+            tools: Array.isArray((role as any)?.tools) ? (role as any).tools : undefined,
+          },
+          prompt,
+          cwd: sdkOptions.cwd as string | undefined,
+          model: sdkOptions.model as string | undefined,
+          resume: sdkOptions.resume as string | undefined,
+          permissionMode: 'bypassPermissions',
+          env: sdkOptions.env as NodeJS.ProcessEnv | undefined,
+          mcpServers: sdkOptions.mcpServers as Record<string, unknown> | undefined,
+          abortSignal: abortController.signal,
+          stderr: (chunk) => liveLog({ type: 'tool_start', content: `[claude-cli stderr] ${chunk.slice(0, 300)}` }),
+        });
+      } else {
+        msgStream = query({ prompt, options: sdkOptions as any });
+      }
+
+      for await (const msg of msgStream) {
         if ('session_id' in msg && msg.session_id) sessionId = msg.session_id as string;
 
         if (msg.type === 'assistant') {
@@ -1862,7 +1928,7 @@ async function runAgentTurn(
   // buildDelegationPrompt already appended the WORKSPACE CONSTRAINT section at the
   // tail when cwd is set, so we splice the repo context in right before it to
   // preserve ordering: base → repoContext → workspaceConstraint.
-  if (systemPrompt && cwd && targetName !== 'repo-scanner') {
+  if (systemPrompt && cwd && targetName !== 'repo-scanner' && isEphemeralCwd(cwd)) {
     try {
       const repoContextBlock = await buildRepoContextBlock(db, cwd);
       if (repoContextBlock) {

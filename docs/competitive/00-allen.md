@@ -1,18 +1,19 @@
 # Allen — Deep Dive (baseline doc for comparison)
 
-**Last reviewed:** 2026-04-17
+**Last reviewed:** 2026-04-20
 **Category:** Self-hosted multi-agent workflow orchestration platform
-**One-line pitch:** A TypeScript monorepo that orchestrates Claude Code + Codex CLI subprocesses through a declarative workflow graph, with first-class teams, agent-to-agent delegation, 16 self-service MCP tools, a Mem0-style learning system, and human-in-the-loop interventions — all self-hostable.
+**One-line pitch:** A TypeScript monorepo that orchestrates Claude Code + Codex CLI subprocesses through a declarative workflow graph, with first-class teams, agent-to-agent delegation, 21 self-service MCP tools, a Mem0-style learning system, automatic CodeRabbit review resolution, and human-in-the-loop interventions — all self-hostable, production-deployed to AWS.
 
 ---
 
 ## 1. Snapshot
 
 - **Package layout:** npm workspaces + Turbo — `packages/engine`, `packages/server`, `packages/ui`.
-- **Runtime:** Node.js (Express), MongoDB persistence, React + SSE front-end.
+- **Runtime:** Node.js (Express), MongoDB persistence (DocumentDB on AWS), React + SSE front-end.
 - **Model providers:** Claude Code SDK (TypeScript `query()` wrapper, not raw CLI) + OpenAI Codex CLI.
-- **Deployment:** Docker Compose (local/on-prem). AWS deployment plan in `docs/plans/`.
-- **Source:** Private repo.
+- **Deployment:** Docker Compose for local/on-prem. **Live production on AWS** — EC2 behind ALB + Route53 (`allen.inomy.ai`) + ACM, provisioned via Terraform (`infra/` + `apply.sh`).
+- **Persistent state:** `~/.allen/` (repos/workspaces/worktree-cache) — survives reboots; centralized in `packages/engine/src/paths.ts` with per-subdir env overrides.
+- **Source:** Private repo (`Kalpai-poc/allen`).
 
 ## 2. Engine (`packages/engine/src/`)
 
@@ -176,15 +177,15 @@ Chat, Execution List, Execution Detail, Interventions, Learnings, Workflow List,
 
 ## 7. Shipped vs. planned (from `docs/plans/`)
 
-### Shipped (code + tests)
+### Shipped (code + tests, live on production)
 - 5 node types, parallel execution with merge strategies, 3-layer retry, checkpoints, auto-gate
 - Chat system (multi-turn, streaming, delegation)
-- 16 MCP tools on Allen MCP server
+- **21 MCP tools on Allen MCP server** (PR + workspace + execution + repo + agent + team + learning + secret + cron tools)
 - Learning system (5 sources, ADD/UPDATE/DELETE/NOOP, embedding search)
 - Org context live injection
-- Workspace management (git worktrees, port assignment, setup polling)
+- Workspace management (git worktrees on persistent `~/.allen/`, port assignment, setup polling)
 - Intervention system with Slack notifications
-- Cron scheduling
+- Cron scheduling (3 built-in jobs + user-defined)
 - Repo context scanner + Claude agents importer
 - Workflow visual builder
 - Design-doc persistence
@@ -193,27 +194,37 @@ Chat, Execution List, Execution Detail, Interventions, Learnings, Workflow List,
 - Full auth (JWT, password reset, admin, mustReset)
 - PR tracking, alerts, analytics dashboards
 - Codex provider support + per-node overrides
+- **AWS production deployment** — EC2 + ALB + Route53 + ACM via Terraform; live at `allen.inomy.ai` with SSM-driven deploy pipeline
+- **Full provider tool access** — agents can use every Claude/Codex built-in + every registered MCP server (removed legacy `allowedTools` restriction that silently blocked MCP calls in workflow nodes)
+- **Per-execution tool-call log with expandable I/O** — every tool invocation is persisted in `execution_traces.toolCalls[]`, with full args + result (10KB cap + truncated flag). Rendered inline in the Activity Log viewer, ExecutionDetailPage, NodeDetail, and ChatPage. Live-streams during execution via `agent_tool_complete` SSE events.
+- **Agent execution attempt tabs** — resuming a `spawn_agent` execution appends attempt N+1 on the same execution row (not a new execution). Attempt tabs in the UI let you switch between turns; the trace / cost / tool log / response per attempt is independently viewable.
+- **Centralized brand + path constants** — `packages/engine/src/brand.ts` + `packages/ui/src/lib/brand.ts` + `packages/engine/src/paths.ts` make rebrands and relocations a 2-line change. Writable-check + fallback chain for `$HOME/.allen` → `/var/lib/allen` → `/tmp/allen` (with loud warning).
+- **CodeRabbit auto-resolution workflow** — new `resolve-pr-reviews.yml` + 2 agents (`pr-workspace-resolver`, `pr-review-bot`) + `coderabbit-sweep-15min` cron. Fetches unresolved CodeRabbit comments from any open PR, applies fixes in the originating workspace (Flow A) or a freshly-created one (Flow B), runs tests, commits + pushes to the same branch, posts a summary, resolves threads via GraphQL. Manual UI trigger on the Pull Requests page for external PRs. Rate-limited: 3-attempt cap per PR, 30-min cooldown, advisory lock with TTL.
+- **MCP-first agent instructions** — all new agents are told to prefer `mcp__github__*` / `mcp__linear__*` / `mcp__aws__*` / `mcp__pipeline*__*` / `mcp__allen__*` over shell CLI calls. Resolver orchestrators propagate this policy to delegated specialists.
 
 ### Planned (design docs only, no code)
 - Memory blocks (Letta-inspired) — `docs/plans/memory-system-gap-analysis-2026.md`
 - Skill library (markdown recipes on orphan branch) — `docs/plans/skill-library-design.md`
 - Bidirectional agent conversations (ask mid-task) — `docs/plans/bidirectional-agent-conversations.md`
-- AWS deployment (ECS + RDS + ALB) — `docs/plans/aws-deployment-allen.md`
-- Slack bot integration (commands + approvals beyond notifications) — `docs/plans/slack-bot-integration.md`
+- Slack bot integration — commands + approvals beyond notifications; notifier path is live, full bot integration partially shipped (`docs/plans/slack-bot-integration.md`)
 - Full per-node reasoning assignments — `docs/plans/agent-reasoning-assignments.md` (partial)
+- GitHub webhook receiver — for sub-second CodeRabbit trigger latency (today the sweep is cron-driven at 15 min)
 
 ## 8. Strengths (distinct from competitors)
 
 1. **Declarative graph + diffable YAML + 3-layer retry + checkpoints** — no other product has all four in the same engine.
-2. **Agent self-service via 16 MCP tools** — agents that can create agents, author workflows, build teams, spawn peers. Rare capability.
+2. **Agent self-service via 21 MCP tools** — agents that can create agents, author workflows, build teams, spawn peers, resolve PRs, mark sync state. Rare capability; no direct competitor matches it.
 3. **Live org-chart injection at prompt time** — every agent sees the current team structure without restart.
 4. **First-class teams with blueprints** — members + system prompts + delegation edges + live org chart in one primitive.
 5. **Agent-to-agent delegation shipped** (`delegate_to_agent`, `wait_for_delegation`, `answer_delegator`) — Letta-class behavior.
 6. **Claude Code ecosystem interop** — imports `.claude/agents/*.md` from user repos; exposes an MCP server Claude Code clients can call.
-7. **Self-host on commodity infra** — Docker Compose + Mongo; no AWS lock-in; no per-token markup.
+7. **Self-host on commodity infra** — Docker Compose + Mongo; no AWS lock-in; no per-token markup. Also ships a full Terraform-driven AWS deploy for shops that want managed infra.
 8. **Local embeddings** — `all-MiniLM-L6-v2` via transformers.js, no API key, no network.
 9. **Cron + chat + visual builder + CLI + Codex + Slack** on a single engine — widest surface in this cohort.
 10. **Production-grade auth + secrets + E2E tests** — not a hobby project.
+11. **Automatic review-bot resolution loop** — `resolve-pr-reviews` workflow fetches unresolved CodeRabbit / Sonar / arbitrary-bot comments, delegates fixes to the right specialist, commits + pushes to the same branch, and resolves the threads. Runs every 15 min via cron for workflow-owned PRs; manual trigger supports external PRs. No competitor in this cohort ships this.
+12. **Full per-execution tool-call log with expandable I/O** — every tool call persists name + description + args + result + duration + error state. Matched by `toolUseId` for exact replay, or tool+timestamp as a fallback. Streams live via SSE during execution and survives page reloads after. Factory and Conductor show agent actions; neither exposes the full I/O per tool with this fidelity.
+13. **Two-brand-constant rebrand path** — the project itself demonstrated this by renaming `flowforge` → `allen` across 129 files + infra + DocumentDB + live EC2 in a single day. The `brand.ts` + `paths.ts` abstractions are now documented as the "change these two lines" primitive for future rebrands or forks.
 
 ## 9. Weaknesses (honest self-assessment)
 
@@ -236,13 +247,22 @@ Chat, Execution List, Execution Detail, Interventions, Learnings, Workflow List,
 
 ## 11. Top priorities derived from gaps
 
-1. **Ship memory blocks** — `docs/plans/memory-system-gap-analysis-2026.md` is ready.
+1. **Ship memory blocks** — `docs/plans/memory-system-gap-analysis-2026.md` is ready. Biggest remaining gap vs. Letta.
 2. **Ship skill library** — `docs/plans/skill-library-design.md` is ready.
-3. **Spec node type** (EARS-style) — new node emits `requirements.md` + `design.md` + `tasks.md` into state.
-4. **Event hooks** (file save / PR / tool use) — extend the emitter.
-5. **Multi-trajectory option on agent nodes** — `trajectories: { samples: 3, selector: tests-pass }` reuses checkpoint infra.
-6. **Conductor-style parallel-workspace UI**.
-7. **Publish a SWE-bench or Terminal-Bench number** for the coding-agent workflow.
+3. **Spec node type** (EARS-style) — new node emits `requirements.md` + `design.md` + `tasks.md` into state. Closes the Kiro gap.
+4. **GitHub webhook receiver** — for sub-second CodeRabbit trigger latency. Today's 15-min sweep handles it with acceptable lag but a webhook path would be strictly better.
+5. **Event hooks** (file save / PR-opened / tool use) — extend the emitter. Kiro ships this; Allen doesn't.
+6. **Multi-trajectory option on agent nodes** — `trajectories: { samples: 3, selector: tests-pass }` reuses checkpoint infra. Closes the Factory pass@k gap.
+7. **Conductor-style parallel-workspace UI** — the data model supports parallel forks; the UI needs a split-pane view.
+8. **Publish a SWE-bench or Terminal-Bench number** for the coding-agent workflow — Factory and Conductor publish; Allen doesn't yet.
+
+### Recently closed (2026-04-20)
+- ✅ Persistent workspace/repo paths (`~/.allen/` instead of tmpfs-volatile `/tmp/`)
+- ✅ Full MCP tool access across all workflow nodes (fixed the `allowedTools` bug that silently blocked MCP in workflow contexts)
+- ✅ Structured per-execution tool log with expandable input/output
+- ✅ Agent execution attempt tracking (resume creates attempt N+1 on same execution)
+- ✅ Auto-resolve review-bot comments (CodeRabbit workflow)
+- ✅ AWS production deploy (Terraform + Route53 + ACM + ALB)
 
 ## 12. References (internal)
 
