@@ -53,33 +53,28 @@ export function evaluateCondition(expression: string, state: Record<string, unkn
   const ids = extractIdentifiers(expression);
   const safeState: Record<string, unknown> = { ...state };
 
-  // CRITICAL: filtrex does NOT have built-in `true` / `false` literals.
-  // Expressions like `foo == true` or `bar == false` treat `true` / `false`
-  // as variable names that resolve to UnknownPropertyError at runtime,
-  // and the comparison silently fails. We pre-populate them in safeState
-  // as numbers 1 and 0 so filtrex sees them as resolvable values. This
-  // pairs with the boolean normalization below, where any boolean in
-  // state is also converted to 1/0 so the comparison is numeric-equal
-  // and works under both loose and strict == semantics.
-  safeState.true = 1;
-  safeState.false = 0;
-
-  // Normalize booleans in state to numbers so `== true` / `== false`
-  // comparisons work. JavaScript booleans compared to 0/1 are equal
-  // in filtrex because filtrex uses loose equality via coercion, but
-  // the safer move is to pre-coerce so we don't depend on filtrex's
-  // internal semantics. Applied only to top-level keys to avoid
-  // breaking nested structures (e.g., if state contains objects that
-  // happen to have boolean properties — those are passed through as-is).
-  for (const [k, v] of Object.entries(safeState)) {
-    if (v === true) safeState[k] = 1;
-    else if (v === false) safeState[k] = 0;
-  }
+  // CRITICAL: filtrex does NOT have built-in `true`, `false`, `null`, or
+  // `undefined` literals. It treats them as variable names that resolve to
+  // UnknownPropertyError at runtime. We pre-populate them in safeState so
+  // expressions like `foo == true` or `x != null` work correctly.
+  //
+  // Filtrex 3.x requires actual booleans for logical operators (not/and/or)
+  // — passing numbers (0/1) throws UnexpectedTypeError. So we use real
+  // boolean values throughout, NOT numeric coercion.
+  //
+  // For `null`/`undefined`: mapped to `false` so that `x != null` works
+  // when missing/null state values are also coerced to `false`:
+  //   x is null/missing (→ false)  → false != false → false  ✓
+  //   x is a string "/path"        → "/path" != false → true  ✓
+  safeState.true = true;
+  safeState.false = false;
+  safeState.null = false;
+  safeState.undefined = false;
 
   for (const id of ids) {
-    if (!(id in safeState)) safeState[id] = 0;
-    // Also coerce undefined/null to 0 so NOT x works sanely
-    else if (safeState[id] === undefined || safeState[id] === null) safeState[id] = 0;
+    if (!(id in safeState)) safeState[id] = false;
+    // Also coerce undefined/null to false so NOT x works sanely
+    else if (safeState[id] === undefined || safeState[id] === null) safeState[id] = false;
   }
 
   const result = fn(safeState);

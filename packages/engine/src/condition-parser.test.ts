@@ -44,6 +44,52 @@ describe('condition-parser', () => {
     });
   });
 
+  describe('null / undefined literals in expressions', () => {
+    it('x != null is true when x has a string value', () => {
+      expect(evaluateCondition('repo_path != null', { repo_path: '/some/path' })).toBe(true);
+    });
+
+    it('x != null is false when x is null in state', () => {
+      expect(evaluateCondition('repo_path != null', { repo_path: null })).toBe(false);
+    });
+
+    it('x != null is false when x is missing from state', () => {
+      expect(evaluateCondition('repo_path != null', {})).toBe(false);
+    });
+
+    it('x == null is true when x is missing', () => {
+      expect(evaluateCondition('repo_path == null', {})).toBe(true);
+    });
+
+    it('x == null is false when x has a value', () => {
+      expect(evaluateCondition('repo_path == null', { repo_path: '/path' })).toBe(false);
+    });
+
+    it('compound condition with null check and string check', () => {
+      // The exact condition from the workflow bug report
+      expect(
+        evaluateCondition(
+          'needs_clarification != true AND repo_path != null AND repo_path != ""',
+          { needs_clarification: false, repo_path: '/some/repo' },
+        ),
+      ).toBe(true);
+    });
+
+    it('alternative branch with null check evaluates correctly', () => {
+      expect(
+        evaluateCondition(
+          'needs_clarification != true AND (repo_path == null OR repo_path == "")',
+          { needs_clarification: false, repo_path: '/some/repo' },
+        ),
+      ).toBe(false);
+    });
+
+    it('x != undefined behaves like x != null', () => {
+      expect(evaluateCondition('x != undefined', { x: 'hello' })).toBe(true);
+      expect(evaluateCondition('x != undefined', {})).toBe(false);
+    });
+  });
+
   describe('logical operators', () => {
     it('AND of two truthies', () => {
       expect(evaluateCondition('a AND b', { a: true, b: true })).toBe(true);
