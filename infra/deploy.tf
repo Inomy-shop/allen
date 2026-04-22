@@ -51,6 +51,10 @@ resource "aws_ssm_parameter" "env_production" {
 
     # Node.js TLS verification flag — global, not MCP-specific
     node_tls_reject_unauthorized       = var.node_tls_reject_unauthorized
+
+    # Agent execution mode + Claude binary path
+    allen_agent_execution_mode         = var.allen_agent_execution_mode
+    claude_bin                         = var.claude_bin
   })
   tags = local.tags
 }

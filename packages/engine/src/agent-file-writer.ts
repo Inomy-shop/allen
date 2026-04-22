@@ -46,13 +46,10 @@ export function renderAgentFile(agent: AgentSpec): { subagentName: string; body:
   const subagentName = `allen-${slugify(agent.name)}`;
   const description = agent.description ?? `Allen agent: ${agent.name}`;
 
-  // Refuse to emit a body that would break its own frontmatter.
-  if (agent.system.includes('\n---')) {
-    throw new Error(
-      `Agent "${agent.name}" system prompt contains a literal "\\n---" line, ` +
-      `which would break the generated markdown frontmatter. Edit the agent body first.`,
-    );
-  }
+  // A line of three+ dashes in the body would prematurely terminate the YAML
+  // frontmatter we're about to emit. Swap it for `***`, an equivalent markdown
+  // thematic break, so authored content survives without corrupting the file.
+  const safeSystem = agent.system.replace(/^-{3,}$/gm, '***');
 
   // Translate Allen's raw tools list into concrete Claude Code tool names.
   // Generic categories like `filesystem` / `terminal` expand to their real
@@ -70,7 +67,7 @@ export function renderAgentFile(agent: AgentSpec): { subagentName: string; body:
     '---',
   ].join('\n');
 
-  const body = `${frontmatter}\n\n${agent.system}\n`;
+  const body = `${frontmatter}\n\n${safeSystem}\n`;
   return { subagentName, body };
 }
 

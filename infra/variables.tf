@@ -234,3 +234,17 @@ variable "node_tls_reject_unauthorized" {
   type        = string
   default     = "1"
 }
+
+# ── Agent execution mode ──────────────────────────────────────────────────
+
+variable "allen_agent_execution_mode" {
+  description = "How the engine spawns Claude agents: 'cli' uses the global Claude Code binary (required for --agent <name> invocations), 'sdk' uses the bundled @anthropic-ai/claude-code SDK. Default: 'sdk'."
+  type        = string
+  default     = ""
+}
+
+variable "claude_bin" {
+  description = "Absolute path to the global Claude Code binary with --agent support. Needed when running under npm scripts because `which claude` resolves to node_modules/.bin/claude (bundled SDK CLI without --agent). Leave empty to let the engine auto-detect via PATH. Value differs between local dev and the EC2 instance — set per-environment."
+  type        = string
+  default     = ""
+}
