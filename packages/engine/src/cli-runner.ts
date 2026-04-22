@@ -115,11 +115,32 @@ export async function* queryViaCli(opts: CliQueryOptions): AsyncGenerator<any, v
       cwd: opts.cwd,
       env: opts.env ?? process.env,
       stdio: ['pipe', 'pipe', 'pipe'],
+      // detached: true makes the child its own process-group leader on Unix,
+      // so we can signal the entire group on cancel — otherwise tool-call
+      // grandchildren (Bash subprocesses, MCP servers spawned by claude)
+      // survive a SIGTERM aimed only at the immediate child.
+      detached: process.platform !== 'win32',
     });
 
-    // Abort handling: kill child on signal.
+    // Kill the whole process group (negative pid). Falls back to single-child
+    // kill if the group signal fails (e.g. group already gone). Schedules a
+    // SIGKILL after a short grace window so a stuck child can't linger.
+    const killTree = (signal: NodeJS.Signals) => {
+      const pid = child?.pid;
+      if (!pid) return;
+      try {
+        if (process.platform !== 'win32') process.kill(-pid, signal);
+        else child?.kill(signal);
+      } catch {
+        try { child?.kill(signal); } catch { /* ignore */ }
+      }
+    };
+
     const onAbort = () => {
-      try { child?.kill('SIGTERM'); } catch { /* ignore */ }
+      killTree('SIGTERM');
+      setTimeout(() => {
+        if (child && child.exitCode === null) killTree('SIGKILL');
+      }, 3000).unref();
     };
     opts.abortSignal?.addEventListener('abort', onAbort, { once: true });
 
@@ -214,7 +235,23 @@ export async function* queryViaCli(opts: CliQueryOptions): AsyncGenerator<any, v
     }
   } finally {
     try {
-      if (child && child.exitCode === null) child.kill('SIGTERM');
+      if (child && child.exitCode === null) {
+        const pid = child.pid;
+        try {
+          if (pid && process.platform !== 'win32') process.kill(-pid, 'SIGTERM');
+          else child.kill('SIGTERM');
+        } catch {
+          try { child.kill('SIGTERM'); } catch { /* ignore */ }
+        }
+        setTimeout(() => {
+          if (child && child.exitCode === null) {
+            try {
+              if (pid && process.platform !== 'win32') process.kill(-pid, 'SIGKILL');
+              else child.kill('SIGKILL');
+            } catch { /* ignore */ }
+          }
+        }, 3000).unref();
+      }
     } catch { /* ignore */ }
     materialized.cleanup();
   }

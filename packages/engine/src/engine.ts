@@ -13,6 +13,7 @@ import type {
   ExecutionLog,
   LogCategory,
   LogLevel,
+  ExecutionStatus,
 } from './types.js';
 import { executeNode, type NodeExecutorDeps, type NodeResult } from './node-executor.js';
 import { evaluateCondition } from './condition-parser.js';
@@ -150,23 +151,38 @@ export class AllenEngine {
       return result;
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : String(err);
-      exec.status = 'failed';
+      // A user-initiated cancel races with this catch — service.cancel writes
+      // status='cancelled' on the same row. Detect cancellation here so both
+      // writes converge on 'cancelled' instead of clobbering it with 'failed'.
+      const isCancellation = message === 'Execution cancelled';
+      const finalStatus: ExecutionStatus = isCancellation ? 'cancelled' : 'failed';
+
+      exec.status = finalStatus;
       exec.errorMessage = message;
       exec.completedAt = new Date();
       exec.durationMs = Date.now() - exec.startedAt.getTime();
       await this.stateManager.updateExecution(executionId, {
-        status: 'failed',
+        status: finalStatus,
         errorMessage: message,
         failedNode: exec.failedNode,
         completedAt: exec.completedAt,
         durationMs: exec.durationMs,
       });
 
-      // Persist a detailed failure report (gate-specific diagnostics + state)
-      // so the UI can surface WHY the workflow failed.
-      await this.stateManager.saveFailureReport(exec, err as Error);
+      if (!isCancellation) {
+        // Persist a detailed failure report (gate-specific diagnostics + state)
+        // so the UI can surface WHY the workflow failed. Cancellations are
+        // user-initiated, not failures — no report needed.
+        await this.stateManager.saveFailureReport(exec, err as Error);
+      }
 
-      this.log(executionId, { category: 'system', level: 'error', message: `Execution failed: ${message}` });
+      this.log(executionId, {
+        category: 'system',
+        level: isCancellation ? 'info' : 'error',
+        message: isCancellation ? 'Execution cancelled' : `Execution failed: ${message}`,
+      });
+      // Reuse execution_failed for cancellations — the new status field on
+      // the executions row is what the UI keys off.
       this.emit({
         event: 'execution_failed',
         data: { executionId, failedNode: exec.failedNode, error: message },
@@ -1361,9 +1377,42 @@ export class AllenEngine {
 
       return 'continue';
     } catch (err: unknown) {
-      exec.failedNode = nodeName;
       const message = err instanceof Error ? err.message : String(err);
-      this.emit({ event: 'node_failed', data: { node: nodeName, attempt, error: message } });
+      // A cancel signals the abort controller and adds to cancelledExecutions
+      // before the node's promise rejects, so either signal is reliable.
+      const wasCancelled = ac.signal.aborted || this.cancelledExecutions.has(exec.id);
+
+      if (wasCancelled) {
+        // Persist a trace row for the in-flight node so the UI can show that
+        // the agent was running when cancelled — without this, the node
+        // disappears from the trace timeline entirely.
+        const cancelledTrace: NodeTrace = {
+          node: nodeName,
+          attempt,
+          status: 'cancelled',
+          type: nodeDef.type ?? 'agent',
+          agent: nodeDef.agent,
+          inputState: { ...exec.state },
+          renderedPrompt: nodeDef.prompt
+            ? renderTemplateWithBindings(nodeDef.prompt, exec.state).rendered
+            : undefined,
+          output: {},
+          activity: [],
+          cost: { estimated: 0, actual: null, method: 'estimated' },
+          durationMs: Date.now() - traceStart.getTime(),
+          startedAt: traceStart,
+          completedAt: new Date(),
+          toolCalls: [],
+        };
+        await this.stateManager.saveTrace({ ...cancelledTrace, executionId: exec.id }).catch(() => {});
+        // Reuse node_failed event — adding a new SSEEventType would require
+        // matching frontend changes. The trace row's status='cancelled' is the
+        // authoritative signal for the UI.
+        this.emit({ event: 'node_failed', data: { node: nodeName, attempt, error: 'cancelled' } });
+      } else {
+        exec.failedNode = nodeName;
+        this.emit({ event: 'node_failed', data: { node: nodeName, attempt, error: message } });
+      }
 
       // Learning system: contradict injected learnings on failure (fire-and-forget)
       for (const lid of injectedLearningIds) {
