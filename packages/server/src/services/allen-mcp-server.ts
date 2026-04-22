@@ -23,6 +23,8 @@ const API_BASE = process.env.ALLEN_API_URL ?? `http://localhost:${process.env.PO
 // we forward them to the HTTP endpoint so chat-tools can record
 // parent/root linkage on the newly-created execution row.
 const SPAWN_PARENT_EXECUTION_ID = process.env.ALLEN_PARENT_EXECUTION_ID || undefined;
+const SPAWN_ARTIFACT_ROOT_TYPE = process.env.ALLEN_ARTIFACT_ROOT_TYPE || undefined;
+const SPAWN_ARTIFACT_ROOT_ID = process.env.ALLEN_ARTIFACT_ROOT_ID || undefined;
 const SPAWN_PARENT_CALLER = process.env.ALLEN_PARENT_CALLER || undefined;
 const SPAWN_ROOT_EXECUTION_ID = process.env.ALLEN_ROOT_EXECUTION_ID || undefined;
 
@@ -176,6 +178,23 @@ const TOOLS = [
 
   // ── File upload ──
   { name: 'upload_file', description: 'Upload a file to Allen storage. Returns a permanent public URL.', params: { content: 'string (required) — file content', filename: 'string (required) — e.g. "report.md"', mime_type: 'string — MIME type (default: text/plain)' } },
+
+  // ── Artifacts (hierarchical files filed under the run that spawned you) ──
+  //
+  // Prefer `allen_save_artifact` over `upload_file` when you produce a plan,
+  // design doc, JSON config, CSV, or scratch output that the USER should be
+  // able to review later. The artifact is automatically filed under the
+  // "root" that spawned this agent — chat session id, workflow execution
+  // id, or standalone agent execution id. The UI surfaces all artifacts
+  // for a given root so humans can browse them without the raw URLs.
+  //
+  // Root context is auto-detected from the agent's environment
+  // (ALLEN_ARTIFACT_ROOT_TYPE / ALLEN_ARTIFACT_ROOT_ID) — you don't pass
+  // it yourself. Sub-agents inherit their parent's root, so files always
+  // file under the top-level work that kicked everything off.
+  { name: 'allen_save_artifact', description: 'Save a plan, design doc, JSON, CSV, or text artifact that the user should be able to review later. Files under the run that spawned you — a workflow execution, chat session, or agent run. Prefer this over upload_file when the artifact is meant to be browsed from the Allen UI.', params: { filename: 'string (required) — relative path like "plan.md" or "design/api.json". No leading slash, no ".."', content: 'string (required) — file content as text. For binary, base64-encode and set content_type="binary".', content_type: 'string — "markdown" | "json" | "csv" | "text" | "code" | "binary" — inferred from extension if omitted', description: 'string — short human description shown in the artifacts list', language: 'string — language hint for content_type="code" (e.g. "python", "sql")', overwrite: 'boolean — default false; when true, replace an existing artifact with the same filename' } },
+  { name: 'allen_list_artifacts', description: 'List the artifacts already saved for this run (or any run). Useful for referencing prior plans/docs when continuing work.', params: { root_id: 'string — override the current run\'s root; omit to list your own run\'s artifacts', root_type: 'string — "chat" | "workflow" | "agent"; used with root_id', limit: 'number — default 50' } },
+  { name: 'allen_get_artifact', description: 'Fetch the content of an artifact by id (from allen_save_artifact or allen_list_artifacts).', params: { artifact_id: 'string (required)' } },
 ];
 
 // ── API Call Helper ──
@@ -440,6 +459,11 @@ async function executeTool(name: string, args: Record<string, unknown>): Promise
           parent_execution_id: SPAWN_PARENT_EXECUTION_ID,
           parent_caller: SPAWN_PARENT_CALLER,
           root_execution_id: SPAWN_ROOT_EXECUTION_ID,
+          // Forward the artifact root so the spawned agent's files end up
+          // under the SAME top-level run. Without this, nested spawns
+          // would re-root under their own agent exec id.
+          artifact_root_type: SPAWN_ARTIFACT_ROOT_TYPE,
+          artifact_root_id: SPAWN_ARTIFACT_ROOT_ID,
         }),
       });
       return res.json();
@@ -573,6 +597,63 @@ async function executeTool(name: string, args: Record<string, unknown>): Promise
         data.publicUrl = `${API_BASE}${data.url}`;
       }
       return data;
+    }
+
+    // ── Artifacts ──
+    // Root context is injected via env vars at spawn time. The tool is
+    // idempotent for a given (root, filename) when overwrite=true.
+    case 'allen_save_artifact': {
+      const rootType = process.env.ALLEN_ARTIFACT_ROOT_TYPE;
+      const rootId = process.env.ALLEN_ARTIFACT_ROOT_ID;
+      if (!rootType || !rootId) {
+        return { error: 'ALLEN_ARTIFACT_ROOT_TYPE / ALLEN_ARTIFACT_ROOT_ID env vars not set — artifact root is unknown. If you\'re running this agent directly without a spawner, use upload_file instead.' };
+      }
+      const body = {
+        rootType,
+        rootId,
+        filename: args.filename,
+        content: args.content,
+        contentType: args.content_type,
+        description: args.description,
+        language: args.language,
+        overwrite: args.overwrite ?? false,
+        spawnContext: {
+          originType: 'spawn_agent',
+          agentName: process.env.ALLEN_ARTIFACT_AGENT_NAME,
+          agentExecutionId: process.env.ALLEN_ARTIFACT_AGENT_EXECUTION_ID,
+          nodeName: process.env.ALLEN_ARTIFACT_NODE_NAME,
+          parentId: process.env.ALLEN_ARTIFACT_PARENT_ID,
+        },
+      };
+      const res = await fetch(`${API_BASE}/api/artifacts`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      const data = await res.json() as Record<string, unknown>;
+      if (!res.ok) return { error: data.error ?? `Save failed (${res.status})` };
+      if (data.url) data.publicUrl = `${API_BASE}${data.url}`;
+      return data;
+    }
+    case 'allen_list_artifacts': {
+      const rootType = (args.root_type as string | undefined) ?? process.env.ALLEN_ARTIFACT_ROOT_TYPE;
+      const rootId = (args.root_id as string | undefined) ?? process.env.ALLEN_ARTIFACT_ROOT_ID;
+      const params = new URLSearchParams();
+      if (rootType) params.set('rootType', rootType);
+      if (rootId) params.set('rootId', rootId);
+      if (args.limit) params.set('limit', String(args.limit));
+      return callAPI(`/api/artifacts${params.toString() ? '?' + params.toString() : ''}`);
+    }
+    case 'allen_get_artifact': {
+      const id = args.artifact_id as string | undefined;
+      if (!id) return { error: 'artifact_id is required' };
+      const metaRes = await fetch(`${API_BASE}/api/artifacts/${encodeURIComponent(id)}`);
+      if (!metaRes.ok) return { error: `Artifact "${id}" not found` };
+      const meta = await metaRes.json() as Record<string, unknown>;
+      // Fetch content via the public endpoint (same MIME rules as UI).
+      const contentRes = await fetch(`${API_BASE}/api/artifacts/${encodeURIComponent(id)}/content`);
+      const content = await contentRes.text();
+      return { ...meta, content, publicUrl: `${API_BASE}/api/artifacts/${encodeURIComponent(id)}/content` };
     }
     default: {
       // Fallback dispatcher: forward any tool not handled above to the generic

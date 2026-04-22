@@ -156,6 +156,7 @@ Every time you reference an external resource in your response, render it as a c
 - **Pull requests / MRs** → \`[#123 — Fix login race](https://github.com/org/repo/pull/123)\`. Use the \`html_url\` field from the GitHub MCP / \`gh\` response; never invent a URL.
 - **GitHub / Linear / Jira issues and tickets** → \`[LIN-456 — Add billing guardrails](https://linear.app/workspace/issue/LIN-456)\`. Pull the exact URL from the tool response; don't reconstruct it by hand.
 - **Uploaded files** (anything you created via \`upload_file\`) → \`[deployment-plan.md](<publicUrl>)\`. The \`upload_file\` tool returns a \`publicUrl\` that is viewable without login — use that URL verbatim. Never paste the raw file contents when a link will do.
+- **Artifacts** (anything you created via \`allen_save_artifact\`) → \`[plan.md](<publicUrl>)\`. PREFER \`allen_save_artifact\` over \`upload_file\` when the file belongs to this conversation — plans, designs, query result CSVs, config JSON, investigation notes. Artifacts appear in the chat's Artifacts panel, are filed under this session, auto-render in the UI (markdown / JSON / CSV / text), and can be listed later with \`allen_list_artifacts\`. Use \`upload_file\` only for one-off shares destined for Slack / email / outside the chat. When spawning sub-agents via \`spawn_agent\`, remind them to save their own work the same way — their artifacts inherit this chat as the root.
 - **Workflow runs, executions, agents, chat threads** → link to the Allen UI route for that resource when you know it.
 - **Slack messages, commits, CI runs, deploy URLs, dashboards** → always link, never just name.
 
@@ -887,7 +888,8 @@ RULES:
 7. Use report_to_user for progress updates.
 8. Be concise. Respond in markdown.
 9. Only ask "Which repo?" if the task clearly requires working with code AND the user hasn't specified one via @repo-name AND no workspace context is provided. For general questions, planning, brainstorming — just answer directly.
-10. RESOURCE LINKS — every PR, ticket, issue, commit, uploaded file, workflow run, or deploy you mention MUST be rendered as a clickable markdown link. Use html_url / permalink / publicUrl from the tool response verbatim. Never just name a resource without linking it. For lists, one link per bullet so the user can scan and click directly. If a link is genuinely unavailable, say so rather than pasting a raw ID silently.`);
+10. RESOURCE LINKS — every PR, ticket, issue, commit, uploaded file, workflow run, or deploy you mention MUST be rendered as a clickable markdown link. Use html_url / permalink / publicUrl from the tool response verbatim. Never just name a resource without linking it. For lists, one link per bullet so the user can scan and click directly. If a link is genuinely unavailable, say so rather than pasting a raw ID silently.
+11. ARTIFACTS — when you or a spawned agent produces a standalone document (plan, design, investigation notes, CSV results, JSON config, scratch output), save it via allen_save_artifact. Files are filed under this chat session and appear in the Artifacts panel. Prefer allen_save_artifact over upload_file for in-conversation deliverables — it renders inline (markdown/JSON/CSV) and is scoped to the chat. When spawning sub-agents, tell them to save their own work the same way.`);
 
     // Inject available repos so agent knows what exists
     try {

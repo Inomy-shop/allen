@@ -15,6 +15,25 @@ import { buildRepoContextBlock } from './repo-context-builder.js';
 import { AGENT_FALLBACK_CWD } from './chat-providers.js';
 import { MCP_SERVER_NAME, normalizeModelAlias } from '@allen/engine';
 
+/**
+ * Artifacts guidance — appended to every spawned / delegated agent's system
+ * prompt so any standalone document they produce (plans, designs, notes,
+ * CSV/JSON outputs) gets saved via allen_save_artifact. Files auto-render
+ * in the UI based on extension and are filed under whichever run spawned
+ * this agent (chat session, workflow, or root agent).
+ */
+const ARTIFACTS_GUIDANCE = `
+
+# Artifacts
+
+When you produce a standalone document worth keeping — a plan, design doc, investigation notes, CSV export, JSON config, or any file the user should be able to review later — save it with the \`allen_save_artifact\` MCP tool:
+
+- \`allen_save_artifact(filename, content)\` — files auto-render in the UI based on extension (.md / .json / .csv / .txt / code). No root id needed; the tool files under whichever run spawned you (workflow / chat / agent) via env-var context.
+- Prefer \`allen_save_artifact\` over \`upload_file\` for in-conversation/run deliverables. Use \`upload_file\` only for shares destined for outside Allen.
+- When you spawn sub-agents via \`spawn_agent\`, INCLUDE THIS INSTRUCTION in their prompt. Their artifacts inherit your root, so the user sees the whole spawn tree's files in one Artifacts panel.
+- Don't duplicate auto-captured outputs — workflow outputs whose keys end in \`_markdown\` / \`_json\` / \`_csv\` are saved automatically. Use \`allen_save_artifact\` for artifacts OUTSIDE the declared output schema.
+`;
+
 /** Resolve cwd for agent/chat spawns. Never falls back to process.cwd() —
  * we don't want agents running inside the server's own source tree. */
 function resolveAgentCwd(...candidates: Array<string | undefined>): string {
@@ -584,6 +603,8 @@ const spawnAgent: ChatTool = {
     const parentExecutionId = (args.parent_execution_id as string | undefined) || null;
     const parentCaller = (args.parent_caller as string | undefined)?.trim() || null;
     const providedRoot = (args.root_execution_id as string | undefined) || null;
+    const providedArtifactRootType = (args.artifact_root_type as string | undefined) || undefined;
+    const providedArtifactRootId = (args.artifact_root_id as string | undefined) || undefined;
     const callerLabel = parentCaller || 'chat';
     const workflowName = `${callerLabel}:spawn_agent/${agentName}`;
     // Root defaults to this new execution if no upstream root was passed.
@@ -644,11 +665,38 @@ const spawnAgent: ChatTool = {
     // env vars onward to this agent's own claude-cli subprocess, allowing
     // grandchild spawns (`agent A spawns agent B`) to carry correct
     // parent/root linkage.
+    // Decide the artifact root. Precedence:
+    //   1. Explicit artifact_root_* from the tool call (forwarded by the
+    //      Allen MCP when a nested spawn inherits from its parent).
+    //   2. Chat session context (top-level chat-initiated spawns) — files
+    //      belong to the chat, not the agent exec.
+    //   3. Workflow/root execution id when the caller came from a workflow.
+    //   4. This execution's own id — only hit for standalone agent runs
+    //      that don't have a chat or workflow parent.
+    let artifactRootType: string | undefined = providedArtifactRootType;
+    let artifactRootId: string | undefined = providedArtifactRootId;
+    if (!artifactRootType || !artifactRootId) {
+      if (activeCtxForMeta?.chatSessionId) {
+        artifactRootType = 'chat';
+        artifactRootId = activeCtxForMeta.chatSessionId;
+      } else if (providedRoot) {
+        // A workflow-initiated spawn has a root execution id. Default
+        // artifact root to that — it's the top of the workflow run.
+        artifactRootType = 'workflow';
+        artifactRootId = providedRoot;
+      } else {
+        artifactRootType = 'agent';
+        artifactRootId = executionId;
+      }
+    }
+
     runSpawnInBackground(db, role, agentName, prompt, executionId, resumeSession, repoPath, {
       parentExecutionId,
       parentCaller,
       rootExecutionId,
       spawnDepth,
+      artifactRootType,
+      artifactRootId,
     }).catch(() => {});
 
     return {
@@ -672,6 +720,12 @@ interface SpawnTreeContext {
   parentCaller: string | null;
   rootExecutionId: string;
   spawnDepth: number;
+  /** Artifact-root overrides — when set, propagated into the spawned
+   *  subprocess's env so `allen_save_artifact` files under the original
+   *  top-level run (chat session / workflow exec / root agent) instead
+   *  of each nested spawn creating its own root. */
+  artifactRootType?: string;
+  artifactRootId?: string;
 }
 
 /** Run spawn_agent in background — supports both Claude and Codex with MCP + tracing */
@@ -794,6 +848,7 @@ async function runSpawnInBackground(
     }
   }
 
+
   const MAX_SPAWN_RETRIES = 3;
   let currentResumeSession = resumeSession;
 
@@ -816,17 +871,31 @@ async function runSpawnInBackground(
       // to avoid races between parallel chats rebuilding the Codex config.
       const { spawn } = await import('node:child_process');
 
+      // Same spawn-tree + artifact context as the Claude path below — the
+      // Allen MCP server running inside Codex reads these to tag nested
+      // spawns + route artifacts to the correct root.
+      const codexSpawnEnv: Record<string, string> = {
+        ALLEN_PARENT_EXECUTION_ID: executionId,
+        ALLEN_PARENT_CALLER: agentName,
+        ALLEN_ROOT_EXECUTION_ID: spawnTree?.rootExecutionId ?? executionId,
+        ALLEN_ARTIFACT_ROOT_TYPE: spawnTree?.artifactRootType ?? 'agent',
+        ALLEN_ARTIFACT_ROOT_ID: spawnTree?.artifactRootId ?? executionId,
+        ALLEN_ARTIFACT_AGENT_NAME: agentName,
+        ALLEN_ARTIFACT_AGENT_EXECUTION_ID: executionId,
+        ALLEN_ARTIFACT_PARENT_ID: executionId,
+      };
+
       const args: string[] = ['exec'];
       if (currentResumeSession) {
         args.push('resume', '--json', '--dangerously-bypass-approvals-and-sandbox', '--skip-git-repo-check', '--', currentResumeSession, prompt);
       } else {
         args.push('--json', '--dangerously-bypass-approvals-and-sandbox', '--skip-git-repo-check');
         if (model) args.push('-c', `model="${model}"`);
-        args.push(`${(role.system as string) ?? ''}${repoContextBlock}${workspaceConstraint}\n\n${prompt}`);
+        args.push(`${(role.system as string) ?? ''}${repoContextBlock}${workspaceConstraint}${ARTIFACTS_GUIDANCE}\n\n${prompt}`);
       }
 
       const result = await new Promise<{ text: string; threadId?: string }>((resolveP, rejectP) => {
-        const proc = spawn('codex', args, { cwd: resolveAgentCwd(repoPath), env: { ...process.env }, stdio: ['pipe', 'pipe', 'pipe'] });
+        const proc = spawn('codex', args, { cwd: resolveAgentCwd(repoPath), env: { ...process.env, ...codexSpawnEnv }, stdio: ['pipe', 'pipe', 'pipe'] });
         proc.on('error', (err) => { rejectP(new Error(`Failed to spawn codex: ${err.message}. Is codex CLI installed?`)); });
         proc.stdin.end();
         // Register PID for cancel support
@@ -935,6 +1004,15 @@ async function runSpawnInBackground(
         ALLEN_PARENT_EXECUTION_ID: executionId,
         ALLEN_PARENT_CALLER: agentName,
         ALLEN_ROOT_EXECUTION_ID: spawnTree?.rootExecutionId ?? executionId,
+        // Artifact-root propagation — the Allen MCP server reads these
+        // when the spawned agent calls allen_save_artifact. Inherits
+        // unchanged from this spawn's own tree context so nested spawns
+        // file under the original top-level run.
+        ALLEN_ARTIFACT_ROOT_TYPE: spawnTree?.artifactRootType ?? 'agent',
+        ALLEN_ARTIFACT_ROOT_ID: spawnTree?.artifactRootId ?? executionId,
+        ALLEN_ARTIFACT_AGENT_NAME: agentName,
+        ALLEN_ARTIFACT_AGENT_EXECUTION_ID: executionId,
+        ALLEN_ARTIFACT_PARENT_ID: executionId,
       };
 
       // Pass the spawn context directly into the MCP config loader so the
@@ -959,7 +1037,7 @@ async function runSpawnInBackground(
         // ALLEN_SYSTEM_PROMPT_MODE: 'append' (default) preserves Claude
         // Code's built-in agentic scaffolding; 'custom' reverts to the old
         // full-replacement behavior. Matches node-executor.ts wiring.
-        const systemPromptBody = `${(role.system as string) ?? ''}${repoContextBlock}${workspaceConstraint}`;
+        const systemPromptBody = `${(role.system as string) ?? ''}${repoContextBlock}${workspaceConstraint}${ARTIFACTS_GUIDANCE}`;
         if (process.env.ALLEN_SYSTEM_PROMPT_MODE === 'custom') sdkOptions.customSystemPrompt = systemPromptBody;
         else sdkOptions.appendSystemPrompt = systemPromptBody;
       }
@@ -1165,6 +1243,17 @@ export async function resumeAgentExecution(
     },
   );
 
+  // Preserve the artifact root across resume so loop-back runs keep filing
+  // under the same chat / workflow / agent parent. Pull from exec.meta —
+  // chatSessionId is set when the agent was originally spawned from chat.
+  const resumeChatSessionId = (meta.chatSessionId as string | undefined) || undefined;
+  const resumeRootType = resumeChatSessionId
+    ? 'chat'
+    : (exec.parentExecutionId ? 'workflow' : 'agent');
+  const resumeRootId = resumeChatSessionId
+    ?? (exec.rootExecutionId as string | undefined)
+    ?? executionId;
+
   runSpawnInBackground(
     db,
     role as Record<string, unknown>,
@@ -1173,7 +1262,14 @@ export async function resumeAgentExecution(
     executionId,
     sessionId,
     repoPath,
-    undefined, // no spawn-tree context — this is a top-level resume
+    {
+      parentExecutionId: (exec.parentExecutionId as string | undefined) ?? null,
+      parentCaller: (exec.parentCaller as string | undefined) ?? null,
+      rootExecutionId: (exec.rootExecutionId as string | undefined) ?? executionId,
+      spawnDepth: (exec.spawnDepth as number | undefined) ?? 0,
+      artifactRootType: resumeRootType,
+      artifactRootId: resumeRootId,
+    },
     nextAttempt,
   ).catch(() => { /* errors already logged + persisted */ });
 
@@ -2201,6 +2297,8 @@ async function runAgentTurn(
         systemPrompt += `\n\nMemory from past work:\n${items}`;
       }
     } catch {}
+    // Artifacts guidance for the delegated agent — same block spawned agents get.
+    systemPrompt += ARTIFACTS_GUIDANCE;
   }
 
   // Retry loop — if CLI times out, resume the same session and continue

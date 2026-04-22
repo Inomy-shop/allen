@@ -18,6 +18,7 @@ import {
 } from './intervention.service.js';
 import type { AgentDef } from '@allen/engine';
 import { WorkspaceManager } from './workspace.service.js';
+import { ArtifactService } from './artifact.service.js';
 
 /**
  * Build the in-process service hook bundle the engine passes to built-ins.
@@ -27,6 +28,7 @@ import { WorkspaceManager } from './workspace.service.js';
  */
 function buildEngineServices(db: Db): EngineConfig['services'] {
   const wsManager = new WorkspaceManager(db);
+  const artifactService = new ArtifactService(db);
   return {
     workspaces: {
       create: async (payload) => {
@@ -36,6 +38,44 @@ function buildEngineServices(db: Db): EngineConfig['services'] {
       get: async (id) => {
         const ws = await wsManager.get(id);
         return (ws as unknown as Record<string, unknown> | null) ?? null;
+      },
+    },
+    artifacts: {
+      save: async (input) => {
+        const res = await artifactService.save({
+          rootType: input.rootType,
+          rootId: input.rootId,
+          filename: input.filename,
+          content: input.content,
+          contentType: input.contentType,
+          description: input.description,
+          overwrite: input.overwrite,
+          spawnContext: input.spawnContext
+            ? {
+                originType: input.spawnContext.originType,
+                nodeName: input.spawnContext.nodeName,
+                agentName: input.spawnContext.agentName,
+                agentExecutionId: input.spawnContext.agentExecutionId,
+                parentId: input.spawnContext.parentId,
+              }
+            : undefined,
+        });
+        return { artifactId: res.artifactId, url: res.url };
+      },
+      listForRoot: async (input) => {
+        const docs = await artifactService.list({
+          rootType: input.rootType,
+          rootId: input.rootId,
+          limit: input.limit,
+        });
+        return docs.map((d) => ({
+          artifactId: d.artifactId,
+          filename: d.filename,
+          relativePath: d.relativePath,
+          contentType: d.contentType,
+          sizeBytes: d.sizeBytes,
+          nodeName: d.spawnContext?.nodeName,
+        }));
       },
     },
   };

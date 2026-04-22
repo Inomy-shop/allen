@@ -453,6 +453,23 @@ ${context}
     ALLEN_PARENT_CALLER: nodeName,
     ALLEN_ROOT_EXECUTION_ID:
       process.env.ALLEN_ROOT_EXECUTION_ID || deps.executionId || '',
+    // Artifact-root context — the Allen MCP's allen_save_artifact tool
+    // reads these to decide which root directory to file user-visible
+    // artifacts under. Inherit from parent env when set (so a workflow
+    // that spawns agents keeps EVERY sub-agent's artifacts under the
+    // same top-level workflow execution id). Otherwise, this node is
+    // the root and fills it in.
+    ALLEN_ARTIFACT_ROOT_TYPE:
+      process.env.ALLEN_ARTIFACT_ROOT_TYPE || 'workflow',
+    ALLEN_ARTIFACT_ROOT_ID:
+      process.env.ALLEN_ARTIFACT_ROOT_ID
+      || process.env.ALLEN_ROOT_EXECUTION_ID
+      || deps.executionId
+      || '',
+    ALLEN_ARTIFACT_NODE_NAME: nodeName,
+    ALLEN_ARTIFACT_AGENT_NAME: nodeDef.agent ?? '',
+    ALLEN_ARTIFACT_AGENT_EXECUTION_ID: deps.executionId ?? '',
+    ALLEN_ARTIFACT_PARENT_ID: deps.executionId ?? '',
   };
 
   // Load MCP servers so agent nodes can access Linear, Postgres, etc.

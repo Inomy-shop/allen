@@ -5,7 +5,7 @@ import {
   Download, RotateCcw, Brain, Bot, Clock, DollarSign, Terminal,
   CheckCircle, AlertCircle, Wrench, ChevronDown, ChevronRight,
   ArrowRight, AlertTriangle, Save, BarChart2, Activity,
-  MessageSquare,
+  MessageSquare, FileText,
 } from 'lucide-react';
 import { useExecution, type TimelineEvent } from '../hooks/useExecution';
 import { useResizable } from '../hooks/useResizable';
@@ -17,6 +17,8 @@ import LiveGraph from '../components/execution/LiveGraph';
 import Timeline from '../components/execution/Timeline';
 import NodeDetail from '../components/execution/NodeDetail';
 import CheckpointsDrawer from '../components/execution/CheckpointsDrawer';
+import ArtifactsDrawer from '../components/artifacts/ArtifactsDrawer';
+import { artifacts as artifactsApi } from '../services/api';
 import TimelineDrawer from '../components/execution/TimelineDrawer';
 import StateChangesDrawer from '../components/execution/StateChangesDrawer';
 import HumanInputDialog from '../components/execution/HumanInputDialog';
@@ -221,6 +223,7 @@ function AgentExecutionView({ execution, agentName, traces, id, liveToolCalls, r
   const [resumeOpen, setResumeOpen] = useState(false);
   const [resumePrompt, setResumePrompt] = useState('');
   const [resumeBusy, setResumeBusy] = useState(false);
+  const [agentArtifactsOpen, setAgentArtifactsOpen] = useState(false);
   const logsEndRef = useRef<HTMLDivElement>(null);
 
   const prompt = trace?.renderedPrompt ?? execution.input?.prompt ?? '';
@@ -403,6 +406,14 @@ function AgentExecutionView({ execution, agentName, traces, id, liveToolCalls, r
             </span>
           )}
           <CostDisplay cost={cost} />
+          <button
+            onClick={() => setAgentArtifactsOpen(true)}
+            className="btn-ghost text-xs inline-flex items-center gap-1"
+            title="View artifacts saved by this agent run"
+          >
+            <FileText className="w-3.5 h-3.5" />
+            <span>Artifacts</span>
+          </button>
           {execution.status === 'running' && (
             <button onClick={async () => { await api.cancel(id); window.location.reload(); }} className="flex items-center gap-1 text-xs text-red-400 hover:text-red-300 bg-red-400/10 hover:bg-red-400/20 border border-red-400/20 rounded px-2.5 py-1 font-mono transition-colors">
               <XCircle className="w-3.5 h-3.5" /> Cancel
@@ -615,6 +626,16 @@ function AgentExecutionView({ execution, agentName, traces, id, liveToolCalls, r
           {meta.chatSessionId && <a href={`/chat/${meta.chatSessionId}`} className="text-blue-400 hover:underline">Open Chat →</a>}
         </div>
       </div>
+
+      {/* Artifacts drawer — standalone agent runs are their OWN root. If
+          this run was spawned by a chat or workflow, its artifacts are
+          filed under that parent instead and would show up empty here. */}
+      <ArtifactsDrawer
+        rootType="agent"
+        rootId={id}
+        open={agentArtifactsOpen}
+        onClose={() => setAgentArtifactsOpen(false)}
+      />
     </div>
   );
 }
@@ -652,6 +673,8 @@ export default function ExecutionDetailPage() {
   const [timelineOpen, setTimelineOpen] = useState(false);
   const [stateChangesOpen, setStateChangesOpen] = useState(false);
   const [checkpointCount, setCheckpointCount] = useState<number | null>(null);
+  const [artifactsOpen, setArtifactsOpen] = useState(false);
+  const [artifactCount, setArtifactCount] = useState<number | null>(null);
 
   // Input dialog is dismissible — user can close it to look at nodes/logs
   // and reopen via the header "Respond" button. The dismissed flag resets
@@ -663,6 +686,9 @@ export default function ExecutionDetailPage() {
     let cancelled = false;
     api.checkpoints.list(id)
       .then((list) => { if (!cancelled) setCheckpointCount((list ?? []).length); })
+      .catch(() => {});
+    artifactsApi.list({ rootType: 'workflow', rootId: id, limit: 500 })
+      .then((list) => { if (!cancelled) setArtifactCount((list ?? []).length); })
       .catch(() => {});
     return () => { cancelled = true; };
   }, [id, execution?.status, execution?.completedNodes?.length]);
@@ -1000,6 +1026,19 @@ export default function ExecutionDetailPage() {
             {checkpointCount != null && checkpointCount > 0 && (
               <span className="ml-0.5 px-1 py-px rounded-sm bg-accent-blue/20 text-accent-blue text-[10px] font-mono tabular-nums">
                 {checkpointCount}
+              </span>
+            )}
+          </button>
+          <button
+            onClick={() => setArtifactsOpen(true)}
+            className="btn-ghost text-xs inline-flex items-center gap-1"
+            title="View artifacts saved by agents during this run"
+          >
+            <FileText className="w-3.5 h-3.5" />
+            <span>Artifacts</span>
+            {artifactCount != null && artifactCount > 0 && (
+              <span className="ml-0.5 px-1 py-px rounded-sm bg-accent-blue/20 text-accent-blue text-[10px] font-mono tabular-nums">
+                {artifactCount}
               </span>
             )}
           </button>
@@ -1347,6 +1386,12 @@ export default function ExecutionDetailPage() {
         executionStatus={execution.status}
         open={checkpointsOpen}
         onClose={() => setCheckpointsOpen(false)}
+      />
+      <ArtifactsDrawer
+        rootType="workflow"
+        rootId={id!}
+        open={artifactsOpen}
+        onClose={() => setArtifactsOpen(false)}
       />
       <TimelineDrawer
         traces={(traces ?? []) as any}

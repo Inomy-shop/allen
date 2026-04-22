@@ -478,6 +478,44 @@ export interface EngineServices {
     }) => Promise<Record<string, unknown>>;
     get: (id: string) => Promise<Record<string, unknown> | null>;
   };
+  /** Auto-capture hook — called after a node completes so the engine can
+   *  file eligible outputs (markdown/json strings) as user-visible
+   *  artifacts without workflow authors scaffolding upload_file calls.
+   *  Implementation lives in the server process; engine stays decoupled. */
+  artifacts?: {
+    save: (input: {
+      rootType: 'chat' | 'workflow' | 'agent';
+      rootId: string;
+      filename: string;
+      content: string;
+      contentType?: 'markdown' | 'json' | 'csv' | 'text' | 'code' | 'binary';
+      description?: string;
+      overwrite?: boolean;
+      spawnContext?: {
+        originType: 'chat' | 'workflow_node' | 'spawn_agent' | 'standalone' | 'system';
+        nodeName?: string;
+        agentName?: string;
+        agentExecutionId?: string;
+        parentId?: string;
+      };
+    }) => Promise<{ artifactId: string; url: string }>;
+    /** List artifacts filed under this run for prompt injection — the
+     *  engine injects a short summary of upstream artifacts into every
+     *  downstream agent's system prompt so agents can decide to fetch
+     *  full content via the MCP tool when templated state is truncated. */
+    listForRoot?: (input: {
+      rootType: 'chat' | 'workflow' | 'agent';
+      rootId: string;
+      limit?: number;
+    }) => Promise<Array<{
+      artifactId: string;
+      filename: string;
+      relativePath: string;
+      contentType: string;
+      sizeBytes: number;
+      nodeName?: string;
+    }>>;
+  };
 }
 
 export interface BuiltInContext {

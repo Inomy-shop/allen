@@ -628,3 +628,59 @@ export const users = {
       method: 'POST',
     }),
 };
+
+// ── Artifacts ─────────────────────────────────────────────────────────────
+// Hierarchical file storage keyed by the root that spawned the work —
+// chat session, workflow execution, or standalone agent run. The MCP tool
+// `allen_save_artifact` routes to these endpoints; the UI renders lists
+// and per-file viewers on chat / execution / agent pages.
+
+export interface ArtifactDoc {
+  artifactId: string;
+  rootType: 'chat' | 'workflow' | 'agent';
+  rootId: string;
+  spawnContext: {
+    originType: 'chat' | 'workflow_node' | 'spawn_agent' | 'standalone' | 'system';
+    parentId?: string;
+    nodeName?: string;
+    agentName?: string;
+    agentExecutionId?: string;
+  };
+  filename: string;
+  relativePath: string;
+  contentType: 'markdown' | 'json' | 'csv' | 'text' | 'code' | 'binary';
+  sizeBytes: number;
+  description?: string;
+  language?: string;
+  createdAt: string;
+  createdByAgent?: string;
+  createdByUserId?: string;
+}
+
+export const artifacts = {
+  list: (params: { rootType?: 'chat' | 'workflow' | 'agent'; rootId?: string; limit?: number }) => {
+    const qs = new URLSearchParams();
+    if (params.rootType) qs.set('rootType', params.rootType);
+    if (params.rootId) qs.set('rootId', params.rootId);
+    if (params.limit != null) qs.set('limit', String(params.limit));
+    return request<ArtifactDoc[]>(`/artifacts${qs.toString() ? '?' + qs.toString() : ''}`);
+  },
+  get: (id: string) => request<ArtifactDoc>(`/artifacts/${id}`),
+  /** Public content URL — no auth required; UUID is the capability. */
+  contentUrl: (id: string) => `/api/artifacts/${id}/content`,
+  save: (body: {
+    rootType: 'chat' | 'workflow' | 'agent';
+    rootId: string;
+    filename: string;
+    content: string;
+    contentType?: 'markdown' | 'json' | 'csv' | 'text' | 'code' | 'binary';
+    description?: string;
+    overwrite?: boolean;
+  }) =>
+    request<{ artifactId: string; url: string; filename: string; sizeBytes: number }>(
+      `/artifacts`,
+      { method: 'POST', body: JSON.stringify(body) },
+    ),
+  delete: (id: string) =>
+    request<{ deleted: boolean }>(`/artifacts/${id}`, { method: 'DELETE' }),
+};

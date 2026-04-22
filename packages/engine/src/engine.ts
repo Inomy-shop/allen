@@ -887,8 +887,33 @@ export class AllenEngine {
 
     // Build context-aware auto-gate instruction for EVERY agent node,
     // regardless of whether it has conditional outgoing edges.
+    //
+    // Also inject a short index of artifacts produced by upstream nodes so
+    // this agent can fetch full content via allen_get_artifact when
+    // templated state values might be truncated or summarized. Lookup is
+    // best-effort — if the service hook isn't wired (e.g. in tests), we
+    // skip the index silently.
+    let upstreamArtifacts: import('./output-extractor.js').UpstreamArtifactSummary[] | undefined;
+    if (nodeType === 'agent' && this.config.services?.artifacts?.listForRoot) {
+      try {
+        const artifactRootType = (process.env.ALLEN_ARTIFACT_ROOT_TYPE as 'workflow' | 'chat' | 'agent' | undefined) ?? 'workflow';
+        const artifactRootId = process.env.ALLEN_ARTIFACT_ROOT_ID || exec.id;
+        const list = await this.config.services.artifacts.listForRoot({
+          rootType: artifactRootType,
+          rootId: artifactRootId,
+          limit: 30,
+        });
+        upstreamArtifacts = list;
+      } catch {
+        /* best effort — skip the index if the lookup fails */
+      }
+    }
     let nodeContext = nodeType === 'agent' && workflow
-      ? buildNodeContext(nodeName, { nodes: workflow.nodes as Record<string, unknown>, edges: workflow.edges as unknown as Array<Record<string, unknown>> })
+      ? buildNodeContext(
+          nodeName,
+          { nodes: workflow.nodes as Record<string, unknown>, edges: workflow.edges as unknown as Array<Record<string, unknown>> },
+          upstreamArtifacts,
+        )
       : '';
 
     // Learning injection: query and inject relevant learnings before execution.
@@ -1065,6 +1090,28 @@ export class AllenEngine {
       };
 
       await this.stateManager.saveTrace({ ...trace, executionId: exec.id });
+
+      // Auto-capture eligible outputs as user-visible artifacts so the
+      // user can browse plans / PRDs / JSON configs from the execution
+      // page without the workflow author having to scaffold uploads.
+      // Best-effort — failures here never block the run.
+      if (this.config.services?.artifacts) {
+        autoCaptureArtifacts({
+          save: this.config.services.artifacts.save,
+          outputs: result.outputs,
+          nodeName,
+          nodeAgent: nodeDef.agent,
+          rootId: (process.env.ALLEN_ARTIFACT_ROOT_ID || exec.id),
+          attempt,
+        }).catch((err) => {
+          this.log(exec.id, {
+            category: 'system',
+            node: nodeName,
+            level: 'debug',
+            message: `Artifact auto-capture skipped: ${(err as Error).message}`,
+          });
+        });
+      }
 
       // Save checkpoint
       await this.stateManager.saveCheckpoint({
@@ -1783,6 +1830,78 @@ export class AllenEngine {
 
 function sleep(ms: number): Promise<void> {
   return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+/**
+ * Decide which output keys from a node should be auto-saved as artifacts
+ * and write them through the host-supplied save hook.
+ *
+ * Heuristic (keep it conservative — false positives clutter the artifact list):
+ *   - Key ends with `_markdown` AND value is a non-empty string → save as .md
+ *   - Key ends with `_json` AND value is an object (or parseable JSON string) → save as .json
+ *   - Key ends with `_csv` AND value is a string → save as .csv
+ *   - Key ends with `_url` or `_id` → never capture (it's a reference, not content)
+ *   - __-prefixed keys → never capture (engine-internal)
+ */
+async function autoCaptureArtifacts(args: {
+  save: NonNullable<NonNullable<EngineServices>['artifacts']>['save'];
+  outputs: Record<string, unknown>;
+  nodeName: string;
+  nodeAgent?: string;
+  rootId: string;
+  attempt: number;
+}): Promise<void> {
+  const rootType = (process.env.ALLEN_ARTIFACT_ROOT_TYPE as 'workflow' | 'chat' | 'agent' | undefined) ?? 'workflow';
+  const suffix = args.attempt > 1 ? `-attempt-${args.attempt}` : '';
+  for (const [key, value] of Object.entries(args.outputs)) {
+    if (!key || key.startsWith('__')) continue;
+    if (key.endsWith('_url') || key.endsWith('_id')) continue;
+
+    let filename: string | undefined;
+    let content: string | undefined;
+    let contentType: 'markdown' | 'json' | 'csv' | 'text' | undefined;
+
+    if (key.endsWith('_markdown') && typeof value === 'string' && value.trim().length > 0) {
+      filename = `${args.nodeName}/${key.replace(/_markdown$/, '')}${suffix}.md`;
+      content = value;
+      contentType = 'markdown';
+    } else if (key.endsWith('_json')) {
+      if (typeof value === 'string') {
+        try { JSON.parse(value); } catch { continue; }
+        content = value;
+      } else if (value !== null && typeof value === 'object') {
+        content = JSON.stringify(value, null, 2);
+      } else continue;
+      filename = `${args.nodeName}/${key.replace(/_json$/, '')}${suffix}.json`;
+      contentType = 'json';
+    } else if (key.endsWith('_csv') && typeof value === 'string' && value.trim().length > 0) {
+      filename = `${args.nodeName}/${key.replace(/_csv$/, '')}${suffix}.csv`;
+      content = value;
+      contentType = 'csv';
+    } else {
+      continue;
+    }
+
+    if (!filename || content == null) continue;
+    try {
+      await args.save({
+        rootType,
+        rootId: args.rootId,
+        filename,
+        content,
+        contentType,
+        overwrite: true, // attempts can rewrite earlier rounds
+        description: `Auto-captured from ${args.nodeName} (${key})`,
+        spawnContext: {
+          originType: 'workflow_node',
+          nodeName: args.nodeName,
+          agentName: args.nodeAgent,
+        },
+      });
+    } catch {
+      // Best-effort — one failing output shouldn't block the rest.
+    }
+  }
 }
 
 /**

@@ -1,0 +1,122 @@
+name: test-artifacts
+description: >
+  Takes a topic and generates a detailed report on it, across two
+  sequential agent turns. Also serves as a real-world smoke test for the
+  artifact system: the engine auto-captures every declared _markdown /
+  _json output, so a run produces 4 artifacts that the user can browse
+  via the execution page's Artifacts drawer.
+
+  The workflow itself does not mention artifacts in its prompts — that
+  instruction is injected globally into every agent's system prompt. The
+  test is whether normal author-level YAML produces visible artifacts
+  with zero extra scaffolding.
+
+  Expected artifacts per run:
+    • research/research_notes.md   — working notes from the research node
+    • research/outline.json        — structured outline
+    • report/report.md             — the final long-form report
+    • report/highlights.json       — structured key takeaways
+
+  Runs in ~15–20s on haiku. Cost: well under a cent.
+
+version: 1
+
+context:
+  tools: []
+  concurrency: 5
+
+input:
+  topic:
+    type: string
+    required: true
+    widget: textarea
+    label: Topic
+    description: What should the report be about? Any subject the model can reasonably write on from training knowledge. Keep it specific enough to be interesting.
+    placeholder: "e.g. the history of the MapReduce paper and why it mattered, or: how do React Server Components differ from SSR"
+
+nodes:
+  research:
+    agent: test-chat-helper
+    resume_on_retry: false
+    prompt: |
+      You are preparing research notes for a short-form report on:
+      "{{topic}}"
+
+      Produce concise research notes (400–600 words) covering what a
+      reader would need to know BEFORE reading the final report:
+      background, the key questions to answer, the main claims, and
+      honest gaps or open questions.
+
+      Also propose a clean outline the report phase will follow.
+
+      End your response with a fenced JSON block:
+      ```json
+      {
+        "research_notes_markdown": "# Research notes: <topic>\n\n## Background\n\n...\n\n## Key questions\n\n- ...\n- ...\n\n## Main claims\n\n- ...\n\n## Open questions\n\n- ...\n",
+        "outline_json": {
+          "title": "<short, specific title>",
+          "sections": [
+            { "heading": "Introduction",        "purpose": "Frame the topic for a new reader" },
+            { "heading": "Background",          "purpose": "Essential context" },
+            { "heading": "Core analysis",       "purpose": "The main argument or explanation" },
+            { "heading": "Implications",        "purpose": "Why it matters / what it changes" },
+            { "heading": "Open questions",      "purpose": "What remains uncertain" }
+          ],
+          "target_length_words": 800,
+          "tone": "technical but accessible"
+        }
+      }
+      ```
+    outputs:
+      research_notes_markdown: "Research notes — auto-captured as research_notes.md."
+      outline_json: "Structured outline — auto-captured as outline.json."
+
+  report:
+    agent: test-chat-helper
+    resume_on_retry: false
+    prompt: |
+      Write a polished, detailed report on:
+      "{{topic}}"
+
+      Use the prior research notes and outline as your working material:
+
+      RESEARCH NOTES:
+      {{research_notes_markdown}}
+
+      OUTLINE:
+      {{outline_json}}
+
+      Deliver a complete markdown report that follows the outline's
+      sections. 700–900 words total. Be concrete — name actual systems,
+      people, dates, numbers where they're known. Do NOT hedge with
+      phrases like "it depends" or "in general" when a specific answer
+      exists. Use prose, not bullet-lists, for the body sections —
+      reserve lists for the introduction's roadmap and the open-questions
+      section.
+
+      Also emit a short highlights JSON with the 3–5 most important
+      takeaways a busy reader should leave with.
+
+      End your response with a fenced JSON block:
+      ```json
+      {
+        "report_markdown": "# <outline.title>\n\n*Report on <topic>*\n\n<full prose report, following the outline>\n",
+        "highlights_json": {
+          "takeaways": [
+            "<one-sentence takeaway 1>",
+            "<one-sentence takeaway 2>",
+            "<one-sentence takeaway 3>"
+          ],
+          "word_count": <approximate integer>,
+          "confidence": <float 0-1 — how confident you are in the claims>
+        }
+      }
+      ```
+    outputs:
+      report_markdown: "Long-form report — auto-captured as report.md."
+      highlights_json: "Key takeaways — auto-captured as highlights.json."
+
+edges:
+  - { from: START,    to: research }
+  - { from: research, to: report }
+  - { from: report,   to: END }
