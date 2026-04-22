@@ -14,6 +14,7 @@ import { evaluateCondition } from './condition-parser.js';
 import { executeCodexNode } from './codex-executor.js';
 import { buildToolCallRecord, type ToolCallRecord } from './tool-call.js';
 import { normalizeModelAlias } from './model-alias.js';
+import { withArtifactsGuidance } from './agent-file-writer.js';
 import { statSync, mkdirSync } from 'node:fs';
 
 /** Agent-safe fallback cwd. Kept in sync with chat-providers.ts's
@@ -499,6 +500,10 @@ ${context}
       }
     } catch { /* org-context unavailable — fall back to plain system prompt */ }
   }
+  // Universal artifact guidance — every workflow agent (Claude SDK, Claude
+  // CLI, Codex below) gets the instruction to save deliverables via
+  // allen_save_artifact. Idempotent: skipped if already present.
+  if (effectiveSystem !== undefined) effectiveSystem = withArtifactsGuidance(effectiveSystem);
 
   // Captured across all callAgent invocations for this node. First-seen
   // init message's `tools` array — the agent's full tool allowlist. Used

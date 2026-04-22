@@ -18,6 +18,7 @@
  */
 
 import type { Collection, Db, ObjectId } from 'mongodb';
+import { withArtifactsGuidance } from '@allen/engine';
 
 /** Bump when scanner prompt or storage shape changes meaningfully. */
 export const SCAN_VERSION = 1;
@@ -198,7 +199,7 @@ export class RepoContextScannerService {
         model,
         permissionMode: 'bypassPermissions',
         cwd: repoPath,
-        customSystemPrompt: agent.system as string,
+        customSystemPrompt: withArtifactsGuidance(agent.system as string),
         abortController,
       };
 

@@ -157,6 +157,7 @@ const TOOLS = [
   // ── Workspaces ──
   { name: 'get_workspace', description: 'Fetch a workspace row by id. Returns worktreePath, branch, baseBranch, status, repoId, prUrl, services, and more.', params: { workspace_id: 'string (required) — workspaces _id' } },
   { name: 'create_workspace_for_pr', description: 'Create a fresh workspace from a PR branch (Flow B). Used when a PR has no linked workspace. Polls until setup completes. Returns { workspace_id, worktree_path, branch, base_branch }.', params: { pr_url: 'string (required)', repo_id: 'string (required)', branch: 'string (required) — PR head branch', base_branch: 'string (required) — PR base branch', pr_number: 'number (required)', pr_title: 'string — optional display name' } },
+  { name: 'create_workspace', description: 'Create an isolated git worktree from a registered repo, on a new branch off the base branch. Use this whenever code changes are needed — every specialist agent you spawn must work inside this worktree. Returns { workspace_id, worktree_path, branch, base_branch }. Engineering-lead orchestrators are the expected caller; never call this from a worker/specialist agent.', params: { repo_path: 'string (required) — absolute path of a registered repo or an existing worktree whose repo will be used as the base', branch_prefix: 'string — short label prepended to the generated branch (e.g. "feature", "fix"). Default: "feature".', task_summary: 'string — one-line intent used inside the generated branch name for human readability', base_branch: 'string — branch to cut from. Default: "main".' } },
 
   // ── Delegation & Communication ──
   { name: 'delegate_to_agent', description: 'Delegate a task to another agent. Pass conversation_id to continue an existing thread.', params: { agent_name: 'string (required)', task: 'string (required)', context: 'object — relevant context', conversation_id: 'string — existing conversation ID to continue' } },
@@ -349,6 +350,64 @@ async function executeTool(name: string, args: Record<string, unknown>): Promise
         await new Promise(r => setTimeout(r, 2000));
       }
       return { error: 'workspace setup timed out (10 min)' };
+    }
+    case 'create_workspace': {
+      // Generic workspace creation — the PR-specific variant above is used
+      // for CodeRabbit review flows. This one is for engineering-lead's
+      // feature / bug fix path: cut a fresh branch off the base and
+      // create an isolated worktree every specialist will share.
+      const repoPath = String(args.repo_path ?? '');
+      const branchPrefix = String(args.branch_prefix ?? 'feature');
+      const taskSummary = String(args.task_summary ?? '').trim();
+      const baseBranch = String(args.base_branch ?? 'main');
+      if (!repoPath) return { error: 'repo_path is required' };
+
+      // Find the repo by absolute path (registered repo or any existing
+      // workspace whose repoPath we recognise).
+      const repos = await callAPI('/api/repos') as any[];
+      if (!Array.isArray(repos)) return repos; // error passthrough
+      const repo = repos.find((r: any) => r.path === repoPath);
+      if (!repo) return { error: `No registered repo found at ${repoPath}. Call list_repos and pass an exact path.` };
+
+      // Generate a short, filesystem-safe branch name from the summary.
+      const slug = taskSummary
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, '-')
+        .replace(/^-+|-+$/g, '')
+        .slice(0, 40) || 'work';
+      const stamp = Math.floor(Date.now() / 1000).toString(36);
+      const branch = `${branchPrefix}/${slug}-${stamp}`;
+      const name = `${branchPrefix}-${slug}-${stamp}`.slice(0, 60);
+
+      const ws = await callAPI('/api/workspaces', 'POST', {
+        repoId: String(repo._id ?? repo.id),
+        repoName: repo.name,
+        repoPath: repo.path,
+        branch,
+        baseBranch,
+        name,
+      }) as any;
+      if (ws?.error) return { error: ws.error };
+
+      // Poll until active (≤5 min — generic workspaces usually complete
+      // faster than PR-flow ones since there's no PR checkout step).
+      const wsId = String(ws._id ?? ws.id);
+      const deadline = Date.now() + 300_000;
+      while (Date.now() < deadline) {
+        const cur = await callAPI(`/api/workspaces/${encodeURIComponent(wsId)}`) as any;
+        if (cur?.status === 'active' || cur?.status === 'running') {
+          return {
+            workspace_id: wsId,
+            worktree_path: cur.worktreePath,
+            branch: cur.branch,
+            base_branch: cur.baseBranch,
+            status: cur.status,
+          };
+        }
+        if (cur?.status === 'failed') return { error: 'workspace setup failed' };
+        await new Promise(r => setTimeout(r, 2000));
+      }
+      return { error: 'workspace setup timed out (5 min)' };
     }
     case 'list_agents': {
       // Return minimal fields — full details via get_agent

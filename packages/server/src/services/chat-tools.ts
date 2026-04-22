@@ -13,26 +13,7 @@ import { AgentConversationService } from './agent-conversation.service.js';
 import { metaChatTools, META_DESTRUCTIVE_TOOLS } from './chat-tools-meta.js';
 import { buildRepoContextBlock } from './repo-context-builder.js';
 import { AGENT_FALLBACK_CWD } from './chat-providers.js';
-import { MCP_SERVER_NAME, normalizeModelAlias } from '@allen/engine';
-
-/**
- * Artifacts guidance — appended to every spawned / delegated agent's system
- * prompt so any standalone document they produce (plans, designs, notes,
- * CSV/JSON outputs) gets saved via allen_save_artifact. Files auto-render
- * in the UI based on extension and are filed under whichever run spawned
- * this agent (chat session, workflow, or root agent).
- */
-const ARTIFACTS_GUIDANCE = `
-
-# Artifacts
-
-When you produce a standalone document worth keeping — a plan, design doc, investigation notes, CSV export, JSON config, or any file the user should be able to review later — save it with the \`allen_save_artifact\` MCP tool:
-
-- \`allen_save_artifact(filename, content)\` — files auto-render in the UI based on extension (.md / .json / .csv / .txt / code). No root id needed; the tool files under whichever run spawned you (workflow / chat / agent) via env-var context.
-- Prefer \`allen_save_artifact\` over \`upload_file\` for in-conversation/run deliverables. Use \`upload_file\` only for shares destined for outside Allen.
-- When you spawn sub-agents via \`spawn_agent\`, INCLUDE THIS INSTRUCTION in their prompt. Their artifacts inherit your root, so the user sees the whole spawn tree's files in one Artifacts panel.
-- Don't duplicate auto-captured outputs — workflow outputs whose keys end in \`_markdown\` / \`_json\` / \`_csv\` are saved automatically. Use \`allen_save_artifact\` for artifacts OUTSIDE the declared output schema.
-`;
+import { MCP_SERVER_NAME, normalizeModelAlias, ARTIFACTS_GUIDANCE } from '@allen/engine';
 
 /** Resolve cwd for agent/chat spawns. Never falls back to process.cwd() —
  * we don't want agents running inside the server's own source tree. */
@@ -1059,7 +1040,11 @@ async function runSpawnInBackground(
           agent: {
             name: agentName,
             description: (role as any)?.description,
-            system: `${(role.system as string) ?? ''}${repoContextBlock}${workspaceConstraint}`,
+            // Mirror the SDK path — ARTIFACTS_GUIDANCE must be part of the
+            // system prompt for the CLI branch too, otherwise agents running
+            // with ALLEN_AGENT_EXECUTION_MODE=cli never see the instruction
+            // to save artifacts via allen_save_artifact.
+            system: `${(role.system as string) ?? ''}${repoContextBlock}${workspaceConstraint}${ARTIFACTS_GUIDANCE}`,
             model: sdkOptions.model as string | undefined,
             tools: Array.isArray((role as any)?.tools) ? (role as any).tools : undefined,
           },
