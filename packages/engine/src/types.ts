@@ -269,6 +269,87 @@ export interface NodeTrace {
    *  captured from both Claude SDK and Codex CLI providers. See
    *  ./tool-call.ts for the record shape. */
   toolCalls?: import('./tool-call.js').ToolCallRecord[];
+
+  // ── Phase 2 enrichments (all optional — older traces render gracefully) ──
+
+  /** Why this attempt was triggered. `undefined` for attempt 1 of the initial
+   *  run. On retry rows, classifies the cause so the UI can surface it. */
+  retryReason?:
+    | 'transient'          // SDK exited with a retryable error (exit 1, ETIMEDOUT, …)
+    | 'extraction-failed'  // output didn't match required JSON shape
+    | 'gate-clarify'       // agent asked for clarification via __action:clarify
+    | 'manual'             // user clicked retry-from-node
+    | 'max-turns'          // SDK result.subtype === 'error_max_turns'
+    | 'error-during-execution';
+
+  /** Template placeholder → resolved value bindings, captured from
+   *  renderTemplate. Helps diagnose "why is my prompt empty" without a re-run.
+   *  Secrets are redacted (keys matching /secret|token|password|key/i get
+   *  `status: 'redacted'` and `resolved: undefined`). */
+  templateBindings?: Array<{
+    placeholder: string;
+    resolved: unknown;
+    status?: 'missing' | 'redacted';
+  }>;
+
+  /** Full list of tool names the agent was allowed to use. UI diffs against
+   *  toolCalls to show "had access to X, Y, Z but only used X". */
+  toolsAvailable?: string[];
+
+  /** Structured auto-gate decision when the node emits __action. */
+  gateDecision?: {
+    action: 'stop' | 'skip' | 'clarify';
+    reason: string;
+    clarifyAction?: 'retry' | 'continue';
+    clarifyFields?: string[];
+  };
+
+  /** For condition/router nodes — the expression evaluated + its result. */
+  routingDecision?: {
+    expression: string;
+    result: unknown;
+  };
+
+  /** Spawn-time context snapshot. Captures cwd, exec mode, resolved model,
+   *  permission mode, MCP server names attached, the env keys present
+   *  (names only, not values). */
+  runtimeContext?: {
+    cwd?: string;
+    executionMode?: 'sdk' | 'cli';
+    systemPromptMode?: 'append' | 'custom';
+    resolvedModel?: string;
+    reasoningEffort?: string;
+    planMode?: boolean;
+    mcpServerNames?: string[];
+    envKeys?: string[];
+  };
+
+  /** Learnings injected into the prompt for this node. Pinned to the trace
+   *  so the UI can show them alongside the renderedPrompt. */
+  learningsInjected?: Array<{
+    id?: string;
+    content: string;     // truncated to ~500 chars at write time
+    contextTags?: string[];
+  }>;
+
+  /** Effective agent settings at spawn time + which layer set each. */
+  agentOverrides?: {
+    model?: string;
+    reasoningEffort?: string;
+    planMode?: boolean;
+    sources: Partial<Record<'model' | 'reasoningEffort' | 'planMode', 'node' | 'agent-default'>>;
+  };
+
+  /** Per-tool-call token usage + estimated cost. Estimated because the
+   *  Anthropic API doesn't expose per-tool billing; derived from the
+   *  tool_result input_tokens proportion. */
+  tokenUsagePerTool?: Array<{
+    toolUseId: string;
+    tool: string;
+    inputTokens: number;
+    outputTokens: number;
+    estimatedCost: number;
+  }>;
 }
 
 export interface ActivityEntry {
@@ -396,6 +477,44 @@ export interface EngineServices {
       name: string;
     }) => Promise<Record<string, unknown>>;
     get: (id: string) => Promise<Record<string, unknown> | null>;
+  };
+  /** Auto-capture hook — called after a node completes so the engine can
+   *  file eligible outputs (markdown/json strings) as user-visible
+   *  artifacts without workflow authors scaffolding upload_file calls.
+   *  Implementation lives in the server process; engine stays decoupled. */
+  artifacts?: {
+    save: (input: {
+      rootType: 'chat' | 'workflow' | 'agent';
+      rootId: string;
+      filename: string;
+      content: string;
+      contentType?: 'markdown' | 'json' | 'csv' | 'text' | 'code' | 'binary';
+      description?: string;
+      overwrite?: boolean;
+      spawnContext?: {
+        originType: 'chat' | 'workflow_node' | 'spawn_agent' | 'standalone' | 'system';
+        nodeName?: string;
+        agentName?: string;
+        agentExecutionId?: string;
+        parentId?: string;
+      };
+    }) => Promise<{ artifactId: string; url: string }>;
+    /** List artifacts filed under this run for prompt injection — the
+     *  engine injects a short summary of upstream artifacts into every
+     *  downstream agent's system prompt so agents can decide to fetch
+     *  full content via the MCP tool when templated state is truncated. */
+    listForRoot?: (input: {
+      rootType: 'chat' | 'workflow' | 'agent';
+      rootId: string;
+      limit?: number;
+    }) => Promise<Array<{
+      artifactId: string;
+      filename: string;
+      relativePath: string;
+      contentType: string;
+      sizeBytes: number;
+      nodeName?: string;
+    }>>;
   };
 }
 

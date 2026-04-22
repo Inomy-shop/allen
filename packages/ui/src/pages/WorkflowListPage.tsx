@@ -7,9 +7,9 @@ import {
   RefreshCw, X, Pencil, Loader2, Layers, ArrowRight, Sparkles,
   ChevronDown, ChevronRight, Tag, FileText, Shield,
 } from 'lucide-react';
-import Select from '../components/common/Select';
 import DeleteConfirmDialog from '../components/common/DeleteConfirmDialog';
 import { useToast } from '../components/common/Toast';
+import WorkflowRunDialog from '../components/workflow/WorkflowRunDialog';
 
 interface RunDialogState {
   open: boolean;
@@ -21,44 +21,6 @@ interface WorkflowExecStats {
   completed: number;
   failed: number;
   running: number;
-}
-
-type InputWidget = 'text' | 'textarea' | 'checkbox' | 'select' | 'repo_picker' | 'number';
-
-/**
- * Decide which form widget to render for a workflow input field.
- * Priority:
- *   1. `widget:` explicitly set on the schema (new, preferred).
- *   2. `enum: [...]` present → select dropdown.
- *   3. `type: boolean` → checkbox.
- *   4. `type: number` → number input.
- *   5. Heuristic fallback by field name (legacy workflows that haven't
- *      been updated with a `widget:` hint yet):
- *        - exact match on repo_path / path / repo / worktree_path → repo_picker
- *        - name is one of the known long-prose fields → textarea
- *        - everything else → text
- *
- * This function lets the UI honor the workflow author's intent first
- * (explicit `widget:` wins) while still handling legacy workflows that
- * never got the new field. Once every workflow has a `widget:` hint
- * the heuristic fallback can be deleted.
- */
-function resolveWidget(key: string, schema: any): InputWidget {
-  if (schema?.widget) return schema.widget as InputWidget;
-  if (Array.isArray(schema?.enum) && schema.enum.length > 0) return 'select';
-  if (schema?.type === 'boolean') return 'checkbox';
-  if (schema?.type === 'number') return 'number';
-
-  // Legacy heuristic fallback
-  if (/^(repo_path|repoPath|repo|path|worktree_path|worktreePath)$/.test(key)) {
-    return 'repo_picker';
-  }
-  const longFields = new Set([
-    'task', 'topic', 'question', 'problem', 'description',
-    'user_request', 'bug_report', 'greeting', 'feedback',
-  ]);
-  if (longFields.has(key)) return 'textarea';
-  return 'text';
 }
 
 // ── Loading Row Skeleton ────────────────────────────────────────────────────
@@ -95,12 +57,9 @@ export default function WorkflowListPage() {
   const navigate = useNavigate();
   const toast = useToast();
 
-  const [runningId, setRunningId] = useState<string | null>(null);
+  const [runningId] = useState<string | null>(null);
   const [runDialog, setRunDialog] = useState<RunDialogState>({ open: false, workflow: null });
-  const [runInput, setRunInput] = useState<Record<string, string>>({});
   const [deletingWf, setDeletingWf] = useState<{ id: string; name: string } | null>(null);
-  const [repoList, setRepoList] = useState<any[]>([]);
-  const [repoMode, setRepoMode] = useState<'select' | 'manual'>('select');
   const [expandedId, setExpandedId] = useState<string | null>(null);
 
   const stats = useMemo(() => {
@@ -129,67 +88,11 @@ export default function WorkflowListPage() {
     }).catch(() => {});
   }, [workflows]);
 
-  const openRunDialog = useCallback(async (wf: any) => {
-    let fullWf = wf;
-    try {
-      fullWf = await wfApi.get(wf._id);
-    } catch { /* fallback to list data */ }
-
-    const defaults: Record<string, string> = {};
-    if (fullWf.parsed?.input) {
-      for (const [key, schema] of Object.entries(fullWf.parsed.input) as [string, any][]) {
-        defaults[key] = schema?.default != null ? String(schema.default) : '';
-      }
-    } else {
-      defaults['task'] = '';
-    }
-    setRunInput(defaults);
-    setRepoMode('select');
-    setRunDialog({ open: true, workflow: fullWf });
-    repoApi.list().then(setRepoList).catch(() => setRepoList([]));
+  // Open dialog: we just pass the workflow `{_id, name}` — the shared
+  // WorkflowRunDialog fetches the full record and loads repos internally.
+  const openRunDialog = useCallback((wf: any) => {
+    setRunDialog({ open: true, workflow: wf });
   }, []);
-
-  const handleRun = useCallback(async () => {
-    const wf = runDialog.workflow;
-    if (!wf) return;
-    setRunningId(wf._id);
-    setRunDialog({ open: false, workflow: null });
-    try {
-      // Cast each form value to the right type per the workflow's input
-      // schema. The form state is always strings (so we can render every
-      // widget with a consistent input control), but the server expects
-      // the right types — booleans as booleans, numbers as numbers.
-      const schemaByKey = (wf.parsed?.input ?? {}) as Record<string, any>;
-      const input: Record<string, unknown> = {};
-      for (const [k, v] of Object.entries(runInput)) {
-        const schema = schemaByKey[k];
-        const type = schema?.type ?? 'string';
-        const trimmed = typeof v === 'string' ? v.trim() : v;
-
-        if (type === 'boolean') {
-          // Always include booleans — false is a legitimate value and
-          // shouldn't be filtered out the way empty strings are.
-          // The form state only stores strings ('true'/'false'), so
-          // a simple string equality is sufficient.
-          input[k] = trimmed === 'true';
-        } else if (type === 'number') {
-          if (trimmed === '' || trimmed == null) continue;
-          const n = Number(trimmed);
-          if (!Number.isNaN(n)) input[k] = n;
-        } else {
-          // string / object / array / fallback — skip empty
-          if (trimmed === '' || trimmed == null) continue;
-          input[k] = trimmed;
-        }
-      }
-      const exec = await execApi.start(wf._id, input);
-      toast.success(`Workflow "${wf.name}" started successfully`);
-      navigate(`/executions/${exec.id}`);
-    } catch (e: any) {
-      toast.error(e.message || 'Failed to start workflow');
-    }
-    setRunningId(null);
-  }, [navigate, runDialog.workflow, runInput, toast]);
 
   const handleDelete = useCallback(async () => {
     if (!deletingWf) return;
@@ -477,210 +380,18 @@ export default function WorkflowListPage() {
         </div>
       )}
 
-      {/* ── Run Dialog ── */}
+      {/* ── Run Dialog (extracted to shared component) ── */}
       {runDialog.open && runDialog.workflow && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-md">
-          <div className="card w-full max-w-lg overflow-hidden shadow-glow-blue/20 animate-in fade-in zoom-in-95 duration-200">
-            {/* Header */}
-            <div className="px-6 py-5 border-b border-border/60">
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-3">
-                  <div className="w-10 h-10 rounded-lg bg-accent-blue/10 flex items-center justify-center">
-                    <Play className="w-5 h-5 text-accent-blue" />
-                  </div>
-                  <div>
-                    <h2 className="font-heading text-sm font-bold text-theme-primary tracking-wider uppercase">
-                      Run Workflow
-                    </h2>
-                    <p className="text-[11px] text-theme-muted font-mono">{runDialog.workflow.name}</p>
-                  </div>
-                </div>
-                <button
-                  onClick={() => setRunDialog({ open: false, workflow: null })}
-                  className="p-2 rounded-sm hover:bg-surface-200 text-theme-muted hover:text-theme-secondary transition-colors"
-                  title="Close"
-                >
-                  <X className="w-4 h-4" />
-                </button>
-              </div>
-              {runDialog.workflow.description && (
-                <p className="text-xs text-theme-secondary mt-3 leading-relaxed font-body">
-                  {runDialog.workflow.description}
-                </p>
-              )}
-            </div>
-
-            {/* Input fields — schema-driven widgets.
-                Each field's widget is picked in this priority order:
-                  1. `widget:` explicitly set on the schema (text/textarea/
-                     checkbox/select/repo_picker/number)
-                  2. `enum: [...]` present → select dropdown
-                  3. `type: boolean` → checkbox
-                  4. `type: number` → numeric input
-                  5. Heuristic fallback for legacy workflows that predate
-                     the widget field — path/repo in the name → repo picker,
-                     common long-prose field names → textarea,
-                     everything else → single-line text. */}
-            <div className="px-6 py-5 space-y-4 max-h-[50vh] overflow-auto">
-              {Object.entries(runInput).map(([key, value]) => {
-                const schema = runDialog.workflow.parsed?.input?.[key] as any;
-                const isRequired = schema?.required !== false;
-
-                // Resolve the widget.
-                const widget = resolveWidget(key, schema);
-
-                // Legacy skip: if the workflow doesn't declare repo in its
-                // context.requires list, skip the repo field entirely.
-                // (Preserved from the old behavior.)
-                const requires = runDialog.workflow.parsed?.context?.requires;
-                if (widget === 'repo_picker' && requires && Array.isArray(requires) && !requires.includes('repo')) {
-                  return null;
-                }
-
-                const label = schema?.label ?? key.replace(/_/g, ' ');
-                const description = schema?.description;
-                const placeholder = schema?.placeholder ?? schema?.description ?? `Enter ${key.replace(/_/g, ' ')}...`;
-
-                return (
-                  <div key={key}>
-                    <label className="text-xs font-label font-semibold text-theme-secondary mb-1 uppercase tracking-widest flex items-center gap-1">
-                      {label}
-                      {isRequired && <span className="text-accent-red normal-case text-[10px]">*</span>}
-                    </label>
-                    {description && widget !== 'checkbox' && (
-                      <p className="text-[11px] text-theme-subtle font-body mb-2 leading-relaxed">
-                        {description}
-                      </p>
-                    )}
-
-                    {widget === 'repo_picker' && (
-                      repoMode === 'select' ? (
-                        <div className="space-y-2">
-                          <Select
-                            value={value}
-                            placeholder="Select a repository..."
-                            options={[
-                              ...repoList.map((repo: any) => ({
-                                value: repo.path,
-                                label: repo.name,
-                                sublabel: repo.path,
-                              })),
-                              { value: '__manual__', label: 'Enter path manually...' },
-                            ]}
-                            onChange={v => {
-                              if (v === '__manual__') {
-                                setRepoMode('manual');
-                                setRunInput(prev => ({ ...prev, [key]: '' }));
-                              } else {
-                                setRunInput(prev => ({ ...prev, [key]: v }));
-                              }
-                            }}
-                          />
-                        </div>
-                      ) : (
-                        <div className="space-y-2">
-                          <input
-                            type="text"
-                            value={value}
-                            onChange={e => setRunInput(prev => ({ ...prev, [key]: e.target.value }))}
-                            placeholder="/path/to/your/project"
-                            className="input w-full font-mono text-sm"
-                          />
-                          <button
-                            type="button"
-                            onClick={() => { setRepoMode('select'); setRunInput(prev => ({ ...prev, [key]: '' })); }}
-                            className="text-[10px] text-accent-blue hover:text-accent-cyan font-mono uppercase tracking-wider"
-                          >
-                            Back to repo list
-                          </button>
-                        </div>
-                      )
-                    )}
-
-                    {widget === 'checkbox' && (
-                      <label className="flex items-start gap-2 cursor-pointer">
-                        <input
-                          type="checkbox"
-                          checked={value === 'true'}
-                          onChange={e => setRunInput(prev => ({ ...prev, [key]: e.target.checked ? 'true' : 'false' }))}
-                          className="mt-0.5 cursor-pointer"
-                        />
-                        {description && (
-                          <span className="text-[11px] text-theme-subtle font-body leading-relaxed">
-                            {description}
-                          </span>
-                        )}
-                      </label>
-                    )}
-
-                    {widget === 'select' && (
-                      <select
-                        value={value}
-                        onChange={e => setRunInput(prev => ({ ...prev, [key]: e.target.value }))}
-                        className="input w-full text-sm"
-                      >
-                        {!isRequired && <option value="">— none —</option>}
-                        {(schema?.enum ?? []).map((opt: string) => (
-                          <option key={opt} value={opt}>{opt}</option>
-                        ))}
-                      </select>
-                    )}
-
-                    {widget === 'number' && (
-                      <input
-                        type="number"
-                        value={value}
-                        onChange={e => setRunInput(prev => ({ ...prev, [key]: e.target.value }))}
-                        placeholder={placeholder}
-                        min={schema?.min}
-                        max={schema?.max}
-                        className="input w-full text-sm"
-                      />
-                    )}
-
-                    {widget === 'textarea' && (
-                      <textarea
-                        value={value}
-                        onChange={e => setRunInput(prev => ({ ...prev, [key]: e.target.value }))}
-                        placeholder={placeholder}
-                        rows={6}
-                        className="input w-full text-sm resize-y font-body leading-relaxed"
-                      />
-                    )}
-
-                    {widget === 'text' && (
-                      <input
-                        type="text"
-                        value={value}
-                        onChange={e => setRunInput(prev => ({ ...prev, [key]: e.target.value }))}
-                        placeholder={placeholder}
-                        className="input w-full text-sm"
-                      />
-                    )}
-                  </div>
-                );
-              })}
-            </div>
-
-            {/* Footer */}
-            <div className="flex items-center gap-3 px-6 py-5 border-t border-border/60 bg-surface-50/50">
-              <button
-                onClick={() => setRunDialog({ open: false, workflow: null })}
-                className="flex-1 btn-ghost"
-              >
-                Cancel
-              </button>
-              <button
-                onClick={handleRun}
-                className="flex-1 btn-primary inline-flex items-center justify-center gap-2"
-              >
-                <Play className="w-4 h-4" /> Run Workflow
-                <ArrowRight className="w-3.5 h-3.5 opacity-60" />
-              </button>
-            </div>
-          </div>
-        </div>
+        <WorkflowRunDialog
+          workflow={runDialog.workflow}
+          onClose={() => setRunDialog({ open: false, workflow: null })}
+          onStarted={(exec) => {
+            setRunDialog({ open: false, workflow: null });
+            navigate(`/executions/${exec.id}`);
+          }}
+        />
       )}
+
 
       <DeleteConfirmDialog
         open={!!deletingWf}

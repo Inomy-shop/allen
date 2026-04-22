@@ -1,10 +1,11 @@
 import { useState, useCallback, useEffect, useRef } from 'react';
-import { useParams, Link, useNavigate } from 'react-router-dom';
+import { useParams, Link, useNavigate, useSearchParams } from 'react-router-dom';
 import {
   ArrowLeft, XCircle, Pause, Play, RefreshCw, Wifi, WifiOff,
   Download, RotateCcw, Brain, Bot, Clock, DollarSign, Terminal,
   CheckCircle, AlertCircle, Wrench, ChevronDown, ChevronRight,
-  ArrowRight, AlertTriangle,
+  ArrowRight, AlertTriangle, Save, BarChart2, Activity,
+  MessageSquare, FileText,
 } from 'lucide-react';
 import { useExecution, type TimelineEvent } from '../hooks/useExecution';
 import { useResizable } from '../hooks/useResizable';
@@ -15,6 +16,12 @@ import { renderMarkdown } from '../components/chat/ChatMessageList';
 import LiveGraph from '../components/execution/LiveGraph';
 import Timeline from '../components/execution/Timeline';
 import NodeDetail from '../components/execution/NodeDetail';
+import CheckpointsDrawer from '../components/execution/CheckpointsDrawer';
+import ArtifactsDrawer from '../components/artifacts/ArtifactsDrawer';
+import { artifacts as artifactsApi } from '../services/api';
+import TimelineDrawer from '../components/execution/TimelineDrawer';
+import StateChangesDrawer from '../components/execution/StateChangesDrawer';
+import HumanInputDialog from '../components/execution/HumanInputDialog';
 import { ToolCallLog, type ToolCall } from '../components/common/ToolCallLog';
 
 /**
@@ -216,6 +223,7 @@ function AgentExecutionView({ execution, agentName, traces, id, liveToolCalls, r
   const [resumeOpen, setResumeOpen] = useState(false);
   const [resumePrompt, setResumePrompt] = useState('');
   const [resumeBusy, setResumeBusy] = useState(false);
+  const [agentArtifactsOpen, setAgentArtifactsOpen] = useState(false);
   const logsEndRef = useRef<HTMLDivElement>(null);
 
   const prompt = trace?.renderedPrompt ?? execution.input?.prompt ?? '';
@@ -398,6 +406,14 @@ function AgentExecutionView({ execution, agentName, traces, id, liveToolCalls, r
             </span>
           )}
           <CostDisplay cost={cost} />
+          <button
+            onClick={() => setAgentArtifactsOpen(true)}
+            className="btn-ghost text-xs inline-flex items-center gap-1"
+            title="View artifacts saved by this agent run"
+          >
+            <FileText className="w-3.5 h-3.5" />
+            <span>Artifacts</span>
+          </button>
           {execution.status === 'running' && (
             <button onClick={async () => { await api.cancel(id); window.location.reload(); }} className="flex items-center gap-1 text-xs text-red-400 hover:text-red-300 bg-red-400/10 hover:bg-red-400/20 border border-red-400/20 rounded px-2.5 py-1 font-mono transition-colors">
               <XCircle className="w-3.5 h-3.5" /> Cancel
@@ -610,6 +626,16 @@ function AgentExecutionView({ execution, agentName, traces, id, liveToolCalls, r
           {meta.chatSessionId && <a href={`/chat/${meta.chatSessionId}`} className="text-blue-400 hover:underline">Open Chat →</a>}
         </div>
       </div>
+
+      {/* Artifacts drawer — standalone agent runs are their OWN root. If
+          this run was spawned by a chat or workflow, its artifacts are
+          filed under that parent instead and would show up empty here. */}
+      <ArtifactsDrawer
+        rootType="agent"
+        rootId={id}
+        open={agentArtifactsOpen}
+        onClose={() => setAgentArtifactsOpen(false)}
+      />
     </div>
   );
 }
@@ -626,11 +652,46 @@ export default function ExecutionDetailPage() {
     liveToolCallsByNode,
   } = useExecution(id);
 
-  const [selectedNode, setSelectedNode] = useState<string | null>(null);
+  // Deep-link node selection via ?node=X query param. Keeps the URL as the
+  // source of truth so selections survive reload + can be shared.
+  const [searchParams, setSearchParams] = useSearchParams();
+  const selectedNode = searchParams.get('node');
+  const setSelectedNode = (n: string | null) => {
+    const next = new URLSearchParams(searchParams);
+    if (n) next.set('node', n);
+    else next.delete('node');
+    setSearchParams(next, { replace: true });
+  };
   // Interventions for this workflow run — drives the pending-intervention
   // banner and the interventions sidebar. The dedicated InterventionsPage
   // is where users actually take action; this page just shows awareness.
   const [runInterventions, setRunInterventions] = useState<any[]>([]);
+  // Checkpoints drawer — opens from a button in the top toolbar. Badge
+  // shows the count so users know whether there's anything to look at
+  // before clicking.
+  const [checkpointsOpen, setCheckpointsOpen] = useState(false);
+  const [timelineOpen, setTimelineOpen] = useState(false);
+  const [stateChangesOpen, setStateChangesOpen] = useState(false);
+  const [checkpointCount, setCheckpointCount] = useState<number | null>(null);
+  const [artifactsOpen, setArtifactsOpen] = useState(false);
+  const [artifactCount, setArtifactCount] = useState<number | null>(null);
+
+  // Input dialog is dismissible — user can close it to look at nodes/logs
+  // and reopen via the header "Respond" button. The dismissed flag resets
+  // whenever a new input request arrives or the execution resumes.
+  const [inputDialogDismissed, setInputDialogDismissed] = useState(false);
+  const lastInputNodeRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!id) return;
+    let cancelled = false;
+    api.checkpoints.list(id)
+      .then((list) => { if (!cancelled) setCheckpointCount((list ?? []).length); })
+      .catch(() => {});
+    artifactsApi.list({ rootType: 'workflow', rootId: id, limit: 500 })
+      .then((list) => { if (!cancelled) setArtifactCount((list ?? []).length); })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, [id, execution?.status, execution?.completedNodes?.length]);
 
   const latestInputEvent = [...timeline].reverse().find((e: TimelineEvent) => e.event === 'input_required');
 
@@ -653,6 +714,27 @@ export default function ExecutionDetailPage() {
   // moves to a new node. Instead we only auto-select when `selectedNode` is
   // null (first load) OR when the execution hits a state that requires the
   // user's attention (waiting_for_input, just-completed, just-failed).
+  // When a NEW input request arrives (different node than last time, or the
+  // execution was not in waiting_for_input before), re-open the dialog. Also
+  // re-open when the status moves back to running (so next pause starts fresh).
+  useEffect(() => {
+    if (!execution) return;
+    const waitingNode =
+      execution.status === 'waiting_for_input'
+        ? (latestInputEvent?.data?.node
+          ?? ((Array.isArray(execution.currentNodes) && execution.currentNodes[0]) || null))
+        : null;
+    if (execution.status !== 'waiting_for_input') {
+      if (inputDialogDismissed) setInputDialogDismissed(false);
+      lastInputNodeRef.current = null;
+      return;
+    }
+    if (waitingNode && waitingNode !== lastInputNodeRef.current) {
+      lastInputNodeRef.current = waitingNode;
+      setInputDialogDismissed(false);
+    }
+  }, [execution?.status, execution?.currentNodes, latestInputEvent?.data?.node]);
+
   const prevStatusRef = useRef<string | null>(null);
   useEffect(() => {
     if (!execution) return;
@@ -738,10 +820,19 @@ export default function ExecutionDetailPage() {
   }, [id, refresh]);
 
   const handleSubmitInput = useCallback(async (data: Record<string, unknown>) => {
-    if (id && latestInputEvent) {
+    if (!id || !latestInputEvent) return;
+    try {
       await api.submitInput(id, latestInputEvent.data.node, data);
+    } catch (err) {
+      alert(`Failed to submit input: ${(err as Error).message}`);
+      return;
     }
-  }, [id, latestInputEvent]);
+    // Re-fetch so the execution page reflects the submitted value, the
+    // new state keys, and the next status (running / next waiting node).
+    // SSE would deliver these eventually on live runs, but refresh()
+    // makes non-live / replay views update immediately too.
+    refresh();
+  }, [id, latestInputEvent, refresh]);
 
   const [resumeBusy, setResumeBusy] = useState(false);
   const [resumePickerOpen, setResumePickerOpen] = useState(false);
@@ -868,6 +959,17 @@ export default function ExecutionDetailPage() {
                   <Pause className="w-3 h-3" /> paused
                 </span>
               )}
+              {execution.status === 'waiting_for_input' && inputDialogDismissed && (
+                <button
+                  onClick={() => setInputDialogDismissed(false)}
+                  className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[11px] font-mono bg-accent-yellow/15 text-accent-yellow border border-accent-yellow/40 hover:bg-accent-yellow/25 transition-colors"
+                  title="Reopen the input dialog"
+                >
+                  <MessageSquare className="w-3 h-3" />
+                  Respond to input
+                  <span className="w-1.5 h-1.5 rounded-full bg-accent-yellow animate-pulse" />
+                </button>
+              )}
               {isLive && (
                 connected
                   ? <Wifi className="w-3 h-3 text-accent-green" />
@@ -893,6 +995,53 @@ export default function ExecutionDetailPage() {
               {learningCounts.extracted > 0 && <span>{learningCounts.extracted} out</span>}
             </Link>
           )}
+          <button
+            onClick={() => setTimelineOpen(true)}
+            className="btn-ghost text-xs inline-flex items-center gap-1"
+            title="View node execution timeline (Gantt view)"
+          >
+            <BarChart2 className="w-3.5 h-3.5" />
+            <span>Timeline</span>
+            {traces && traces.length > 0 && (
+              <span className="ml-0.5 px-1 py-px rounded-sm bg-accent-blue/20 text-accent-blue text-[10px] font-mono tabular-nums">
+                {traces.length}
+              </span>
+            )}
+          </button>
+          <button
+            onClick={() => setStateChangesOpen(true)}
+            className="btn-ghost text-xs inline-flex items-center gap-1"
+            title="View chronological state changes across checkpoints"
+          >
+            <Activity className="w-3.5 h-3.5" />
+            <span>State Changes</span>
+          </button>
+          <button
+            onClick={() => setCheckpointsOpen(true)}
+            className="btn-ghost text-xs inline-flex items-center gap-1"
+            title="View checkpoints (edit state, run from, fork)"
+          >
+            <Save className="w-3.5 h-3.5" />
+            <span>Checkpoints</span>
+            {checkpointCount != null && checkpointCount > 0 && (
+              <span className="ml-0.5 px-1 py-px rounded-sm bg-accent-blue/20 text-accent-blue text-[10px] font-mono tabular-nums">
+                {checkpointCount}
+              </span>
+            )}
+          </button>
+          <button
+            onClick={() => setArtifactsOpen(true)}
+            className="btn-ghost text-xs inline-flex items-center gap-1"
+            title="View artifacts saved by agents during this run"
+          >
+            <FileText className="w-3.5 h-3.5" />
+            <span>Artifacts</span>
+            {artifactCount != null && artifactCount > 0 && (
+              <span className="ml-0.5 px-1 py-px rounded-sm bg-accent-blue/20 text-accent-blue text-[10px] font-mono tabular-nums">
+                {artifactCount}
+              </span>
+            )}
+          </button>
           <button onClick={handleExportTraces} className="btn-ghost text-xs" title="Export traces">
             <Download className="w-3.5 h-3.5" />
           </button>
@@ -938,11 +1087,38 @@ export default function ExecutionDetailPage() {
           <div className="flex-1 min-w-0">
             <div className="text-xs font-heading font-semibold text-theme-primary">
               FAILED AT <span className="font-mono text-accent-red">{execution.failedNode}</span>
+              {(() => {
+                // Surface the failing tool call from the failed node's trace.
+                const failedTrace = (traces ?? []).find(
+                  (t: any) => t.node === execution.failedNode && t.status === 'failed',
+                );
+                const failingTool = failedTrace?.toolCalls?.find((tc: any) => tc.isError);
+                if (!failingTool) return null;
+                return (
+                  <span className="ml-2 text-[11px] font-mono text-theme-muted">
+                    · tool <span className="text-accent-red">{failingTool.tool}</span>
+                  </span>
+                );
+              })()}
+              <button
+                onClick={() => { setSelectedNode(execution.failedNode); }}
+                className="ml-3 text-[10px] font-mono underline text-theme-muted hover:text-theme-primary"
+                title="Jump to failed node + Inspector tab for state-at-failure"
+              >
+                Inspect →
+              </button>
             </div>
             {execution.errorMessage && (
-              <div className="text-[11px] font-mono text-theme-muted mt-1 break-words max-w-3xl">
-                {execution.errorMessage}
-              </div>
+              <details className="mt-1">
+                <summary className="text-[11px] font-mono text-theme-muted cursor-pointer hover:text-theme-primary list-none">
+                  <span className="text-[10px] uppercase tracking-widest mr-1">Error</span>
+                  {execution.errorMessage.split('\n')[0].slice(0, 180)}
+                  {execution.errorMessage.length > 180 && ' …'}
+                </summary>
+                <pre className="mt-1.5 text-[10px] font-mono text-theme-muted whitespace-pre-wrap break-words max-w-3xl bg-black/20 rounded p-2">
+                  {execution.errorMessage}
+                </pre>
+              </details>
             )}
             <div className="text-[10px] font-mono text-theme-subtle mt-1">
               Resume rewinds state to the checkpoint taken before the selected node and re-enters the graph from there. Upstream outputs and agent sessions are preserved.
@@ -1189,9 +1365,141 @@ export default function ExecutionDetailPage() {
               </tbody>
             </table>
           </div>
+
+          {/* ── Checkpoints ──────────────────────────────────────────
+              View, edit, and resume/fork from any checkpoint saved
+              during this run. Actions gate on execution status:
+              edits blocked while running/waiting; run-from blocked
+              unless failed/cancelled; fork always allowed. */}
+          {/* Timeline, State Changes, and Checkpoints are all accessed via
+              the matching buttons in the header, which open right-side
+              drawers. Kept off the main flow to reduce scroll and put them
+              one click away at any time. */}
           </div>
         </div>
       </div>
+
+      {/* Right-side drawers — mounted at page root, portal to body so
+          ancestor backdrop-filter can't trap them. */}
+      <CheckpointsDrawer
+        executionId={id!}
+        executionStatus={execution.status}
+        open={checkpointsOpen}
+        onClose={() => setCheckpointsOpen(false)}
+      />
+      <ArtifactsDrawer
+        rootType="workflow"
+        rootId={id!}
+        open={artifactsOpen}
+        onClose={() => setArtifactsOpen(false)}
+      />
+      <TimelineDrawer
+        traces={(traces ?? []) as any}
+        open={timelineOpen}
+        onClose={() => setTimelineOpen(false)}
+        onNodeClick={(n) => setSelectedNode(n)}
+      />
+      <StateChangesDrawer
+        executionId={id!}
+        open={stateChangesOpen}
+        onClose={() => setStateChangesOpen(false)}
+      />
+
+      {/* Inline human-input dialog — brought back for clarification flows
+          that carry reviewable content. The legacy /interventions/:id page
+          still exists for interventions that need richer workflow; this
+          dialog handles in-place clarify-with-content patterns:
+          - `__clarify_fields` in exec state → form fields
+          - `__clarify_content` in exec state → content to review (markdown/json/code)
+          - `__clarify_content_type` → how to render the content
+          - `__reason` → the question prompt
+          Mounted only when status is waiting_for_input AND we have the
+          clarify payload; otherwise we defer to the pending-intervention
+          banner higher up. */}
+      {execution.status === 'waiting_for_input' && !inputDialogDismissed && (() => {
+        const st = (execution.state ?? {}) as Record<string, unknown>;
+        // Field source priority:
+        //   1. __clarify_fields   — agent-provided clarify fields (auto-gate)
+        //   2. latestInputEvent   — human node's declared fields (from workflow YAML)
+        //   3. fallback single `response` field
+        // Using the declared fields ensures submitted keys match what
+        // downstream nodes template against (e.g. {{user_question}}).
+        const clarifyFields = Array.isArray(st.__clarify_fields) && (st.__clarify_fields as unknown[]).length > 0
+          ? (st.__clarify_fields as any[])
+          : undefined;
+        const nodeFields = Array.isArray(latestInputEvent?.data?.fields) && latestInputEvent!.data!.fields!.length > 0
+          ? (latestInputEvent!.data!.fields as any[])
+          : undefined;
+        const fields = clarifyFields ?? nodeFields ?? [
+          { name: 'response', type: 'text', label: 'Your response', required: true },
+        ];
+
+        // Find the agent's actual response text — ONLY when there's an
+        // active clarify gate whose target node is the currently-waiting
+        // node. For plain human-node pauses (no gate) we must NOT read
+        // the node's own declared outputs as "agent text" — those outputs
+        // are filled BY the user on this same pause, so their current
+        // values are leftover from a previous loop iteration.
+        let agentText: string | undefined;
+        const waitingNode = latestInputEvent?.data?.node
+          ?? (Array.isArray(execution.currentNodes) && execution.currentNodes[0])
+          ?? undefined;
+        const gateNode = st.__gate_node as string | undefined;
+        const gateAction = st.__gate_action as string | undefined;
+        const gateIsForWaitingNode = !!gateNode && gateNode === waitingNode && gateAction === 'clarify';
+        if (gateIsForWaitingNode && gateNode) {
+          const gateNodeDef = workflow?.parsed?.nodes?.[gateNode];
+          const outputsSpec = (gateNodeDef as { outputs?: Record<string, unknown> } | undefined)?.outputs;
+          if (outputsSpec && typeof outputsSpec === 'object') {
+            let best: string | undefined;
+            for (const key of Object.keys(outputsSpec)) {
+              if (key.startsWith('__')) continue;
+              const v = st[key];
+              if (typeof v === 'string' && v.length > (best?.length ?? 0)) best = v;
+            }
+            agentText = best;
+          }
+        }
+
+        // Prompt resolution: agent-supplied > agent's actual text > generic.
+        // __reason is only trusted when the gate applies to this node —
+        // same staleness rule as agentText above.
+        const explicitReason = gateIsForWaitingNode
+          && typeof st.__reason === 'string' && st.__reason.length > 0
+          ? (st.__reason as string)
+          : undefined;
+        const reason = explicitReason
+          ?? (agentText && agentText.length < 280 ? agentText : undefined)
+          ?? (latestInputEvent?.data?.prompt as string | undefined)
+          ?? 'The agent is asking for input.';
+
+        // Review content: explicit clarify_content first (only if gate is
+        // for this node), else the agent's full response text when long
+        // enough to warrant a dedicated viewer.
+        let reviewContent: string | undefined;
+        if (gateIsForWaitingNode && typeof st.__clarify_content === 'string') {
+          reviewContent = st.__clarify_content;
+        } else if (gateIsForWaitingNode && st.__clarify_content != null) {
+          reviewContent = JSON.stringify(st.__clarify_content, null, 2);
+        } else if (agentText && agentText.length >= 280) {
+          reviewContent = agentText;
+        }
+        const reviewContentType = (st.__clarify_content_type as 'markdown' | 'json' | 'code' | 'text' | undefined) ?? 'markdown';
+        // Only render if we have a waiting-node context. If not, fall back
+        // to the intervention banner flow.
+        if (!waitingNode) return null;
+        return (
+          <HumanInputDialog
+            node={waitingNode}
+            prompt={reason}
+            fields={fields}
+            reviewContent={reviewContent}
+            reviewContentType={reviewContentType}
+            onSubmit={(data) => handleSubmitInput(data)}
+            onCancel={() => setInputDialogDismissed(true)}
+          />
+        );
+      })()}
     </div>
   );
 }

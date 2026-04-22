@@ -89,3 +89,18 @@ export function evaluateCondition(expression: string, state: Record<string, unkn
 export function validateCondition(expression: string): void {
   compileExpression(normalizeExpression(expression));
 }
+
+/**
+ * Evaluate a condition AND return the (expression, raw-result, coerced-bool)
+ * tuple so the engine can persist it as `routingDecision` on the trace row.
+ * Useful for "why did this branch fire" debugging in the UI.
+ */
+export function evaluateConditionVerbose(
+  expression: string,
+  state: Record<string, unknown>,
+): { expression: string; result: boolean; raw: unknown } {
+  // Call the existing implementation to keep behavior identical — we just
+  // wrap the return with the raw expression text for tracing.
+  const result = evaluateCondition(expression, state);
+  return { expression, result, raw: result };
+}

@@ -5,10 +5,11 @@ import type { Node, Edge } from '@xyflow/react';
 import {
   Save, CheckCircle, Play, Eye, Code2, ArrowLeft, AlertTriangle, XCircle, X, ChevronDown,
 } from 'lucide-react';
-import { workflows as wfApi, executions as execApi } from '../services/api';
+import { workflows as wfApi } from '../services/api';
 import Canvas from '../components/canvas/Canvas';
 import YamlEditor from '../components/editor/YamlEditor';
 import MermaidPreview from '../components/editor/MermaidPreview';
+import WorkflowRunDialog from '../components/workflow/WorkflowRunDialog';
 import { yamlToReactFlow } from '../lib/yaml-to-reactflow';
 import { reactFlowToYaml } from '../lib/reactflow-to-yaml';
 
@@ -171,16 +172,19 @@ export default function WorkflowBuilderPage() {
     }
   }, [id, yamlContent]);
 
-  // Run
-  const handleRun = useCallback(async () => {
+  // Run — opens the same schema-driven input dialog used on the workflow
+  // list page. Input schema is read from the (parsed) workflow definition,
+  // so users get the exact same prompts regardless of which page they run
+  // from.
+  const [runDialogOpen, setRunDialogOpen] = useState(false);
+  const handleRun = useCallback(() => {
     if (!id) { alert('Save the workflow first'); return; }
-    try {
-      const exec = await execApi.start(id, {});
-      navigate(`/executions/${exec.id}`);
-    } catch (e: any) {
-      alert(e.message);
+    if (dirty) {
+      const proceed = confirm('You have unsaved changes. Save first, or run the currently saved version?');
+      if (!proceed) return;
     }
-  }, [id, navigate]);
+    setRunDialogOpen(true);
+  }, [id, dirty]);
 
   if (loading) {
     return <div className="flex items-center justify-center h-full text-theme-muted font-mono text-sm">LOADING...</div>;
@@ -333,6 +337,24 @@ export default function WorkflowBuilderPage() {
           </div>
         )}
       </div>
+
+      {/* Run-with-input dialog — same component used on the workflow list
+          page so users see identical input schema regardless of entry point.
+          Fetches the saved workflow by id; uses `parsedWorkflow` as an
+          optimistic hint so the dialog renders instantly even if the server
+          round-trip is slow. */}
+      {runDialogOpen && id && (
+        <WorkflowRunDialog
+          workflow={parsedWorkflow
+            ? { _id: id, name: workflowMeta?.name, description: workflowMeta?.description, parsed: parsedWorkflow }
+            : { _id: id, name: workflowMeta?.name, description: workflowMeta?.description }}
+          onClose={() => setRunDialogOpen(false)}
+          onStarted={(exec) => {
+            setRunDialogOpen(false);
+            navigate(`/executions/${exec.id}`);
+          }}
+        />
+      )}
     </div>
   );
 }

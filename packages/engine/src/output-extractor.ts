@@ -366,14 +366,32 @@ ${fieldGuide}
 - The downstream workflow will fail if this JSON block is missing or malformed.`;
 }
 
+/** Compact record the engine can pass into buildNodeContext so the
+ *  "Artifacts from prior nodes" index is rendered inline. Kept structural
+ *  so the engine doesn't have to import server types. */
+export interface UpstreamArtifactSummary {
+  artifactId: string;
+  filename: string;
+  relativePath: string;
+  contentType: string;
+  sizeBytes: number;
+  nodeName?: string;
+}
+
 /**
  * Build context-aware auto-gate instructions based on the node's position
  * in the workflow graph. First/middle/last nodes get different instructions
  * so middle nodes don't incorrectly stop the entire workflow.
+ *
+ * When `upstreamArtifacts` is provided, a short index is appended at the
+ * END of the context block so downstream agents can see what upstream
+ * nodes produced and fetch full content via allen_get_artifact when
+ * templated state values are too short, truncated, or summarized.
  */
 export function buildNodeContext(
   nodeName: string,
   workflow: { nodes: Record<string, unknown>; edges: Array<Record<string, unknown>> },
+  upstreamArtifacts?: UpstreamArtifactSummary[],
 ): string {
   const edges = workflow.edges ?? [];
   const allNodes = workflow.nodes ?? {};
@@ -450,13 +468,17 @@ export function buildNodeContext(
 
   // Universal rules — apply to ALL nodes regardless of position or routing.
   context += '\nACTIONS YOU CAN TAKE:\n';
-  context += 'STOP ("__action": "stop", "__reason": "<short explanation>"): Short-circuit the entire workflow because there is no point continuing. Use this when:\n';
-  context += '  • The task is impossible — e.g. the target repo path does not exist, a required file is missing, the input is unintelligible or references something that no longer exists.\n';
+  context += 'STOP ("__action": "stop", "__reason": "<short explanation>"): Short-circuit the entire workflow because there is no point continuing. Use this ONLY when the situation cannot be fixed by asking the user a question:\n';
   context += '  • The task is already done — e.g. the feature being requested already exists, the bug being reported is already fixed, the daily posts are already posted, the tests you were asked to write already exist and pass.\n';
-  context += '  • The premise is broken — e.g. the bug report describes behavior that is actually the documented spec, the feature violates a constraint that cannot be relaxed.\n';
-  context += '  • A critical error at this step makes all downstream work pointless — running the rest of the workflow would waste tokens and time.\n';
-  context += 'Always include "__reason" so the operator can see why you stopped. Prefer STOP over producing a hollow output that downstream nodes will process uselessly. Do NOT use STOP for problems you can solve yourself — only when no amount of continuing helps.\n';
-  context += 'CLARIFY with retry ("__action": "clarify", "__clarify_action": "retry"): If you CANNOT produce output because essential information is missing or your input is broken/empty. Explain what you need AND why — mention what the next step needs from you so the user understands the impact.\n';
+  context += '  • The premise is structurally broken — e.g. the bug report describes behavior that is actually the documented spec, the feature violates a constraint that cannot be relaxed.\n';
+  context += '  • An environmental precondition failed — e.g. the target repo path does not exist, a required service is unreachable, credentials are missing.\n';
+  context += '  • A critical error at this step makes all downstream work pointless AND no amount of user clarification would help.\n';
+  context += 'Always include "__reason" so the operator can see why you stopped. Do NOT use STOP for problems a clarifying question could solve — prefer CLARIFY in that case.\n';
+  context += 'CLARIFY with retry ("__action": "clarify", "__clarify_action": "retry"): Use when you CANNOT produce valid output and asking the user would unblock you. This covers:\n';
+  context += '  • Input is unintelligible, gibberish, empty, or ambiguous (e.g. the user typed random characters, or asked something you can\'t parse).\n';
+  context += '  • Essential information is missing that only the user can supply — a file path, an enum choice, a target audience, a constraint.\n';
+  context += '  • You need a decision between equally-valid options you can\'t pick on your own.\n';
+  context += '  Explain what you need AND why — mention what the next step needs from you so the user understands the impact. Prefer CLARIFY over STOP whenever a human answer would fix the problem.\n';
   context += 'CLARIFY with continue ("__action": "clarify", "__clarify_action": "continue"): If you CAN produce output but a human decision would significantly improve quality. Your output will be PRESERVED and the human\'s answer will be added for the next step.\n';
   context += '\nWhen using CLARIFY, you can optionally include "__clarify_fields" — an array of form fields the user should fill out. Each field has: name (string), type ("string"|"text"|"select"|"boolean"|"number"), label (string), required (boolean), and optionally options (string[] for select type). Example:\n';
   context += '"__clarify_fields": [{"name":"recipient","type":"string","label":"Who is the recipient?","required":true},{"name":"purpose","type":"select","label":"Purpose","options":["request","follow-up","thank you"],"required":true}]\n';
@@ -468,7 +490,56 @@ export function buildNodeContext(
 
   context += '\nDEFAULT: Just produce your output normally. Do NOT include __action unless one of the above situations genuinely applies. Most of the time you should just do your job and move on.\n';
 
+  // ── Artifacts guidance — applies to every agent invocation ──
+  //
+  // Tell the agent that any reviewable side-output (a plan, design doc,
+  // investigation notes, CSV export, config file) should be persisted via
+  // the allen_save_artifact MCP tool so the user can browse it later from
+  // the execution page. The workflow engine auto-captures outputs whose
+  // declared key ends in _markdown / _json / _csv — anything OUTSIDE that
+  // naming convention is the agent's responsibility to save.
+  context += '\nARTIFACTS — save reviewable files with allen_save_artifact(filename, content):\n';
+  context += '  • When to use: standalone documents worth keeping (plans, designs, investigation notes, CSV exports, config files, scratch outputs, etc).\n';
+  context += '  • Auto-captured: outputs you already declare whose keys end with _markdown, _json, or _csv are saved automatically — don\'t duplicate those via allen_save_artifact.\n';
+  context += '  • Root context: files are filed under whichever run spawned you (workflow / chat / agent). No root id needed — the tool reads it from env.\n';
+  context += '  • Sub-agents: when you spawn other agents, include this instruction in their prompt so they save their own standalone documents too. Files from the whole spawn tree land under the same run.\n';
+  context += '  • Viewing: files auto-render in the UI based on extension — .md renders as markdown, .json as pretty JSON, .csv as a table. Binary is download-only.\n';
+
+  // ── Upstream artifacts index ──────────────────────────────────────────
+  //
+  // Upstream nodes' full-fidelity outputs are filed as artifacts. Template
+  // values in state may be short summaries or truncated when the agent hit
+  // max_tokens; artifacts always carry the full content. Each row here tells
+  // the agent what exists, its size, and the id it can fetch. Agents should
+  // default to templated state for quick context and only fetch an artifact
+  // when they genuinely need more detail than state provides.
+  if (upstreamArtifacts && upstreamArtifacts.length > 0) {
+    // Prefer artifacts produced by OTHER nodes (not this node's own prior
+    // attempts). Sort by size desc so the largest — most likely to have
+    // been the overflow case — lead the list. Cap the list so we don't
+    // bloat the prompt on long runs.
+    const filtered = upstreamArtifacts
+      .filter((a) => !a.nodeName || a.nodeName !== nodeName)
+      .sort((a, b) => b.sizeBytes - a.sizeBytes)
+      .slice(0, 20);
+    if (filtered.length > 0) {
+      context += '\nARTIFACTS FROM PRIOR NODES IN THIS RUN:\n';
+      context += '  These are full-fidelity files upstream nodes wrote. Use allen_get_artifact(artifact_id)\n';
+      context += '  to read the complete content when templated state is short/summarized/truncated.\n';
+      for (const a of filtered) {
+        const producer = a.nodeName ? ` [${a.nodeName}]` : '';
+        context += `  • ${a.relativePath} (${formatBytes(a.sizeBytes)}, ${a.contentType})${producer} — id: ${a.artifactId}\n`;
+      }
+    }
+  }
+
   return context;
+}
+
+function formatBytes(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
 /**

@@ -3,24 +3,29 @@
  *
  * Dedicated page for the Human Intervention Protocol:
  *   - /interventions        — list view, sectioned into Pending + History
- *   - /interventions/:id    — detail view with action zone + full history
+ *   - /interventions/:id    — detail view powered by ClarificationPanel
  *
- * Replaces the old inline human-input form on the execution page. Every
- * human pause in any workflow lands here — pending interventions are
- * actionable, answered ones stay visible as an audit trail.
+ * All field rendering, review content viewing, and action buttons now flow
+ * through the shared ClarificationPanel — same visual language as the
+ * execution page's HumanInputDialog.
  */
 
 import { useEffect, useMemo, useState } from 'react';
 import { useParams, useNavigate, Link } from 'react-router-dom';
 import { interventions as interventionsApi } from '../services/api';
 import { useToast } from '../components/common/Toast';
+import ClarificationPanel, {
+  type ClarificationField,
+  type ClarificationSeverity,
+} from '../components/clarification/ClarificationPanel';
 import {
-  ArrowRight, Check, X, AlertTriangle, CheckCircle, HelpCircle,
-  Clock, FileText, ExternalLink, RefreshCw, Search, Inbox,
-  Archive, Send, Activity, ChevronLeft, User,
+  ArrowRight, Check, AlertTriangle, CheckCircle2, HelpCircle,
+  Clock, RefreshCw, Search, Inbox,
+  Archive, Activity, ChevronLeft, User,
+  Sparkles, ShieldCheck, Shield,
 } from 'lucide-react';
 
-// ── Types (envelope documented in backend §9.1) ────────────────────────
+// ── Types ──────────────────────────────────────────────────────────────
 
 interface InterventionField {
   name: string;
@@ -46,6 +51,9 @@ interface Intervention {
   docs: Array<{ label: string; url: string; kind?: string }>;
   round_info?: { current: number; max: number };
   user_request?: string;
+  review_content?: string;
+  review_content_type?: 'markdown' | 'json' | 'code' | 'text';
+  review_language?: string;
   status: 'pending' | 'answered' | 'expired' | 'skipped';
   response?: {
     decision: string;
@@ -59,70 +67,66 @@ interface Intervention {
   created_at: string;
 }
 
-// ── Visual helpers ─────────────────────────────────────────────────────
-
-function severityEmoji(severity: Intervention['severity']): string {
-  switch (severity) {
-    case 'question': return '🟡';
-    case 'approval': return '🟢';
-    case 'escalation': return '🔴';
-  }
-}
-
-function severityLabel(severity: Intervention['severity']): string {
-  switch (severity) {
-    case 'question': return 'Question';
-    case 'approval': return 'Approval';
-    case 'escalation': return 'Escalation';
-  }
-}
-
-function severityColorBase(severity: Intervention['severity']): {
-  text: string;
-  bg: string;
-  border: string;
-  strip: string;
-} {
-  switch (severity) {
-    case 'question':
-      return {
-        text: 'text-accent-yellow',
-        bg: 'bg-accent-yellow/10',
-        border: 'border-accent-yellow/30',
-        strip: 'bg-accent-yellow',
-      };
-    case 'approval':
-      return {
-        text: 'text-accent-green',
-        bg: 'bg-accent-green/10',
-        border: 'border-accent-green/30',
-        strip: 'bg-accent-green',
-      };
-    case 'escalation':
-      return {
-        text: 'text-accent-red',
-        bg: 'bg-accent-red/10',
-        border: 'border-accent-red/30',
-        strip: 'bg-accent-red',
-      };
-  }
-}
+// ── Severity visual helpers ────────────────────────────────────────────
 
 function SeverityIcon({ severity, className = 'w-4 h-4' }: {
   severity: Intervention['severity'];
   className?: string;
 }) {
   switch (severity) {
-    case 'question': return <HelpCircle className={className} />;
-    case 'approval': return <CheckCircle className={className} />;
+    case 'question':   return <HelpCircle className={className} />;
+    case 'approval':   return <ShieldCheck className={className} />;
     case 'escalation': return <AlertTriangle className={className} />;
   }
 }
 
-/**
- * Short relative time like "2 min ago", "3 hr ago", "5 days ago",
- * falls back to a locale date if older than a week.
- */
+function severityLabel(severity: Intervention['severity']): string {
+  switch (severity) {
+    case 'question':   return 'Question';
+    case 'approval':   return 'Approval';
+    case 'escalation': return 'Escalation';
+  }
+}
+
+function severityTheme(severity: Intervention['severity']): {
+  text: string;
+  bg: string;
+  bgSoft: string;
+  border: string;
+  strip: string;
+  badge: string;
+} {
+  switch (severity) {
+    case 'question':
+      return {
+        text: 'text-accent-yellow',
+        bg: 'bg-accent-yellow/10',
+        bgSoft: 'bg-accent-yellow/5',
+        border: 'border-accent-yellow/30',
+        strip: 'bg-accent-yellow',
+        badge: 'bg-accent-yellow/15 text-accent-yellow border border-accent-yellow/30',
+      };
+    case 'approval':
+      return {
+        text: 'text-accent-green',
+        bg: 'bg-accent-green/10',
+        bgSoft: 'bg-accent-green/5',
+        border: 'border-accent-green/30',
+        strip: 'bg-accent-green',
+        badge: 'bg-accent-green/15 text-accent-green border border-accent-green/30',
+      };
+    case 'escalation':
+      return {
+        text: 'text-accent-red',
+        bg: 'bg-accent-red/10',
+        bgSoft: 'bg-accent-red/5',
+        border: 'border-accent-red/30',
+        strip: 'bg-accent-red',
+        badge: 'bg-accent-red/15 text-accent-red border border-accent-red/30',
+      };
+  }
+}
+
 function relativeTime(dateStr?: string): string {
   if (!dateStr) return '';
   const ms = Date.now() - new Date(dateStr).getTime();
@@ -146,51 +150,50 @@ function humaniseStage(stage: string): string {
 
 function responseDecisionLabel(d?: string): { label: string; color: string } {
   switch (d) {
-    case 'approve': return { label: 'Approved', color: 'text-accent-green' };
-    case 'reject': return { label: 'Rejected', color: 'text-accent-red' };
+    case 'approve':         return { label: 'Approved',          color: 'text-accent-green' };
+    case 'reject':          return { label: 'Rejected',          color: 'text-accent-red' };
     case 'request_changes': return { label: 'Changes requested', color: 'text-accent-yellow' };
-    case 'answer': return { label: 'Answered', color: 'text-accent-blue' };
-    default: return { label: d ?? 'unknown', color: 'text-theme-muted' };
+    case 'answer':          return { label: 'Answered',          color: 'text-accent-blue' };
+    default:                return { label: d ?? 'unknown',      color: 'text-theme-muted' };
   }
 }
 
-// ── Row component ──────────────────────────────────────────────────────
+// ── Row ────────────────────────────────────────────────────────────────
 
 function InterventionRow({ item, emphasized }: { item: Intervention; emphasized: boolean }) {
-  const colors = severityColorBase(item.severity);
+  const theme = severityTheme(item.severity);
   const decision = responseDecisionLabel(item.response?.decision);
   const isPending = item.status === 'pending';
 
   return (
     <Link
       to={`/interventions/${item.intervention_id}`}
-      className={`group flex items-stretch gap-0 border-b border-border/10 last:border-b-0 transition-colors ${
+      className={`group flex items-stretch border-b border-border/10 last:border-b-0 transition-colors ${
         emphasized ? 'hover:bg-surface-200/30' : 'hover:bg-surface-200/15'
       }`}
     >
-      {/* Left severity strip — vertical bar for quick visual scanning */}
-      <div className={`w-1 shrink-0 ${colors.strip} ${isPending ? '' : 'opacity-30'}`} />
+      {/* Severity strip */}
+      <div className={`w-1 shrink-0 ${theme.strip} ${isPending ? '' : 'opacity-30'}`} />
 
-      <div className={`flex-1 flex items-start gap-4 px-4 py-3 min-w-0 ${emphasized ? '' : 'opacity-80'}`}>
-        {/* Severity badge */}
-        <div className={`shrink-0 w-9 h-9 rounded-lg ${colors.bg} border ${colors.border} flex items-center justify-center`}>
-          <span className="text-lg leading-none">{severityEmoji(item.severity)}</span>
+      <div className={`flex-1 flex items-start gap-4 px-4 py-3.5 min-w-0 ${emphasized ? '' : 'opacity-80'}`}>
+        {/* Severity icon tile — lucide, not emoji */}
+        <div className={`shrink-0 w-10 h-10 rounded-lg ${theme.bg} border ${theme.border} flex items-center justify-center`}>
+          <SeverityIcon severity={item.severity} className={`w-4 h-4 ${theme.text}`} />
         </div>
 
-        {/* Main content */}
         <div className="flex-1 min-w-0">
-          <div className="flex items-center gap-2 mb-1">
+          <div className="flex items-center gap-2 mb-1 flex-wrap">
             <span className={`text-[13px] font-body font-medium truncate ${
               emphasized ? 'text-theme-primary' : 'text-theme-secondary'
             }`}>
               {item.title}
             </span>
             {item.round_info && (
-              <span className={`text-[9px] font-mono px-1.5 py-0.5 rounded-full ${colors.bg} ${colors.text} shrink-0`}>
+              <span className={`text-[9px] font-mono px-1.5 py-0.5 rounded-full ${theme.bg} ${theme.text} shrink-0`}>
                 {item.round_info.current}/{item.round_info.max}
               </span>
             )}
-            <span className={`text-[9px] font-mono px-1.5 py-0.5 rounded-full border shrink-0 ${colors.bg} ${colors.text} ${colors.border}`}>
+            <span className={`text-[9px] font-mono px-1.5 py-0.5 rounded-full shrink-0 ${theme.badge}`}>
               {severityLabel(item.severity)}
             </span>
           </div>
@@ -226,7 +229,6 @@ function InterventionRow({ item, emphasized }: { item: Intervention; emphasized:
           </div>
         </div>
 
-        {/* Right-side action hint */}
         <div className="shrink-0 self-center">
           {isPending ? (
             <div className="flex items-center gap-1 text-[10px] font-mono text-accent-blue opacity-0 group-hover:opacity-100 transition-opacity">
@@ -241,7 +243,7 @@ function InterventionRow({ item, emphasized }: { item: Intervention; emphasized:
   );
 }
 
-// ── List view ──────────────────────────────────────────────────────────
+// ── List ───────────────────────────────────────────────────────────────
 
 function InterventionsListView() {
   const [items, setItems] = useState<Intervention[]>([]);
@@ -268,16 +270,8 @@ function InterventionsListView() {
     load();
   }, [statusFilter, severityFilter]);
 
-  // Auto-refresh every 15s while we have pending interventions to catch
-  // new ones without manual reload. Stops when there's nothing pending.
-  const pendingCount = useMemo(
-    () => items.filter(i => i.status === 'pending').length,
-    [items],
-  );
-  const answeredCount = useMemo(
-    () => items.filter(i => i.status === 'answered').length,
-    [items],
-  );
+  const pendingCount = useMemo(() => items.filter(i => i.status === 'pending').length, [items]);
+  const answeredCount = useMemo(() => items.filter(i => i.status === 'answered').length, [items]);
 
   useEffect(() => {
     if (pendingCount === 0) return;
@@ -285,7 +279,6 @@ function InterventionsListView() {
     return () => clearInterval(t);
   }, [pendingCount, statusFilter, severityFilter]);
 
-  // Search across title, summary, workflow name, stage
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
     if (!q) return items;
@@ -303,21 +296,23 @@ function InterventionsListView() {
 
   return (
     <div className="flex flex-col h-full">
-      {/* Sticky header */}
       <div className="sticky top-0 z-10 bg-surface-50 border-b border-border/30">
         <div className="p-6 pb-4">
           <div className="flex items-center justify-between mb-4">
             <div>
-              <h1 className="font-heading text-xl font-bold text-theme-primary tracking-widest uppercase">
-                Interventions
-              </h1>
+              <div className="flex items-center gap-2 mb-1">
+                <Shield className="w-5 h-5 text-accent-blue" />
+                <h1 className="font-heading text-xl font-bold text-theme-primary tracking-widest uppercase">
+                  Interventions
+                </h1>
+              </div>
               <div className="flex items-center gap-3 mt-1 text-[10px] font-mono text-theme-muted">
                 <span className="flex items-center gap-1">
                   <Clock className="w-3 h-3 text-accent-yellow" />
                   <span className="text-theme-primary font-semibold">{pendingCount}</span> pending
                 </span>
                 <span className="flex items-center gap-1">
-                  <CheckCircle className="w-3 h-3 text-accent-green" />
+                  <CheckCircle2 className="w-3 h-3 text-accent-green" />
                   <span className="text-theme-primary font-semibold">{answeredCount}</span> answered
                 </span>
                 <span>· {items.length} total</span>
@@ -339,7 +334,6 @@ function InterventionsListView() {
             </button>
           </div>
 
-          {/* Filters row */}
           <div className="flex items-center gap-2">
             <div className="relative flex-1">
               <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-theme-subtle pointer-events-none" />
@@ -347,13 +341,13 @@ function InterventionsListView() {
                 type="text"
                 value={search}
                 onChange={e => setSearch(e.target.value)}
-                placeholder="Search title, workflow, stage, user request..."
+                placeholder="Search title, workflow, stage, user request…"
                 className="input text-xs pl-8 pr-3 py-1.5 w-full"
               />
             </div>
             <select
               value={statusFilter}
-              onChange={e => setStatusFilter(e.target.value as any)}
+              onChange={e => setStatusFilter(e.target.value as 'all' | 'pending' | 'answered')}
               className="input text-xs px-2 py-1.5"
             >
               <option value="all">All statuses</option>
@@ -362,24 +356,23 @@ function InterventionsListView() {
             </select>
             <select
               value={severityFilter}
-              onChange={e => setSeverityFilter(e.target.value as any)}
+              onChange={e => setSeverityFilter(e.target.value as 'all' | Intervention['severity'])}
               className="input text-xs px-2 py-1.5"
             >
               <option value="all">Any severity</option>
-              <option value="question">🟡 Question</option>
-              <option value="approval">🟢 Approval</option>
-              <option value="escalation">🔴 Escalation</option>
+              <option value="question">Question</option>
+              <option value="approval">Approval</option>
+              <option value="escalation">Escalation</option>
             </select>
           </div>
         </div>
       </div>
 
-      {/* Body — scrollable list */}
       <div className="flex-1 overflow-y-auto">
         {loading && items.length === 0 && (
           <div className="flex items-center justify-center py-16 text-xs text-theme-muted">
             <RefreshCw className="w-4 h-4 mr-2 animate-spin" />
-            Loading interventions...
+            Loading interventions…
           </div>
         )}
 
@@ -389,7 +382,6 @@ function InterventionsListView() {
 
         {filtered.length > 0 && (
           <div className="pb-8">
-            {/* Pending section — emphasized */}
             {pending.length > 0 && (
               <section>
                 <SectionHeader
@@ -405,8 +397,6 @@ function InterventionsListView() {
                 </div>
               </section>
             )}
-
-            {/* History section — muted */}
             {history.length > 0 && (
               <section className="mt-6">
                 <SectionHeader
@@ -475,9 +465,8 @@ function EmptyState({ hasFilters }: { hasFilters: boolean }) {
             No interventions yet
           </h3>
           <p className="text-xs text-theme-muted font-body max-w-md">
-            When a workflow pauses and needs human input — a clarification question, a plan approval,
-            or an escalation — it'll show up here. Try running <span className="font-mono text-theme-primary">test-human-intervention</span> to
-            see the different severity types.
+            When a workflow pauses for human input — a clarification, plan approval, or escalation —
+            it shows up here. Try running <span className="font-mono text-theme-primary">test-human-intervention</span>.
           </p>
         </>
       )}
@@ -493,10 +482,6 @@ function InterventionDetailView() {
   const toast = useToast();
   const [item, setItem] = useState<Intervention | null>(null);
   const [loading, setLoading] = useState(true);
-  const [decision, setDecision] = useState<'approve' | 'request_changes' | 'reject' | 'answer' | null>(null);
-  const [feedback, setFeedback] = useState('');
-  const [scope, setScope] = useState<'requirements' | 'architecture' | 'technical_design' | 'all'>('requirements');
-  const [fieldValues, setFieldValues] = useState<Record<string, string>>({});
   const [submitting, setSubmitting] = useState(false);
 
   async function load() {
@@ -505,19 +490,6 @@ function InterventionDetailView() {
     try {
       const data = await interventionsApi.get(id);
       setItem(data);
-      // Seed field values from the intervention's declared fields —
-      // selects default to the first option, text fields to empty.
-      if (data?.fields && data.fields.length > 0) {
-        const initial: Record<string, string> = {};
-        for (const f of data.fields as InterventionField[]) {
-          if (f.type === 'select' && f.options && f.options.length > 0) {
-            initial[f.name] = f.options[0];
-          } else {
-            initial[f.name] = '';
-          }
-        }
-        setFieldValues(initial);
-      }
     } finally {
       setLoading(false);
     }
@@ -525,40 +497,11 @@ function InterventionDetailView() {
 
   useEffect(() => { load(); }, [id]);
 
-  async function submit() {
-    if (!item || !decision) return;
-    setSubmitting(true);
-    try {
-      await interventionsApi.respond(item.intervention_id, {
-        decision,
-        feedback: decision === 'request_changes' ? feedback : undefined,
-        scope: decision === 'request_changes' && item.stage === 'plan_approval_gate' ? scope : undefined,
-        field_values: decision === 'answer' || decision === 'approve' ? fieldValues : undefined,
-        human_node_name: item.stage,
-      });
-      toast.success(`Response submitted: ${decision}`);
-      await load();
-    } catch (err: unknown) {
-      toast.error(err instanceof Error ? err.message : 'Failed to submit response');
-    } finally {
-      setSubmitting(false);
-    }
-  }
-
-  // Check that all required fields have values (for submit button enable)
-  function requiredFieldsFilled(): boolean {
-    if (!item?.fields || item.fields.length === 0) return true;
-    for (const f of item.fields) {
-      if (f.required !== false && !fieldValues[f.name]?.trim()) return false;
-    }
-    return true;
-  }
-
   if (loading) {
     return (
       <div className="flex items-center justify-center h-full text-xs text-theme-muted">
         <RefreshCw className="w-4 h-4 mr-2 animate-spin" />
-        Loading intervention...
+        Loading intervention…
       </div>
     );
   }
@@ -578,45 +521,116 @@ function InterventionDetailView() {
     );
   }
 
-  const colors = severityColorBase(item.severity);
+  const theme = severityTheme(item.severity);
   const isPending = item.status === 'pending';
   const isPlanApproval = item.stage === 'plan_approval_gate';
 
+  // Map intervention → ClarificationPanel props
+  const panelMode: 'simple' | 'approval' | 'question' | 'escalation' =
+    item.severity === 'approval'   ? 'approval'
+    : item.severity === 'escalation' ? 'escalation'
+    : item.severity === 'question'   ? 'question'
+    : 'simple';
+
+  const panelSeverity: ClarificationSeverity =
+    item.severity === 'approval'   ? 'approval'
+    : item.severity === 'escalation' ? 'escalation'
+    : 'question';
+
+  const fields: ClarificationField[] = (item.fields ?? []).map(f => ({
+    name: f.name,
+    type: (f.type as ClarificationField['type']) ?? 'text',
+    label: f.label,
+    required: f.required !== false,
+    options: f.options,
+    placeholder: f.placeholder,
+  }));
+
+  const scopeOptions = isPlanApproval ? [
+    { value: 'requirements',     label: 'Requirements (PRD)',   description: 'Re-runs PRD → HLA → TDD' },
+    { value: 'architecture',     label: 'Architecture (HLA)',   description: 'Re-runs HLA → TDD' },
+    { value: 'technical_design', label: 'Technical Design',     description: 'Re-runs TDD only' },
+    { value: 'all',              label: 'All three',            description: 'Start from PRD' },
+  ] : undefined;
+
+  async function onSubmit(payload: {
+    decision?: 'approve' | 'request_changes' | 'reject' | 'answer';
+    fieldValues: Record<string, unknown>;
+    feedback?: string;
+    scope?: string;
+  }) {
+    if (!item || !payload.decision) return;
+    setSubmitting(true);
+    try {
+      await interventionsApi.respond(item.intervention_id, {
+        decision: payload.decision,
+        feedback: payload.feedback,
+        scope: payload.scope as 'requirements' | 'architecture' | 'technical_design' | 'all' | undefined,
+        field_values:
+          payload.decision === 'answer' || payload.decision === 'approve'
+            ? (payload.fieldValues as Record<string, string>)
+            : undefined,
+        human_node_name: item.stage,
+      });
+      toast.success(`Response submitted: ${payload.decision}`);
+      await load();
+    } catch (err: unknown) {
+      toast.error(err instanceof Error ? err.message : 'Failed to submit response');
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
   return (
-    <div className="max-w-4xl mx-auto p-6">
-      {/* Breadcrumb */}
-      <div className="mb-4 flex items-center gap-2 text-[11px] font-mono text-theme-muted">
+    <div className="w-full p-6">
+      {/* Breadcrumb + status pill + quick meta */}
+      <div className="mb-4 flex items-center gap-3 text-[11px] font-mono text-theme-muted flex-wrap">
         <Link to="/interventions" className="flex items-center gap-1 hover:text-theme-primary transition-colors">
           <ChevronLeft className="w-3 h-3" /> Interventions
         </Link>
         <span>/</span>
         <span className="text-theme-primary">{item.intervention_id}</span>
+        <span className="ml-auto">
+          {isPending ? (
+            <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full bg-accent-yellow/10 text-accent-yellow border border-accent-yellow/30">
+              <span className="w-1.5 h-1.5 rounded-full bg-accent-yellow animate-pulse" /> Awaiting response
+            </span>
+          ) : (
+            <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full bg-surface-200/40 text-theme-muted border border-border/30">
+              <Check className="w-3 h-3" /> Resolved
+            </span>
+          )}
+        </span>
       </div>
 
-      {/* Hero card */}
-      <div className={`relative border ${colors.border} ${colors.bg} rounded-xl p-6 mb-6 overflow-hidden`}>
-        {/* Left severity strip */}
-        <div className={`absolute left-0 top-0 bottom-0 w-1.5 ${colors.strip}`} />
-
-        <div className="flex items-start gap-4 pl-2">
-          <div className={`w-14 h-14 rounded-xl ${colors.bg} border ${colors.border} flex items-center justify-center shrink-0`}>
-            <span className="text-3xl leading-none">{severityEmoji(item.severity)}</span>
-          </div>
-          <div className="flex-1 min-w-0">
-            <div className={`flex items-center gap-2 text-[10px] font-mono uppercase tracking-widest ${colors.text} mb-1`}>
-              <SeverityIcon severity={item.severity} className="w-3 h-3" />
-              {severityLabel(item.severity)}
-              <span className="text-theme-subtle">·</span>
-              <span className="text-theme-muted">{humaniseStage(item.stage)}</span>
-              {item.round_info && (
-                <>
-                  <span className="text-theme-subtle">·</span>
-                  <span className="text-theme-muted">round {item.round_info.current}/{item.round_info.max}</span>
-                </>
-              )}
+      {/* Compact hero — identity only (severity/stage/title/workflow/time).
+          Context summary and question live inside the panel to avoid
+          duplicating the same text in two places. */}
+      <div className={`relative border ${theme.border} ${theme.bgSoft} rounded-xl mb-5 overflow-hidden shadow-sm`}>
+        <div className={`absolute left-0 top-0 bottom-0 w-1 ${theme.strip}`} />
+        <div className="p-5 pl-7">
+          <div className="flex items-center gap-4">
+            <div className={`shrink-0 w-12 h-12 rounded-xl ${theme.bg} border ${theme.border} flex items-center justify-center shadow-sm`}>
+              <SeverityIcon severity={item.severity} className={`w-5 h-5 ${theme.text}`} />
             </div>
-            <h1 className="text-xl font-heading font-bold text-theme-primary mb-2">{item.title}</h1>
-            <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-[11px] font-mono text-theme-muted">
+            <div className="flex-1 min-w-0">
+              <div className="flex items-center gap-2 flex-wrap mb-1">
+                <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-mono font-medium uppercase tracking-wider ${theme.badge}`}>
+                  <SeverityIcon severity={item.severity} className="w-2.5 h-2.5" />
+                  {severityLabel(item.severity)}
+                </span>
+                <span className="text-[10px] font-mono text-theme-muted">{humaniseStage(item.stage)}</span>
+                {item.round_info && (
+                  <span className="text-[10px] font-mono text-theme-muted bg-surface-200/40 px-2 py-0.5 rounded-full border border-border/20">
+                    Round {item.round_info.current} / {item.round_info.max}
+                  </span>
+                )}
+              </div>
+              <h1 className="text-lg font-heading font-semibold text-theme-primary tracking-tight leading-snug truncate">
+                {item.title}
+              </h1>
+            </div>
+            <div className="shrink-0 flex flex-col items-end gap-1 text-[10px] font-mono text-theme-muted">
               <Link
                 to={`/executions/${item.workflow_run_id}`}
                 className="flex items-center gap-1 hover:text-accent-blue transition-colors"
@@ -625,295 +639,78 @@ function InterventionDetailView() {
                 {item.workflow_name}
               </Link>
               <span className="flex items-center gap-1">
-                <Clock className="w-3 h-3" /> Created {relativeTime(item.created_at)}
+                <Clock className="w-3 h-3" /> {relativeTime(item.created_at)}
               </span>
-              <span className="text-theme-subtle">{item.intervention_id}</span>
             </div>
           </div>
-        </div>
 
-        {item.user_request && (
-          <div className="mt-4 pl-2 pt-4 border-t border-current/10">
-            <div className="text-[10px] font-label uppercase tracking-widest text-theme-muted mb-1">
-              Original Request
-            </div>
-            <p className="text-sm italic text-theme-primary font-body">"{item.user_request}"</p>
-          </div>
-        )}
-      </div>
-
-      {/* Summary */}
-      <Section label="Summary">
-        <p className="text-sm text-theme-primary font-body leading-relaxed">{item.context_summary}</p>
-      </Section>
-
-      {/* Question */}
-      <Section label="Question">
-        <div className="bg-surface-100 border border-border/30 rounded-lg p-4">
-          <pre className="text-xs text-theme-primary font-body whitespace-pre-wrap leading-relaxed">
-            {item.question}
-          </pre>
-        </div>
-      </Section>
-
-      {/* Docs */}
-      {item.docs.length > 0 && (
-        <Section label={`Linked Docs (${item.docs.length})`}>
-          <div className="flex flex-wrap gap-2">
-            {item.docs.map((d, i) => (
-              <a
-                key={i}
-                href={d.url}
-                target="_blank"
-                rel="noreferrer"
-                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-mono bg-surface-200/30 text-accent-blue hover:bg-accent-blue/10 border border-border/30 hover:border-accent-blue/40 transition-colors"
-              >
-                <FileText className="w-3 h-3" />
-                {d.label}
-                <ExternalLink className="w-3 h-3 opacity-60" />
-              </a>
-            ))}
-          </div>
-        </Section>
-      )}
-
-      {/* Action zone (when pending) */}
-      {isPending && (
-        <Section label="Action Required" emphasis>
-          <div className="border border-border/30 rounded-lg p-5 bg-surface-100">
-            {/* Dynamic field rendering — if the intervention carries the
-                original human node's fields, render them BEFORE the
-                action buttons. The field values are what the engine's
-                submitInput needs to unblock the pause. */}
-            {item.fields && item.fields.length > 0 && (
-              <div className="mb-5 space-y-4">
-                {item.fields.map(f => (
-                  <FieldInput
-                    key={f.name}
-                    field={f}
-                    value={fieldValues[f.name] ?? ''}
-                    onChange={v => setFieldValues(prev => ({ ...prev, [f.name]: v }))}
-                  />
-                ))}
+          {item.user_request && (
+            <div className="mt-4 pt-3 border-t border-current/10">
+              <div className="text-[10px] font-label uppercase tracking-widest text-theme-muted mb-1 flex items-center gap-1.5">
+                <Sparkles className="w-3 h-3" /> Original request
               </div>
-            )}
-
-            <div className="flex flex-wrap gap-2 mb-5">
-              {item.severity === 'approval' && (
-                <>
-                  <ActionBtn label="Approve" icon={<Check className="w-3 h-3" />} color="green" active={decision === 'approve'} onClick={() => setDecision('approve')} />
-                  <ActionBtn label="Request changes" icon={<RefreshCw className="w-3 h-3" />} color="yellow" active={decision === 'request_changes'} onClick={() => setDecision('request_changes')} />
-                  <ActionBtn label="Reject" icon={<X className="w-3 h-3" />} color="red" active={decision === 'reject'} onClick={() => setDecision('reject')} />
-                </>
-              )}
-              {item.severity === 'question' && (
-                <>
-                  <ActionBtn label="Submit" icon={<Send className="w-3 h-3" />} color="blue" active={decision === 'answer'} onClick={() => setDecision('answer')} />
-                  <ActionBtn label="Reject" icon={<X className="w-3 h-3" />} color="red" active={decision === 'reject'} onClick={() => setDecision('reject')} />
-                </>
-              )}
-              {item.severity === 'escalation' && (
-                <>
-                  <ActionBtn label="Approve (accept deviations)" icon={<Check className="w-3 h-3" />} color="green" active={decision === 'approve'} onClick={() => setDecision('approve')} />
-                  <ActionBtn label="Request changes" icon={<RefreshCw className="w-3 h-3" />} color="yellow" active={decision === 'request_changes'} onClick={() => setDecision('request_changes')} />
-                  <ActionBtn label="Reject (abandon)" icon={<X className="w-3 h-3" />} color="red" active={decision === 'reject'} onClick={() => setDecision('reject')} />
-                </>
-              )}
+              <p className="text-sm italic text-theme-primary font-body leading-relaxed">
+                "{item.user_request}"
+              </p>
             </div>
+          )}
+        </div>
+      </div>
 
-            {decision === 'request_changes' && (
-              <>
-                {isPlanApproval && (
-                  <div className="mb-4">
-                    <label className="block text-[10px] font-label uppercase tracking-widest text-theme-subtle mb-1.5">
-                      Which section needs changes?
-                    </label>
-                    <select
-                      value={scope}
-                      onChange={e => setScope(e.target.value as any)}
-                      className="input text-xs w-full"
-                    >
-                      <option value="requirements">Requirements (PRD) — also re-runs HLA + TDD</option>
-                      <option value="architecture">Architecture (HLA) — also re-runs TDD</option>
-                      <option value="technical_design">Technical Design (TDD) only</option>
-                      <option value="all">All three — start from PRD</option>
-                    </select>
-                  </div>
-                )}
-                <div className="mb-4">
-                  <label className="block text-[10px] font-label uppercase tracking-widest text-theme-subtle mb-1.5">
-                    Feedback for the agent
-                  </label>
-                  <textarea
-                    value={feedback}
-                    onChange={e => setFeedback(e.target.value)}
-                    rows={6}
-                    className="input text-xs w-full font-body leading-relaxed"
-                    placeholder="Be specific — the agent gets this verbatim as its retry feedback."
-                    autoFocus
-                  />
-                </div>
-              </>
-            )}
+      {/* Context summary — one-liner above the panel. Skip rendering if the
+          summary would just repeat the question (common for short
+          single-sentence clarifies). */}
+      {item.context_summary && item.context_summary !== item.question && (
+        <div className="mb-5 px-4 py-3 rounded-lg bg-surface-100/40 border border-border/20 text-sm text-theme-secondary font-body leading-relaxed">
+          {item.context_summary}
+        </div>
+      )}
 
-            <div className="flex items-center justify-between pt-2 border-t border-border/20">
-              <span className="text-[10px] font-mono text-theme-subtle">
-                {decision ? `Submitting: ${decision}` : 'Pick an action above'}
-              </span>
-              <button
-                onClick={submit}
-                disabled={
-                  !decision
-                  || submitting
-                  || (decision === 'request_changes' && !feedback.trim())
-                  || ((decision === 'answer' || decision === 'approve') && !requiredFieldsFilled())
-                }
-                className="inline-flex items-center gap-1.5 px-4 py-2 rounded-full text-xs font-mono bg-accent-blue/10 text-accent-blue hover:bg-accent-blue/20 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
-              >
-                {submitting ? <RefreshCw className="w-3 h-3 animate-spin" /> : <Send className="w-3 h-3" />}
-                Submit response
-              </button>
+      {/* Action panel (pending) — shared ClarificationPanel.
+          Note: we pass no `title` so the panel skips its own header and
+          doesn't duplicate the hero above. */}
+      {isPending && (
+        <div className="rounded-xl border border-border/30 bg-surface-50 overflow-hidden shadow-sm">
+          <ClarificationPanel
+            layout="inline"
+            prompt={item.question}
+            severity={panelSeverity}
+            fields={fields}
+            reviewContent={item.review_content}
+            reviewContentType={item.review_content_type}
+            reviewLanguage={item.review_language}
+            mode={panelMode}
+            scopeOptions={scopeOptions}
+            docs={item.docs?.map(d => ({ label: d.label, url: d.url }))}
+            submitting={submitting}
+            onSubmit={onSubmit}
+          />
+        </div>
+      )}
+
+      {/* Answered record */}
+      {!isPending && item.response && (
+        <div className="rounded-xl border border-border/30 bg-surface-50 overflow-hidden shadow-sm">
+          <div className="px-6 py-4 border-b border-border/15 bg-surface-100/30">
+            <div className="text-[10px] font-label uppercase tracking-widest text-theme-muted">
+              Response
             </div>
           </div>
-        </Section>
-      )}
-
-      {/* Answered record (when not pending) */}
-      {!isPending && item.response && (
-        <Section label="Response">
-          <AnsweredBlock item={item} />
-        </Section>
+          <div className="p-6">
+            <AnsweredBlock item={item} />
+          </div>
+        </div>
       )}
     </div>
-  );
-}
-
-function Section({
-  label, children, emphasis = false,
-}: {
-  label: string;
-  children: React.ReactNode;
-  emphasis?: boolean;
-}) {
-  return (
-    <div className="mb-6">
-      <div className={`text-[10px] font-label uppercase tracking-widest mb-2 ${
-        emphasis ? 'text-accent-blue' : 'text-theme-subtle'
-      }`}>
-        {label}
-      </div>
-      {children}
-    </div>
-  );
-}
-
-/**
- * Dynamic field renderer — reads the intervention's stored fields
- * (captured from the original human node's `fields` config at create
- * time) and renders the matching input type. Values flow back via the
- * `field_values` object that's sent to the respond endpoint, where the
- * keys match the workflow YAML's declared field names exactly.
- */
-function FieldInput({
-  field, value, onChange,
-}: {
-  field: InterventionField;
-  value: string;
-  onChange: (v: string) => void;
-}) {
-  const label = field.label ?? field.name;
-  const required = field.required !== false;
-
-  if (field.type === 'select' && field.options && field.options.length > 0) {
-    return (
-      <div>
-        <label className="block text-[10px] font-label uppercase tracking-widest text-theme-subtle mb-1.5">
-          {label}{required && <span className="text-accent-red ml-1">*</span>}
-        </label>
-        <select
-          value={value}
-          onChange={e => onChange(e.target.value)}
-          className="input text-xs w-full"
-        >
-          {field.options.map(opt => (
-            <option key={opt} value={opt}>{opt}</option>
-          ))}
-        </select>
-      </div>
-    );
-  }
-
-  if (field.type === 'textarea') {
-    return (
-      <div>
-        <label className="block text-[10px] font-label uppercase tracking-widest text-theme-subtle mb-1.5">
-          {label}{required && <span className="text-accent-red ml-1">*</span>}
-        </label>
-        <textarea
-          value={value}
-          onChange={e => onChange(e.target.value)}
-          rows={5}
-          className="input text-xs w-full font-body leading-relaxed"
-          placeholder={field.placeholder ?? ''}
-          autoFocus
-        />
-      </div>
-    );
-  }
-
-  // Default to single-line text input
-  return (
-    <div>
-      <label className="block text-[10px] font-label uppercase tracking-widest text-theme-subtle mb-1.5">
-        {label}{required && <span className="text-accent-red ml-1">*</span>}
-      </label>
-      <input
-        type="text"
-        value={value}
-        onChange={e => onChange(e.target.value)}
-        className="input text-xs w-full font-body"
-        placeholder={field.placeholder ?? ''}
-        autoFocus
-      />
-    </div>
-  );
-}
-
-function ActionBtn({
-  label, icon, color, active, onClick,
-}: {
-  label: string;
-  icon: React.ReactNode;
-  color: 'green' | 'yellow' | 'red' | 'blue';
-  active: boolean;
-  onClick: () => void;
-}) {
-  const colorMap = {
-    green: { base: 'bg-accent-green/10 text-accent-green hover:bg-accent-green/20', ring: 'ring-accent-green/60' },
-    yellow: { base: 'bg-accent-yellow/10 text-accent-yellow hover:bg-accent-yellow/20', ring: 'ring-accent-yellow/60' },
-    red: { base: 'bg-accent-red/10 text-accent-red hover:bg-accent-red/20', ring: 'ring-accent-red/60' },
-    blue: { base: 'bg-accent-blue/10 text-accent-blue hover:bg-accent-blue/20', ring: 'ring-accent-blue/60' },
-  };
-  const c = colorMap[color];
-  return (
-    <button
-      onClick={onClick}
-      className={`inline-flex items-center gap-1.5 px-3.5 py-2 rounded-full text-[11px] font-mono transition-all ${c.base} ${
-        active ? `ring-2 ring-offset-2 ring-offset-surface-100 ${c.ring}` : ''
-      }`}
-    >
-      {icon}
-      {label}
-    </button>
   );
 }
 
 function AnsweredBlock({ item }: { item: Intervention }) {
   const decision = responseDecisionLabel(item.response?.decision);
   return (
-    <div className="border border-border/30 rounded-lg p-5 bg-surface-100">
-      <div className="flex items-center gap-3 mb-4 pb-3 border-b border-border/20">
-        <div className={`w-10 h-10 rounded-full bg-surface-200/40 flex items-center justify-center ${decision.color}`}>
+    <div>
+      <div className="flex items-center gap-3 mb-5 pb-4 border-b border-border/15">
+        <div className={`w-11 h-11 rounded-xl bg-surface-200/40 border border-border/20 flex items-center justify-center ${decision.color}`}>
           <Check className="w-5 h-5" />
         </div>
         <div className="flex-1">
@@ -938,10 +735,10 @@ function AnsweredBlock({ item }: { item: Intervention }) {
         <ResponseField label="Answer" value={item.response.answer} pre />
       )}
       {item.retry_triggered && (
-        <div className="mt-3 pt-3 border-t border-border/20 text-[10px] font-mono text-theme-muted">
-          <RefreshCw className="w-3 h-3 inline mr-1.5" />
-          Retry triggered: <span className="text-accent-blue">{item.retry_triggered.target_node}</span>
-          {' '}(attempt {item.retry_triggered.retry_attempt}, source: {item.retry_triggered.retry_source})
+        <div className="mt-4 pt-4 border-t border-border/15 text-[11px] font-mono text-theme-muted flex items-center gap-2">
+          <RefreshCw className="w-3 h-3" />
+          Retry triggered at <span className="text-accent-blue">{item.retry_triggered.target_node}</span>
+          <span>(attempt {item.retry_triggered.retry_attempt} · {item.retry_triggered.retry_source})</span>
         </div>
       )}
     </div>
@@ -955,10 +752,10 @@ function ResponseField({ label, value, pre, mono }: {
   mono?: boolean;
 }) {
   return (
-    <div className="mb-3 last:mb-0">
-      <div className="text-[10px] font-label uppercase tracking-widest text-theme-subtle mb-1">{label}</div>
+    <div className="mb-4 last:mb-0">
+      <div className="text-[10px] font-label uppercase tracking-widest text-theme-subtle mb-1.5">{label}</div>
       {pre ? (
-        <pre className={`text-xs whitespace-pre-wrap text-theme-primary font-body bg-surface-200/30 border border-border/20 rounded p-3 ${mono ? 'font-mono' : ''}`}>
+        <pre className={`text-xs whitespace-pre-wrap text-theme-primary font-body bg-surface-100/50 border border-border/20 rounded-md p-3 leading-relaxed ${mono ? 'font-mono' : ''}`}>
           {value}
         </pre>
       ) : (
@@ -968,7 +765,7 @@ function ResponseField({ label, value, pre, mono }: {
   );
 }
 
-// ── Page component — routes between list and detail ───────────────────
+// ── Page component ────────────────────────────────────────────────────
 
 export default function InterventionsPage() {
   const { id } = useParams<{ id?: string }>();

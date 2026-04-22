@@ -11,7 +11,8 @@ description: >
 
     1. Human intervention appears → user answers.
     2. The answered intervention's data flows into the next agent node
-       via state (the question field becomes {{question}} in the prompt).
+       via state (the user_question field becomes {{user_question}} in
+       the prompt).
     3. The agent's response lands in state and is shown to the user in
        the next intervention card.
     4. A loop-back creates a fresh intervention each iteration (the
@@ -28,36 +29,25 @@ context:
   tools: []
   concurrency: 5
 
-input:
-  greeting:
-    type: string
-    required: false
-    default: "Hello! What can I help you with today?"
-    widget: text
-    label: Greeting
-    description: Optional greeting shown on the first question card. Leave at default for a normal test run.
-
 nodes:
   ask_question:
     type: human
     fields:
-      - name: question
+      - name: user_question
         label: "Your question"
         type: textarea
         required: true
     outputs:
-      question: "The user's current question."
+      user_question: "The question the user typed in this iteration."
     prompt: |
       🟡 Ask the agent a question.
-
-      {{greeting}}
 
       This is a simple chat loop test. Type any question — the agent
       (test-chat-helper on haiku) will answer it, then the workflow
       will pause again and ask if you have another question. The
       loop runs up to 10 iterations before ending.
 
-  agent_answer:
+  answer_question:
     agent: test-chat-helper
     # Each loop iteration is a FRESH session — questions in this test
     # workflow are independent ("what's X?" then "what's Y?"), not a
@@ -68,12 +58,12 @@ nodes:
     # If you want to test the continuing-conversation pattern instead
     # (agent remembers prior turns), set resume_on_retry: true AND
     # verify that test-chat-helper's Claude-CLI spawn populates
-    # state.sessions[agent_answer] on completion.
+    # state.sessions[answer_question] on completion.
     resume_on_retry: false
     prompt: |
       The user asked:
 
-      "{{question}}"
+      "{{user_question}}"
 
       Answer clearly and concisely in plain prose. 2–4 sentences unless
       the question genuinely needs more depth. No JSON, no code fences
@@ -82,26 +72,26 @@ nodes:
       Treat this as a standalone question — you don't have memory of
       prior questions in this workflow run. Each iteration is fresh.
     outputs:
-      answer: "The agent's conversational answer to the user's question."
+      agent_response: "The agent's conversational answer to the user's question."
 
-  ask_continue:
+  confirm_continue:
     type: human
     fields:
-      - name: continue_decision
+      - name: should_continue
         label: "Another question?"
         type: select
         options: [yes, no]
         required: true
     outputs:
-      continue_decision: "yes to loop back to ask_question, no to end the workflow."
+      should_continue: "yes to loop back to ask_question, no to end the workflow."
     prompt: |
       🟢 The agent answered your question.
 
       YOUR QUESTION:
-      {{question}}
+      {{user_question}}
 
       AGENT'S ANSWER:
-      {{answer}}
+      {{agent_response}}
 
       Would you like to ask another question?
         • yes → loops back to ask another question
@@ -109,7 +99,7 @@ nodes:
 
 edges:
   - { from: START, to: ask_question }
-  - { from: ask_question, to: agent_answer }
-  - { from: agent_answer, to: ask_continue }
-  - { from: ask_continue, to: ask_question, condition: "continue_decision == 'yes'", max_retries: 10 }
-  - { from: ask_continue, to: END, condition: "continue_decision == 'no'" }
+  - { from: ask_question, to: answer_question }
+  - { from: answer_question, to: confirm_continue }
+  - { from: confirm_continue, to: ask_question, condition: "should_continue == 'yes'", max_retries: 10 }
+  - { from: confirm_continue, to: END, condition: "should_continue == 'no'" }

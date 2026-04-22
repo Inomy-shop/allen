@@ -16,9 +16,10 @@ import type {
 } from './types.js';
 import { executeNode, type NodeExecutorDeps, type NodeResult } from './node-executor.js';
 import { evaluateCondition } from './condition-parser.js';
-import { renderTemplate } from './template.js';
+import { renderTemplate, renderTemplateWithBindings, collectPlaceholders } from './template.js';
 import { mergeParallelOutputs } from './parallel.js';
 import { extractAutoGateFields, buildNodeContext } from './output-extractor.js';
+import { needsSynthesis, synthesizeClarifyContext } from './clarify-synthesizer.js';
 import { StateManager } from './state-manager.js';
 import { LearningManager, type ExtractionContext } from './learning-manager.js';
 import type { Db } from 'mongodb';
@@ -107,6 +108,12 @@ export class AllenEngine {
     // Derive context tags for the learning system
     const contextTags = this.learningManager.deriveContextTags(input, workflow);
     exec.state.__contextTags = contextTags;
+
+    // Snapshot the workflow definition at execution start. Frozen DAG so the
+    // UI can render traces against exactly the shape the engine ran against,
+    // even if the workflow is edited later. Stored on the executions row as
+    // an extra field (not in ExecutionState type, intentionally out-of-band).
+    (exec as unknown as Record<string, unknown>).workflowSnapshot = workflow;
 
     await this.stateManager.createExecution(exec);
     this.emit({ event: 'execution_started', data: { executionId, workflowName: workflow.name } });
@@ -270,13 +277,17 @@ export class AllenEngine {
       ? checkpoint.completedNodes.slice(0, nodeIdx)
       : [...checkpoint.completedNodes];
 
+    // Carry `input` forward from the existing execution record so any node
+    // that reads `${input.*}` templates still resolves correctly on retry.
+    // The previous behavior reset to `{}` which silently broke such templates.
+    const existing = await this.stateManager.getExecution(executionId);
     const exec: ExecutionState = {
       id: executionId,
-      workflowId: '',
+      workflowId: existing?.workflowId ?? '',
       workflowName: workflow.name,
       workflowVersion: workflow.version ?? 1,
       status: 'running',
-      input: {},
+      input: existing?.input ?? {},
       state: { ...checkpoint.state } as Record<string, unknown>,
       sessions: { ...checkpoint.sessions },
       retryCounts: { ...checkpoint.retryCounts },
@@ -326,6 +337,186 @@ export class AllenEngine {
       this.emit({
         event: 'execution_failed',
         data: { executionId, failedNode: exec.failedNode, error: message },
+      });
+      throw err;
+    }
+  }
+
+  /**
+   * Resume execution from a SPECIFIC checkpoint (by id), not "the last
+   * checkpoint before this node." Used by the Editable Checkpoints UI flow:
+   * user edits a checkpoint's state, then clicks "Run from here" — the
+   * edited state is loaded verbatim and the graph runs forward.
+   *
+   * Differs from retryFromNode:
+   *   - Keyed by checkpoint._id instead of a node name
+   *   - Uses checkpoint.completedNodes AS-IS (the checkpoint already
+   *     represents the correct cut-point; no need to trim downstream)
+   *   - Carries `input` forward from the existing execution record (same
+   *     fix as retryFromNode)
+   *
+   * Runs against the SAME execution id — not a fork. Status transitions
+   * `failed`/`cancelled` → `running` → `completed`/`failed` as normal.
+   */
+  async runFromCheckpoint(
+    workflow: WorkflowDef,
+    executionId: string,
+    checkpointId: string,
+  ): Promise<Record<string, unknown>> {
+    const checkpoint = await this.stateManager.getCheckpointById(executionId, checkpointId);
+    if (!checkpoint) {
+      throw new Error(`Checkpoint ${checkpointId} not found for execution ${executionId}`);
+    }
+
+    const existing = await this.stateManager.getExecution(executionId);
+    const exec: ExecutionState = {
+      id: executionId,
+      workflowId: existing?.workflowId ?? '',
+      workflowName: workflow.name,
+      workflowVersion: workflow.version ?? 1,
+      status: 'running',
+      input: existing?.input ?? {},
+      state: { ...checkpoint.state } as Record<string, unknown>,
+      sessions: { ...checkpoint.sessions },
+      retryCounts: { ...checkpoint.retryCounts },
+      currentNodes: [],
+      completedNodes: [...checkpoint.completedNodes],
+      cost: { actual: null, estimated: 0 },
+      durationMs: 0,
+      startedAt: new Date(),
+    };
+
+    // Clear prior error fields via $unset so the UI no longer shows them
+    // after the re-run starts.
+    await this.stateManager.updateExecutionWithUnset(
+      executionId,
+      {
+        status: 'running',
+        state: exec.state,
+        completedNodes: exec.completedNodes,
+      },
+      ['errorMessage', 'failedNode'],
+    );
+
+    this.emit({ event: 'execution_started', data: { executionId, workflowName: workflow.name } });
+
+    try {
+      const result = await this.executeGraph(workflow, exec, 0);
+      exec.status = 'completed';
+      exec.completedAt = new Date();
+      exec.durationMs = Date.now() - exec.startedAt.getTime();
+      await this.stateManager.updateExecution(executionId, {
+        status: 'completed',
+        completedAt: exec.completedAt,
+        durationMs: exec.durationMs,
+        state: exec.state,
+        cost: exec.cost,
+        completedNodes: exec.completedNodes,
+      });
+      this.emit({
+        event: 'execution_completed',
+        data: { executionId, durationMs: exec.durationMs, cost: exec.cost },
+      });
+      return result;
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err);
+      exec.status = 'failed';
+      exec.errorMessage = message;
+      await this.stateManager.updateExecution(executionId, {
+        status: 'failed',
+        errorMessage: message,
+        failedNode: exec.failedNode,
+      });
+      await this.stateManager.saveFailureReport(exec, err as Error);
+      this.emit({
+        event: 'execution_failed',
+        data: { executionId, failedNode: exec.failedNode, error: message },
+      });
+      throw err;
+    }
+  }
+
+  /**
+   * Fork from a specific checkpoint into a NEW execution id. The new run
+   * inherits the checkpoint's state/sessions/retryCounts/completedNodes but
+   * gets its own executions row, own trace stream, own cost counter.
+   * Useful for "try this state edit without destroying the original run."
+   * Returns the new execution id.
+   */
+  async forkFromCheckpoint(
+    workflow: WorkflowDef,
+    sourceExecutionId: string,
+    checkpointId: string,
+    options?: { ownerId?: string; newExecutionId?: string },
+  ): Promise<{ newExecutionId: string; result: Record<string, unknown> }> {
+    const checkpoint = await this.stateManager.getCheckpointById(sourceExecutionId, checkpointId);
+    if (!checkpoint) {
+      throw new Error(`Checkpoint ${checkpointId} not found for execution ${sourceExecutionId}`);
+    }
+    const source = await this.stateManager.getExecution(sourceExecutionId);
+    if (!source) {
+      throw new Error(`Source execution ${sourceExecutionId} not found`);
+    }
+
+    // Caller may preallocate the id (service layer does this so the HTTP
+    // response can return the id without awaiting execution completion).
+    const newExecutionId = options?.newExecutionId ?? randomUUID();
+    const exec: ExecutionState = {
+      id: newExecutionId,
+      workflowId: source.workflowId ?? '',
+      workflowName: workflow.name,
+      workflowVersion: workflow.version ?? 1,
+      status: 'running',
+      input: source.input ?? {},
+      state: { ...checkpoint.state } as Record<string, unknown>,
+      sessions: { ...checkpoint.sessions },
+      retryCounts: { ...checkpoint.retryCounts },
+      currentNodes: [],
+      completedNodes: [...checkpoint.completedNodes],
+      cost: { actual: null, estimated: 0 },
+      durationMs: 0,
+      startedAt: new Date(),
+    } as ExecutionState;
+    // Stamp ownerId + fork lineage as extra metadata. ExecutionState's type
+    // doesn't declare these, so write via a plain object cast.
+    const execAny = exec as unknown as Record<string, unknown>;
+    if (options?.ownerId) execAny.ownerId = options.ownerId;
+    execAny.forkedFrom = { executionId: sourceExecutionId, checkpointId };
+
+    await this.stateManager.createExecution(exec);
+    this.emit({ event: 'execution_started', data: { executionId: newExecutionId, workflowName: workflow.name } });
+
+    try {
+      const result = await this.executeGraph(workflow, exec, 0);
+      exec.status = 'completed';
+      exec.completedAt = new Date();
+      exec.durationMs = Date.now() - exec.startedAt.getTime();
+      await this.stateManager.updateExecution(newExecutionId, {
+        status: 'completed',
+        completedAt: exec.completedAt,
+        durationMs: exec.durationMs,
+        state: exec.state,
+        cost: exec.cost,
+        completedNodes: exec.completedNodes,
+      });
+      this.emit({
+        event: 'execution_completed',
+        data: { executionId: newExecutionId, durationMs: exec.durationMs, cost: exec.cost },
+      });
+      return { newExecutionId, result };
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err);
+      exec.status = 'failed';
+      exec.errorMessage = message;
+      await this.stateManager.updateExecution(newExecutionId, {
+        status: 'failed',
+        errorMessage: message,
+        failedNode: exec.failedNode,
+      });
+      await this.stateManager.saveFailureReport(exec, err as Error);
+      this.emit({
+        event: 'execution_failed',
+        data: { executionId: newExecutionId, failedNode: exec.failedNode, error: message },
       });
       throw err;
     }
@@ -474,7 +665,17 @@ export class AllenEngine {
             return exec.state;
           }
 
-          if (gateAction === 'clarify') {
+          // Re-entrant clarify loop — if the retry itself emits clarify again
+          // (e.g. the user's first clarification wasn't enough, or they gave
+          // more gibberish), pause AGAIN on the same node. Prior versions
+          // fell through after one retry and let the workflow advance to
+          // the next node while the agent was still asking for input.
+          //
+          // Track every clarify field name the user filled this round so we
+          // can clean up ephemeral (non-declared) keys after the retry
+          // completes without falling back into another clarify.
+          const clarifyFieldNames: string[] = [];
+          while (gateAction === 'clarify') {
             // Pause and wait for human input at this node
             const reason = (exec.state.__gate_reason as string) ?? 'Agent needs clarification';
             const clarifyAction = (exec.state.__clarify_action as string) ?? 'retry';
@@ -484,6 +685,12 @@ export class AllenEngine {
             const fields = Array.isArray(clarifyFields) && clarifyFields.length > 0
               ? clarifyFields
               : [{ name: 'clarification', type: 'text', label: 'Your response', required: true, placeholder: 'Type your answer here...' }];
+            for (const f of fields) {
+              const n = (f as { name?: unknown }).name;
+              if (typeof n === 'string' && n && !n.startsWith('__')) {
+                clarifyFieldNames.push(n);
+              }
+            }
 
             exec.status = 'waiting_for_input';
             await this.stateManager.updateExecution(exec.id, {
@@ -584,16 +791,45 @@ export class AllenEngine {
                 if (retryLearning) {
                   this.learningManager.classifyAndStore(retryLearning).catch(() => {});
                 }
+
+                // Clean up ephemeral clarify keys — names the clarify
+                // introduced that aren't declared workflow variables.
+                // Overwrite targets (template placeholders / upstream
+                // fields) are kept; one-shot helpers are dropped so they
+                // don't leak into downstream nodes.
+                const dropped = cleanupEphemeralClarifyKeys(
+                  exec.state,
+                  clarifyFieldNames,
+                  nodeName,
+                  workflow,
+                );
+                if (dropped.length > 0) {
+                  this.log(exec.id, {
+                    category: 'gate',
+                    node: nodeName,
+                    level: 'debug',
+                    message: `Cleaned up ${dropped.length} ephemeral clarify key(s): ${dropped.join(', ')}`,
+                    data: { dropped },
+                  });
+                }
               }
 
               // If re-run returns stop/skip, exit graph
               if (gateAction === 'stop' || gateAction === 'skip') {
                 return exec.state;
               }
-              // If re-run returns clarify again, the next iteration of the for loop handles it
+              // If re-run returns 'clarify' again, loop back to the top of
+              // the while(gateAction === 'clarify') and pause once more on
+              // the same node with the fresh gate context the retry just
+              // wrote into state.
+            } else {
+              // 'continue' clarify: node's original output stays, human
+              // input is merged into state, fall through to advance to
+              // the next nodes. Break out of the clarify loop.
+              break;
             }
-            // For 'continue': node output stays, human input added to state, advance to next nodes
           }
+          // For 'continue' (via break above): advance to next nodes.
         }
 
         // Pass exec.completedNodes BY REFERENCE so getNextNodes can rewind
@@ -651,8 +887,33 @@ export class AllenEngine {
 
     // Build context-aware auto-gate instruction for EVERY agent node,
     // regardless of whether it has conditional outgoing edges.
+    //
+    // Also inject a short index of artifacts produced by upstream nodes so
+    // this agent can fetch full content via allen_get_artifact when
+    // templated state values might be truncated or summarized. Lookup is
+    // best-effort — if the service hook isn't wired (e.g. in tests), we
+    // skip the index silently.
+    let upstreamArtifacts: import('./output-extractor.js').UpstreamArtifactSummary[] | undefined;
+    if (nodeType === 'agent' && this.config.services?.artifacts?.listForRoot) {
+      try {
+        const artifactRootType = (process.env.ALLEN_ARTIFACT_ROOT_TYPE as 'workflow' | 'chat' | 'agent' | undefined) ?? 'workflow';
+        const artifactRootId = process.env.ALLEN_ARTIFACT_ROOT_ID || exec.id;
+        const list = await this.config.services.artifacts.listForRoot({
+          rootType: artifactRootType,
+          rootId: artifactRootId,
+          limit: 30,
+        });
+        upstreamArtifacts = list;
+      } catch {
+        /* best effort — skip the index if the lookup fails */
+      }
+    }
     let nodeContext = nodeType === 'agent' && workflow
-      ? buildNodeContext(nodeName, { nodes: workflow.nodes as Record<string, unknown>, edges: workflow.edges as unknown as Array<Record<string, unknown>> })
+      ? buildNodeContext(
+          nodeName,
+          { nodes: workflow.nodes as Record<string, unknown>, edges: workflow.edges as unknown as Array<Record<string, unknown>> },
+          upstreamArtifacts,
+        )
       : '';
 
     // Learning injection: query and inject relevant learnings before execution.
@@ -661,6 +922,9 @@ export class AllenEngine {
     // memory-tool reads, with no engine-side learning-context injection.
     const contextTags = (exec.state.__contextTags as string[]) ?? [];
     let injectedLearningIds: any[] = [];
+    /** Trace-friendly snapshot of injected learnings, pinned to THIS node's
+     *  trace row so the UI can display them inline with the prompt. */
+    let learningsInjectedTrace: Array<{ id?: string; content: string; contextTags?: string[] }> = [];
     const skipLearnings = process.env.ALLEN_AGENT_SKIP_LEARNINGS === 'true';
     if (nodeType === 'agent' && !skipLearnings) {
       try {
@@ -674,6 +938,11 @@ export class AllenEngine {
         if (learnings.length > 0) {
           nodeContext += this.learningManager.buildLearningsPrompt(learnings);
           injectedLearningIds = learnings.map(l => l._id).filter(Boolean);
+          learningsInjectedTrace = learnings.map((l) => ({
+            id: l._id ? String(l._id) : undefined,
+            content: (l.content ?? '').slice(0, 500),
+            contextTags: (l as unknown as { contextTags?: string[] }).contextTags,
+          }));
           const totalTokens = learnings.reduce((sum, l) => sum + l.tokenCount, 0);
           const previews = learnings.map(l => `"${l.content.slice(0, 50)}..."`).join(', ');
           this.log(exec.id, {
@@ -780,7 +1049,19 @@ export class AllenEngine {
 
       exec.completedNodes.push(nodeName);
 
-      // Save trace
+      // Save trace.
+      //
+      // Phase 2 enrichments are all optional and additive:
+      // - templateBindings: placeholder → resolved values from nodeDef.prompt
+      // - learningsInjected: learnings attached to this specific node spawn
+      // - runtimeContext / agentOverrides / toolsAvailable / tokenUsagePerTool /
+      //   gateDecision: populated by node-executor and bubbled up via NodeResult
+      // - retryReason: set on retry rows only (attempt > 1). For attempt 1 of
+      //   a normal first run it stays undefined.
+      const promptRender = nodeDef.prompt
+        ? renderTemplateWithBindings(nodeDef.prompt, exec.state)
+        : undefined;
+      const resultExt = result as unknown as NodeResult;
       const trace: NodeTrace = {
         node: nodeName,
         attempt,
@@ -788,7 +1069,7 @@ export class AllenEngine {
         type: nodeDef.type ?? 'agent',
         agent: nodeDef.agent,
         inputState: { ...exec.state },
-        renderedPrompt: nodeDef.prompt ? renderTemplate(nodeDef.prompt, exec.state) : undefined,
+        renderedPrompt: promptRender?.rendered,
         output: result.outputs,
         rawResponse: result.rawResponse,
         activity: [],
@@ -798,9 +1079,39 @@ export class AllenEngine {
         startedAt: traceStart,
         completedAt: new Date(),
         toolCalls: result.toolCalls,
+        // Enrichments — any still-undefined fields are dropped by Mongo on $set.
+        templateBindings: promptRender?.bindings,
+        learningsInjected: learningsInjectedTrace.length > 0 ? learningsInjectedTrace : undefined,
+        runtimeContext: resultExt.runtimeContext,
+        agentOverrides: resultExt.agentOverrides,
+        toolsAvailable: resultExt.toolsAvailable,
+        tokenUsagePerTool: resultExt.tokenUsagePerTool,
+        gateDecision: resultExt.gateDecision,
       };
 
       await this.stateManager.saveTrace({ ...trace, executionId: exec.id });
+
+      // Auto-capture eligible outputs as user-visible artifacts so the
+      // user can browse plans / PRDs / JSON configs from the execution
+      // page without the workflow author having to scaffold uploads.
+      // Best-effort — failures here never block the run.
+      if (this.config.services?.artifacts) {
+        autoCaptureArtifacts({
+          save: this.config.services.artifacts.save,
+          outputs: result.outputs,
+          nodeName,
+          nodeAgent: nodeDef.agent,
+          rootId: (process.env.ALLEN_ARTIFACT_ROOT_ID || exec.id),
+          attempt,
+        }).catch((err) => {
+          this.log(exec.id, {
+            category: 'system',
+            node: nodeName,
+            level: 'debug',
+            message: `Artifact auto-capture skipped: ${(err as Error).message}`,
+          });
+        });
+      }
 
       // Save checkpoint
       await this.stateManager.saveCheckpoint({
@@ -909,15 +1220,133 @@ export class AllenEngine {
             }
           }
 
+          // For clarify gates lacking context, ask Haiku to synthesize a
+          // targeted reason + fields from the raw response and input state.
+          // Skipped when the agent already provided both (or when no API
+          // key is configured — the synthesizer returns null and we fall
+          // back to the agent-provided values or the generic defaults).
+          let synthReason: string | undefined;
+          let synthFields: unknown[] | undefined;
+          if (gate.action === 'clarify'
+            && needsSynthesis(gate.reason, gate.clarifyFields)) {
+            this.log(exec.id, {
+              category: 'gate',
+              node: nodeName,
+              level: 'info',
+              message: `Clarify synthesizer: triggered (agent reason empty/boilerplate, no fields)`,
+            });
+            // Collect workflow context so the synthesizer can distinguish
+            // "fix a bad input" (reuse template/upstream name → overwrite)
+            // from "ask for missing info" (fresh name → ephemeral).
+            const templatePlaceholders = typeof nodeDef.prompt === 'string'
+              ? collectPlaceholders(nodeDef.prompt)
+              : [];
+            const upstreamFields = collectUpstreamHumanFields(nodeName, workflow);
+            const nodeOutputs = nodeDef.outputs && typeof nodeDef.outputs === 'object'
+              ? Object.keys(nodeDef.outputs as Record<string, unknown>)
+              : [];
+            const synth = await synthesizeClarifyContext({
+              nodeName,
+              nodePrompt: typeof nodeDef.prompt === 'string' ? nodeDef.prompt : undefined,
+              rawResponse: result.rawResponse,
+              inputVars: exec.state,
+              agentReason: gate.reason,
+              templatePlaceholders,
+              upstreamFields,
+              nodeOutputs,
+              abortSignal: ac.signal,
+              log: (entry) => {
+                switch (entry.phase) {
+                  case 'start':
+                    this.log(exec.id, {
+                      category: 'gate',
+                      node: nodeName,
+                      level: 'debug',
+                      message: `Clarify synthesizer: calling ${entry.model} (${entry.contextChars} chars of context)`,
+                      data: entry,
+                    });
+                    break;
+                  case 'haiku_response':
+                    this.log(exec.id, {
+                      category: 'gate',
+                      node: nodeName,
+                      level: 'debug',
+                      message: `Clarify synthesizer: Haiku responded in ${entry.durationMs}ms (${entry.textLen} chars)`,
+                      data: entry,
+                    });
+                    break;
+                  case 'parsed':
+                    this.log(exec.id, {
+                      category: 'gate',
+                      node: nodeName,
+                      level: 'info',
+                      message: `Clarify synthesizer: ${entry.fieldCount} field(s) — ${entry.fieldTypes.join(', ')}`,
+                      data: entry,
+                    });
+                    break;
+                  case 'skipped':
+                    this.log(exec.id, {
+                      category: 'gate',
+                      node: nodeName,
+                      level: 'debug',
+                      message: `Clarify synthesizer: skipped — ${entry.reason}`,
+                      data: entry,
+                    });
+                    break;
+                  case 'strict_rewrite':
+                    this.log(exec.id, {
+                      category: 'gate',
+                      node: nodeName,
+                      level: 'warn',
+                      message: `Clarify synthesizer: strict rewrite — ${entry.detail}`,
+                      data: entry,
+                    });
+                    break;
+                  case 'failed':
+                    this.log(exec.id, {
+                      category: 'gate',
+                      node: nodeName,
+                      level: 'warn',
+                      message: `Clarify synthesizer: failed at ${entry.stage} — ${entry.reason}${entry.detail ? ` (${entry.detail})` : ''}`,
+                      data: entry,
+                    });
+                    break;
+                }
+              },
+            });
+            if (synth) {
+              synthReason = synth.reason;
+              synthFields = synth.fields;
+              this.log(exec.id, {
+                category: 'gate',
+                node: nodeName,
+                level: 'info',
+                message: `Clarify synthesized → "${synth.reason.slice(0, 120)}"`,
+                data: { fieldCount: synth.fields.length, synthesized: true },
+              });
+            } else {
+              this.log(exec.id, {
+                category: 'gate',
+                node: nodeName,
+                level: 'warn',
+                message: `Clarify synthesizer returned null — falling back to agent/engine defaults`,
+              });
+            }
+          }
+
           // Store reason in state for visibility
           exec.state.__gate_action = gate.action;
-          exec.state.__gate_reason = gate.reason ?? 'Agent decided to ' + gate.action;
+          exec.state.__gate_reason = synthReason ?? gate.reason ?? 'Agent decided to ' + gate.action;
           exec.state.__gate_node = nodeName;
           if (gate.clarifyAction) {
             exec.state.__clarify_action = gate.clarifyAction;
           }
-          if (gate.clarifyFields) {
+          // Prefer agent-provided fields; only use synthesized ones when
+          // the agent didn't supply any.
+          if (gate.clarifyFields && gate.clarifyFields.length > 0) {
             exec.state.__clarify_fields = gate.clarifyFields;
+          } else if (synthFields && synthFields.length > 0) {
+            exec.state.__clarify_fields = synthFields;
           }
           return gate.action as 'stop' | 'skip' | 'clarify';
         } else {
@@ -1401,4 +1830,186 @@ export class AllenEngine {
 
 function sleep(ms: number): Promise<void> {
   return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+/**
+ * Decide which output keys from a node should be auto-saved as artifacts
+ * and write them through the host-supplied save hook.
+ *
+ * Heuristic (keep it conservative — false positives clutter the artifact list):
+ *   - Key ends with `_markdown` AND value is a non-empty string → save as .md
+ *   - Key ends with `_json` AND value is an object (or parseable JSON string) → save as .json
+ *   - Key ends with `_csv` AND value is a string → save as .csv
+ *   - Key ends with `_url` or `_id` → never capture (it's a reference, not content)
+ *   - __-prefixed keys → never capture (engine-internal)
+ */
+async function autoCaptureArtifacts(args: {
+  save: NonNullable<NonNullable<EngineServices>['artifacts']>['save'];
+  outputs: Record<string, unknown>;
+  nodeName: string;
+  nodeAgent?: string;
+  rootId: string;
+  attempt: number;
+}): Promise<void> {
+  const rootType = (process.env.ALLEN_ARTIFACT_ROOT_TYPE as 'workflow' | 'chat' | 'agent' | undefined) ?? 'workflow';
+  const suffix = args.attempt > 1 ? `-attempt-${args.attempt}` : '';
+  for (const [key, value] of Object.entries(args.outputs)) {
+    if (!key || key.startsWith('__')) continue;
+    if (key.endsWith('_url') || key.endsWith('_id')) continue;
+
+    let filename: string | undefined;
+    let content: string | undefined;
+    let contentType: 'markdown' | 'json' | 'csv' | 'text' | undefined;
+
+    if (key.endsWith('_markdown') && typeof value === 'string' && value.trim().length > 0) {
+      filename = `${args.nodeName}/${key.replace(/_markdown$/, '')}${suffix}.md`;
+      content = value;
+      contentType = 'markdown';
+    } else if (key.endsWith('_json')) {
+      if (typeof value === 'string') {
+        try { JSON.parse(value); } catch { continue; }
+        content = value;
+      } else if (value !== null && typeof value === 'object') {
+        content = JSON.stringify(value, null, 2);
+      } else continue;
+      filename = `${args.nodeName}/${key.replace(/_json$/, '')}${suffix}.json`;
+      contentType = 'json';
+    } else if (key.endsWith('_csv') && typeof value === 'string' && value.trim().length > 0) {
+      filename = `${args.nodeName}/${key.replace(/_csv$/, '')}${suffix}.csv`;
+      content = value;
+      contentType = 'csv';
+    } else {
+      continue;
+    }
+
+    if (!filename || content == null) continue;
+    try {
+      await args.save({
+        rootType,
+        rootId: args.rootId,
+        filename,
+        content,
+        contentType,
+        overwrite: true, // attempts can rewrite earlier rounds
+        description: `Auto-captured from ${args.nodeName} (${key})`,
+        spawnContext: {
+          originType: 'workflow_node',
+          nodeName: args.nodeName,
+          agentName: args.nodeAgent,
+        },
+      });
+    } catch {
+      // Best-effort — one failing output shouldn't block the rest.
+    }
+  }
+}
+
+/**
+ * Walk incoming edges backward from `nodeName` and collect every field
+ * declared on an upstream human node. Stops at each human node on that
+ * branch (further upstream is irrelevant — the user would have filled
+ * the immediately-reachable human nodes first).
+ *
+ * Used by the clarify synthesizer so it knows which variable names the
+ * user originally filled; picking those names makes the clarify answer
+ * OVERWRITE the broken value on retry instead of adding a new state key.
+ */
+function collectUpstreamHumanFields(
+  nodeName: string,
+  workflow: WorkflowDef | undefined,
+): Array<{ nodeName: string; name: string; type?: string; label?: string }> {
+  if (!workflow) return [];
+  const nodes = workflow.nodes ?? {};
+  const edges = workflow.edges ?? [];
+  const result: Array<{ nodeName: string; name: string; type?: string; label?: string }> = [];
+  const seen = new Set<string>();
+  const frontier: string[] = [nodeName];
+  const MAX_NODES = 25; // defence-in-depth for pathological graphs
+  while (frontier.length > 0 && seen.size < MAX_NODES) {
+    const current = frontier.shift()!;
+    for (const edge of edges) {
+      if (edge.to !== current) continue;
+      // Edges can have a string or string[] as `from` (join edges).
+      // Normalize so we handle both uniformly.
+      const froms = Array.isArray(edge.from) ? edge.from : [edge.from];
+      for (const from of froms) {
+        if (!from || from === 'START' || seen.has(from)) continue;
+        seen.add(from);
+        const upstream = nodes[from] as NodeDef | undefined;
+        if (upstream?.type === 'human' && Array.isArray(upstream.fields)) {
+          for (const f of upstream.fields) {
+            if (f && typeof f === 'object' && typeof (f as { name?: unknown }).name === 'string') {
+              result.push({
+                nodeName: from,
+                name: (f as { name: string }).name,
+                type: (f as { type?: string }).type,
+                label: (f as { label?: string }).label,
+              });
+            }
+          }
+          // Don't traverse past a human node — the user filled it;
+          // anything further upstream is already reflected in that
+          // node's outputs.
+          continue;
+        }
+        frontier.push(from);
+      }
+    }
+  }
+  return result;
+}
+
+/**
+ * After a clarify retry finishes successfully, delete state keys that
+ * were introduced BY THAT clarify but are NOT declared workflow variables.
+ * Keeps workflow-level keys (template placeholders, upstream human
+ * fields, other nodes' outputs) and drops one-shot clarify helpers so
+ * downstream nodes don't see stale context.
+ *
+ * A key is "persistent" — and thus NOT deleted — if any of these hold:
+ *   - It's a template placeholder of the gate node (the node reads it).
+ *   - It's an upstream human-node field (the user filled it legitimately).
+ *   - It's declared as an output of ANY node in the workflow (some node
+ *     produces it; deleting would break downstream templating).
+ */
+function cleanupEphemeralClarifyKeys(
+  state: Record<string, unknown>,
+  clarifyFieldNames: string[],
+  gateNodeName: string,
+  workflow: WorkflowDef | undefined,
+): string[] {
+  if (clarifyFieldNames.length === 0) return [];
+  if (!workflow) return [];
+  const nodes = workflow.nodes ?? {};
+  const gateNode = nodes[gateNodeName] as NodeDef | undefined;
+  const placeholderSet = new Set<string>();
+  if (gateNode && typeof gateNode.prompt === 'string') {
+    for (const p of collectPlaceholders(gateNode.prompt)) {
+      // Templates can use dotted paths ("state.brand"); compare on the
+      // first segment, which is the top-level state key.
+      placeholderSet.add(p.split('.')[0]);
+    }
+  }
+  const upstreamNames = new Set(
+    collectUpstreamHumanFields(gateNodeName, workflow).map((f) => f.name),
+  );
+  const outputNames = new Set<string>();
+  for (const def of Object.values(nodes)) {
+    const outs = (def as NodeDef).outputs;
+    if (outs && typeof outs === 'object') {
+      for (const k of Object.keys(outs)) outputNames.add(k);
+    }
+  }
+  const deleted: string[] = [];
+  for (const name of clarifyFieldNames) {
+    if (!name || name.startsWith('__')) continue;
+    if (placeholderSet.has(name)) continue;
+    if (upstreamNames.has(name)) continue;
+    if (outputNames.has(name)) continue;
+    if (name in state) {
+      delete state[name];
+      deleted.push(name);
+    }
+  }
+  return deleted;
 }

@@ -228,3 +228,9 @@ variable "allen_api_auth_token" {
   sensitive   = true
   default     = ""
 }
+
+variable "node_tls_reject_unauthorized" {
+  description = "Node.js TLS cert verification flag. '0' disables verification (needed for DocumentDB self-signed certs), '1' or unset enforces strict verification. SECURITY: only disable on trusted networks."
+  type        = string
+  default     = "1"
+}

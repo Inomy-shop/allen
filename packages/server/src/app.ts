@@ -24,6 +24,8 @@ import { alertRoutes } from './routes/alert.routes.js';
 import { workspaceRoutes } from './routes/workspace.routes.js';
 import { pullRequestRoutes } from './routes/pull-request.routes.js';
 import { fileRoutes, publicFileRoutes } from './routes/file.routes.js';
+import { artifactRoutes, publicArtifactRoutes } from './routes/artifact.routes.js';
+import { ArtifactService } from './services/artifact.service.js';
 import { slackRoutes } from './routes/slack.routes.js';
 import { startTerminalWebSocketServer } from './services/workspace-terminal.js';
 import { createWorkspaceProxy } from './services/workspace-proxy.js';
@@ -83,6 +85,7 @@ process.on('unhandledRejection', (reason: unknown, promise: Promise<unknown>) =>
 async function main(): Promise<void> {
   const db = await connectDB();
   await ensureIndexes(db);
+  await new ArtifactService(db).ensureIndexes();
   await bootstrapAdmin(db);
   // Secrets + @secret:KEY migrations removed. MCP env now comes straight
   // from Allen's root .env via the ALLEN_ prefix convention — see
@@ -118,9 +121,11 @@ async function main(): Promise<void> {
       'feature-plan-and-implement',
       'bug-investigate-and-fix',
       'resolve-pr-reviews',
+      'understand-and-plan',
       'test-human-intervention',
       'test-chat-loop',
       'test-create-workspace',
+      'test-artifacts',
     ],
   );
   await seedCronJobs(db);
@@ -180,6 +185,11 @@ async function main(): Promise<void> {
   // Write operations stay behind auth via `fileRoutes()` mounted further down.
   app.use('/api/files', publicFileRoutes());
 
+  // Public artifact content — same no-auth pattern as /api/files.
+  // Artifact UUIDs are unguessable, so the URL itself is the capability.
+  // Write operations stay behind auth via `artifactRoutes()` below.
+  app.use('/api/artifacts', publicArtifactRoutes(db));
+
   // Execution SSE stream — mounted BEFORE requireAuth so the browser's
   // EventSource (which cannot send an Authorization header) can subscribe.
   // The execution id is an unguessable UUID, same capability-URL model as
@@ -214,6 +224,7 @@ async function main(): Promise<void> {
   app.use('/api/interventions', interventionRoutes(db));
   app.use('/api/linear', linearRoutes(db));
   app.use('/api/files', fileRoutes());
+  app.use('/api/artifacts', artifactRoutes(db));
 
   // Preview reverse proxy — must be after json middleware but catches /api/workspaces/:id/preview/*
   app.use('/api/workspaces/:id/preview', createWorkspaceProxy(db));

@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import Editor from '@monaco-editor/react';
 import type { NodeState, ActivityEntry } from '../../hooks/useExecution';
 import StatusBadge from '../common/StatusBadge';
@@ -10,6 +11,10 @@ import { useSettingsStore } from '../../stores/settingsStore';
 import { resolveColorMode } from '../../lib/theme';
 import { Wrench, CheckCircle, Send, MessageSquare, ChevronDown, ChevronRight } from 'lucide-react';
 import { ToolCallLog } from '../common/ToolCallLog';
+import NodeInspector from './NodeInspector';
+import { CopyButton, DownloadButton } from '../common/CopyDownload';
+import TemplateBindingsTable from './TemplateBindingsTable';
+import StateDiffModal from './StateDiffModal';
 
 // ── Inline Monaco (read-only, compact) ──
 
@@ -621,16 +626,42 @@ function SpawnedAgentsPanel({
 
 // ── Main Component ──
 
-type DataTab = 'input' | 'prompt' | 'response' | 'outputs';
+type DataTab = 'input' | 'prompt' | 'response' | 'outputs' | 'inspector';
 
 export default function NodeDetail({
   nodeName, nodeState, trace, allTraces = [], waitingInput, onSubmitInput,
   spawnedChildren = [], allChildren = [], descendantsMode = false, onToggleDescendants,
 }: Props) {
   const [formData, setFormData] = useState<Record<string, unknown>>({});
-  const [viewAttempt, setViewAttempt] = useState<number | null>(null);
   const [expandViewer, setExpandViewer] = useState<{ title: string; content: string; mode?: ViewerMode } | null>(null);
-  const [activeTab, setActiveTab] = useState<DataTab>('response');
+  /** When set, opens StateDiffModal comparing two attempts' inputState+output. */
+  const [compareAttempts, setCompareAttempts] = useState<[number, number] | null>(null);
+
+  // Deep-link attempt + tab via URL params. `?attempt=N` and `?tab=Y`
+  // survive reload + let users share a link to a specific view.
+  const [searchParams, setSearchParams] = useSearchParams();
+  const attemptParam = searchParams.get('attempt');
+  // Guard against malformed ?attempt=foo — Number('foo') is NaN which would
+  // silently break the active-attempt match downstream. Coerce to null when
+  // not a finite number.
+  const parsedAttempt = attemptParam != null ? Number(attemptParam) : NaN;
+  const viewAttempt: number | null = Number.isFinite(parsedAttempt) ? parsedAttempt : null;
+  const setViewAttempt = (a: number | null) => {
+    const next = new URLSearchParams(searchParams);
+    if (a != null) next.set('attempt', String(a));
+    else next.delete('attempt');
+    setSearchParams(next, { replace: true });
+  };
+  const tabParam = searchParams.get('tab') as DataTab | null;
+  const [activeTabInternal, setActiveTabInternal] = useState<DataTab>('response');
+  const activeTab: DataTab = (tabParam && ['input', 'prompt', 'response', 'outputs', 'inspector'].includes(tabParam))
+    ? tabParam : activeTabInternal;
+  const setActiveTab = (t: DataTab) => {
+    setActiveTabInternal(t);
+    const next = new URLSearchParams(searchParams);
+    next.set('tab', t);
+    setSearchParams(next, { replace: true });
+  };
 
   // Reset the active tab whenever the selected node changes. MUST be
   // declared before any early `return` below or React throws a
@@ -722,7 +753,8 @@ export default function NodeDetail({
   // every render, which is fine.
   const resolvedTab: DataTab = (() => {
     const has = { input: tabHasInput, prompt: tabHasPrompt, response: tabHasResponse, outputs: tabHasOutputs };
-    if (has[activeTab]) return activeTab;
+    if (activeTab === 'inspector') return activeTrace ? 'inspector' : 'response';
+    if (has[activeTab as 'input' | 'prompt' | 'response' | 'outputs']) return activeTab;
     if (has.response) return 'response';
     if (has.outputs) return 'outputs';
     if (has.prompt) return 'prompt';
@@ -770,7 +802,7 @@ export default function NodeDetail({
         </div>
       )}
 
-      {/* Attempt tabs */}
+      {/* Attempt tabs + "Compare attempts" button when there are >1 */}
       {hasMultipleAttempts && (
         <div className="flex items-center gap-1 px-4 py-2 border-b border-border/50 shrink-0 bg-surface-50/50">
           <span className="text-[10px] font-label uppercase tracking-wider text-theme-muted mr-2">Attempt:</span>
@@ -789,6 +821,15 @@ export default function NodeDetail({
               {t.status === 'failed' && <span className="ml-1 text-accent-red">✗</span>}
             </button>
           ))}
+          {dedupedTraces.length >= 2 && (
+            <button
+              onClick={() => setCompareAttempts([dedupedTraces[0].attempt, dedupedTraces[dedupedTraces.length - 1].attempt])}
+              className="ml-auto text-[11px] font-mono px-2 py-0.5 rounded-sm border border-border/40 text-theme-secondary hover:bg-surface-200 transition-colors"
+              title="Compare first vs latest attempt's state"
+            >
+              Compare first ↔ latest
+            </button>
+          )}
         </div>
       )}
 
@@ -876,21 +917,43 @@ export default function NodeDetail({
                 disabled={!tabHasOutputs}
                 onClick={() => setActiveTab('outputs')}
               />
+              <TabButton
+                label="Inspector"
+                active={resolvedTab === 'inspector'}
+                disabled={!activeTrace}
+                onClick={() => setActiveTab('inspector')}
+              />
               {/* Expand-to-fullscreen button for the active tab — lives
                   on the right edge of the tab bar. */}
               <div className="flex-1" />
-              <div className="pr-2">
+              <div className="pr-2 flex items-center gap-0.5">
                 {resolvedTab === 'input' && tabHasInput && inputJson && (
-                  <ExpandButton onClick={() => setExpandViewer({ title: `${nodeName} — Input State`, content: inputJson, mode: 'json' })} />
+                  <>
+                    <CopyButton text={inputJson} />
+                    <DownloadButton content={inputJson} filename={`${nodeName}-input.json`} />
+                    <ExpandButton onClick={() => setExpandViewer({ title: `${nodeName} — Input State`, content: inputJson, mode: 'json' })} />
+                  </>
                 )}
                 {resolvedTab === 'prompt' && tabHasPrompt && prompt && (
-                  <ExpandButton onClick={() => setExpandViewer({ title: `${nodeName} — Prompt`, content: prompt, mode: 'raw' })} />
+                  <>
+                    <CopyButton text={prompt} />
+                    <DownloadButton content={prompt} filename={`${nodeName}-prompt.txt`} mime="text/plain" />
+                    <ExpandButton onClick={() => setExpandViewer({ title: `${nodeName} — Prompt`, content: prompt, mode: 'raw' })} />
+                  </>
                 )}
                 {resolvedTab === 'response' && tabHasResponse && (
-                  <ExpandButton onClick={() => setExpandViewer({ title: `${nodeName} — Response`, content: responseDisplay, mode: 'markdown' })} />
+                  <>
+                    <CopyButton text={responseDisplay} />
+                    <DownloadButton content={responseDisplay} filename={`${nodeName}-response.md`} mime="text/markdown" />
+                    <ExpandButton onClick={() => setExpandViewer({ title: `${nodeName} — Response`, content: responseDisplay, mode: 'markdown' })} />
+                  </>
                 )}
                 {resolvedTab === 'outputs' && tabHasOutputs && outputJson && (
-                  <ExpandButton onClick={() => setExpandViewer({ title: `${nodeName} — Outputs`, content: outputJson, mode: 'json' })} />
+                  <>
+                    <CopyButton text={outputJson} />
+                    <DownloadButton content={outputJson} filename={`${nodeName}-outputs.json`} />
+                    <ExpandButton onClick={() => setExpandViewer({ title: `${nodeName} — Outputs`, content: outputJson, mode: 'json' })} />
+                  </>
                 )}
               </div>
             </div>
@@ -904,7 +967,19 @@ export default function NodeDetail({
                 <InlineEditor value={inputJson} language="json" fill />
               )}
               {resolvedTab === 'prompt' && prompt && (
-                <InlineEditor value={prompt} language="plaintext" fill />
+                <div className="h-full min-h-0 flex flex-col gap-2">
+                  {/* Template bindings collapsible above the prompt — lets
+                      the user see which {{state.foo}} resolved to what
+                      without jumping to the Inspector tab. */}
+                  {activeTrace?.templateBindings && activeTrace.templateBindings.length > 0 && (
+                    <div className="shrink-0">
+                      <TemplateBindingsTable bindings={activeTrace.templateBindings as any} />
+                    </div>
+                  )}
+                  <div className="flex-1 min-h-0">
+                    <InlineEditor value={prompt} language="plaintext" fill />
+                  </div>
+                </div>
               )}
               {resolvedTab === 'response' && tabHasResponse && (
                 status === 'running'
@@ -913,6 +988,11 @@ export default function NodeDetail({
               )}
               {resolvedTab === 'outputs' && outputJson && (
                 <InlineEditor value={outputJson} language="json" fill />
+              )}
+              {resolvedTab === 'inspector' && activeTrace && (
+                <div className="p-3 overflow-auto h-full">
+                  <NodeInspector trace={activeTrace as any} />
+                </div>
               )}
               {/* Empty-state fallback: when every tab is empty (pending
                   node that hasn't started yet), show a placeholder. */}
@@ -937,6 +1017,32 @@ export default function NodeDetail({
                 <ToolCallLog calls={toolCalls} title="Tool Calls" />
               </Section>
             )}
+
+            {/* Thinking — extract any activity entries tagged `thinking` so
+                users can see the agent's internal reasoning between tool
+                calls without hunting through the full activity stream. */}
+            {(() => {
+              const thinkingEntries = (activity as any[]).filter((e) =>
+                e.type === 'thinking' || (typeof e.content === 'string' && e.content.includes('[thinking]')),
+              );
+              if (thinkingEntries.length === 0) return null;
+              return (
+                <Section title={`Thinking (${thinkingEntries.length})`} defaultOpen={false}>
+                  <div className="space-y-2 max-h-64 overflow-auto">
+                    {thinkingEntries.map((e: any, i: number) => (
+                      <div key={i} className="border-l-2 border-accent-blue/30 pl-2 py-1 bg-accent-blue/5 rounded-sm">
+                        <div className="text-[10px] font-mono text-theme-subtle mb-0.5">
+                          {e.tool ?? 'assistant'}
+                        </div>
+                        <div className="text-[11px] font-body text-theme-secondary whitespace-pre-wrap">
+                          {e.content}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </Section>
+              );
+            })()}
 
             {/* Activity log */}
             {activity.length > 0 && (
@@ -987,6 +1093,26 @@ export default function NodeDetail({
           onClose={() => setExpandViewer(null)}
         />
       )}
+
+      {/* Attempt-to-attempt state diff modal */}
+      {compareAttempts && (() => {
+        const [a1, a2] = compareAttempts;
+        const t1 = dedupedTraces.find((t) => t.attempt === a1);
+        const t2 = dedupedTraces.find((t) => t.attempt === a2);
+        if (!t1 || !t2) { setCompareAttempts(null); return null; }
+        // Combine inputState + output into a single snapshot per attempt so
+        // the diff reflects the full post-node state the downstream saw.
+        const snap = (t: typeof t1) => ({ ...(t.inputState ?? {}), ...(t.output ?? {}) });
+        return (
+          <StateDiffModal
+            titleLeft={`attempt #${a1}`}
+            titleRight={`attempt #${a2}`}
+            left={snap(t1)}
+            right={snap(t2)}
+            onClose={() => setCompareAttempts(null)}
+          />
+        );
+      })()}
     </div>
   );
 }

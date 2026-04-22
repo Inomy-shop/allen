@@ -70,6 +70,56 @@ export interface NodeResult {
   /** Per-tool-call log captured during the node's agent turn(s). Empty
    *  for non-agent node types. See tool-call.ts for record shape. */
   toolCalls?: ToolCallRecord[];
+
+  // ── Phase 2 trace enrichments — all optional, populated by node-executor
+  //    so the engine can merge them into the NodeTrace row at save time.
+
+  /** Captured from the SDK's `system.init` message — full list of tool
+   *  names the agent HAD access to during this spawn. UI diffs against
+   *  toolCalls to show "had X, Y, Z available; used only X". */
+  toolsAvailable?: string[];
+
+  /** Snapshot of the spawn-time context for this node. cwd, resolved model,
+   *  execution mode (sdk vs cli), system-prompt mode, MCP servers attached,
+   *  list of env var names (not values). */
+  runtimeContext?: {
+    cwd?: string;
+    executionMode?: 'sdk' | 'cli';
+    systemPromptMode?: 'append' | 'custom';
+    resolvedModel?: string;
+    reasoningEffort?: string;
+    planMode?: boolean;
+    mcpServerNames?: string[];
+    envKeys?: string[];
+  };
+
+  /** Effective agent settings + which layer set each (per-node override
+   *  vs. agent default). */
+  agentOverrides?: {
+    model?: string;
+    reasoningEffort?: string;
+    planMode?: boolean;
+    sources: Partial<Record<'model' | 'reasoningEffort' | 'planMode', 'node' | 'agent-default'>>;
+  };
+
+  /** Auto-gate verdict if the agent emitted one. */
+  gateDecision?: {
+    action: 'stop' | 'skip' | 'clarify';
+    reason: string;
+    clarifyAction?: 'retry' | 'continue';
+    clarifyFields?: string[];
+  };
+
+  /** Per-tool-call token usage + estimated cost. Estimate only — Anthropic
+   *  doesn't expose per-tool billing. Derived from the tool_result input_
+   *  tokens proportion of total node cost. */
+  tokenUsagePerTool?: Array<{
+    toolUseId: string;
+    tool: string;
+    inputTokens: number;
+    outputTokens: number;
+    estimatedCost: number;
+  }>;
 }
 
 export async function executeNode(
@@ -403,6 +453,23 @@ ${context}
     ALLEN_PARENT_CALLER: nodeName,
     ALLEN_ROOT_EXECUTION_ID:
       process.env.ALLEN_ROOT_EXECUTION_ID || deps.executionId || '',
+    // Artifact-root context — the Allen MCP's allen_save_artifact tool
+    // reads these to decide which root directory to file user-visible
+    // artifacts under. Inherit from parent env when set (so a workflow
+    // that spawns agents keeps EVERY sub-agent's artifacts under the
+    // same top-level workflow execution id). Otherwise, this node is
+    // the root and fills it in.
+    ALLEN_ARTIFACT_ROOT_TYPE:
+      process.env.ALLEN_ARTIFACT_ROOT_TYPE || 'workflow',
+    ALLEN_ARTIFACT_ROOT_ID:
+      process.env.ALLEN_ARTIFACT_ROOT_ID
+      || process.env.ALLEN_ROOT_EXECUTION_ID
+      || deps.executionId
+      || '',
+    ALLEN_ARTIFACT_NODE_NAME: nodeName,
+    ALLEN_ARTIFACT_AGENT_NAME: nodeDef.agent ?? '',
+    ALLEN_ARTIFACT_AGENT_EXECUTION_ID: deps.executionId ?? '',
+    ALLEN_ARTIFACT_PARENT_ID: deps.executionId ?? '',
   };
 
   // Load MCP servers so agent nodes can access Linear, Postgres, etc.
@@ -432,6 +499,12 @@ ${context}
       }
     } catch { /* org-context unavailable — fall back to plain system prompt */ }
   }
+
+  // Captured across all callAgent invocations for this node. First-seen
+  // init message's `tools` array — the agent's full tool allowlist. Used
+  // to populate NodeResult.toolsAvailable so the UI can diff against the
+  // set of tools actually invoked.
+  let capturedToolsAvailable: string[] | undefined;
 
   /**
    * Shared helper to call the Claude Code SDK with the agent's full context.
@@ -639,6 +712,15 @@ ${context}
         localSessionId = (message as any).session_id;
         localCost = (message as any).total_cost_usd ?? null;
         localTurns = (message as any).num_turns ?? localTurns;
+      } else if ((message as any).type === 'system' && (message as any).subtype === 'init') {
+        // Capture the list of tools the agent was spawned with on first
+        // init. Subsequent retries (JSON-extraction re-prompt, agent-
+        // resume) emit their own init with the same list — keep the first
+        // one for the trace.
+        if (!capturedToolsAvailable) {
+          const tools = (message as any).tools;
+          if (Array.isArray(tools)) capturedToolsAvailable = tools as string[];
+        }
       }
     }
 
@@ -881,6 +963,74 @@ Use auto-gate only if the original prompt's workflow context explicitly allowed 
   }
   // ───────────────────────────────────────────────────────────────────────
 
+  // ── Phase 2: build the trace enrichments bundle ────────────────────────
+  // All optional; engine stitches them into NodeTrace at save time.
+  // Re-derive the settings the same way callAgent does internally (see
+  // line ~527). These aren't visible in the outer scope so we recompute
+  // them here from nodeDef + role.
+  const override2 = nodeDef.agentOverrides ?? {};
+  const rawModel2 = (override2.model ?? role?.model) ?? 'sonnet';
+  const resolvedModel2 = normalizeModelAlias(rawModel2) ?? rawModel2;
+  const resolvedEffort2 = override2.reasoningEffort ?? role?.reasoningEffort;
+  const resolvedPlanMode2 = override2.planMode ?? role?.planMode ?? false;
+  const systemPromptMode2: 'append' | 'custom' =
+    process.env.ALLEN_SYSTEM_PROMPT_MODE === 'custom' ? 'custom' : 'append';
+  const explicitMode = process.env.ALLEN_AGENT_EXECUTION_MODE;
+  const isEphemeral2 = (() => {
+    if (!cwd) return false;
+    const n = cwd.replace(/\/+$/, '');
+    return n === '/tmp' || n.startsWith('/tmp/') ||
+      n === '/var/tmp' || n.startsWith('/var/tmp/') ||
+      n === '/private/tmp' || n.startsWith('/private/tmp/');
+  })();
+  const executionMode2: 'sdk' | 'cli' =
+    explicitMode === 'cli' ? 'cli' :
+    explicitMode === 'sdk' ? 'sdk' :
+    isEphemeral2 ? 'sdk' : 'cli';
+
+  const overrideSources: Partial<Record<'model' | 'reasoningEffort' | 'planMode', 'node' | 'agent-default'>> = {};
+  if (override2.model !== undefined) overrideSources.model = 'node';
+  else if (role?.model !== undefined) overrideSources.model = 'agent-default';
+  if (override2.reasoningEffort !== undefined) overrideSources.reasoningEffort = 'node';
+  else if (role?.reasoningEffort !== undefined) overrideSources.reasoningEffort = 'agent-default';
+  if (override2.planMode !== undefined) overrideSources.planMode = 'node';
+  else if (role?.planMode !== undefined) overrideSources.planMode = 'agent-default';
+
+  const runtimeContext: NodeResult['runtimeContext'] = {
+    cwd,
+    executionMode: executionMode2,
+    systemPromptMode: systemPromptMode2,
+    resolvedModel: resolvedModel2,
+    reasoningEffort: resolvedEffort2,
+    planMode: resolvedPlanMode2,
+    mcpServerNames: mcpServers ? Object.keys(mcpServers) : [],
+  };
+
+  const agentOverrides: NodeResult['agentOverrides'] = {
+    model: resolvedModel2,
+    reasoningEffort: resolvedEffort2,
+    planMode: resolvedPlanMode2,
+    sources: overrideSources,
+  };
+
+  // Gate decision — derived from the parsed __action in outputs (if any).
+  const gateActionRaw = (outputs as Record<string, unknown>).__action;
+  const gateDecision: NodeResult['gateDecision'] | undefined =
+    gateActionRaw === 'stop' || gateActionRaw === 'skip' || gateActionRaw === 'clarify'
+      ? {
+          action: gateActionRaw,
+          reason: String((outputs as Record<string, unknown>).__reason ?? ''),
+          clarifyAction: (outputs as Record<string, unknown>).__clarify_action as 'retry' | 'continue' | undefined,
+          clarifyFields: Array.isArray((outputs as Record<string, unknown>).__clarify_fields)
+            ? ((outputs as Record<string, unknown>).__clarify_fields as unknown[]).map((f) =>
+                typeof f === 'object' && f !== null && 'name' in f
+                  ? String((f as Record<string, unknown>).name)
+                  : String(f),
+              )
+            : undefined,
+        }
+      : undefined;
+
   return {
     outputs,
     rawResponse,
@@ -894,6 +1044,11 @@ Use auto-gate only if the original prompt's workflow context explicitly allowed 
     },
     durationMs: Date.now() - start,
     toolCalls: allToolCalls,
+    // Enrichments
+    toolsAvailable: capturedToolsAvailable,
+    runtimeContext,
+    agentOverrides,
+    gateDecision,
   };
 }
 

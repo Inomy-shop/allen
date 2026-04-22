@@ -10,8 +10,10 @@ import { CHAT_TITLE, CHAT_EMPTY_PROMPT } from '../lib/brand';
 import {
   MessageSquare, Command, Server, ScrollText, Users,
   Sparkles, Zap, BarChart3, Terminal, FolderOpen, AlertTriangle, Bot, Wrench,
+  FileText,
 } from 'lucide-react';
 import { chat as chatApi, mcp as mcpApi, learnings as learningsApi, agents as agentsApi } from '../services/api';
+import ArtifactsDrawer from '../components/artifacts/ArtifactsDrawer';
 
 const PROVIDER_DISPLAY: Record<string, { label: string; color: string }> = {
   codex: { label: 'Codex', color: 'text-accent-green' },
@@ -25,6 +27,7 @@ export default function ChatPage() {
   const [cmdPaletteOpen, setCmdPaletteOpen] = useState(false);
   const [logsOpen, setLogsOpen] = useState(false);
   const [toolLogOpen, setToolLogOpen] = useState(false);
+  const [artifactsOpen, setArtifactsOpen] = useState(false);
   const [mcpCount, setMcpCount] = useState<{ enabled: number; connected: number }>({ enabled: 0, connected: 0 });
   const [providers, setProviders] = useState<any[]>([]);
   const [selectedProvider, setSelectedProvider] = useState('codex');
@@ -232,6 +235,11 @@ export default function ChatPage() {
               <Wrench className="w-3.5 h-3.5" />
             </button>
           )}
+          {activeSessionId && (
+            <button onClick={() => setArtifactsOpen(true)} className="p-1.5 rounded-md bg-surface-200/30 hover:bg-surface-200/60 text-theme-muted hover:text-theme-secondary transition-all" title="Artifacts saved in this chat">
+              <FileText className="w-3.5 h-3.5" />
+            </button>
+          )}
           <button onClick={() => setCmdPaletteOpen(true)} className="p-1.5 rounded-md bg-surface-200/30 hover:bg-surface-200/60 text-theme-muted hover:text-theme-secondary transition-all" title="Commands">
             <Command className="w-3.5 h-3.5" />
           </button>
@@ -339,6 +347,14 @@ export default function ChatPage() {
       </div>
 
       <CommandPalette open={cmdPaletteOpen} onClose={() => setCmdPaletteOpen(false)} onSelect={handleCommandSelect} />
+      {activeSessionId && (
+        <ArtifactsDrawer
+          rootType="chat"
+          rootId={activeSessionId}
+          open={artifactsOpen}
+          onClose={() => setArtifactsOpen(false)}
+        />
+      )}
       {logsOpen && activeSessionId && <ConversationLogs sessionId={activeSessionId} onClose={() => setLogsOpen(false)} />}
       {toolLogOpen && activeSessionId && (
         <div className="fixed inset-y-0 right-0 w-full max-w-xl border-l border-border/40 bg-surface-50 shadow-2xl flex flex-col z-40">

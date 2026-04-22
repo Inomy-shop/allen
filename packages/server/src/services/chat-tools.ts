@@ -7,12 +7,32 @@
 import type { Db, ObjectId } from 'mongodb';
 import { mkdirSync } from 'node:fs';
 import { ExecutionService } from './execution.service.js';
+import { InterventionService } from './intervention.service.js';
 import { embedAndSave, invalidateCache } from './embedding.service.js';
 import { AgentConversationService } from './agent-conversation.service.js';
 import { metaChatTools, META_DESTRUCTIVE_TOOLS } from './chat-tools-meta.js';
 import { buildRepoContextBlock } from './repo-context-builder.js';
 import { AGENT_FALLBACK_CWD } from './chat-providers.js';
 import { MCP_SERVER_NAME, normalizeModelAlias } from '@allen/engine';
+
+/**
+ * Artifacts guidance — appended to every spawned / delegated agent's system
+ * prompt so any standalone document they produce (plans, designs, notes,
+ * CSV/JSON outputs) gets saved via allen_save_artifact. Files auto-render
+ * in the UI based on extension and are filed under whichever run spawned
+ * this agent (chat session, workflow, or root agent).
+ */
+const ARTIFACTS_GUIDANCE = `
+
+# Artifacts
+
+When you produce a standalone document worth keeping — a plan, design doc, investigation notes, CSV export, JSON config, or any file the user should be able to review later — save it with the \`allen_save_artifact\` MCP tool:
+
+- \`allen_save_artifact(filename, content)\` — files auto-render in the UI based on extension (.md / .json / .csv / .txt / code). No root id needed; the tool files under whichever run spawned you (workflow / chat / agent) via env-var context.
+- Prefer \`allen_save_artifact\` over \`upload_file\` for in-conversation/run deliverables. Use \`upload_file\` only for shares destined for outside Allen.
+- When you spawn sub-agents via \`spawn_agent\`, INCLUDE THIS INSTRUCTION in their prompt. Their artifacts inherit your root, so the user sees the whole spawn tree's files in one Artifacts panel.
+- Don't duplicate auto-captured outputs — workflow outputs whose keys end in \`_markdown\` / \`_json\` / \`_csv\` are saved automatically. Use \`allen_save_artifact\` for artifacts OUTSIDE the declared output schema.
+`;
 
 /** Resolve cwd for agent/chat spawns. Never falls back to process.cwd() —
  * we don't want agents running inside the server's own source tree. */
@@ -339,6 +359,50 @@ const getExecution: ChatTool = {
           }
         }
 
+        // When paused waiting for input, surface the clarify payload so the
+        // LLM can explain to the user what the workflow is asking for.
+        let inputRequest: Record<string, unknown> | undefined;
+        let pendingIntervention: Record<string, unknown> | undefined;
+        if (exec.status === 'waiting_for_input') {
+          const st = (exec.state ?? {}) as Record<string, unknown>;
+          const waitingNode = Array.isArray(exec.currentNodes) && exec.currentNodes[0] ? exec.currentNodes[0] : undefined;
+          const reason = (st.__reason as string) ?? 'The workflow is waiting for your input.';
+          const fields = (st.__clarify_fields as unknown[]) ?? [
+            { name: 'response', type: 'text', label: 'Your response', required: true },
+          ];
+          const reviewContent = typeof st.__clarify_content === 'string'
+            ? st.__clarify_content
+            : st.__clarify_content != null
+              ? JSON.stringify(st.__clarify_content, null, 2)
+              : undefined;
+          inputRequest = {
+            node: waitingNode,
+            prompt: reason,
+            fields,
+            review_content: reviewContent,
+            review_content_type: st.__clarify_content_type ?? 'markdown',
+            clarify_action: st.__clarify_action ?? 'retry',
+          };
+
+          // Also look up any pending intervention for this execution so the
+          // LLM can offer intervention_id shortcuts (used by InterventionsPage).
+          try {
+            const interventionService = new InterventionService(db);
+            const pending = await interventionService.listForWorkflowRun(executionId);
+            const active = pending.find(p => p.status === 'pending');
+            if (active) {
+              pendingIntervention = {
+                intervention_id: active.intervention_id,
+                severity: active.severity,
+                title: active.title,
+                stage: active.stage,
+              };
+            }
+          } catch {
+            // Intervention service lookup is best-effort — not fatal if it fails.
+          }
+        }
+
         return {
           id: exec.id,
           workflow_name: exec.workflowName,
@@ -346,12 +410,15 @@ const getExecution: ChatTool = {
           response,
           session_id: sessionId,
           completed_nodes: exec.completedNodes,
+          current_nodes: exec.currentNodes,
           failed_node: exec.failedNode,
           error: exec.errorMessage,
           cost: exec.cost,
           duration_ms: exec.durationMs,
           started_at: exec.startedAt,
           completed_at: exec.completedAt,
+          input_request: inputRequest,
+          pending_intervention: pendingIntervention,
         };
       }
 
@@ -536,6 +603,8 @@ const spawnAgent: ChatTool = {
     const parentExecutionId = (args.parent_execution_id as string | undefined) || null;
     const parentCaller = (args.parent_caller as string | undefined)?.trim() || null;
     const providedRoot = (args.root_execution_id as string | undefined) || null;
+    const providedArtifactRootType = (args.artifact_root_type as string | undefined) || undefined;
+    const providedArtifactRootId = (args.artifact_root_id as string | undefined) || undefined;
     const callerLabel = parentCaller || 'chat';
     const workflowName = `${callerLabel}:spawn_agent/${agentName}`;
     // Root defaults to this new execution if no upstream root was passed.
@@ -596,11 +665,38 @@ const spawnAgent: ChatTool = {
     // env vars onward to this agent's own claude-cli subprocess, allowing
     // grandchild spawns (`agent A spawns agent B`) to carry correct
     // parent/root linkage.
+    // Decide the artifact root. Precedence:
+    //   1. Explicit artifact_root_* from the tool call (forwarded by the
+    //      Allen MCP when a nested spawn inherits from its parent).
+    //   2. Chat session context (top-level chat-initiated spawns) — files
+    //      belong to the chat, not the agent exec.
+    //   3. Workflow/root execution id when the caller came from a workflow.
+    //   4. This execution's own id — only hit for standalone agent runs
+    //      that don't have a chat or workflow parent.
+    let artifactRootType: string | undefined = providedArtifactRootType;
+    let artifactRootId: string | undefined = providedArtifactRootId;
+    if (!artifactRootType || !artifactRootId) {
+      if (activeCtxForMeta?.chatSessionId) {
+        artifactRootType = 'chat';
+        artifactRootId = activeCtxForMeta.chatSessionId;
+      } else if (providedRoot) {
+        // A workflow-initiated spawn has a root execution id. Default
+        // artifact root to that — it's the top of the workflow run.
+        artifactRootType = 'workflow';
+        artifactRootId = providedRoot;
+      } else {
+        artifactRootType = 'agent';
+        artifactRootId = executionId;
+      }
+    }
+
     runSpawnInBackground(db, role, agentName, prompt, executionId, resumeSession, repoPath, {
       parentExecutionId,
       parentCaller,
       rootExecutionId,
       spawnDepth,
+      artifactRootType,
+      artifactRootId,
     }).catch(() => {});
 
     return {
@@ -624,6 +720,12 @@ interface SpawnTreeContext {
   parentCaller: string | null;
   rootExecutionId: string;
   spawnDepth: number;
+  /** Artifact-root overrides — when set, propagated into the spawned
+   *  subprocess's env so `allen_save_artifact` files under the original
+   *  top-level run (chat session / workflow exec / root agent) instead
+   *  of each nested spawn creating its own root. */
+  artifactRootType?: string;
+  artifactRootId?: string;
 }
 
 /** Run spawn_agent in background — supports both Claude and Codex with MCP + tracing */
@@ -746,6 +848,7 @@ async function runSpawnInBackground(
     }
   }
 
+
   const MAX_SPAWN_RETRIES = 3;
   let currentResumeSession = resumeSession;
 
@@ -768,17 +871,31 @@ async function runSpawnInBackground(
       // to avoid races between parallel chats rebuilding the Codex config.
       const { spawn } = await import('node:child_process');
 
+      // Same spawn-tree + artifact context as the Claude path below — the
+      // Allen MCP server running inside Codex reads these to tag nested
+      // spawns + route artifacts to the correct root.
+      const codexSpawnEnv: Record<string, string> = {
+        ALLEN_PARENT_EXECUTION_ID: executionId,
+        ALLEN_PARENT_CALLER: agentName,
+        ALLEN_ROOT_EXECUTION_ID: spawnTree?.rootExecutionId ?? executionId,
+        ALLEN_ARTIFACT_ROOT_TYPE: spawnTree?.artifactRootType ?? 'agent',
+        ALLEN_ARTIFACT_ROOT_ID: spawnTree?.artifactRootId ?? executionId,
+        ALLEN_ARTIFACT_AGENT_NAME: agentName,
+        ALLEN_ARTIFACT_AGENT_EXECUTION_ID: executionId,
+        ALLEN_ARTIFACT_PARENT_ID: executionId,
+      };
+
       const args: string[] = ['exec'];
       if (currentResumeSession) {
         args.push('resume', '--json', '--dangerously-bypass-approvals-and-sandbox', '--skip-git-repo-check', '--', currentResumeSession, prompt);
       } else {
         args.push('--json', '--dangerously-bypass-approvals-and-sandbox', '--skip-git-repo-check');
         if (model) args.push('-c', `model="${model}"`);
-        args.push(`${(role.system as string) ?? ''}${repoContextBlock}${workspaceConstraint}\n\n${prompt}`);
+        args.push(`${(role.system as string) ?? ''}${repoContextBlock}${workspaceConstraint}${ARTIFACTS_GUIDANCE}\n\n${prompt}`);
       }
 
       const result = await new Promise<{ text: string; threadId?: string }>((resolveP, rejectP) => {
-        const proc = spawn('codex', args, { cwd: resolveAgentCwd(repoPath), env: { ...process.env }, stdio: ['pipe', 'pipe', 'pipe'] });
+        const proc = spawn('codex', args, { cwd: resolveAgentCwd(repoPath), env: { ...process.env, ...codexSpawnEnv }, stdio: ['pipe', 'pipe', 'pipe'] });
         proc.on('error', (err) => { rejectP(new Error(`Failed to spawn codex: ${err.message}. Is codex CLI installed?`)); });
         proc.stdin.end();
         // Register PID for cancel support
@@ -887,6 +1004,15 @@ async function runSpawnInBackground(
         ALLEN_PARENT_EXECUTION_ID: executionId,
         ALLEN_PARENT_CALLER: agentName,
         ALLEN_ROOT_EXECUTION_ID: spawnTree?.rootExecutionId ?? executionId,
+        // Artifact-root propagation — the Allen MCP server reads these
+        // when the spawned agent calls allen_save_artifact. Inherits
+        // unchanged from this spawn's own tree context so nested spawns
+        // file under the original top-level run.
+        ALLEN_ARTIFACT_ROOT_TYPE: spawnTree?.artifactRootType ?? 'agent',
+        ALLEN_ARTIFACT_ROOT_ID: spawnTree?.artifactRootId ?? executionId,
+        ALLEN_ARTIFACT_AGENT_NAME: agentName,
+        ALLEN_ARTIFACT_AGENT_EXECUTION_ID: executionId,
+        ALLEN_ARTIFACT_PARENT_ID: executionId,
       };
 
       // Pass the spawn context directly into the MCP config loader so the
@@ -911,7 +1037,7 @@ async function runSpawnInBackground(
         // ALLEN_SYSTEM_PROMPT_MODE: 'append' (default) preserves Claude
         // Code's built-in agentic scaffolding; 'custom' reverts to the old
         // full-replacement behavior. Matches node-executor.ts wiring.
-        const systemPromptBody = `${(role.system as string) ?? ''}${repoContextBlock}${workspaceConstraint}`;
+        const systemPromptBody = `${(role.system as string) ?? ''}${repoContextBlock}${workspaceConstraint}${ARTIFACTS_GUIDANCE}`;
         if (process.env.ALLEN_SYSTEM_PROMPT_MODE === 'custom') sdkOptions.customSystemPrompt = systemPromptBody;
         else sdkOptions.appendSystemPrompt = systemPromptBody;
       }
@@ -1117,6 +1243,17 @@ export async function resumeAgentExecution(
     },
   );
 
+  // Preserve the artifact root across resume so loop-back runs keep filing
+  // under the same chat / workflow / agent parent. Pull from exec.meta —
+  // chatSessionId is set when the agent was originally spawned from chat.
+  const resumeChatSessionId = (meta.chatSessionId as string | undefined) || undefined;
+  const resumeRootType = resumeChatSessionId
+    ? 'chat'
+    : (exec.parentExecutionId ? 'workflow' : 'agent');
+  const resumeRootId = resumeChatSessionId
+    ?? (exec.rootExecutionId as string | undefined)
+    ?? executionId;
+
   runSpawnInBackground(
     db,
     role as Record<string, unknown>,
@@ -1125,7 +1262,14 @@ export async function resumeAgentExecution(
     executionId,
     sessionId,
     repoPath,
-    undefined, // no spawn-tree context — this is a top-level resume
+    {
+      parentExecutionId: (exec.parentExecutionId as string | undefined) ?? null,
+      parentCaller: (exec.parentCaller as string | undefined) ?? null,
+      rootExecutionId: (exec.rootExecutionId as string | undefined) ?? executionId,
+      spawnDepth: (exec.spawnDepth as number | undefined) ?? 0,
+      artifactRootType: resumeRootType,
+      artifactRootId: resumeRootId,
+    },
     nextAttempt,
   ).catch(() => { /* errors already logged + persisted */ });
 
@@ -1418,21 +1562,111 @@ const getDashboardStats: ChatTool = {
 
 const submitExecutionInput: ChatTool = {
   name: 'submit_execution_input',
-  description: 'Submit human input to a paused workflow execution. Use this when wait_for_execution shows status "waiting_for_input" — it means a human node or auto-gate clarify is waiting for the user\'s response.',
+  description: 'Submit human input/intervention response to a paused workflow. Call this after wait_for_execution shows status "waiting_for_input" OR get_pending_interventions returns a pending item. Two modes: (1) direct — pass execution_id + node + data (field values). (2) intervention — pass intervention_id + decision (approve|request_changes|reject|answer) + field_values + optional feedback/scope. The intervention mode goes through the same backend path as the Interventions page button, so it triggers retryFromNode for request_changes, etc.',
   inputSchema: {
     type: 'object',
     properties: {
-      execution_id: { type: 'string', description: 'The execution ID that is waiting for input' },
-      node: { type: 'string', description: 'The node name that is waiting (from wait_for_execution current_nodes)' },
-      data: { type: 'object', description: 'The input data to submit. For human nodes: field values. For clarify: { response: "user answer", __clarify_action: "retry" or "continue" }', additionalProperties: true },
+      execution_id: { type: 'string', description: 'The execution ID that is waiting for input. Required for direct mode.' },
+      node: { type: 'string', description: 'The node name that is waiting. Required for direct mode.' },
+      data: { type: 'object', description: 'Field values keyed by field name. For direct mode: required. For intervention mode: optional — prefer field_values.', additionalProperties: true },
+      intervention_id: { type: 'string', description: 'Use this when responding to an intervention from get_pending_interventions. Takes precedence over execution_id + node.' },
+      decision: { type: 'string', enum: ['approve', 'request_changes', 'reject', 'answer'], description: 'Decision for intervention mode. approval/escalation severity uses approve|request_changes|reject; question severity uses answer|reject.' },
+      field_values: { type: 'object', description: 'Field values keyed by field name, for intervention mode.', additionalProperties: true },
+      feedback: { type: 'string', description: 'Free-form feedback. Required when decision is request_changes — passed verbatim as retry guidance.' },
+      scope: { type: 'string', description: 'Scope for plan approval gates (requirements | architecture | technical_design | all). Only used when decision is request_changes on plan_approval_gate stage.' },
     },
-    required: ['execution_id', 'node', 'data'],
   },
   async execute(args, db) {
     const executionService = new ExecutionService(db);
+    const interventionService = new InterventionService(db);
+
+    // ── Intervention mode ──
+    const interventionId = args.intervention_id as string | undefined;
+    if (interventionId) {
+      const intervention = await interventionService.get(interventionId);
+      if (!intervention) return { error: `Intervention "${interventionId}" not found.` };
+      if (intervention.status !== 'pending') {
+        return { error: `Intervention is already ${intervention.status}.` };
+      }
+      const decision = args.decision as 'approve' | 'request_changes' | 'reject' | 'answer' | undefined;
+      if (!decision) return { error: 'decision is required in intervention mode (approve | request_changes | reject | answer).' };
+
+      const fieldValues = (args.field_values as Record<string, unknown>) ?? (args.data as Record<string, unknown>) ?? {};
+      const feedback = args.feedback as string | undefined;
+      const scope = args.scope as string | undefined;
+
+      if (decision === 'request_changes' && !feedback) {
+        return { error: 'feedback is required when decision is "request_changes".' };
+      }
+
+      // Dispatch by decision — mirrors the POST /api/interventions/:id/respond handler
+      if (decision === 'approve' || decision === 'answer') {
+        const nodeName = intervention.stage;
+        const originalFields = (intervention as unknown as { fields?: Array<{ name: string }> }).fields ?? [];
+        const payload: Record<string, unknown> = {};
+        if (Object.keys(fieldValues).length > 0) {
+          Object.assign(payload, fieldValues);
+        } else if (originalFields.length > 0) {
+          // Fallback — single-field case where the caller only sent `data`
+          // with a free-form response.
+          payload[originalFields[0].name] = (args.data as Record<string, unknown>)?.response ?? '';
+        }
+        try {
+          await executionService.submitInput(intervention.workflow_run_id, nodeName, payload);
+        } catch (err) {
+          return { error: `submitInput failed: ${(err as Error).message}` };
+        }
+        await db.collection('executions').updateOne(
+          { id: intervention.workflow_run_id },
+          { $set: { status: 'running' } },
+        );
+      } else if (decision === 'request_changes') {
+        const targetNode = retryTargetForStage(intervention.stage, scope);
+        await db.collection('executions').updateOne(
+          { id: intervention.workflow_run_id },
+          {
+            $set: {
+              'state.__retry_target': [targetNode],
+              'state.__retry_source': 'human_feedback',
+              'state.__retry_attempt': 1,
+              'state.retry_context': feedback ?? '',
+            },
+          },
+        );
+        try {
+          await executionService.retryFromNode(intervention.workflow_run_id, targetNode);
+        } catch (err) {
+          return { error: `retryFromNode failed: ${(err as Error).message}` };
+        }
+      } else if (decision === 'reject') {
+        await db.collection('executions').updateOne(
+          { id: intervention.workflow_run_id },
+          { $set: { status: 'cancelled' } },
+        );
+      }
+
+      await interventionService.recordResponse(interventionId, {
+        decision,
+        feedback,
+        scope: scope as 'requirements' | 'architecture' | 'technical_design' | 'all' | undefined,
+        answered_by_user_id: 'chat',
+      });
+
+      return {
+        message: `Intervention ${interventionId} resolved with "${decision}".`,
+        intervention_id: interventionId,
+        execution_id: intervention.workflow_run_id,
+        decision,
+      };
+    }
+
+    // ── Direct mode ──
     const execId = args.execution_id as string;
     const node = args.node as string;
-    const data = (args.data as Record<string, unknown>) ?? {};
+    const data = (args.data as Record<string, unknown>) ?? (args.field_values as Record<string, unknown>) ?? {};
+    if (!execId || !node) {
+      return { error: 'execution_id and node are required in direct mode (or use intervention_id).' };
+    }
 
     const exec = await executionService.getById(execId);
     if (!exec) return { error: `Execution "${execId}" not found.` };
@@ -1452,6 +1686,105 @@ const submitExecutionInput: ChatTool = {
     };
   },
 };
+
+/**
+ * Mirrors retryTargetForStage in intervention.routes.ts. Kept in sync by
+ * hand — a mis-mapped retry target is obvious (wrong node re-runs), so a
+ * duplicate is cheaper than the coupling of sharing it across files.
+ */
+function retryTargetForStage(stage: string, scope?: string): string {
+  if (stage === 'plan_approval_gate') {
+    switch (scope) {
+      case 'requirements':     return 'produce_prd';
+      case 'architecture':     return 'produce_hla';
+      case 'technical_design': return 'produce_tdd';
+      default:                 return 'produce_prd';
+    }
+  }
+  const map: Record<string, string> = {
+    clarify_round_1: 'clarify',
+    clarify_round_2: 'clarify',
+    clarify_round_3: 'clarify',
+    audit_prd_escalation: 'produce_prd',
+    audit_hla_escalation: 'produce_hla',
+    audit_tdd_escalation: 'produce_tdd',
+    qa_escalation: 'qa_failure_triage',
+    validator_escalation: 'plan_implementation',
+    feature_escalation: 'investigate',
+    repro_question: 'investigate',
+  };
+  return map[stage] ?? stage;
+}
+
+const getPendingInterventions: ChatTool = {
+  name: 'get_pending_interventions',
+  description: 'List interventions that are waiting for a human response. Returns the question, required fields, reviewable content (PRD/JSON/code), and intervention_id. Call this when the user asks "what is waiting?" or "why is the workflow paused?" Pair with submit_execution_input (intervention mode) to respond.',
+  inputSchema: {
+    type: 'object',
+    properties: {
+      execution_id: { type: 'string', description: 'Filter to a specific execution. Optional — omit to see all pending interventions.' },
+      intervention_id: { type: 'string', description: 'Fetch a single intervention by id (returns full detail).' },
+      limit: { type: 'number', description: 'Max items (default 20).' },
+    },
+  },
+  async execute(args, db) {
+    const service = new InterventionService(db);
+
+    if (args.intervention_id) {
+      const doc = await service.get(args.intervention_id as string);
+      if (!doc) return { error: 'Intervention not found.' };
+      return { intervention: summarizeIntervention(doc as unknown as Record<string, unknown>, { full: true }) };
+    }
+
+    const limit = (args.limit as number) ?? 20;
+    const docs = args.execution_id
+      ? (await service.listForWorkflowRun(args.execution_id as string)).filter(d => d.status === 'pending')
+      : await service.list({ status: 'pending', limit });
+
+    return {
+      count: docs.length,
+      interventions: docs.slice(0, limit).map(d => summarizeIntervention(d as unknown as Record<string, unknown>, { full: false })),
+    };
+  },
+};
+
+function summarizeIntervention(
+  doc: Record<string, unknown>,
+  opts: { full: boolean },
+): Record<string, unknown> {
+  const d = doc as Record<string, unknown>;
+  const base: Record<string, unknown> = {
+    intervention_id: d.intervention_id,
+    execution_id: d.workflow_run_id,
+    workflow_name: d.workflow_name,
+    severity: d.severity,
+    stage: d.stage,
+    title: d.title,
+    question: d.question,
+    context_summary: d.context_summary,
+    status: d.status,
+    created_at: d.created_at,
+    round_info: d.round_info,
+  };
+  if (opts.full) {
+    base.fields = d.fields;
+    base.review_content = d.review_content;
+    base.review_content_type = d.review_content_type ?? 'markdown';
+    base.docs = d.docs;
+    base.user_request = d.user_request;
+    base.options = d.options;
+  } else {
+    const fields = Array.isArray(d.fields) ? (d.fields as Array<{ name: string; type?: string; label?: string; required?: boolean }>) : [];
+    base.field_summary = fields.map(f => ({
+      name: f.name,
+      type: f.type ?? 'text',
+      label: f.label ?? f.name,
+      required: f.required !== false,
+    }));
+    base.has_review_content = !!d.review_content;
+  }
+  return base;
+}
 
 // ── Learning Capture ──
 
@@ -1964,6 +2297,8 @@ async function runAgentTurn(
         systemPrompt += `\n\nMemory from past work:\n${items}`;
       }
     } catch {}
+    // Artifacts guidance for the delegated agent — same block spawned agents get.
+    systemPrompt += ARTIFACTS_GUIDANCE;
   }
 
   // Retry loop — if CLI times out, resume the same session and continue
@@ -2354,6 +2689,7 @@ export const chatTools: ChatTool[] = [
   getExecutionLogs,
   // Human-in-the-loop
   submitExecutionInput,
+  getPendingInterventions,
   // Learning capture
   saveLearning,
   // Workspace actions
