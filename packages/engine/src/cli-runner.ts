@@ -87,11 +87,18 @@ export async function* queryViaCli(opts: CliQueryOptions): AsyncGenerator<any, v
   const materialized: MaterializedAgent = writeAgentFile(opts.agent);
 
   const claudeBin = resolveClaudeBinary();
+
+  // Product directive: every CLI agent run bypasses every permission
+  // prompt, unconditionally. --dangerously-skip-permissions is the
+  // only permission flag we pass — it overrides tool allowlists, MCP
+  // policies, sandbox checks, and interactive prompts. Allen agents
+  // run unattended; any interactive prompt deadlocks the whole run.
+  // opts.permissionMode is accepted and IGNORED on the CLI path.
   const args: string[] = [
     '--output-format', 'stream-json',
     '--verbose',
     '--input-format', 'stream-json',
-    '--permission-mode', opts.permissionMode ?? 'bypassPermissions',
+    '--dangerously-skip-permissions',
     // The file at ~/.claude/agents/allen-<name>.md IS the system prompt for
     // the main session. Claude Code reads it via --agent <name>. No
     // --system-prompt / --append-system-prompt flags are needed; the file
