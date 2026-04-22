@@ -1,11 +1,13 @@
 import { Router, type Request, type Response } from 'express';
 import { ExecutionService } from '../services/execution.service.js';
+import { InterventionService } from '../services/intervention.service.js';
 import { param } from '../types.js';
 import type { Db } from 'mongodb';
 
 export function executionRoutes(db: Db): Router {
   const router = Router();
   const service = new ExecutionService(db);
+  const interventionService = new InterventionService(db);
 
   // POST /api/executions
   router.post('/', async (req: Request, res: Response) => {
@@ -112,15 +114,109 @@ export function executionRoutes(db: Db): Router {
   });
 
   // POST /api/executions/:id/input
+  //
+  // Delivers the user's response to the paused engine AND (if present)
+  // marks any matching pending intervention as answered, so the
+  // /interventions audit log reflects responses made from the execution
+  // page — not just those made from the interventions page.
   router.post('/:id/input', async (req: Request, res: Response) => {
     try {
       const { node, data } = req.body;
       if (!node) return res.status(400).json({ error: 'node is required' });
-      const delivered = await service.submitInput(param(req, 'id'), node, data ?? {});
+      const executionId = param(req, 'id');
+      const delivered = await service.submitInput(executionId, node, data ?? {});
       if (!delivered) {
         return res.status(404).json({ error: 'No pending input request found for this execution/node' });
       }
+
+      // Best-effort intervention sync — same tracking whether the user
+      // answered from the execution page or the interventions page.
+      // Failures here shouldn't block the engine from resuming.
+      try {
+        const all = await interventionService.listForWorkflowRun(executionId);
+
+        // Orphan cleanup — mark pending interventions as `skipped` when
+        // their stage is already in completedNodes AND no longer in
+        // currentNodes. These are leftovers from past engine advances
+        // where the user answered via the execution page (which didn't
+        // use to sync intervention records) or from loop iterations
+        // that moved on without resolution.
+        const exec = await service.getById(executionId);
+        const completed = new Set((exec?.completedNodes as string[] | undefined) ?? []);
+        const current = new Set((exec?.currentNodes as string[] | undefined) ?? []);
+        for (const p of all) {
+          if (p.status !== 'pending') continue;
+          if (!completed.has(p.stage)) continue;
+          if (current.has(p.stage)) continue;
+          if (p.stage === node) continue; // the one we're about to resolve
+          await interventionService.skipStalePending(executionId, undefined, p.stage);
+        }
+
+        const matchingPending = all.filter(
+          (p) => p.status === 'pending' && (p.stage === node || p.stage.startsWith(node)),
+        );
+        // Loop-back workflows can accumulate multiple pending interventions
+        // for the same stage (e.g. ask_question paused, engine moved past it
+        // without the intervention being resolved, then paused again).
+        // Record against the NEWEST one, and mark older same-stage pendings
+        // as `skipped` so the interventions page stops showing them.
+        if (matchingPending.length > 0) {
+          matchingPending.sort(
+            (a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime(),
+          );
+          const primary = matchingPending[0];
+          const userId = (req as unknown as { user?: { _id?: unknown } }).user?._id;
+          const payload = data as Record<string, unknown> | undefined;
+          const answerText = typeof payload?.response === 'string'
+            ? (payload.response as string)
+            : JSON.stringify(payload ?? {});
+          await interventionService.recordResponse(primary.intervention_id, {
+            decision: primary.severity === 'approval' ? 'approve' : 'answer',
+            answer: answerText,
+            answered_by_user_id: userId ? String(userId) : 'execution-page',
+          });
+          if (matchingPending.length > 1) {
+            const skipped = await interventionService.skipStalePending(
+              executionId,
+              primary.intervention_id,
+              primary.stage,
+            );
+            if (skipped > 0) {
+              console.log(`[execution.input] skipped ${skipped} stale ${primary.stage} interventions`);
+            }
+          }
+        }
+      } catch (err) {
+        console.warn('[execution.input] intervention sync failed:', (err as Error).message);
+      }
+
       res.json({ status: 'input_received' });
+    } catch (err: unknown) {
+      res.status(500).json({ error: (err as Error).message });
+    }
+  });
+
+  // POST /api/executions/:id/interventions/reconcile
+  //
+  // Sweep through all pending interventions for this execution and mark
+  // any whose stage is not currently waiting as `skipped`. Useful for
+  // healing runs where the user answered via the execution page before
+  // the intervention-sync wiring existed.
+  router.post('/:id/interventions/reconcile', async (req: Request, res: Response) => {
+    try {
+      const executionId = param(req, 'id');
+      const exec = await service.getById(executionId);
+      if (!exec) return res.status(404).json({ error: 'Execution not found' });
+      const all = await interventionService.listForWorkflowRun(executionId);
+      const current = new Set((exec.currentNodes as string[] | undefined) ?? []);
+      let skipped = 0;
+      for (const p of all) {
+        if (p.status !== 'pending') continue;
+        if (current.has(p.stage)) continue;
+        const n = await interventionService.skipStalePending(executionId, undefined, p.stage);
+        skipped += n;
+      }
+      res.json({ skipped });
     } catch (err: unknown) {
       res.status(500).json({ error: (err as Error).message });
     }

@@ -118,6 +118,7 @@ async function main(): Promise<void> {
       'feature-plan-and-implement',
       'bug-investigate-and-fix',
       'resolve-pr-reviews',
+      'understand-and-plan',
       'test-human-intervention',
       'test-chat-loop',
       'test-create-workspace',

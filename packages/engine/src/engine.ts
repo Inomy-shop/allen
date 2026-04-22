@@ -16,9 +16,10 @@ import type {
 } from './types.js';
 import { executeNode, type NodeExecutorDeps, type NodeResult } from './node-executor.js';
 import { evaluateCondition } from './condition-parser.js';
-import { renderTemplate, renderTemplateWithBindings } from './template.js';
+import { renderTemplate, renderTemplateWithBindings, collectPlaceholders } from './template.js';
 import { mergeParallelOutputs } from './parallel.js';
 import { extractAutoGateFields, buildNodeContext } from './output-extractor.js';
+import { needsSynthesis, synthesizeClarifyContext } from './clarify-synthesizer.js';
 import { StateManager } from './state-manager.js';
 import { LearningManager, type ExtractionContext } from './learning-manager.js';
 import type { Db } from 'mongodb';
@@ -664,7 +665,17 @@ export class AllenEngine {
             return exec.state;
           }
 
-          if (gateAction === 'clarify') {
+          // Re-entrant clarify loop — if the retry itself emits clarify again
+          // (e.g. the user's first clarification wasn't enough, or they gave
+          // more gibberish), pause AGAIN on the same node. Prior versions
+          // fell through after one retry and let the workflow advance to
+          // the next node while the agent was still asking for input.
+          //
+          // Track every clarify field name the user filled this round so we
+          // can clean up ephemeral (non-declared) keys after the retry
+          // completes without falling back into another clarify.
+          const clarifyFieldNames: string[] = [];
+          while (gateAction === 'clarify') {
             // Pause and wait for human input at this node
             const reason = (exec.state.__gate_reason as string) ?? 'Agent needs clarification';
             const clarifyAction = (exec.state.__clarify_action as string) ?? 'retry';
@@ -674,6 +685,12 @@ export class AllenEngine {
             const fields = Array.isArray(clarifyFields) && clarifyFields.length > 0
               ? clarifyFields
               : [{ name: 'clarification', type: 'text', label: 'Your response', required: true, placeholder: 'Type your answer here...' }];
+            for (const f of fields) {
+              const n = (f as { name?: unknown }).name;
+              if (typeof n === 'string' && n && !n.startsWith('__')) {
+                clarifyFieldNames.push(n);
+              }
+            }
 
             exec.status = 'waiting_for_input';
             await this.stateManager.updateExecution(exec.id, {
@@ -774,16 +791,45 @@ export class AllenEngine {
                 if (retryLearning) {
                   this.learningManager.classifyAndStore(retryLearning).catch(() => {});
                 }
+
+                // Clean up ephemeral clarify keys — names the clarify
+                // introduced that aren't declared workflow variables.
+                // Overwrite targets (template placeholders / upstream
+                // fields) are kept; one-shot helpers are dropped so they
+                // don't leak into downstream nodes.
+                const dropped = cleanupEphemeralClarifyKeys(
+                  exec.state,
+                  clarifyFieldNames,
+                  nodeName,
+                  workflow,
+                );
+                if (dropped.length > 0) {
+                  this.log(exec.id, {
+                    category: 'gate',
+                    node: nodeName,
+                    level: 'debug',
+                    message: `Cleaned up ${dropped.length} ephemeral clarify key(s): ${dropped.join(', ')}`,
+                    data: { dropped },
+                  });
+                }
               }
 
               // If re-run returns stop/skip, exit graph
               if (gateAction === 'stop' || gateAction === 'skip') {
                 return exec.state;
               }
-              // If re-run returns clarify again, the next iteration of the for loop handles it
+              // If re-run returns 'clarify' again, loop back to the top of
+              // the while(gateAction === 'clarify') and pause once more on
+              // the same node with the fresh gate context the retry just
+              // wrote into state.
+            } else {
+              // 'continue' clarify: node's original output stays, human
+              // input is merged into state, fall through to advance to
+              // the next nodes. Break out of the clarify loop.
+              break;
             }
-            // For 'continue': node output stays, human input added to state, advance to next nodes
           }
+          // For 'continue' (via break above): advance to next nodes.
         }
 
         // Pass exec.completedNodes BY REFERENCE so getNextNodes can rewind
@@ -1127,15 +1173,133 @@ export class AllenEngine {
             }
           }
 
+          // For clarify gates lacking context, ask Haiku to synthesize a
+          // targeted reason + fields from the raw response and input state.
+          // Skipped when the agent already provided both (or when no API
+          // key is configured — the synthesizer returns null and we fall
+          // back to the agent-provided values or the generic defaults).
+          let synthReason: string | undefined;
+          let synthFields: unknown[] | undefined;
+          if (gate.action === 'clarify'
+            && needsSynthesis(gate.reason, gate.clarifyFields)) {
+            this.log(exec.id, {
+              category: 'gate',
+              node: nodeName,
+              level: 'info',
+              message: `Clarify synthesizer: triggered (agent reason empty/boilerplate, no fields)`,
+            });
+            // Collect workflow context so the synthesizer can distinguish
+            // "fix a bad input" (reuse template/upstream name → overwrite)
+            // from "ask for missing info" (fresh name → ephemeral).
+            const templatePlaceholders = typeof nodeDef.prompt === 'string'
+              ? collectPlaceholders(nodeDef.prompt)
+              : [];
+            const upstreamFields = collectUpstreamHumanFields(nodeName, workflow);
+            const nodeOutputs = nodeDef.outputs && typeof nodeDef.outputs === 'object'
+              ? Object.keys(nodeDef.outputs as Record<string, unknown>)
+              : [];
+            const synth = await synthesizeClarifyContext({
+              nodeName,
+              nodePrompt: typeof nodeDef.prompt === 'string' ? nodeDef.prompt : undefined,
+              rawResponse: result.rawResponse,
+              inputVars: exec.state,
+              agentReason: gate.reason,
+              templatePlaceholders,
+              upstreamFields,
+              nodeOutputs,
+              abortSignal: ac.signal,
+              log: (entry) => {
+                switch (entry.phase) {
+                  case 'start':
+                    this.log(exec.id, {
+                      category: 'gate',
+                      node: nodeName,
+                      level: 'debug',
+                      message: `Clarify synthesizer: calling ${entry.model} (${entry.contextChars} chars of context)`,
+                      data: entry,
+                    });
+                    break;
+                  case 'haiku_response':
+                    this.log(exec.id, {
+                      category: 'gate',
+                      node: nodeName,
+                      level: 'debug',
+                      message: `Clarify synthesizer: Haiku responded in ${entry.durationMs}ms (${entry.textLen} chars)`,
+                      data: entry,
+                    });
+                    break;
+                  case 'parsed':
+                    this.log(exec.id, {
+                      category: 'gate',
+                      node: nodeName,
+                      level: 'info',
+                      message: `Clarify synthesizer: ${entry.fieldCount} field(s) — ${entry.fieldTypes.join(', ')}`,
+                      data: entry,
+                    });
+                    break;
+                  case 'skipped':
+                    this.log(exec.id, {
+                      category: 'gate',
+                      node: nodeName,
+                      level: 'debug',
+                      message: `Clarify synthesizer: skipped — ${entry.reason}`,
+                      data: entry,
+                    });
+                    break;
+                  case 'strict_rewrite':
+                    this.log(exec.id, {
+                      category: 'gate',
+                      node: nodeName,
+                      level: 'warn',
+                      message: `Clarify synthesizer: strict rewrite — ${entry.detail}`,
+                      data: entry,
+                    });
+                    break;
+                  case 'failed':
+                    this.log(exec.id, {
+                      category: 'gate',
+                      node: nodeName,
+                      level: 'warn',
+                      message: `Clarify synthesizer: failed at ${entry.stage} — ${entry.reason}${entry.detail ? ` (${entry.detail})` : ''}`,
+                      data: entry,
+                    });
+                    break;
+                }
+              },
+            });
+            if (synth) {
+              synthReason = synth.reason;
+              synthFields = synth.fields;
+              this.log(exec.id, {
+                category: 'gate',
+                node: nodeName,
+                level: 'info',
+                message: `Clarify synthesized → "${synth.reason.slice(0, 120)}"`,
+                data: { fieldCount: synth.fields.length, synthesized: true },
+              });
+            } else {
+              this.log(exec.id, {
+                category: 'gate',
+                node: nodeName,
+                level: 'warn',
+                message: `Clarify synthesizer returned null — falling back to agent/engine defaults`,
+              });
+            }
+          }
+
           // Store reason in state for visibility
           exec.state.__gate_action = gate.action;
-          exec.state.__gate_reason = gate.reason ?? 'Agent decided to ' + gate.action;
+          exec.state.__gate_reason = synthReason ?? gate.reason ?? 'Agent decided to ' + gate.action;
           exec.state.__gate_node = nodeName;
           if (gate.clarifyAction) {
             exec.state.__clarify_action = gate.clarifyAction;
           }
-          if (gate.clarifyFields) {
+          // Prefer agent-provided fields; only use synthesized ones when
+          // the agent didn't supply any.
+          if (gate.clarifyFields && gate.clarifyFields.length > 0) {
             exec.state.__clarify_fields = gate.clarifyFields;
+          } else if (synthFields && synthFields.length > 0) {
+            exec.state.__clarify_fields = synthFields;
           }
           return gate.action as 'stop' | 'skip' | 'clarify';
         } else {
@@ -1619,4 +1783,114 @@ export class AllenEngine {
 
 function sleep(ms: number): Promise<void> {
   return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+/**
+ * Walk incoming edges backward from `nodeName` and collect every field
+ * declared on an upstream human node. Stops at each human node on that
+ * branch (further upstream is irrelevant — the user would have filled
+ * the immediately-reachable human nodes first).
+ *
+ * Used by the clarify synthesizer so it knows which variable names the
+ * user originally filled; picking those names makes the clarify answer
+ * OVERWRITE the broken value on retry instead of adding a new state key.
+ */
+function collectUpstreamHumanFields(
+  nodeName: string,
+  workflow: WorkflowDef | undefined,
+): Array<{ nodeName: string; name: string; type?: string; label?: string }> {
+  if (!workflow) return [];
+  const nodes = workflow.nodes ?? {};
+  const edges = workflow.edges ?? [];
+  const result: Array<{ nodeName: string; name: string; type?: string; label?: string }> = [];
+  const seen = new Set<string>();
+  const frontier: string[] = [nodeName];
+  const MAX_NODES = 25; // defence-in-depth for pathological graphs
+  while (frontier.length > 0 && seen.size < MAX_NODES) {
+    const current = frontier.shift()!;
+    for (const edge of edges) {
+      if (edge.to !== current) continue;
+      // Edges can have a string or string[] as `from` (join edges).
+      // Normalize so we handle both uniformly.
+      const froms = Array.isArray(edge.from) ? edge.from : [edge.from];
+      for (const from of froms) {
+        if (!from || from === 'START' || seen.has(from)) continue;
+        seen.add(from);
+        const upstream = nodes[from] as NodeDef | undefined;
+        if (upstream?.type === 'human' && Array.isArray(upstream.fields)) {
+          for (const f of upstream.fields) {
+            if (f && typeof f === 'object' && typeof (f as { name?: unknown }).name === 'string') {
+              result.push({
+                nodeName: from,
+                name: (f as { name: string }).name,
+                type: (f as { type?: string }).type,
+                label: (f as { label?: string }).label,
+              });
+            }
+          }
+          // Don't traverse past a human node — the user filled it;
+          // anything further upstream is already reflected in that
+          // node's outputs.
+          continue;
+        }
+        frontier.push(from);
+      }
+    }
+  }
+  return result;
+}
+
+/**
+ * After a clarify retry finishes successfully, delete state keys that
+ * were introduced BY THAT clarify but are NOT declared workflow variables.
+ * Keeps workflow-level keys (template placeholders, upstream human
+ * fields, other nodes' outputs) and drops one-shot clarify helpers so
+ * downstream nodes don't see stale context.
+ *
+ * A key is "persistent" — and thus NOT deleted — if any of these hold:
+ *   - It's a template placeholder of the gate node (the node reads it).
+ *   - It's an upstream human-node field (the user filled it legitimately).
+ *   - It's declared as an output of ANY node in the workflow (some node
+ *     produces it; deleting would break downstream templating).
+ */
+function cleanupEphemeralClarifyKeys(
+  state: Record<string, unknown>,
+  clarifyFieldNames: string[],
+  gateNodeName: string,
+  workflow: WorkflowDef | undefined,
+): string[] {
+  if (clarifyFieldNames.length === 0) return [];
+  if (!workflow) return [];
+  const nodes = workflow.nodes ?? {};
+  const gateNode = nodes[gateNodeName] as NodeDef | undefined;
+  const placeholderSet = new Set<string>();
+  if (gateNode && typeof gateNode.prompt === 'string') {
+    for (const p of collectPlaceholders(gateNode.prompt)) {
+      // Templates can use dotted paths ("state.brand"); compare on the
+      // first segment, which is the top-level state key.
+      placeholderSet.add(p.split('.')[0]);
+    }
+  }
+  const upstreamNames = new Set(
+    collectUpstreamHumanFields(gateNodeName, workflow).map((f) => f.name),
+  );
+  const outputNames = new Set<string>();
+  for (const def of Object.values(nodes)) {
+    const outs = (def as NodeDef).outputs;
+    if (outs && typeof outs === 'object') {
+      for (const k of Object.keys(outs)) outputNames.add(k);
+    }
+  }
+  const deleted: string[] = [];
+  for (const name of clarifyFieldNames) {
+    if (!name || name.startsWith('__')) continue;
+    if (placeholderSet.has(name)) continue;
+    if (upstreamNames.has(name)) continue;
+    if (outputNames.has(name)) continue;
+    if (name in state) {
+      delete state[name];
+      deleted.push(name);
+    }
+  }
+  return deleted;
 }

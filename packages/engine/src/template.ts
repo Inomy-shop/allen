@@ -90,6 +90,30 @@ export function renderTemplateWithBindings(
   return { rendered, bindings };
 }
 
+/**
+ * Return every placeholder path referenced in a template, without
+ * rendering. E.g. `"Hello {{user.name}}, {{count}}"` → `["user.name", "count"]`.
+ * Used by the clarify synthesizer to know which variables the node's
+ * prompt actually reads, so it can pick field names that overwrite
+ * those exact keys on retry. Returns an empty array on parse failure.
+ */
+export function collectPlaceholders(template: string): string[] {
+  const out: string[] = [];
+  const seen = new Set<string>();
+  try {
+    const ast = Handlebars.parse(template);
+    walkPaths(ast as unknown as { body?: unknown[]; program?: unknown }, (path) => {
+      if (seen.has(path)) return;
+      seen.add(path);
+      if (path.startsWith('@') || path === 'this') return;
+      out.push(path);
+    });
+  } catch {
+    // Malformed template — fall back to empty list rather than throwing.
+  }
+  return out;
+}
+
 function walkPaths(node: unknown, visit: (path: string) => void): void {
   if (!node || typeof node !== 'object') return;
   const n = node as Record<string, unknown>;

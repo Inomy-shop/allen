@@ -1,6 +1,6 @@
 export { AllenEngine, type EngineConfig, type RunOptions } from './engine.js';
 export { StateManager } from './state-manager.js';
-export { renderTemplate, renderTemplateWithBindings, type TemplateBinding } from './template.js';
+export { renderTemplate, renderTemplateWithBindings, collectPlaceholders, type TemplateBinding } from './template.js';
 export { evaluateCondition, evaluateConditionVerbose, validateCondition } from './condition-parser.js';
 export { extractOutputs, extractOutputsSync, buildOutputInstruction, buildNodeContext } from './output-extractor.js';
 export { mergeParallelOutputs } from './parallel.js';
@@ -19,6 +19,10 @@ export { writeAgentFile, renderAgentFile, type AgentSpec, type MaterializedAgent
 export { expandToClaudeTools } from './tool-mapping.js';
 export { ensureInstalled, forgetInstall, type InstallStatus } from './mcp-install.js';
 export { normalizeModelAlias } from './model-alias.js';
+export {
+  synthesizeClarifyContext, needsSynthesis,
+  type ClarifySynthesisInput, type ClarifySynthesisOutput, type ClarifyField,
+} from './clarify-synthesizer.js';
 export { resolveAllenHome, resolveRepositoriesDir, resolveWorkspacesDir, resolveWorktreeCacheDir } from './paths.js';
 export {
   BRAND_NAME, BRAND_SLUG, DB_NAME_DEFAULT, MCP_SERVER_NAME,

@@ -137,21 +137,34 @@ export function useExecution(id: string | undefined) {
             try { wfForInput = await wfApi.get(exec.workflowId); } catch {}
           }
           const nodeDef = wfForInput?.parsed?.nodes?.[waitingNode];
-          // Use gate-provided fields/reason if available, otherwise fall back to node definition
-          const gateReason = exec.state?.__gate_reason;
-          const gateFields = exec.state?.__clarify_fields;
+          // Gate state is only relevant when the clarify is for THIS node.
+          // The engine is supposed to clean __gate_* when the gate clears,
+          // but stale fields can persist across loop iterations — guard
+          // against reading them when we're actually paused at a plain
+          // human node downstream of a past clarify.
+          const gateNode = exec.state?.__gate_node as string | undefined;
+          const gateIsForWaitingNode = !gateNode || gateNode === waitingNode;
+          const gateReason = gateIsForWaitingNode ? exec.state?.__gate_reason : undefined;
+          const gateFields = gateIsForWaitingNode ? exec.state?.__clarify_fields : undefined;
+
+          // Prefer a node's declared fields (human node) over a clarify
+          // gate's fallback. A human node always has its own fields in the
+          // workflow YAML; a clarify gate uses a generic text field unless
+          // the agent supplied __clarify_fields.
+          const hasDeclaredFields = Array.isArray(nodeDef?.fields) && nodeDef!.fields!.length > 0;
 
           let prompt: string;
           let fields: any[];
 
-          if (gateReason || gateFields) {
-            // Auto-gate clarify — use agent-provided prompt and fields
+          if ((gateReason || gateFields) && !hasDeclaredFields) {
+            // Auto-gate clarify — use agent-provided prompt and fields.
             prompt = (gateReason as string) ?? `Input required for ${waitingNode}`;
             fields = Array.isArray(gateFields) && gateFields.length > 0
               ? gateFields
               : [{ name: 'clarification', type: 'text', label: 'Your response', required: true, placeholder: 'Type your answer here...' }];
           } else if (nodeDef) {
-            // Human node — use workflow definition
+            // Human node — use workflow definition. Render {{placeholders}}
+            // against current state so the user sees filled-in values.
             prompt = nodeDef.prompt ?? `Input required for ${waitingNode}`;
             for (const [key, val] of Object.entries(exec.state ?? {})) {
               prompt = prompt.replace(new RegExp(`\\{\\{${key}\\}\\}`, 'g'), String(val ?? ''));

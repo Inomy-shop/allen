@@ -73,8 +73,6 @@ export default function WorkflowRunDialog({ workflow, onClose, onStarted }: Work
           for (const [key, schema] of Object.entries(wf.parsed.input) as [string, any][]) {
             defaults[key] = schema?.default != null ? String(schema.default) : '';
           }
-        } else {
-          defaults['task'] = '';
         }
         setRunInput(defaults);
       } catch (e) {

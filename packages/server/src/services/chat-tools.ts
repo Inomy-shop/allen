@@ -7,6 +7,7 @@
 import type { Db, ObjectId } from 'mongodb';
 import { mkdirSync } from 'node:fs';
 import { ExecutionService } from './execution.service.js';
+import { InterventionService } from './intervention.service.js';
 import { embedAndSave, invalidateCache } from './embedding.service.js';
 import { AgentConversationService } from './agent-conversation.service.js';
 import { metaChatTools, META_DESTRUCTIVE_TOOLS } from './chat-tools-meta.js';
@@ -339,6 +340,50 @@ const getExecution: ChatTool = {
           }
         }
 
+        // When paused waiting for input, surface the clarify payload so the
+        // LLM can explain to the user what the workflow is asking for.
+        let inputRequest: Record<string, unknown> | undefined;
+        let pendingIntervention: Record<string, unknown> | undefined;
+        if (exec.status === 'waiting_for_input') {
+          const st = (exec.state ?? {}) as Record<string, unknown>;
+          const waitingNode = Array.isArray(exec.currentNodes) && exec.currentNodes[0] ? exec.currentNodes[0] : undefined;
+          const reason = (st.__reason as string) ?? 'The workflow is waiting for your input.';
+          const fields = (st.__clarify_fields as unknown[]) ?? [
+            { name: 'response', type: 'text', label: 'Your response', required: true },
+          ];
+          const reviewContent = typeof st.__clarify_content === 'string'
+            ? st.__clarify_content
+            : st.__clarify_content != null
+              ? JSON.stringify(st.__clarify_content, null, 2)
+              : undefined;
+          inputRequest = {
+            node: waitingNode,
+            prompt: reason,
+            fields,
+            review_content: reviewContent,
+            review_content_type: st.__clarify_content_type ?? 'markdown',
+            clarify_action: st.__clarify_action ?? 'retry',
+          };
+
+          // Also look up any pending intervention for this execution so the
+          // LLM can offer intervention_id shortcuts (used by InterventionsPage).
+          try {
+            const interventionService = new InterventionService(db);
+            const pending = await interventionService.listForWorkflowRun(executionId);
+            const active = pending.find(p => p.status === 'pending');
+            if (active) {
+              pendingIntervention = {
+                intervention_id: active.intervention_id,
+                severity: active.severity,
+                title: active.title,
+                stage: active.stage,
+              };
+            }
+          } catch {
+            // Intervention service lookup is best-effort — not fatal if it fails.
+          }
+        }
+
         return {
           id: exec.id,
           workflow_name: exec.workflowName,
@@ -346,12 +391,15 @@ const getExecution: ChatTool = {
           response,
           session_id: sessionId,
           completed_nodes: exec.completedNodes,
+          current_nodes: exec.currentNodes,
           failed_node: exec.failedNode,
           error: exec.errorMessage,
           cost: exec.cost,
           duration_ms: exec.durationMs,
           started_at: exec.startedAt,
           completed_at: exec.completedAt,
+          input_request: inputRequest,
+          pending_intervention: pendingIntervention,
         };
       }
 
@@ -1418,21 +1466,111 @@ const getDashboardStats: ChatTool = {
 
 const submitExecutionInput: ChatTool = {
   name: 'submit_execution_input',
-  description: 'Submit human input to a paused workflow execution. Use this when wait_for_execution shows status "waiting_for_input" — it means a human node or auto-gate clarify is waiting for the user\'s response.',
+  description: 'Submit human input/intervention response to a paused workflow. Call this after wait_for_execution shows status "waiting_for_input" OR get_pending_interventions returns a pending item. Two modes: (1) direct — pass execution_id + node + data (field values). (2) intervention — pass intervention_id + decision (approve|request_changes|reject|answer) + field_values + optional feedback/scope. The intervention mode goes through the same backend path as the Interventions page button, so it triggers retryFromNode for request_changes, etc.',
   inputSchema: {
     type: 'object',
     properties: {
-      execution_id: { type: 'string', description: 'The execution ID that is waiting for input' },
-      node: { type: 'string', description: 'The node name that is waiting (from wait_for_execution current_nodes)' },
-      data: { type: 'object', description: 'The input data to submit. For human nodes: field values. For clarify: { response: "user answer", __clarify_action: "retry" or "continue" }', additionalProperties: true },
+      execution_id: { type: 'string', description: 'The execution ID that is waiting for input. Required for direct mode.' },
+      node: { type: 'string', description: 'The node name that is waiting. Required for direct mode.' },
+      data: { type: 'object', description: 'Field values keyed by field name. For direct mode: required. For intervention mode: optional — prefer field_values.', additionalProperties: true },
+      intervention_id: { type: 'string', description: 'Use this when responding to an intervention from get_pending_interventions. Takes precedence over execution_id + node.' },
+      decision: { type: 'string', enum: ['approve', 'request_changes', 'reject', 'answer'], description: 'Decision for intervention mode. approval/escalation severity uses approve|request_changes|reject; question severity uses answer|reject.' },
+      field_values: { type: 'object', description: 'Field values keyed by field name, for intervention mode.', additionalProperties: true },
+      feedback: { type: 'string', description: 'Free-form feedback. Required when decision is request_changes — passed verbatim as retry guidance.' },
+      scope: { type: 'string', description: 'Scope for plan approval gates (requirements | architecture | technical_design | all). Only used when decision is request_changes on plan_approval_gate stage.' },
     },
-    required: ['execution_id', 'node', 'data'],
   },
   async execute(args, db) {
     const executionService = new ExecutionService(db);
+    const interventionService = new InterventionService(db);
+
+    // ── Intervention mode ──
+    const interventionId = args.intervention_id as string | undefined;
+    if (interventionId) {
+      const intervention = await interventionService.get(interventionId);
+      if (!intervention) return { error: `Intervention "${interventionId}" not found.` };
+      if (intervention.status !== 'pending') {
+        return { error: `Intervention is already ${intervention.status}.` };
+      }
+      const decision = args.decision as 'approve' | 'request_changes' | 'reject' | 'answer' | undefined;
+      if (!decision) return { error: 'decision is required in intervention mode (approve | request_changes | reject | answer).' };
+
+      const fieldValues = (args.field_values as Record<string, unknown>) ?? (args.data as Record<string, unknown>) ?? {};
+      const feedback = args.feedback as string | undefined;
+      const scope = args.scope as string | undefined;
+
+      if (decision === 'request_changes' && !feedback) {
+        return { error: 'feedback is required when decision is "request_changes".' };
+      }
+
+      // Dispatch by decision — mirrors the POST /api/interventions/:id/respond handler
+      if (decision === 'approve' || decision === 'answer') {
+        const nodeName = intervention.stage;
+        const originalFields = (intervention as unknown as { fields?: Array<{ name: string }> }).fields ?? [];
+        const payload: Record<string, unknown> = {};
+        if (Object.keys(fieldValues).length > 0) {
+          Object.assign(payload, fieldValues);
+        } else if (originalFields.length > 0) {
+          // Fallback — single-field case where the caller only sent `data`
+          // with a free-form response.
+          payload[originalFields[0].name] = (args.data as Record<string, unknown>)?.response ?? '';
+        }
+        try {
+          await executionService.submitInput(intervention.workflow_run_id, nodeName, payload);
+        } catch (err) {
+          return { error: `submitInput failed: ${(err as Error).message}` };
+        }
+        await db.collection('executions').updateOne(
+          { id: intervention.workflow_run_id },
+          { $set: { status: 'running' } },
+        );
+      } else if (decision === 'request_changes') {
+        const targetNode = retryTargetForStage(intervention.stage, scope);
+        await db.collection('executions').updateOne(
+          { id: intervention.workflow_run_id },
+          {
+            $set: {
+              'state.__retry_target': [targetNode],
+              'state.__retry_source': 'human_feedback',
+              'state.__retry_attempt': 1,
+              'state.retry_context': feedback ?? '',
+            },
+          },
+        );
+        try {
+          await executionService.retryFromNode(intervention.workflow_run_id, targetNode);
+        } catch (err) {
+          return { error: `retryFromNode failed: ${(err as Error).message}` };
+        }
+      } else if (decision === 'reject') {
+        await db.collection('executions').updateOne(
+          { id: intervention.workflow_run_id },
+          { $set: { status: 'cancelled' } },
+        );
+      }
+
+      await interventionService.recordResponse(interventionId, {
+        decision,
+        feedback,
+        scope: scope as 'requirements' | 'architecture' | 'technical_design' | 'all' | undefined,
+        answered_by_user_id: 'chat',
+      });
+
+      return {
+        message: `Intervention ${interventionId} resolved with "${decision}".`,
+        intervention_id: interventionId,
+        execution_id: intervention.workflow_run_id,
+        decision,
+      };
+    }
+
+    // ── Direct mode ──
     const execId = args.execution_id as string;
     const node = args.node as string;
-    const data = (args.data as Record<string, unknown>) ?? {};
+    const data = (args.data as Record<string, unknown>) ?? (args.field_values as Record<string, unknown>) ?? {};
+    if (!execId || !node) {
+      return { error: 'execution_id and node are required in direct mode (or use intervention_id).' };
+    }
 
     const exec = await executionService.getById(execId);
     if (!exec) return { error: `Execution "${execId}" not found.` };
@@ -1452,6 +1590,105 @@ const submitExecutionInput: ChatTool = {
     };
   },
 };
+
+/**
+ * Mirrors retryTargetForStage in intervention.routes.ts. Kept in sync by
+ * hand — a mis-mapped retry target is obvious (wrong node re-runs), so a
+ * duplicate is cheaper than the coupling of sharing it across files.
+ */
+function retryTargetForStage(stage: string, scope?: string): string {
+  if (stage === 'plan_approval_gate') {
+    switch (scope) {
+      case 'requirements':     return 'produce_prd';
+      case 'architecture':     return 'produce_hla';
+      case 'technical_design': return 'produce_tdd';
+      default:                 return 'produce_prd';
+    }
+  }
+  const map: Record<string, string> = {
+    clarify_round_1: 'clarify',
+    clarify_round_2: 'clarify',
+    clarify_round_3: 'clarify',
+    audit_prd_escalation: 'produce_prd',
+    audit_hla_escalation: 'produce_hla',
+    audit_tdd_escalation: 'produce_tdd',
+    qa_escalation: 'qa_failure_triage',
+    validator_escalation: 'plan_implementation',
+    feature_escalation: 'investigate',
+    repro_question: 'investigate',
+  };
+  return map[stage] ?? stage;
+}
+
+const getPendingInterventions: ChatTool = {
+  name: 'get_pending_interventions',
+  description: 'List interventions that are waiting for a human response. Returns the question, required fields, reviewable content (PRD/JSON/code), and intervention_id. Call this when the user asks "what is waiting?" or "why is the workflow paused?" Pair with submit_execution_input (intervention mode) to respond.',
+  inputSchema: {
+    type: 'object',
+    properties: {
+      execution_id: { type: 'string', description: 'Filter to a specific execution. Optional — omit to see all pending interventions.' },
+      intervention_id: { type: 'string', description: 'Fetch a single intervention by id (returns full detail).' },
+      limit: { type: 'number', description: 'Max items (default 20).' },
+    },
+  },
+  async execute(args, db) {
+    const service = new InterventionService(db);
+
+    if (args.intervention_id) {
+      const doc = await service.get(args.intervention_id as string);
+      if (!doc) return { error: 'Intervention not found.' };
+      return { intervention: summarizeIntervention(doc as unknown as Record<string, unknown>, { full: true }) };
+    }
+
+    const limit = (args.limit as number) ?? 20;
+    const docs = args.execution_id
+      ? (await service.listForWorkflowRun(args.execution_id as string)).filter(d => d.status === 'pending')
+      : await service.list({ status: 'pending', limit });
+
+    return {
+      count: docs.length,
+      interventions: docs.slice(0, limit).map(d => summarizeIntervention(d as unknown as Record<string, unknown>, { full: false })),
+    };
+  },
+};
+
+function summarizeIntervention(
+  doc: Record<string, unknown>,
+  opts: { full: boolean },
+): Record<string, unknown> {
+  const d = doc as Record<string, unknown>;
+  const base: Record<string, unknown> = {
+    intervention_id: d.intervention_id,
+    execution_id: d.workflow_run_id,
+    workflow_name: d.workflow_name,
+    severity: d.severity,
+    stage: d.stage,
+    title: d.title,
+    question: d.question,
+    context_summary: d.context_summary,
+    status: d.status,
+    created_at: d.created_at,
+    round_info: d.round_info,
+  };
+  if (opts.full) {
+    base.fields = d.fields;
+    base.review_content = d.review_content;
+    base.review_content_type = d.review_content_type ?? 'markdown';
+    base.docs = d.docs;
+    base.user_request = d.user_request;
+    base.options = d.options;
+  } else {
+    const fields = Array.isArray(d.fields) ? (d.fields as Array<{ name: string; type?: string; label?: string; required?: boolean }>) : [];
+    base.field_summary = fields.map(f => ({
+      name: f.name,
+      type: f.type ?? 'text',
+      label: f.label ?? f.name,
+      required: f.required !== false,
+    }));
+    base.has_review_content = !!d.review_content;
+  }
+  return base;
+}
 
 // ── Learning Capture ──
 
@@ -2354,6 +2591,7 @@ export const chatTools: ChatTool[] = [
   getExecutionLogs,
   // Human-in-the-loop
   submitExecutionInput,
+  getPendingInterventions,
   // Learning capture
   saveLearning,
   // Workspace actions

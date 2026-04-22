@@ -5,6 +5,7 @@ import {
   Download, RotateCcw, Brain, Bot, Clock, DollarSign, Terminal,
   CheckCircle, AlertCircle, Wrench, ChevronDown, ChevronRight,
   ArrowRight, AlertTriangle, Save, BarChart2, Activity,
+  MessageSquare,
 } from 'lucide-react';
 import { useExecution, type TimelineEvent } from '../hooks/useExecution';
 import { useResizable } from '../hooks/useResizable';
@@ -651,6 +652,12 @@ export default function ExecutionDetailPage() {
   const [timelineOpen, setTimelineOpen] = useState(false);
   const [stateChangesOpen, setStateChangesOpen] = useState(false);
   const [checkpointCount, setCheckpointCount] = useState<number | null>(null);
+
+  // Input dialog is dismissible — user can close it to look at nodes/logs
+  // and reopen via the header "Respond" button. The dismissed flag resets
+  // whenever a new input request arrives or the execution resumes.
+  const [inputDialogDismissed, setInputDialogDismissed] = useState(false);
+  const lastInputNodeRef = useRef<string | null>(null);
   useEffect(() => {
     if (!id) return;
     let cancelled = false;
@@ -681,6 +688,27 @@ export default function ExecutionDetailPage() {
   // moves to a new node. Instead we only auto-select when `selectedNode` is
   // null (first load) OR when the execution hits a state that requires the
   // user's attention (waiting_for_input, just-completed, just-failed).
+  // When a NEW input request arrives (different node than last time, or the
+  // execution was not in waiting_for_input before), re-open the dialog. Also
+  // re-open when the status moves back to running (so next pause starts fresh).
+  useEffect(() => {
+    if (!execution) return;
+    const waitingNode =
+      execution.status === 'waiting_for_input'
+        ? (latestInputEvent?.data?.node
+          ?? ((Array.isArray(execution.currentNodes) && execution.currentNodes[0]) || null))
+        : null;
+    if (execution.status !== 'waiting_for_input') {
+      if (inputDialogDismissed) setInputDialogDismissed(false);
+      lastInputNodeRef.current = null;
+      return;
+    }
+    if (waitingNode && waitingNode !== lastInputNodeRef.current) {
+      lastInputNodeRef.current = waitingNode;
+      setInputDialogDismissed(false);
+    }
+  }, [execution?.status, execution?.currentNodes, latestInputEvent?.data?.node]);
+
   const prevStatusRef = useRef<string | null>(null);
   useEffect(() => {
     if (!execution) return;
@@ -766,10 +794,19 @@ export default function ExecutionDetailPage() {
   }, [id, refresh]);
 
   const handleSubmitInput = useCallback(async (data: Record<string, unknown>) => {
-    if (id && latestInputEvent) {
+    if (!id || !latestInputEvent) return;
+    try {
       await api.submitInput(id, latestInputEvent.data.node, data);
+    } catch (err) {
+      alert(`Failed to submit input: ${(err as Error).message}`);
+      return;
     }
-  }, [id, latestInputEvent]);
+    // Re-fetch so the execution page reflects the submitted value, the
+    // new state keys, and the next status (running / next waiting node).
+    // SSE would deliver these eventually on live runs, but refresh()
+    // makes non-live / replay views update immediately too.
+    refresh();
+  }, [id, latestInputEvent, refresh]);
 
   const [resumeBusy, setResumeBusy] = useState(false);
   const [resumePickerOpen, setResumePickerOpen] = useState(false);
@@ -895,6 +932,17 @@ export default function ExecutionDetailPage() {
                 <span className="badge bg-accent-orange/10 text-accent-orange gap-1">
                   <Pause className="w-3 h-3" /> paused
                 </span>
+              )}
+              {execution.status === 'waiting_for_input' && inputDialogDismissed && (
+                <button
+                  onClick={() => setInputDialogDismissed(false)}
+                  className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[11px] font-mono bg-accent-yellow/15 text-accent-yellow border border-accent-yellow/40 hover:bg-accent-yellow/25 transition-colors"
+                  title="Reopen the input dialog"
+                >
+                  <MessageSquare className="w-3 h-3" />
+                  Respond to input
+                  <span className="w-1.5 h-1.5 rounded-full bg-accent-yellow animate-pulse" />
+                </button>
               )}
               {isLive && (
                 connected
@@ -1323,20 +1371,75 @@ export default function ExecutionDetailPage() {
           Mounted only when status is waiting_for_input AND we have the
           clarify payload; otherwise we defer to the pending-intervention
           banner higher up. */}
-      {execution.status === 'waiting_for_input' && (() => {
+      {execution.status === 'waiting_for_input' && !inputDialogDismissed && (() => {
         const st = (execution.state ?? {}) as Record<string, unknown>;
-        const fields = (st.__clarify_fields as any[]) ?? [
+        // Field source priority:
+        //   1. __clarify_fields   — agent-provided clarify fields (auto-gate)
+        //   2. latestInputEvent   — human node's declared fields (from workflow YAML)
+        //   3. fallback single `response` field
+        // Using the declared fields ensures submitted keys match what
+        // downstream nodes template against (e.g. {{user_question}}).
+        const clarifyFields = Array.isArray(st.__clarify_fields) && (st.__clarify_fields as unknown[]).length > 0
+          ? (st.__clarify_fields as any[])
+          : undefined;
+        const nodeFields = Array.isArray(latestInputEvent?.data?.fields) && latestInputEvent!.data!.fields!.length > 0
+          ? (latestInputEvent!.data!.fields as any[])
+          : undefined;
+        const fields = clarifyFields ?? nodeFields ?? [
           { name: 'response', type: 'text', label: 'Your response', required: true },
         ];
-        const reason = String(st.__reason ?? latestInputEvent?.data?.prompt ?? 'The agent is asking for input.');
-        const reviewContent = typeof st.__clarify_content === 'string'
-          ? st.__clarify_content
-          : st.__clarify_content
-            ? JSON.stringify(st.__clarify_content, null, 2)
-            : undefined;
-        const reviewContentType = (st.__clarify_content_type as 'markdown' | 'json' | 'code' | 'text' | undefined) ?? 'markdown';
+
+        // Find the agent's actual response text — ONLY when there's an
+        // active clarify gate whose target node is the currently-waiting
+        // node. For plain human-node pauses (no gate) we must NOT read
+        // the node's own declared outputs as "agent text" — those outputs
+        // are filled BY the user on this same pause, so their current
+        // values are leftover from a previous loop iteration.
+        let agentText: string | undefined;
         const waitingNode = latestInputEvent?.data?.node
-          ?? ((Array.isArray(execution.currentNodes) && execution.currentNodes[0]) || '');
+          ?? (Array.isArray(execution.currentNodes) && execution.currentNodes[0])
+          ?? undefined;
+        const gateNode = st.__gate_node as string | undefined;
+        const gateAction = st.__gate_action as string | undefined;
+        const gateIsForWaitingNode = !!gateNode && gateNode === waitingNode && gateAction === 'clarify';
+        if (gateIsForWaitingNode && gateNode) {
+          const gateNodeDef = workflow?.parsed?.nodes?.[gateNode];
+          const outputsSpec = (gateNodeDef as { outputs?: Record<string, unknown> } | undefined)?.outputs;
+          if (outputsSpec && typeof outputsSpec === 'object') {
+            let best: string | undefined;
+            for (const key of Object.keys(outputsSpec)) {
+              if (key.startsWith('__')) continue;
+              const v = st[key];
+              if (typeof v === 'string' && v.length > (best?.length ?? 0)) best = v;
+            }
+            agentText = best;
+          }
+        }
+
+        // Prompt resolution: agent-supplied > agent's actual text > generic.
+        // __reason is only trusted when the gate applies to this node —
+        // same staleness rule as agentText above.
+        const explicitReason = gateIsForWaitingNode
+          && typeof st.__reason === 'string' && st.__reason.length > 0
+          ? (st.__reason as string)
+          : undefined;
+        const reason = explicitReason
+          ?? (agentText && agentText.length < 280 ? agentText : undefined)
+          ?? (latestInputEvent?.data?.prompt as string | undefined)
+          ?? 'The agent is asking for input.';
+
+        // Review content: explicit clarify_content first (only if gate is
+        // for this node), else the agent's full response text when long
+        // enough to warrant a dedicated viewer.
+        let reviewContent: string | undefined;
+        if (gateIsForWaitingNode && typeof st.__clarify_content === 'string') {
+          reviewContent = st.__clarify_content;
+        } else if (gateIsForWaitingNode && st.__clarify_content != null) {
+          reviewContent = JSON.stringify(st.__clarify_content, null, 2);
+        } else if (agentText && agentText.length >= 280) {
+          reviewContent = agentText;
+        }
+        const reviewContentType = (st.__clarify_content_type as 'markdown' | 'json' | 'code' | 'text' | undefined) ?? 'markdown';
         // Only render if we have a waiting-node context. If not, fall back
         // to the intervention banner flow.
         if (!waitingNode) return null;
@@ -1348,7 +1451,7 @@ export default function ExecutionDetailPage() {
             reviewContent={reviewContent}
             reviewContentType={reviewContentType}
             onSubmit={(data) => handleSubmitInput(data)}
-            onCancel={() => { /* backdrop/Escape should NOT lose the pending state */ }}
+            onCancel={() => setInputDialogDismissed(true)}
           />
         );
       })()}

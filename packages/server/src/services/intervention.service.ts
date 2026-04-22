@@ -274,6 +274,34 @@ export class InterventionService {
       .toArray() as Promise<InterventionDoc[]>;
   }
 
+  /**
+   * Mark all pending interventions for a run as `skipped` except the given
+   * intervention_id. Used when the engine moves past a human pause without
+   * the user answering the matching intervention (e.g. the dialog was used
+   * but an older loop-iteration intervention is still sitting as pending).
+   * Returns the count of interventions skipped.
+   */
+  async skipStalePending(
+    workflow_run_id: string,
+    keep_intervention_id?: string,
+    stage?: string,
+  ): Promise<number> {
+    const query: Record<string, unknown> = {
+      workflow_run_id,
+      status: 'pending',
+    };
+    if (keep_intervention_id) query.intervention_id = { $ne: keep_intervention_id };
+    if (stage) query.stage = stage;
+    const result = await this.col.updateMany(query, {
+      $set: {
+        status: 'skipped',
+        answered_at: new Date(),
+        answered_by_user_id: 'system:engine-advanced',
+      },
+    });
+    return result.modifiedCount ?? 0;
+  }
+
   // ── Helpers ────────────────────────────────────────────────────────────
 
   private generateInterventionId(): string {
