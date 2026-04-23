@@ -108,6 +108,7 @@ export class AllenEngine {
       retryCounts: {},
       currentNodes: [],
       completedNodes: [],
+      nodeAttempts: {},
       cost: { actual: null, estimated: 0 },
       durationMs: 0,
       startedAt: new Date(),
@@ -211,6 +212,7 @@ export class AllenEngine {
       retryCounts: { ...checkpoint.retryCounts },
       currentNodes: [],
       completedNodes: [...checkpoint.completedNodes],
+      nodeAttempts: { ...(checkpoint.nodeAttempts ?? {}) },
       cost: { actual: null, estimated: 0 },
       durationMs: 0,
       startedAt: new Date(),
@@ -301,6 +303,7 @@ export class AllenEngine {
       retryCounts: { ...checkpoint.retryCounts },
       currentNodes: [],
       completedNodes,
+      nodeAttempts: { ...(checkpoint.nodeAttempts ?? {}) },
       cost: { actual: null, estimated: 0 },
       durationMs: 0,
       startedAt: new Date(),
@@ -389,6 +392,7 @@ export class AllenEngine {
       retryCounts: { ...checkpoint.retryCounts },
       currentNodes: [],
       completedNodes: [...checkpoint.completedNodes],
+      nodeAttempts: { ...(checkpoint.nodeAttempts ?? {}) },
       cost: { actual: null, estimated: 0 },
       durationMs: 0,
       startedAt: new Date(),
@@ -481,6 +485,7 @@ export class AllenEngine {
       retryCounts: { ...checkpoint.retryCounts },
       currentNodes: [],
       completedNodes: [...checkpoint.completedNodes],
+      nodeAttempts: { ...(checkpoint.nodeAttempts ?? {}) },
       cost: { actual: null, estimated: 0 },
       durationMs: 0,
       startedAt: new Date(),
@@ -690,9 +695,14 @@ export class AllenEngine {
         return e.to.every(t => currentNodes.includes(t));
       });
 
+      // Track which nodes we just finished so the dead-end diagnostic
+      // below can name them if no outgoing edge matches.
+      let justFinishedForDiag: string[] = [];
+
       if (parallelEdge && Array.isArray(parallelEdge.to)) {
         await this.executeParallelNodes(parallelEdge.to, parallelEdge, nodes, exec, nestingDepth);
         const parallelJustFinished = parallelEdge.to as string[];
+        justFinishedForDiag = parallelJustFinished;
         const nextNodes = this.getNextNodes(exec.completedNodes, edges, exec.state, exec.retryCounts, exec.id, parallelJustFinished);
         currentNodes = nextNodes;
       } else {
@@ -881,11 +891,34 @@ export class AllenEngine {
         // allFromCompleted check, while retry edges require at least one source
         // in justFinished to prevent infinite loops on stale state.
         const justFinished = currentNodes.filter(n => n !== 'END');
+        justFinishedForDiag = justFinished;
         currentNodes = this.getNextNodes(exec.completedNodes, edges, exec.state, exec.retryCounts, exec.id, justFinished);
       }
 
-      if (currentNodes.includes('END') || currentNodes.length === 0) {
+      if (currentNodes.includes('END')) {
         break;
+      }
+      if (currentNodes.length === 0) {
+        // Dead-end: getNextNodes returned no matches. Previously this
+        // silently broke the loop and `run()` marked the execution as
+        // `completed`, which looked identical to a successful finish —
+        // the most dangerous possible failure mode because the operator
+        // couldn't tell something went wrong. Common causes:
+        //   - A verdict/decision field has a value no outgoing edge covers
+        //     (e.g. plan_approval_gate request_changes with empty scope,
+        //     or an agent emitting an unexpected string for a verdict key).
+        //   - Conditions that use `!=` against undefined: the condition
+        //     parser coerces undefined to false, so `foo != 'x'` is true
+        //     even when foo was never set — the workflow author likely
+        //     intended a stricter check.
+        // Throw with the current state so the operator sees it.
+        const stuck = justFinishedForDiag.length > 0
+          ? justFinishedForDiag.join(', ')
+          : 'unknown';
+        throw new Error(
+          `Workflow stuck after node(s) [${stuck}]: no outgoing edge matched the current state. ` +
+          `Add a condition that covers this case, or route unexpected verdicts to escalation_review / END.`,
+        );
       }
     }
 
@@ -909,11 +942,16 @@ export class AllenEngine {
       throw new Error(`Node definition not found: ${nodeName}`);
     }
 
-    // Track retry count per node for trace attempt numbering
-    // Count how many times this node has already been traced (completed traces for this node)
+    // Per-node attempt counter. Monotonically increases for every node
+    // across the entire execution — independent of `completedNodes`
+    // (which gets spliced when retry edges rewind downstream history).
+    // Previously the counter was `completedNodes.filter(...).length + 1`,
+    // which reset to 1 for any node downstream of a retry target (because
+    // its prior entry was spliced out). Now every node's trace rows carry
+    // a correct, increasing attempt number even mid-retry-loop.
     const edgeRetryKey = this.findRetryEdgeKey(nodeName, exec.retryCounts);
-    const previousAttempts = exec.completedNodes.filter(n => n === nodeName).length;
-    const attempt = previousAttempts + 1;
+    exec.nodeAttempts[nodeName] = (exec.nodeAttempts[nodeName] ?? 0) + 1;
+    const attempt = exec.nodeAttempts[nodeName];
     const traceStart = new Date();
 
     const nodeType = nodeDef.type ?? 'agent';
@@ -1052,6 +1090,7 @@ export class AllenEngine {
           sessions: { ...exec.sessions },
           retryCounts: { ...exec.retryCounts },
           completedNodes: [...exec.completedNodes],
+          nodeAttempts: { ...exec.nodeAttempts },
           createdAt: new Date(),
         });
 
@@ -1156,6 +1195,7 @@ export class AllenEngine {
         sessions: { ...exec.sessions },
         retryCounts: { ...exec.retryCounts },
         completedNodes: [...exec.completedNodes],
+        nodeAttempts: { ...exec.nodeAttempts },
         createdAt: new Date(),
       });
 
@@ -1808,21 +1848,26 @@ export class AllenEngine {
       const allFromCompleted = fromNodes.every(f => effectiveCompleted.has(f));
       if (!allFromCompleted) continue;
 
-      // Retry edges: only fire when at least one source is in the just-finished
-      // set. Without this, a retry edge like `clarify → requirements if revise`
-      // would keep firing on every subsequent iteration because `clarify` stays
-      // in historical completedNodes and `approved` state doesn't auto-reset.
-      if (edge.max_retries != null && justFinishedSet) {
+      // Retry + re-route edges: only fire when at least one source is in
+      // the just-finished set. Without this, a retry edge like `clarify →
+      // requirements if revise` would keep firing on every subsequent
+      // iteration because `clarify` stays in historical completedNodes
+      // and `approved` state doesn't auto-reset. `retry_context`-bearing
+      // edges (human-override routes from escalation_review) get the same
+      // freshness guard so stale escalation state can't keep re-routing.
+      const isReRouteEdge = edge.max_retries != null || edge.retry_context != null;
+      if (isReRouteEdge && justFinishedSet) {
         const anyJustFinished = fromNodes.some(f => justFinishedSet.has(f));
         if (!anyJustFinished) continue;
       }
 
-      // For forward (non-retry) edges: skip if ALL targets are already
-      // completed. This prevents re-routing to already-visited nodes on
-      // subsequent iterations (e.g. edge 3 `[req, ux] → threat-model` firing
-      // again after threat-model already ran). Retry edges intentionally
-      // re-route and are exempt.
-      if (edge.max_retries == null) {
+      // For forward-only edges: skip if ALL targets are already completed.
+      // This prevents re-routing to already-visited nodes on subsequent
+      // iterations (e.g. edge `[req, ux] → threat-model` firing again
+      // after threat-model already ran). Retry and human-override edges
+      // INTENTIONALLY re-route to completed nodes (the whole point is to
+      // run them again with new context), so they bypass this check.
+      if (!isReRouteEdge) {
         const targets = Array.isArray(edge.to) ? edge.to : [edge.to];
         const allTargetsDone = targets.every(t => t !== 'END' && effectiveCompleted.has(t));
         if (allTargetsDone) continue;
@@ -1857,16 +1902,19 @@ export class AllenEngine {
       // "max_retries_exceeded" in thrown errors no longer gets those
       // classifications here; that's fine because the workflow's
       // fallback edge decides how the run ends.
+      // ── Retry counter (retry edges only) ────────────────────────────
+      //
+      // When the budget is exhausted we skip the edge and stamp
+      // `state.__retry_exhausted_from` so a condition-only fallback edge
+      // (e.g. `audit_prd → escalation_review on revise AND __retry_exhausted_from == 'audit_prd'`)
+      // can fire on the next pass. Previously this threw "Max retries
+      // exceeded" which crashed the run.
+      let edgeKey: string | undefined;
+      let attemptForDisplay: number | undefined;
       if (edge.max_retries != null) {
-        const edgeKey = `${fromNodes.join(',')}→${Array.isArray(edge.to) ? edge.to.join(',') : edge.to}`;
+        edgeKey = `${fromNodes.join(',')}→${Array.isArray(edge.to) ? edge.to.join(',') : edge.to}`;
         const count = retryCounts[edgeKey] ?? 0;
         if (count >= edge.max_retries) {
-          // Stamp the source-node name onto state so workflow authors
-          // can route exhausted-retry cases to a fallback edge guarded
-          // by `__retry_exhausted_from == '<source>'`. Without this flag
-          // a catch-all fallback would fan-out in parallel with the
-          // active retry; with it, the fallback only fires AFTER the
-          // retry's budget is spent.
           state.__retry_exhausted_from = fromNodes.join(',');
           if (executionId) {
             this.log(executionId, {
@@ -1880,24 +1928,56 @@ export class AllenEngine {
           continue;
         }
         retryCounts[edgeKey] = count + 1;
+        attemptForDisplay = count + 2;
+      }
 
-        // Build the feedback payload the engine will auto-inject into the
-        // target node's prompt. Every retry edge gets one, even if no
-        // retry_context template was declared — in that case we synthesise
-        // a summary from the source node's outputs so the workflow author
-        // never has to scaffold `{{retry_context}}` manually.
+      // ── Retry-context payload + rewind ──────────────────────────────
+      //
+      // Fires for BOTH retry edges (max_retries) AND human-override edges
+      // (condition-only with retry_context). Previously the whole block
+      // lived inside the `max_retries != null` guard, so condition-only
+      // escalation edges like `escalation_review → produce_prd` silently
+      // dropped their retry_context template — the user's typed feedback
+      // never reached the target agent.
+      if (isReRouteEdge) {
+        const targetNodes = Array.isArray(edge.to) ? edge.to : [edge.to];
+
+        // Build the feedback payload. Retry edges without an explicit
+        // template get a synthesised summary so workflow authors never
+        // have to scaffold `{{retry_context}}` by hand.
         const rendered = edge.retry_context
           ? renderTemplate(edge.retry_context, state)
           : this.synthesiseRetryContext(fromNodes, state);
         state.retry_context = rendered;
-
-        const targetNodes = Array.isArray(edge.to) ? edge.to : [edge.to];
-        // Scope the retry payload to the immediate target(s) so forward-path
-        // nodes downstream of the retry target don't accidentally see stale
-        // retry_context on their next run.
         state.__retry_target = targetNodes;
-        state.__retry_attempt = count + 2;
         state.__retry_source = fromNodes.join(',');
+        state.__retry_attempt = attemptForDisplay ?? 1;
+
+        // ── Human-override path (Fix C) ────────────────────────────────
+        //
+        // When a condition-only edge carries retry_context, it represents
+        // a human explicitly saying "try this node again with my
+        // feedback". Two cleanups so the retry actually has room to work:
+        //   1. Reset `retryCounts` for every edge targeting the same
+        //      node(s). Otherwise the first automatic retry after this
+        //      human override immediately hits the already-exhausted
+        //      budget and loops straight back to escalation_review.
+        //   2. Clear `state.__retry_exhausted_from` so the exhaustion-
+        //      fallback edge that routed into escalation_review doesn't
+        //      re-fire on the next pass.
+        if (edge.max_retries == null) {
+          const targetSet = new Set(targetNodes);
+          for (const key of Object.keys(retryCounts)) {
+            const arrowIdx = key.indexOf('→');
+            if (arrowIdx < 0) continue;
+            const targetPart = key.slice(arrowIdx + 1);
+            const targetList = targetPart.split(',');
+            if (targetList.some(t => targetSet.has(t))) {
+              delete retryCounts[key];
+            }
+          }
+          delete state.__retry_exhausted_from;
+        }
 
         const targetNode = targetNodes[0];
         if (executionId) {
@@ -1905,8 +1985,15 @@ export class AllenEngine {
             category: 'routing',
             node: targetNode,
             level: 'warn',
-            message: `Retry attempt ${count + 2}/${edge.max_retries}`,
-            data: { attempt: count + 2, maxRetries: edge.max_retries, retryContext: state.retry_context },
+            message: edge.max_retries != null
+              ? `Retry attempt ${attemptForDisplay}/${edge.max_retries}`
+              : `Human-driven retry — fresh retry budget for [${targetNodes.join(', ')}]`,
+            data: {
+              attempt: attemptForDisplay ?? 1,
+              maxRetries: edge.max_retries,
+              retryContext: state.retry_context,
+              humanOverride: edge.max_retries == null,
+            },
           });
         }
 
@@ -1915,7 +2002,7 @@ export class AllenEngine {
           data: {
             node: targetNode,
             fromNode: fromNodes.join(','),
-            attempt: count + 2,
+            attempt: attemptForDisplay ?? 1,
             retryContext: state.retry_context,
           },
         });
@@ -1924,9 +2011,24 @@ export class AllenEngine {
         // retry targets from completedNodes. This ensures that after the
         // retry runs, the forward edges will fire again (instead of being
         // blocked by the "all targets already completed" filter above).
+        //
+        // Scope: only touch entries AFTER the retry target's most recent
+        // position in completedNodes. Ancestors that ran before the retry
+        // target are not actually "downstream" in execution order — they
+        // ran first. The topological BFS can spuriously reach them when
+        // a node like `escalation_review` has forward edges back to
+        // ancestors (`escalation_review → clarify / produce_prd / …`).
+        // Without this bound, a simple audit_tdd → produce_tdd retry
+        // wipes out clarify / produce_prd / audit_prd / … from
+        // completedNodes, leaving the UI timeline showing only the tail.
+        let targetPos = -1;
+        for (const t of targetNodes) {
+          const idx = completedNodes.lastIndexOf(t);
+          if (idx > targetPos) targetPos = idx;
+        }
         const downstream = this.findDownstreamNodes(targetNodes, edges);
-        if (downstream.size > 0) {
-          for (let i = completedNodes.length - 1; i >= 0; i--) {
+        if (downstream.size > 0 && targetPos >= 0) {
+          for (let i = completedNodes.length - 1; i > targetPos; i--) {
             if (downstream.has(completedNodes[i])) {
               completedNodes.splice(i, 1);
             }

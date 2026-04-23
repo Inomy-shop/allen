@@ -379,6 +379,11 @@ export interface Checkpoint {
   sessions: Record<string, string>;
   retryCounts: Record<string, number>;
   completedNodes: string[];
+  /** Per-node attempt counters. Survives splicing during retry rewinds
+   *  so every node's trace rows carry a monotonically-increasing attempt
+   *  number (1, 2, 3…) across the whole execution, including on resume.
+   *  Absent on older checkpoints — engine treats missing as {}. */
+  nodeAttempts?: Record<string, number>;
   createdAt: Date;
 }
 
@@ -396,6 +401,11 @@ export interface ExecutionState {
   retryCounts: Record<string, number>;
   currentNodes: string[];
   completedNodes: string[];
+  /** Per-node attempt counters, monotonically increasing across the whole
+   *  execution. Independent of completedNodes (which gets spliced during
+   *  retry rewinds) — so every node's trace rows carry the right attempt
+   *  number even when the node is downstream of a retry target. */
+  nodeAttempts: Record<string, number>;
   failedNode?: string;
   errorMessage?: string;
   cost: { actual: number | null; estimated: number };
