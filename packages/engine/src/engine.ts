@@ -8,6 +8,7 @@ import type {
   AgentDef,
   BuiltInFunction,
   NodeTrace,
+  NodeStatus,
   SSEEvent,
   Checkpoint,
   ExecutionLog,
@@ -47,10 +48,17 @@ export class AllenEngine {
   private stateManager: StateManager;
   private learningManager: LearningManager;
   private config: EngineConfig;
-  private pendingInputResolvers = new Map<string, (data: Record<string, unknown>) => void>();
+  private pendingInputResolvers = new Map<string, {
+    resolve: (data: Record<string, unknown>) => void;
+    reject: (err: Error) => void;
+  }>();
   private cancelledExecutions = new Set<string>();
   private pausedExecutions = new Set<string>();
-  private abortControllers = new Map<string, AbortController>();
+  // One execution can have many in-flight subprocesses simultaneously
+  // (parallel-fork branches, retry loops, the parallel-coordinator's own
+  // fail-fast controller). Track them all so cancelExecution can abort
+  // every child cleanly instead of only the most-recently-registered one.
+  private abortControllers = new Map<string, Set<AbortController>>();
 
   constructor(config: EngineConfig) {
     this.config = config;
@@ -530,18 +538,53 @@ export class AllenEngine {
     const key = `${executionId}:${node}`;
     const resolver = this.pendingInputResolvers.get(key);
     if (resolver) {
-      resolver(data);
+      resolver.resolve(data);
       this.pendingInputResolvers.delete(key);
       return true;
     }
     return false;
   }
 
+  /** Register a child-process abort controller against an execution. */
+  private registerAbort(executionId: string, ac: AbortController): void {
+    let set = this.abortControllers.get(executionId);
+    if (!set) {
+      set = new Set();
+      this.abortControllers.set(executionId, set);
+    }
+    set.add(ac);
+  }
+
+  /** Remove a controller after its node finishes — keeps the map bounded. */
+  private unregisterAbort(executionId: string, ac: AbortController): void {
+    const set = this.abortControllers.get(executionId);
+    if (!set) return;
+    set.delete(ac);
+    if (set.size === 0) this.abortControllers.delete(executionId);
+  }
+
   cancelExecution(executionId: string): void {
     this.cancelledExecutions.add(executionId);
-    // Abort the running node's process immediately
-    const ac = this.abortControllers.get(executionId);
-    if (ac) { ac.abort(); this.abortControllers.delete(executionId); }
+    // Abort every in-flight child process for this execution. Includes
+    // serial node spawns, parallel-fork branches, and the parallel
+    // coordinator's own fail-fast controller (which cascades to branches
+    // via their abort listeners).
+    const set = this.abortControllers.get(executionId);
+    if (set) {
+      for (const ac of set) {
+        try { ac.abort(); } catch { /* ignore */ }
+      }
+      this.abortControllers.delete(executionId);
+    }
+    // Unblock any pending human-input awaits — otherwise the engine stays
+    // parked inside waitForInput and never observes the cancel flag.
+    const prefix = `${executionId}:`;
+    for (const [key, resolver] of this.pendingInputResolvers) {
+      if (key.startsWith(prefix)) {
+        try { resolver.reject(new Error('Execution cancelled')); } catch { /* ignore */ }
+        this.pendingInputResolvers.delete(key);
+      }
+    }
   }
 
   pauseExecution(executionId: string): void {
@@ -964,7 +1007,7 @@ export class AllenEngine {
 
     // Create abort controller for this node — cancelled via cancelExecution()
     const ac = new AbortController();
-    this.abortControllers.set(exec.id, ac);
+    this.registerAbort(exec.id, ac);
 
     const deps: NodeExecutorDeps = {
       agents: this.config.agents,
@@ -986,7 +1029,11 @@ export class AllenEngine {
 
     try {
       const result = await executeNode(nodeName, nodeDef, exec.state, exec.sessions, deps);
-      this.abortControllers.delete(exec.id); // Clean up after node completes
+      // Subprocess has exited (or was aborted) — drop the controller so a
+      // later cancel doesn't try to abort a stale handle. waitForInput
+      // below has its own pendingInputResolvers cancel path and doesn't
+      // need an AbortController.
+      this.unregisterAbort(exec.id, ac);
 
       // Handle human node waiting
       if (result.outputs.__waiting_for_input) {
@@ -1091,27 +1138,15 @@ export class AllenEngine {
 
       await this.stateManager.saveTrace({ ...trace, executionId: exec.id });
 
-      // Auto-capture eligible outputs as user-visible artifacts so the
-      // user can browse plans / PRDs / JSON configs from the execution
-      // page without the workflow author having to scaffold uploads.
-      // Best-effort — failures here never block the run.
-      if (this.config.services?.artifacts) {
-        autoCaptureArtifacts({
-          save: this.config.services.artifacts.save,
-          outputs: result.outputs,
-          nodeName,
-          nodeAgent: nodeDef.agent,
-          rootId: (process.env.ALLEN_ARTIFACT_ROOT_ID || exec.id),
-          attempt,
-        }).catch((err) => {
-          this.log(exec.id, {
-            category: 'system',
-            node: nodeName,
-            level: 'debug',
-            message: `Artifact auto-capture skipped: ${(err as Error).message}`,
-          });
-        });
-      }
+      // Note: there used to be an auto-capture hook here that saved outputs
+      // named *_markdown / *_json / *_csv as artifacts. It was removed —
+      // agents are now required to save their own artifacts via the
+      // `allen_save_artifact` MCP tool for any plan, design doc, report,
+      // or summary they produce. This keeps artifact content and naming
+      // under the agent's control (one save call with the full text,
+      // instead of the engine grabbing whatever happened to parse into
+      // state, which could be truncated). See ARTIFACTS_GUIDANCE in
+      // packages/engine/src/agent-file-writer.ts for the agent-side contract.
 
       // Save checkpoint
       await this.stateManager.saveCheckpoint({
@@ -1361,8 +1396,58 @@ export class AllenEngine {
 
       return 'continue';
     } catch (err: unknown) {
+      // Drop the controller on the failure path too — its child has either
+      // exited with an error or been aborted; either way nothing to abort.
+      this.unregisterAbort(exec.id, ac);
       exec.failedNode = nodeName;
       const message = err instanceof Error ? err.message : String(err);
+
+      // Distinguish cancel from hard failure so the UI can render a grey
+      // "cancelled" chip instead of a red "failed" one. Signal.aborted is
+      // the most reliable indicator — the engine only aborts this AC via
+      // cancelExecution, so a fired signal always means user cancel. Fall
+      // back to message-based detection for safety (e.g., waitForInput's
+      // rejection predates the abort wiring).
+      const wasCancelled =
+        ac.signal.aborted ||
+        message === 'Execution cancelled' ||
+        message === 'Branch cancelled by join policy';
+      const traceStatus: NodeStatus = wasCancelled ? 'cancelled' : 'failed';
+
+      // Write a trace row so the node stops showing "running" in the UI.
+      // Previously the catch block only emitted the SSE event and rethrew,
+      // leaving no DB footprint for failed/cancelled nodes — the timeline
+      // skipped them and execution-detail views left stale spinners.
+      const promptRender = nodeDef.prompt
+        ? renderTemplateWithBindings(nodeDef.prompt, exec.state)
+        : undefined;
+      const failureTrace: NodeTrace = {
+        node: nodeName,
+        attempt,
+        status: traceStatus,
+        type: nodeDef.type ?? 'agent',
+        agent: nodeDef.agent,
+        inputState: { ...exec.state },
+        renderedPrompt: promptRender?.rendered,
+        output: {},
+        rawResponse: undefined,
+        activity: [],
+        cost: { actual: null, estimated: 0, method: 'estimated' },
+        durationMs: Date.now() - traceStart.getTime(),
+        startedAt: traceStart,
+        completedAt: new Date(),
+        templateBindings: promptRender?.bindings,
+        learningsInjected: learningsInjectedTrace.length > 0 ? learningsInjectedTrace : undefined,
+        // Stash the error message on the trace so the UI can show what
+        // happened without needing a separate log lookup.
+        error: message,
+      };
+      try {
+        await this.stateManager.saveTrace({ ...failureTrace, executionId: exec.id });
+      } catch {
+        // Best effort — a failure here must not mask the original error.
+      }
+
       this.emit({ event: 'node_failed', data: { node: nodeName, attempt, error: message } });
 
       // Learning system: contradict injected learnings on failure (fire-and-forget)
@@ -1398,8 +1483,11 @@ export class AllenEngine {
     // Snapshot state BEFORE parallel branches so they don't interfere
     const stateSnapshot = { ...exec.state };
 
-    // For fail-fast / wait-any we need an abort mechanism
+    // For fail-fast / wait-any we need an abort mechanism. Register with
+    // the engine so cancelExecution cascades to all branches via the
+    // signal listener wired below.
     const abortController = new AbortController();
+    this.registerAbort(exec.id, abortController);
 
     interface BranchResult {
       node: string;
@@ -1433,69 +1521,125 @@ export class AllenEngine {
         } catch { /* fire-and-forget */ }
       }
 
+      // Each branch gets its own controller registered against the
+      // execution, AND listens to the coordinator's signal so a cancel
+      // (external or fail-fast / wait-any loser) cascades down to the
+      // child process. Without the listener, cancelExecution would have
+      // to enumerate per-branch controllers itself.
       const retryAc = new AbortController();
-      this.abortControllers.set(exec.id, retryAc);
-      const deps: NodeExecutorDeps = {
-        agents: this.config.agents,
-        builtIns: this.config.builtIns,
-        workflows: this.config.workflows,
-        emitter: this.config.emitter,
-        runWorkflow: (wf, input) => this.run(wf, input, nestingDepth + 1),
-        executionId: exec.id,
-        nodeContext,
-        db: this.config.db,
-        services: this.config.services,
-        abortSignal: retryAc.signal,
-      };
+      this.registerAbort(exec.id, retryAc);
+      const onCoordinatorAbort = () => { try { retryAc.abort(); } catch { /* ignore */ } };
+      abortController.signal.addEventListener('abort', onCoordinatorAbort, { once: true });
 
-      // Each branch reads from the snapshot, not the live state
-      const result = await executeNode(nodeName, nodeDef, stateSnapshot, exec.sessions, deps);
+      try {
+        const deps: NodeExecutorDeps = {
+          agents: this.config.agents,
+          builtIns: this.config.builtIns,
+          workflows: this.config.workflows,
+          emitter: this.config.emitter,
+          runWorkflow: (wf, input) => this.run(wf, input, nestingDepth + 1),
+          executionId: exec.id,
+          nodeContext,
+          db: this.config.db,
+          services: this.config.services,
+          abortSignal: retryAc.signal,
+        };
 
-      // Check if abort was signaled
-      if (abortController.signal.aborted) {
-        throw new Error('Branch cancelled by join policy');
+        // Each branch reads from the snapshot, not the live state
+        const result = await executeNode(nodeName, nodeDef, stateSnapshot, exec.sessions, deps);
+
+        // Check if abort was signaled
+        if (abortController.signal.aborted) {
+          throw new Error('Branch cancelled by join policy');
+        }
+
+        // Track session (safe — different keys per branch)
+        if (result.sessionId) {
+          exec.sessions[nodeName] = result.sessionId;
+        }
+
+        return { node: nodeName, outputs: result.outputs, result, traceStart, injectedLearningIds: branchLearningIds };
+      } catch (err: unknown) {
+        // Save a failure/cancelled trace for this branch before the outer
+        // join policy decides what to do with the error. Mirrors the
+        // single-node catch: otherwise aborted parallel branches leave
+        // no DB footprint and the UI shows a perpetual spinner.
+        const message = err instanceof Error ? err.message : String(err);
+        const wasCancelled =
+          retryAc.signal.aborted ||
+          abortController.signal.aborted ||
+          message === 'Execution cancelled' ||
+          message === 'Branch cancelled by join policy';
+        const branchTrace: NodeTrace = {
+          node: nodeName,
+          attempt: 1,
+          status: wasCancelled ? 'cancelled' : 'failed',
+          type: nodeDef.type ?? 'agent',
+          agent: nodeDef.agent,
+          inputState: stateSnapshot,
+          renderedPrompt: nodeDef.prompt ? renderTemplate(nodeDef.prompt, stateSnapshot) : undefined,
+          output: {},
+          activity: [],
+          cost: { actual: null, estimated: 0, method: 'estimated' },
+          durationMs: Date.now() - traceStart.getTime(),
+          startedAt: traceStart,
+          completedAt: new Date(),
+          error: message,
+        };
+        try {
+          await this.stateManager.saveTrace({ ...branchTrace, executionId: exec.id });
+        } catch {
+          // Best effort — must not shadow the original error.
+        }
+        throw err;
+      } finally {
+        abortController.signal.removeEventListener('abort', onCoordinatorAbort);
+        this.unregisterAbort(exec.id, retryAc);
       }
-
-      // Track session (safe — different keys per branch)
-      if (result.sessionId) {
-        exec.sessions[nodeName] = result.sessionId;
-      }
-
-      return { node: nodeName, outputs: result.outputs, result, traceStart, injectedLearningIds: branchLearningIds };
     });
 
     let branchResults: BranchResult[];
 
-    if (joinPolicy === 'wait-any') {
-      // Take first to complete, let others finish in background
-      const first = await Promise.race(promises);
-      branchResults = [first];
-      // Don't abort others — let them complete silently, but we only use the first result
-
-    } else if (joinPolicy === 'fail-fast') {
-      // If any fails, abort the rest and throw
-      try {
-        branchResults = await Promise.all(promises);
-      } catch (err) {
+    try {
+      if (joinPolicy === 'wait-any') {
+        // Take first to complete, abort the losers so their child
+        // processes exit instead of dangling. Previously losers were
+        // left running "silently" which leaked compute and could outlive
+        // a workflow cancel.
+        const first = await Promise.race(promises);
+        branchResults = [first];
         abortController.abort();
-        throw err;
-      }
+        // Drain remaining promises so unhandled rejections from aborted
+        // losers don't surface — they're expected to throw.
+        Promise.allSettled(promises).catch(() => {});
 
-    } else {
-      // wait-all: collect all, throw if any failed
-      const settled = await Promise.allSettled(promises);
-      branchResults = [];
-      const errors: unknown[] = [];
-      for (const r of settled) {
-        if (r.status === 'fulfilled') {
-          branchResults.push(r.value);
-        } else {
-          errors.push(r.reason);
+      } else if (joinPolicy === 'fail-fast') {
+        // If any fails, abort the rest and throw
+        try {
+          branchResults = await Promise.all(promises);
+        } catch (err) {
+          abortController.abort();
+          throw err;
+        }
+
+      } else {
+        // wait-all: collect all, throw if any failed
+        const settled = await Promise.allSettled(promises);
+        branchResults = [];
+        const errors: unknown[] = [];
+        for (const r of settled) {
+          if (r.status === 'fulfilled') {
+            branchResults.push(r.value);
+          } else {
+            errors.push(r.reason);
+          }
+        }
+        if (errors.length > 0) {
+          throw errors[0];
         }
       }
-      if (errors.length > 0) {
-        throw errors[0];
-      }
+    } finally {
+      this.unregisterAbort(exec.id, abortController);
     }
 
     // Aggregate costs AFTER all branches complete (no race condition)
@@ -1698,14 +1842,42 @@ export class AllenEngine {
         if (!condResult) continue;
       }
 
-      // Check retry limit for backward edges
+      // Check retry limit for backward edges.
+      //
+      // Change from earlier behavior: when a retry edge's counter is
+      // exhausted, we SKIP the edge and continue evaluating the rest of
+      // the list. Previously this threw "Max retries exceeded" which
+      // crashed the whole run. Skipping lets workflow authors declare
+      // a catch-all fallback edge (same source, no max_retries, matching
+      // condition) that fires once the retry budget is spent — e.g. to
+      // route to a human escalation node instead of hard-failing.
+      //
+      // Logged at warn level so operators can still see when a retry
+      // cap was hit. The state-manager classifier that looks for
+      // "max_retries_exceeded" in thrown errors no longer gets those
+      // classifications here; that's fine because the workflow's
+      // fallback edge decides how the run ends.
       if (edge.max_retries != null) {
         const edgeKey = `${fromNodes.join(',')}→${Array.isArray(edge.to) ? edge.to.join(',') : edge.to}`;
         const count = retryCounts[edgeKey] ?? 0;
         if (count >= edge.max_retries) {
-          throw new Error(
-            `Max retries (${edge.max_retries}) exceeded for edge ${edgeKey}`,
-          );
+          // Stamp the source-node name onto state so workflow authors
+          // can route exhausted-retry cases to a fallback edge guarded
+          // by `__retry_exhausted_from == '<source>'`. Without this flag
+          // a catch-all fallback would fan-out in parallel with the
+          // active retry; with it, the fallback only fires AFTER the
+          // retry's budget is spent.
+          state.__retry_exhausted_from = fromNodes.join(',');
+          if (executionId) {
+            this.log(executionId, {
+              category: 'condition',
+              node: fromNodes.join(','),
+              level: 'warn',
+              message: `Retry edge ${edgeKey} exhausted (${count}/${edge.max_retries}) — skipping; state.__retry_exhausted_from set. Fallback edges guarded by that flag will fire next.`,
+              data: { edgeKey, count, maxRetries: edge.max_retries },
+            });
+          }
+          continue;
         }
         retryCounts[edgeKey] = count + 1;
 
@@ -1800,10 +1972,12 @@ export class AllenEngine {
     executionId: string,
     node: string,
   ): Promise<Record<string, unknown>> {
-    return new Promise((resolve) => {
+    return new Promise((resolve, reject) => {
       const key = `${executionId}:${node}`;
-      this.pendingInputResolvers.set(key, resolve);
-      // No timeout — waits indefinitely until submitted or execution is cancelled
+      this.pendingInputResolvers.set(key, { resolve, reject });
+      // No timeout — waits indefinitely until submitted or execution is
+      // cancelled (cancelExecution rejects this promise so the engine loop
+      // can observe the cancel flag instead of staying parked).
     });
   }
 
@@ -1830,78 +2004,6 @@ export class AllenEngine {
 
 function sleep(ms: number): Promise<void> {
   return new Promise(resolve => setTimeout(resolve, ms));
-}
-
-/**
- * Decide which output keys from a node should be auto-saved as artifacts
- * and write them through the host-supplied save hook.
- *
- * Heuristic (keep it conservative — false positives clutter the artifact list):
- *   - Key ends with `_markdown` AND value is a non-empty string → save as .md
- *   - Key ends with `_json` AND value is an object (or parseable JSON string) → save as .json
- *   - Key ends with `_csv` AND value is a string → save as .csv
- *   - Key ends with `_url` or `_id` → never capture (it's a reference, not content)
- *   - __-prefixed keys → never capture (engine-internal)
- */
-async function autoCaptureArtifacts(args: {
-  save: NonNullable<NonNullable<EngineServices>['artifacts']>['save'];
-  outputs: Record<string, unknown>;
-  nodeName: string;
-  nodeAgent?: string;
-  rootId: string;
-  attempt: number;
-}): Promise<void> {
-  const rootType = (process.env.ALLEN_ARTIFACT_ROOT_TYPE as 'workflow' | 'chat' | 'agent' | undefined) ?? 'workflow';
-  const suffix = args.attempt > 1 ? `-attempt-${args.attempt}` : '';
-  for (const [key, value] of Object.entries(args.outputs)) {
-    if (!key || key.startsWith('__')) continue;
-    if (key.endsWith('_url') || key.endsWith('_id')) continue;
-
-    let filename: string | undefined;
-    let content: string | undefined;
-    let contentType: 'markdown' | 'json' | 'csv' | 'text' | undefined;
-
-    if (key.endsWith('_markdown') && typeof value === 'string' && value.trim().length > 0) {
-      filename = `${args.nodeName}/${key.replace(/_markdown$/, '')}${suffix}.md`;
-      content = value;
-      contentType = 'markdown';
-    } else if (key.endsWith('_json')) {
-      if (typeof value === 'string') {
-        try { JSON.parse(value); } catch { continue; }
-        content = value;
-      } else if (value !== null && typeof value === 'object') {
-        content = JSON.stringify(value, null, 2);
-      } else continue;
-      filename = `${args.nodeName}/${key.replace(/_json$/, '')}${suffix}.json`;
-      contentType = 'json';
-    } else if (key.endsWith('_csv') && typeof value === 'string' && value.trim().length > 0) {
-      filename = `${args.nodeName}/${key.replace(/_csv$/, '')}${suffix}.csv`;
-      content = value;
-      contentType = 'csv';
-    } else {
-      continue;
-    }
-
-    if (!filename || content == null) continue;
-    try {
-      await args.save({
-        rootType,
-        rootId: args.rootId,
-        filename,
-        content,
-        contentType,
-        overwrite: true, // attempts can rewrite earlier rounds
-        description: `Auto-captured from ${args.nodeName} (${key})`,
-        spawnContext: {
-          originType: 'workflow_node',
-          nodeName: args.nodeName,
-          agentName: args.nodeAgent,
-        },
-      });
-    } catch {
-      // Best-effort — one failing output shouldn't block the rest.
-    }
-  }
 }
 
 /**

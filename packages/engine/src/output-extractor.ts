@@ -492,18 +492,27 @@ export function buildNodeContext(
 
   // ── Artifacts guidance — applies to every agent invocation ──
   //
-  // Tell the agent that any reviewable side-output (a plan, design doc,
-  // investigation notes, CSV export, config file) should be persisted via
-  // the allen_save_artifact MCP tool so the user can browse it later from
-  // the execution page. The workflow engine auto-captures outputs whose
-  // declared key ends in _markdown / _json / _csv — anything OUTSIDE that
-  // naming convention is the agent's responsibility to save.
-  context += '\nARTIFACTS — save reviewable files with allen_save_artifact(filename, content):\n';
-  context += '  • When to use: standalone documents worth keeping (plans, designs, investigation notes, CSV exports, config files, scratch outputs, etc).\n';
-  context += '  • Auto-captured: outputs you already declare whose keys end with _markdown, _json, or _csv are saved automatically — don\'t duplicate those via allen_save_artifact.\n';
-  context += '  • Root context: files are filed under whichever run spawned you (workflow / chat / agent). No root id needed — the tool reads it from env.\n';
-  context += '  • Sub-agents: when you spawn other agents, include this instruction in their prompt so they save their own standalone documents too. Files from the whole spawn tree land under the same run.\n';
-  context += '  • Viewing: files auto-render in the UI based on extension — .md renders as markdown, .json as pretty JSON, .csv as a table. Binary is download-only.\n';
+  // The engine does NOT auto-capture outputs as artifacts anymore. Agents
+  // are required to save their own artifacts explicitly via the
+  // allen_save_artifact MCP tool for any plan / design / report / summary
+  // they produce. This keeps artifact content and filenames under the
+  // agent's control (one save call with the full text) instead of the
+  // engine grabbing whatever parsed into state (which can be truncated).
+  context += '\nARTIFACTS — MANDATORY for plans, designs, reports, summaries:\n';
+  context += '  You MUST call allen_save_artifact(filename, content, content_type) in the SAME turn, BEFORE you emit your final JSON output block, for every standalone document you produce:\n';
+  context += '    • PRD → save as prd/requirements.md (content_type: markdown)\n';
+  context += '    • HLA/HLD → hla/architecture.md (markdown)\n';
+  context += '    • TDD → tdd/technical-design.md (markdown)\n';
+  context += '    • Implementation plan → plans/implementation-plan.md AND plans/implementation-plan.json\n';
+  context += '    • Investigation / research report → reports/<topic>.md (markdown)\n';
+  context += '    • QA / validator / code-review report → reports/<name>.md (markdown)\n';
+  context += '    • Run summary → summary/summary.md (markdown)\n';
+  context += '    • Structured data → use .csv / .json / .yaml with matching content_type\n';
+  context += '  File extensions: .md / .json / .csv / .txt / .yaml / code extensions — pick the one that matches what you wrote. Pass content_type explicitly.\n';
+  context += '  Root is auto-detected from env — you do NOT pass a root id. Use overwrite:true on retries.\n';
+  context += '  Tool return shape: { artifactId, url, publicUrl, rootType, rootId, filename, sizeBytes, overwritten }. Copy the **publicUrl** field (full http://host/api/artifacts/<id>/content — human-clickable and WebFetch-able) into your JSON output as e.g. `prd_artifact_url`. Do NOT use `url` (relative-only) or `artifactId` (opaque id).\n';
+  context += '  ALSO emit the structured JSON in your output block — the saved markdown is for the user, the JSON is for downstream workflow nodes. Both are required.\n';
+  context += '  Sub-agents: when you spawn other agents via spawn_agent, include this instruction in their prompt. Their artifacts inherit your root.\n';
 
   // ── Upstream artifacts index ──────────────────────────────────────────
   //

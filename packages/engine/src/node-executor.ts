@@ -759,6 +759,19 @@ ${context}
   let initial: Awaited<ReturnType<typeof callAgent>> | null = null;
   let lastMainError: Error | null = null;
   for (let attempt = 1; attempt <= MAIN_CALL_MAX_ATTEMPTS; attempt++) {
+    // Short-circuit on cancel. The abort signal is fired by the engine's
+    // cancelExecution path; if it's already set we must NOT respawn the
+    // subprocess — that would just produce another exit-143 that gets
+    // retried in a loop. Emit a clear "cancelled by user" log and throw
+    // a stable sentinel the engine catch recognises as a cancel.
+    if (deps.abortSignal?.aborted) {
+      emitLog(deps, nodeName, {
+        level: 'warn',
+        category: 'system',
+        message: `[agent-call] Cancelled by user before attempt ${attempt}`,
+      });
+      throw new Error('Execution cancelled');
+    }
     try {
       if (attempt > 1) {
         emitLog(deps, nodeName, {
@@ -777,8 +790,27 @@ ${context}
     } catch (err) {
       lastMainError = err instanceof Error ? err : new Error(String(err));
       const msg = lastMainError.message;
-      // Only retry transient SDK errors — not genuine logic errors
-      const isTransient = /exited with code 1|ECONNRESET|ETIMEDOUT|fetch failed|socket hang up/i.test(msg);
+
+      // Cancel path: if the abort fired mid-call the subprocess was
+      // SIGTERM'd and exits with code 143. Treat that as a cancel, not a
+      // transient error — no retry, no scary log, just unwind cleanly.
+      // Must check the signal BEFORE the transient regex, because the
+      // regex below deliberately excludes 143 and would fall through to
+      // re-throw; but we want a specific "Execution cancelled" message
+      // for the engine's catch block to classify this as status=cancelled.
+      if (deps.abortSignal?.aborted || /exited with code 143|SIGTERM/i.test(msg)) {
+        emitLog(deps, nodeName, {
+          level: 'warn',
+          category: 'system',
+          message: `[agent-call] Cancelled by user on attempt ${attempt} (subprocess exited with SIGTERM)`,
+        });
+        throw new Error('Execution cancelled');
+      }
+
+      // Only retry transient SDK errors — not genuine logic errors or
+      // cancels. The `\b` boundary prevents "exited with code 143" from
+      // being matched as a substring of "exited with code 1".
+      const isTransient = /exited with code 1\b|ECONNRESET|ETIMEDOUT|fetch failed|socket hang up/i.test(msg);
       if (!isTransient || attempt === MAIN_CALL_MAX_ATTEMPTS) {
         throw lastMainError;
       }
@@ -830,6 +862,12 @@ ${context}
   const MAX_AGENT_RETRIES = 2;
   if (extractionFailed(outputs) && sessionId) {
     for (let attempt = 1; attempt <= MAX_AGENT_RETRIES; attempt++) {
+      // Cancel short-circuit — don't respawn the agent to re-ask for JSON
+      // if the user already cancelled. Stable sentinel so the engine
+      // catch block classifies this as status=cancelled.
+      if (deps.abortSignal?.aborted) {
+        throw new Error('Execution cancelled');
+      }
       emitLog(deps, nodeName, {
         level: 'warn',
         category: 'system',
@@ -898,10 +936,16 @@ Use auto-gate only if the original prompt's workflow context explicitly allowed 
           });
         }
       } catch (err) {
+        const msg = (err as Error).message;
+        // If the agent-resume subprocess was SIGTERM'd by our cancel
+        // path, propagate as cancel instead of "failed: exit 143".
+        if (deps.abortSignal?.aborted || /exited with code 143|SIGTERM/i.test(msg)) {
+          throw new Error('Execution cancelled');
+        }
         emitLog(deps, nodeName, {
           level: 'warn',
           category: 'system',
-          message: `[extraction] Agent-resume retry ${attempt} failed: ${(err as Error).message}`,
+          message: `[extraction] Agent-resume retry ${attempt} failed: ${msg}`,
         });
         // Continue to next attempt
       }
@@ -913,6 +957,9 @@ Use auto-gate only if the original prompt's workflow context explicitly allowed 
   // or agent refused to cooperate), try a fresh Haiku call to extract from
   // the raw text as a last-ditch LLM attempt.
   if (extractionFailed(outputs)) {
+    if (deps.abortSignal?.aborted) {
+      throw new Error('Execution cancelled');
+    }
     emitLog(deps, nodeName, {
       level: 'warn',
       category: 'system',
@@ -1075,6 +1122,13 @@ async function executeCodeNode(
   const maxAttempts = (nodeDef.retries ?? 0) + 1;
 
   for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    // Cancel short-circuit. A code node in a retry loop must NOT be
+    // re-invoked after user cancel — the engine's cancelExecution has
+    // already signalled we're unwinding. Throw the stable sentinel so
+    // the engine catch classifies this as status=cancelled, not failed.
+    if (deps.abortSignal?.aborted) {
+      throw new Error('Execution cancelled');
+    }
     try {
       if (attempt > 0) {
         const delayMs = calculateBackoff(nodeDef, attempt);
@@ -1093,6 +1147,11 @@ async function executeCodeNode(
       };
     } catch (err: unknown) {
       lastError = err instanceof Error ? err : new Error(String(err));
+      // If the abort fired mid-call, the thrown error is the cancel —
+      // don't retry, just propagate the cancel sentinel.
+      if (deps.abortSignal?.aborted) {
+        throw new Error('Execution cancelled');
+      }
       if (nodeDef.retry_on && nodeDef.retry_on.length > 0) {
         const shouldRetry = nodeDef.retry_on.some(code => lastError!.message.includes(code));
         if (!shouldRetry) break;

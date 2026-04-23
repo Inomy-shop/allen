@@ -35,14 +35,52 @@ const ARTIFACT_MCP_TOOLS: readonly string[] = [
  */
 export const ARTIFACTS_GUIDANCE = `
 
-# Artifacts
+# Artifacts — MANDATORY for plans, designs, reports, and summaries
 
-When you produce a standalone document worth keeping — a plan, design doc, investigation notes, CSV export, JSON config, or any file the user should be able to review later — save it with the \`allen_save_artifact\` MCP tool:
+You MUST call the \`allen_save_artifact\` MCP tool whenever you produce any of the following kinds of content. This is not optional — the engine does NOT auto-capture your JSON outputs as files. If you don't call this tool, the document you generated will only exist as a JSON string in execution state and will not be browsable by the user.
 
-- \`allen_save_artifact(filename, content)\` — files auto-render in the UI based on extension (.md / .json / .csv / .txt / code). No root id needed; the tool files under whichever run spawned you (workflow / chat / agent) via env-var context.
-- Prefer \`allen_save_artifact\` over \`upload_file\` for in-conversation/run deliverables. Use \`upload_file\` only for shares destined for outside Allen.
-- When you spawn sub-agents via \`spawn_agent\`, INCLUDE THIS INSTRUCTION in their prompt. Their artifacts inherit your root, so the user sees the whole spawn tree's files in one Artifacts panel.
-- Don't duplicate auto-captured outputs — workflow outputs whose keys end in \`_markdown\` / \`_json\` / \`_csv\` are saved automatically. Use \`allen_save_artifact\` for artifacts OUTSIDE the declared output schema.
+## When to call \`allen_save_artifact\` (always — every run)
+
+Call it once per document. Save BEFORE you emit your final JSON output block, in the same turn.
+
+- **Product Requirements Documents (PRD)** — save the full markdown: \`allen_save_artifact("prd/requirements.md", <the PRD content>, content_type="markdown")\`
+- **High-Level Architecture / Design (HLA / HLD)** — \`allen_save_artifact("hla/architecture.md", <the HLA content>, content_type="markdown")\`
+- **Technical Design Documents (TDD)** — \`allen_save_artifact("tdd/technical-design.md", <the TDD content>, content_type="markdown")\`
+- **Implementation plans / file-level plans** — \`allen_save_artifact("plans/implementation-plan.md", <plan>, content_type="markdown")\` and also save the structured version as JSON: \`allen_save_artifact("plans/implementation-plan.json", <plan json>, content_type="json")\`
+- **Investigation / research reports** — \`allen_save_artifact("reports/<topic>.md", <report>, content_type="markdown")\`
+- **QA / test reports / validator verdicts** — \`allen_save_artifact("reports/qa-verdict.md", <report>, content_type="markdown")\`
+- **Code review notes** — \`allen_save_artifact("reports/code-review.md", <review>, content_type="markdown")\`
+- **Run summaries** — \`allen_save_artifact("summary/summary.md", <summary>, content_type="markdown")\`
+- **Structured data exports** — CSV, JSON configs, YAML: pick the matching content_type (csv / json / yaml / code).
+- **Any other standalone document the user should be able to review later** — scratch notes, investigation logs, decision records.
+
+## Format rules
+
+- Use the file extension that matches the content: \`.md\` for markdown, \`.json\` for JSON, \`.csv\` for CSV, \`.txt\` for plain text, \`.yaml\` for YAML, source-file extensions for code.
+- Pass \`content_type\` explicitly when the extension might be ambiguous.
+- Use sub-paths to group related files: \`plans/<name>.md\`, \`reports/<name>.md\`, \`tdd/<name>.md\`.
+- \`overwrite: true\` is safe on retry — subsequent attempts replace the prior artifact.
+
+## What the tool does for you
+
+- Files are routed automatically to the run that spawned you (workflow execution / chat session / agent run) — you do NOT pass a root id. The MCP reads it from env.
+- Files render inline in the Allen UI by extension: markdown → prose with headings, JSON → pretty-printed tree, CSV → table, text/code → monospace.
+- Each artifact gets a public URL — \`allen_save_artifact\` returns an object shaped like \`{ artifactId, url, publicUrl, rootType, rootId, filename, sizeBytes, overwritten }\`. Copy the **publicUrl** field (full \`http://host/api/artifacts/<id>/content\` — human-clickable and WebFetch-able) into your JSON output so downstream nodes can link to it: \`{"prd_artifact_url": "<publicUrl from allen_save_artifact>"}\`. Do NOT use the bare \`url\` field (relative path only) or \`artifactId\` (opaque id).
+
+## What you should STILL emit in your structured output
+
+The artifact is the user-facing rendered document. Your structured JSON output (PRD as a data object, plan as an array of changes, etc.) is what downstream workflow nodes consume via templating. Both are required:
+1. Call \`allen_save_artifact\` with the rendered markdown.
+2. Also emit the structured JSON in your output block.
+They're not redundant — the markdown is for humans, the JSON is for downstream agents.
+
+## Sub-agents
+
+When you spawn sub-agents via \`spawn_agent\`, INCLUDE THIS INSTRUCTION in their prompt. Their artifacts inherit your root, so the user sees the whole spawn tree's files in one Artifacts panel.
+
+## \`upload_file\` vs \`allen_save_artifact\`
+
+Prefer \`allen_save_artifact\` for anything belonging to this run. Use \`upload_file\` only when you need a one-off file that leaves Allen (e.g., Slack attachments, email).
 `;
 
 /** Sentinel used by the idempotent injector. Cheap substring check. */

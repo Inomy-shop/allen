@@ -1,7 +1,7 @@
 name: bug-investigate-and-fix
 description: >
   Lean bug fix workflow: investigate the root cause, distinguish from
-  feature-in-disguise, create a worktree, dispatch the fix via the developer
+  feature-in-disguise, create a worktree, dispatch the fix via the engineering-lead
   orchestrator, write a regression test, run the full suite (no skip flag —
   bug fixes are regression-risk), update tech docs, security-aware code
   review, open a PR, post a summary.
@@ -55,6 +55,7 @@ input:
 nodes:
   investigate:
     agent: bug-investigator
+    resume_on_retry: true
     prompt: |
       Investigate this bug and find the root cause.
 
@@ -90,6 +91,8 @@ nodes:
         type: select
         options: [continue_as_bug, start_feature_workflow, cancel]
         required: true
+    outputs:
+      decision: "continue_as_bug | start_feature_workflow | cancel"
     prompt: |
       ⚠ The bug-investigator determined this is actually a feature request,
       not a bug fix. The code is behaving as specified — but the
@@ -111,40 +114,55 @@ nodes:
                                  proper design review
         cancel                 → abandon the workflow
 
-  create_branch:
-    type: code
-    function: create-workspace
-    config:
-      repo_path: "{{repo_path}}"
-      branch_prefix: "fix"
-      task_summary: "{{root_cause}}"
-    outputs:
-      worktree_path: "Absolute path to the isolated git worktree."
-      branch_name: "New branch name."
-      workspace_id: "Internal Allen workspace identifier."
-
-  develop:
-    agent: developer
+  implement:
+    agent: engineering-lead
+    # Resume across retries (qa-fail, code-review-fail) so engineering-lead
+    # remembers the workspace it created and which specialist owns which
+    # file — retries become "fix what broke" not "re-create everything".
+    resume_on_retry: true
+    # Single-node execution: engineering-lead creates the fix workspace
+    # via create_workspace, groups files by specialist, and dispatches
+    # through spawn_agent. Replaces the previous create_branch (code) +
+    # develop (deprecated `developer` agent) pipeline.
     prompt: |
-      You are the Developer Orchestrator. Dispatch the fix via spawn_agent.
+      MODE: 2 (execute — fix dispatch with workspace creation)
+
+      You are the Engineering Lead dispatching a bug fix. Create a
+      workspace, group the files listed below by specialty, spawn the
+      right specialist(s), collect results. You DO NOT write code.
 
       BUG ROOT CAUSE: {{root_cause}}
       FIX DESCRIPTION: {{fix_description}}
-      FILES TO TOUCH: {{files_to_touch}}
+      FILES TO TOUCH:  {{files_to_touch}}
+      REPO PATH:       {{repo_path}}
 
-      WORKTREE PATH: {{worktree_path}}
-      BRANCH: {{branch_name}}
+      Step-by-step:
+        1. Call create_workspace(repo_path="{{repo_path}}", branch_prefix="fix",
+           task_summary="{{root_cause}}") ONCE. Capture the worktree_path.
+        2. Group files_to_touch by specialty (backend-developer /
+           frontend-developer / devops-engineer / security-specialist /
+           documentation-writer). Most bug fixes touch one subsystem — a
+           single specialist is the common case.
+        3. For each specialist, spawn_agent with repo_path=<worktree_path>
+           and a prompt containing: root_cause, fix_description, the
+           specific files they own, and the worktree path.
+        4. Wait for each spawn via wait_for_execution. On failure, retry
+           that specialist ONCE with the error output as context.
+        5. Emit the MODE 2 JSON output block with worktree_path, branch_name,
+           specialists_used, files_changed, any_failures, failure_details.
 
-      Follow your six-rule contract: group files by specialist (most bug
-      fixes touch one subsystem — spawn one specialist), detect conflicts,
-      parallelise when safe. Pass repo_path={{worktree_path}} to every
-      spawn_agent call.
-
-      End with a JSON summary of the spawn — specialists_used, batches,
-      files_changed, any_failures.
+      HARD RULES:
+        - NEVER edit files yourself. Use spawn_agent for every change.
+        - ALWAYS pass repo_path=<worktree_path> to every spawn_agent call.
+        - NEVER skip create_workspace — a fix must not touch the
+          registered repo directly.
     outputs:
-      developer_output: "The orchestrator's summary JSON."
+      worktree_path: "Absolute path to the isolated git worktree the fix specialist(s) worked inside."
+      branch_name: "Fix branch name."
+      workspace_id: "Internal Allen workspace identifier."
       files_changed: "List of files changed by the fix."
+      any_failures: "Boolean — true if any specialist returned a non-recoverable failure."
+      failure_details: "Structured details per failing specialist. Empty on success."
 
   qa:
     agent: qa-lead
@@ -188,11 +206,12 @@ nodes:
       regression_test_file: "Path to the new regression test file."
       regression_test_summary: "One paragraph describing what the test asserts."
       cycles_used: "Number of write-run-verify cycles."
-      failure_target: "developer | test-writer | null"
+      failure_target: "engineering-lead | test-writer | null"
       failure_details: "Details when verdict is fail or escalate."
 
   update_docs:
     agent: documentation-writer
+    resume_on_retry: true
     prompt: |
       MODE: update_docs
 
@@ -244,6 +263,7 @@ nodes:
 
   open_pr:
     agent: pr-creator
+    resume_on_retry: true
     prompt: |
       Create a pull request for this bug fix run.
 
@@ -271,8 +291,46 @@ nodes:
       status: "created | reused_existing | failed"
       error: "Error message when status is failed."
 
+  # Unified escalation review — qa escalate and any retry exhaustion
+  # route here instead of silently ending. User picks retry / override
+  # / abandon.
+  escalation_review:
+    type: human
+    fields:
+      - name: decision
+        label: "What should happen?"
+        type: select
+        options: [retry_with_feedback, override_and_continue, abandon]
+        required: true
+      - name: feedback
+        label: "Feedback for the agent (required for retry)"
+        type: textarea
+        required: false
+    outputs:
+      decision: "retry_with_feedback | override_and_continue | abandon"
+      feedback: "Free-text feedback passed to the agent on retry"
+    prompt: |
+      🔴 The bug-fix workflow paused because an agent gave up or its
+      retry budget was exhausted.
+
+      BUG REPORT:     {{bug_report}}
+      ROOT CAUSE:     {{root_cause}}
+      FIX DESCRIPTION: {{fix_description}}
+
+      QA VERDICT:        {{qa_verdict}}
+      QA failure details: {{failure_details}}
+      CODE REVIEW:       {{review_verdict}}
+      CODE REVIEW NOTES: {{review_feedback}}
+
+      Your decision:
+        retry_with_feedback  — loop back to `implement` with your feedback.
+        override_and_continue — skip the failing stage (qa → update_docs
+                               or code_review → open_pr).
+        abandon              — end the run; artifacts so far are preserved.
+
   summary:
     agent: documentation-writer
+    resume_on_retry: true
     prompt: |
       MODE: summary
 
@@ -301,16 +359,30 @@ nodes:
 
 edges:
   - { from: START, to: investigate }
-  - { from: investigate, to: create_branch, condition: "looks_like_a_feature == false" }
+  - { from: investigate, to: implement, condition: "looks_like_a_feature == false" }
   - { from: investigate, to: feature_escalation_human, condition: "looks_like_a_feature == true" }
-  - { from: feature_escalation_human, to: create_branch }
-  - { from: create_branch, to: develop }
-  - { from: develop, to: qa }
+  # Honour the user's decision. Before this split, every choice
+  # unconditionally advanced to `implement`, so `start_feature_workflow`
+  # and `cancel` silently behaved like `continue_as_bug`.
+  - { from: feature_escalation_human, to: implement, condition: "decision == 'continue_as_bug'" }
+  - { from: feature_escalation_human, to: END,       condition: "decision == 'start_feature_workflow'" }
+  - { from: feature_escalation_human, to: END,       condition: "decision == 'cancel'" }
+  - { from: implement, to: qa }
   - { from: qa, to: update_docs, condition: "qa_verdict == 'pass'" }
-  - { from: qa, to: develop, condition: "qa_verdict == 'fail'", max_retries: 2, retry_context: "QA failed — build/lint/tests broken:\n{{failure_details}}" }
-  - { from: qa, to: END, condition: "qa_verdict == 'escalate'" }
+  - { from: qa, to: implement, condition: "qa_verdict == 'fail'", max_retries: 2, retry_context: "QA failed — build/lint/tests broken:\n{{failure_details}}" }
+  - { from: qa, to: escalation_review, condition: "qa_verdict == 'escalate'" }
+  # Retry-exhaustion fallbacks (guarded by __retry_exhausted_from so they
+  # only fire AFTER the retry edge's budget is spent — see engine.ts).
+  - { from: qa,          to: escalation_review, condition: "qa_verdict == 'fail' AND __retry_exhausted_from == 'qa'" }
+  - { from: code_review, to: escalation_review, condition: "review_verdict == 'REQUEST_CHANGES' AND __retry_exhausted_from == 'code_review'" }
   - { from: update_docs, to: code_review }
   - { from: code_review, to: open_pr, condition: "review_verdict == 'APPROVED'" }
-  - { from: code_review, to: develop, condition: "review_verdict == 'REQUEST_CHANGES'", max_retries: 2, retry_context: "Review feedback:\n{{review_feedback}}" }
+  - { from: code_review, to: implement, condition: "review_verdict == 'REQUEST_CHANGES'", max_retries: 2, retry_context: "Review feedback:\n{{review_feedback}}" }
   - { from: open_pr, to: summary }
   - { from: summary, to: END }
+
+  # escalation_review outgoing
+  - { from: escalation_review, to: END,         condition: "decision == 'abandon'" }
+  - { from: escalation_review, to: implement,   condition: "decision == 'retry_with_feedback'", retry_context: "Human intervened on bug-fix failure. Feedback:\n{{feedback}}" }
+  - { from: escalation_review, to: update_docs, condition: "decision == 'override_and_continue' AND (qa_verdict == 'escalate' OR qa_verdict == 'fail')" }
+  - { from: escalation_review, to: open_pr,     condition: "decision == 'override_and_continue' AND review_verdict == 'REQUEST_CHANGES'" }

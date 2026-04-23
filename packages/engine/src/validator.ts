@@ -131,6 +131,20 @@ export function validateWorkflow(
   const allOutputs = new Set<string>();
   for (const node of Object.values(workflow.nodes)) {
     for (const o of Object.keys(node.outputs ?? {})) allOutputs.add(o);
+    // Human nodes declare their state contributions via `fields[].name`
+    // — treat those as implicit outputs so conditions/templates that
+    // reference decision / scope / feedback etc. don't false-warn when
+    // the workflow author omits a redundant `outputs:` block. Declaring
+    // an explicit `outputs:` map is still supported and preferred for
+    // human nodes with documentation value.
+    const fields = (node as unknown as { fields?: Array<{ name?: unknown }> }).fields;
+    if (Array.isArray(fields)) {
+      for (const f of fields) {
+        if (f && typeof f === 'object' && typeof f.name === 'string') {
+          allOutputs.add(f.name);
+        }
+      }
+    }
   }
   if (workflow.input) {
     for (const key of Object.keys(workflow.input)) allOutputs.add(key);
@@ -148,13 +162,20 @@ export function validateWorkflow(
     }
   }
 
-  // 8b. Condition variable warnings — check variables used in conditions
-  const reservedCondVars = new Set(['true', 'false', 'null', 'AND', 'OR', 'NOT']);
+  // 8b. Condition variable warnings — check variables used in conditions.
+  //
+  // Identifiers beginning with `__` are engine-reserved state keys that
+  // are stamped at routing/retry/clarify time (e.g. __retry_exhausted_from,
+  // __retry_attempt, __retry_target, __clarify_action, __gate_reason). No
+  // node "outputs" them because they're the engine's plumbing, not agent
+  // output — but they are valid condition operands. Skip them.
+  const reservedCondVars = new Set(['true', 'false', 'null', 'AND', 'OR', 'NOT', 'retry_context']);
+  const isEngineReserved = (v: string) => v.startsWith('__');
   for (const edge of workflow.edges) {
     if (edge.condition) {
       const condVars = extractConditionVariables(edge.condition);
       for (const v of condVars) {
-        if (!allOutputs.has(v) && !reservedCondVars.has(v)) {
+        if (!allOutputs.has(v) && !reservedCondVars.has(v) && !isEngineReserved(v)) {
           warnings.push(`Condition "${edge.condition}" uses '${v}' but no node outputs it`);
         }
       }
@@ -165,7 +186,7 @@ export function validateWorkflow(
       for (const cond of node.conditions) {
         const condVars = extractConditionVariables(cond.expression);
         for (const v of condVars) {
-          if (!allOutputs.has(v) && !reservedCondVars.has(v)) {
+          if (!allOutputs.has(v) && !reservedCondVars.has(v) && !isEngineReserved(v)) {
             warnings.push(`Condition in node ${name} uses '${v}' but no node outputs it`);
           }
         }

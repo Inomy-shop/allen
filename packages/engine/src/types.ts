@@ -350,6 +350,11 @@ export interface NodeTrace {
     outputTokens: number;
     estimatedCost: number;
   }>;
+
+  /** Populated on failed/cancelled traces — short error message so the UI
+   *  can show "why this node stopped" without needing a separate log lookup.
+   *  Always undefined on completed traces. */
+  error?: string;
 }
 
 export interface ActivityEntry {

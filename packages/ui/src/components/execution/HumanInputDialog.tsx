@@ -42,8 +42,12 @@ export default function HumanInputDialog({
       className="fixed inset-0 z-[9999] flex items-start justify-center bg-black/70 backdrop-blur-sm p-4 overflow-y-auto"
       onClick={onCancel}
     >
+      {/* Card grows with content; the OUTER overlay scrolls when the card
+          exceeds the viewport. Previously the card was capped at 92vh +
+          overflow-hidden, which clipped tall prompts/forms and hid the
+          submit button below the fold with no scroll path. */}
       <div
-        className={`bg-surface-50 border border-border/30 rounded-xl shadow-2xl w-full mt-[4vh] max-h-[92vh] flex flex-col overflow-hidden ${
+        className={`bg-surface-50 border border-border/30 rounded-xl shadow-2xl w-full my-[4vh] flex flex-col ${
           hasReview ? 'max-w-6xl' : 'max-w-2xl'
         }`}
         onClick={(e) => e.stopPropagation()}

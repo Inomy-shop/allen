@@ -197,8 +197,12 @@ export default function ClarificationPanel({
   }
 
   // ── Render ──
+  // Card flows naturally; the modal wrapper's outer overlay handles
+  // viewport-overflow scrolling. Previously this used h-full + child
+  // overflow-auto, which only worked when the card had a bounded height
+  // and silently clipped tall content otherwise.
   return (
-    <div className={`flex flex-col min-h-0 ${layout === 'inline' ? '' : 'h-full'}`}>
+    <div className="flex flex-col min-h-0">
       {/* Header — icon + title + subtitle. Only renders when a title is
           supplied; callers that provide their own outer header (e.g. the
           intervention detail hero card) pass only `prompt` and skip this. */}
@@ -261,11 +265,14 @@ export default function ClarificationPanel({
         </div>
       )}
 
-      {/* Two-column body (review + form) OR single-column */}
-      <div className={`flex-1 min-h-0 ${isTwoCol ? 'grid grid-cols-[minmax(0,1fr)_minmax(0,1fr)] divide-x divide-border/15' : ''} ${layout === 'modal' ? 'overflow-hidden' : ''}`}>
+      {/* Two-column body (review + form) OR single-column. Both columns
+          flow naturally — the outer modal overlay (or the page) handles
+          scroll. Internal scroll caps live on ReviewContent so a giant
+          PRD doesn't push the form off-screen. */}
+      <div className={isTwoCol ? 'grid grid-cols-[minmax(0,1fr)_minmax(0,1fr)] divide-x divide-border/15' : ''}>
         {/* Review content */}
         {hasReview && (
-          <div className={`${layout === 'modal' ? 'overflow-auto' : ''} p-6 ${isTwoCol ? 'bg-surface-100/30' : ''}`}>
+          <div className={`p-6 ${isTwoCol ? 'bg-surface-100/30' : ''}`}>
             <SectionLabel icon={<FileText className="w-3 h-3" />} text={reviewLabel} />
             <ReviewContent
               content={reviewContent!}
@@ -278,7 +285,7 @@ export default function ClarificationPanel({
         {/* Form */}
         <form
           onSubmit={handleSubmit}
-          className={`${layout === 'modal' ? 'overflow-auto' : ''} p-6 flex flex-col gap-5`}
+          className="p-6 flex flex-col gap-5"
         >
           {fields.length > 0 && (
             <div className="space-y-5">

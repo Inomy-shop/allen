@@ -68,11 +68,11 @@ nodes:
 
   clarify:
     agent: requirements-analyst
-    # resume_on_retry: true (default) — after the user answers clarifying
-    # questions, the agent resumes its prior session so it remembers what
-    # it asked. The retry feedback prompt delivers the user's answers into
-    # the resumed conversation. The agent then either asks follow-up
-    # questions or emits ready_to_produce_prd=true to advance.
+    # Explicit resume-on-retry: on retry the agent resumes its prior
+    # session so it remembers the questions it already asked. The
+    # retry_context delivers the user's answers into the resumed
+    # conversation — the agent sees its prior turn + new feedback.
+    resume_on_retry: true
     prompt: |
       You are in CLARIFICATION mode. Read the user's raw feature request and
       decide whether it's clear enough to produce a PRD OR whether you need to
@@ -163,13 +163,25 @@ nodes:
       incorporates the user's original ask plus all clarification answers.
       Fall back to user_request only if no clarification occurred.
 
-      CRITICAL OUTPUT FORMAT:
+      ARTIFACT + OUTPUT CONTRACT:
+      Before emitting your JSON output, save the full PRD as a public
+      markdown artifact so the human gate and downstream nodes can link
+      to it:
+        allen_save_artifact("prd/requirements.md", <prd markdown>, content_type="markdown", overwrite=true)
+      The tool returns an object shaped like
+        { artifactId, url, publicUrl, rootType, rootId, filename, sizeBytes, overwritten }
+      Copy the `publicUrl` field (full http://host/api/artifacts/<id>/content
+      URL — human-clickable and fetchable with WebFetch/curl) into the
+      JSON block as `prd_artifact_url`. Do NOT use `url` (relative path
+      only) or `artifactId` (opaque id).
+
       End your response with a fenced JSON block containing EXACTLY these
       top-level keys (the engine extracts by key name — wrong names = lost data):
 
       ```json
       {
         "prd_markdown": "<your full PRD as a markdown string>",
+        "prd_artifact_url": "<url returned by allen_save_artifact>",
         "prd_json": {
           "requirements": [...],
           "acceptance_criteria": [...],
@@ -189,10 +201,12 @@ nodes:
       {{/if}}
     outputs:
       prd_markdown: "Full PRD as markdown."
+      prd_artifact_url: "Public URL of the PRD markdown artifact (returned by allen_save_artifact)."
       prd_json: "Structured PRD with requirements, acceptance_criteria, edge_cases, assumptions, risks, open_questions, out_of_scope, non_functional_requirements."
 
   audit_prd:
     agent: doc-auditor
+    resume_on_retry: true
     prompt: |
       Audit this PRD against the user's original request for intent fidelity.
 
@@ -258,13 +272,25 @@ nodes:
       technology choices with rationale, non-functional requirements, risks
       and mitigations, tradeoffs considered, out of scope.
 
-      CRITICAL OUTPUT FORMAT:
+      ARTIFACT + OUTPUT CONTRACT:
+      Before emitting your JSON output, save the full HLA as a public
+      markdown artifact so the human gate and downstream nodes can link
+      to it:
+        allen_save_artifact("hla/architecture.md", <hla markdown>, content_type="markdown", overwrite=true)
+      The tool returns an object shaped like
+        { artifactId, url, publicUrl, rootType, rootId, filename, sizeBytes, overwritten }
+      Copy the `publicUrl` field (full http://host/api/artifacts/<id>/content
+      URL — human-clickable and fetchable with WebFetch/curl) into the
+      JSON block as `hla_artifact_url`. Do NOT use `url` (relative path
+      only) or `artifactId` (opaque id).
+
       End your response with a fenced JSON block containing EXACTLY these
       top-level keys (the engine extracts by key name — wrong names = lost data):
 
       ```json
       {
         "hla_markdown": "<your full HLA as a markdown string>",
+        "hla_artifact_url": "<url returned by allen_save_artifact>",
         "hla_json": {
           "components": [...],
           "data_flow_summary": "...",
@@ -283,10 +309,12 @@ nodes:
       {{/if}}
     outputs:
       hla_markdown: "Full HLA as markdown."
+      hla_artifact_url: "Public URL of the HLA markdown artifact (returned by allen_save_artifact)."
       hla_json: "Structured HLA with components, data_flow_summary, tech_choices, non_functional_requirements, risks, build_vs_buy, confidence."
 
   audit_hla:
     agent: doc-auditor
+    resume_on_retry: true
     prompt: |
       Audit this HLA against the user's original request AND the approved PRD.
 
@@ -365,13 +393,25 @@ nodes:
       diagrams, error taxonomy, observability plan, UI changes, implementation
       flags (has_backend_changes / has_frontend_changes).
 
-      CRITICAL OUTPUT FORMAT:
+      ARTIFACT + OUTPUT CONTRACT:
+      Before emitting your JSON output, save the full TDD as a public
+      markdown artifact so the human gate and downstream nodes can link
+      to it:
+        allen_save_artifact("tdd/technical-design.md", <tdd markdown>, content_type="markdown", overwrite=true)
+      The tool returns an object shaped like
+        { artifactId, url, publicUrl, rootType, rootId, filename, sizeBytes, overwritten }
+      Copy the `publicUrl` field (full http://host/api/artifacts/<id>/content
+      URL — human-clickable and fetchable with WebFetch/curl) into the
+      JSON block as `tdd_artifact_url`. Do NOT use `url` (relative path
+      only) or `artifactId` (opaque id).
+
       End your response with a fenced JSON block containing EXACTLY these
       top-level keys (the engine extracts by key name — wrong names = lost data):
 
       ```json
       {
         "tdd_markdown": "<your full TDD as a markdown string>",
+        "tdd_artifact_url": "<url returned by allen_save_artifact>",
         "tdd_json": {
           "data_models": [...],
           "api_contracts": [...],
@@ -385,9 +425,10 @@ nodes:
       }
       ```
 
-      IMPORTANT: `tdd_markdown` and `tdd_json` MUST be top-level keys in
-      your JSON. Do NOT nest them under a `tdd` wrapper. The downstream
-      audit node reads `{{tdd_markdown}}` directly from state.
+      IMPORTANT: `tdd_markdown`, `tdd_artifact_url`, and `tdd_json` MUST
+      be top-level keys in your JSON. Do NOT nest them under a `tdd`
+      wrapper. The downstream audit node reads `{{tdd_markdown}}`
+      directly from state.
 
       {{#if retry_context}}
       RETRY FEEDBACK from doc-auditor:
@@ -395,12 +436,14 @@ nodes:
       {{/if}}
     outputs:
       tdd_markdown: "Full TDD as markdown."
+      tdd_artifact_url: "Public URL of the TDD markdown artifact (returned by allen_save_artifact)."
       tdd_json: "Structured TDD with data_models, api_contracts, error_taxonomy, observability, has_backend_changes, has_frontend_changes."
       has_backend_changes: "Boolean from TDD JSON."
       has_frontend_changes: "Boolean from TDD JSON."
 
   audit_tdd:
     agent: doc-auditor
+    resume_on_retry: true
     prompt: |
       Audit this TDD against the approved PRD and HLA.
 
@@ -432,27 +475,6 @@ nodes:
       tdd_audit_issues: "Structured issues."
       tdd_audit_rationale: "One paragraph."
 
-  persist_docs:
-    type: code
-    function: persist-design-docs
-    config:
-      # Creates a design_docs record via DesignDocService with three section
-      # versions, uploads each as a public .md, and returns the URLs. The
-      # built-in resolves workflow_run_id from ctx.executionId automatically
-      # (state doesn't carry execution_id, so {{execution_id}} wouldn't work
-      # here). The built-in is implemented in
-      # packages/engine/src/built-ins/persist-design-docs.ts.
-      chat_session_id: "{{chat_session_id}}"
-      user_request: "{{user_request}}"
-      prd: "{{prd_markdown}}"
-      hla: "{{hla_markdown}}"
-      tdd: "{{tdd_markdown}}"
-    outputs:
-      design_doc_id: "Mongo ID of the design_docs record."
-      prd_url: "Public .md URL for the PRD."
-      hla_url: "Public .md URL for the HLA."
-      tdd_url: "Public .md URL for the TDD."
-
   plan_approval_gate:
     type: human
     prompt: |
@@ -461,9 +483,9 @@ nodes:
 
       USER REQUEST: {{user_request}}
 
-      📋 Requirements: {{prd_url}}
-      🏗️ Architecture: {{hla_url}}
-      🔧 Technical Design: {{tdd_url}}
+      📋 Requirements: {{prd_artifact_url}}
+      🏗️ Architecture: {{hla_artifact_url}}
+      🔧 Technical Design: {{tdd_artifact_url}}
 
       has_backend_changes: {{has_backend_changes}}
       has_frontend_changes: {{has_frontend_changes}}
@@ -489,70 +511,76 @@ nodes:
         label: "Feedback (required for request_changes)"
         type: textarea
         required: false
+    outputs:
+      decision: "approve | request_changes | reject"
+      scope: "requirements | architecture | technical_design | all — only set when decision == 'request_changes'"
+      feedback: "Free-text feedback, required when decision == 'request_changes'"
 
   # ══════════════════════════════════════════════════════════════════════
   # PHASE 2 — IMPLEMENTATION
   # ══════════════════════════════════════════════════════════════════════
 
-  plan_implementation:
+  implement:
     agent: engineering-lead
+    # Resume across retries: qa-fail / validator-fail / code-review-fail
+    # each loops back here with retry_context. The engineering-lead's
+    # session persists across those retries so it remembers the plan it
+    # produced, the workspace it created, and which specialists ran.
+    # That lets retries act as "fix what broke" rather than "re-do
+    # everything from scratch".
+    resume_on_retry: true
+    # Single-node execution: engineering-lead operates in MODE 2 — it
+    # produces the file-level plan from the approved PRD/HLA/TDD, creates
+    # the workspace via the create_workspace MCP tool, dispatches
+    # specialists via spawn_agent, and collects their results. The
+    # previous plan_implementation + create_branch + develop pipeline is
+    # absorbed here because the lead owns end-to-end dispatch and must
+    # never let specialists work outside the isolated worktree.
     prompt: |
-      You are in MODE A — consume an approved design and produce a file-level
-      implementation plan. DO NOT redesign.
+      MODE: 2 (execute — plan + workspace + dispatch in one turn)
 
-      APPROVED PRD: {{prd_url}}
-      APPROVED HLA: {{hla_url}}
-      APPROVED TDD: {{tdd_url}}
+      You are the Engineering Lead. Translate the approved design into a
+      file-level plan, create a workspace via create_workspace, and
+      dispatch specialists through spawn_agent to implement every change.
+      You DO NOT write code yourself.
 
-      IMPORTANT: The URLs above point to public markdown files. Fetch each
-      document before reading it — use WebFetch or curl to download the
-      content. Do NOT guess from the URL alone.
+      APPROVED PRD: {{prd_artifact_url}}
+      APPROVED HLA: {{hla_artifact_url}}
+      APPROVED TDD: {{tdd_artifact_url}}
+      REPO PATH:    {{repo_path}}
 
-      REPO PATH: {{repo_path}}
+      The URLs point to public markdown files — fetch each with WebFetch
+      or curl before reading. Do NOT guess from the URL alone.
 
-      Translate the TDD into a concrete file-level plan. For every file, set
-      the `specialist` hint based on which specialty should own that file.
+      Step-by-step:
+        1. Fetch + read PRD, HLA, TDD.
+        2. Scan the target repo (get_repo_context, Read the files TDD touches).
+        3. Build the plan (see your MODE 2 contract — file entries with
+           specialist hints, validation commands, risks).
+        4. Call create_workspace(repo_path="{{repo_path}}", branch_prefix="feature",
+           task_summary="{{user_request}}") ONCE. Capture the worktree_path.
+        5. For each specialist group, spawn_agent with repo_path=<worktree_path>
+           and the plan slice in the prompt. Parallelise safe batches; serialise
+           conflicts.
+        6. Wait on each batch, retry each specialist once on failure, aggregate
+           files_changed.
+        7. Emit the MODE 2 JSON output block including implementation_plan_json,
+           worktree_path, branch_name, workspace_id, specialists_used,
+           batches, files_changed, any_failures, failure_details.
 
-      End with a JSON block: { mode, changes[], validation_approach,
-      has_backend_changes, has_frontend_changes, risks[] }.
+      HARD RULES:
+        - NEVER edit files yourself. Use spawn_agent for every change.
+        - ALWAYS pass repo_path=<worktree_path> to every spawn_agent call.
+        - NEVER skip create_workspace — specialists must not touch the
+          registered repo directly.
     outputs:
-      implementation_plan: "The full implementation plan JSON."
-
-  create_branch:
-    type: code
-    function: create-workspace
-    config:
-      repo_path: "{{repo_path}}"
-      branch_prefix: "feature"
-      task_summary: "{{user_request}}"
-    outputs:
-      worktree_path: "Absolute path to the isolated git worktree."
-      branch_name: "New branch name."
+      implementation_plan_json: "The full implementation plan JSON — auto-captured as implementation_plan.json."
+      worktree_path: "Absolute path to the isolated git worktree the specialists worked inside."
+      branch_name: "Feature branch name."
       workspace_id: "Internal Allen workspace identifier."
-
-  develop:
-    agent: developer
-    prompt: |
-      You are the Developer Orchestrator. Drive the implementation plan to
-      completion by spawning specialists in parallel via spawn_agent.
-
-      IMPLEMENTATION PLAN:
-      {{implementation_plan}}
-
-      WORKTREE PATH: {{worktree_path}}
-      BRANCH: {{branch_name}}
-
-      Follow your six-rule contract: read plan → group by specialist hint →
-      detect file conflicts → spawn parallel batches (wait for each batch
-      before the next) → serialise when conflicted → collect & validate.
-
-      ALWAYS pass repo_path={{worktree_path}} to every spawn_agent call.
-
-      End with a JSON summary of specialists used, batches, files changed,
-      and any failures.
-    outputs:
-      developer_output: "The orchestrator's summary JSON with specialists_used, batches, files_changed, any_failures."
       files_changed: "List of all files the specialists touched."
+      any_failures: "Boolean — true if any specialist returned a non-recoverable failure."
+      failure_details: "Structured details per failing specialist. Empty on success."
 
   qa:
     agent: qa-lead
@@ -563,15 +591,15 @@ nodes:
       call: spawn test-writer to write tests, run them, check coverage,
       fix or delegate back on failure, repeat until green. You never
       return partial results — you only return when quality is pass,
-      fail (delegate back to developer), or escalate.
+      fail (delegate back to engineering-lead), or escalate.
 
-      APPROVED PRD URL: {{prd_url}}
-      APPROVED HLA URL: {{hla_url}}
-      APPROVED TDD URL: {{tdd_url}}
+      APPROVED PRD URL: {{prd_artifact_url}}
+      APPROVED HLA URL: {{hla_artifact_url}}
+      APPROVED TDD URL: {{tdd_artifact_url}}
       (Fetch each URL with WebFetch/curl to read the document content.)
 
       WORKTREE PATH: {{worktree_path}}
-      FILES CHANGED BY DEVELOPER: {{files_changed}}
+      FILES CHANGED BY ENGINEERING LEAD: {{files_changed}}
       SKIP REGRESSION: {{skip_regression}}
 
       Follow your five-rule contract:
@@ -593,7 +621,7 @@ nodes:
       covered_acceptance_criteria: "List of ACs with passing tests."
       uncovered_acceptance_criteria: "List of ACs without tests (empty on pass)."
       cycles_used: "Number of write-run-verify cycles."
-      failure_target: "developer | test-writer | null"
+      failure_target: "engineering-lead | test-writer | null"
       failure_details: "Details when verdict is fail or escalate."
 
   implementation_validator:
@@ -606,12 +634,12 @@ nodes:
       REMEMBER: PRD is the source of truth. TDD deviations are
       informational, not blocking, as long as the PRD is still satisfied.
 
-      APPROVED PRD: {{prd_url}}
-      APPROVED HLA: {{hla_url}}
-      APPROVED TDD: {{tdd_url}}
+      APPROVED PRD: {{prd_artifact_url}}
+      APPROVED HLA: {{hla_artifact_url}}
+      APPROVED TDD: {{tdd_artifact_url}}
       (Fetch each URL with WebFetch/curl to read the document content.)
 
-      IMPLEMENTATION PLAN: {{implementation_plan}}
+      IMPLEMENTATION PLAN: {{implementation_plan_json}}
       WORKTREE PATH: {{worktree_path}}
 
       Run your blocking-checks list + informational-checks list against the
@@ -629,6 +657,7 @@ nodes:
 
   update_docs:
     agent: documentation-writer
+    resume_on_retry: true
     prompt: |
       MODE: update_docs
 
@@ -637,9 +666,9 @@ nodes:
 
       WORKTREE PATH: {{worktree_path}}
       FILES CHANGED: {{files_changed}}
-      PRD URL: {{prd_url}}
-      HLA URL: {{hla_url}}
-      TDD URL: {{tdd_url}}
+      PRD URL: {{prd_artifact_url}}
+      HLA URL: {{hla_artifact_url}}
+      TDD URL: {{tdd_artifact_url}}
 
       Follow your 7-rule contract: discover docs, match to changed modules,
       update to match reality, match existing style, no speculation,
@@ -680,6 +709,7 @@ nodes:
 
   open_pr:
     agent: pr-creator
+    resume_on_retry: true
     prompt: |
       Create a pull request for this feature run.
 
@@ -688,9 +718,9 @@ nodes:
       BRANCH NAME: {{branch_name}}
       USER REQUEST: {{user_request}}
 
-      PRD URL: {{prd_url}}
-      HLA URL: {{hla_url}}
-      TDD URL: {{tdd_url}}
+      PRD URL: {{prd_artifact_url}}
+      HLA URL: {{hla_artifact_url}}
+      TDD URL: {{tdd_artifact_url}}
 
       VALIDATOR VERDICT: prd_satisfied={{prd_satisfied}}
       INFORMATIONAL DEVIATIONS: {{informational_deviations}}
@@ -713,6 +743,7 @@ nodes:
 
   summary:
     agent: documentation-writer
+    resume_on_retry: true
     prompt: |
       MODE: summary
 
@@ -723,10 +754,10 @@ nodes:
       PR URL: {{pr_url}}
       BRANCH: {{branch_name}}
       WORKTREE PATH: {{worktree_path}}
-      PRD URL: {{prd_url}}
-      HLA URL: {{hla_url}}
-      TDD URL: {{tdd_url}}
-      IMPLEMENTATION PLAN: {{implementation_plan}}
+      PRD URL: {{prd_artifact_url}}
+      HLA URL: {{hla_artifact_url}}
+      TDD URL: {{tdd_artifact_url}}
+      IMPLEMENTATION PLAN: {{implementation_plan_json}}
       VALIDATOR VERDICT: prd_satisfied={{prd_satisfied}}, informational_deviations={{informational_deviations}}
       QA VERDICT: {{qa_verdict}}
       COVERED ACCEPTANCE CRITERIA: {{covered_acceptance_criteria}}
@@ -742,6 +773,64 @@ nodes:
       summary_markdown: "Full summary as markdown."
       summary_url: "Public .md URL."
       workflow_verdict: "success or partial_success_with_manual_review"
+
+  # Unified escalation review — every agent's `escalate` verdict routes here
+  # instead of silently ending. The user sees what escalated, gets the
+  # full context, and picks retry / override / abandon. Replaces the
+  # previous pattern where audit_{prd,hla,tdd} and qa all dead-ended at END.
+  escalation_review:
+    type: human
+    fields:
+      - name: decision
+        label: "What should happen?"
+        type: select
+        options: [retry_with_feedback, override_and_continue, abandon]
+        required: true
+      - name: feedback
+        label: "Feedback for the agent (required for retry)"
+        type: textarea
+        required: false
+    outputs:
+      decision: "retry_with_feedback | override_and_continue | abandon"
+      feedback: "Free-text feedback passed to the agent on retry"
+    prompt: |
+      🔴 The workflow paused because an agent escalated. It gave up on
+      producing a clean verdict after its retry budget and is handing
+      the decision to you.
+
+      ORIGINAL REQUEST:
+      {{user_request}}
+
+      ── Escalation context (only the relevant rows are filled) ──
+
+      PRD AUDIT:     {{prd_audit_verdict}}
+      {{prd_audit_rationale}}
+      issues: {{prd_audit_issues}}
+
+      HLA AUDIT:     {{hla_audit_verdict}}
+      {{hla_audit_rationale}}
+      issues: {{hla_audit_issues}}
+
+      TDD AUDIT:     {{tdd_audit_verdict}}
+      {{tdd_audit_rationale}}
+      issues: {{tdd_audit_issues}}
+
+      QA VERDICT:    {{qa_verdict}}
+      cycles used: {{cycles_used}}
+      failure details: {{failure_details}}
+
+      ── Your decision ──
+
+      retry_with_feedback  — loop back to the failing stage with your
+                             feedback as retry_context. The agent will
+                             see your feedback verbatim.
+      override_and_continue — bypass the escalating agent's verdict and
+                             advance to the next stage anyway. Use this
+                             when the escalation is overly cautious and
+                             you're willing to accept the risk.
+      abandon              — end the run. Artifacts produced so far are
+                             preserved and browsable on the execution
+                             page; no PR is opened.
 
 edges:
   - { from: START, to: clarify }
@@ -771,35 +860,96 @@ edges:
   - { from: produce_prd, to: audit_prd }
   - { from: audit_prd, to: produce_hla, condition: "prd_audit_verdict == 'approve'" }
   - { from: audit_prd, to: produce_prd, condition: "prd_audit_verdict == 'revise'", max_retries: 2, retry_context: "PRD audit feedback:\n{{prd_audit_rationale}}\n{{prd_audit_issues}}" }
-  - { from: audit_prd, to: END, condition: "prd_audit_verdict == 'escalate'" }
+  - { from: audit_prd, to: escalation_review, condition: "prd_audit_verdict == 'escalate'" }
   - { from: produce_hla, to: audit_hla }
   - { from: audit_hla, to: produce_tdd, condition: "hla_audit_verdict == 'approve'" }
   - { from: audit_hla, to: produce_hla, condition: "hla_audit_verdict == 'revise'", max_retries: 2, retry_context: "HLA audit feedback:\n{{hla_audit_rationale}}\n{{hla_audit_issues}}" }
-  - { from: audit_hla, to: END, condition: "hla_audit_verdict == 'escalate'" }
+  - { from: audit_hla, to: escalation_review, condition: "hla_audit_verdict == 'escalate'" }
   - { from: produce_tdd, to: audit_tdd }
-  - { from: audit_tdd, to: persist_docs, condition: "tdd_audit_verdict == 'approve'" }
+  - { from: audit_tdd, to: implement,          condition: "tdd_audit_verdict == 'approve' AND trusted_mode == true" }
+  - { from: audit_tdd, to: plan_approval_gate, condition: "tdd_audit_verdict == 'approve' AND trusted_mode != true" }
   - { from: audit_tdd, to: produce_tdd, condition: "tdd_audit_verdict == 'revise'", max_retries: 2, retry_context: "TDD audit feedback:\n{{tdd_audit_rationale}}\n{{tdd_audit_issues}}" }
-  - { from: audit_tdd, to: END, condition: "tdd_audit_verdict == 'escalate'" }
-  - { from: persist_docs, to: plan_implementation, condition: "trusted_mode == true" }
-  - { from: persist_docs, to: plan_approval_gate, condition: "trusted_mode != true" }
+  - { from: audit_tdd, to: escalation_review, condition: "tdd_audit_verdict == 'escalate'" }
   # Gate routing — the user picks approve / request_changes / reject.
   # request_changes loops back to the producer for the chosen scope.
-  - { from: plan_approval_gate, to: plan_implementation, condition: "decision == 'approve'" }
+  - { from: plan_approval_gate, to: implement, condition: "decision == 'approve'" }
   - { from: plan_approval_gate, to: END, condition: "decision == 'reject'" }
   - { from: plan_approval_gate, to: produce_prd, condition: "decision == 'request_changes' AND scope == 'requirements'", max_retries: 2, retry_context: "Human feedback on PRD:\n{{feedback}}" }
   - { from: plan_approval_gate, to: produce_hla, condition: "decision == 'request_changes' AND scope == 'architecture'", max_retries: 2, retry_context: "Human feedback on HLA:\n{{feedback}}" }
   - { from: plan_approval_gate, to: produce_tdd, condition: "decision == 'request_changes' AND scope == 'technical_design'", max_retries: 2, retry_context: "Human feedback on TDD:\n{{feedback}}" }
   - { from: plan_approval_gate, to: produce_prd, condition: "decision == 'request_changes' AND scope == 'all'", max_retries: 2, retry_context: "Human feedback (full redesign):\n{{feedback}}" }
-  - { from: plan_implementation, to: create_branch }
-  - { from: create_branch, to: develop }
-  - { from: develop, to: qa }
+  - { from: implement, to: qa }
   - { from: qa, to: implementation_validator, condition: "qa_verdict == 'pass'" }
-  - { from: qa, to: develop, condition: "qa_verdict == 'fail'", max_retries: 2, retry_context: "QA failed — build/lint/tests broken:\n{{failure_details}}" }
-  - { from: qa, to: END, condition: "qa_verdict == 'escalate'" }
+  - { from: qa, to: implement, condition: "qa_verdict == 'fail'", max_retries: 2, retry_context: "QA failed — build/lint/tests broken:\n{{failure_details}}" }
+  - { from: qa, to: escalation_review, condition: "qa_verdict == 'escalate'" }
   - { from: implementation_validator, to: update_docs, condition: "prd_satisfied == true" }
-  - { from: implementation_validator, to: plan_implementation, condition: "prd_satisfied != true", max_retries: 2, retry_context: "Validator found blocking violations:\n{{blocking_violations}}" }
+  - { from: implementation_validator, to: implement, condition: "prd_satisfied != true", max_retries: 2, retry_context: "Validator found blocking violations:\n{{blocking_violations}}" }
   - { from: update_docs, to: code_review }
   - { from: code_review, to: open_pr, condition: "review_verdict == 'APPROVED'" }
-  - { from: code_review, to: develop, condition: "review_verdict == 'REQUEST_CHANGES'", max_retries: 2, retry_context: "Review feedback:\n{{review_feedback}}" }
+  - { from: code_review, to: implement, condition: "review_verdict == 'REQUEST_CHANGES'", max_retries: 2, retry_context: "Review feedback:\n{{review_feedback}}" }
   - { from: open_pr, to: summary }
   - { from: summary, to: END }
+
+  # ══════════════════════════════════════════════════════════════════════
+  # RETRY-EXHAUSTION FALLBACKS — when a retry edge's budget is spent,
+  # the engine skips that edge and sets state.__retry_exhausted_from to
+  # the source node name. These condition-only edges are guarded by
+  # that flag so they ONLY fire after exhaustion — they don't fan out
+  # in parallel with an active retry.
+  # ══════════════════════════════════════════════════════════════════════
+  - { from: clarify_human,            to: escalation_review, condition: "ready_to_produce_prd != true AND __retry_exhausted_from == 'clarify_human'" }
+  - { from: audit_prd,                to: escalation_review, condition: "prd_audit_verdict == 'revise' AND __retry_exhausted_from == 'audit_prd'" }
+  - { from: audit_hla,                to: escalation_review, condition: "hla_audit_verdict == 'revise' AND __retry_exhausted_from == 'audit_hla'" }
+  - { from: audit_tdd,                to: escalation_review, condition: "tdd_audit_verdict == 'revise' AND __retry_exhausted_from == 'audit_tdd'" }
+  - { from: plan_approval_gate,       to: escalation_review, condition: "decision == 'request_changes' AND __retry_exhausted_from == 'plan_approval_gate'" }
+  - { from: qa,                       to: escalation_review, condition: "qa_verdict == 'fail' AND __retry_exhausted_from == 'qa'" }
+  - { from: implementation_validator, to: escalation_review, condition: "prd_satisfied != true AND __retry_exhausted_from == 'implementation_validator'" }
+  - { from: code_review,              to: escalation_review, condition: "review_verdict == 'REQUEST_CHANGES' AND __retry_exhausted_from == 'code_review'" }
+
+  # ══════════════════════════════════════════════════════════════════════
+  # escalation_review outgoing
+  # ══════════════════════════════════════════════════════════════════════
+  # Conditions OR on BOTH the agent-escalate case and the retry-
+  # exhaustion case (e.g. prd_audit_verdict == 'revise' OR 'escalate')
+  # so the same edge handles both failure modes for a given stage.
+  #
+  # No max_retries on retry edges — the human is the retry controller;
+  # they pick abandon when they're done. An unbounded agent loop would
+  # be a footgun; an unbounded human-gated loop is just "I keep asking
+  # the user to help".
+  - { from: escalation_review, to: END, condition: "decision == 'abandon'" }
+
+  # retry_with_feedback
+  - { from: escalation_review, to: clarify,     condition: "decision == 'retry_with_feedback' AND ready_to_produce_prd != true", retry_context: "Human intervened on clarification exhaustion. Commit to the best interpretation and emit ready_to_produce_prd=true with refined_request. Feedback:\n{{feedback}}" }
+  - { from: escalation_review, to: produce_prd, condition: "decision == 'retry_with_feedback' AND (prd_audit_verdict == 'escalate' OR prd_audit_verdict == 'revise')", retry_context: "Human intervened on PRD audit failure. Feedback:\n{{feedback}}" }
+  - { from: escalation_review, to: produce_hla, condition: "decision == 'retry_with_feedback' AND (hla_audit_verdict == 'escalate' OR hla_audit_verdict == 'revise')", retry_context: "Human intervened on HLA audit failure. Feedback:\n{{feedback}}" }
+  - { from: escalation_review, to: produce_tdd, condition: "decision == 'retry_with_feedback' AND (tdd_audit_verdict == 'escalate' OR tdd_audit_verdict == 'revise')", retry_context: "Human intervened on TDD audit failure. Feedback:\n{{feedback}}" }
+  # The condition-parser maps undefined identifiers to `false`, so
+  # `prd_satisfied != true` AND `prd_satisfied == false` BOTH fan out
+  # whenever prd_satisfied has never been set. Guard the validator branch
+  # with `__retry_exhausted_from == 'implementation_validator'` instead —
+  # that flag is only ever set after validator retries exhaust.
+  - { from: escalation_review, to: implement,   condition: "decision == 'retry_with_feedback' AND (qa_verdict == 'escalate' OR qa_verdict == 'fail' OR __retry_exhausted_from == 'implementation_validator' OR review_verdict == 'REQUEST_CHANGES')", retry_context: "Human intervened on implementation/validation/review failure. Feedback:\n{{feedback}}" }
+  # Plan-approval-gate request_changes exhaustion — route back to the
+  # producer for whichever scope the human last picked. Guarded by the
+  # exhaustion source so these don't fan out with audit-driven retries
+  # when `scope` happens to be a leftover value from an earlier
+  # plan_approval_gate visit.
+  - { from: escalation_review, to: produce_prd, condition: "decision == 'retry_with_feedback' AND __retry_exhausted_from == 'plan_approval_gate' AND scope == 'requirements'", retry_context: "Human intervened on plan-approval request_changes exhaustion. Feedback:\n{{feedback}}" }
+  - { from: escalation_review, to: produce_hla, condition: "decision == 'retry_with_feedback' AND __retry_exhausted_from == 'plan_approval_gate' AND scope == 'architecture'", retry_context: "Human intervened on plan-approval request_changes exhaustion. Feedback:\n{{feedback}}" }
+  - { from: escalation_review, to: produce_tdd, condition: "decision == 'retry_with_feedback' AND __retry_exhausted_from == 'plan_approval_gate' AND scope == 'technical_design'", retry_context: "Human intervened on plan-approval request_changes exhaustion. Feedback:\n{{feedback}}" }
+  - { from: escalation_review, to: produce_prd, condition: "decision == 'retry_with_feedback' AND __retry_exhausted_from == 'plan_approval_gate' AND scope == 'all'", retry_context: "Human intervened on plan-approval request_changes exhaustion (all scope). Feedback:\n{{feedback}}" }
+
+  # override_and_continue — advance past the failing stage.
+  - { from: escalation_review, to: produce_hla,             condition: "decision == 'override_and_continue' AND (prd_audit_verdict == 'escalate' OR prd_audit_verdict == 'revise')" }
+  - { from: escalation_review, to: produce_tdd,             condition: "decision == 'override_and_continue' AND (hla_audit_verdict == 'escalate' OR hla_audit_verdict == 'revise')" }
+  - { from: escalation_review, to: implement,               condition: "decision == 'override_and_continue' AND (tdd_audit_verdict == 'escalate' OR tdd_audit_verdict == 'revise') AND trusted_mode == true" }
+  - { from: escalation_review, to: plan_approval_gate,      condition: "decision == 'override_and_continue' AND (tdd_audit_verdict == 'escalate' OR tdd_audit_verdict == 'revise') AND trusted_mode != true" }
+  - { from: escalation_review, to: implementation_validator, condition: "decision == 'override_and_continue' AND (qa_verdict == 'escalate' OR qa_verdict == 'fail')" }
+  - { from: escalation_review, to: update_docs,             condition: "decision == 'override_and_continue' AND __retry_exhausted_from == 'implementation_validator'" }
+  - { from: escalation_review, to: open_pr,                 condition: "decision == 'override_and_continue' AND review_verdict == 'REQUEST_CHANGES'" }
+  # For plan-approval and clarify exhaustions, overriding advances the
+  # happy path (implement / produce_prd respectively). The clarify
+  # override says "just try with what we have".
+  - { from: escalation_review, to: implement,   condition: "decision == 'override_and_continue' AND __retry_exhausted_from == 'plan_approval_gate'" }
+  - { from: escalation_review, to: produce_prd, condition: "decision == 'override_and_continue' AND __retry_exhausted_from == 'clarify_human'" }

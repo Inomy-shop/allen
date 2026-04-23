@@ -347,9 +347,14 @@ export class ExecutionService {
     const killed = killExecutionProcess(id);
     if (killed) console.log(`[cancel] Killed process for execution ${id}`);
 
+    // Clear currentNodes so the UI stops rendering the aborted nodes as
+    // "running". The engine writes cancelled/failed trace rows for the
+    // in-flight nodes in its catch paths; the list itself is no longer
+    // meaningful once the run is cancelled.
     await this.stateManager.updateExecution(id, {
       status: 'cancelled',
       completedAt: new Date(),
+      currentNodes: [],
     });
   }
 
