@@ -189,6 +189,31 @@ variable "allen_oxylabs_endpoint" {
   default     = ""
 }
 
+variable "allen_opensearch_endpoint" {
+  description = "OpenSearch MCP: cluster endpoint (default http://localhost:9200)"
+  type        = string
+  default     = ""
+}
+
+variable "allen_opensearch_username" {
+  description = "OpenSearch MCP: username (required for authenticated clusters)"
+  type        = string
+  default     = ""
+}
+
+variable "allen_opensearch_password" {
+  description = "OpenSearch MCP: password (required for authenticated clusters)"
+  type        = string
+  sensitive   = true
+  default     = ""
+}
+
+variable "allen_opensearch_ssl_reject_unauthorized" {
+  description = "OpenSearch MCP: 'false' to allow self-signed certs (default 'true')"
+  type        = string
+  default     = ""
+}
+
 variable "allen_aws_region" {
   description = "AWS MCP: region (default us-east-1)"
   type        = string

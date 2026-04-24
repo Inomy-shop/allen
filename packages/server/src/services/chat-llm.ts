@@ -50,6 +50,15 @@ export interface ChatLLMOptions {
   skipTools?: boolean;
   signal?: AbortSignal;
   cwd?: string;
+  /**
+   * Chat session id this LLM call is running under. Forwarded to the
+   * Allen MCP subprocess as `ALLEN_ARTIFACT_ROOT_TYPE=chat` /
+   * `ALLEN_ARTIFACT_ROOT_ID=<sessionId>` so `allen_save_artifact` calls
+   * from the chat agent can file artifacts under this chat. Without it,
+   * the MCP returns the "ALLEN_ARTIFACT_ROOT_TYPE / ALLEN_ARTIFACT_ROOT_ID
+   * env vars not set" error and the save fails.
+   */
+  chatSessionId?: string;
 }
 
 export interface ChatTraceEvent {
@@ -93,6 +102,7 @@ async function runClaudeCLI(
   skipTools?: boolean,
   cwd?: string,
   resolved?: ResolvedSettings,
+  chatSessionId?: string,
 ): Promise<{ text: string; costUsd: number; sessionId?: string; trace: ChatTraceEvent[] }> {
   const { query } = await import('@anthropic-ai/claude-code');
   const { resolve, dirname } = await import('node:path');
@@ -118,6 +128,18 @@ async function runClaudeCLI(
         // Shared with the MCP subprocess so it can mint its own access token
         // when calling back into /api/* — see allen-mcp-server.ts.
         JWT_ACCESS_SECRET: process.env.JWT_ACCESS_SECRET ?? '',
+        // Artifact-root context for `allen_save_artifact` — files saved
+        // by the chat agent get filed under this chat session. Without
+        // these the MCP returns "ALLEN_ARTIFACT_ROOT_TYPE / ID env vars
+        // not set". Only set when we have a chat session id (callers
+        // that don't supply one shouldn't be saving chat-scoped
+        // artifacts anyway).
+        ...(chatSessionId
+          ? {
+              ALLEN_ARTIFACT_ROOT_TYPE: 'chat',
+              ALLEN_ARTIFACT_ROOT_ID: chatSessionId,
+            }
+          : {}),
       },
     };
 
@@ -275,10 +297,10 @@ export async function runChatLLM(db: Db, options: ChatLLMOptions): Promise<ChatL
 
   switch (provider) {
     case 'codex':
-      result = await runCodexCLI(db, options.systemPrompt, options.messages, model, callbacks, options.resumeSessionId, options.skipTools, options.cwd, resolved);
+      result = await runCodexCLI(db, options.systemPrompt, options.messages, model, callbacks, options.resumeSessionId, options.skipTools, options.cwd, resolved, options.chatSessionId);
       break;
     case 'claude-cli':
-      result = await runClaudeCLI(db, options.systemPrompt, options.messages, model, callbacks, options.resumeSessionId, options.skipTools, options.cwd, resolved);
+      result = await runClaudeCLI(db, options.systemPrompt, options.messages, model, callbacks, options.resumeSessionId, options.skipTools, options.cwd, resolved, options.chatSessionId);
       break;
     default:
       throw new Error(`Unknown provider: ${provider}`);

@@ -627,6 +627,10 @@ export class ChatService {
         messages: llmMessages,
         resumeSessionId: hasSessionResume ? resumeSessionId : undefined,
         cwd: workspaceCwd,
+        // Forwarded down to the Allen MCP subprocess as
+        // ALLEN_ARTIFACT_ROOT_TYPE=chat / ALLEN_ARTIFACT_ROOT_ID=<sessionId>
+        // so allen_save_artifact files under this chat session.
+        chatSessionId: sessionId,
         signal: entry.abortController.signal,
         onText: (fullText) => {
           entry.currentText = fullText;
@@ -773,6 +777,9 @@ export class ChatService {
               : await getSystemPrompt(provider, this.db, 'continue'),
             messages: [{ role: 'user', content: 'Continue from where you left off. Complete the delegation and provide the final response.' }],
             resumeSessionId: savedSessionId,
+            // Same artifact-root context as the primary call above so a
+            // mid-retry allen_save_artifact still files under this chat.
+            chatSessionId: sessionId,
             onText: (fullText) => { entry.currentText = fullText; broadcastToListeners(entry, 'message_delta', { text: fullText, messageId: assistantMsgId }); },
             onThinking: (thinking) => { broadcastToListeners(entry, 'thinking', { text: thinking, messageId: assistantMsgId }); },
             onToolStart: (tool, args, toolUseId) => { broadcastToListeners(entry, 'tool_start', { tool, args, tool_use_id: toolUseId }); },

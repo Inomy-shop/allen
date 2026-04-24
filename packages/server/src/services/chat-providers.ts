@@ -192,6 +192,7 @@ export async function runCodexCLI(
   skipTools?: boolean,
   cwd?: string,
   resolved?: import('./agent-settings.js').ResolvedSettings,
+  chatSessionId?: string,
 ): Promise<ProviderResult & { sessionId?: string }> {
   const { spawn } = await import('node:child_process');
   const { toCodexArgs } = await import('./agent-settings.js');
@@ -246,7 +247,21 @@ export async function runCodexCLI(
     mkdirSync(fallbackCwd, { recursive: true });
     const proc = spawn('codex', args, {
       cwd: fallbackCwd,
-      env: { ...process.env },
+      // Codex registers the Allen MCP server globally via `codex mcp add`,
+      // which means we can't pass per-session env via the MCP config.
+      // Instead we add it to codex's own process env — the MCP child
+      // inherits it because Node's child_process spawn passes the
+      // parent's env down by default (codex doesn't strip it). Same
+      // mechanism as ALLEN_API_URL / JWT_ACCESS_SECRET work today.
+      env: {
+        ...process.env,
+        ...(chatSessionId
+          ? {
+              ALLEN_ARTIFACT_ROOT_TYPE: 'chat',
+              ALLEN_ARTIFACT_ROOT_ID: chatSessionId,
+            }
+          : {}),
+      },
       stdio: ['pipe', 'pipe', 'pipe'],
     });
 

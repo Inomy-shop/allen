@@ -42,6 +42,10 @@ resource "aws_ssm_parameter" "env_production" {
     allen_oxylabs_username             = var.allen_oxylabs_username
     allen_oxylabs_password             = var.allen_oxylabs_password
     allen_oxylabs_endpoint             = var.allen_oxylabs_endpoint
+    allen_opensearch_endpoint          = var.allen_opensearch_endpoint
+    allen_opensearch_username          = var.allen_opensearch_username
+    allen_opensearch_password          = var.allen_opensearch_password
+    allen_opensearch_ssl_reject_unauthorized = var.allen_opensearch_ssl_reject_unauthorized
     allen_aws_region                   = var.allen_aws_region
     allen_aws_access_key_id            = var.allen_aws_access_key_id
     allen_aws_secret_access_key        = var.allen_aws_secret_access_key
