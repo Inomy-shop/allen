@@ -128,6 +128,17 @@ export async function ensureIndexes(db: Db): Promise<void> {
   await db.collection('agent_conversations').createIndex({ fromAgent: 1, toAgent: 1 });
   await db.collection('agent_conversations').createIndex({ status: 1 });
 
+  // Agent Activity — running log of intermediate events emitted by
+  // delegations and spawned executions. Queried by refId for wait tools
+  // and UI replay; TTL keeps the collection bounded (7 days) because the
+  // final response is already persisted in agent_conversations/traces.
+  await db.collection('agent_activity').createIndex({ refId: 1, timestamp: 1 });
+  await db.collection('agent_activity').createIndex({ chatSessionId: 1, timestamp: 1 });
+  await db.collection('agent_activity').createIndex(
+    { timestamp: 1 },
+    { expireAfterSeconds: 7 * 24 * 60 * 60 },
+  );
+
   // Teams (org-chart grouping for agents — phase 1 of teams architecture)
   await db.collection('teams').createIndex({ name: 1 }, { unique: true });
   await db.collection('teams').createIndex({ parentTeamName: 1 });

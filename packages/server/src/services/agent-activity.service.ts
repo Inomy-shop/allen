@@ -35,8 +35,12 @@ import type { Collection, Db, ObjectId } from 'mongodb';
 export type ActivityScope = 'delegation' | 'execution';
 export type ActivityType = 'text' | 'thinking' | 'tool_call' | 'tool_result';
 
-const TEXT_CAP = 200;
-const TOOL_ARG_CAP = 100;
+// Per-row content caps. TEXT_CAP covers `text` and `thinking` rows; the
+// UI's LiveFeed truncates further for display (80–100 chars) but the
+// refresh-replay needs enough context to reconstruct what the agent was
+// saying. TOOL_ARG_CAP is tighter — tool summaries tend to be short.
+const TEXT_CAP = 1000;
+const TOOL_ARG_CAP = 200;
 
 export interface AgentActivityEvent {
   _id?: ObjectId;

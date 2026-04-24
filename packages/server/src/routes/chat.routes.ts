@@ -80,6 +80,29 @@ export function chatRoutes(db: Db): Router {
     }
   });
 
+  // GET /api/chat/delegations/:conversationId/activity — Persisted thread-event log
+  // for a delegation, used by useChat.ts on refresh so running delegations
+  // don't lose their visible progress when the client reloads. Returns
+  // oldest-first so the UI can append in natural order. `since` filters to
+  // events after that ISO timestamp; `limit` caps at 2000 (default 500).
+  router.get('/delegations/:conversationId/activity', async (req: Request, res: Response) => {
+    try {
+      const conversationId = param(req, 'conversationId');
+      const sinceRaw = req.query.since as string | undefined;
+      const limitRaw = req.query.limit as string | undefined;
+      const since = sinceRaw ? new Date(sinceRaw) : undefined;
+      const limit = limitRaw ? Math.max(1, Math.min(parseInt(limitRaw, 10) || 500, 2000)) : 500;
+      const { AgentActivityService } = await import('../services/agent-activity.service.js');
+      const service = new AgentActivityService(db);
+      const events = await service.listForRef(conversationId, { since, limit });
+      console.log('[chat/activity] conv', conversationId, 'since', sinceRaw ?? '-', '→', events.length, 'rows');
+      res.json({ events });
+    } catch (err: unknown) {
+      console.error('[chat/activity] failed:', (err as Error).message);
+      res.status(500).json({ error: (err as Error).message });
+    }
+  });
+
   // GET /api/chat/delegation/:id/status — Quick status check (non-blocking)
   router.get('/delegation/:id/status', async (req: Request, res: Response) => {
     try {
@@ -188,13 +211,16 @@ export function chatRoutes(db: Db): Router {
   // GET /api/chat/sessions/:id/stream — Subscribe to active stream (reconnection)
   router.get('/sessions/:id/stream', (req: Request, res: Response) => {
     const sessionId = param(req, 'id');
+    console.log('[chat/stream] subscribe session', sessionId);
     chatService.subscribeToStream(sessionId, res);
   });
 
   // GET /api/chat/sessions/:id/streaming — Check if session is streaming
   router.get('/sessions/:id/streaming', (req: Request, res: Response) => {
     const sessionId = param(req, 'id');
-    res.json({ streaming: chatService.isStreaming(sessionId) });
+    const streaming = chatService.isStreaming(sessionId);
+    console.log('[chat/isStreaming]', sessionId, '→', streaming);
+    res.json({ streaming });
   });
 
   // PATCH /api/chat/sessions/:id — Update session

@@ -10,6 +10,7 @@ import { ExecutionService } from './execution.service.js';
 import { InterventionService } from './intervention.service.js';
 import { embedAndSave, invalidateCache } from './embedding.service.js';
 import { AgentConversationService } from './agent-conversation.service.js';
+import { AgentActivityService } from './agent-activity.service.js';
 import { metaChatTools, META_DESTRUCTIVE_TOOLS } from './chat-tools-meta.js';
 import { buildRepoContextBlock } from './repo-context-builder.js';
 import { AGENT_FALLBACK_CWD } from './chat-providers.js';
@@ -330,17 +331,31 @@ const runWorkflow: ChatTool = {
 
 const getExecution: ChatTool = {
   name: 'wait_for_execution',
-  description: `Get the status of a workflow or spawned agent execution. If still running, blocks up to 90 seconds waiting for completion (like wait_for_delegation). If status="waiting", call again. When completed, includes the agent's response.`,
+  description: `Get the status of a workflow or spawned agent execution. If still running, blocks up to 90 seconds waiting for completion (like wait_for_delegation). If status="waiting", call again. When completed, includes the agent's response. Also returns recent_activity (last 10 events since activity_since cursor) so the caller can narrate the delegated agent's progress — pass the returned activity_cursor back as activity_since on the next call to stream forward.`,
   inputSchema: {
     type: 'object',
     properties: {
       execution_id: { type: 'string', description: 'The execution ID to check' },
+      activity_since: { type: 'string', description: 'ISO timestamp cursor. Pass activity_cursor from the previous wait_for_execution response to fetch only newer events.' },
     },
     required: ['execution_id'],
   },
   async execute(args, db) {
     const executionId = args.execution_id as string;
+    const activitySince = typeof args.activity_since === 'string' ? new Date(args.activity_since) : undefined;
     const executionService = new ExecutionService(db);
+
+    // Helper — pulls the latest activity window for this execution. Used
+    // both when the execution has finished (so the tool's final response
+    // still includes recent events) and when we're about to return
+    // status: "waiting" (so the caller can narrate progress).
+    const { AgentActivityService } = await import('./agent-activity.service.js');
+    const activityService = new AgentActivityService(db);
+    const readActivity = async () => {
+      const rows = await activityService.recent(executionId, { since: activitySince, limit: 10 });
+      const activityCursor = rows.length > 0 ? rows[rows.length - 1].at : activitySince?.toISOString();
+      return { recent_activity: rows, activity_cursor: activityCursor };
+    };
 
     // Long-poll: wait up to 90s for completion (under MCP 120s timeout)
     let waitMs = 5000;
@@ -410,6 +425,7 @@ const getExecution: ChatTool = {
           }
         }
 
+        const finalActivity = await readActivity();
         return {
           id: exec.id,
           workflow_name: exec.workflowName,
@@ -426,6 +442,7 @@ const getExecution: ChatTool = {
           completed_at: exec.completedAt,
           input_request: inputRequest,
           pending_intervention: pendingIntervention,
+          ...finalActivity,
         };
       }
 
@@ -434,11 +451,15 @@ const getExecution: ChatTool = {
       waitMs = Math.min(waitMs * 1.3, maxWaitMs);
     }
 
-    // Still running after 90s — return "waiting" so LLM calls again
+    // Still running after 90s — return "waiting" so LLM calls again.
+    // Include the latest activity window so the caller can narrate what
+    // the delegated agent is doing instead of silently polling.
+    const waitingActivity = await readActivity();
     return {
       id: executionId,
       status: 'waiting',
       message: 'Execution is still running. Call wait_for_execution again — it will continue waiting.',
+      ...waitingActivity,
     };
   },
 };
@@ -756,6 +777,31 @@ async function runSpawnInBackground(
   const model = normalizeModelAlias((role.model as string) ?? 'sonnet') ?? 'sonnet';
   const activity: { type: string; tool?: string; timestamp: Date }[] = [];
 
+  // Persist spawn activity to agent_activity so the wait tools can return
+  // a `recent_activity` cursor and the UI replay route can hydrate this
+  // execution's event log on refresh. Fire-and-forget — failures here
+  // must never stall the delegation stream.
+  const activityService = new AgentActivityService(db);
+  const persistSpawnActivity = (
+    rawType: 'tool_start' | 'tool_done' | 'thinking' | 'text',
+    data: { tool?: string; content?: string; toolUseId?: string; command?: string },
+  ): void => {
+    const type =
+      rawType === 'tool_start' ? 'tool_call'
+      : rawType === 'tool_done' ? 'tool_result'
+      : rawType;
+    void activityService.record({
+      scope: 'execution',
+      refId: executionId,
+      chatSessionId: activeCtx?.chatSessionId,
+      agent: agentName,
+      type,
+      tool: data.tool,
+      content: data.content ?? data.command,
+      toolUseId: data.toolUseId,
+    });
+  };
+
   // Broadcast spawn started + persist log
   if (onEvent) onEvent('spawn_started', { executionId, agent: agentName, prompt: prompt.slice(0, 200), provider, model });
 
@@ -946,6 +992,7 @@ async function runSpawnInBackground(
                 // Build description from args for readability
                 const desc = toolDescription(name, args);
                 if (onEvent) onEvent('spawn_activity', { executionId, agent: agentName, type: 'tool_start', tool: name, content: desc, toolUseId: itemId });
+                persistSpawnActivity('tool_start', { tool: name, content: desc, toolUseId: itemId });
                 liveLog({ type: 'tool_start', tool: name, content: desc, toolUseId: itemId, args });
               }
               if (evt.type === 'item.completed' && (evt.item?.type === 'mcp_tool_call' || evt.item?.type === 'collab_tool_call')) {
@@ -957,6 +1004,7 @@ async function runSpawnInBackground(
                 const itemId = evt.item.id ?? '';
                 activity.push({ type: 'tool_result', tool: name, timestamp: new Date() });
                 if (onEvent) onEvent('spawn_activity', { executionId, agent: agentName, type: 'tool_done', tool: name, content: outStr, toolUseId: itemId });
+                persistSpawnActivity('tool_done', { tool: name, content: outStr, toolUseId: itemId });
                 liveLog({ type: 'tool_done', tool: name, content: outStr, toolUseId: itemId });
               }
               if (evt.type === 'item.completed' && evt.item?.type === 'function_call') {
@@ -967,6 +1015,7 @@ async function runSpawnInBackground(
                 toolCalls.push({ tool: fn, args: fnArgs });
                 activity.push({ type: 'tool_call', tool: fn, timestamp: new Date() });
                 if (onEvent) onEvent('spawn_activity', { executionId, agent: agentName, type: 'tool_done', tool: fn, content: desc, toolUseId: callId });
+                persistSpawnActivity('tool_done', { tool: fn, content: desc, toolUseId: callId });
                 liveLog({ type: 'tool_done', tool: fn, content: desc, toolUseId: callId, args: fnArgs });
               }
               if (evt.type === 'item.completed' && evt.item?.type === 'command_execution') {
@@ -976,11 +1025,13 @@ async function runSpawnInBackground(
                 toolCalls.push({ tool: 'Bash', args: { command: cmd } });
                 activity.push({ type: 'tool_call', tool: 'Bash', timestamp: new Date() });
                 if (onEvent) onEvent('spawn_activity', { executionId, agent: agentName, type: 'tool_done', tool: 'Bash', command: cmd, toolUseId: itemId });
+                persistSpawnActivity('tool_done', { tool: 'Bash', content: cmd, toolUseId: itemId });
                 liveLog({ type: 'tool_done', tool: 'Bash', command: cmd, content: exitCode !== '' ? `exit ${exitCode}` : undefined, toolUseId: itemId, args: { command: cmd } });
               }
               // Broadcast thinking
               if (evt.type === 'item.started' && evt.item?.type === 'agent_reasoning') {
                 if (onEvent) onEvent('spawn_activity', { executionId, agent: agentName, type: 'thinking' });
+                persistSpawnActivity('thinking', {});
                 liveLog({ type: 'thinking' });
               }
             } catch {}
@@ -1137,6 +1188,7 @@ async function runSpawnInBackground(
           if (text) {
             response = text;
             if (onEvent) onEvent('spawn_activity', { executionId, agent: agentName, type: 'text', content: text.slice(-200) });
+            persistSpawnActivity('text', { content: text.slice(-200) });
             liveLog({ type: 'text', content: text.slice(-200) });
           }
           for (const block of blocks) {
@@ -1164,10 +1216,12 @@ async function runSpawnInBackground(
               toolCalls.push({ tool: block.name, args });
               activity.push({ type: 'tool_call', tool: block.name, timestamp: new Date() });
               if (onEvent) onEvent('spawn_activity', { executionId, agent: agentName, type: 'tool_start', tool: block.name, content: desc, toolUseId });
+              persistSpawnActivity('tool_start', { tool: block.name, content: desc, toolUseId });
               liveLog({ type: 'tool_start', tool: block.name, content: desc, toolUseId, args });
             }
             if (block.type === 'thinking' && block.text) {
               if (onEvent) onEvent('spawn_activity', { executionId, agent: agentName, type: 'thinking', content: block.text.slice(-200) });
+              persistSpawnActivity('thinking', { content: block.text.slice(-200) });
               liveLog({ type: 'thinking', content: block.text.slice(-200) });
             }
           }
@@ -1178,6 +1232,7 @@ async function runSpawnInBackground(
           const toolUseId = (msg as any).tool_use_id ?? (msg as any).id ?? '';
           activity.push({ type: 'tool_result', tool: toolName, timestamp: new Date() });
           if (onEvent) onEvent('spawn_activity', { executionId, agent: agentName, type: 'tool_done', tool: toolName, toolUseId });
+          persistSpawnActivity('tool_done', { tool: toolName, toolUseId });
           liveLog({ type: 'tool_done', tool: toolName, toolUseId });
         }
 
@@ -2093,17 +2148,29 @@ RULES:
 - If "waiting": call wait_for_delegation again immediately. NEVER give up.
 - If "question": answer it via answer_delegator, then call wait_for_delegation again.
 - If you can't answer the question yourself, use ask_delegator to escalate to YOUR caller.
-- NEVER respond to the user before status is "completed" or "failed".`,
+- NEVER respond to the user before status is "completed" or "failed".
+
+Also returns recent_activity (last 10 thread events since the activity_since cursor) so you can describe what the delegated agent is doing rather than polling silently — pass the returned activity_cursor back on the next call to stream forward.`,
   inputSchema: {
     type: 'object',
     properties: {
       conversation_id: { type: 'string', description: 'Conversation ID from delegate_to_agent' },
+      activity_since: { type: 'string', description: 'ISO timestamp cursor. Pass activity_cursor from the previous wait_for_delegation response to fetch only newer events.' },
     },
     required: ['conversation_id'],
   },
   async execute(args, db) {
     const convId = args.conversation_id as string;
+    const activitySince = typeof args.activity_since === 'string' ? new Date(args.activity_since) : undefined;
     const conversationService = new AgentConversationService(db);
+    const { AgentActivityService } = await import('./agent-activity.service.js');
+    const activityService = new AgentActivityService(db);
+    const readActivity = async () => {
+      const rows = await activityService.recent(convId, { since: activitySince, limit: 10 });
+      const activityCursor = rows.length > 0 ? rows[rows.length - 1].at : activitySince?.toISOString();
+      return { recent_activity: rows, activity_cursor: activityCursor };
+    };
+
     let waitMs = 5000;
     const maxWaitMs = 30000;
     const maxTotalMs = 90_000; // 90s per call (MCP safe)
@@ -2115,17 +2182,20 @@ RULES:
 
       // Agent asked a question — return immediately so caller can answer
       if (conv.status === 'waiting_for_answer' && conv.pendingQuestion?.status === 'pending') {
+        const qActivity = await readActivity();
         return {
           conversation_id: convId,
           status: 'question',
           question: conv.pendingQuestion.question,
           from_agent: conv.pendingQuestion.fromAgent,
           message: `${conv.toAgent} is asking: "${conv.pendingQuestion.question}". Answer via answer_delegator(conversation_id, answer).`,
+          ...qActivity,
         };
       }
 
       // Completed or failed — return result
       if (conv.status === 'completed' || conv.status === 'failed') {
+        const finalActivity = await readActivity();
         return {
           conversation_id: convId,
           status: conv.status,
@@ -2136,6 +2206,7 @@ RULES:
           duration_ms: conv.durationMs,
           turn_count: conv.turnCount,
           hint: conv.status === 'completed' ? `To continue, call delegate_to_agent with conversation_id="${convId}"` : undefined,
+          ...finalActivity,
         };
       }
 
@@ -2144,7 +2215,10 @@ RULES:
       waitMs = Math.min(waitMs * 1.3, maxWaitMs);
     }
 
-    return { conversation_id: convId, status: 'waiting', message: 'Agent is still working. Call wait_for_delegation again.' };
+    // Timed out — include activity so the caller can narrate progress
+    // rather than silently re-polling.
+    const waitingActivity = await readActivity();
+    return { conversation_id: convId, status: 'waiting', message: 'Agent is still working. Call wait_for_delegation again.', ...waitingActivity };
   },
 };
 
@@ -2317,9 +2391,52 @@ async function runAgentTurn(
   const activeMcpCalls = new Map<string, { tool: string; startMs: number }>();
   const MAX_RETRIES = 3;
 
+  // Persist delegation activity to agent_activity for refresh replay and
+  // for the main agent's wait_for_delegation `recent_activity` cursor.
+  // Same pattern as runSpawnInBackground's persistSpawnActivity — a
+  // fire-and-forget write that cannot stall the thread stream.
+  const activityService = new AgentActivityService(db);
+
   /** Emit a thread event to the UI */
+  // Text events in runAgentTurn carry `text.slice(-300)` — the tail of
+  // the cumulative response. Consecutive emits often repeat content (the
+  // tail window barely moves between stream chunks), so de-dupe here to
+  // stop the activity log filling with near-identical rows.
+  let lastPersistedText: string | undefined;
   function emit(type: string, data: Record<string, unknown>) {
     if (onEvent) onEvent('thread_message', { conversationId: convId, agent: targetName, ...data, type });
+    // runAgentTurn emits these types verbatim — keep this list in sync
+    // with the emit() call sites below. Anything else (status, warn,
+    // follow_up, response) is UI-only and does not need persisting.
+    const allowed: ReadonlyArray<'text' | 'thinking' | 'tool_call' | 'tool_result'> =
+      ['text', 'thinking', 'tool_call', 'tool_result'];
+    if (!allowed.includes(type as (typeof allowed)[number])) {
+      console.log('[delegation:emit] skip (not persisted):', type, 'conv', convId.slice(0,8));
+      return;
+    }
+    const activityType = type as 'text' | 'thinking' | 'tool_call' | 'tool_result';
+
+    const content = typeof data.content === 'string' ? (data.content as string) : undefined;
+    if (activityType === 'text') {
+      if (!content || content === lastPersistedText) {
+        console.log('[delegation:emit] skip text (dedupe):', convId.slice(0,8));
+        return;
+      }
+      lastPersistedText = content;
+    }
+
+    console.log('[delegation:emit] persist', activityType, 'tool=', data.tool ?? '-', 'conv', convId.slice(0,8), 'contentLen=', content?.length ?? 0);
+    void activityService.record({
+      scope: 'delegation',
+      refId: convId,
+      chatSessionId: activeCtx?.chatSessionId,
+      agent: targetName,
+      type: activityType,
+      tool: typeof data.tool === 'string' ? (data.tool as string) : undefined,
+      content,
+      toolUseId: typeof data.toolUseId === 'string' ? (data.toolUseId as string) : undefined,
+      durationMs: typeof data.durationMs === 'number' ? (data.durationMs as number) : undefined,
+    });
   }
 
   // Save/restore context for nested delegation

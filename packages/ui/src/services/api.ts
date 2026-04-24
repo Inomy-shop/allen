@@ -214,8 +214,35 @@ export const executions = {
   traces: (id: string) => request<any[]>(`/executions/${id}/traces`),
   tracesByNode: (id: string, node: string) =>
     request<any[]>(`/executions/${id}/traces/${node}`),
+  // Persisted spawn-activity event log. Used by the UI to hydrate the
+  // execution detail page on refresh so intermediate text / thinking /
+  // tool events from the spawned agent aren't lost when the client
+  // reloads mid-run.
+  activity: (id: string, opts?: { since?: string; limit?: number }) => {
+    const params = new URLSearchParams();
+    if (opts?.since) params.set('since', opts.since);
+    if (opts?.limit) params.set('limit', String(opts.limit));
+    const qs = params.toString() ? `?${params.toString()}` : '';
+    return request<{ events: ActivityEvent[] }>(`/executions/${id}/activity${qs}`);
+  },
   streamUrl: (id: string) => `${BASE}/executions/${id}/stream`,
 };
+
+// ── Agent Activity (shared shape) ─────────────────────────────────────────
+// Row shape returned by both the delegation and execution activity routes.
+// See packages/server/src/services/agent-activity.service.ts PersistedActivityRow.
+export interface ActivityEvent {
+  id: string;
+  scope: 'delegation' | 'execution';
+  refId: string;
+  agent: string;
+  type: 'text' | 'thinking' | 'tool_call' | 'tool_result';
+  tool?: string;
+  content?: string;
+  toolUseId?: string;
+  durationMs?: number;
+  at: string;
+}
 
 // ── Agents ─────────────────────────────────────────────────────────────────
 export const agents = {
@@ -387,6 +414,17 @@ export const chat = {
     request<void>(`/chat/sessions/${id}`, { method: 'DELETE' }),
   getThreads: (id: string) =>
     request<any[]>(`/chat/sessions/${id}/threads`),
+  // Replay persisted activity for a single delegation (conversation).
+  // Called from useChat on initial load to repopulate liveActivity for
+  // still-running threads so a page refresh doesn't erase their visible
+  // progress feed.
+  getDelegationActivity: (conversationId: string, opts?: { since?: string; limit?: number }) => {
+    const params = new URLSearchParams();
+    if (opts?.since) params.set('since', opts.since);
+    if (opts?.limit) params.set('limit', String(opts.limit));
+    const qs = params.toString() ? `?${params.toString()}` : '';
+    return request<{ events: ActivityEvent[] }>(`/chat/delegations/${conversationId}/activity${qs}`);
+  },
   answerAgentQuestion: (id: string, answer: string) =>
     request<any>(`/chat/sessions/${id}/agent-answer`, { method: 'POST', body: JSON.stringify({ answer }) }),
   logs: (params?: Record<string, string>) => {

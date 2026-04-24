@@ -360,6 +360,30 @@ export function executionRoutes(db: Db): Router {
     }
   });
 
+  // GET /api/executions/:id/activity
+  //
+  // Persisted log of intermediate agent events (text / thinking /
+  // tool_call / tool_result) for a spawn execution. Mirrors the
+  // delegation-side route at /api/chat/delegations/:conversationId/activity
+  // and exists so the UI can re-hydrate a running spawn's progress view
+  // on refresh. Events are returned oldest-first; `since` accepts an ISO
+  // timestamp cursor; `limit` defaults to 500, capped at 2000.
+  router.get('/:id/activity', async (req: Request, res: Response) => {
+    try {
+      const executionId = param(req, 'id');
+      const sinceRaw = req.query.since as string | undefined;
+      const limitRaw = req.query.limit as string | undefined;
+      const since = sinceRaw ? new Date(sinceRaw) : undefined;
+      const limit = limitRaw ? Math.max(1, Math.min(parseInt(limitRaw, 10) || 500, 2000)) : 500;
+      const { AgentActivityService } = await import('../services/agent-activity.service.js');
+      const activityService = new AgentActivityService(db);
+      const events = await activityService.listForRef(executionId, { since, limit });
+      res.json({ events });
+    } catch (err: unknown) {
+      res.status(500).json({ error: (err as Error).message });
+    }
+  });
+
   // GET /api/executions/:id/traces
   router.get('/:id/traces', async (req: Request, res: Response) => {
     try {
