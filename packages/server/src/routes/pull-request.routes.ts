@@ -1,6 +1,6 @@
 import { Router, type Request, type Response } from 'express';
 import type { Db } from 'mongodb';
-import { PullRequestService } from '../services/pull-request.service.js';
+import { PullRequestService, syncAllActivePrs } from '../services/pull-request.service.js';
 import { WorkspaceManager } from '../services/workspace.service.js';
 
 function p(req: Request, name: string): string {
@@ -30,12 +30,25 @@ export function pullRequestRoutes(db: Db): Router {
     } catch (err: unknown) { res.status(500).json({ error: (err as Error).message }); }
   });
 
-  // Sync PRs from GitHub for a repo
+  // Sync PRs from GitHub for a single repo. Kept for programmatic
+  // single-repo use; the UI's "Sync from GitHub" button uses /sync-all
+  // below to hit every active repo in one request.
   router.post('/sync', async (req: Request, res: Response) => {
     try {
       const { repoPath, repoId, repoName } = req.body;
       if (!repoPath || !repoId) return res.status(400).json({ error: 'repoPath and repoId required' });
       const result = await prService.syncFromGitHub(repoPath, repoId, repoName ?? '');
+      res.json(result);
+    } catch (err: unknown) { res.status(500).json({ error: (err as Error).message }); }
+  });
+
+  // Sync PRs from GitHub for every active repo in one request. Shares
+  // its implementation (`syncAllActivePrs`) with the `pr-sync-all` cron,
+  // so the manual button and the 30-min auto-sync are guaranteed to
+  // behave identically. Returns structured per-repo results + aggregates.
+  router.post('/sync-all', async (_req: Request, res: Response) => {
+    try {
+      const result = await syncAllActivePrs(db);
       res.json(result);
     } catch (err: unknown) { res.status(500).json({ error: (err as Error).message }); }
   });

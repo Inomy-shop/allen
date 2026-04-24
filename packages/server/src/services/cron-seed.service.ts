@@ -44,6 +44,21 @@ const SEED_JOBS: Omit<CronJob, '_id' | 'nextRunAt' | 'lastRunAt' | 'lastRunStatu
     createdBy: 'seed',
   },
   {
+    name: 'pr-sync-30min',
+    displayName: 'GitHub PR Sync (every 30 min)',
+    description:
+      'Refreshes the local pull_requests mirror by running `gh pr list` against every active repo. Keeps the PR list in the UI current without requiring a manual refresh.',
+    enabled: true,
+    schedule: '*/30 * * * *',
+    timezone: 'UTC',
+    target: {
+      type: 'system',
+      systemAction: 'pr-sync-all',
+    },
+    isBuiltIn: true,
+    createdBy: 'seed',
+  },
+  {
     name: 'mcp-bundle-cleanup-hourly',
     displayName: 'MCP Bundle Cleanup',
     description:

@@ -27,6 +27,7 @@ import ConditionNode from './ConditionNode';
 import TerminalNode from './TerminalNode';
 import ConditionalEdge from './ConditionalEdge';
 import RetryEdge from './RetryEdge';
+import AutoEdge from './AutoEdge';
 import NodePalette from './NodePalette';
 import NodeProperties from './NodeProperties';
 
@@ -42,6 +43,11 @@ const nodeTypes = {
 const edgeTypes = {
   'al-conditional': ConditionalEdge,
   'al-retry': RetryEdge,
+  // Auto-routed forward edges. Straight when near-vertical, smooth-step
+  // (right-angled with rounded corners) when the geometry would otherwise
+  // draw a shallow awkward diagonal. Used as the default for edges that
+  // carry no condition / no max_retries.
+  'al-auto': AutoEdge,
 };
 
 // ── Simple undo/redo stack ──────────────────────────────────────────────────
@@ -138,7 +144,9 @@ export default function Canvas({ nodes, edges, onNodesChange, onEdgesChange, wor
     const updated = addEdge(
       {
         ...connection,
-        type: 'default',
+        // Auto-routed edge — straight when geometry permits, smooth-step
+        // otherwise. Previously used 'default' (bezier curve).
+        type: 'al-auto',
         style: { stroke: 'rgb(var(--color-flow-edge-default))' },
         markerEnd: { type: MarkerType.ArrowClosed, width: 16, height: 16, color: 'rgb(var(--color-flow-edge-default))' },
       },
@@ -236,7 +244,11 @@ function CanvasInner({
         fitViewOptions={{ padding: 0.3, maxZoom: 1 }}
         colorMode={document.documentElement.classList.contains('dark') ? 'dark' : 'light'}
         defaultEdgeOptions={{
-          style: { stroke: 'rgb(var(--color-flow-edge-default))', strokeWidth: 2 },
+          // Auto-routed: straight for near-vertical pairs, smooth-step
+          // (right-angled) for shallow-diagonal pairs. Removes the curved
+          // bezier look.
+          type: 'al-auto',
+          style: { stroke: 'rgb(var(--color-flow-edge-default))', strokeWidth: 2.25 },
           markerEnd: { type: MarkerType.ArrowClosed, width: 16, height: 16, color: 'rgb(var(--color-flow-edge-default))' },
         }}
       >

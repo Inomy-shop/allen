@@ -59,6 +59,16 @@ export const pullRequests = {
   get: (id: string) => request<any>(`/pull-requests/${id}`),
   sync: (repoPath: string, repoId: string, repoName: string) =>
     request<any>('/pull-requests/sync', { method: 'POST', body: JSON.stringify({ repoPath, repoId, repoName }) }),
+  // Sync all active repos in one request. Shared server-side logic with
+  // the `pr-sync-all` cron — single source of truth for the loop.
+  syncAll: () =>
+    request<{
+      repos: Array<{ repoId: string; repoName: string; status: 'synced' | 'error'; synced?: number; total?: number; error?: string }>;
+      summary: string;
+      totalSynced: number;
+      totalPrs: number;
+      errorCount: number;
+    }>('/pull-requests/sync-all', { method: 'POST' }),
   getDiff: (id: string) => request<any>(`/pull-requests/${id}/diff`),
   createWorkspace: (id: string) => request<any>(`/pull-requests/${id}/workspace`, { method: 'POST' }),
 };

@@ -150,10 +150,15 @@ const nodeTypes = { 'exec-node': ExecutionNode, 'al-terminal': TerminalNode };
 
 import ConditionalEdge from '../canvas/ConditionalEdge';
 import RetryEdge from '../canvas/RetryEdge';
+import AutoEdge from '../canvas/AutoEdge';
 
 const edgeTypes = {
   'al-conditional': ConditionalEdge,
   'al-retry': RetryEdge,
+  // Auto-routed forward edges. Same component the editor uses, keeping
+  // both surfaces visually consistent — straight when source/target are
+  // near-vertical, smooth-step otherwise.
+  'al-auto': AutoEdge,
 };
 
 // ── Dagre Layout ──
@@ -163,16 +168,78 @@ const NODE_HEIGHT = 100;
 function layoutGraph(nodes: Node[], edges: Edge[]): Node[] {
   const g = new dagre.graphlib.Graph();
   g.setDefaultEdgeLabel(() => ({}));
-  g.setGraph({ rankdir: 'TB', nodesep: 120, ranksep: 130, marginx: 60, marginy: 60 });
+  // `acyclicer: 'greedy'` tells dagre to internally flip back edges when
+  // building its topological order. Combined with edge filtering below,
+  // it prevents retry / escalation-return edges from distorting the
+  // layout.
+  //
+  // ranksep/nodesep bumped so orthogonal smooth-step routing has vertical
+  // room for horizontal lanes between ranks — prevents fan-out edges
+  // from piling onto the same y-coordinate.
+  g.setGraph({
+    rankdir: 'TB',
+    nodesep: 140,
+    ranksep: 200,
+    marginx: 60,
+    marginy: 60,
+    acyclicer: 'greedy',
+    ranker: 'network-simplex',
+  });
 
   for (const node of nodes) {
     g.setNode(node.id, { width: NODE_WIDTH, height: NODE_HEIGHT });
   }
-  for (const edge of edges) {
+  // Only feed layout-influencing edges into dagre:
+  //   - retry edges (`al-retry`) loop back to an ancestor; they render
+  //     as side-loop curves via RetryEdge.tsx and shouldn't pull their
+  //     target upward in the layout.
+  //   - escalation-return edges from `escalation_review` to ancestors
+  //     (clarify / produce_prd / produce_hla / …) are explicit "go back
+  //     to a previous stage" routes. Including them in layout would
+  //     force escalation_review to rank BEFORE those producers, which
+  //     is the opposite of the desired visual (escalation at the
+  //     bottom of the flow, producers at the top).
+  // Filtering these out leaves dagre with a clean DAG and dramatically
+  // reduces edge crossings.
+  const layoutEdges = edges.filter((e) => {
+    if (e.type === 'al-retry') return false;
+    if (e.source === 'escalation_review') return false;
+    return true;
+  });
+  for (const edge of layoutEdges) {
     g.setEdge(edge.source, edge.target);
   }
 
   dagre.layout(g);
+
+  // ── Spine column alignment ──
+  //
+  // Dagre produces reasonable y-coordinates (ranks / stages) but
+  // spreads x-coordinates so edges can avoid each other. That's good
+  // for general DAGs but bad for workflows — the user wants the main
+  // forward path (the "happy trunk") to be a single clean column with
+  // all its vertical edges stacking on top of each other.
+  //
+  // Fix: compute the LONGEST forward path from START to END, force
+  // every node on that path onto a common x-coordinate. Branches
+  // (escalation_review, clarify_human, …) keep whatever x dagre
+  // assigned them and visually sit off to the sides.
+  //
+  // Result for feature-plan-and-implement.yml: ~15-node spine collapses
+  // into one column; ~14 forward edges along the spine overlap into a
+  // single vertical trunk; escalation_review and clarify_human appear
+  // as side branches.
+  const spine = findLongestForwardPath('START', 'END', layoutEdges);
+  if (spine.length > 2) {
+    // Use the median x of the spine as the shared column — keeps the
+    // trunk near the center of the graph's natural bounds.
+    const xs = spine.map(id => g.node(id)?.x ?? 0).sort((a, b) => a - b);
+    const columnX = xs[Math.floor(xs.length / 2)];
+    for (const id of spine) {
+      const n = g.node(id);
+      if (n) n.x = columnX;
+    }
+  }
 
   return nodes.map(node => {
     const pos = g.node(node.id);
@@ -184,6 +251,39 @@ function layoutGraph(nodes: Node[], edges: Edge[]): Node[] {
       },
     };
   });
+}
+
+/**
+ * Longest path from `start` to `end` through the given forward edges.
+ * DFS with memoization — O(V + E). Returns an empty array when no path
+ * connects them (e.g. during partial loading).
+ */
+function findLongestForwardPath(start: string, end: string, edges: Edge[]): string[] {
+  const adj = new Map<string, string[]>();
+  for (const e of edges) {
+    let list = adj.get(e.source);
+    if (!list) { list = []; adj.set(e.source, list); }
+    list.push(e.target);
+  }
+  const memo = new Map<string, string[]>();
+  const visiting = new Set<string>();
+  function dfs(node: string): string[] {
+    if (node === end) return [end];
+    if (memo.has(node)) return memo.get(node)!;
+    if (visiting.has(node)) return []; // cycle guard (shouldn't trigger on filtered DAG)
+    visiting.add(node);
+    const next = adj.get(node) ?? [];
+    let best: string[] = [];
+    for (const n of next) {
+      const path = dfs(n);
+      if (path.length > best.length) best = path;
+    }
+    visiting.delete(node);
+    const result = best.length ? [node, ...best] : [];
+    memo.set(node, result);
+    return result;
+  }
+  return dfs(start);
 }
 
 // ── Props ──
@@ -222,8 +322,9 @@ export default function LiveGraph({ workflow, nodeStates, selectedNode, onSelect
             sourceHandle: 'bottom',
             target: names[i + 1],
             targetHandle: 'top',
-            type: 'default',
-            style: { stroke: 'rgb(var(--color-flow-edge-default))', strokeWidth: 2 },
+            // Orthogonal auto-routed edge (was 'default' = bezier curve).
+            type: 'al-auto',
+            style: { stroke: 'rgb(var(--color-flow-edge-default))', strokeWidth: 2.5 },
           });
         }
         return rfEdges;
@@ -252,7 +353,9 @@ export default function LiveGraph({ workflow, nodeStates, selectedNode, onSelect
             sourceHandle: isRetry ? retrySide : 'bottom',
             target: to,
             targetHandle: isRetry ? retrySide : 'top',
-            type: isRetry ? 'al-retry' : edge.condition ? 'al-conditional' : 'default',
+            // Orthogonal auto-routed edge for plain forward edges (was
+            // 'default' = bezier curve).
+            type: isRetry ? 'al-retry' : edge.condition ? 'al-conditional' : 'al-auto',
             label: edge.condition ?? (edge.parallel ? '∥ parallel' : undefined),
             labelStyle: { fill: 'rgb(var(--color-text-secondary))', fontSize: 10, fontFamily: 'var(--font-mono)' },
             labelBgStyle: { fill: 'rgb(var(--color-surface-100))', fillOpacity: 0.95 },
@@ -271,10 +374,10 @@ export default function LiveGraph({ workflow, nodeStates, selectedNode, onSelect
               color: isRetry ? 'rgb(var(--color-flow-edge-retry))' : edge.condition ? 'rgb(var(--color-flow-edge-conditional))' : 'rgb(var(--color-flow-edge-default))',
             },
             style: isRetry
-              ? { stroke: 'rgb(var(--color-flow-edge-retry))', strokeDasharray: '8 5', strokeWidth: 2 }
+              ? { stroke: 'rgb(var(--color-flow-edge-retry))', strokeDasharray: '8 5', strokeWidth: 2.5 }
               : edge.condition
-                ? { stroke: 'rgb(var(--color-flow-edge-conditional))', strokeWidth: 2 }
-                : { stroke: 'rgb(var(--color-flow-edge-default))', strokeWidth: 2 },
+                ? { stroke: 'rgb(var(--color-flow-edge-conditional))', strokeWidth: 2.5 }
+                : { stroke: 'rgb(var(--color-flow-edge-default))', strokeWidth: 2.5 },
           });
         }
       }
@@ -331,6 +434,79 @@ export default function LiveGraph({ workflow, nodeStates, selectedNode, onSelect
     return layoutGraph(rfNodes, edges);
   }, [workflowNodes, edges]);
 
+  // ── Direction-aware handle reassignment ──
+  //
+  // After dagre has computed positions, walk each (non-retry) edge and
+  // decide whether its source/target handles should be top/bottom
+  // (normal downward flow) or left/right (upward or same-rank flow).
+  //
+  // The default layout places forward edges top→bottom. But the workflow
+  // has explicit "go back to an earlier stage" edges (escalation_review
+  // returning to a producer) where target.y < source.y. Routing these
+  // through bottom→top handles produces ugly loops — the edge exits the
+  // source downward, loops around the graph, comes up to target. Using
+  // right-side handles on both ends keeps them in a clean side channel.
+  //
+  // Retry edges (`al-retry`) already pick their own side (`retrySide` in
+  // the main edge builder), so we leave them alone here.
+  const positionedEdges = useMemo<Edge[]>(() => {
+    if (initialNodes.length === 0) return edges;
+    const posById = new Map<string, { x: number; y: number }>();
+    for (const n of initialNodes) posById.set(n.id, n.position);
+    const UPWARD_THRESHOLD = 40; // px — ignore tiny y differences (same-rank neighbours)
+
+    return edges.map((e) => {
+      if (e.type === 'al-retry') return e;
+      const src = posById.get(e.source);
+      const tgt = posById.get(e.target);
+      if (!src || !tgt) return e;
+
+      const dy = tgt.y - src.y;
+      // Target clearly above source (backward in y). Route via side
+      // handles — always the RIGHT side, so upward traffic runs in one
+      // predictable lane on the right of the graph. Matches the existing
+      // right-side convention used by retry edges by default.
+      if (dy < -UPWARD_THRESHOLD) {
+        return { ...e, sourceHandle: 'right', targetHandle: 'right' };
+      }
+      // Same rank (no meaningful y gap) — still use side handles so the
+      // edge doesn't attempt to loop around through top/bottom. Choose
+      // the side that faces the target's x-direction.
+      if (Math.abs(dy) < UPWARD_THRESHOLD) {
+        const side = tgt.x >= src.x ? 'right' : 'left';
+        return { ...e, sourceHandle: side, targetHandle: side };
+      }
+      // Normal downward forward edge — leave default top/bottom handles.
+      return e;
+    });
+  }, [edges, initialNodes]);
+
+  // Derived edges that ReactFlow actually renders. Every edge is
+  // always visible — edge overlap (shared stubs, spine-column
+  // alignment, right-side routing for upward edges) is what keeps the
+  // graph readable rather than hiding anything.
+  //
+  // The only runtime transformation is selection contrast: when a
+  // node is selected, edges touching it stay at full opacity while
+  // the rest fade to 0.15. Thickness is unchanged so the graph's
+  // overall geometry stays stable.
+  const displayEdges = useMemo<Edge[]>(() => {
+    return positionedEdges.map((e) => {
+      const isConnected = selectedNode
+        ? e.source === selectedNode || e.target === selectedNode
+        : false;
+      const opacity = !selectedNode ? 1 : isConnected ? 1 : 0.15;
+      return {
+        ...e,
+        style: {
+          ...(e.style as any),
+          opacity,
+        },
+        animated: isConnected ? e.animated : false,
+      };
+    });
+  }, [positionedEdges, selectedNode]);
+
   // Maintain node state separately so dragging persists
   const [nodes, setNodes] = useState<Node[]>(initialNodes);
 
@@ -380,7 +556,7 @@ export default function LiveGraph({ workflow, nodeStates, selectedNode, onSelect
       <ReactFlowProvider>
         <LiveGraphInner
           nodes={nodes}
-          edges={edges}
+          edges={displayEdges}
           onNodesChange={onNodesChange}
           onNodeClick={onSelectNode}
           onReset={handleReset}
@@ -417,13 +593,21 @@ function LiveGraphInner({
         nodeTypes={nodeTypes}
         edgeTypes={edgeTypes}
         onNodeClick={(_e, node) => onNodeClick(node.id)}
+        // Click on empty canvas clears the selection so the edge
+        // highlight fades and the full graph returns to normal opacity.
+        onPaneClick={() => onNodeClick('')}
         fitView
         fitViewOptions={{ padding: 0.3, maxZoom: 1 }}
         colorMode={document.documentElement.classList.contains('dark') ? 'dark' : 'light'}
         nodesConnectable={false}
         panOnDrag
         zoomOnScroll
-        defaultEdgeOptions={{ type: 'default', style: { stroke: 'rgb(var(--color-flow-edge-default))', strokeWidth: 2 } }}
+        defaultEdgeOptions={{
+          // Auto-routed: straight for near-vertical pairs, smooth-step for
+          // shallow diagonals. Replaces the curved bezier default.
+          type: 'al-auto',
+          style: { stroke: 'rgb(var(--color-flow-edge-default))', strokeWidth: 2.25 },
+        }}
       >
         <Background variant={BackgroundVariant.Lines} gap={30} size={1} color="rgb(var(--color-border) / 0.2)" />
         <Controls

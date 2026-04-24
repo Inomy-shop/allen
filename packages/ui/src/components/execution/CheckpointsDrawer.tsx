@@ -2,6 +2,7 @@ import { useEffect } from 'react';
 import { createPortal } from 'react-dom';
 import { X as XIcon } from 'lucide-react';
 import CheckpointsPanel from './CheckpointsPanel';
+import { useResizable } from '../../hooks/useResizable';
 
 interface Props {
   executionId: string;
@@ -17,6 +18,17 @@ interface Props {
  * clip the `position: fixed` overlay.
  */
 export default function CheckpointsDrawer({ executionId, executionStatus, open, onClose }: Props) {
+  // Drawer width — resizable via the left-edge drag handle. Matches the
+  // same pattern used on the main execution page (right node-detail
+  // pane) so users get one consistent resize UX.
+  const { size: drawerWidth, handleMouseDown: drawerResizeStart } = useResizable({
+    direction: 'horizontal',
+    initialSize: 560,
+    minSize: 360,
+    maxSize: 1200,
+    side: 'end',
+  });
+
   useEffect(() => {
     if (!open) return;
     const prev = document.body.style.overflow;
@@ -39,12 +51,25 @@ export default function CheckpointsDrawer({ executionId, executionStatus, open, 
         className="absolute inset-0 bg-black/50 backdrop-blur-sm animate-in fade-in duration-150"
         onClick={onClose}
       />
-      {/* Slide-out panel from the right. `max-w-xl` keeps it readable on
-          wide monitors while still leaving the underlying page visible. */}
+      {/* Slide-out panel from the right. Width is now user-resizable via
+          the left-edge drag handle (default 560px, min 360, max 1200).
+          The `calc(100vw - 40px)` cap guarantees the user can't drag it
+          off-screen on narrow viewports. */}
       <aside
-        className="absolute top-0 right-0 h-full w-full sm:w-[560px] max-w-full bg-surface-50 border-l border-border/40 shadow-2xl flex flex-col animate-in slide-in-from-right duration-200"
+        className="absolute top-0 right-0 h-full bg-surface-50 border-l border-border/40 shadow-2xl flex flex-col animate-in slide-in-from-right duration-200"
+        style={{ width: `min(${drawerWidth}px, calc(100vw - 40px))` }}
         onClick={(e) => e.stopPropagation()}
       >
+        {/* Left-edge drag handle. Wide (8px) invisible hit zone for easy
+            grabbing; on hover only a thin 1px line appears in the centre
+            so the indicator stays unobtrusive. */}
+        <div
+          className="absolute top-0 left-0 bottom-0 w-2 cursor-col-resize z-10 group"
+          onMouseDown={drawerResizeStart}
+          title="Drag to resize"
+        >
+          <div className="absolute left-1/2 -translate-x-1/2 top-0 bottom-0 w-px bg-transparent group-hover:bg-accent-blue/60 transition-colors" />
+        </div>
         <div className="flex items-center justify-between px-5 py-3.5 border-b border-border/20 shrink-0">
           <h3 className="font-heading text-sm text-theme-primary tracking-wider uppercase">
             Checkpoints

@@ -42,6 +42,7 @@ import { CronService } from './services/cron.service.js';
 import { seedCronJobs } from './services/cron-seed.service.js';
 import { createRepoScanIfChangedAction } from './services/repo-context-scanner.service.js';
 import { createRepoPullAllAction } from './services/repo.service.js';
+import { createPrSyncAllAction } from './services/pull-request.service.js';
 import { createMcpBundleCleanupAction } from './services/mcp-bundle.service.js';
 import { cronRoutes } from './routes/cron.routes.js';
 import { designDocRoutes } from './routes/design-doc.routes.js';
@@ -135,6 +136,7 @@ async function main(): Promise<void> {
   const cronService = new CronService(db);
   cronService.registerSystemAction(createRepoScanIfChangedAction(db));
   cronService.registerSystemAction(createRepoPullAllAction(db));
+  cronService.registerSystemAction(createPrSyncAllAction(db));
   cronService.registerSystemAction(createMcpBundleCleanupAction(db));
   const { createCodeRabbitSweepAction } = await import('./services/coderabbit-sweep.service.js');
   cronService.registerSystemAction(createCodeRabbitSweepAction(db));

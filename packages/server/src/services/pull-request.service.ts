@@ -368,3 +368,89 @@ export class PullRequestService {
     }).sort({ lastReviewSyncAt: 1 }).limit(25).toArray() as Promise<PullRequest[]>;
   }
 }
+
+/**
+ * Shared helper: sync GitHub PRs for every active repo via `gh pr list`.
+ *
+ * One source of truth for the "sync all repos" operation. Called by:
+ *   - The `pr-sync-all` cron system action (every 30 min).
+ *   - The `POST /api/pull-requests/sync-all` route (UI "Sync from GitHub" button).
+ *
+ * One bad repo doesn't halt the sweep — each repo's failure is captured
+ * and surfaced in the returned structured result AND rendered into a
+ * single-line summary for the cron_runs.notes / UI toast.
+ */
+export interface SyncAllResult {
+  /** Machine-readable per-repo results. */
+  repos: Array<{
+    repoId: string;
+    repoName: string;
+    status: 'synced' | 'error';
+    synced?: number;   // count of PRs upserted
+    total?: number;    // count from `gh pr list`
+    error?: string;
+  }>;
+  /** Human-readable single-line summary (used by cron UI + toasts). */
+  summary: string;
+  /** Aggregates for the UI: "Synced 3 repos (18 PRs). 1 error." */
+  totalSynced: number;
+  totalPrs: number;
+  errorCount: number;
+}
+
+export async function syncAllActivePrs(db: import('mongodb').Db): Promise<SyncAllResult> {
+  const service = new PullRequestService(db);
+  const repos = await db.collection('repos').find({ status: 'active' }).toArray();
+  const results: SyncAllResult['repos'] = [];
+  const synced: string[] = [];
+  const errors: string[] = [];
+  let totalPrs = 0;
+
+  for (const repo of repos) {
+    const repoId = String(repo._id);
+    const repoName = repo.name as string;
+    try {
+      const result = await service.syncFromGitHub(
+        repo.path as string,
+        repoId,
+        repoName,
+      );
+      results.push({ repoId, repoName, status: 'synced', synced: result.synced, total: result.total });
+      synced.push(`${repoName}: ${result.synced}/${result.total}`);
+      totalPrs += result.synced;
+    } catch (err) {
+      const message = (err as Error).message;
+      results.push({ repoId, repoName, status: 'error', error: message });
+      errors.push(`${repoName}: ${message}`);
+    }
+  }
+
+  const parts = [
+    synced.length ? `Synced: ${synced.join('; ')}` : null,
+    errors.length ? `Errors: ${errors.join('; ')}` : null,
+  ].filter(Boolean);
+
+  return {
+    repos: results,
+    summary: parts.join(' | ') || 'No active repos found',
+    totalSynced: synced.length,
+    totalPrs,
+    errorCount: errors.length,
+  };
+}
+
+/**
+ * Factory for the "pr-sync-all" system action. Delegates to the shared
+ * `syncAllActivePrs` helper so the cron and the UI button share a single
+ * implementation.
+ */
+export function createPrSyncAllAction(db: import('mongodb').Db): { name: string; description: string; run: () => Promise<string> } {
+  return {
+    name: 'pr-sync-all',
+    description: 'Sync GitHub PRs for all active repos via `gh pr list`. Updates the local pull_requests mirror.',
+    async run() {
+      const result = await syncAllActivePrs(db);
+      return result.summary;
+    },
+  };
+}

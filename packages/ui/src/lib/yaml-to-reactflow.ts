@@ -44,7 +44,10 @@ export function yamlToReactFlow(
             sourceHandle: isRetry ? retrySide : 'bottom',
             target: to,
             targetHandle: isRetry ? retrySide : 'top',
-            type: isRetry ? 'al-retry' : edge.condition ? 'al-conditional' : 'default',
+            // Use the auto-routed edge for plain forward edges (no condition,
+            // no max_retries). Straight when geometry permits, smooth-step
+            // right-angle when it would be a shallow awkward diagonal.
+            type: isRetry ? 'al-retry' : edge.condition ? 'al-conditional' : 'al-auto',
             label: edge.condition ?? (edge.parallel ? '∥' : undefined),
             data: {
               condition: edge.condition,
@@ -73,10 +76,23 @@ export function yamlToReactFlow(
     }
   }
 
-  // Dagre layout
+  // Dagre layout.
+  //
+  // `acyclicer: 'greedy'` + filtering back-edges (retry + escalation
+  // returns) dramatically reduces edge crossings: dagre only gets the
+  // DAG-shaped forward spine to layer, and the non-layout edges route
+  // over the top without pulling their targets upward.
   const g = new dagre.graphlib.Graph();
   g.setDefaultEdgeLabel(() => ({}));
-  g.setGraph({ rankdir: 'TB', nodesep: 60, ranksep: 80, marginx: 40, marginy: 40 });
+  g.setGraph({
+    rankdir: 'TB',
+    nodesep: 120,
+    ranksep: 160,
+    marginx: 40,
+    marginy: 40,
+    acyclicer: 'greedy',
+    ranker: 'network-simplex',
+  });
 
   // Add START and END as virtual nodes for layout
   g.setNode('START', { width: NODE_WIDTH, height: 40 });
@@ -86,11 +102,35 @@ export function yamlToReactFlow(
     g.setNode(name, { width: NODE_WIDTH, height: NODE_HEIGHT });
   }
 
-  for (const edge of rfEdges) {
+  // Only feed forward (DAG-shaped) edges into dagre. Retry and
+  // escalation-return edges render on top afterwards without distorting
+  // node ranks.
+  const layoutEdges = rfEdges.filter((e) => {
+    if (e.type === 'al-retry') return false;
+    if (e.source === 'escalation_review') return false;
+    return true;
+  });
+  for (const edge of layoutEdges) {
     g.setEdge(edge.source, edge.target);
   }
 
   dagre.layout(g);
+
+  // ── Spine column alignment ──
+  //
+  // Force the longest forward path (START → … → END) onto a single
+  // x-coordinate so every spine edge becomes a vertical segment and
+  // they all visually stack into one trunk. Side branches (retry /
+  // escalation) keep dagre's x and render on the sides.
+  const spine = findLongestForwardPath('START', 'END', layoutEdges);
+  if (spine.length > 2) {
+    const xs = spine.map(id => g.node(id)?.x ?? 0).sort((a, b) => a - b);
+    const columnX = xs[Math.floor(xs.length / 2)];
+    for (const id of spine) {
+      const n = g.node(id);
+      if (n) n.x = columnX;
+    }
+  }
 
   // Add START node
   const startPos = g.node('START');
@@ -129,4 +169,38 @@ export function yamlToReactFlow(
   });
 
   return { nodes: rfNodes, edges: rfEdges };
+}
+
+/**
+ * Longest path from `start` to `end` through the given forward edges.
+ * Used to identify the main "spine" of a workflow so those nodes can
+ * be column-aligned — every spine edge then draws as a vertical
+ * segment and they all visually stack into one trunk.
+ */
+function findLongestForwardPath(start: string, end: string, edges: Edge[]): string[] {
+  const adj = new Map<string, string[]>();
+  for (const e of edges) {
+    let list = adj.get(e.source);
+    if (!list) { list = []; adj.set(e.source, list); }
+    list.push(e.target);
+  }
+  const memo = new Map<string, string[]>();
+  const visiting = new Set<string>();
+  function dfs(node: string): string[] {
+    if (node === end) return [end];
+    if (memo.has(node)) return memo.get(node)!;
+    if (visiting.has(node)) return [];
+    visiting.add(node);
+    const next = adj.get(node) ?? [];
+    let best: string[] = [];
+    for (const n of next) {
+      const path = dfs(n);
+      if (path.length > best.length) best = path;
+    }
+    visiting.delete(node);
+    const result = best.length ? [node, ...best] : [];
+    memo.set(node, result);
+    return result;
+  }
+  return dfs(start);
 }

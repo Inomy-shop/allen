@@ -1,7 +1,7 @@
 import { BaseEdge, type EdgeProps } from '@xyflow/react';
 
 export default function RetryEdge(props: EdgeProps) {
-  const { sourceX, sourceY, targetX, targetY, data, markerEnd } = props;
+  const { sourceX, sourceY, targetX, targetY, data, markerEnd, style } = props;
 
   const maxRetries = (data as any)?.max_retries;
   const side = (data as any)?.retrySide ?? 'right';
@@ -59,10 +59,16 @@ export default function RetryEdge(props: EdgeProps) {
       </defs>
       <BaseEdge
         path={edgePath}
+        // Theme CSS var supplies the base stroke color (amber in both
+        // themes). Trailing `...style` spread lets the selected-node
+        // highlight in LiveGraph override opacity + strokeWidth on this
+        // edge too — previously those overrides were silently dropped
+        // because retry edges hardcoded their full style inline.
         style={{
           stroke: 'rgb(var(--color-flow-edge-retry))',
-          strokeWidth: 2,
+          strokeWidth: 2.5,
           strokeDasharray: '6 3',
+          ...(style as any),
         }}
         markerEnd={markerEnd ?? 'url(#ff-arrow-yellow)'}
       />

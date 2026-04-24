@@ -39,9 +39,11 @@ export default function PullRequestListPage() {
   async function handleSync() {
     setSyncing(true);
     try {
-      for (const repo of repos) {
-        await pullRequests.sync(repo.path, repo._id, repo.name).catch(() => {});
-      }
+      // One server-side sweep instead of an N-request client-side loop.
+      // Delegates to the same `syncAllActivePrs` helper the pr-sync-all
+      // cron uses, so the manual button and the 30-min auto-sync stay
+      // consistent by construction.
+      await pullRequests.syncAll().catch(() => {});
       await load();
     } catch {}
     setSyncing(false);

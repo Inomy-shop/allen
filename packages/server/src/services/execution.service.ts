@@ -199,6 +199,7 @@ export class ExecutionService {
           retryCounts: {},
           currentNodes: [],
           completedNodes: [],
+          nodeAttempts: {},
           cost: { actual: null, estimated: 0 },
           durationMs: 0,
           startedAt: new Date(),

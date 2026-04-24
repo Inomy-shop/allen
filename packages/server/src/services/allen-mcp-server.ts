@@ -171,6 +171,21 @@ const TOOLS = [
   { name: 'get_my_session_history', description: 'Get your own chat session message history. Use to re-read the user\'s original request or see your prior responses.', params: { limit: 'number — max messages (default 30, max 100)' } },
   { name: 'get_my_delegation_thread', description: 'Get messages in your current delegation thread. Only works for delegated agents.', params: {} },
 
+  // ── Chat conversation tracing (arbitrary sessions) ──
+  //
+  // Use these to diagnose "why did this chat behave the way it did?" for
+  // any chat session by id — not just your own. The four collections below
+  // together tell the full story:
+  //   chat_sessions       → provider, model, activeAgent, agentOverrides
+  //   chat_messages       → full user/assistant/tool turns + persisted toolCalls
+  //   chat_logs           → per-turn trace: provider, model, trace, cost, duration, status
+  //   agent_conversations → agent-to-agent delegation threads spawned from the chat
+  { name: 'get_chat_session', description: 'Get chat session metadata for any session id: provider, model, activeAgent, agentOverrides, llmSessionId, userId, createdAt. Use to answer "which provider/model is this chat configured for?".', params: { session_id: 'string (required) — chat_sessions _id' } },
+  { name: 'get_chat_messages', description: 'Paginated read of the chat_messages collection for a session. Returns user + assistant turns, including persisted toolCalls on assistant rows. Pass before=<timestamp|id> to page backward.', params: { session_id: 'string (required)', limit: 'number — max messages per page (default 50, max 200)', before: 'string — cursor for older pages' } },
+  { name: 'get_chat_logs', description: 'Read the chat_logs collection for a session (full per-turn trace: provider, model, trace, toolCalls, cost, duration, status). Newest-first ordering, then reversed to chronological on return.', params: { session_id: 'string (required)', limit: 'number — max logs (default 50, max 200)' } },
+  { name: 'get_chat_log', description: 'Drill into one chat_log row by its Mongo _id. Full trace/toolCalls/prompt, not truncated. Pair with get_chat_logs to locate the id.', params: { log_id: 'string (required) — chat_logs _id' } },
+  { name: 'get_chat_threads', description: 'List agent-to-agent delegation conversations spawned from this chat session. Shows which agents were invoked, their prompts, and statuses.', params: { session_id: 'string (required)' } },
+
   // ── Knowledge & Data ──
   { name: 'search_learnings', description: 'Search the learning system. Filter by workflow, type, or limit.', params: { workflow_name: 'string', type: 'string', limit: 'number' } },
   { name: 'save_learning', description: 'Save a learning/correction to memory. Call when user corrects you or states a preference.', params: { content: 'string (required) — generalized rule', type: 'string (required) — fact, pattern, mistake, or preference' } },
@@ -534,6 +549,56 @@ async function executeTool(name: string, args: Record<string, unknown>): Promise
       const params = new URLSearchParams();
       if (args.limit) params.set('limit', String(args.limit));
       const res = await fetch(`${API_BASE}/api/${collection === 'chat_sessions' ? 'chat/sessions' : collection}?${params}`);
+      return res.json();
+    }
+
+    // ── Chat conversation tracing ──
+    //
+    // Thin wrappers over the existing /api/chat routes. The MCP auth layer
+    // at the top of this file injects the Authorization header on every
+    // API_BASE fetch, so these work for any session the service account
+    // can read — not just the currently-running chat session like
+    // get_my_session_history does.
+    case 'get_chat_session': {
+      const sid = args.session_id as string | undefined;
+      if (!sid) return { error: 'session_id is required' };
+      const res = await fetch(`${API_BASE}/api/chat/sessions/${encodeURIComponent(sid)}`);
+      if (!res.ok) return { error: `chat_sessions lookup failed (${res.status})` };
+      return res.json();
+    }
+    case 'get_chat_messages': {
+      const sid = args.session_id as string | undefined;
+      if (!sid) return { error: 'session_id is required' };
+      const params = new URLSearchParams();
+      if (args.limit != null) params.set('limit', String(Math.min(Number(args.limit) || 50, 200)));
+      if (args.before) params.set('before', String(args.before));
+      const qs = params.toString();
+      const res = await fetch(`${API_BASE}/api/chat/sessions/${encodeURIComponent(sid)}/messages${qs ? '?' + qs : ''}`);
+      if (!res.ok) return { error: `chat_messages lookup failed (${res.status})` };
+      return res.json();
+    }
+    case 'get_chat_logs': {
+      const sid = args.session_id as string | undefined;
+      if (!sid) return { error: 'session_id is required' };
+      const params = new URLSearchParams();
+      if (args.limit != null) params.set('limit', String(Math.min(Number(args.limit) || 50, 200)));
+      const qs = params.toString();
+      const res = await fetch(`${API_BASE}/api/chat/sessions/${encodeURIComponent(sid)}/logs${qs ? '?' + qs : ''}`);
+      if (!res.ok) return { error: `chat_logs lookup failed (${res.status})` };
+      return res.json();
+    }
+    case 'get_chat_log': {
+      const lid = args.log_id as string | undefined;
+      if (!lid) return { error: 'log_id is required' };
+      const res = await fetch(`${API_BASE}/api/chat/logs/${encodeURIComponent(lid)}`);
+      if (!res.ok) return { error: `chat_log ${lid} not found (${res.status})` };
+      return res.json();
+    }
+    case 'get_chat_threads': {
+      const sid = args.session_id as string | undefined;
+      if (!sid) return { error: 'session_id is required' };
+      const res = await fetch(`${API_BASE}/api/chat/sessions/${encodeURIComponent(sid)}/threads`);
+      if (!res.ok) return { error: `chat_threads lookup failed (${res.status})` };
       return res.json();
     }
     case 'search_executions': {
