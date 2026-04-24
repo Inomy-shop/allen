@@ -44,6 +44,7 @@ import { createRepoScanIfChangedAction } from './services/repo-context-scanner.s
 import { createRepoPullAllAction } from './services/repo.service.js';
 import { createPrSyncAllAction } from './services/pull-request.service.js';
 import { createMcpBundleCleanupAction } from './services/mcp-bundle.service.js';
+import { runTrustBootstrap } from './services/trust-bootstrap.service.js';
 import { cronRoutes } from './routes/cron.routes.js';
 import { designDocRoutes } from './routes/design-doc.routes.js';
 import { interventionRoutes } from './routes/intervention.routes.js';
@@ -141,6 +142,15 @@ async function main(): Promise<void> {
   const { createCodeRabbitSweepAction } = await import('./services/coderabbit-sweep.service.js');
   cronService.registerSystemAction(createCodeRabbitSweepAction(db));
   await cronService.start();
+
+  // Pre-answer the "trust this directory?" prompts from Codex and
+  // Claude CLI in <ALLEN_HOME>. Fire-and-forget — the server boots
+  // even if `expect` or the CLIs aren't installed. Without this, the
+  // first workflow spawn in a fresh install hangs on the interactive
+  // trust dialog until manually answered.
+  runTrustBootstrap().catch((err) => {
+    console.warn('[trust-bootstrap] bootstrap crashed:', (err as Error).message);
+  });
 
   const app = express();
 
