@@ -57,7 +57,7 @@ export default function ConditionalEdge(props: EdgeProps) {
           <div className="flex items-center justify-center">
             <span
               title={String(label)}
-              className="bg-surface-200 border border-accent-purple/30 text-accent-purple text-[9px] px-2 py-0.5 rounded-sm whitespace-nowrap max-w-[110px] truncate font-mono cursor-help hover:bg-surface-300 hover:border-accent-purple/60 transition-colors"
+              className="bg-surface-200 border border-border/60 text-theme-secondary text-[9px] px-2 py-0.5 rounded-sm whitespace-nowrap max-w-[110px] truncate font-mono cursor-help hover:bg-surface-300 hover:border-border transition-colors"
             >
               {label as string}
             </span>

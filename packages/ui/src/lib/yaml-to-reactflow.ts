@@ -1,8 +1,9 @@
 import { MarkerType, type Node, type Edge } from '@xyflow/react';
 import dagre from '@dagrejs/dagre';
+import { applyPositionHandles } from './edge-handles';
 
-const NODE_WIDTH = 180;
-const NODE_HEIGHT = 80;
+const NODE_WIDTH = 280;
+const NODE_HEIGHT = 100;
 
 /**
  * Convert a parsed workflow definition into React Flow nodes and edges
@@ -63,13 +64,21 @@ export function yamlToReactFlow(
               type: MarkerType.ArrowClosed,
               width: 16,
               height: 16,
-              color: isRetry ? '#eab308' : edge.condition ? '#a855f7' : '#4b5563',
+              // Same CSS var the execution view uses. All three resolve
+              // to the shared gray, so editor and execution render
+              // identically; type is distinguished by the label pill
+              // (conditional) or the dashed stroke (retry).
+              color: isRetry
+                ? 'rgb(var(--color-flow-edge-retry))'
+                : edge.condition
+                  ? 'rgb(var(--color-flow-edge-conditional))'
+                  : 'rgb(var(--color-flow-edge-default))',
             },
             style: isRetry
-              ? { stroke: '#eab308', strokeDasharray: '5 3' }
+              ? { stroke: 'rgb(var(--color-flow-edge-retry))', strokeDasharray: '8 5', strokeWidth: 2.5 }
               : edge.condition
-                ? { stroke: '#a855f7' }
-                : { stroke: '#4b5563' },
+                ? { stroke: 'rgb(var(--color-flow-edge-conditional))', strokeWidth: 2.5 }
+                : { stroke: 'rgb(var(--color-flow-edge-default))', strokeWidth: 2.5 },
           });
         }
       }
@@ -86,10 +95,12 @@ export function yamlToReactFlow(
   g.setDefaultEdgeLabel(() => ({}));
   g.setGraph({
     rankdir: 'TB',
-    nodesep: 120,
-    ranksep: 160,
-    marginx: 40,
-    marginy: 40,
+    // Spacing + margins mirror the execution view (LiveGraph) so a
+    // workflow lays out the same in both places.
+    nodesep: 140,
+    ranksep: 200,
+    marginx: 60,
+    marginy: 60,
     acyclicer: 'greedy',
     ranker: 'network-simplex',
   });
@@ -168,7 +179,13 @@ export function yamlToReactFlow(
     deletable: false,
   });
 
-  return { nodes: rfNodes, edges: rfEdges };
+  // Reassign each non-retry edge's source/target handles based on the
+  // actual relative position of its nodes. Without this, every forward
+  // edge funnels into the target's top handle, which piles parallel
+  // edges on top of each other for wide fan-in targets.
+  const routedEdges = applyPositionHandles(rfNodes, rfEdges);
+
+  return { nodes: rfNodes, edges: routedEdges };
 }
 
 /**

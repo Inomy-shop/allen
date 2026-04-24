@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef } from 'react';
+import { useCallback, useEffect, useMemo, useRef } from 'react';
 import { useResizable } from '../../hooks/useResizable';
 import {
   ReactFlow,
@@ -30,6 +30,7 @@ import RetryEdge from './RetryEdge';
 import AutoEdge from './AutoEdge';
 import NodePalette from './NodePalette';
 import NodeProperties from './NodeProperties';
+import { applyPositionHandles } from '../../lib/edge-handles';
 
 const nodeTypes = {
   'al-agent': AgentNode,
@@ -181,6 +182,68 @@ export default function Canvas({ nodes, edges, onNodesChange, onEdgesChange, wor
     onEdgesChange(edges.filter(e => e.source !== id && e.target !== id));
   }, [nodes, edges, onNodesChange, onEdgesChange, pushSnapshot]);
 
+  // Route each edge through the handle side that best matches the
+  // current relative positions of its endpoints, then overlay a
+  // selection-aware highlight so clicking a node brightens its direct
+  // edges and fades the rest. Recomputed on every render so dragging a
+  // node live-reroutes its edges instead of keeping them pinned to
+  // whatever handle was chosen at creation.
+  const selectedId = selectedNode?.id ?? null;
+
+  // Set of nodes directly connected to the selected one (the selected
+  // node itself plus every edge neighbour). Used to fade unrelated
+  // nodes alongside unrelated edges, so a click fully isolates the
+  // neighbourhood instead of leaving other nodes at full opacity.
+  const connectedIds = useMemo(() => {
+    if (!selectedId) return null;
+    const set = new Set<string>([selectedId]);
+    for (const e of edges) {
+      if (e.source === selectedId) set.add(e.target);
+      else if (e.target === selectedId) set.add(e.source);
+    }
+    return set;
+  }, [edges, selectedId]);
+
+  const displayNodes = useMemo(() => {
+    if (!connectedIds) return nodes;
+    return nodes.map((n) => {
+      const inNeighbourhood = connectedIds.has(n.id);
+      return {
+        ...n,
+        style: {
+          ...(n.style ?? {}),
+          // Fade + desaturate nodes outside the neighbourhood so the
+          // selected node and its immediate graph truly own the focus.
+          opacity: inNeighbourhood ? 1 : 0.15,
+          filter: inNeighbourhood ? undefined : 'grayscale(100%)',
+        },
+      };
+    });
+  }, [nodes, connectedIds]);
+
+  const displayEdges = useMemo(() => {
+    const routed = applyPositionHandles(nodes, edges);
+    if (!selectedId) return routed;
+    return routed.map((e) => {
+      const isConnected = e.source === selectedId || e.target === selectedId;
+      const baseStyle = (e.style as any) ?? {};
+      return {
+        ...e,
+        // No zIndex override — React Flow renders zero-z edges in the
+        // layer below nodes, so an edge never visually passes over a
+        // node (even when highlighted). Non-highlighted edges fade to
+        // 0.15, which keeps the accent edge readable despite the
+        // shared layer.
+        style: {
+          ...baseStyle,
+          opacity: isConnected ? 1 : 0.08,
+          stroke: isConnected ? 'rgb(var(--color-accent))' : baseStyle.stroke,
+        },
+        animated: isConnected ? e.animated : false,
+      };
+    });
+  }, [nodes, edges, selectedId]);
+
   return (
     <div className="flex h-full">
       {/* Canvas with floating palette */}
@@ -192,8 +255,8 @@ export default function Canvas({ nodes, edges, onNodesChange, onEdgesChange, wor
 
         <ReactFlowProvider>
           <CanvasInner
-            nodes={nodes}
-            edges={edges}
+            nodes={displayNodes}
+            edges={displayEdges}
             onNodesChange={handleNodesChange}
             onEdgesChange={handleEdgesChange}
             onConnect={handleConnect}

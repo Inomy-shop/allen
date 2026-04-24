@@ -4,6 +4,7 @@ import {
   GitBranch, LayoutTemplate, Bot, Briefcase, Crown,
   Shield, Server, Brain, FileText, Wrench, Zap,
   Terminal, Rocket, Bug, Cpu, Palette, Users,
+  BrainCircuit, Sparkles,
 } from 'lucide-react';
 
 const iconMap: Record<string, React.ElementType> = {
@@ -38,6 +39,8 @@ const iconMap: Record<string, React.ElementType> = {
   palette: Palette,
   users: Users,
   bot: Bot,
+  brainCircuit: BrainCircuit,
+  sparkles: Sparkles,
 };
 
 export default function RoleIcon({
@@ -49,6 +52,6 @@ export default function RoleIcon({
   color?: string;
   size?: number;
 }) {
-  const Icon = iconMap[icon ?? ''] ?? Bot;
+  const Icon = iconMap[icon ?? ''] ?? BrainCircuit;
   return <Icon style={{ color: color ?? '#888' }} width={size} height={size} />;
 }

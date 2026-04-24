@@ -19,6 +19,19 @@ import dagre from '@dagrejs/dagre';
 import type { NodeState } from '../../hooks/useExecution';
 import RoleIcon from '../common/RoleIcon';
 import { Handle, Position, type NodeProps } from '@xyflow/react';
+import { applyPositionHandles } from '../../lib/edge-handles';
+import { Code2, User, Workflow as WorkflowIcon, GitFork } from 'lucide-react';
+
+// Type-specific icon for the execution graph. Falls back to `null` for
+// agent rows so the role-driven RoleIcon keeps rendering. Keeps the
+// execution view visually in sync with the editor where each node type
+// carries its own distinct glyph.
+const TYPE_ICON: Record<string, React.ComponentType<{ className?: string }>> = {
+  code: Code2,
+  human: User,
+  workflow: WorkflowIcon,
+  condition: GitFork,
+};
 
 // ── Status-aware border/glow styles ──
 const statusBorder: Record<string, string> = {
@@ -65,7 +78,7 @@ function ExecutionNode({ data, selected }: NodeProps) {
 
   return (
     <div
-      className={`relative px-4 py-3 rounded-lg border-2 bg-surface-100/90 backdrop-blur-sm min-w-[160px] transition-all
+      className={`relative px-4 py-3 rounded-lg border-2 bg-surface-100/90 backdrop-blur-sm w-[280px] transition-all
         ${statusBorder[status] ?? statusBorder.pending}
         ${statusRing[status] ?? ''}
         ${selected ? 'ring-2 ring-white/40' : ''}
@@ -74,12 +87,17 @@ function ExecutionNode({ data, selected }: NodeProps) {
       <Handle type="target" position={Position.Top} id="top" className="!opacity-0 !w-1 !h-1" />
       <Handle type="target" position={Position.Right} id="right" className="!opacity-0 !w-1 !h-1" />
       <Handle type="target" position={Position.Left} id="left" className="!opacity-0 !w-1 !h-1" />
+      <Handle type="target" position={Position.Bottom} id="bottom" className="!opacity-0 !w-1 !h-1" />
 
-      <div className="flex items-center gap-2">
-        <RoleIcon icon={d.icon} color={d.color} size={16} />
-        <div>
-          <div className="text-xs font-label font-medium text-theme-primary">{d.label}</div>
-          <div className={`text-[10px] font-mono uppercase text-${accent}/70`}>
+      <div className="flex items-center gap-2 min-w-0">
+        {(() => {
+          const TypeIcon = TYPE_ICON[type];
+          if (TypeIcon) return <TypeIcon className={`w-4 h-4 shrink-0 text-${accent}`} />;
+          return <RoleIcon icon={d.icon} color={d.color} size={16} />;
+        })()}
+        <div className="min-w-0 flex-1">
+          <div className="text-xs font-label font-medium text-theme-primary truncate">{d.label}</div>
+          <div className={`text-[10px] font-mono uppercase text-${accent}/70 truncate`}>
             {type === 'agent' ? (d.role ?? 'agent') : type === 'code' ? (d.function ?? 'code') : type}
           </div>
         </div>
@@ -100,15 +118,27 @@ function ExecutionNode({ data, selected }: NodeProps) {
         )}
       </div>
 
-      {/* Outputs pills */}
+      {/* Outputs pills — capped so a node with many outputs doesn't
+          grow tall; overflow collapses into a +N pill tooltip. */}
       {(() => {
         const keys = outputsAsKeys(d.outputs);
         if (keys.length === 0) return null;
+        const MAX_VISIBLE = 3;
+        const visible = keys.slice(0, MAX_VISIBLE);
+        const hidden = keys.length - visible.length;
         return (
           <div className="mt-1.5 flex flex-wrap gap-1">
-            {keys.map((o) => (
+            {visible.map((o) => (
               <span key={o} className={`text-[8px] bg-${accent}/10 text-${accent}/60 px-1 rounded-sm font-mono`}>{o}</span>
             ))}
+            {hidden > 0 && (
+              <span
+                className={`text-[8px] bg-${accent}/10 text-${accent}/60 px-1 rounded-sm font-mono`}
+                title={keys.slice(MAX_VISIBLE).join(', ')}
+              >
+                +{hidden}
+              </span>
+            )}
           </div>
         );
       })()}
@@ -140,6 +170,7 @@ function ExecutionNode({ data, selected }: NodeProps) {
       <Handle type="source" position={Position.Bottom} id="bottom" className="!opacity-0 !w-1 !h-1" />
       <Handle type="source" position={Position.Right} id="right" className="!opacity-0 !w-1 !h-1" />
       <Handle type="source" position={Position.Left} id="left" className="!opacity-0 !w-1 !h-1" />
+      <Handle type="source" position={Position.Top} id="top" className="!opacity-0 !w-1 !h-1" />
     </div>
   );
 }
@@ -162,7 +193,7 @@ const edgeTypes = {
 };
 
 // ── Dagre Layout ──
-const NODE_WIDTH = 180;
+const NODE_WIDTH = 280;
 const NODE_HEIGHT = 100;
 
 function layoutGraph(nodes: Node[], edges: Edge[]): Node[] {
@@ -434,79 +465,6 @@ export default function LiveGraph({ workflow, nodeStates, selectedNode, onSelect
     return layoutGraph(rfNodes, edges);
   }, [workflowNodes, edges]);
 
-  // ── Direction-aware handle reassignment ──
-  //
-  // After dagre has computed positions, walk each (non-retry) edge and
-  // decide whether its source/target handles should be top/bottom
-  // (normal downward flow) or left/right (upward or same-rank flow).
-  //
-  // The default layout places forward edges top→bottom. But the workflow
-  // has explicit "go back to an earlier stage" edges (escalation_review
-  // returning to a producer) where target.y < source.y. Routing these
-  // through bottom→top handles produces ugly loops — the edge exits the
-  // source downward, loops around the graph, comes up to target. Using
-  // right-side handles on both ends keeps them in a clean side channel.
-  //
-  // Retry edges (`al-retry`) already pick their own side (`retrySide` in
-  // the main edge builder), so we leave them alone here.
-  const positionedEdges = useMemo<Edge[]>(() => {
-    if (initialNodes.length === 0) return edges;
-    const posById = new Map<string, { x: number; y: number }>();
-    for (const n of initialNodes) posById.set(n.id, n.position);
-    const UPWARD_THRESHOLD = 40; // px — ignore tiny y differences (same-rank neighbours)
-
-    return edges.map((e) => {
-      if (e.type === 'al-retry') return e;
-      const src = posById.get(e.source);
-      const tgt = posById.get(e.target);
-      if (!src || !tgt) return e;
-
-      const dy = tgt.y - src.y;
-      // Target clearly above source (backward in y). Route via side
-      // handles — always the RIGHT side, so upward traffic runs in one
-      // predictable lane on the right of the graph. Matches the existing
-      // right-side convention used by retry edges by default.
-      if (dy < -UPWARD_THRESHOLD) {
-        return { ...e, sourceHandle: 'right', targetHandle: 'right' };
-      }
-      // Same rank (no meaningful y gap) — still use side handles so the
-      // edge doesn't attempt to loop around through top/bottom. Choose
-      // the side that faces the target's x-direction.
-      if (Math.abs(dy) < UPWARD_THRESHOLD) {
-        const side = tgt.x >= src.x ? 'right' : 'left';
-        return { ...e, sourceHandle: side, targetHandle: side };
-      }
-      // Normal downward forward edge — leave default top/bottom handles.
-      return e;
-    });
-  }, [edges, initialNodes]);
-
-  // Derived edges that ReactFlow actually renders. Every edge is
-  // always visible — edge overlap (shared stubs, spine-column
-  // alignment, right-side routing for upward edges) is what keeps the
-  // graph readable rather than hiding anything.
-  //
-  // The only runtime transformation is selection contrast: when a
-  // node is selected, edges touching it stay at full opacity while
-  // the rest fade to 0.15. Thickness is unchanged so the graph's
-  // overall geometry stays stable.
-  const displayEdges = useMemo<Edge[]>(() => {
-    return positionedEdges.map((e) => {
-      const isConnected = selectedNode
-        ? e.source === selectedNode || e.target === selectedNode
-        : false;
-      const opacity = !selectedNode ? 1 : isConnected ? 1 : 0.15;
-      return {
-        ...e,
-        style: {
-          ...(e.style as any),
-          opacity,
-        },
-        animated: isConnected ? e.animated : false,
-      };
-    });
-  }, [positionedEdges, selectedNode]);
-
   // Maintain node state separately so dragging persists
   const [nodes, setNodes] = useState<Node[]>(initialNodes);
 
@@ -534,6 +492,86 @@ export default function LiveGraph({ workflow, nodeStates, selectedNode, onSelect
     }));
   }, [nodeStates, selectedNode, spawnCounts]);
 
+  // ── Direction-aware handle reassignment ──
+  //
+  // Pick the source/target handle for each non-retry edge based on the
+  // relative geometry of its two nodes. The dominant axis (dx vs dy)
+  // decides which face of each node the edge leaves/enters through, so
+  // backward and same-rank edges don't funnel through top/bottom and
+  // diagonal fan-outs don't pile into a single top handle.
+  //
+  // Retry edges (`al-retry`) already pick their own side in the main
+  // edge builder, so they pass through unchanged.
+  //
+  // Tracks `nodes` (not just initialNodes) so dragging a node live-
+  // reroutes its edges instead of pinning them to the initial layout.
+  const positionedEdges = useMemo<Edge[]>(
+    () => (nodes.length === 0 ? edges : applyPositionHandles(nodes, edges)),
+    [edges, nodes],
+  );
+
+  // Derived edges that ReactFlow actually renders. Every edge is
+  // always visible — edge overlap (shared stubs, spine-column
+  // alignment, right-side routing for upward edges) is what keeps the
+  // graph readable rather than hiding anything.
+  //
+  // Selection contrast: when a node is selected, edges touching it
+  // switch to the accent color with a thicker stroke, and all other
+  // edges fade to 0.15 opacity. Connected edges become visually
+  // obvious without the user having to trace them.
+  const displayEdges = useMemo<Edge[]>(() => {
+    return positionedEdges.map((e) => {
+      if (!selectedNode) return e;
+      const isConnected = e.source === selectedNode || e.target === selectedNode;
+      const baseStyle = (e.style as any) ?? {};
+      return {
+        ...e,
+        // No zIndex override — React Flow renders zero-z edges in the
+        // layer below nodes, so an edge never visually passes over a
+        // node (even when highlighted). Non-highlighted edges fade to
+        // 0.15, which keeps the accent edge readable despite the
+        // shared layer.
+        style: {
+          ...baseStyle,
+          opacity: isConnected ? 1 : 0.08,
+          stroke: isConnected ? 'rgb(var(--color-accent))' : baseStyle.stroke,
+        },
+        animated: isConnected ? e.animated : false,
+      };
+    });
+  }, [positionedEdges, selectedNode]);
+
+  // Neighbourhood of the selected node — the node itself plus any
+  // node sharing an edge with it. Drives the node-fade so a click
+  // visually isolates the local area instead of leaving unrelated
+  // nodes at full opacity.
+  const connectedIds = useMemo(() => {
+    if (!selectedNode) return null;
+    const set = new Set<string>([selectedNode]);
+    for (const e of positionedEdges) {
+      if (e.source === selectedNode) set.add(e.target);
+      else if (e.target === selectedNode) set.add(e.source);
+    }
+    return set;
+  }, [positionedEdges, selectedNode]);
+
+  const displayNodes = useMemo<Node[]>(() => {
+    if (!connectedIds) return nodes;
+    return nodes.map((n) => {
+      const inNeighbourhood = connectedIds.has(n.id);
+      return {
+        ...n,
+        style: {
+          ...(n.style ?? {}),
+          // Fade + desaturate nodes outside the neighbourhood so the
+          // selected node and its immediate graph truly own the focus.
+          opacity: inNeighbourhood ? 1 : 0.15,
+          filter: inNeighbourhood ? undefined : 'grayscale(100%)',
+        },
+      };
+    });
+  }, [nodes, connectedIds]);
+
   // Handle drag
   const onNodesChange: OnNodesChange = useCallback((changes) => {
     setNodes(prev => applyNodeChanges(changes, prev));
@@ -555,7 +593,7 @@ export default function LiveGraph({ workflow, nodeStates, selectedNode, onSelect
     <div className="h-full w-full relative">
       <ReactFlowProvider>
         <LiveGraphInner
-          nodes={nodes}
+          nodes={displayNodes}
           edges={displayEdges}
           onNodesChange={onNodesChange}
           onNodeClick={onSelectNode}
