@@ -226,22 +226,92 @@ export class WorkspaceManager {
     const oid = new ObjectId(id);
 
     try {
-      // Fetch latest from origin so worktree starts from up-to-date base
-      await exec('git', ['fetch', 'origin'], { cwd: repoPath }).catch(() => {});
-
-      // Determine base ref: prefer origin/baseBranch, fallback to local baseBranch
-      let baseRef = baseBranch;
+      // Fetch latest from origin BEFORE creating the worktree — otherwise
+      // the worktree starts from whatever stale tip the parent repo
+      // happens to have, which defeats the purpose of an isolated
+      // workspace. --prune also drops remote-tracking refs whose branches
+      // were deleted upstream so we never resolve a renamed branch.
+      //
+      // We fail loudly if fetch errors (no silent catch): silently
+      // continuing would cut the new branch from stale code, and the
+      // agent running in the workspace would miss recent commits without
+      // any signal that something went wrong. If the host is genuinely
+      // offline, creation should abort so the caller knows.
       try {
-        await exec('git', ['rev-parse', '--verify', `origin/${baseBranch}`], { cwd: repoPath });
-        baseRef = `origin/${baseBranch}`;
-      } catch {} // origin doesn't exist — use local
+        await exec('git', ['fetch', '--prune', 'origin'], { cwd: repoPath, timeout: 60_000 });
+      } catch (err) {
+        throw new Error(
+          `git fetch origin failed for ${repoPath}: ${(err as Error).message}. ` +
+          `Workspace creation aborted to avoid cutting a branch from stale code.`,
+        );
+      }
+
+      // Resolve a real ref for `baseBranch`. We try, in order:
+      //   1. origin/<baseBranch>   — remote branch, freshest tip (guaranteed fresh by the fetch above)
+      //   2. <baseBranch>          — local branch, in case origin missing
+      //   3. A short fallback list — only used if the caller-supplied
+      //      branch doesn't exist at all. This covers repos that don't
+      //      have `main` but do have `dev` / `development` / `master`
+      //      (or vice versa) and keeps create_workspace working when the
+      //      repo record's defaultBranch is missing or stale.
+      const resolveExistingRef = async (candidate: string): Promise<string | null> => {
+        try {
+          await exec('git', ['rev-parse', '--verify', `origin/${candidate}`], { cwd: repoPath });
+          return `origin/${candidate}`;
+        } catch {}
+        try {
+          await exec('git', ['rev-parse', '--verify', candidate], { cwd: repoPath });
+          return candidate;
+        } catch {}
+        return null;
+      };
+
+      let baseRef = await resolveExistingRef(baseBranch);
+      let resolvedBaseBranch = baseBranch;
+      if (!baseRef) {
+        const fallbacks = ['dev', 'development', 'main', 'master'].filter(b => b !== baseBranch);
+        for (const candidate of fallbacks) {
+          const ref = await resolveExistingRef(candidate);
+          if (ref) {
+            console.warn(`[workspace] base branch "${baseBranch}" not found in ${repoPath}; falling back to "${candidate}"`);
+            baseRef = ref;
+            resolvedBaseBranch = candidate;
+            break;
+          }
+        }
+      }
+      if (!baseRef) {
+        throw new Error(`Cannot resolve a base branch for ${repoPath}. Tried "${baseBranch}" and fallbacks [dev, development, main, master] — none exist.`);
+      }
+
+      // If we fell through to a different branch, keep the workspace
+      // record honest so downstream git state queries use the real base.
+      if (resolvedBaseBranch !== baseBranch) {
+        baseBranch = resolvedBaseBranch;
+        await this.col.updateOne({ _id: oid }, { $set: { baseBranch } }).catch(() => {});
+      }
 
       // Create worktree
       if (isPr) {
-        await exec('git', ['fetch', 'origin', branch], { cwd: repoPath }).catch(() => {});
+        // Targeted fetch of the PR head — the general `fetch --prune origin`
+        // above already refreshed every remote-tracking branch, but if the
+        // PR lives on a fork or a non-default refspec, pull it explicitly.
+        // Failing here is fatal: checking out a PR branch we haven't
+        // fetched means the worktree carries stale/wrong code.
+        try {
+          await exec('git', ['fetch', 'origin', branch], { cwd: repoPath, timeout: 60_000 });
+        } catch (err) {
+          throw new Error(
+            `git fetch origin ${branch} failed for ${repoPath}: ${(err as Error).message}. ` +
+            `Workspace creation aborted — PR branch is not reachable.`,
+          );
+        }
         await exec('git', ['worktree', 'add', worktreePath, `origin/${branch}`], { cwd: repoPath });
       } else {
-        // Delete stale branch if it exists, then create fresh from base
+        // Delete stale branch if it exists, then create fresh from base.
+        // baseRef was resolved above to the latest origin tip (the
+        // `fetch --prune origin` guarantees that), so the new branch
+        // starts from up-to-date code.
         await exec('git', ['branch', '-D', branch], { cwd: repoPath }).catch(() => {});
         await exec('git', ['worktree', 'add', '-b', branch, worktreePath, baseRef], { cwd: repoPath });
       }

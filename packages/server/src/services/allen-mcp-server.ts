@@ -157,7 +157,7 @@ const TOOLS = [
   // ── Workspaces ──
   { name: 'get_workspace', description: 'Fetch a workspace row by id. Returns worktreePath, branch, baseBranch, status, repoId, prUrl, services, and more.', params: { workspace_id: 'string (required) — workspaces _id' } },
   { name: 'create_workspace_for_pr', description: 'Create a fresh workspace from a PR branch (Flow B). Used when a PR has no linked workspace. Polls until setup completes. Returns { workspace_id, worktree_path, branch, base_branch }.', params: { pr_url: 'string (required)', repo_id: 'string (required)', branch: 'string (required) — PR head branch', base_branch: 'string (required) — PR base branch', pr_number: 'number (required)', pr_title: 'string — optional display name' } },
-  { name: 'create_workspace', description: 'Create an isolated git worktree from a registered repo, on a new branch off the base branch. Use this whenever code changes are needed — every specialist agent you spawn must work inside this worktree. Returns { workspace_id, worktree_path, branch, base_branch }. Engineering-lead orchestrators are the expected caller; never call this from a worker/specialist agent.', params: { repo_path: 'string (required) — absolute path of a registered repo or an existing worktree whose repo will be used as the base', branch_prefix: 'string — short label prepended to the generated branch (e.g. "feature", "fix"). Default: "feature".', task_summary: 'string — one-line intent used inside the generated branch name for human readability', base_branch: 'string — branch to cut from. Default: "main".' } },
+  { name: 'create_workspace', description: 'Create an isolated git worktree from a registered repo, on a new branch off the base branch. Use this whenever code changes are needed — every specialist agent you spawn must work inside this worktree. Returns { workspace_id, worktree_path, branch, base_branch }. Engineering-lead orchestrators are the expected caller; never call this from a worker/specialist agent.', params: { repo_path: 'string (required) — absolute path of a registered repo or an existing worktree whose repo will be used as the base', branch_prefix: 'string — short label prepended to the generated branch (e.g. "feature", "fix"). Default: "feature".', task_summary: 'string — one-line intent used inside the generated branch name for human readability', base_branch: 'string — branch to cut from. Defaults to the repo\'s detected default branch (captured at scan time); falls back to "main" only if the repo record has no defaultBranch. Pass this explicitly only when you need to cut from a non-default branch.' } },
 
   // ── Delegation & Communication ──
   { name: 'delegate_to_agent', description: 'Delegate a task to another agent. Pass conversation_id to continue an existing thread.', params: { agent_name: 'string (required)', task: 'string (required)', context: 'object — relevant context', conversation_id: 'string — existing conversation ID to continue' } },
@@ -374,7 +374,6 @@ async function executeTool(name: string, args: Record<string, unknown>): Promise
       const repoPath = String(args.repo_path ?? '');
       const branchPrefix = String(args.branch_prefix ?? 'feature');
       const taskSummary = String(args.task_summary ?? '').trim();
-      const baseBranch = String(args.base_branch ?? 'main');
       if (!repoPath) return { error: 'repo_path is required' };
 
       // Find the repo by absolute path (registered repo or any existing
@@ -383,6 +382,16 @@ async function executeTool(name: string, args: Record<string, unknown>): Promise
       if (!Array.isArray(repos)) return repos; // error passthrough
       const repo = repos.find((r: any) => r.path === repoPath);
       if (!repo) return { error: `No registered repo found at ${repoPath}. Call list_repos and pass an exact path.` };
+
+      // Resolve the base branch. Precedence: explicit caller arg → the
+      // repo's detected default branch (captured at scan time) → 'dev' as
+      // a sensible fallback for teams whose convention is `dev` /
+      // `development` rather than `main`. The workspace service itself
+      // does a second-pass fallback against the actual repo when the
+      // requested branch doesn't resolve (see workspace.service.ts), so
+      // passing 'dev' here still works for repos on main/master.
+      const repoDefaultBranch = (repo?.detected as any)?.defaultBranch as string | undefined;
+      const baseBranch = String(args.base_branch ?? repoDefaultBranch ?? 'dev');
 
       // Generate a short, filesystem-safe branch name from the summary.
       const slug = taskSummary
