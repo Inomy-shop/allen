@@ -15,9 +15,19 @@ export default function TerminalNode({ data, id }: NodeProps) {
       </span>
 
       {isStart ? (
-        <Handle type="source" position={Position.Bottom} id="bottom" className="!bg-theme-muted !w-2.5 !h-2.5 !border-surface" />
+        <>
+          <Handle type="source" position={Position.Bottom} id="bottom" className="!bg-theme-muted !w-2.5 !h-2.5 !border-surface" />
+          <Handle type="source" position={Position.Right} id="right" className="!bg-theme-muted !w-2 !h-2 !border-surface" />
+          <Handle type="source" position={Position.Left} id="left" className="!bg-theme-muted !w-2 !h-2 !border-surface" />
+          <Handle type="source" position={Position.Top} id="top" className="!bg-theme-muted !w-2.5 !h-2.5 !border-surface" />
+        </>
       ) : (
-        <Handle type="target" position={Position.Top} id="top" className="!bg-theme-muted !w-2.5 !h-2.5 !border-surface" />
+        <>
+          <Handle type="target" position={Position.Top} id="top" className="!bg-theme-muted !w-2.5 !h-2.5 !border-surface" />
+          <Handle type="target" position={Position.Right} id="right" className="!bg-theme-muted !w-2 !h-2 !border-surface" />
+          <Handle type="target" position={Position.Left} id="left" className="!bg-theme-muted !w-2 !h-2 !border-surface" />
+          <Handle type="target" position={Position.Bottom} id="bottom" className="!bg-theme-muted !w-2.5 !h-2.5 !border-surface" />
+        </>
       )}
     </div>
   );

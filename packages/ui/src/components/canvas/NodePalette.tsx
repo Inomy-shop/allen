@@ -1,4 +1,4 @@
-import { Bot, Cog, MessageSquare, GitBranch, HelpCircle } from 'lucide-react';
+import { BrainCircuit, Code2, User, Workflow, GitFork } from 'lucide-react';
 
 interface PaletteItem {
   type: string;
@@ -13,7 +13,7 @@ const paletteItems: PaletteItem[] = [
   {
     type: 'agent',
     label: 'Agent',
-    icon: Bot,
+    icon: BrainCircuit,
     color: 'text-accent-blue',
     bgColor: 'hover:bg-accent-blue/10',
     defaults: { role: 'developer', prompt: '', outputs: {} },
@@ -21,7 +21,7 @@ const paletteItems: PaletteItem[] = [
   {
     type: 'code',
     label: 'Code',
-    icon: Cog,
+    icon: Code2,
     color: 'text-accent-green',
     bgColor: 'hover:bg-accent-green/10',
     defaults: { type: 'code', function: 'run-build', outputs: {} },
@@ -29,7 +29,7 @@ const paletteItems: PaletteItem[] = [
   {
     type: 'human',
     label: 'Human',
-    icon: MessageSquare,
+    icon: User,
     color: 'text-accent-orange',
     bgColor: 'hover:bg-accent-orange/10',
     defaults: { type: 'human', prompt: '', fields: [], outputs: {} },
@@ -37,7 +37,7 @@ const paletteItems: PaletteItem[] = [
   {
     type: 'workflow',
     label: 'Workflow',
-    icon: GitBranch,
+    icon: Workflow,
     color: 'text-accent-purple',
     bgColor: 'hover:bg-accent-purple/10',
     defaults: { type: 'workflow', workflow: '', input_map: {}, output_map: {} },
@@ -45,7 +45,7 @@ const paletteItems: PaletteItem[] = [
   {
     type: 'condition',
     label: 'Condition',
-    icon: HelpCircle,
+    icon: GitFork,
     color: 'text-accent-yellow',
     bgColor: 'hover:bg-accent-yellow/10',
     defaults: { type: 'condition', conditions: [] },

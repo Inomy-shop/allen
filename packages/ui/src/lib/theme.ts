@@ -13,14 +13,14 @@ export const COLOR_MODE_TOKENS = {
     textMuted: '#94a3b8',
     textSubtle: '#64748b',
     terminalChrome: '#6b7280',
-    // Three edge types get three clearly distinct hues so the visual
-    // language of the graph reads at a glance: blue = forward flow,
-    // purple = conditional branch, amber = retry/loop-back. All three
-    // are bold enough to stand out on the dark surface; the retry edge
-    // keeps a dashed stroke as an additional semantic marker.
-    flowEdgeDefault: '#60a5fa',       // forward — sky blue
-    flowEdgeConditional: '#c084fc',   // conditional — violet
-    flowEdgeRetry: '#f59e0b',         // retry — amber (dashed)
+    // Muted gray for all edges so unselected edges recede. On
+    // selection the connected edges switch to the theme accent (in
+    // Canvas.tsx / LiveGraph.tsx) to stand out. Type is still
+    // distinguishable via chrome, not color: conditional carries a
+    // label pill, retry stays dashed.
+    flowEdgeDefault: '#6b7280',       // muted gray-500
+    flowEdgeConditional: '#6b7280',
+    flowEdgeRetry: '#6b7280',
     editorBackground: '#141620',
     editorLineHighlight: '#1a1d2b',
     editorGutter: '#0f1117',
@@ -42,11 +42,11 @@ export const COLOR_MODE_TOKENS = {
     textMuted: '#374151', // 4.5:1 contrast on white (WCAG AA)
     textSubtle: '#4b5563', // 7.0:1 contrast on white (WCAG AAA)
     terminalChrome: '#4b5563',
-    // Same semantic trio as dark mode — blue / violet / amber — but using
-    // deeper shades so each stays bold against a white surface.
-    flowEdgeDefault: '#2563eb',       // forward — bold blue
-    flowEdgeConditional: '#7e22ce',   // conditional — deep violet
-    flowEdgeRetry: '#b45309',         // retry — dark amber (dashed)
+    // Lighter gray for edges on a white surface so they recede by
+    // default. Selection promotes connected edges to the accent.
+    flowEdgeDefault: '#d1d5db',       // gray-300
+    flowEdgeConditional: '#d1d5db',
+    flowEdgeRetry: '#d1d5db',
     editorBackground: '#ffffff',
     editorLineHighlight: '#f8fafc',
     editorGutter: '#f1f5f9',

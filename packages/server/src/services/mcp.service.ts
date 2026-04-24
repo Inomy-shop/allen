@@ -127,16 +127,15 @@ export const MCP_PRESETS: McpPreset[] = [
   },
   {
     name: 'postgres',
-    description: 'PostgreSQL — schema management, queries, performance analysis',
+    description: 'PostgreSQL — read-only SQL queries (official MCP)',
     type: 'stdio',
     command: 'npx',
-    // The connection string is the LAST arg (appended at spawn from
-    // process.env.ALLEN_POSTGRES_CONNECTION_STRING). `--connection-string` is a
-    // fixed literal flag that precedes the argKeys expansion.
-    args: ['-y', '@henkey/postgres-mcp-server', '--connection-string'],
+    // Connection string is appended as the last positional arg at spawn time
+    // from process.env.ALLEN_POSTGRES_CONNECTION_STRING (via argKeys).
+    args: ['-y', '@modelcontextprotocol/server-postgres'],
     envKeys: [],
     argKeys: ['POSTGRES_CONNECTION_STRING'],
-    docsUrl: 'https://github.com/HenkDz/postgresql-mcp-server',
+    docsUrl: 'https://github.com/modelcontextprotocol/servers-archived/tree/main/src/postgres',
   },
   {
     name: 'mongodb',

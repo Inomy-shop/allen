@@ -19,12 +19,14 @@
     --color-accent-yellow: 255 170 0;
     --color-accent-purple: 168 85 247;
     --color-terminal-chrome: 107 114 128;
-    /* Three edge types get three distinct hues — blue (forward) /
-       violet (conditional) / amber (retry). Retry additionally draws
-       dashed for an extra semantic marker. */
-    --color-flow-edge-default: 96 165 250;       /* #60a5fa — sky blue */
-    --color-flow-edge-conditional: 192 132 252;  /* #c084fc — violet */
-    --color-flow-edge-retry: 245 158 11;         /* #f59e0b — amber */
+    /* All edges share one muted gray so the graph reads as a calm
+       visual layer. Edges recede by default; selecting a node
+       promotes its connected edges to the theme accent. Type is still
+       distinguishable without color: conditional carries a label pill;
+       retry stays dashed. */
+    --color-flow-edge-default: 107 114 128;      /* #6b7280 — gray-500 */
+    --color-flow-edge-conditional: 107 114 128;  /* same gray, distinguished by label */
+    --color-flow-edge-retry: 107 114 128;        /* same gray, distinguished by dash */
     --color-editor-background: 20 22 32;
     --color-editor-line-highlight: 26 29 43;
     --color-editor-gutter: 15 17 23;
