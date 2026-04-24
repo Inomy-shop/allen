@@ -520,64 +520,95 @@ nodes:
   # PHASE 2 — IMPLEMENTATION
   # ══════════════════════════════════════════════════════════════════════
 
+  # Dedicated workspace-creation node — runs ONCE before implement on
+  # the forward path out of planning. The engineering-lead used to
+  # create the workspace inline in its prompt, but that coupled plan
+  # dispatch to workspace setup and caused duplicate worktrees on
+  # retry. Now the code-node creates the worktree exactly once; retries
+  # back to `implement` skip this node and reuse the existing
+  # worktree_path carried in state.
+  create_workspace:
+    type: code
+    function: create-workspace
+    config:
+      wait_for_setup: true
+      timeout_sec: 600
+    outputs:
+      workspace_id: "Internal Allen workspace identifier."
+      worktree_path: "Absolute path to the isolated git worktree the specialists will work inside."
+      branch: "Generated branch name (e.g. allen/feature-<stamp>)."
+      branch_name: "Alias of `branch` — downstream nodes read {{branch_name}}."
+      base_branch: "Branch the worktree was cut from (repo default)."
+      status: "Workspace setup status — 'active' or 'running' on success."
+      repo_path: "Alias of worktree_path — overwrites the input repo_path so downstream agents operate inside the worktree."
+
   implement:
     agent: engineering-lead
     # Resume across retries: qa-fail / validator-fail / code-review-fail
     # each loops back here with retry_context. The engineering-lead's
     # session persists across those retries so it remembers the plan it
-    # produced, the workspace it created, and which specialists ran.
-    # That lets retries act as "fix what broke" rather than "re-do
-    # everything from scratch".
+    # produced and which specialists ran. That lets retries act as "fix
+    # what broke" rather than "re-do everything from scratch".
     resume_on_retry: true
-    # Single-node execution: engineering-lead operates in MODE 2 — it
-    # produces the file-level plan from the approved PRD/HLA/TDD, creates
-    # the workspace via the create_workspace MCP tool, dispatches
-    # specialists via spawn_agent, and collects their results. The
-    # previous plan_implementation + create_branch + develop pipeline is
-    # absorbed here because the lead owns end-to-end dispatch and must
-    # never let specialists work outside the isolated worktree.
+    # Single-node dispatch in MODE 2 — the workspace is already
+    # provisioned by the upstream `create_workspace` code node. The
+    # engineering-lead produces the file-level plan from the approved
+    # PRD/HLA/TDD, reuses the existing worktree, and dispatches
+    # specialists via spawn_agent. It MUST NOT call create_workspace.
     prompt: |
-      MODE: 2 (execute — plan + workspace + dispatch in one turn)
+      MODE: 2 (execute — plan + dispatch into an existing worktree)
 
       You are the Engineering Lead. Translate the approved design into a
-      file-level plan, create a workspace via create_workspace, and
-      dispatch specialists through spawn_agent to implement every change.
-      You DO NOT write code yourself.
+      file-level plan, then dispatch specialists through spawn_agent
+      inside the worktree that was ALREADY created upstream. You DO NOT
+      write code yourself.
 
       APPROVED PRD: {{prd_artifact_url}}
       APPROVED HLA: {{hla_artifact_url}}
       APPROVED TDD: {{tdd_artifact_url}}
-      REPO PATH:    {{repo_path}}
+      USER REQUEST: {{user_request}}
 
-      The URLs point to public markdown files — fetch each with WebFetch
-      or curl before reading. Do NOT guess from the URL alone.
+      EXISTING WORKSPACE (do NOT create a new one):
+        worktree_path: {{worktree_path}}
+        branch_name:   {{branch_name}}
+        workspace_id:  {{workspace_id}}
+        base_branch:   {{base_branch}}
+
+      The PRD/HLA/TDD URLs point to public markdown files — fetch each
+      with WebFetch or curl before reading. Do NOT guess from the URL alone.
 
       Step-by-step:
         1. Fetch + read PRD, HLA, TDD.
-        2. Scan the target repo (get_repo_context, Read the files TDD touches).
+        2. Scan the worktree ({{worktree_path}}) — get_repo_context, Read
+           the files TDD touches. Treat the worktree as the target
+           repo; it's an isolated clone.
         3. Build the plan (see your MODE 2 contract — file entries with
            specialist hints, validation commands, risks).
-        4. Call create_workspace(repo_path="{{repo_path}}", branch_prefix="feature",
-           task_summary="{{user_request}}") ONCE. Capture the worktree_path.
-        5. For each specialist group, spawn_agent with repo_path=<worktree_path>
-           and the plan slice in the prompt. Parallelise safe batches; serialise
-           conflicts.
-        6. Wait on each batch, retry each specialist once on failure, aggregate
-           files_changed.
-        7. Emit the MODE 2 JSON output block including implementation_plan_json,
-           worktree_path, branch_name, workspace_id, specialists_used,
-           batches, files_changed, any_failures, failure_details.
+        4. DO NOT call create_workspace. The worktree above already
+           exists — all specialists must work inside {{worktree_path}}.
+        5. For each specialist group, spawn_agent with repo_path={{worktree_path}}
+           and the plan slice in the prompt. Parallelise safe batches;
+           serialise conflicts.
+        6. Wait on each batch, retry each specialist once on failure,
+           aggregate files_changed.
+        7. Emit the MODE 2 JSON output block including
+           implementation_plan_json, specialists_used, batches,
+           files_changed, any_failures, failure_details. Do NOT re-emit
+           worktree_path / branch_name / workspace_id — the upstream
+           create_workspace node already put those in state; downstream
+           nodes read them directly from there.
 
       HARD RULES:
         - NEVER edit files yourself. Use spawn_agent for every change.
-        - ALWAYS pass repo_path=<worktree_path> to every spawn_agent call.
-        - NEVER skip create_workspace — specialists must not touch the
-          registered repo directly.
+        - ALWAYS pass repo_path={{worktree_path}} to every spawn_agent call.
+        - NEVER call create_workspace — the workspace is already provisioned.
+
+      {{#if retry_context}}
+      RETRY FEEDBACK:
+      {{retry_context}}
+      {{/if}}
     outputs:
       implementation_plan_json: "The full implementation plan JSON — auto-captured as implementation_plan.json."
-      worktree_path: "Absolute path to the isolated git worktree the specialists worked inside."
-      branch_name: "Feature branch name."
-      workspace_id: "Internal Allen workspace identifier."
       files_changed: "List of all files the specialists touched."
       any_failures: "Boolean — true if any specialist returned a non-recoverable failure."
       failure_details: "Structured details per failing specialist. Empty on success."
@@ -866,13 +897,17 @@ edges:
   - { from: audit_hla, to: produce_hla, condition: "hla_audit_verdict == 'revise'", max_retries: 2, retry_context: "HLA audit feedback:\n{{hla_audit_rationale}}\n{{hla_audit_issues}}" }
   - { from: audit_hla, to: escalation_review, condition: "hla_audit_verdict == 'escalate'" }
   - { from: produce_tdd, to: audit_tdd }
-  - { from: audit_tdd, to: implement,          condition: "tdd_audit_verdict == 'approve' AND trusted_mode == true" }
+  # Forward paths to implementation go through `create_workspace` so the
+  # worktree is provisioned exactly once per run. Retry edges loop back
+  # directly to `implement` (see below) and reuse the existing worktree.
+  - { from: audit_tdd, to: create_workspace,   condition: "tdd_audit_verdict == 'approve' AND trusted_mode == true" }
   - { from: audit_tdd, to: plan_approval_gate, condition: "tdd_audit_verdict == 'approve' AND trusted_mode != true" }
   - { from: audit_tdd, to: produce_tdd, condition: "tdd_audit_verdict == 'revise'", max_retries: 2, retry_context: "TDD audit feedback:\n{{tdd_audit_rationale}}\n{{tdd_audit_issues}}" }
   - { from: audit_tdd, to: escalation_review, condition: "tdd_audit_verdict == 'escalate'" }
   # Gate routing — the user picks approve / request_changes / reject.
   # request_changes loops back to the producer for the chosen scope.
-  - { from: plan_approval_gate, to: implement, condition: "decision == 'approve'" }
+  - { from: plan_approval_gate, to: create_workspace, condition: "decision == 'approve'" }
+  - { from: create_workspace, to: implement }
   - { from: plan_approval_gate, to: END, condition: "decision == 'reject'" }
   - { from: plan_approval_gate, to: produce_prd, condition: "decision == 'request_changes' AND scope == 'requirements'", max_retries: 2, retry_context: "Human feedback on PRD:\n{{feedback}}" }
   - { from: plan_approval_gate, to: produce_hla, condition: "decision == 'request_changes' AND scope == 'architecture'", max_retries: 2, retry_context: "Human feedback on HLA:\n{{feedback}}" }
@@ -940,16 +975,20 @@ edges:
   - { from: escalation_review, to: produce_tdd, condition: "decision == 'retry_with_feedback' AND __retry_exhausted_from == 'plan_approval_gate' AND scope == 'technical_design'", retry_context: "Human intervened on plan-approval request_changes exhaustion. Feedback:\n{{feedback}}" }
   - { from: escalation_review, to: produce_prd, condition: "decision == 'retry_with_feedback' AND __retry_exhausted_from == 'plan_approval_gate' AND scope == 'all'", retry_context: "Human intervened on plan-approval request_changes exhaustion (all scope). Feedback:\n{{feedback}}" }
 
-  # override_and_continue — advance past the failing stage.
+  # override_and_continue — advance past the failing stage. Paths that
+  # reach implementation for the FIRST time go through create_workspace
+  # so the worktree is provisioned; paths that have already implemented
+  # (qa / validator / review overrides) skip straight to their next
+  # node and reuse the existing worktree.
   - { from: escalation_review, to: produce_hla,             condition: "decision == 'override_and_continue' AND (prd_audit_verdict == 'escalate' OR prd_audit_verdict == 'revise')" }
   - { from: escalation_review, to: produce_tdd,             condition: "decision == 'override_and_continue' AND (hla_audit_verdict == 'escalate' OR hla_audit_verdict == 'revise')" }
-  - { from: escalation_review, to: implement,               condition: "decision == 'override_and_continue' AND (tdd_audit_verdict == 'escalate' OR tdd_audit_verdict == 'revise') AND trusted_mode == true" }
+  - { from: escalation_review, to: create_workspace,        condition: "decision == 'override_and_continue' AND (tdd_audit_verdict == 'escalate' OR tdd_audit_verdict == 'revise') AND trusted_mode == true" }
   - { from: escalation_review, to: plan_approval_gate,      condition: "decision == 'override_and_continue' AND (tdd_audit_verdict == 'escalate' OR tdd_audit_verdict == 'revise') AND trusted_mode != true" }
   - { from: escalation_review, to: implementation_validator, condition: "decision == 'override_and_continue' AND (qa_verdict == 'escalate' OR qa_verdict == 'fail')" }
   - { from: escalation_review, to: update_docs,             condition: "decision == 'override_and_continue' AND __retry_exhausted_from == 'implementation_validator'" }
   - { from: escalation_review, to: open_pr,                 condition: "decision == 'override_and_continue' AND review_verdict == 'REQUEST_CHANGES'" }
   # For plan-approval and clarify exhaustions, overriding advances the
-  # happy path (implement / produce_prd respectively). The clarify
-  # override says "just try with what we have".
-  - { from: escalation_review, to: implement,   condition: "decision == 'override_and_continue' AND __retry_exhausted_from == 'plan_approval_gate'" }
-  - { from: escalation_review, to: produce_prd, condition: "decision == 'override_and_continue' AND __retry_exhausted_from == 'clarify_human'" }
+  # happy path (create_workspace → implement / produce_prd respectively).
+  # The clarify override says "just try with what we have".
+  - { from: escalation_review, to: create_workspace, condition: "decision == 'override_and_continue' AND __retry_exhausted_from == 'plan_approval_gate'" }
+  - { from: escalation_review, to: produce_prd,      condition: "decision == 'override_and_continue' AND __retry_exhausted_from == 'clarify_human'" }
