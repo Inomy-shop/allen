@@ -15,6 +15,32 @@ import { buildRepoContextBlock } from './repo-context-builder.js';
 import { AGENT_FALLBACK_CWD } from './chat-providers.js';
 import { MCP_SERVER_NAME, normalizeModelAlias, ARTIFACTS_GUIDANCE } from '@allen/engine';
 
+/**
+ * Claude-spawn-only system-prompt notice. Appended (via appendSystemPrompt
+ * or inlined into customSystemPrompt) to every Claude-path spawn so the
+ * model doesn't emit `ToolSearch` calls out of habit from the interactive
+ * Claude Code harness. `ToolSearch` has no handler in the SDK/CLI spawn
+ * environment — emitting it used to stall the stream for ~15 min until
+ * Anthropic's idle watchdog fired. Not applied on the Codex path (Codex
+ * doesn't emit this pattern and has its own prompt conventions).
+ */
+const CLAUDE_SPAWN_NOTICE = `
+## Execution environment
+
+You are running as a spawned agent via the Claude CLI / SDK, NOT the
+interactive Claude Code harness. Therefore:
+
+- Every MCP tool is already loaded eagerly — call the tool you want
+  directly by its full name (for example \`mcp__allen__*\`,
+  \`mcp__pipeline-api-server__*\`, \`mcp__documentdb__*\`, \`mcp__postgres__*\`,
+  \`mcp__opensearch__*\`, \`mcp__oxylabs-server__*\`, \`mcp__aws__*\`).
+- The \`ToolSearch\` tool is NOT available in this environment. Never
+  emit a \`ToolSearch\` call — it has no handler here and emitting it
+  will stall the run until the idle watchdog fires.
+- If you're unsure a tool exists, just attempt the call — an
+  unknown-tool error surfaces in seconds, whereas \`ToolSearch\` hangs.
+`.trim();
+
 /** Resolve cwd for agent/chat spawns. Never falls back to process.cwd() —
  * we don't want agents running inside the server's own source tree. */
 function resolveAgentCwd(...candidates: Array<string | undefined>): string {
@@ -1018,7 +1044,9 @@ async function runSpawnInBackground(
         // ALLEN_SYSTEM_PROMPT_MODE: 'append' (default) preserves Claude
         // Code's built-in agentic scaffolding; 'custom' reverts to the old
         // full-replacement behavior. Matches node-executor.ts wiring.
-        const systemPromptBody = `${(role.system as string) ?? ''}${repoContextBlock}${workspaceConstraint}${ARTIFACTS_GUIDANCE}`;
+        // CLAUDE_SPAWN_NOTICE warns the model that ToolSearch isn't wired
+        // here (claude-cli only — codex path above has its own prompt).
+        const systemPromptBody = `${CLAUDE_SPAWN_NOTICE}\n\n${(role.system as string) ?? ''}${repoContextBlock}${workspaceConstraint}${ARTIFACTS_GUIDANCE}`;
         if (process.env.ALLEN_SYSTEM_PROMPT_MODE === 'custom') sdkOptions.customSystemPrompt = systemPromptBody;
         else sdkOptions.appendSystemPrompt = systemPromptBody;
       }
@@ -1040,11 +1068,13 @@ async function runSpawnInBackground(
           agent: {
             name: agentName,
             description: (role as any)?.description,
-            // Mirror the SDK path — ARTIFACTS_GUIDANCE must be part of the
-            // system prompt for the CLI branch too, otherwise agents running
-            // with ALLEN_AGENT_EXECUTION_MODE=cli never see the instruction
-            // to save artifacts via allen_save_artifact.
-            system: `${(role.system as string) ?? ''}${repoContextBlock}${workspaceConstraint}${ARTIFACTS_GUIDANCE}`,
+            // Mirror the SDK path — ARTIFACTS_GUIDANCE and CLAUDE_SPAWN_NOTICE
+            // must be part of the system prompt for the CLI branch too.
+            // Without ARTIFACTS_GUIDANCE, CLI-mode agents never see the
+            // instruction to save via allen_save_artifact. Without
+            // CLAUDE_SPAWN_NOTICE, CLI-mode agents emit `ToolSearch` out of
+            // harness habit and stall their stream for ~15 min.
+            system: `${CLAUDE_SPAWN_NOTICE}\n\n${(role.system as string) ?? ''}${repoContextBlock}${workspaceConstraint}${ARTIFACTS_GUIDANCE}`,
             model: sdkOptions.model as string | undefined,
             tools: Array.isArray((role as any)?.tools) ? (role as any).tools : undefined,
           },
@@ -1062,7 +1092,43 @@ async function runSpawnInBackground(
         msgStream = query({ prompt, options: sdkOptions as any });
       }
 
-      for await (const msg of msgStream) {
+      // Client-side idle watchdog (claude-cli path only). Claude's server-
+      // side stream-idle timeout is ~15 min, which is too generous when a
+      // run stalls. We race every `next()` against a setTimeout whose
+      // threshold depends on whether we've already seen a `ToolSearch`
+      // tool_use in this stream:
+      //   - Default: 5 min. Longer than any legit single tool call
+      //     should run, so false positives are rare.
+      //   - After ToolSearch: 1 min. ToolSearch has no handler in the
+      //     spawn env, so the stream is very likely to stall from here
+      //     on — give it a short grace window (in case the model
+      //     recovers on its own) before aborting. 1 min still beats
+      //     Anthropic's 15-min server-side watchdog by a wide margin.
+      // On timeout we abort the controller and let the existing catch/
+      // retry logic at `isTimeout` take over.
+      const STREAM_IDLE_MS = 300_000; // 5 min — general stall
+      const STREAM_IDLE_AFTER_TOOLSEARCH_MS = 60_000; // 1 min — after ToolSearch
+      let toolSearchSeen = false;
+      const streamIterator = (msgStream as AsyncIterable<any>)[Symbol.asyncIterator]();
+      streamLoop: while (true) {
+        const currentIdleMs = toolSearchSeen ? STREAM_IDLE_AFTER_TOOLSEARCH_MS : STREAM_IDLE_MS;
+        const raced = await Promise.race([
+          streamIterator.next().then(r => ({ kind: 'msg' as const, result: r })),
+          new Promise<{ kind: 'timeout' }>(resolve =>
+            setTimeout(() => resolve({ kind: 'timeout' }), currentIdleMs),
+          ),
+        ]);
+        if (raced.kind === 'timeout') {
+          const reason = toolSearchSeen ? 'post-ToolSearch' : 'general';
+          const warn = `[spawn:${agentName}] claude-cli stream idle >${currentIdleMs / 1000}s (${reason}) — aborting`;
+          console.warn(warn);
+          if (onEvent) onEvent('spawn_activity', { executionId, agent: agentName, type: 'warn', content: warn });
+          abortController.abort(new Error('Stream idle (client-side watchdog)'));
+          throw new Error(`claude-cli stream idle timeout (${currentIdleMs / 1000}s, ${reason})`);
+        }
+        if (raced.result.done) break;
+        const msg = raced.result.value;
+
         if ('session_id' in msg && msg.session_id) sessionId = msg.session_id as string;
 
         if (msg.type === 'assistant') {
@@ -1075,6 +1141,23 @@ async function runSpawnInBackground(
           }
           for (const block of blocks) {
             if (block.type === 'tool_use' && block.name) {
+              // Guard: Claude sometimes emits `ToolSearch` out of habit
+              // from the interactive harness. Spawned agents don't have
+              // that tool registered, so the stream would stall until
+              // Anthropic's 15-min idle watchdog. Rather than abort
+              // immediately, mark the stream as post-ToolSearch so the
+              // watchdog above uses the shorter 1-min threshold. This
+              // gives a small grace window in case the model recovers
+              // on its own, while still cutting total wait from ~15 min
+              // to ≤1 min. The existing isTimeout retry path (the
+              // watchdog throws an error containing "timeout") then
+              // re-runs with CLAUDE_SPAWN_NOTICE in force.
+              if (block.name === 'ToolSearch' && !toolSearchSeen) {
+                const warn = `[spawn:${agentName}] model emitted ToolSearch — will abort in ${STREAM_IDLE_AFTER_TOOLSEARCH_MS / 1000}s if stream stays idle`;
+                console.warn(warn);
+                if (onEvent) onEvent('spawn_activity', { executionId, agent: agentName, type: 'warn', content: warn });
+                toolSearchSeen = true;
+              }
               const args = (block.input as Record<string, unknown>) ?? {};
               const desc = toolDescription(block.name, args);
               const toolUseId = block.id ?? '';
