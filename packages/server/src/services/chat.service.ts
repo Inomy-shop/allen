@@ -482,6 +482,26 @@ export class ChatService {
   isStreaming(sessionId: string): boolean { return activeQueries.has(sessionId); }
 
   /**
+   * Broadcast an SSE event to every tab currently subscribed to this
+   * session's stream. Used by the /agent-answer endpoint so a user who
+   * answers an ask_user question in one tab instantly clears the popup
+   * in their other tabs — without this, the ask_user tool's poll loop
+   * is the only thing that fires `user_answer`, and its interval can
+   * grow to 30s between checks, leaving sibling tabs stuck on the
+   * question for that long.
+   *
+   * Returns the number of listeners the event was delivered to. 0 means
+   * the session has no active query (nothing to broadcast to); the caller
+   * can still rely on the DB write being visible via the poll loop.
+   */
+  broadcastToSession(sessionId: string, event: string, data: unknown): number {
+    const entry = activeQueries.get(sessionId);
+    if (!entry) return 0;
+    broadcastToListeners(entry, event, data);
+    return entry.listeners.size;
+  }
+
+  /**
    * Run LLM via Anthropic Messages API with native tool calling.
    */
   private async runLLM(sessionId: string, assistantMsgId: string, content: string, entry: ActiveQuery, agent?: string, retryCount = 0): Promise<void> {

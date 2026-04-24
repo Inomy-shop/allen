@@ -396,6 +396,13 @@ export function chatRoutes(db: Db): Router {
         },
       );
 
+      // Fan out to every other tab subscribed to this session's stream so
+      // their ask_user popup clears immediately. The ask_user tool's poll
+      // loop will still fire its own `user_answer` when it detects the
+      // DB change, but its interval grows to 30s — too slow for a good
+      // multi-tab experience.
+      chatService.broadcastToSession(sessionId, 'user_answer', { answer });
+
       res.json({ answered: true });
     } catch (err: unknown) {
       res.status(500).json({ error: (err as Error).message });
