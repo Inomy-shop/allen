@@ -16,9 +16,24 @@
 import type { Collection, Db } from 'mongodb';
 import cron from 'node-cron';
 import { CronExpressionParser } from 'cron-parser';
+import { signAccessToken } from '../auth/jwt.js';
 import type { CronJob, CronRun, CronRunStatus, SystemAction } from './cron.types.js';
 
 const PORT = parseInt(process.env.PORT ?? '4000', 10);
+
+export function buildInternalApiHeaders(): Record<string, string> {
+  const token = signAccessToken({
+    sub: 'cron-system',
+    email: 'cron@internal.local',
+    role: 'admin',
+    mustResetPassword: false,
+  });
+
+  return {
+    'Content-Type': 'application/json',
+    Authorization: `Bearer ${token}`,
+  };
+}
 
 export class CronService {
   private db: Db;
@@ -233,7 +248,7 @@ export class CronService {
     const url = `http://localhost:${PORT}/api/chat/spawn-agent`;
     const res = await fetch(url, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: buildInternalApiHeaders(),
       body: JSON.stringify({
         agent_name: target.agentName,
         prompt: target.prompt,
@@ -261,7 +276,7 @@ export class CronService {
     const url = `http://localhost:${PORT}/api/executions`;
     const res = await fetch(url, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: buildInternalApiHeaders(),
       body: JSON.stringify({
         workflowId: String(wfDoc._id),
         input: target.workflowInput ?? {},
