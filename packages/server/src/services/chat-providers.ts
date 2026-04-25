@@ -221,11 +221,35 @@ export async function runCodexCLI(
     resumeSafeArgs.push(flag, kv);
   }
 
+  // Per-call MCP env overrides for the Allen MCP. Codex stores the MCP
+  // entry from `codex mcp add ...` with only the env vars passed at
+  // registration time (ALLEN_API_URL, JWT_ACCESS_SECRET) — codex does
+  // NOT forward its own runtime env to MCP children, despite the
+  // earlier comment claiming otherwise. Without per-call overrides,
+  // `allen_save_artifact` returns "ALLEN_ARTIFACT_ROOT_TYPE / ROOT_ID
+  // env vars not set". Codex accepts dotted-key TOML overrides via -c,
+  // including for MCP env values, so we inject the chat-scope vars here
+  // on every codex exec.
+  const mcpEnvOverrides: string[] = [];
+  if (chatSessionId) {
+    mcpEnvOverrides.push(
+      '-c', `mcp_servers.${MCP_SERVER_NAME}.env.ALLEN_ARTIFACT_ROOT_TYPE="chat"`,
+      '-c', `mcp_servers.${MCP_SERVER_NAME}.env.ALLEN_ARTIFACT_ROOT_ID="${chatSessionId}"`,
+      '-c', `mcp_servers.${MCP_SERVER_NAME}.env.ALLEN_CHAT_SESSION_ID="${chatSessionId}"`,
+      // Carry the existing required vars too — the override is a full
+      // dict replacement in some codex versions, so re-state them to be
+      // safe across CLI variants.
+      '-c', `mcp_servers.${MCP_SERVER_NAME}.env.ALLEN_API_URL="http://localhost:${process.env.PORT ?? '4023'}"`,
+      '-c', `mcp_servers.${MCP_SERVER_NAME}.env.JWT_ACCESS_SECRET="${process.env.JWT_ACCESS_SECRET ?? ''}"`,
+    );
+  }
+
   const args: string[] = ['exec'];
   if (resumeSessionId) {
     args.push('resume', '--json', '--dangerously-bypass-approvals-and-sandbox', '--skip-git-repo-check');
     // Apply resume-safe overrides (effort only) BEFORE the session id + prompt.
     if (resumeSafeArgs.length > 0) args.push(...resumeSafeArgs);
+    if (mcpEnvOverrides.length > 0) args.push(...mcpEnvOverrides);
     args.push('--', resumeSessionId, prompt);
   } else {
     args.push('--json', '--dangerously-bypass-approvals-and-sandbox', '--skip-git-repo-check');
@@ -234,6 +258,7 @@ export async function runCodexCLI(
     } else if (model && model !== 'default') {
       args.push('-c', `model="${model}"`);
     }
+    if (mcpEnvOverrides.length > 0) args.push(...mcpEnvOverrides);
     args.push(prompt);
   }
 
@@ -259,6 +284,11 @@ export async function runCodexCLI(
           ? {
               ALLEN_ARTIFACT_ROOT_TYPE: 'chat',
               ALLEN_ARTIFACT_ROOT_ID: chatSessionId,
+              // Session marker — Allen MCP forwards this as
+              // x-allen-chat-session-id on outbound /api/chat/* calls so
+              // the server-side tool dispatcher can resolve the right
+              // chat context instead of probing getAnyActiveSession().
+              ALLEN_CHAT_SESSION_ID: chatSessionId,
             }
           : {}),
       },

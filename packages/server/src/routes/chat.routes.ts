@@ -18,6 +18,24 @@ export function chatRoutes(db: Db): Router {
     res.json({ cancelled, sessionId });
   });
 
+  // Helper — pull the Allen MCP's x-allen-* context headers off an
+  // incoming tool-dispatch request. The MCP subprocess sets these from
+  // its own env (ALLEN_CHAT_SESSION_ID, etc.) so the server can route
+  // tool calls to the exact chat / spawn context that spawned this MCP,
+  // instead of probing a global "any active" map. Missing headers are
+  // fine; tools fall back to their historic lookup behaviour.
+  const readToolContext = (req: Request) => {
+    const hdr = (name: string) => {
+      const v = req.header(name);
+      return typeof v === 'string' && v.length > 0 ? v : undefined;
+    };
+    return {
+      chatSessionId: hdr('x-allen-chat-session-id'),
+      parentExecutionId: hdr('x-allen-parent-execution-id'),
+      rootExecutionId: hdr('x-allen-root-execution-id'),
+    };
+  };
+
   // POST /api/chat/spawn-agent — Execute spawn_agent tool via API (used by Allen MCP server)
   router.post('/spawn-agent', async (req: Request, res: Response) => {
     try {
@@ -34,7 +52,7 @@ export function chatRoutes(db: Db): Router {
       const result = await executeChatTool('spawn_agent', {
         agent_name, prompt, repo_path, session_id,
         parent_execution_id, parent_caller, root_execution_id,
-      }, db);
+      }, db, readToolContext(req));
       res.json(result);
     } catch (err: unknown) {
       res.status(500).json({ error: (err as Error).message });
@@ -52,7 +70,7 @@ export function chatRoutes(db: Db): Router {
     try {
       const toolName = param(req, 'toolName');
       const args = (req.body ?? {}) as Record<string, unknown>;
-      const result = await executeChatTool(toolName, args, db);
+      const result = await executeChatTool(toolName, args, db, readToolContext(req));
       res.json(result);
     } catch (err: unknown) {
       res.status(500).json({ error: (err as Error).message });
@@ -63,17 +81,18 @@ export function chatRoutes(db: Db): Router {
   router.post('/delegate', async (req: Request, res: Response) => {
     try {
       const { tool, agent_name, task, context, conversation_id, answer } = req.body;
+      const ctx = readToolContext(req);
 
       // Route to the right tool
       if (tool === 'answer_delegator' || tool === 'answer_question') {
         if (!conversation_id || !answer) return res.status(400).json({ error: 'conversation_id and answer are required' });
-        const result = await executeChatTool('answer_delegator', { conversation_id, answer }, db);
+        const result = await executeChatTool('answer_delegator', { conversation_id, answer }, db, ctx);
         return res.json(result);
       }
 
       // Default: delegate_to_agent
       if (!agent_name || !task) return res.status(400).json({ error: 'agent_name and task are required' });
-      const result = await executeChatTool('delegate_to_agent', { agent_name, task, context, conversation_id }, db);
+      const result = await executeChatTool('delegate_to_agent', { agent_name, task, context, conversation_id }, db, ctx);
       res.json(result);
     } catch (err: unknown) {
       res.status(500).json({ error: (err as Error).message });
@@ -315,7 +334,7 @@ export function chatRoutes(db: Db): Router {
       const { question, conversation_id } = req.body;
       if (!question) return res.status(400).json({ error: 'question is required' });
       // conversation_id can come from the request or from the active session context
-      const result = await executeChatTool('ask_delegator', { question, _conversation_id: conversation_id }, db);
+      const result = await executeChatTool('ask_delegator', { question, _conversation_id: conversation_id }, db, readToolContext(req));
       res.json(result);
     } catch (err: unknown) {
       res.status(500).json({ error: (err as Error).message });

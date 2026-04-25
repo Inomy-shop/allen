@@ -122,10 +122,38 @@ export function getActiveSession(sessionId: string): ActiveSessionContext | unde
   return activeSessions.get(sessionId);
 }
 
-/** Find any active session (for API-triggered delegations that don't know the session) */
+/**
+ * Legacy helper kept as a fallback for callers that don't yet thread an
+ * explicit context. Safe only when ≤1 chat is active at a time — with
+ * multiple concurrent chats it returns whichever Map entry iterates
+ * first, which can bleed SSE / artifact / ask_user state across
+ * sessions. New code should call `resolveActiveSession(context)`
+ * instead, supplying the context plumbed through from the MCP header.
+ */
 export function getAnyActiveSession(): ActiveSessionContext | undefined {
+  if (activeSessions.size > 1) {
+    const keys = Array.from(activeSessions.keys()).map(k => k.slice(0, 8)).join(', ');
+    console.warn(`[chat-tools] getAnyActiveSession() called while ${activeSessions.size} sessions are active (${keys}) — result is the Map's first entry and may be wrong. Caller should pass an explicit ChatToolContext so we can resolve by chatSessionId instead.`);
+  }
   for (const ctx of activeSessions.values()) return ctx;
   return undefined;
+}
+
+/**
+ * Resolve the active session for a tool call. Prefers the explicit
+ * `context.chatSessionId` threaded through from the MCP subprocess's
+ * `x-allen-chat-session-id` header; falls back to the legacy "any
+ * active" probe only when the caller didn't supply a context (direct
+ * in-process callers that haven't been migrated yet). This is the
+ * seam that unblocks parallel-chat isolation — every site that used
+ * to call `getAnyActiveSession()` should call this instead.
+ */
+function resolveActiveSession(context?: ChatToolContext): ActiveSessionContext | undefined {
+  if (context?.chatSessionId) {
+    const match = getActiveSession(context.chatSessionId);
+    if (match) return match;
+  }
+  return getAnyActiveSession();
 }
 
 // ── Process Registry — track PIDs for agent executions so they can be killed on cancel ──
@@ -204,13 +232,33 @@ export async function waitForBackgroundTasks(sessionId: string, maxWaitMs = 3_60
 
 // ── Tool Definition Shape ──
 
+/**
+ * Context threaded through to every tool execution so tools can look up
+ * the exact chat / spawn-execution they belong to — instead of probing
+ * `getAnyActiveSession()` which grabs whichever Map entry iterates first.
+ *
+ * The MCP subprocess sets env vars (ALLEN_CHAT_SESSION_ID,
+ * ALLEN_PARENT_EXECUTION_ID, ALLEN_ROOT_EXECUTION_ID) and forwards them
+ * as `x-allen-*` headers. The route dispatcher reads the headers and
+ * passes them into `executeChatTool` → each tool's `execute`.
+ *
+ * All fields optional to stay backwards-compatible with direct callers
+ * (linear.service, internal tests) that don't have the MCP header
+ * context. When absent, tools fall back to their historic behaviour.
+ */
+export interface ChatToolContext {
+  chatSessionId?: string;
+  parentExecutionId?: string;
+  rootExecutionId?: string;
+}
+
 export interface ChatTool {
   name: string;
   description: string;
   inputSchema: Record<string, unknown>;
   /** If true, this tool mutates state (requires approval in guided/manual mode) */
   destructive?: boolean;
-  execute: (args: Record<string, unknown>, db: Db) => Promise<Record<string, unknown>>;
+  execute: (args: Record<string, unknown>, db: Db, context?: ChatToolContext) => Promise<Record<string, unknown>>;
 }
 
 /** Tools that mutate state — require approval in guided mode */
@@ -584,7 +632,7 @@ const spawnAgent: ChatTool = {
     },
     required: ['agent_name', 'prompt'],
   },
-  async execute(args, db) {
+  async execute(args, db, context) {
     const agentName = args.agent_name as string;
     const prompt = args.prompt as string;
     const resumeSession = args.session_id as string | undefined;
@@ -602,7 +650,7 @@ const spawnAgent: ChatTool = {
     // not a lock.
     let repoPath = args.repo_path as string | undefined;
     if (!repoPath) {
-      const activeCtx = getAnyActiveSession();
+      const activeCtx = resolveActiveSession(context);
       repoPath = activeCtx?.resolvedCwd ?? await resolveWorkspacePath(db, activeCtx?.chatSessionId) ?? undefined;
     }
     if (!repoPath && typeof role.sourceRepoPath === 'string' && role.sourceRepoPath) {
@@ -611,7 +659,7 @@ const spawnAgent: ChatTool = {
 
     const { randomUUID } = await import('node:crypto');
     const executionId = randomUUID();
-    const activeCtxForMeta = getAnyActiveSession();
+    const activeCtxForMeta = resolveActiveSession(context);
 
     // ── Spawn-tree linkage (Phase 1 of the workflow-spawn visibility plan) ──
     //
@@ -725,7 +773,7 @@ const spawnAgent: ChatTool = {
       spawnDepth,
       artifactRootType,
       artifactRootId,
-    }).catch(() => {});
+    }, 1, context).catch(() => {});
 
     return {
       agent_name: agentName,
@@ -765,8 +813,13 @@ async function runSpawnInBackground(
    *  execution (agent resume). Threaded into trace inserts so the execution
    *  detail page can show per-attempt tabs. */
   baseAttempt: number = 1,
+  /** Tool-call context forwarded from the caller. When the spawn is
+   *  initiated via the MCP dispatcher, this carries the x-allen-chat-
+   *  session-id header so we attach SSE / artifact state to the right
+   *  chat instead of probing the global "any active" map. */
+  context?: ChatToolContext,
 ): Promise<void> {
-  const activeCtx = getAnyActiveSession();
+  const activeCtx = resolveActiveSession(context);
   if (activeCtx) activeCtx.pendingBackgroundTasks++;
   const onEvent = activeCtx?.broadcastEvent;
   const startMs = Date.now();
@@ -936,14 +989,35 @@ async function runSpawnInBackground(
         ALLEN_ARTIFACT_AGENT_NAME: agentName,
         ALLEN_ARTIFACT_AGENT_EXECUTION_ID: executionId,
         ALLEN_ARTIFACT_PARENT_ID: executionId,
+        // Session marker so callbacks from this spawn's MCP subprocess
+        // carry x-allen-chat-session-id on outbound /api/chat/* calls.
+        // Only set when the spawn tree is rooted in a chat; omitted for
+        // workflow-initiated spawns so the server doesn't mis-route
+        // them to a chat context.
+        ...(activeCtx?.chatSessionId ? { ALLEN_CHAT_SESSION_ID: activeCtx.chatSessionId } : {}),
       };
+
+      // Per-call MCP env overrides — codex doesn't forward parent env
+      // to MCP children, so the codexSpawnEnv values above never reach
+      // the Allen MCP. Inject them via -c TOML overrides instead.
+      const mcpEnvOverrides: string[] = [];
+      for (const [k, v] of Object.entries(codexSpawnEnv)) {
+        mcpEnvOverrides.push('-c', `mcp_servers.${MCP_SERVER_NAME}.env.${k}="${v.replace(/"/g, '\\"')}"`);
+      }
+      mcpEnvOverrides.push(
+        '-c', `mcp_servers.${MCP_SERVER_NAME}.env.ALLEN_API_URL="http://localhost:${process.env.PORT ?? '4023'}"`,
+        '-c', `mcp_servers.${MCP_SERVER_NAME}.env.JWT_ACCESS_SECRET="${process.env.JWT_ACCESS_SECRET ?? ''}"`,
+      );
 
       const args: string[] = ['exec'];
       if (currentResumeSession) {
-        args.push('resume', '--json', '--dangerously-bypass-approvals-and-sandbox', '--skip-git-repo-check', '--', currentResumeSession, prompt);
+        args.push('resume', '--json', '--dangerously-bypass-approvals-and-sandbox', '--skip-git-repo-check');
+        if (mcpEnvOverrides.length > 0) args.push(...mcpEnvOverrides);
+        args.push('--', currentResumeSession, prompt);
       } else {
         args.push('--json', '--dangerously-bypass-approvals-and-sandbox', '--skip-git-repo-check');
         if (model) args.push('-c', `model="${model}"`);
+        if (mcpEnvOverrides.length > 0) args.push(...mcpEnvOverrides);
         args.push(`${(role.system as string) ?? ''}${repoContextBlock}${workspaceConstraint}${ARTIFACTS_GUIDANCE}\n\n${prompt}`);
       }
 
@@ -1071,6 +1145,8 @@ async function runSpawnInBackground(
         ALLEN_ARTIFACT_AGENT_NAME: agentName,
         ALLEN_ARTIFACT_AGENT_EXECUTION_ID: executionId,
         ALLEN_ARTIFACT_PARENT_ID: executionId,
+        // Session marker — see codex spawn path above for rationale.
+        ...(activeCtx?.chatSessionId ? { ALLEN_CHAT_SESSION_ID: activeCtx.chatSessionId } : {}),
       };
 
       // Pass the spawn context directly into the MCP config loader so the
@@ -1922,10 +1998,10 @@ const saveLearning: ChatTool = {
     },
     required: ['content', 'type'],
   },
-  async execute(args, db) {
+  async execute(args, db, context) {
     const content = args.content as string;
     const type = args.type as string;
-    const activeCtx = getAnyActiveSession();
+    const activeCtx = resolveActiveSession(context);
     const agentName = activeCtx?.currentAgent;
 
     // Auto-scope to the active agent if one is selected
@@ -1987,7 +2063,7 @@ CRITICAL RULES:
     },
     required: ['agent_name', 'task'],
   },
-  async execute(args, db) {
+  async execute(args, db, toolContext) {
     const targetName = args.agent_name as string;
     const task = args.task as string;
     const context = (args.context as Record<string, unknown>) ?? {};
@@ -2000,7 +2076,7 @@ CRITICAL RULES:
       return { error: `Agent "${targetName}" not found. Use list_agents to see available agents.` };
     }
 
-    const activeCtx = getAnyActiveSession();
+    const activeCtx = resolveActiveSession(toolContext);
     const chatSessionId = activeCtx?.chatSessionId ?? 'unknown';
     const parentMessageId = activeCtx?.parentMessageId ?? 'unknown';
     const fromAgent = activeCtx?.currentAgent ?? 'assistant';
@@ -2234,11 +2310,11 @@ const answerQuestion: ChatTool = {
     },
     required: ['conversation_id', 'answer'],
   },
-  async execute(args, db) {
+  async execute(args, db, context) {
     const convId = args.conversation_id as string;
     const answer = args.answer as string;
     const conversationService = new AgentConversationService(db);
-    const activeCtx = getAnyActiveSession();
+    const activeCtx = resolveActiveSession(context);
     const fromAgent = activeCtx?.currentAgent ?? 'assistant';
 
     const conv = await conversationService.get(convId);
@@ -2267,9 +2343,9 @@ const askCaller: ChatTool = {
     },
     required: ['question'],
   },
-  async execute(args, db) {
+  async execute(args, db, context) {
     const question = args.question as string;
-    const activeCtx = getAnyActiveSession();
+    const activeCtx = resolveActiveSession(context);
     const currentAgent = activeCtx?.currentAgent ?? 'unknown';
     // Accept conversation_id from API route (when called via MCP → HTTP) or from active context
     const convId = (args._conversation_id as string) ?? activeCtx?.currentConversationId;
@@ -2311,9 +2387,9 @@ const askUser: ChatTool = {
     },
     required: ['question'],
   },
-  async execute(args, db) {
+  async execute(args, db, context) {
     const question = args.question as string;
-    const activeCtx = getAnyActiveSession();
+    const activeCtx = resolveActiveSession(context);
     const fromAgent = activeCtx?.currentAgent ?? 'assistant';
 
     if (!activeCtx) return { error: 'No active session context.' };
@@ -2503,18 +2579,58 @@ async function runAgentTurn(
       // races between parallel agent spawns rewriting Codex's config.
       const { spawn } = await import('node:child_process');
 
+      // Per-call MCP env overrides — codex stores the Allen MCP entry
+      // with only registration-time env vars and does NOT forward its
+      // own runtime env to MCP children. Without these `-c` overrides
+      // the delegated agent's allen_save_artifact would fail with
+      // "ALLEN_ARTIFACT_ROOT_TYPE / ROOT_ID env vars not set" — same
+      // mechanism as the codex chat provider in chat-providers.ts.
+      const mcpEnvOverrides: string[] = [];
+      if (activeCtx?.chatSessionId) {
+        mcpEnvOverrides.push(
+          '-c', `mcp_servers.${MCP_SERVER_NAME}.env.ALLEN_ARTIFACT_ROOT_TYPE="chat"`,
+          '-c', `mcp_servers.${MCP_SERVER_NAME}.env.ALLEN_ARTIFACT_ROOT_ID="${activeCtx.chatSessionId}"`,
+          '-c', `mcp_servers.${MCP_SERVER_NAME}.env.ALLEN_ARTIFACT_AGENT_NAME="${targetName}"`,
+          '-c', `mcp_servers.${MCP_SERVER_NAME}.env.ALLEN_ARTIFACT_PARENT_ID="${convId}"`,
+          '-c', `mcp_servers.${MCP_SERVER_NAME}.env.ALLEN_CHAT_SESSION_ID="${activeCtx.chatSessionId}"`,
+          '-c', `mcp_servers.${MCP_SERVER_NAME}.env.ALLEN_API_URL="http://localhost:${process.env.PORT ?? '4023'}"`,
+          '-c', `mcp_servers.${MCP_SERVER_NAME}.env.JWT_ACCESS_SECRET="${process.env.JWT_ACCESS_SECRET ?? ''}"`,
+        );
+      }
+
       const args: string[] = ['exec'];
       if (resumeSessionId) {
-        args.push('resume', '--json', '--dangerously-bypass-approvals-and-sandbox', '--skip-git-repo-check', '--', resumeSessionId, prompt);
+        args.push('resume', '--json', '--dangerously-bypass-approvals-and-sandbox', '--skip-git-repo-check');
+        if (mcpEnvOverrides.length > 0) args.push(...mcpEnvOverrides);
+        args.push('--', resumeSessionId, prompt);
       } else {
         args.push('--json', '--dangerously-bypass-approvals-and-sandbox', '--skip-git-repo-check');
         if (model) args.push('-c', `model="${model}"`);
+        if (mcpEnvOverrides.length > 0) args.push(...mcpEnvOverrides);
         args.push(`${systemPrompt}\n\n${prompt}`);
       }
 
       const result = await new Promise<{ text: string; threadId?: string; costUsd: number }>((resolveP, rejectP) => {
-        const cleanEnv = { ...process.env };
+        // Artifact-root env for the delegated agent's Allen MCP subprocess.
+        // Without these, `allen_save_artifact` inside the delegated agent
+        // fails with "ALLEN_ARTIFACT_ROOT_TYPE / ROOT_ID env vars not set".
+        // Rooting at the chat session (not the delegation id) makes saved
+        // files appear in this chat's Artifacts panel — same behaviour as
+        // spawn_agent spawns.
+        const cleanEnv: NodeJS.ProcessEnv = { ...process.env };
         delete cleanEnv.PORT; // Don't leak host server port
+        if (activeCtx?.chatSessionId) {
+          cleanEnv.ALLEN_ARTIFACT_ROOT_TYPE = 'chat';
+          cleanEnv.ALLEN_ARTIFACT_ROOT_ID = activeCtx.chatSessionId;
+          cleanEnv.ALLEN_ARTIFACT_AGENT_NAME = targetName;
+          cleanEnv.ALLEN_ARTIFACT_PARENT_ID = convId;
+          // Session marker so the delegated agent's MCP subprocess
+          // forwards x-allen-chat-session-id on outbound chat-tool
+          // calls. Without it, tools called by this delegated agent
+          // would fall back to getAnyActiveSession() and could attach
+          // to the wrong chat when multiple chats run concurrently.
+          cleanEnv.ALLEN_CHAT_SESSION_ID = activeCtx.chatSessionId;
+        }
         const proc = spawn('codex', args, { cwd: resolveAgentCwd(cwd), env: cleanEnv, stdio: ['pipe', 'pipe', 'pipe'] });
         proc.on('error', (err) => { rejectP(new Error(`Failed to spawn codex: ${err.message}. Is codex CLI installed?`)); });
         proc.stdin.end();
@@ -2598,6 +2714,22 @@ async function runAgentTurn(
         env: {
           ALLEN_API_URL: `http://localhost:${process.env.PORT ?? '4023'}`,
           JWT_ACCESS_SECRET: process.env.JWT_ACCESS_SECRET ?? '',
+          // Artifact-root context so `allen_save_artifact` inside this
+          // delegated agent routes files to the parent chat's Artifacts
+          // panel instead of failing with "env vars not set". The Claude
+          // SDK passes this object verbatim to the MCP subprocess — it
+          // does NOT inherit from the host Node env — so these MUST be
+          // listed here.
+          ...(activeCtx?.chatSessionId
+            ? {
+                ALLEN_ARTIFACT_ROOT_TYPE: 'chat',
+                ALLEN_ARTIFACT_ROOT_ID: activeCtx.chatSessionId,
+                ALLEN_ARTIFACT_AGENT_NAME: targetName,
+                ALLEN_ARTIFACT_PARENT_ID: convId,
+                // Session marker — see Codex delegation path above.
+                ALLEN_CHAT_SESSION_ID: activeCtx.chatSessionId,
+              }
+            : {}),
         },
       };
       const { loadExternalMcpServers } = await import('./chat-mcp.js');
@@ -2742,12 +2874,12 @@ const reportToUser: ChatTool = {
     },
     required: ['message'],
   },
-  async execute(args, _db) {
+  async execute(args, _db, context) {
     const message = args.message as string;
     const status = (args.status as string) ?? 'in_progress';
 
     // Read from active session registry
-    const activeCtx = getAnyActiveSession();
+    const activeCtx = resolveActiveSession(context);
     const fromAgent = activeCtx?.currentAgent ?? 'assistant';
 
     if (activeCtx?.broadcastEvent) {
@@ -2776,8 +2908,8 @@ const createPullRequest: ChatTool = {
     },
     required: ['title'],
   },
-  async execute(args, db) {
-    const activeCtx = getAnyActiveSession();
+  async execute(args, db, context) {
+    const activeCtx = resolveActiveSession(context);
 
     // Find workspace linked to this session only
     const ws = activeCtx?.chatSessionId
@@ -2890,11 +3022,12 @@ export async function executeChatTool(
   toolName: string,
   args: Record<string, unknown>,
   db: Db,
+  context?: ChatToolContext,
 ): Promise<Record<string, unknown>> {
   const tool = chatTools.find(t => t.name === toolName);
   if (!tool) return { error: `Unknown tool: ${toolName}` };
   try {
-    return await tool.execute(args, db);
+    return await tool.execute(args, db, context);
   } catch (err) {
     return { error: `Tool ${toolName} failed: ${(err as Error).message}` };
   }

@@ -27,6 +27,14 @@ const SPAWN_ARTIFACT_ROOT_TYPE = process.env.ALLEN_ARTIFACT_ROOT_TYPE || undefin
 const SPAWN_ARTIFACT_ROOT_ID = process.env.ALLEN_ARTIFACT_ROOT_ID || undefined;
 const SPAWN_PARENT_CALLER = process.env.ALLEN_PARENT_CALLER || undefined;
 const SPAWN_ROOT_EXECUTION_ID = process.env.ALLEN_ROOT_EXECUTION_ID || undefined;
+// Session-scope markers. These are attached as headers on outbound
+// /api/chat/* calls so the server can route tools to the correct chat /
+// spawn-execution context instead of guessing from a global "any active"
+// map. Set by whoever spawned this MCP subprocess:
+//   chat-llm.ts        → ALLEN_CHAT_SESSION_ID for main-chat agents
+//   chat-tools.ts      → same for delegation / spawn subprocesses rooted
+//                        in a chat (omitted for workflow-rooted spawns)
+const SPAWN_CHAT_SESSION_ID = process.env.ALLEN_CHAT_SESSION_ID || undefined;
 
 // ── Auth: mint a short-lived JWT using the shared secret ──
 // The MCP server runs as a child process of the main server and shares
@@ -83,6 +91,20 @@ globalThis.fetch = async (input: FetchInput, init?: RequestInit): Promise<Respon
   const mergedHeaders = new Headers(init?.headers);
   if (!mergedHeaders.has('Authorization')) {
     mergedHeaders.set('Authorization', `Bearer ${token}`);
+  }
+  // Attach context markers so the server-side tool dispatcher can match
+  // this MCP's calls to the exact chat session / spawn execution that
+  // owns this subprocess — replaces the legacy getAnyActiveSession()
+  // probe. These are always safe to include (server ignores them for
+  // non-chat routes) and only one will be truthy at a time in practice.
+  if (SPAWN_CHAT_SESSION_ID && !mergedHeaders.has('x-allen-chat-session-id')) {
+    mergedHeaders.set('x-allen-chat-session-id', SPAWN_CHAT_SESSION_ID);
+  }
+  if (SPAWN_PARENT_EXECUTION_ID && !mergedHeaders.has('x-allen-parent-execution-id')) {
+    mergedHeaders.set('x-allen-parent-execution-id', SPAWN_PARENT_EXECUTION_ID);
+  }
+  if (SPAWN_ROOT_EXECUTION_ID && !mergedHeaders.has('x-allen-root-execution-id')) {
+    mergedHeaders.set('x-allen-root-execution-id', SPAWN_ROOT_EXECUTION_ID);
   }
   return originalFetch(input, { ...init, headers: mergedHeaders });
 };

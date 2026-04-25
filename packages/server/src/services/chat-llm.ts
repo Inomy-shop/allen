@@ -138,6 +138,13 @@ async function runClaudeCLI(
           ? {
               ALLEN_ARTIFACT_ROOT_TYPE: 'chat',
               ALLEN_ARTIFACT_ROOT_ID: chatSessionId,
+              // Session-scope marker. The MCP forwards this as an
+              // x-allen-chat-session-id header on every outbound
+              // /api/chat/* call so the server can route tools to the
+              // right chat context instead of probing a global "any
+              // active" map — fixes cross-chat bleed when two chats run
+              // LLM loops concurrently.
+              ALLEN_CHAT_SESSION_ID: chatSessionId,
             }
           : {}),
       },

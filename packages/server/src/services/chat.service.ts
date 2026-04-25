@@ -217,39 +217,39 @@ DO NOT route to team-builder for unrelated requests (running workflows, querying
     }
   } catch {}
 
-  if (provider === 'codex') {
-    return `${base}
+  // Single unified tail for both providers — keeps tool guidance,
+  // examples, and artifact handling identical across codex and
+  // claude-cli so the assistant behaves the same regardless of which
+  // CLI is running. Tool name aliases (with / without `allen` prefix)
+  // are listed so the model picks them up correctly under either MCP
+  // surface (codex namespaces tools with the server prefix; claude-cli
+  // surfaces them by bare name via buildToolInstructions()).
+  return `${base}
 
 You have MCP tools available. Use them to get data — don't describe what you would do, actually call the tool.
 
-Key MCP tools:
-- allen: list_workflows, list_executions, wait_for_execution, list_agents, get_agent, list_repos, get_dashboard_stats, run_workflow, get_node_trace, get_execution_logs, submit_execution_input
-- Other MCP servers (Linear, GitHub, etc.) are also available if configured
+Key Allen tools (under the \`allen\` MCP server — codex shows them as \`allen.<name>\`, claude-cli as bare \`<name>\`):
+- list_workflows, list_executions, wait_for_execution
+- list_agents, get_agent, list_repos
+- get_dashboard_stats, search_executions, get_node_trace, get_execution_logs
+- run_workflow, spawn_agent, delegate_to_agent, wait_for_delegation
+- allen_save_artifact, allen_list_artifacts, allen_get_artifact, upload_file
+- submit_execution_input, ask_user, ask_delegator, answer_delegator
+
+Other MCP servers (Linear, GitHub, etc.) are also available when configured.
 
 Examples:
-- "What workflows do I have?" → call allen list_workflows
-- "Show me linear tickets" → call linear linear_search_issues
-- "Check execution abc123" → call allen wait_for_execution with execution_id=abc123
-- "List my agents" → call allen list_agents
+- "What workflows do I have?" → list_workflows
+- "Show me linear tickets" → linear_search_issues
+- "Check execution abc123" → wait_for_execution(execution_id="abc123")
+- "List my agents" → list_agents
+- "What happened in my last run?" → list_executions then get_execution_logs / get_node_trace
+- "Show me dashboard stats" → get_dashboard_stats
+- "Find failed executions today" → search_executions
+- "Review code in @my-repo" → spawn_agent with the correct repo_path from the @mention
+- If an execution is waiting for input → present the fields, then submit_execution_input
 
-For code tasks (review, investigate, plan): use allen spawn_agent or run_workflow with the correct repo_path from @mentions.${orgBlock}${reposBlock}`;
-  }
-
-  // For claude-cli: tool instructions are appended by buildToolInstructions() in chat-llm.ts
-  return `${base}
-
-You have tools to interact with the system. When a user asks to run a workflow, check status, query data, or debug — use the appropriate tool. Don't describe what you would do; actually do it.
-
-Examples:
-- "What workflows do I have?" → use list_workflows
-- "Check execution abc123" → use wait_for_execution
-- "What happened in my last run?" → use list_executions
-- "Show me dashboard stats" → use get_dashboard_stats
-- "Find failed executions today" → use search_executions
-- "Review code in @my-repo" → use list_agents to find an agent, then spawn_agent with repo_path
-- If an execution is waiting for input → present the fields, then use submit_execution_input
-
-For code tasks (review, investigate, plan): delegate to an agent via spawn_agent with the correct repo_path from @mentions.${orgBlock}${reposBlock}`;
+For code tasks (review, investigate, plan): use spawn_agent or run_workflow with the correct repo_path from @mentions. Remind any sub-agent you spawn to save its deliverables via allen_save_artifact so they appear in this chat's Artifacts panel.${orgBlock}${reposBlock}`;
 }
 
 // ── Active Query Tracking ──
