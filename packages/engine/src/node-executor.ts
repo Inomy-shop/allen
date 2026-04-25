@@ -60,6 +60,18 @@ export interface NodeExecutorDeps {
   services?: import('./types.js').EngineServices;
   /** Abort signal — set by engine on cancel, checked/used by node executors to kill processes */
   abortSignal?: AbortSignal;
+  /**
+   * Optional discoverer that returns the full list of `mcp__<server>__<tool>`
+   * names registered in the runtime. When the agent's authored `tools`
+   * allowlist is non-empty, Claude Code treats it as a hard cap and
+   * silently strips every MCP tool not in the list — the agent ends up
+   * unable to see Linear / Postgres / GitHub MCPs even though their
+   * servers are loaded. Engine consumers (server-side) inject this so
+   * the materialized agent file's allowlist gets the discovered MCP
+   * tools appended. Optional; if missing the file is written without
+   * MCP-tool injection (existing behaviour).
+   */
+  discoverMcpToolNames?: () => Promise<string[]>;
 }
 
 export interface NodeResult {
@@ -594,6 +606,18 @@ ${context}
     let conv: AsyncIterable<any>;
     if (executionMode === 'cli') {
       const { queryViaCli } = await import('./cli-runner.js');
+      // Discover registered MCP tool names so the materialized agent
+      // file's allowlist (when the agent has one) doesn't silently
+      // hide every mcp__* tool. Server-side dep injection — falls back
+      // to no extra injection if the host didn't wire the discoverer.
+      let discoveredMcpTools: string[] = [];
+      if (deps.discoverMcpToolNames) {
+        try {
+          discoveredMcpTools = await deps.discoverMcpToolNames();
+        } catch (err) {
+          console.warn(`[node:${nodeName}] MCP tool discovery failed:`, (err as Error).message);
+        }
+      }
       conv = queryViaCli({
         agent: {
           name: nodeDef.agent ?? 'unknown',
@@ -601,6 +625,7 @@ ${context}
           system: effectiveSystem ?? '',
           model: resolvedModel,
           tools: Array.isArray((role as any)?.tools) ? (role as any).tools : undefined,
+          mcpToolNames: discoveredMcpTools,
         },
         prompt: effectivePrompt,
         cwd,

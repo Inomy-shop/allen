@@ -1191,6 +1191,21 @@ async function runSpawnInBackground(
       let msgStream: AsyncIterable<any>;
       if (useCliMode) {
         const { queryViaCli } = await import('@allen/engine');
+        // Discover every registered MCP's tool list once so the
+        // materialized agent file's `tools:` allowlist (if the agent
+        // has one) gets the full mcp__<server>__<tool> set appended.
+        // Without this, an agent with `tools: [Read, Write, Bash]`
+        // can't see Linear / Postgres / GitHub tools even though
+        // their MCPs are loaded — Claude Code treats the allowlist
+        // as a hard cap. `loadMcpTools` is idempotent + caches
+        // connections so repeated spawns don't re-spawn MCPs.
+        let discoveredMcpTools: string[] = [];
+        try {
+          const { loadMcpTools } = await import('./chat-mcp-client.js');
+          discoveredMcpTools = (await loadMcpTools(db)).map(t => t.fullName);
+        } catch (err) {
+          console.warn(`[spawn:${agentName}] MCP tool discovery failed (allowlist will lack mcp__* entries):`, (err as Error).message);
+        }
         msgStream = queryViaCli({
           agent: {
             name: agentName,
@@ -1204,6 +1219,7 @@ async function runSpawnInBackground(
             system: `${CLAUDE_SPAWN_NOTICE}\n\n${(role.system as string) ?? ''}${repoContextBlock}${workspaceConstraint}${ARTIFACTS_GUIDANCE}`,
             model: sdkOptions.model as string | undefined,
             tools: Array.isArray((role as any)?.tools) ? (role as any).tools : undefined,
+            mcpToolNames: discoveredMcpTools,
           },
           prompt,
           cwd: sdkOptions.cwd as string | undefined,

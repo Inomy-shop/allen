@@ -117,6 +117,18 @@ export type AgentSpec = {
   model?: string;
   /** optional tool allowlist — passed through to the frontmatter. */
   tools?: string[];
+  /**
+   * Optional list of `mcp__<server>__<tool>` names available in the runtime
+   * (Allen, Linear, Postgres, GitHub, etc.). When the agent has an explicit
+   * `tools` allowlist, Claude Code treats it as a hard cap — any MCP tool
+   * NOT in the list is invisible to the model, even if its server is
+   * registered. We append these names to the allowlist so every registered
+   * MCP tool is reachable by the agent. Pass the discovered tool list from
+   * `loadMcpTools(db)` (server side) or from any equivalent caller-side
+   * discovery; missing or empty array → no extra injection (the allowlist
+   * stays as the author wrote it).
+   */
+  mcpToolNames?: string[];
 };
 
 /** Slug the agent name so it forms a valid filename + subagent identifier. */
@@ -152,7 +164,22 @@ export function renderAgentFile(agent: AgentSpec): { subagentName: string; body:
   // the frontmatter on agents that already opted in.
   if (expandedTools.length > 0) {
     const seen = new Set(expandedTools);
-    for (const t of ARTIFACT_MCP_TOOLS) if (!seen.has(t)) expandedTools.push(t);
+    // Always-on artifact tools — agents are told to call these in
+    // ARTIFACTS_GUIDANCE, so without injection the allowlist would
+    // silently strip them.
+    for (const t of ARTIFACT_MCP_TOOLS) if (!seen.has(t)) { expandedTools.push(t); seen.add(t); }
+    // Caller-supplied list of every registered MCP tool name. Without
+    // this, an authored allowlist (e.g. `tools: [Read, Write, Bash]`)
+    // hides every mcp__linear__*, mcp__postgres__*, etc. — the agent
+    // then says "I don't have Linear API access" even though the MCP
+    // is loaded and connected. Inject them so the allowlist becomes
+    // "the author's tools + every MCP tool the runtime discovered".
+    for (const t of agent.mcpToolNames ?? []) {
+      if (typeof t === 'string' && t.startsWith('mcp__') && !seen.has(t)) {
+        expandedTools.push(t);
+        seen.add(t);
+      }
+    }
   }
   const frontmatter = [
     '---',

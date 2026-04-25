@@ -35,6 +35,15 @@ export interface EngineConfig {
   maxNestingDepth?: number;
   /** In-process service hooks for built-ins (e.g. workspace creation without HTTP). */
   services?: EngineServices;
+  /**
+   * Optional discoverer that returns every registered MCP tool's
+   * `mcp__<server>__<tool>` name. Engine forwards it to NodeExecutorDeps
+   * so the materialized agent file's `tools:` allowlist gets the full
+   * MCP tool set appended — preventing Claude Code's allowlist from
+   * silently hiding Linear / Postgres / GitHub tools. Server-side
+   * callers wire this to their `loadMcpTools(db)` helper.
+   */
+  discoverMcpToolNames?: () => Promise<string[]>;
 }
 
 export interface RunOptions {
@@ -1058,6 +1067,7 @@ export class AllenEngine {
       db: this.config.db,
       services: this.config.services,
       abortSignal: ac.signal,
+      discoverMcpToolNames: this.config.discoverMcpToolNames,
     };
     this.log(exec.id, {
       category: 'system',
@@ -1583,6 +1593,7 @@ export class AllenEngine {
           db: this.config.db,
           services: this.config.services,
           abortSignal: retryAc.signal,
+          discoverMcpToolNames: this.config.discoverMcpToolNames,
         };
 
         // Each branch reads from the snapshot, not the live state

@@ -257,6 +257,19 @@ export class ExecutionService {
       workflows,
       emitter,
       services: buildEngineServices(this.db),
+      discoverMcpToolNames: async () => {
+        // Lazy-import to avoid pulling chat-mcp-client into engine type
+        // resolution. Cached behind chat-mcp-client's connection map, so
+        // repeated workflow runs reuse the same MCP subprocesses.
+        try {
+          const { loadMcpTools } = await import('./chat-mcp-client.js');
+          const tools = await loadMcpTools(this.db);
+          return tools.map(t => t.fullName);
+        } catch (err) {
+          console.warn('[engine] MCP tool discovery failed for workflow run:', (err as Error).message);
+          return [];
+        }
+      },
     };
 
     const engine = new AllenEngine(config);
@@ -489,6 +502,19 @@ export class ExecutionService {
       workflows,
       emitter,
       services: buildEngineServices(this.db),
+      discoverMcpToolNames: async () => {
+        // Lazy-import to avoid pulling chat-mcp-client into engine type
+        // resolution. Cached behind chat-mcp-client's connection map, so
+        // repeated workflow runs reuse the same MCP subprocesses.
+        try {
+          const { loadMcpTools } = await import('./chat-mcp-client.js');
+          const tools = await loadMcpTools(this.db);
+          return tools.map(t => t.fullName);
+        } catch (err) {
+          console.warn('[engine] MCP tool discovery failed for workflow run:', (err as Error).message);
+          return [];
+        }
+      },
     };
 
     const engine = new AllenEngine(config);
@@ -540,6 +566,19 @@ export class ExecutionService {
       workflows,
       emitter,
       services: buildEngineServices(this.db),
+      discoverMcpToolNames: async () => {
+        // Lazy-import to avoid pulling chat-mcp-client into engine type
+        // resolution. Cached behind chat-mcp-client's connection map, so
+        // repeated workflow runs reuse the same MCP subprocesses.
+        try {
+          const { loadMcpTools } = await import('./chat-mcp-client.js');
+          const tools = await loadMcpTools(this.db);
+          return tools.map(t => t.fullName);
+        } catch (err) {
+          console.warn('[engine] MCP tool discovery failed for workflow run:', (err as Error).message);
+          return [];
+        }
+      },
     };
 
     const engine = new AllenEngine(config);
@@ -580,6 +619,19 @@ export class ExecutionService {
       workflows,
       emitter,
       services: buildEngineServices(this.db),
+      discoverMcpToolNames: async () => {
+        // Lazy-import to avoid pulling chat-mcp-client into engine type
+        // resolution. Cached behind chat-mcp-client's connection map, so
+        // repeated workflow runs reuse the same MCP subprocesses.
+        try {
+          const { loadMcpTools } = await import('./chat-mcp-client.js');
+          const tools = await loadMcpTools(this.db);
+          return tools.map(t => t.fullName);
+        } catch (err) {
+          console.warn('[engine] MCP tool discovery failed for workflow run:', (err as Error).message);
+          return [];
+        }
+      },
     };
 
     const engine = new AllenEngine(config);
