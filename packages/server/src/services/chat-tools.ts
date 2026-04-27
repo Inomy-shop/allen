@@ -42,6 +42,23 @@ interactive Claude Code harness. Therefore:
   unknown-tool error surfaces in seconds, whereas \`ToolSearch\` hangs.
 `.trim();
 
+// Codex CLI spawn lifecycle controls. Without these, a hung codex child
+// (or one blocked writing to stderr because nobody drains the pipe) holds
+// the spawning Promise's closure alive forever — see the workspace
+// memory-pressure incident on 2026-04-27 where this pattern drove the
+// allen.service cgroup past MemoryHigh and triggered uv_thread_create
+// failures across the box.
+//
+// Idle watchdog is the real protection: legitimate agent runs may take
+// hours, but they emit stdout regularly (thinking, tool calls, messages),
+// so 5 min of *pure silence* reliably means stuck. The total cap is just
+// a backstop against runaway loops that keep streaming forever — set
+// generously so it never trips a real run.
+const CODEX_STREAM_IDLE_MS = 5 * 60_000;        // kill if no stdout for 5 min
+const CODEX_TOTAL_TIMEOUT_MS = 12 * 60 * 60_000; // backstop: 12 h wall time
+const CODEX_KILL_GRACE_MS = 5_000;              // SIGTERM → SIGKILL escalation
+const CODEX_STDERR_TAIL_BYTES = 4096;           // bounded stderr tail for diagnostics
+
 /** Resolve cwd for agent/chat spawns. Never falls back to process.cwd() —
  * we don't want agents running inside the server's own source tree. */
 function resolveAgentCwd(...candidates: Array<string | undefined>): string {
@@ -1023,18 +1040,78 @@ async function runSpawnInBackground(
 
       const result = await new Promise<{ text: string; threadId?: string }>((resolveP, rejectP) => {
         const proc = spawn('codex', args, { cwd: resolveAgentCwd(repoPath), env: { ...process.env, ...codexSpawnEnv }, stdio: ['pipe', 'pipe', 'pipe'] });
-        proc.on('error', (err) => { rejectP(new Error(`Failed to spawn codex: ${err.message}. Is codex CLI installed?`)); });
+        const spawnStartMs = Date.now();
+        let text = '';
+        let threadId: string | undefined = resumeSession;
+        let buf = '';
+        let stderrTail = '';
+        let settled = false;
+        let idleTimer: NodeJS.Timeout | undefined;
+        let totalTimer: NodeJS.Timeout | undefined;
+        let killTimer: NodeJS.Timeout | undefined;
+
+        const clearTimers = () => {
+          if (idleTimer) { clearTimeout(idleTimer); idleTimer = undefined; }
+          if (totalTimer) { clearTimeout(totalTimer); totalTimer = undefined; }
+          if (killTimer) { clearTimeout(killTimer); killTimer = undefined; }
+        };
+
+        // Persist threadId to outer scope as soon as it's observed so the
+        // retry loop can resume even when this spawn is killed by a watchdog.
+        const settle = (action: () => void) => {
+          if (settled) return;
+          settled = true;
+          clearTimers();
+          if (threadId) currentResumeSession = threadId;
+          action();
+        };
+
+        const escalateKill = (reason: string) => {
+          try { proc.kill('SIGTERM'); } catch {}
+          if (killTimer) clearTimeout(killTimer);
+          killTimer = setTimeout(() => {
+            console.error(`[codex] sigkill exec=${executionId} agent=${agentName} pid=${proc.pid ?? '?'} reason=${reason} (SIGTERM ignored after ${CODEX_KILL_GRACE_MS / 1000}s)`);
+            try { proc.kill('SIGKILL'); } catch {}
+          }, CODEX_KILL_GRACE_MS);
+        };
+
+        const resetIdleTimer = () => {
+          if (idleTimer) clearTimeout(idleTimer);
+          idleTimer = setTimeout(() => {
+            console.error(`[codex] timeout-idle exec=${executionId} agent=${agentName} pid=${proc.pid ?? '?'} after=${CODEX_STREAM_IDLE_MS / 1000}s thread=${threadId?.slice(0, 12) ?? 'none'} stderr-tail=${stderrTail.slice(-512)}`);
+            escalateKill('idle');
+            settle(() => rejectP(new Error(`codex stream idle for ${CODEX_STREAM_IDLE_MS / 1000}s (timeout)${stderrTail ? `; stderr tail: ${stderrTail.slice(-512)}` : ''}`)));
+          }, CODEX_STREAM_IDLE_MS);
+        };
+
+        proc.on('error', (err) => {
+          console.error(`[codex] error exec=${executionId} agent=${agentName} pid=${proc.pid ?? '?'} ${err.message}`);
+          settle(() => rejectP(new Error(`Failed to spawn codex: ${err.message}. Is codex CLI installed?`)));
+        });
         proc.stdin.end();
         // Register PID for cancel support
         if (proc.pid) {
           registerExecutionProcess(executionId, proc.pid, () => { try { proc.kill('SIGTERM'); } catch {} });
           db.collection('executions').updateOne({ id: executionId }, { $set: { 'meta.pid': proc.pid } }).catch(() => {});
         }
-        let text = '';
-        let threadId: string | undefined = resumeSession;
-        let buf = '';
+        console.log(`[codex] start exec=${executionId} agent=${agentName} pid=${proc.pid ?? '?'} resume=${currentResumeSession ? currentResumeSession.slice(0, 12) : 'new'}`);
+
+        totalTimer = setTimeout(() => {
+          console.error(`[codex] timeout-total exec=${executionId} agent=${agentName} pid=${proc.pid ?? '?'} after=${CODEX_TOTAL_TIMEOUT_MS / 1000}s thread=${threadId?.slice(0, 12) ?? 'none'} stderr-tail=${stderrTail.slice(-512)}`);
+          escalateKill('total-timeout');
+          settle(() => rejectP(new Error(`codex exceeded ${CODEX_TOTAL_TIMEOUT_MS / 1000}s total timeout${stderrTail ? `; stderr tail: ${stderrTail.slice(-512)}` : ''}`)));
+        }, CODEX_TOTAL_TIMEOUT_MS);
+        resetIdleTimer();
+
+        // Drain stderr so codex doesn't block on a full pipe buffer (default
+        // 64 KiB on Linux); keep a bounded tail for diagnostics on failure.
+        proc.stderr.on('data', (chunk: Buffer) => {
+          stderrTail += chunk.toString();
+          if (stderrTail.length > CODEX_STDERR_TAIL_BYTES) stderrTail = stderrTail.slice(-CODEX_STDERR_TAIL_BYTES);
+        });
 
         proc.stdout.on('data', (chunk: Buffer) => {
+          resetIdleTimer();
           buf += chunk.toString();
           const lines = buf.split('\n');
           buf = lines.pop() ?? '';
@@ -1042,7 +1119,14 @@ async function runSpawnInBackground(
             if (!line.trim()) continue;
             try {
               const evt = JSON.parse(line);
-              if (evt.type === 'thread.started' && evt.thread_id) threadId = evt.thread_id;
+              if (evt.type === 'thread.started' && evt.thread_id) {
+                threadId = evt.thread_id;
+                // Persist to outer scope immediately so retry-on-timeout can
+                // resume — waiting for Promise resolution loses threadId if
+                // the spawn is killed by a watchdog.
+                currentResumeSession = evt.thread_id;
+                console.log(`[codex] thread.started exec=${executionId} agent=${agentName} pid=${proc.pid ?? '?'} thread=${String(evt.thread_id).slice(0, 12)}`);
+              }
               if (evt.type === 'item.completed' && evt.item?.type === 'agent_message') {
                 const t = evt.item.text ?? evt.item.content?.filter((c: any) => c.type === 'output_text').map((c: any) => c.text).join('') ?? '';
                 if (t) { text = t; liveLog({ type: 'text', content: t.slice(-300) }); }
@@ -1111,8 +1195,16 @@ async function runSpawnInBackground(
             } catch {}
           }
         });
-        proc.on('close', () => resolveP({ text, threadId }));
-        proc.on('error', (err) => rejectP(err));
+        proc.on('close', (code, signal) => {
+          const durationMs = Date.now() - spawnStartMs;
+          if (code != null && code !== 0) {
+            console.error(`[codex] non-zero-exit exec=${executionId} agent=${agentName} pid=${proc.pid ?? '?'} code=${code} signal=${signal ?? 'null'} duration=${durationMs}ms text=${text.length}b stderr-tail=${stderrTail.slice(-512)}`);
+            settle(() => rejectP(new Error(`codex exited code=${code} signal=${signal ?? 'null'}${stderrTail ? `; stderr tail: ${stderrTail.slice(-512)}` : ''}`)));
+            return;
+          }
+          console.log(`[codex] close exec=${executionId} agent=${agentName} pid=${proc.pid ?? '?'} code=${code ?? 'null'} signal=${signal ?? 'null'} duration=${durationMs}ms text=${text.length}b thread=${threadId?.slice(0, 12) ?? 'none'}`);
+          settle(() => resolveP({ text, threadId }));
+        });
       });
 
       response = result.text;
@@ -1253,7 +1345,7 @@ async function runSpawnInBackground(
       const STREAM_IDLE_AFTER_TOOLSEARCH_MS = 60_000; // 1 min — after ToolSearch
       let toolSearchSeen = false;
       const streamIterator = (msgStream as AsyncIterable<any>)[Symbol.asyncIterator]();
-      streamLoop: while (true) {
+      while (true) {
         const currentIdleMs = toolSearchSeen ? STREAM_IDLE_AFTER_TOOLSEARCH_MS : STREAM_IDLE_MS;
         const raced = await Promise.race([
           streamIterator.next().then(r => ({ kind: 'msg' as const, result: r })),
@@ -2581,8 +2673,7 @@ async function runAgentTurn(
   // Retry loop — if CLI times out, resume the same session and continue
   for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
     if (attempt > 0) {
-      // This is a retry — resume the session with "continue" prompt
-      const isTimeout = true; // we only retry on timeout
+      // This is a retry — resume the session with "continue" prompt.
       console.log(`[delegation] Auto-retry #${attempt} for ${targetName} (session ${sessionId?.slice(0, 12)}...)`);
       emit('text', { content: `Reconnecting to ${targetName} (retry ${attempt}/${MAX_RETRIES})...` });
       prompt = 'Continue from where you left off. Complete your task and provide the final response.';
@@ -2648,15 +2739,76 @@ async function runAgentTurn(
           cleanEnv.ALLEN_CHAT_SESSION_ID = activeCtx.chatSessionId;
         }
         const proc = spawn('codex', args, { cwd: resolveAgentCwd(cwd), env: cleanEnv, stdio: ['pipe', 'pipe', 'pipe'] });
-        proc.on('error', (err) => { rejectP(new Error(`Failed to spawn codex: ${err.message}. Is codex CLI installed?`)); });
-        proc.stdin.end();
-        // Register PID for cancel — use convId as key for delegations
-        if (proc.pid) registerExecutionProcess(convId, proc.pid, () => { try { proc.kill('SIGTERM'); } catch {} });
+        const spawnStartMs = Date.now();
         let text = '';
         let threadId: string | undefined = resumeSessionId;
         let buf = '';
+        let stderrTail = '';
+        let settled = false;
+        let idleTimer: NodeJS.Timeout | undefined;
+        let totalTimer: NodeJS.Timeout | undefined;
+        let killTimer: NodeJS.Timeout | undefined;
+
+        const clearTimers = () => {
+          if (idleTimer) { clearTimeout(idleTimer); idleTimer = undefined; }
+          if (totalTimer) { clearTimeout(totalTimer); totalTimer = undefined; }
+          if (killTimer) { clearTimeout(killTimer); killTimer = undefined; }
+        };
+
+        // Persist threadId to outer-scope sessionId as soon as it's observed
+        // so the retry loop can resume even when this spawn is killed by a
+        // watchdog. (See identical pattern in the chat-tools spawn path.)
+        const settle = (action: () => void) => {
+          if (settled) return;
+          settled = true;
+          clearTimers();
+          if (threadId) sessionId = threadId;
+          action();
+        };
+
+        const escalateKill = (reason: string) => {
+          try { proc.kill('SIGTERM'); } catch {}
+          if (killTimer) clearTimeout(killTimer);
+          killTimer = setTimeout(() => {
+            console.error(`[codex-delegation] sigkill conv=${convId} target=${targetName} pid=${proc.pid ?? '?'} reason=${reason} (SIGTERM ignored after ${CODEX_KILL_GRACE_MS / 1000}s)`);
+            try { proc.kill('SIGKILL'); } catch {}
+          }, CODEX_KILL_GRACE_MS);
+        };
+
+        const resetIdleTimer = () => {
+          if (idleTimer) clearTimeout(idleTimer);
+          idleTimer = setTimeout(() => {
+            console.error(`[codex-delegation] timeout-idle conv=${convId} target=${targetName} pid=${proc.pid ?? '?'} after=${CODEX_STREAM_IDLE_MS / 1000}s thread=${threadId?.slice(0, 12) ?? 'none'} stderr-tail=${stderrTail.slice(-512)}`);
+            escalateKill('idle');
+            settle(() => rejectP(new Error(`codex stream idle for ${CODEX_STREAM_IDLE_MS / 1000}s (timeout)${stderrTail ? `; stderr tail: ${stderrTail.slice(-512)}` : ''}`)));
+          }, CODEX_STREAM_IDLE_MS);
+        };
+
+        proc.on('error', (err) => {
+          console.error(`[codex-delegation] error conv=${convId} target=${targetName} pid=${proc.pid ?? '?'} ${err.message}`);
+          settle(() => rejectP(new Error(`Failed to spawn codex: ${err.message}. Is codex CLI installed?`)));
+        });
+        proc.stdin.end();
+        // Register PID for cancel — use convId as key for delegations
+        if (proc.pid) registerExecutionProcess(convId, proc.pid, () => { try { proc.kill('SIGTERM'); } catch {} });
+        console.log(`[codex-delegation] start conv=${convId} target=${targetName} pid=${proc.pid ?? '?'} resume=${resumeSessionId ? resumeSessionId.slice(0, 12) : 'new'}`);
+
+        totalTimer = setTimeout(() => {
+          console.error(`[codex-delegation] timeout-total conv=${convId} target=${targetName} pid=${proc.pid ?? '?'} after=${CODEX_TOTAL_TIMEOUT_MS / 1000}s thread=${threadId?.slice(0, 12) ?? 'none'} stderr-tail=${stderrTail.slice(-512)}`);
+          escalateKill('total-timeout');
+          settle(() => rejectP(new Error(`codex exceeded ${CODEX_TOTAL_TIMEOUT_MS / 1000}s total timeout${stderrTail ? `; stderr tail: ${stderrTail.slice(-512)}` : ''}`)));
+        }, CODEX_TOTAL_TIMEOUT_MS);
+        resetIdleTimer();
+
+        // Drain stderr so codex doesn't block on a full pipe buffer (default
+        // 64 KiB on Linux); keep a bounded tail for diagnostics on failure.
+        proc.stderr.on('data', (chunk: Buffer) => {
+          stderrTail += chunk.toString();
+          if (stderrTail.length > CODEX_STDERR_TAIL_BYTES) stderrTail = stderrTail.slice(-CODEX_STDERR_TAIL_BYTES);
+        });
 
         proc.stdout.on('data', (chunk: Buffer) => {
+          resetIdleTimer();
           buf += chunk.toString();
           const lines = buf.split('\n');
           buf = lines.pop() ?? '';
@@ -2664,7 +2816,13 @@ async function runAgentTurn(
             if (!line.trim()) continue;
             try {
               const evt = JSON.parse(line);
-              if (evt.type === 'thread.started' && evt.thread_id) threadId = evt.thread_id;
+              if (evt.type === 'thread.started' && evt.thread_id) {
+                threadId = evt.thread_id;
+                // Persist to outer-scope sessionId so retry-on-timeout can
+                // resume even when this spawn is killed by a watchdog.
+                sessionId = evt.thread_id;
+                console.log(`[codex-delegation] thread.started conv=${convId} target=${targetName} pid=${proc.pid ?? '?'} thread=${String(evt.thread_id).slice(0, 12)}`);
+              }
               // Text output
               if (evt.type === 'item.completed' && evt.item?.type === 'agent_message') {
                 const t = evt.item.text ?? evt.item.content?.filter((c: any) => c.type === 'output_text').map((c: any) => c.text).join('') ?? '';
@@ -2708,8 +2866,16 @@ async function runAgentTurn(
             } catch {}
           }
         });
-        proc.on('close', () => resolveP({ text, threadId, costUsd: 0 }));
-        proc.on('error', (err) => rejectP(err));
+        proc.on('close', (code, signal) => {
+          const durationMs = Date.now() - spawnStartMs;
+          if (code != null && code !== 0) {
+            console.error(`[codex-delegation] non-zero-exit conv=${convId} target=${targetName} pid=${proc.pid ?? '?'} code=${code} signal=${signal ?? 'null'} duration=${durationMs}ms text=${text.length}b stderr-tail=${stderrTail.slice(-512)}`);
+            settle(() => rejectP(new Error(`codex exited code=${code} signal=${signal ?? 'null'}${stderrTail ? `; stderr tail: ${stderrTail.slice(-512)}` : ''}`)));
+            return;
+          }
+          console.log(`[codex-delegation] close conv=${convId} target=${targetName} pid=${proc.pid ?? '?'} code=${code ?? 'null'} signal=${signal ?? 'null'} duration=${durationMs}ms text=${text.length}b thread=${threadId?.slice(0, 12) ?? 'none'}`);
+          settle(() => resolveP({ text, threadId, costUsd: 0 }));
+        });
       });
 
       responseText = result.text;

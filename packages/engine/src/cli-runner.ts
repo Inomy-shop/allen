@@ -19,6 +19,17 @@ import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
 import { writeAgentFile, type AgentSpec, type MaterializedAgent } from './agent-file-writer.js';
 import { normalizeModelAlias } from './model-alias.js';
 
+// Claude CLI spawn lifecycle controls. Same shape as the codex constants in
+// chat-tools.ts — both cover the "subprocess hangs while we keep retaining
+// its closure" failure mode that drove the 2026-04-27 memory-pressure
+// incident. Idle watchdog is the real protection; total cap is a backstop
+// for runaway-output loops the idle timer can't catch. Numbers are matched
+// to the codex path so behaviour is consistent across providers.
+const CLI_STREAM_IDLE_MS = 5 * 60_000;          // kill if no stdout for 5 min
+const CLI_TOTAL_TIMEOUT_MS = 12 * 60 * 60_000;  // backstop: 12 h wall time
+const CLI_KILL_GRACE_MS = 5_000;                // SIGTERM → SIGKILL escalation
+const CLI_STDERR_TAIL_BYTES = 4096;             // bounded stderr tail for diagnostics
+
 export type CliQueryOptions = {
   /** Agent definition — materialized to ~/.claude/agents/ before spawn. */
   agent: AgentSpec;
@@ -113,9 +124,50 @@ export async function* queryViaCli(opts: CliQueryOptions): AsyncGenerator<any, v
   }
 
   let child: ChildProcess | null = null;
-  let stderrBuf = '';
+  let stderrTail = '';
   let exitCode: number | null = null;
   let exitSignal: NodeJS.Signals | null = null;
+  let killTimer: NodeJS.Timeout | undefined;
+  let idleTimer: NodeJS.Timeout | undefined;
+  let totalTimer: NodeJS.Timeout | undefined;
+  let abortListener: ((this: AbortSignal, ev: Event) => void) | null = null;
+  const spawnStartMs = Date.now();
+  const agentName = opts.agent.name;
+
+  let buffer = '';
+  const queue: any[] = [];
+  let streamDone = false;
+  let streamErr: Error | null = null;
+  let wake: (() => void) | null = null;
+
+  const wakeNow = () => { if (wake) { const w = wake; wake = null; w(); } };
+
+  // SIGTERM → SIGKILL escalation. Without this, a Claude CLI that ignores
+  // SIGTERM (e.g. stuck on an interactive prompt or in a tight native loop)
+  // leaves the child alive forever, which blocks `await exitPromise` and
+  // pins the whole generator's closure state.
+  const escalateKill = (reason: string) => {
+    if (!child || child.exitCode !== null) return;
+    try { child.kill('SIGTERM'); } catch { /* ignore */ }
+    if (killTimer) clearTimeout(killTimer);
+    killTimer = setTimeout(() => {
+      if (child && child.exitCode === null) {
+        console.error(`[claude-cli] sigkill agent=${agentName} pid=${child.pid ?? '?'} reason=${reason} (SIGTERM ignored after ${CLI_KILL_GRACE_MS / 1000}s)`);
+        try { child.kill('SIGKILL'); } catch { /* ignore */ }
+      }
+    }, CLI_KILL_GRACE_MS);
+  };
+
+  const resetIdleTimer = () => {
+    if (idleTimer) clearTimeout(idleTimer);
+    idleTimer = setTimeout(() => {
+      console.error(`[claude-cli] timeout-idle agent=${agentName} pid=${child?.pid ?? '?'} after=${CLI_STREAM_IDLE_MS / 1000}s stderr-tail=${stderrTail.slice(-512)}`);
+      streamErr = new Error(`claude-cli stream idle for ${CLI_STREAM_IDLE_MS / 1000}s (timeout)${stderrTail ? `; stderr tail: ${stderrTail.slice(-512)}` : ''}`);
+      streamDone = true;
+      escalateKill('idle');
+      wakeNow();
+    }, CLI_STREAM_IDLE_MS);
+  };
 
   try {
     child = spawn(claudeBin, args, {
@@ -124,16 +176,27 @@ export async function* queryViaCli(opts: CliQueryOptions): AsyncGenerator<any, v
       stdio: ['pipe', 'pipe', 'pipe'],
     });
 
-    // Abort handling: kill child on signal.
-    const onAbort = () => {
-      try { child?.kill('SIGTERM'); } catch { /* ignore */ }
-    };
-    opts.abortSignal?.addEventListener('abort', onAbort, { once: true });
+    console.log(`[claude-cli] start agent=${agentName} pid=${child.pid ?? '?'} resume=${opts.resume ? opts.resume.slice(0, 12) : 'new'}`);
 
-    // Stderr capture.
+    // Abort handling: kill child on signal. Stash the listener ref so the
+    // finally block can detach it — when the AbortSignal is reused across
+    // a long-lived chat session, an undetached listener pins this run's
+    // closure (child + queue + buffer + stderrTail) for the session's life.
+    if (opts.abortSignal) {
+      abortListener = () => {
+        console.warn(`[claude-cli] abort agent=${agentName} pid=${child?.pid ?? '?'}`);
+        escalateKill('abort');
+      };
+      opts.abortSignal.addEventListener('abort', abortListener as any, { once: true });
+    }
+
+    // Bounded stderr capture — `stderrBuf += chunk` was unbounded before;
+    // a chatty Claude run (verbose logs, MCP errors) could grow this string
+    // arbitrarily. Same fix shape as the codex spawn paths.
     child.stderr?.setEncoding('utf8');
     child.stderr?.on('data', (chunk: string) => {
-      stderrBuf += chunk;
+      stderrTail += chunk;
+      if (stderrTail.length > CLI_STDERR_TAIL_BYTES) stderrTail = stderrTail.slice(-CLI_STDERR_TAIL_BYTES);
       if (opts.stderr) opts.stderr(chunk);
     });
 
@@ -145,6 +208,18 @@ export async function* queryViaCli(opts: CliQueryOptions): AsyncGenerator<any, v
         resolvePromise();
       });
     });
+
+    // Watchdogs. Idle timer is the primary protection (resets on every
+    // stdout chunk); total timer is a backstop against runaway streams
+    // that the idle timer can't catch.
+    totalTimer = setTimeout(() => {
+      console.error(`[claude-cli] timeout-total agent=${agentName} pid=${child?.pid ?? '?'} after=${CLI_TOTAL_TIMEOUT_MS / 1000}s stderr-tail=${stderrTail.slice(-512)}`);
+      streamErr = new Error(`claude-cli exceeded ${CLI_TOTAL_TIMEOUT_MS / 1000}s total timeout${stderrTail ? `; stderr tail: ${stderrTail.slice(-512)}` : ''}`);
+      streamDone = true;
+      escalateKill('total-timeout');
+      wakeNow();
+    }, CLI_TOTAL_TIMEOUT_MS);
+    resetIdleTimer();
 
     // Write the initial user message as stream-json, then close stdin so the
     // CLI knows the user side of the conversation is complete. (The CLI will
@@ -161,13 +236,8 @@ export async function* queryViaCli(opts: CliQueryOptions): AsyncGenerator<any, v
     if (!stdout) throw new Error('claude-cli spawned without stdout');
     stdout.setEncoding('utf8');
 
-    let buffer = '';
-    const queue: any[] = [];
-    let streamDone = false;
-    let streamErr: Error | null = null;
-    let wake: (() => void) | null = null;
-
     stdout.on('data', (chunk: string) => {
+      resetIdleTimer();
       buffer += chunk;
       let newlineIdx: number;
       while ((newlineIdx = buffer.indexOf('\n')) >= 0) {
@@ -180,18 +250,18 @@ export async function* queryViaCli(opts: CliQueryOptions): AsyncGenerator<any, v
           streamErr = new Error(`Failed to parse stream-json line: ${line.slice(0, 200)}`);
         }
       }
-      if (wake) { const w = wake; wake = null; w(); }
+      wakeNow();
     });
 
     stdout.on('end', () => {
       streamDone = true;
-      if (wake) { const w = wake; wake = null; w(); }
+      wakeNow();
     });
 
     stdout.on('error', (err: Error) => {
       streamErr = err;
       streamDone = true;
-      if (wake) { const w = wake; wake = null; w(); }
+      wakeNow();
     });
 
     // Yield messages as they land.
@@ -209,19 +279,52 @@ export async function* queryViaCli(opts: CliQueryOptions): AsyncGenerator<any, v
     // Wait for the child to fully exit so we know the real exit code.
     await exitPromise;
 
+    const durationMs = Date.now() - spawnStartMs;
+    // A watchdog (idle/total) may have fired AFTER the stream loop exited
+    // cleanly but before the child actually died — e.g. child closed stdout
+    // then refused to exit. In that case streamErr is set but the loop
+    // never observed it. Surface it instead of falsely reporting a clean
+    // close on a SIGKILL'd run.
+    if (streamErr) {
+      console.error(`[claude-cli] post-stream-error agent=${agentName} pid=${child?.pid ?? '?'} duration=${durationMs}ms stderr-tail=${stderrTail.slice(-512)}`);
+      throw streamErr;
+    }
     // If the child crashed before emitting a final `result` message, raise
     // the same shape of error the SDK produces — callers catch this and
     // retry transient failures.
     if (exitCode !== 0 && exitCode !== null) {
-      const tail = stderrBuf.slice(-500);
+      const tail = stderrTail.slice(-512);
+      console.error(`[claude-cli] non-zero-exit agent=${agentName} pid=${child?.pid ?? '?'} code=${exitCode} signal=${exitSignal ?? 'null'} duration=${durationMs}ms stderr-tail=${tail}`);
       throw new Error(
         `Claude Code process exited with code ${exitCode}${exitSignal ? ` (signal ${exitSignal})` : ''}` +
         (tail ? `\nstderr tail: ${tail}` : ''),
       );
     }
+    console.log(`[claude-cli] close agent=${agentName} pid=${child?.pid ?? '?'} code=${exitCode ?? 'null'} signal=${exitSignal ?? 'null'} duration=${durationMs}ms`);
   } finally {
+    // Clear timers FIRST so they don't fire after we've torn down.
+    if (idleTimer) { clearTimeout(idleTimer); idleTimer = undefined; }
+    if (totalTimer) { clearTimeout(totalTimer); totalTimer = undefined; }
+    if (killTimer) { clearTimeout(killTimer); killTimer = undefined; }
+    // Detach abort listener so a long-lived AbortSignal doesn't hold this
+    // run's closure alive.
+    if (opts.abortSignal && abortListener) {
+      try { opts.abortSignal.removeEventListener('abort', abortListener as any); } catch { /* ignore */ }
+      abortListener = null;
+    }
+    // Best-effort kill if child is somehow still alive (e.g. caller called
+    // generator.return() mid-stream). SIGTERM, then SIGKILL after grace.
     try {
-      if (child && child.exitCode === null) child.kill('SIGTERM');
+      if (child && child.exitCode === null) {
+        try { child.kill('SIGTERM'); } catch { /* ignore */ }
+        const t = setTimeout(() => {
+          if (child && child.exitCode === null) {
+            try { child.kill('SIGKILL'); } catch { /* ignore */ }
+          }
+        }, CLI_KILL_GRACE_MS);
+        // Don't keep the event loop alive just for this final escalation.
+        t.unref();
+      }
     } catch { /* ignore */ }
     materialized.cleanup();
   }

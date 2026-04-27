@@ -147,13 +147,33 @@ if ! grep -q '^vm.swappiness' /etc/sysctl.conf; then
   echo 'vm.swappiness=10' | sudo tee -a /etc/sysctl.conf >/dev/null
 fi
 
-# ── 4d. CloudWatch agent (memory + swap + disk metrics) ────────────────────
+# ── 4d. inotify limits (chokidar/ts-node-dev/Vite/Next file watchers) ─────
+# Each running workspace service spawns a watcher that walks its node_modules
+# tree — ts-node-dev, Vite, Next, nodemon, webpack all use chokidar, which
+# burns one inotify watch per file. The Ubuntu default of 8192 watches +
+# 128 instances per user gets blown out after ~1-2 workspaces, after which
+# every new dev server crashes with `ENOSPC: System limit for number of
+# file watchers reached`. Bump to values that comfortably fit 10+ concurrent
+# workspaces. Numbers chosen to match what VSCode and the Vite docs both
+# recommend for monorepo dev hosts.
+echo "=== [4d/9] inotify limits ==="
+sudo sysctl -q fs.inotify.max_user_watches=524288
+sudo sysctl -q fs.inotify.max_user_instances=512
+if ! grep -q '^fs.inotify.max_user_watches' /etc/sysctl.conf; then
+  echo 'fs.inotify.max_user_watches=524288' | sudo tee -a /etc/sysctl.conf >/dev/null
+fi
+if ! grep -q '^fs.inotify.max_user_instances' /etc/sysctl.conf; then
+  echo 'fs.inotify.max_user_instances=512' | sudo tee -a /etc/sysctl.conf >/dev/null
+fi
+echo "  watches=$(cat /proc/sys/fs/inotify/max_user_watches) instances=$(cat /proc/sys/fs/inotify/max_user_instances)"
+
+# ── 4e. CloudWatch agent (memory + swap + disk metrics) ────────────────────
 # AWS only ships CPU / network / EBS metrics by default. Memory and swap
 # are exactly the metrics we need to debug OOM-driven instance hangs, so
 # install the CloudWatch agent and emit them under the CWAgent namespace.
 # Requires CloudWatchAgentServerPolicy on the instance role
 # (es-pipeline-dev-self-healing-profile, managed in es-data-pipeline repo).
-echo "=== [4d/9] CloudWatch agent ==="
+echo "=== [4e/9] CloudWatch agent ==="
 if ! command -v amazon-cloudwatch-agent-ctl &>/dev/null; then
   TMP_DEB=/tmp/amazon-cloudwatch-agent.deb
   wget -q -O "$TMP_DEB" \

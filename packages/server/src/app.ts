@@ -28,7 +28,7 @@ import { artifactRoutes, publicArtifactRoutes } from './routes/artifact.routes.j
 import { ArtifactService } from './services/artifact.service.js';
 import { slackRoutes } from './routes/slack.routes.js';
 import { startTerminalWebSocketServer } from './services/workspace-terminal.js';
-import { createWorkspaceProxy } from './services/workspace-proxy.js';
+import { createWorkspaceProxy, createWorkspaceUpgradeHandler } from './services/workspace-proxy.js';
 import { startFileWatchServer } from './services/workspace-watcher.js';
 import { WorkspaceManager } from './services/workspace.service.js';
 import { seedDefaultWorkflows } from './seed.js';
@@ -248,8 +248,24 @@ async function main(): Promise<void> {
   app.use('/api/files', fileRoutes());
   app.use('/api/artifacts', artifactRoutes(db));
 
-  app.listen(PORT, () => {
+  const httpServer = app.listen(PORT, () => {
     console.log(`Allen server running on http://localhost:${PORT}`);
+  });
+
+  // Forward WebSocket upgrades for workspace subdomains so Vite HMR (and
+  // any other WS the workspace's services use, e.g. Next /_next/webpack-hmr)
+  // works. Without this, http-proxy-middleware's `ws: true` is dead code —
+  // the upgrade event has to be wired to the underlying http.Server
+  // explicitly. Subdomain-only: path-based previews don't need WS because
+  // local dev points the iframe straight at the service port.
+  const wsUpgradeHandler = createWorkspaceUpgradeHandler(db, (req) => {
+    const host = (req.headers.host ?? '').split(':')[0];
+    const m = host.match(WORKSPACE_SUBDOMAIN_REGEX);
+    if (!m) return null;
+    return { serviceName: m[1], wsId: m[2] };
+  });
+  httpServer.on('upgrade', (req, socket, head) => {
+    void wsUpgradeHandler(req, socket, head);
   });
 
   // Start the MCP server health monitor (5-min background loop, alerts on outages)

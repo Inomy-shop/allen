@@ -40,6 +40,11 @@ class LogRingBuffer {
   snapshot(): LogLine[] { return [...this.buf]; }
   subscribe(fn: (line: LogLine) => void) { this.listeners.add(fn); return () => { this.listeners.delete(fn); }; }
   clear() { this.buf = []; }
+  // Release everything: drop log lines + clear listener closures. SSE
+  // subscribers that disconnected uncleanly (TCP RST) leave their unsub
+  // closure registered, pinning the Response object; calling this on
+  // archive prevents that from accumulating across the server's lifetime.
+  dispose() { this.buf = []; this.listeners.clear(); }
 }
 
 // ── Types ──
@@ -329,15 +334,40 @@ export class WorkspaceManager {
       const config = await this.getConfig(ws.repoId);
       const base = ws.basePort;
 
-      // Helper: replace {port:N} → basePort+N, also {port} → basePort+0
-      const resolvePortPlaceholders = (str: string): string =>
+      // Placeholder substitution for env files, setup scripts, and service
+      // commands. Workspace configs reference these so a per-workspace
+      // value (port, id, public host) can be baked into a generic template.
+      //   {port}              → basePort + 0
+      //   {port:N}             → basePort + N
+      //   {workspaceId}       → 24-char ObjectId for this workspace
+      //   {publicHost}        → ALLEN_PUBLIC_DOMAIN env var (empty if unset)
+      //   {previewUrl:<svc>}  → Browser-reachable URL for the named service.
+      //                          Production (ALLEN_PUBLIC_DOMAIN set):
+      //                            https://<svc>-<wsId>.<publicHost>
+      //                          Localhost (no public domain):
+      //                            http://localhost:<port-of-svc>
+      //                          One template, both environments.
+      const publicHost = process.env.ALLEN_PUBLIC_DOMAIN ?? '';
+      const servicePorts = new Map<string, number>();
+      if (config?.services) {
+        for (const svc of config.services) servicePorts.set(svc.name, base + svc.portOffset);
+      }
+      const resolvePlaceholders = (str: string): string =>
         str.replace(/\{port:(\d+)\}/g, (_, n) => String(base + parseInt(n)))
-           .replace(/\{port\}/g, String(base));
+           .replace(/\{port\}/g, String(base))
+           .replace(/\{workspaceId\}/g, id)
+           .replace(/\{publicHost\}/g, publicHost)
+           .replace(/\{previewUrl:([a-z][a-z0-9_-]*)\}/g, (_, svcName: string) => {
+             if (publicHost) return `https://${svcName}-${id}.${publicHost}`;
+             const port = servicePorts.get(svcName);
+             if (port == null) return ''; // unknown service — leave a clear hole
+             return `http://localhost:${port}`;
+           });
 
       // Step 1: Generate .env files from templates BEFORE running scripts
       if (config?.envFiles?.length) {
         for (const envFile of config.envFiles) {
-          const content = resolvePortPlaceholders(envFile.content);
+          const content = resolvePlaceholders(envFile.content);
           const fullPath = join(worktreePath, envFile.path);
           const dir = dirname(fullPath);
           if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
@@ -363,7 +393,7 @@ export class WorkspaceManager {
         }
 
         for (let i = 0; i < scriptSteps.length; i++) {
-          const cmd = resolvePortPlaceholders(scriptSteps[i]);
+          const cmd = resolvePlaceholders(scriptSteps[i]);
           const stepNum = (config?.envFiles?.length ? 1 : 0) + i + 1;
           await this.col.updateOne({ _id: oid }, {
             $set: { setupProgress: { currentStep: stepNum, totalSteps: allSteps.length, currentCommand: cmd, log, status: 'running' } },
@@ -388,7 +418,7 @@ export class WorkspaceManager {
           const port = base + svc.portOffset;
           services.push({
             name: svc.name,
-            command: resolvePortPlaceholders(svc.command),
+            command: resolvePlaceholders(svc.command),
             port,
             status: 'stopped',
             healthCheck: svc.healthCheck,
@@ -450,6 +480,18 @@ export class WorkspaceManager {
     // Fallback: ensure the worktree directory is gone even if `git worktree remove` failed
     if (ws.worktreePath && existsSync(ws.worktreePath)) {
       try { rmSync(ws.worktreePath, { recursive: true, force: true }); } catch {}
+    }
+
+    // Release per-service in-memory state. stopService() already deletes
+    // runningProcesses entries; serviceLogs is module-scoped and was never
+    // reaped, leaving a LogRingBuffer + listener closures per service per
+    // archived workspace. With dozens of workspaces archived over a server
+    // lifetime that adds up to MBs of retained Response objects from
+    // disconnected SSE clients.
+    for (const svc of ws.services) {
+      const key = `${id}:${svc.name}`;
+      serviceLogs.get(key)?.dispose();
+      serviceLogs.delete(key);
     }
 
     await this.col.updateOne({ _id: new ObjectId(id) }, { $set: { status: 'archived', updatedAt: new Date() } });

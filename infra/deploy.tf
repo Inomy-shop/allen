@@ -18,6 +18,7 @@ resource "aws_ssm_parameter" "env_production" {
   value = templatefile("${path.module}/templates/env.production.tftpl", {
     port               = var.app_port
     ws_port            = var.ws_port
+    domain             = var.domain
     docdb_uri          = var.docdb_uri
     master_key         = var.master_key
     jwt_access_secret  = var.jwt_access_secret
