@@ -122,6 +122,65 @@ fi
 sudo mkdir -p /tmp/allen
 sudo chown ubuntu:ubuntu /tmp/allen
 
+# ── 4c. Swap file (prevents kernel deadlock under memory pressure) ─────────
+# Without swap, when allen + spawned Claude CLIs + MCP subprocesses crowd
+# the 16 GiB of RAM, the kernel enters direct-reclaim thrashing and the
+# instance becomes unreachable (status check fail) before the OOM killer
+# even fires. A 16 GiB swapfile gives the kernel room to page out idle
+# pages instead of stalling. swappiness=10 keeps it as a safety valve,
+# not a primary tier.
+echo "=== [4c/9] Swap ==="
+if ! swapon --show=NAME --noheadings | grep -q '^/swapfile$'; then
+  sudo fallocate -l 16G /swapfile
+  sudo chmod 600 /swapfile
+  sudo mkswap /swapfile >/dev/null
+  sudo swapon /swapfile
+  if ! grep -q '^/swapfile' /etc/fstab; then
+    echo '/swapfile none swap sw 0 0' | sudo tee -a /etc/fstab >/dev/null
+  fi
+  echo "  swap: 16G enabled at /swapfile"
+else
+  echo "  swap: already enabled"
+fi
+sudo sysctl -q vm.swappiness=10
+if ! grep -q '^vm.swappiness' /etc/sysctl.conf; then
+  echo 'vm.swappiness=10' | sudo tee -a /etc/sysctl.conf >/dev/null
+fi
+
+# ── 4d. CloudWatch agent (memory + swap + disk metrics) ────────────────────
+# AWS only ships CPU / network / EBS metrics by default. Memory and swap
+# are exactly the metrics we need to debug OOM-driven instance hangs, so
+# install the CloudWatch agent and emit them under the CWAgent namespace.
+# Requires CloudWatchAgentServerPolicy on the instance role
+# (es-pipeline-dev-self-healing-profile, managed in es-data-pipeline repo).
+echo "=== [4d/9] CloudWatch agent ==="
+if ! command -v amazon-cloudwatch-agent-ctl &>/dev/null; then
+  TMP_DEB=/tmp/amazon-cloudwatch-agent.deb
+  wget -q -O "$TMP_DEB" \
+    https://s3.amazonaws.com/amazoncloudwatch-agent/ubuntu/amd64/latest/amazon-cloudwatch-agent.deb
+  sudo dpkg -i "$TMP_DEB" >/dev/null
+  rm -f "$TMP_DEB"
+  echo "  installed amazon-cloudwatch-agent"
+else
+  echo "  already installed"
+fi
+sudo tee /opt/aws/amazon-cloudwatch-agent/etc/config.json >/dev/null <<'CWCFG'
+{
+  "agent": { "metrics_collection_interval": 60, "run_as_user": "root" },
+  "metrics": {
+    "namespace": "CWAgent",
+    "append_dimensions": { "InstanceId": "${aws:InstanceId}" },
+    "metrics_collected": {
+      "mem":  { "measurement": ["mem_used_percent", "mem_available_percent"], "metrics_collection_interval": 60 },
+      "swap": { "measurement": ["swap_used_percent"], "metrics_collection_interval": 60 },
+      "disk": { "measurement": ["used_percent"], "resources": ["/"], "metrics_collection_interval": 300 }
+    }
+  }
+}
+CWCFG
+sudo amazon-cloudwatch-agent-ctl -a fetch-config -m ec2 -s \
+  -c file:/opt/aws/amazon-cloudwatch-agent/etc/config.json >/dev/null
+echo "  cloudwatch agent: config applied + running"
 
 # ── 5. iptables — restrict workspace ports 15000-20000 to localhost ────────
 echo "=== [5/8] iptables ==="

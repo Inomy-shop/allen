@@ -231,17 +231,38 @@ function DiffView({ diff }: { diff: string }) {
 
 // ── Main ──
 
+// Pick a preview URL the browser can actually load.
+// Localhost / IP / dev: hit the service port directly. The path-based
+// proxy at /api/workspaces/:id/preview only works for trivial pages —
+// any app with relative asset URLs (Vite, Next, CRA …) would 404
+// because the browser resolves /assets/foo.js against the Allen origin,
+// not through the proxy. Using the direct port avoids that entirely.
+// Production: prepend <service>-<wsId> as a subdomain of whatever host
+// the UI is being served from. The server's WORKSPACE_SUBDOMAIN_REGEX
+// matches any host of that shape, so this works on any deployment
+// domain without a hardcoded value here.
+function previewUrlFor(svc: { name: string; port: number } | undefined, workspaceId: string): string {
+  if (!svc) return '';
+  const { hostname, protocol } = window.location;
+  const isLocal = hostname === 'localhost' || hostname === '127.0.0.1' || /^\d+\.\d+\.\d+\.\d+$/.test(hostname);
+  if (isLocal) return `http://${hostname}:${svc.port}`;
+  return `${protocol}//${svc.name}-${workspaceId}.${hostname}`;
+}
+
 function PreviewBar({ id, previewService, setPreviewService, services, onClose }: {
   id: string; previewService: string; setPreviewService: (s: string) => void; services: any[]; onClose: () => void;
 }) {
+  const ready = services?.filter((s: any) => s.status === 'ready') ?? [];
+  const active = ready.find((s: any) => s.name === previewService) ?? ready[0];
+  const url = previewUrlFor(active, id);
   return (
     <div className="flex items-center gap-2 px-3 py-1 bg-surface-100/30 border-b border-border/20 shrink-0">
       <Eye className="w-3 h-3 text-blue-400" />
       <span className="text-[10px] font-label uppercase tracking-wider text-theme-muted">Preview</span>
       <select value={previewService} onChange={e => setPreviewService(e.target.value)} className="bg-surface-100 border border-border/30 rounded text-[10px] font-mono text-theme-secondary px-1.5 py-0.5">
-        {services?.filter((s: any) => s.status === 'ready').map((s: any) => (<option key={s.name} value={s.name}>{s.name} :{s.port}</option>))}
+        {ready.map((s: any) => (<option key={s.name} value={s.name}>{s.name} :{s.port}</option>))}
       </select>
-      <a href={`/api/workspaces/${id}/preview${previewService ? `?service=${previewService}` : ''}`} target="_blank" rel="noopener noreferrer" className="text-theme-subtle hover:text-theme-secondary p-0.5" title="Open in new tab"><ExternalLink className="w-3 h-3" /></a>
+      {url && <a href={url} target="_blank" rel="noopener noreferrer" className="text-theme-subtle hover:text-theme-secondary p-0.5" title="Open in new tab"><ExternalLink className="w-3 h-3" /></a>}
       <span className="flex-1" />
       <button onClick={onClose} className="text-theme-subtle hover:text-theme-secondary p-0.5"><X className="w-3 h-3" /></button>
     </div>
@@ -328,8 +349,8 @@ function ServiceLogViewer({ workspaceId, serviceName, onClose }: { workspaceId: 
 
 // ── Services Panel ──
 
-function ServicesPanel({ workspaceId, services, domain, onRefresh }: {
-  workspaceId: string; services: any[]; domain: string; onRefresh: () => void;
+function ServicesPanel({ workspaceId, services, onRefresh }: {
+  workspaceId: string; services: any[]; onRefresh: () => void;
 }) {
   const [actionLoading, setActionLoading] = useState<string | null>(null);
   const [logService, setLogService] = useState<string | null>(null);
@@ -348,13 +369,7 @@ function ServicesPanel({ workspaceId, services, domain, onRefresh }: {
   }
 
   function openPreview(svc: any) {
-    const host = window.location.hostname;
-    // On production (subdomain routing via nginx), use the subdomain URL.
-    // On localhost/dev, open the service directly on its port.
-    const previewUrl = host.includes(domain)
-      ? `https://${svc.name}-${workspaceId}.${domain}`
-      : `http://${host}:${svc.port}`;
-    window.open(previewUrl, '_blank');
+    window.open(previewUrlFor(svc, workspaceId), '_blank');
   }
 
   if (logService) {
@@ -891,12 +906,19 @@ export default function WorkspaceDetailPage() {
           </div>
 
           {/* Split preview — side by side with editor */}
-          {showPreview && splitPreview && (
-            <div className="w-1/2 border-l border-border/20 flex flex-col overflow-hidden">
-              <PreviewBar id={id!} previewService={previewService} setPreviewService={setPreviewService} services={workspace.services} onClose={() => setShowPreview(false)} />
-              <iframe src={`/api/workspaces/${id}/preview${previewService ? `?service=${previewService}` : ''}`} className="flex-1 w-full bg-surface-100 border-none" title="Preview" />
-            </div>
-          )}
+          {showPreview && splitPreview && (() => {
+            const ready = (workspace.services ?? []).filter((s: any) => s.status === 'ready');
+            const active = ready.find((s: any) => s.name === previewService) ?? ready[0];
+            const url = previewUrlFor(active, id!);
+            return (
+              <div className="w-1/2 border-l border-border/20 flex flex-col overflow-hidden">
+                <PreviewBar id={id!} previewService={previewService} setPreviewService={setPreviewService} services={workspace.services} onClose={() => setShowPreview(false)} />
+                {url
+                  ? <iframe src={url} className="flex-1 w-full bg-surface-100 border-none" title="Preview" />
+                  : <div className="flex-1 flex items-center justify-center text-xs text-theme-subtle">No service ready</div>}
+              </div>
+            );
+          })()}
 
           {/* Activity panel — side panel */}
           {/* Services panel — right side panel */}
@@ -912,7 +934,6 @@ export default function WorkspaceDetailPage() {
                 <ServicesPanel
                   workspaceId={id!}
                   services={workspace.services ?? []}
-                  domain="allen.inomy.ai"
                   onRefresh={refreshWorkspace}
                 />
               </div>
@@ -949,12 +970,19 @@ export default function WorkspaceDetailPage() {
           </div>
 
           {/* Preview iframe — below editor (non-split) */}
-          {showPreview && !splitPreview && (
-            <div className="shrink-0 border-t border-border/30 flex flex-col" style={{ height: 300 }}>
-              <PreviewBar id={id!} previewService={previewService} setPreviewService={setPreviewService} services={workspace.services} onClose={() => setShowPreview(false)} />
-              <iframe src={`/api/workspaces/${id}/preview${previewService ? `?service=${previewService}` : ''}`} className="flex-1 w-full bg-surface-100 border-none" title="Preview" />
-            </div>
-          )}
+          {showPreview && !splitPreview && (() => {
+            const ready = (workspace.services ?? []).filter((s: any) => s.status === 'ready');
+            const active = ready.find((s: any) => s.name === previewService) ?? ready[0];
+            const url = previewUrlFor(active, id!);
+            return (
+              <div className="shrink-0 border-t border-border/30 flex flex-col" style={{ height: 300 }}>
+                <PreviewBar id={id!} previewService={previewService} setPreviewService={setPreviewService} services={workspace.services} onClose={() => setShowPreview(false)} />
+                {url
+                  ? <iframe src={url} className="flex-1 w-full bg-surface-100 border-none" title="Preview" />
+                  : <div className="flex-1 flex items-center justify-center text-xs text-theme-subtle">No service ready</div>}
+              </div>
+            );
+          })()}
 
           {/* Terminal resize handle */}
           {terminalVisible && <div onMouseDown={termPanel.onMouseDown} className="h-1 shrink-0 cursor-row-resize bg-transparent hover:bg-blue-500/30 active:bg-blue-500/50 transition-colors border-t border-border/30" />}

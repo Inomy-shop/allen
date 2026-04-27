@@ -21,7 +21,7 @@ import { learningRoutes, executionLearningsRoute } from './routes/learning.route
 import { chatRoutes } from './routes/chat.routes.js';
 import { mcpRoutes } from './routes/mcp.routes.js';
 import { alertRoutes } from './routes/alert.routes.js';
-import { workspaceRoutes } from './routes/workspace.routes.js';
+import { workspaceRoutes, publicWorkspaceRoutes } from './routes/workspace.routes.js';
 import { pullRequestRoutes } from './routes/pull-request.routes.js';
 import { fileRoutes, publicFileRoutes } from './routes/file.routes.js';
 import { artifactRoutes, publicArtifactRoutes } from './routes/artifact.routes.js';
@@ -209,6 +209,16 @@ async function main(): Promise<void> {
   // `executionRoutes` below, which sits behind requireAuth.
   app.use('/api/executions', streamRoutes());
 
+  // Workspace service log SSE — same EventSource constraint as executions.
+  // Workspace id is a 24-char ObjectId acting as the capability URL.
+  app.use('/api/workspaces', publicWorkspaceRoutes(db));
+
+  // Workspace preview reverse proxy — same constraint: the iframe and
+  // "open in new tab" link cannot send an Authorization header. Subdomain
+  // routing already bypasses requireAuth via the host-based proxy mounted
+  // earlier; this path-based proxy is the localhost-dev fallback.
+  app.use('/api/workspaces/:id/preview', createWorkspaceProxy(db));
+
   // Every API route below this line requires a valid access token, and if
   // the user has `mustResetPassword: true` they can only hit /api/auth/*.
   app.use('/api', requireAuth, blockIfMustReset);
@@ -237,10 +247,6 @@ async function main(): Promise<void> {
   app.use('/api/linear', linearRoutes(db));
   app.use('/api/files', fileRoutes());
   app.use('/api/artifacts', artifactRoutes(db));
-
-  // Preview reverse proxy — must be after json middleware but catches /api/workspaces/:id/preview/*
-  app.use('/api/workspaces/:id/preview', createWorkspaceProxy(db));
-
 
   app.listen(PORT, () => {
     console.log(`Allen server running on http://localhost:${PORT}`);

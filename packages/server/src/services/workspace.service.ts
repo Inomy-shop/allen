@@ -101,18 +101,25 @@ export interface WorkspaceConfig {
 
 // ── Service ──
 
-export class WorkspaceManager {
-  private runningProcesses = new Map<string, ChildProcess>(); // key: workspaceId:serviceName
-  private serviceLogs = new Map<string, LogRingBuffer>();     // key: workspaceId:serviceName
+// Process and log state must be shared across every WorkspaceManager
+// instance — startService() runs through the auth-gated workspace
+// router's manager, but the SSE log stream is mounted on a separate
+// (public) router with its own WorkspaceManager. Instance-scoped Maps
+// would split the writers from the readers and the UI would never see
+// any logs. Same for runningProcesses, which would otherwise look empty
+// to cleanupStalePids() and bulk operations spawned from other modules.
+const runningProcesses = new Map<string, ChildProcess>(); // key: workspaceId:serviceName
+const serviceLogs = new Map<string, LogRingBuffer>();     // key: workspaceId:serviceName
 
+export class WorkspaceManager {
   constructor(private db: Db) {}
 
   // ── Log access ──
 
   getLogBuffer(workspaceId: string, serviceName: string): LogRingBuffer {
     const key = `${workspaceId}:${serviceName}`;
-    if (!this.serviceLogs.has(key)) this.serviceLogs.set(key, new LogRingBuffer());
-    return this.serviceLogs.get(key)!;
+    if (!serviceLogs.has(key)) serviceLogs.set(key, new LogRingBuffer());
+    return serviceLogs.get(key)!;
   }
 
   // ── Stale PID cleanup (call once on boot) ──
@@ -123,7 +130,7 @@ export class WorkspaceManager {
       for (const svc of (ws.services ?? []) as WorkspaceService[]) {
         if (svc.status === 'ready' || svc.status === 'starting') {
           const key = `${ws._id!.toString()}:${svc.name}`;
-          if (!this.runningProcesses.has(key)) {
+          if (!runningProcesses.has(key)) {
             // Process is not tracked in memory — mark stopped
             await this.col.updateOne(
               { _id: ws._id, 'services.name': svc.name },
@@ -668,7 +675,7 @@ export class WorkspaceManager {
 
     const proc = spawn('sh', ['-c', svc.command], { cwd: ws.worktreePath, env, stdio: ['pipe', 'pipe', 'pipe'], detached: true });
     const key = `${id}:${serviceName}`;
-    this.runningProcesses.set(key, proc);
+    runningProcesses.set(key, proc);
 
     // Set up log capture
     const logBuf = this.getLogBuffer(id, serviceName);
@@ -698,7 +705,7 @@ export class WorkspaceManager {
     );
 
     proc.on('close', (code) => {
-      this.runningProcesses.delete(key);
+      runningProcesses.delete(key);
       logBuf.push({ ts: Date.now(), stream: 'stderr', text: `[process exited with code ${code}]` });
       this.col.updateOne(
         { _id: new ObjectId(id), 'services.name': serviceName },
@@ -724,14 +731,14 @@ export class WorkspaceManager {
     const ws = await this.get(id);
     const svc = ws?.services.find(s => s.name === serviceName);
     const key = `${id}:${serviceName}`;
-    const proc = this.runningProcesses.get(key);
+    const proc = runningProcesses.get(key);
 
     if (proc && proc.pid) {
       // Kill the entire process group (sh + child processes like node/vite)
       try { process.kill(-proc.pid, 'SIGTERM'); } catch {}
       // Fallback: also kill the shell process directly
       try { proc.kill('SIGTERM'); } catch {}
-      this.runningProcesses.delete(key);
+      runningProcesses.delete(key);
     }
 
     // Fallback: kill any process still occupying this service's ports

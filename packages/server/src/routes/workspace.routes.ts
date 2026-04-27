@@ -272,33 +272,6 @@ export function workspaceRoutes(db: Db): Router {
     } catch (err: unknown) { res.status(500).json({ error: (err as Error).message }); }
   });
 
-  // SSE log stream for a service
-  router.get('/:id/services/:name/logs', (req: Request, res: Response) => {
-    try {
-      const logBuf = manager.getLogBuffer(p(req, 'id'), p(req, 'name'));
-
-      res.writeHead(200, {
-        'Content-Type': 'text/event-stream',
-        'Cache-Control': 'no-cache',
-        Connection: 'keep-alive',
-        'X-Accel-Buffering': 'no',
-      });
-
-      // Send existing lines as a snapshot
-      const snapshot = logBuf.snapshot();
-      for (const line of snapshot) {
-        res.write(`data: ${JSON.stringify(line)}\n\n`);
-      }
-
-      // Stream new lines
-      const unsub = logBuf.subscribe(line => {
-        res.write(`data: ${JSON.stringify(line)}\n\n`);
-      });
-
-      req.on('close', unsub);
-    } catch (err: unknown) { res.status(500).json({ error: (err as Error).message }); }
-  });
-
   // ── Chat Link ──
 
   router.post('/:id/link-chat', async (req: Request, res: Response) => {
@@ -383,6 +356,42 @@ export function workspaceRoutes(db: Db): Router {
   router.get('/:id/activity', async (req: Request, res: Response) => {
     try { res.json(await manager.getActivity(p(req, 'id'))); }
     catch (err: unknown) { res.status(500).json({ error: (err as Error).message }); }
+  });
+
+  return router;
+}
+
+// Mounted BEFORE requireAuth in app.ts because EventSource (the SSE
+// client used by the UI to stream service logs) cannot set custom
+// headers, so it can't send the Bearer token. The workspace id is an
+// unguessable 24-char ObjectId, used as the capability — same pattern
+// as /api/executions SSE and /api/files public downloads.
+export function publicWorkspaceRoutes(db: Db): Router {
+  const router = Router();
+  const manager = new WorkspaceManager(db);
+
+  router.get('/:id/services/:name/logs', (req: Request, res: Response) => {
+    try {
+      const logBuf = manager.getLogBuffer(p(req, 'id'), p(req, 'name'));
+
+      res.writeHead(200, {
+        'Content-Type': 'text/event-stream',
+        'Cache-Control': 'no-cache',
+        Connection: 'keep-alive',
+        'X-Accel-Buffering': 'no',
+      });
+
+      const snapshot = logBuf.snapshot();
+      for (const line of snapshot) {
+        res.write(`data: ${JSON.stringify(line)}\n\n`);
+      }
+
+      const unsub = logBuf.subscribe(line => {
+        res.write(`data: ${JSON.stringify(line)}\n\n`);
+      });
+
+      req.on('close', unsub);
+    } catch (err: unknown) { res.status(500).json({ error: (err as Error).message }); }
   });
 
   return router;
