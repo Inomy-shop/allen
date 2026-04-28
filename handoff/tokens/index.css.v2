@@ -1,0 +1,339 @@
+/* ================================================================
+   ALLEN UI · v2 (Linear-clean direction)
+   Drop-in replacement for packages/ui/src/index.css
+   ----------------------------------------------------------------
+   What changed vs. v1:
+   • Surface: deep-navy → near-white. Light theme by default.
+   • Accent: cyan #00D4FF → violet #5E6AD2 (single-accent rule).
+   • Type:   Inter + JetBrains Mono → Inter Tight + Geist Mono.
+   • Chrome: clip-path corners, scan-lines, glow shadows REMOVED.
+            Replaced by 1px borders, 6/10/14px radius, soft shadow.
+   • Buttons: uppercase tracking-wider → sentence-case, tighter.
+   • Status: saturated colors retained — only used for run state.
+   ================================================================ */
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ---------- Fonts ----------
+   Self-host these in packages/ui/public/fonts and reference via
+   @font-face below, OR keep a Google Fonts <link> in index.html. */
+@layer base {
+  :root {
+    /* RGB channel values (Tailwind /<alpha-value>) */
+    --color-surface:        251 251 250;   /* #FBFBFA  page bg          */
+    --color-surface-100:    255 255 255;   /* #FFFFFF  card surface     */
+    --color-surface-200:    244 244 242;   /* #F4F4F2  muted band       */
+    --color-surface-300:    237 237 235;   /* #EDEDEB  sunken band      */
+
+    --color-border:         232 231 228;   /* #E8E7E4  hairline         */
+    --color-border-strong:  216 214 210;   /* #D8D6D2  emphasis hairline*/
+
+    --color-text-primary:    24  24  26;   /* #18181A  ink              */
+    --color-text-secondary:  74  74  79;   /* #4A4A4F  ink-2            */
+    --color-text-muted:     138 138 143;   /* #8A8A8F  ink-3 / muted    */
+    --color-text-subtle:    184 184 188;   /* #B8B8BC  ink-4 / disabled */
+
+    /* Single brand accent — violet */
+    --color-accent:          94 106 210;   /* #5E6AD2  primary CTA      */
+    --color-accent-soft:    238 240 251;   /* #EEF0FB  accent fill 100  */
+    --color-accent-hover:    79  91 199;   /* #4F5BC7  600              */
+
+    /* Status — reserved for run state (pills, dots, glow rings) */
+    --color-accent-green:     5 150 105;   /* #059669  ok / completed   */
+    --color-accent-red:     220  38  38;   /* #DC2626  failed           */
+    --color-accent-yellow:  217 119   6;   /* #D97706  warn / queued    */
+    --color-accent-purple:  168  85 247;   /* #A855F7  human-in-loop    */
+    --color-accent-cyan:      2 132 199;   /* #0284C7  running / info   */
+    --color-accent-orange:  234  88  12;   /* #EA580C  retry            */
+
+    /* Graph edges — recede by default, label/dash carries semantics */
+    --color-flow-edge-default:     184 184 188;  /* #B8B8BC */
+    --color-flow-edge-conditional: 184 184 188;
+    --color-flow-edge-retry:       184 184 188;
+
+    /* Editor (Monaco) — light */
+    --color-editor-background:    255 255 255;
+    --color-editor-line-highlight:248 249 252;
+    --color-editor-gutter:        251 251 250;
+
+    /* Mermaid diagrams */
+    --color-mermaid-line:           184 184 188;
+    --color-mermaid-node-border:    216 214 210;
+    --color-mermaid-cluster-bg:     244 244 242;
+    --color-mermaid-main-bg:        255 255 255;
+    --color-mermaid-edge-label-bg: 255 255 255;
+
+    /* Hex aliases for non-Tailwind use (gradients, focus rings, etc.) */
+    --accent-hex:        #5E6AD2;
+    --accent-soft-hex:   #EEF0FB;
+    --accent-red-hex:    #DC2626;
+
+    /* Type stack */
+    --font-heading: 'Inter Tight', 'Inter', system-ui, sans-serif;
+    --font-body:    'Inter Tight', 'Inter', system-ui, sans-serif;
+    --font-mono:    'Geist Mono', 'JetBrains Mono', ui-monospace, monospace;
+    --font-label:   'Geist Mono', 'JetBrains Mono', ui-monospace, monospace;
+
+    /* Radii (used in @apply rounded-* and component classes) */
+    --radius-sm: 4px;
+    --radius:    6px;
+    --radius-lg: 10px;
+    --radius-xl: 14px;
+
+    /* Elevation */
+    --shadow-sm:      0 1px 2px rgb(0 0 0 / 0.04), 0 1px 1px rgb(0 0 0 / 0.04);
+    --shadow-popover: 0 8px 24px rgb(24 24 26 / 0.08), 0 2px 6px rgb(24 24 26 / 0.06);
+
+    /* Focus ring */
+    --focus-ring: 0 0 0 3px rgb(var(--color-accent) / 0.18);
+  }
+
+  /* Optional dark mode — kept available, NOT default in v2. */
+  .dark {
+    --color-surface:        15  15  17;
+    --color-surface-100:    24  24  27;
+    --color-surface-200:    33  33  37;
+    --color-surface-300:    44  44  48;
+    --color-border:         44  44  48;
+    --color-border-strong:  60  60  66;
+    --color-text-primary:  244 244 245;
+    --color-text-secondary:212 212 216;
+    --color-text-muted:    161 161 170;
+    --color-text-subtle:   113 113 122;
+    --color-editor-background:    24 24 27;
+    --color-editor-line-highlight:33 33 37;
+    --color-editor-gutter:        15 15 17;
+  }
+
+  body {
+    @apply font-body antialiased;
+    background-color: rgb(var(--color-surface));
+    color: rgb(var(--color-text-primary));
+    font-feature-settings: 'cv11', 'ss01';
+    letter-spacing: -0.005em;
+    font-size: 13px;
+    line-height: 1.55;
+  }
+
+  h1, h2, h3, h4, h5, h6 {
+    @apply font-heading;
+    letter-spacing: -0.025em;
+  }
+
+  /* Calm scrollbars */
+  ::-webkit-scrollbar         { width: 10px; height: 10px; }
+  ::-webkit-scrollbar-track   { background: transparent; }
+  ::-webkit-scrollbar-thumb   {
+    background: rgb(var(--color-border-strong));
+    border-radius: 99px;
+    border: 2px solid rgb(var(--color-surface));
+  }
+  ::-webkit-scrollbar-thumb:hover { background: rgb(var(--color-text-muted)); }
+
+  /* Selection */
+  ::selection {
+    background: rgb(var(--color-accent) / 0.25);
+    color: rgb(var(--color-text-primary));
+  }
+
+  /* v1 had a global .scan-lines overlay — delete usage; keep a no-op
+     so existing JSX with className="scan-lines" doesn't blow up. */
+  .scan-lines::after { content: none; }
+}
+
+@layer components {
+  /* ─── Cards ─── flat surface, hairline border, soft radius ─── */
+  .card {
+    @apply bg-surface-100 border border-border rounded-lg;
+  }
+  .card::before { content: none; } /* kill v1's accent top-line */
+
+  .card-hover {
+    @apply card transition-colors;
+  }
+  .card-hover:hover {
+    border-color: rgb(var(--color-border-strong));
+    background: rgb(var(--color-surface-100));
+    box-shadow: var(--shadow-sm);
+  }
+
+  /* ─── Buttons ───
+     v2 buttons are SENTENCE CASE, not uppercase.
+     Removed: clip-path, glow on hover, text-shadow. */
+  .btn {
+    @apply font-body font-medium text-[13px] tracking-tight;
+    @apply inline-flex items-center gap-1.5 px-3 py-1.5 rounded;
+    @apply border transition-colors cursor-pointer;
+    @apply disabled:opacity-50 disabled:cursor-not-allowed;
+    line-height: 1.4;
+  }
+  .btn:focus-visible { outline: none; box-shadow: var(--focus-ring); }
+
+  .btn-primary {
+    @apply btn text-white;
+    background: rgb(var(--color-accent));
+    border-color: rgb(var(--color-accent-hover));
+  }
+  .btn-primary:hover { background: rgb(var(--color-accent-hover)); }
+
+  .btn-secondary {
+    @apply btn bg-surface-100 text-theme-primary border-border;
+  }
+  .btn-secondary:hover { background: rgb(var(--color-surface-200)); }
+
+  .btn-ghost {
+    @apply btn bg-transparent border-transparent text-theme-secondary;
+  }
+  .btn-ghost:hover {
+    background: rgb(var(--color-surface-200));
+    color: rgb(var(--color-text-primary));
+  }
+
+  .btn-danger {
+    @apply btn text-white;
+    background: rgb(var(--color-accent-red));
+    border-color: rgb(var(--color-accent-red));
+  }
+  .btn-danger:hover { background: #B91C1C; }
+
+  .btn-sm { @apply px-2 py-0.5 text-[12px]; }
+  .btn-lg { @apply px-4 py-2 text-[14px]; }
+
+  /* ─── Inputs ─── boxed, not bottom-bordered ─── */
+  .input {
+    @apply w-full bg-surface-100 border border-border rounded;
+    @apply px-3 py-2 text-[13px] font-body;
+    @apply transition-colors;
+    color: rgb(var(--color-text-primary));
+  }
+  .input::placeholder { color: rgb(var(--color-text-muted)); }
+  .input:focus {
+    outline: none;
+    border-color: rgb(var(--color-accent));
+    box-shadow: var(--focus-ring);
+  }
+
+  select.input {
+    appearance: none;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%238A8A8F' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+    background-repeat: no-repeat;
+    background-position: right 10px center;
+    padding-right: 32px;
+    cursor: pointer;
+  }
+  select.input option {
+    background: rgb(var(--color-surface-100));
+    color: rgb(var(--color-text-primary));
+  }
+
+  /* ─── Badges / pills ───
+     v2 uses Geist Mono and SOFT tinted backgrounds, not glows. */
+  .badge {
+    @apply inline-flex items-center gap-1 px-2 py-0.5 rounded-full;
+    @apply text-[11.5px] font-mono font-medium;
+    text-transform: none; /* v1 was uppercase; v2 is sentence-case */
+    letter-spacing: 0;
+  }
+  .badge-ok    { background: #D1FAE5; color: #047857; }
+  .badge-info  { background: #E0F2FE; color: #0369A1; }
+  .badge-warn  { background: #FEF3C7; color: #92400E; }
+  .badge-err   { background: #FEE2E2; color: #B91C1C; }
+  .badge-human { background: #F3E8FF; color: #6B21A8; }
+  .badge-muted { background: #F4F4F2; color: #71717A; }
+
+  /* ─── Status dots ─── compact lists ─── */
+  .dot { @apply inline-block w-1.5 h-1.5 rounded-full mr-1.5 align-middle; }
+  .dot-ok   { background: rgb(var(--color-accent-green)); }
+  .dot-run  { background: rgb(var(--color-accent-cyan)); }
+  .dot-warn { background: rgb(var(--color-accent-yellow)); }
+  .dot-err  { background: rgb(var(--color-accent-red)); }
+  .dot-idle { background: rgb(var(--color-text-subtle)); }
+
+  /* ─── Status glows ───
+     v1 had bright shadow glows. v2 uses subtle pulse animation only.
+     Old class names preserved so JSX usage keeps compiling. */
+  .glow-running   { animation: pulse-running 2s ease-in-out infinite; }
+  .glow-completed { /* no-op — completed state shown via badge color */ }
+  .glow-failed    { /* no-op — failed state shown via badge color */ }
+
+  @keyframes pulse-running {
+    0%,100% { box-shadow: 0 0 0 0 rgb(var(--color-accent-cyan) / 0.45); }
+    50%     { box-shadow: 0 0 0 5px rgb(var(--color-accent-cyan) / 0); }
+  }
+
+  /* ─── Grid background ─── kept but lighter ─── */
+  .grid-bg {
+    background-image:
+      linear-gradient(rgb(var(--color-border) / 0.6) 1px, transparent 1px),
+      linear-gradient(90deg, rgb(var(--color-border) / 0.6) 1px, transparent 1px);
+    background-size: 32px 32px;
+  }
+
+  /* ─── Section / overline label ─── */
+  .overline {
+    @apply font-mono text-[11px] font-medium uppercase tracking-wider;
+    color: rgb(var(--color-text-muted));
+    letter-spacing: 0.05em;
+  }
+
+  /* ─── Markdown body ─── unchanged structure, lighter colors ─── */
+  .markdown-body { word-break: break-word; }
+  .markdown-body > *:first-child { margin-top: 0; }
+  .markdown-body > *:last-child  { margin-bottom: 0; }
+
+  .prose-allen .markdown-body h1 { font-size: 1.25rem; font-weight: 600; margin: 1.5rem 0 0.5rem; color: rgb(var(--color-text-primary)); letter-spacing: -0.02em; }
+  .prose-allen .markdown-body h2 { font-size: 1.10rem; font-weight: 600; margin: 1.25rem 0 0.4rem; color: rgb(var(--color-text-primary)); }
+  .prose-allen .markdown-body h3 { font-size: 0.95rem; font-weight: 600; margin: 1rem 0 0.3rem; color: rgb(var(--color-text-primary)); }
+  .prose-allen .markdown-body p  { margin: 0.4rem 0; line-height: 1.65; color: rgb(var(--color-text-secondary)); }
+  .prose-allen .markdown-body ul,
+  .prose-allen .markdown-body ol { margin: 0.3rem 0; padding-left: 1.5rem; }
+  .prose-allen .markdown-body ul { list-style: disc; }
+  .prose-allen .markdown-body ol { list-style: decimal; }
+  .prose-allen .markdown-body li { margin: 0.15rem 0; line-height: 1.55; }
+  .prose-allen .markdown-body strong { font-weight: 600; color: rgb(var(--color-text-primary)); }
+  .prose-allen .markdown-body code:not(pre code) {
+    font-size: 0.85em; padding: 0.15em 0.35em; border-radius: 3px;
+    background: rgb(var(--color-surface-200));
+    color: rgb(var(--color-text-primary));
+    font-family: var(--font-mono);
+  }
+  .prose-allen .markdown-body hr { border: none; border-top: 1px solid rgb(var(--color-border)); margin: 1rem 0; }
+  .prose-allen .markdown-body table { border-collapse: collapse; margin: 0.5rem 0; font-size: 0.8rem; width: 100%; }
+  .prose-allen .markdown-body th,
+  .prose-allen .markdown-body td { border: 1px solid rgb(var(--color-border)); padding: 0.35rem 0.6rem; text-align: left; }
+  .prose-allen .markdown-body th { background: rgb(var(--color-surface-200)); font-weight: 600; color: rgb(var(--color-text-primary)); }
+
+  /* ─── Chat message entry ─── */
+  .al-msg-enter { animation: al-msg-enter 0.3s ease-out; }
+  @keyframes al-msg-enter {
+    from { opacity: 0; transform: translateY(0.5rem); }
+    to   { opacity: 1; transform: translateY(0); }
+  }
+
+  /* ─── Agent thinking ─── softer than v1 ─── */
+  .al-agent-thinking { animation: al-agent-pulse 1.6s ease-in-out infinite; }
+  @keyframes al-agent-pulse {
+    0%,100% { opacity: 0.55; }
+    50%     { opacity: 1; }
+  }
+}
+
+@layer utilities {
+  .text-theme-primary   { color: rgb(var(--color-text-primary)); }
+  .text-theme-secondary { color: rgb(var(--color-text-secondary)); }
+  .text-theme-muted     { color: rgb(var(--color-text-muted)); }
+  .text-theme-subtle    { color: rgb(var(--color-text-subtle)); }
+
+  .bg-app           { background: rgb(var(--color-surface)); }
+  .bg-app-card      { background: rgb(var(--color-surface-100)); }
+  .bg-app-muted     { background: rgb(var(--color-surface-200)); }
+  .bg-app-sunken    { background: rgb(var(--color-surface-300)); }
+
+  .border-app       { border-color: rgb(var(--color-border)); }
+  .border-app-strong{ border-color: rgb(var(--color-border-strong)); }
+
+  .shadow-popover   { box-shadow: var(--shadow-popover); }
+  .ring-focus       { box-shadow: var(--focus-ring); }
+}
