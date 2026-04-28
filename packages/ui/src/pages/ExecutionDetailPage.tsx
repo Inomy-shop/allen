@@ -380,53 +380,57 @@ function AgentExecutionView({ execution, agentName, traces, id, liveToolCalls, r
 
   return (
     <div className="flex flex-col h-full">
-      {/* Header */}
-      <header className="flex items-center justify-between px-6 py-3 border-b border-app bg-surface-50 shrink-0">
-        <div className="flex items-center gap-3">
-          <Link to="/executions" className="text-theme-secondary hover:text-accent-blue transition-colors">
-            <ArrowLeft className="w-4 h-4" />
+      {/* Header — agent execution variant */}
+      <header className="px-6 pt-4 pb-3 border-b border-app shrink-0">
+        <div className="flex items-center gap-2 mb-2 text-[12px] text-theme-muted">
+          <Link to="/executions" className="hover:text-theme-primary transition-colors flex items-center gap-1">
+            <ArrowLeft className="w-3 h-3" /> Activity
           </Link>
-          <div className="w-9 h-9 rounded-lg bg-accent-purple/10 border border-accent-purple/20 flex items-center justify-center">
-            <Bot className="w-5 h-5 text-accent-purple" />
-          </div>
-          <div>
-            <h1 className="text-[14px] font-semibold text-theme-primary tracking-tight">{agentName}</h1>
-            <div className="flex items-center gap-2 mt-0.5">
-              <StatusBadge status={execution.status} />
-              <span className="text-xs text-theme-muted font-mono">{id?.slice(0, 8)}</span>
-              {meta.spawnedBy && <span className="text-[10px] text-theme-subtle font-mono">by {meta.spawnedBy}</span>}
-            </div>
-          </div>
+          <span className="text-theme-subtle">/</span>
+          <span className="font-mono">{id?.slice(0, 8)}</span>
         </div>
-        <div className="flex items-center gap-3">
-          {execution.status === 'running' && <span className="w-2 h-2 rounded-full bg-blue-400 animate-pulse" />}
-          {durationMs > 0 && (
-            <span className="flex items-center gap-1 text-xs text-theme-secondary font-mono">
-              <Clock className="w-3 h-3" /> {formatDuration(durationMs)}
-            </span>
-          )}
-          <CostDisplay cost={cost} />
-          <button
-            onClick={() => setAgentArtifactsOpen(true)}
-            className="btn-ghost text-xs inline-flex items-center gap-1"
-            title="View artifacts saved by this agent run"
-          >
-            <FileText className="w-3.5 h-3.5" />
-            <span>Artifacts</span>
-          </button>
-          {execution.status === 'running' && (
-            <button onClick={async () => { await api.cancel(id); window.location.reload(); }} className="flex items-center gap-1 text-xs text-accent-red hover:text-red-300 bg-accent-red/10 hover:bg-red-400/20 border border-accent-red/30 rounded px-2.5 py-1 font-mono transition-colors">
-              <XCircle className="w-3.5 h-3.5" /> Cancel
-            </button>
-          )}
-          {canResume && (
+        <div className="flex items-center justify-between gap-3">
+          <div className="flex items-center gap-3 min-w-0">
+            <div className="w-8 h-8 rounded-md bg-accent-purple/10 flex items-center justify-center shrink-0">
+              <Bot className="w-4 h-4 text-accent-purple" />
+            </div>
+            <h1 className="text-[20px] font-semibold text-theme-primary tracking-tight truncate">{agentName}</h1>
+            <StatusBadge status={execution.status} />
+            {meta.spawnedBy && <span className="text-[11px] text-theme-muted font-mono">by {meta.spawnedBy}</span>}
+            {execution.status === 'running' && <span className="w-2 h-2 rounded-full bg-accent animate-pulse" />}
+            {durationMs > 0 && (
+              <span className="flex items-center gap-1 text-[12px] text-theme-muted font-mono">
+                <Clock className="w-3 h-3" /> {formatDuration(durationMs)}
+              </span>
+            )}
+            <CostDisplay cost={cost} />
+          </div>
+          <div className="flex items-center gap-2">
             <button
-              onClick={() => setResumeOpen(v => !v)}
-              className="flex items-center gap-1 text-xs text-accent-blue hover:text-accent-blue/80 bg-accent-blue/10 hover:bg-accent-blue/20 border border-accent-blue/20 rounded px-2.5 py-1 font-mono transition-colors"
+              onClick={() => setAgentArtifactsOpen(true)}
+              className="btn btn-secondary btn-sm"
+              title="View artifacts saved by this agent run"
             >
-              <Play className="w-3.5 h-3.5" /> Resume
+              <FileText className="w-3.5 h-3.5" />
+              Artifacts
             </button>
-          )}
+            {execution.status === 'running' && (
+              <button
+                onClick={async () => { await api.cancel(id); window.location.reload(); }}
+                className="btn btn-danger btn-sm"
+              >
+                <XCircle className="w-3.5 h-3.5" /> Cancel
+              </button>
+            )}
+            {canResume && (
+              <button
+                onClick={() => setResumeOpen(v => !v)}
+                className="btn btn-primary btn-sm"
+              >
+                <Play className="w-3.5 h-3.5" /> Resume
+              </button>
+            )}
+          </div>
         </div>
       </header>
 
@@ -434,7 +438,7 @@ function AgentExecutionView({ execution, agentName, traces, id, liveToolCalls, r
           Sends a follow-up prompt to the same agent, resuming the prior
           claude-cli session so the agent has full context from this run. */}
       {resumeOpen && canResume && (
-        <div className="flex items-center gap-3 px-6 py-3 border-b border-accent-blue/30 bg-accent-blue/5 shrink-0">
+        <div className="flex items-center gap-3 px-6 py-3 border-b border-accent/30 bg-accent-soft shrink-0">
           <div className="flex-1 min-w-0">
             <textarea
               autoFocus
@@ -443,14 +447,14 @@ function AgentExecutionView({ execution, agentName, traces, id, liveToolCalls, r
               onKeyDown={e => { if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') handleResume(); }}
               rows={2}
               placeholder="Follow-up prompt — the agent will resume its prior session with full context from this run…"
-              className="w-full px-3 py-2 rounded-lg bg-app-muted border border-app text-sm text-theme-primary placeholder:text-theme-subtle focus:outline-none focus:border-accent-blue/50 font-mono resize-none"
+              className="w-full px-3 py-2 rounded-lg bg-app-muted border border-app text-sm text-theme-primary placeholder:text-theme-subtle focus:outline-none focus:border-accent font-mono resize-none"
             />
           </div>
           <div className="flex flex-col gap-1.5 shrink-0">
             <button
               onClick={handleResume}
               disabled={resumeBusy || !resumePrompt.trim()}
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[11px] font-mono bg-accent-blue text-white hover:opacity-90 disabled:opacity-40 disabled:cursor-not-allowed transition-opacity"
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[11px] font-mono btn btn-primary btn-sm disabled:opacity-40 disabled:cursor-not-allowed transition-opacity"
             >
               <Play className="w-3 h-3" />
               {resumeBusy ? 'Resuming…' : 'Send'}
@@ -943,41 +947,61 @@ export default function ExecutionDetailPage() {
 
   return (
     <div className="flex flex-col h-full">
-      {/* Top bar */}
-      <header className="flex items-center justify-between px-6 py-3 border-b border-app bg-surface-50 shrink-0">
-        <div className="flex items-center gap-3">
-          <Link to="/executions" className="text-theme-secondary hover:text-accent-blue transition-colors">
-            <ArrowLeft className="w-4 h-4" />
+      {/* Top bar — matches handoff/pages/detail-views.jsx ExecutionDetailV2 */}
+      <header className="px-6 pt-4 pb-3 border-b border-app shrink-0">
+        <div className="flex items-center gap-2 mb-2 text-[12px] text-theme-muted">
+          <Link to="/executions" className="hover:text-theme-primary transition-colors flex items-center gap-1">
+            <ArrowLeft className="w-3 h-3" /> Activity
           </Link>
-          <div>
-            <h1 className="text-[14px] font-semibold text-theme-primary tracking-tight">{execution.workflowName}</h1>
-            <div className="flex items-center gap-2 mt-0.5">
-              <span className="text-xs text-theme-muted font-mono">{id?.slice(0, 8)}</span>
-              <StatusBadge status={execution.status} />
-              {isPaused && (
-                <span className="badge bg-accent-orange/10 text-accent-orange gap-1">
-                  <Pause className="w-3 h-3" /> paused
-                </span>
-              )}
-              {execution.status === 'waiting_for_input' && inputDialogDismissed && (
-                <button
-                  onClick={() => setInputDialogDismissed(false)}
-                  className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[11px] font-mono bg-accent-yellow/15 text-accent-yellow border border-accent-yellow/40 hover:bg-accent-yellow/25 transition-colors"
-                  title="Reopen the input dialog"
-                >
-                  <MessageSquare className="w-3 h-3" />
-                  Respond to input
-                  <span className="w-1.5 h-1.5 rounded-full bg-accent-yellow animate-pulse" />
-                </button>
-              )}
-              {isLive && (
-                connected
-                  ? <Wifi className="w-3 h-3 text-accent-green" />
-                  : <WifiOff className="w-3 h-3 text-accent-red" />
-              )}
-            </div>
-          </div>
+          <span className="text-theme-subtle">/</span>
+          <span className="font-mono">{id?.slice(0, 8)}</span>
         </div>
+
+        <div className="flex items-center justify-between gap-3">
+          <div className="flex items-center gap-3 min-w-0">
+            <h1 className="text-[20px] font-semibold text-theme-primary tracking-tight truncate">
+              {execution.workflowName}
+            </h1>
+            <StatusBadge status={execution.status} />
+            {isPaused && (
+              <span className="badge bg-accent-orange/10 text-accent-orange gap-1">
+                <Pause className="w-3 h-3" /> paused
+              </span>
+            )}
+            {execution.status === 'waiting_for_input' && inputDialogDismissed && (
+              <button
+                onClick={() => setInputDialogDismissed(false)}
+                className="badge badge-warn cursor-pointer"
+                title="Reopen the input dialog"
+              >
+                <MessageSquare className="w-3 h-3" />
+                Respond to input
+                <span className="w-1.5 h-1.5 rounded-full bg-accent-yellow animate-pulse" />
+              </button>
+            )}
+            {isLive && (
+              <span title={connected ? 'Live' : 'Disconnected'}>
+                {connected
+                  ? <Wifi className="w-3 h-3 text-accent-green" />
+                  : <WifiOff className="w-3 h-3 text-accent-red" />}
+              </span>
+            )}
+            {execution.durationMs != null && (
+              <span className="text-[12px] text-theme-muted font-mono">{formatDuration(execution.durationMs)}</span>
+            )}
+            <CostDisplay cost={liveCost} />
+            {(learningCounts.injected > 0 || learningCounts.extracted > 0) && (
+              <Link
+                to={`/learnings?search=${encodeURIComponent(id ?? '')}`}
+                className="flex items-center gap-1 text-[11px] font-mono text-accent-purple hover:opacity-80 transition-opacity"
+                title="Learnings"
+              >
+                <Brain className="w-3 h-3" />
+                {learningCounts.injected > 0 && <span>{learningCounts.injected} in</span>}
+                {learningCounts.extracted > 0 && <span>{learningCounts.extracted} out</span>}
+              </Link>
+            )}
+          </div>
 
         <div className="flex items-center gap-2">
           {execution.durationMs != null && (
@@ -1003,7 +1027,7 @@ export default function ExecutionDetailPage() {
             <BarChart2 className="w-3.5 h-3.5" />
             <span>Timeline</span>
             {traces && traces.length > 0 && (
-              <span className="ml-0.5 px-1 py-px rounded-sm bg-accent-blue/20 text-accent-blue text-[10px] font-mono tabular-nums">
+              <span className="ml-0.5 px-1 py-px rounded-sm bg-accent-soft text-accent text-[10px] font-mono tabular-nums">
                 {traces.length}
               </span>
             )}
@@ -1024,7 +1048,7 @@ export default function ExecutionDetailPage() {
             <Save className="w-3.5 h-3.5" />
             <span>Checkpoints</span>
             {checkpointCount != null && checkpointCount > 0 && (
-              <span className="ml-0.5 px-1 py-px rounded-sm bg-accent-blue/20 text-accent-blue text-[10px] font-mono tabular-nums">
+              <span className="ml-0.5 px-1 py-px rounded-sm bg-accent-soft text-accent text-[10px] font-mono tabular-nums">
                 {checkpointCount}
               </span>
             )}
@@ -1037,7 +1061,7 @@ export default function ExecutionDetailPage() {
             <FileText className="w-3.5 h-3.5" />
             <span>Artifacts</span>
             {artifactCount != null && artifactCount > 0 && (
-              <span className="ml-0.5 px-1 py-px rounded-sm bg-accent-blue/20 text-accent-blue text-[10px] font-mono tabular-nums">
+              <span className="ml-0.5 px-1 py-px rounded-sm bg-accent-soft text-accent text-[10px] font-mono tabular-nums">
                 {artifactCount}
               </span>
             )}
@@ -1073,6 +1097,7 @@ export default function ExecutionDetailPage() {
           <button onClick={refresh} className="btn-ghost text-xs" title="Refresh">
             <RefreshCw className="w-3.5 h-3.5" />
           </button>
+          </div>
         </div>
       </header>
 
