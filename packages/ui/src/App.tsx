@@ -1,18 +1,17 @@
 import { useEffect, useRef, useState } from 'react';
-import { NavLink, Outlet, useLocation, useNavigate, useParams } from 'react-router-dom';
+import { NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom';
 import ErrorBoundary from './components/common/ErrorBoundary';
 import NotificationBell from './components/common/NotificationBell';
 import {
-  LayoutDashboard, GitBranch, Play, Users, Activity, Settings,
+  LayoutDashboard, GitBranch, Play, Users, Settings,
   FolderGit2, Brain, MessageSquare, BarChart3, Plus, Trash2,
-  Server, Palette, User, ChevronRight, ChevronUp, ChevronDown,
-  GitPullRequest, Clock, HelpCircle, Ticket,
+  Server, Palette, User, ChevronDown, ChevronRight,
+  GitPullRequest, Clock, HelpCircle, Ticket, Search, LogOut, ShieldCheck,
 } from 'lucide-react';
 import { useSettingsStore } from './stores/settingsStore';
 import { useAuthStore } from './stores/authStore';
-import { useChat, type ChatSession } from './hooks/useChat';
+import { useChat } from './hooks/useChat';
 import DeleteConfirmDialog from './components/common/DeleteConfirmDialog';
-import { LogOut, ShieldCheck } from 'lucide-react';
 import { BRAND_NAME } from './lib/brand';
 import { auth as authApi } from './services/api';
 
@@ -23,29 +22,29 @@ interface SettingsTab {
   adminOnly?: boolean;
 }
 
-// ── Nav Groups ──
+// ── Nav Groups (Linear-style: WORKSPACE / BUILD / CODE / INSIGHT) ──
 
 const NAV_GROUPS = [
-  { label: null, items: [
+  { label: 'Workspace', items: [
     { to: '/chat', icon: MessageSquare, label: 'Chat', expandable: true },
-    { to: '/', icon: LayoutDashboard, label: 'Dashboard' },
+    { to: '/', icon: LayoutDashboard, label: 'Overview' },
+    { to: '/executions', icon: Play, label: 'Activity' },
+    { to: '/interventions', icon: HelpCircle, label: 'Needs review' },
   ]},
   { label: 'Build', items: [
-    { to: '/workflows', icon: GitBranch, label: 'Agent Workflows' },
-    { to: '/agents', icon: Users, label: 'Agents & Teams' },
-    { to: '/repos', icon: FolderGit2, label: 'Repos' },
+    { to: '/workflows', icon: GitBranch, label: 'Workflows' },
+    { to: '/agents', icon: Users, label: 'Agents' },
+    { to: '/crons', icon: Clock, label: 'Schedules' },
+  ]},
+  { label: 'Code', items: [
+    { to: '/repos', icon: FolderGit2, label: 'Repositories' },
+    { to: '/workspaces', icon: FolderGit2, label: 'Sandboxes' },
+    { to: '/pull-requests', icon: GitPullRequest, label: 'Pull requests' },
     { to: '/tickets', icon: Ticket, label: 'Linear' },
   ]},
-  { label: 'Develop', items: [
-    { to: '/workspaces', icon: FolderGit2, label: 'Workspaces' },
-    { to: '/pull-requests', icon: GitPullRequest, label: 'Pull Requests' },
-  ]},
-  { label: 'Monitor', items: [
-    { to: '/executions', icon: Play, label: 'Executions' },
-    { to: '/interventions', icon: HelpCircle, label: 'Interventions' },
+  { label: 'Insight', items: [
     { to: '/analytics', icon: BarChart3, label: 'Analytics' },
     { to: '/learnings', icon: Brain, label: 'Learnings' },
-    { to: '/crons', icon: Clock, label: 'Scheduled Jobs' },
   ]},
 ];
 
@@ -59,7 +58,7 @@ const SETTINGS_TABS: SettingsTab[] = [
 // Provider display
 const PROV: Record<string, { label: string; color: string }> = {
   codex: { label: 'Codex', color: 'text-accent-green' },
-  'claude-cli': { label: 'Claude', color: 'text-accent-blue' },
+  'claude-cli': { label: 'Claude', color: 'text-accent' },
 };
 
 function timeAgo(dateStr: string): string {
@@ -93,23 +92,26 @@ function ChatSidebarSection() {
 
   return (
     <>
-      <div className="px-4 py-2 flex items-center justify-between">
-        <span className="text-[10px] font-label uppercase tracking-[0.15em] text-theme-muted">Conversations</span>
-        <button onClick={handleNew} className="w-7 h-7 flex items-center justify-center rounded-md bg-accent-blue/10 text-accent-blue hover:bg-accent-blue/20 transition-colors" title="New conversation">
+      <div className="px-3 py-1.5 flex items-center justify-between">
+        <span className="overline">Conversations</span>
+        <button
+          onClick={handleNew}
+          className="w-6 h-6 flex items-center justify-center rounded text-theme-muted hover:text-accent hover:bg-app-card transition-colors"
+          title="New conversation"
+        >
           <Plus className="w-3.5 h-3.5" />
         </button>
       </div>
-      <div className="flex-1 overflow-y-auto px-1.5 py-1.5 space-y-1.5">
+      <div className="flex-1 overflow-y-auto px-1.5 py-1 space-y-1">
         {loadingSessions && sessions.length === 0 && (
-          <div className="px-4 py-6 text-center text-xs text-theme-subtle animate-pulse">Loading conversations…</div>
+          <div className="px-3 py-4 text-center text-[12px] text-theme-subtle animate-pulse">Loading conversations…</div>
         )}
         {!loadingSessions && sessions.length === 0 && (
-          <div className="px-4 py-6 text-center text-xs text-theme-subtle">No conversations yet</div>
+          <div className="px-3 py-4 text-center text-[12px] text-theme-subtle">No conversations yet</div>
         )}
         {sessions.map(s => {
           const isActive = s._id === activeSessionId;
           const p = PROV[s.provider] ?? { label: s.provider, color: 'text-theme-muted' };
-          // Map the provider text-* class to its matching bg-* for the dot.
           const dotBg = p.color.replace('text-', 'bg-');
           return (
             <div
@@ -124,27 +126,24 @@ function ChatSidebarSection() {
                   navigate(`/chat/${s._id}`, { replace: true });
                 }
               }}
-              className={`group relative flex items-start gap-2.5 px-3 py-2.5 rounded-lg cursor-pointer transition-all duration-150 border ${
+              className={`group relative flex items-start gap-2 px-2.5 py-2 rounded-md cursor-pointer transition-colors ${
                 isActive
-                  ? 'bg-accent-blue/15 border-accent-blue/40 shadow-sm shadow-accent-blue/10'
-                  : 'bg-surface-100/70 border-border/40 hover:bg-surface-200/70 hover:border-border/70'
+                  ? 'bg-app-card border border-border shadow-sm'
+                  : 'hover:bg-app-card border border-transparent'
               }`}
               title={s.title}
             >
-              {/* Provider dot — tiny colored indicator on the left */}
               <span
-                className={`mt-[7px] w-1.5 h-1.5 rounded-full shrink-0 ${dotBg} ${isActive ? 'ring-2 ring-accent-blue/20' : ''}`}
+                className={`mt-[6px] w-1.5 h-1.5 rounded-full shrink-0 ${dotBg}`}
                 aria-hidden="true"
               />
-
-              {/* Title + meta line */}
               <div className="flex-1 min-w-0">
-                <div className={`text-sm font-body truncate leading-snug ${
+                <div className={`text-[13px] truncate leading-snug ${
                   isActive ? 'text-theme-primary font-medium' : 'text-theme-secondary group-hover:text-theme-primary'
                 }`}>
                   {s.title}
                 </div>
-                <div className="flex items-center gap-1.5 mt-0.5 text-[10px] font-mono">
+                <div className="flex items-center gap-1.5 mt-0.5 text-[11px] font-mono">
                   <span className={p.color}>{p.label}</span>
                   <span className="text-theme-subtle/60">·</span>
                   <span className="text-theme-subtle">{timeAgo(s.lastMessageAt)}</span>
@@ -156,11 +155,9 @@ function ChatSidebarSection() {
                   )}
                 </div>
               </div>
-
-              {/* Delete button (hover-reveal) */}
               <button
                 onClick={e => { e.stopPropagation(); setDeleting({ id: s._id, title: s.title }); }}
-                className="opacity-0 group-hover:opacity-100 focus:opacity-100 shrink-0 w-6 h-6 -mr-0.5 flex items-center justify-center rounded-md text-theme-subtle hover:text-accent-red hover:bg-accent-red/10 transition-all"
+                className="opacity-0 group-hover:opacity-100 focus:opacity-100 shrink-0 w-6 h-6 -mr-0.5 flex items-center justify-center rounded text-theme-subtle hover:text-accent-red hover:bg-accent-red/10 transition-all"
                 title="Delete conversation"
                 aria-label="Delete conversation"
               >
@@ -185,14 +182,13 @@ function SettingsSidebarSection({ onCollapse }: { onCollapse?: () => void }) {
 
   return (
     <div className="py-2">
-      {/* Header with SETTINGS label on the left and collapse chevron on the right */}
-      <div className="px-5 py-1 mb-1 flex items-center justify-between">
-        <span className="text-[10px] font-label uppercase tracking-[0.15em] text-theme-muted">Settings</span>
+      <div className="px-3 py-1 mb-1 flex items-center justify-between">
+        <span className="overline">Settings</span>
         {onCollapse && (
           <button
             type="button"
             onClick={onCollapse}
-            className="p-0.5 rounded text-theme-muted hover:text-theme-secondary hover:bg-surface-200/40 transition-colors"
+            className="p-0.5 rounded text-theme-muted hover:text-theme-secondary hover:bg-app-card transition-colors"
             title="Collapse Settings menu"
             aria-label="Collapse Settings menu"
           >
@@ -204,13 +200,13 @@ function SettingsSidebarSection({ onCollapse }: { onCollapse?: () => void }) {
         <NavLink
           key={id}
           to={`/settings/${id}`}
-          className={`flex items-center gap-3 px-4 py-1.5 mx-2 rounded-md text-sm font-body transition-all ${
+          className={`flex items-center gap-2.5 px-3 py-1.5 mx-1.5 rounded-md text-[13px] transition-colors ${
             activeTab === id
-              ? 'bg-accent-blue/10 text-accent-blue'
-              : 'text-theme-muted hover:text-theme-secondary hover:bg-surface-200/40'
+              ? 'bg-app-card text-theme-primary font-medium shadow-sm'
+              : 'text-theme-secondary hover:text-theme-primary hover:bg-app-card'
           }`}
         >
-          <Icon className="w-[18px] h-[18px]" />
+          <Icon className={`w-4 h-4 ${activeTab === id ? 'text-accent' : 'text-theme-muted'}`} />
           {label}
         </NavLink>
       ))}
@@ -225,7 +221,6 @@ export default function App() {
   const addSystemThemeListener = useSettingsStore((s) => s.addSystemThemeListener);
   useEffect(() => { initSettings(); }, [initSettings]);
 
-  // Add system theme listener
   useEffect(() => {
     const cleanup = addSystemThemeListener();
     return cleanup;
@@ -236,12 +231,6 @@ export default function App() {
   const isChat = location.pathname.startsWith('/chat');
   const isSettings = location.pathname.startsWith('/settings');
 
-  // Sidebar Settings menu — expands/collapses independently of the URL.
-  // Auto-opens when the user first lands on any /settings/* route (direct
-  // link, refresh, or external nav), and can be toggled manually via the
-  // Settings button / collapse chevron. The transition-only guard means the
-  // user can still collapse the menu while staying on a settings page —
-  // otherwise the effect would re-open it on every render.
   const [settingsOpen, setSettingsOpen] = useState(isSettings);
   const wasSettingsRef = useRef(isSettings);
   useEffect(() => {
@@ -259,38 +248,45 @@ export default function App() {
     try {
       if (refreshToken) await authApi.logout(refreshToken);
     } catch {
-      // ignore — we clear locally regardless
+      // ignore — clear locally regardless
     }
     clearAuth();
     navigate('/login', { replace: true });
   }
 
-  return (
-    <div className="flex h-screen">
-      <nav className="w-72 bg-surface-50 border-r border-border/50 flex flex-col shrink-0 relative">
-        {/* Accent edge */}
-        <div className="absolute right-0 top-0 bottom-0 w-px bg-gradient-to-b from-accent-blue/40 via-accent-blue/10 to-transparent" />
+  // Initials for the avatar tile
+  const userInitial = currentUser?.name?.charAt(0)?.toUpperCase()
+    || currentUser?.email?.charAt(0)?.toUpperCase()
+    || '?';
 
-        {/* Logo */}
-        <div className="px-5 py-4 border-b border-border/50">
-          <NavLink to="/" className="flex items-center gap-2.5">
-            <div className="relative">
-              <Activity className="w-5 h-5 text-accent-blue" />
-              <div className="absolute inset-0 blur-md bg-accent-blue/30 rounded-full" />
+  return (
+    <div className="flex h-screen bg-app">
+      <nav className="w-[228px] bg-app-muted flex flex-col shrink-0 border-r border-app">
+        {/* Workspace switcher pill */}
+        <div className="flex items-center gap-2 mx-2 mt-3 mb-2 px-2 py-1.5 rounded-md hover:bg-app-card cursor-pointer transition-colors">
+          <NavLink to="/" className="flex items-center gap-2 flex-1 min-w-0">
+            <div className="w-6 h-6 rounded-md bg-gradient-to-br from-accent to-accent-purple flex items-center justify-center shrink-0">
+              <span className="text-white text-[11px] font-semibold">{BRAND_NAME.charAt(0)}</span>
             </div>
-            <span className="font-heading text-[15px] font-bold text-theme-primary tracking-widest uppercase">{BRAND_NAME}</span>
+            <span className="font-heading text-[13px] font-semibold text-theme-primary truncate">{BRAND_NAME}</span>
           </NavLink>
+          <ChevronDown className="w-3 h-3 text-theme-muted shrink-0" />
         </div>
 
-        {/* Nav groups — conversations list expands INLINE directly below
-            the Chat link when the user is on /chat, capped at 50% of the
-            viewport height so the rest of the nav stays reachable. */}
-        <div className="flex-1 overflow-y-auto py-2">
+        {/* Search box */}
+        <div className="mx-2 mb-3 flex items-center gap-1.5 px-2 py-1.5 rounded-md bg-app-card border border-app text-theme-muted text-[12px] cursor-pointer hover:border-app-strong transition-colors">
+          <Search className="w-3.5 h-3.5 shrink-0" />
+          <span className="flex-1 truncate">Search…</span>
+          <span className="font-mono text-[10px] px-1 py-0.5 rounded bg-app-muted text-theme-subtle">⌘K</span>
+        </div>
+
+        {/* Nav groups */}
+        <div className="flex-1 overflow-y-auto pb-2">
           {NAV_GROUPS.map((group, gi) => (
-            <div key={gi} className={gi > 0 ? 'mt-3' : ''}>
+            <div key={gi} className={gi > 0 ? 'mt-2' : ''}>
               {group.label && (
-                <div className="px-5 py-1">
-                  <span className="text-[10px] font-label uppercase tracking-[0.15em] text-theme-muted">{group.label}</span>
+                <div className="px-3 py-1">
+                  <span className="overline">{group.label}</span>
                 </div>
               )}
               {group.items.map(item => (
@@ -299,20 +295,24 @@ export default function App() {
                     to={item.to}
                     end={item.to === '/'}
                     className={({ isActive }) =>
-                      `flex items-center gap-3 px-4 py-2 mx-2 rounded-md text-sm font-body transition-all duration-200 ${
+                      `flex items-center gap-2.5 px-3 py-1.5 mx-1.5 rounded-md text-[13px] transition-colors ${
                         isActive
-                          ? 'bg-accent-blue/10 text-accent-blue'
-                          : 'text-theme-muted hover:text-theme-secondary hover:bg-surface-200/40'
+                          ? 'bg-app-card text-theme-primary font-medium shadow-sm'
+                          : 'text-theme-secondary hover:text-theme-primary hover:bg-app-card'
                       }`
                     }
                   >
-                    <item.icon className="w-[18px] h-[18px]" />
-                    {item.label}
+                    {({ isActive }) => (
+                      <>
+                        <item.icon className={`w-4 h-4 shrink-0 ${isActive ? 'text-accent' : 'text-theme-muted'}`} />
+                        <span className="flex-1 truncate">{item.label}</span>
+                      </>
+                    )}
                   </NavLink>
 
                   {/* Inline conversations list directly under the Chat link */}
                   {item.to === '/chat' && isChat && (
-                    <div className="mt-1 mb-2 mx-2 flex flex-col max-h-[50vh] min-h-[120px] overflow-hidden rounded-md border border-border/30 bg-surface-100/30">
+                    <div className="mt-1 mb-2 mx-1.5 flex flex-col max-h-[50vh] min-h-[120px] overflow-hidden rounded-md border border-app bg-app-card/50">
                       <ChatSidebarSection />
                     </div>
                   )}
@@ -322,55 +322,53 @@ export default function App() {
           ))}
         </div>
 
-        {/* Bottom — settings is either a single button (closed) OR the full
-            submenu with its own top-right collapse chevron (open). Exactly
-            one of the two is visible at a time — the "Settings" label goes
-            away when expanded. No navigation happens on the button click;
-            only sub-tab clicks route anywhere. */}
-        <div className="border-t border-border/50 shrink-0">
+        {/* Bottom — Settings + user chip + version + notifications */}
+        <div className="border-t border-app shrink-0">
           {settingsOpen ? (
             <SettingsSidebarSection onCollapse={() => setSettingsOpen(false)} />
           ) : (
             <button
               type="button"
               onClick={() => setSettingsOpen(true)}
-              className={`w-full flex items-center gap-3 px-4 py-2 mx-2 my-1 rounded-md text-sm font-body transition-all duration-200 ${
+              className={`w-[calc(100%-12px)] flex items-center gap-2.5 px-3 py-1.5 mx-1.5 my-1 rounded-md text-[13px] transition-colors ${
                 isSettings
-                  ? 'bg-accent-blue/10 text-accent-blue'
-                  : 'text-theme-muted hover:text-theme-secondary hover:bg-surface-200/40'
+                  ? 'bg-app-card text-theme-primary font-medium shadow-sm'
+                  : 'text-theme-secondary hover:text-theme-primary hover:bg-app-card'
               }`}
-              style={{ width: 'calc(100% - 1rem)' }}
             >
-              <Settings className="w-[18px] h-[18px]" />
+              <Settings className={`w-4 h-4 ${isSettings ? 'text-accent' : 'text-theme-muted'}`} />
               <span className="flex-1 text-left">Settings</span>
-              <ChevronUp className="w-4 h-4 opacity-70" />
+              <ChevronRight className="w-3.5 h-3.5 opacity-70" />
             </button>
           )}
 
           {currentUser && (
-            <div className="flex items-center justify-between px-4 py-2 mx-2 rounded-md hover:bg-surface-200/40 group">
-              <div className="min-w-0">
-                <div className="text-xs text-theme-secondary font-body truncate">{currentUser.name}</div>
+            <div className="flex items-center gap-2 px-3 py-2 mx-1.5 rounded-md hover:bg-app-card group transition-colors">
+              <div className="w-6 h-6 rounded-full bg-gradient-to-br from-accent to-accent-purple flex items-center justify-center shrink-0">
+                <span className="text-white text-[10px] font-semibold">{userInitial}</span>
+              </div>
+              <div className="min-w-0 flex-1">
+                <div className="text-[12px] text-theme-primary font-body truncate leading-tight">{currentUser.name}</div>
                 <div className="text-[10px] text-theme-subtle font-mono truncate">{currentUser.email}</div>
               </div>
               <button
                 onClick={handleLogout}
-                className="shrink-0 p-1.5 rounded text-theme-muted hover:text-accent-red"
+                className="shrink-0 p-1 rounded text-theme-muted hover:text-accent-red hover:bg-accent-red/10 transition-colors"
                 title="Sign out"
               >
-                <LogOut className="w-4 h-4" />
+                <LogOut className="w-3.5 h-3.5" />
               </button>
             </div>
           )}
 
-          <div className="flex items-center justify-between px-5 py-2">
+          <div className="flex items-center justify-between px-3 py-1.5">
             <span className="text-[10px] text-theme-subtle font-mono">v0.1.0</span>
             <NotificationBell />
           </div>
         </div>
       </nav>
 
-      <main className="flex-1 overflow-auto bg-surface-50 relative">
+      <main className="flex-1 overflow-auto bg-app relative">
         <ErrorBoundary>
           <Outlet />
         </ErrorBoundary>
