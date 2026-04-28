@@ -36,6 +36,7 @@ import { setStreamDb } from './services/stream.service.js';
 import { SecretService } from './services/secret.service.js';
 import { McpService } from './services/mcp.service.js';
 import { startMcpHealthMonitor } from './services/mcp-health.service.js';
+import { startZombieReconciler } from './services/zombie-reconciler.service.js';
 import { OrgSeedService } from './services/org-seed.js';
 import { cleanupOrphanedSeedEntities } from './services/org-cleanup.js';
 import { CronService } from './services/cron.service.js';
@@ -270,6 +271,10 @@ async function main(): Promise<void> {
 
   // Start the MCP server health monitor (5-min background loop, alerts on outages)
   startMcpHealthMonitor(db);
+
+  // Start the zombie execution reconciler (60s loop, transitions
+  // `running` rows to `failed` once their owning process is gone).
+  startZombieReconciler(db);
 
   // Start file watch WebSocket server on port 4025
   startFileWatchServer();

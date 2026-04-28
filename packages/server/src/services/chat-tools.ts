@@ -1322,6 +1322,16 @@ async function runSpawnInBackground(
           mcpServers: sdkOptions.mcpServers as Record<string, unknown> | undefined,
           abortSignal: abortController.signal,
           stderr: (chunk) => liveLog({ type: 'tool_start', content: `[claude-cli stderr] ${chunk.slice(0, 4000)}` }),
+          // Record the claude binary's PID on the executions row so the
+          // zombie reconciler can detect "running" rows whose process has
+          // died and transition them to failed. Mirrors the codex path's
+          // meta.pid update.
+          onPid: (pid: number) => {
+            db.collection('executions').updateOne(
+              { id: executionId },
+              { $set: { 'meta.pid': pid } },
+            ).catch(() => { /* non-fatal */ });
+          },
         });
       } else {
         msgStream = query({ prompt, options: sdkOptions as any });

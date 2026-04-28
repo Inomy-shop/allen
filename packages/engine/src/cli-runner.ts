@@ -51,6 +51,9 @@ export type CliQueryOptions = {
   abortSignal?: AbortSignal;
   /** Callback for subprocess stderr lines. */
   stderr?: (chunk: string) => void;
+  /** Called once with the spawned child PID (used by callers that record
+   *  meta.pid in the executions doc for the zombie reconciler). */
+  onPid?: (pid: number) => void;
 };
 
 /**
@@ -142,18 +145,40 @@ export async function* queryViaCli(opts: CliQueryOptions): AsyncGenerator<any, v
 
   const wakeNow = () => { if (wake) { const w = wake; wake = null; w(); } };
 
+  // Kill the entire process group, not just the claude PID. Claude (Bun)
+  // spawns 8-10 MCP server children per run; if we only signal claude
+  // itself, those MCPs reparent to systemd and accumulate as zombies that
+  // pin ~3500 PIDs at the cgroup TasksMax ceiling. With detached:true on
+  // spawn, claude becomes its own group leader (pgid == pid), so a
+  // negative-pid kill takes claude + every descendant down together.
+  // The 2026-04-28 incident traced ~325 leaked mcp-mongo-server processes
+  // to this exact gap; see cli-runner.ts:178 detached:true.
+  const killGroup = (sig: NodeJS.Signals) => {
+    if (!child || child.exitCode !== null || child.pid == null) return;
+    try { process.kill(-child.pid, sig); }
+    catch (err) {
+      // ESRCH = group already gone (race with normal exit) — fine.
+      // EPERM = not group leader (shouldn't happen with detached:true) —
+      // fall back to per-PID kill so we still terminate claude.
+      const code = (err as NodeJS.ErrnoException).code;
+      if (code !== 'ESRCH') {
+        try { child.kill(sig); } catch { /* ignore */ }
+      }
+    }
+  };
+
   // SIGTERM → SIGKILL escalation. Without this, a Claude CLI that ignores
   // SIGTERM (e.g. stuck on an interactive prompt or in a tight native loop)
   // leaves the child alive forever, which blocks `await exitPromise` and
   // pins the whole generator's closure state.
   const escalateKill = (reason: string) => {
     if (!child || child.exitCode !== null) return;
-    try { child.kill('SIGTERM'); } catch { /* ignore */ }
+    killGroup('SIGTERM');
     if (killTimer) clearTimeout(killTimer);
     killTimer = setTimeout(() => {
       if (child && child.exitCode === null) {
         console.error(`[claude-cli] sigkill agent=${agentName} pid=${child.pid ?? '?'} reason=${reason} (SIGTERM ignored after ${CLI_KILL_GRACE_MS / 1000}s)`);
-        try { child.kill('SIGKILL'); } catch { /* ignore */ }
+        killGroup('SIGKILL');
       }
     }, CLI_KILL_GRACE_MS);
   };
@@ -174,9 +199,15 @@ export async function* queryViaCli(opts: CliQueryOptions): AsyncGenerator<any, v
       cwd: opts.cwd,
       env: opts.env ?? process.env,
       stdio: ['pipe', 'pipe', 'pipe'],
+      // Make claude its own process-group leader so we can kill the entire
+      // MCP subtree via process.kill(-pid). See killGroup above.
+      detached: true,
     });
 
     console.log(`[claude-cli] start agent=${agentName} pid=${child.pid ?? '?'} resume=${opts.resume ? opts.resume.slice(0, 12) : 'new'}`);
+    if (child.pid != null && opts.onPid) {
+      try { opts.onPid(child.pid); } catch { /* ignore caller errors */ }
+    }
 
     // Abort handling: kill child on signal. Stash the listener ref so the
     // finally block can detach it — when the AbortSignal is reused across
@@ -313,13 +344,15 @@ export async function* queryViaCli(opts: CliQueryOptions): AsyncGenerator<any, v
       abortListener = null;
     }
     // Best-effort kill if child is somehow still alive (e.g. caller called
-    // generator.return() mid-stream). SIGTERM, then SIGKILL after grace.
+    // generator.return() mid-stream). SIGTERM the whole process group,
+    // then SIGKILL after grace — same shape as escalateKill but unguarded
+    // by the abort/timeout codepath.
     try {
       if (child && child.exitCode === null) {
-        try { child.kill('SIGTERM'); } catch { /* ignore */ }
+        killGroup('SIGTERM');
         const t = setTimeout(() => {
           if (child && child.exitCode === null) {
-            try { child.kill('SIGKILL'); } catch { /* ignore */ }
+            killGroup('SIGKILL');
           }
         }, CLI_KILL_GRACE_MS);
         // Don't keep the event loop alive just for this final escalation.
