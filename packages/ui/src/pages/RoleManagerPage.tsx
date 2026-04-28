@@ -41,7 +41,7 @@ function AgentDetailPanel({ agent, onClose }: { agent: Agent; onClose: () => voi
   const model = String(agent.model ?? 'sonnet');
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-md p-6" onClick={onClose}>
-      <div className="card w-full max-w-5xl h-[92vh] overflow-hidden shadow-glow-blue/20 animate-in fade-in zoom-in-95 duration-200 flex flex-col" onClick={e => e.stopPropagation()}>
+      <div className="card w-full max-w-5xl h-[92vh] overflow-hidden shadow-popover animate-in fade-in zoom-in-95 duration-200 flex flex-col" onClick={e => e.stopPropagation()}>
         {/* Header */}
         <div className="px-7 py-5 border-b border-border/60 shrink-0">
           <div className="flex items-center justify-between gap-4">
@@ -214,7 +214,7 @@ function RunAgentDialog({
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-md" onClick={onClose}>
-      <div className="card w-full max-w-2xl shadow-glow-blue/20 animate-in fade-in zoom-in-95 duration-200" onClick={e => e.stopPropagation()}>
+      <div className="card w-full max-w-2xl shadow-popover animate-in fade-in zoom-in-95 duration-200" onClick={e => e.stopPropagation()}>
         <div className="px-6 py-5 border-b border-border/60">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-3">

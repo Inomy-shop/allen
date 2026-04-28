@@ -126,7 +126,7 @@ function HistoryDialog({ job, onClose }: { job: CronJob; onClose: () => void }) 
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-md">
-      <div className="card w-full max-w-2xl overflow-hidden shadow-glow-blue/20 animate-in fade-in zoom-in-95 duration-200 max-h-[80vh] flex flex-col">
+      <div className="card w-full max-w-2xl overflow-hidden shadow-popover animate-in fade-in zoom-in-95 duration-200 max-h-[80vh] flex flex-col">
         {/* Header */}
         <div className="px-6 py-5 border-b border-border/60">
           <div className="flex items-center justify-between">
@@ -285,7 +285,7 @@ function CronFormDialog({ job, open, onClose, onSaved }: { job: CronJob | null; 
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-md">
-      <div className="card w-full max-w-lg overflow-hidden shadow-glow-blue/20 animate-in fade-in zoom-in-95 duration-200 max-h-[90vh] flex flex-col">
+      <div className="card w-full max-w-lg overflow-hidden shadow-popover animate-in fade-in zoom-in-95 duration-200 max-h-[90vh] flex flex-col">
         {/* Header */}
         <div className="px-6 py-5 border-b border-border/60">
           <div className="flex items-center justify-between">

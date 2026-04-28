@@ -138,7 +138,7 @@ export default function WorkflowRunDialog({ workflow, onClose, onStarted }: Work
       onClick={onClose}
     >
       <div
-        className="card w-full max-w-lg overflow-hidden shadow-glow-blue/20"
+        className="card w-full max-w-lg overflow-hidden shadow-popover"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="px-6 py-5 border-b border-border/60">

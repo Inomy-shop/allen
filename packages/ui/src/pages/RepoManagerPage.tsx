@@ -71,7 +71,7 @@ function AddRepoDialog({ open, onClose, onCreated }: { open: boolean; onClose: (
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-md">
-      <div className="card w-full max-w-lg overflow-hidden shadow-glow-blue/20 animate-in fade-in zoom-in-95 duration-200">
+      <div className="card w-full max-w-lg overflow-hidden shadow-popover animate-in fade-in zoom-in-95 duration-200">
         {/* Header */}
         <div className="px-6 py-5 border-b border-border/60">
           <div className="flex items-center justify-between">
@@ -193,7 +193,7 @@ function EditRepoDialog({ repo, open, onClose, onUpdated }: { repo: Repo | null;
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-md">
-      <div className="card w-full max-w-lg overflow-hidden shadow-glow-blue/20 animate-in fade-in zoom-in-95 duration-200">
+      <div className="card w-full max-w-lg overflow-hidden shadow-popover animate-in fade-in zoom-in-95 duration-200">
         <div className="px-6 py-5 border-b border-border/60">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-3">
@@ -546,7 +546,7 @@ function RepoContextViewer({ repoId, repoName, onClose }: { repoId: string; repo
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-md" onClick={onClose}>
-      <div className="card w-full max-w-4xl max-h-[90vh] overflow-hidden shadow-glow-blue/20 animate-in fade-in zoom-in-95 duration-200 flex flex-col" onClick={e => e.stopPropagation()}>
+      <div className="card w-full max-w-4xl max-h-[90vh] overflow-hidden shadow-popover animate-in fade-in zoom-in-95 duration-200 flex flex-col" onClick={e => e.stopPropagation()}>
         {/* Header */}
         <div className="px-6 py-4 border-b border-border/60 shrink-0 flex items-center justify-between">
           <div className="flex items-center gap-3">

@@ -130,7 +130,7 @@ function LogRow({ log, toolCall }: { log: any; toolCall?: ToolCall }) {
             if (argsObj && Object.keys(argsObj).length > 0) {
               return (
                 <div>
-                  <div className="text-[9px] font-label uppercase tracking-wider text-theme-subtle mb-0.5">
+                  <div className="overline mb-0.5">
                     Input{toolCall?.truncated?.args && <span className="text-accent-yellow ml-1">(truncated)</span>}
                   </div>
                   <pre className="text-[10px] font-mono text-theme-secondary whitespace-pre-wrap bg-surface-50/50 rounded-sm p-2 max-h-48 overflow-auto">
@@ -142,7 +142,7 @@ function LogRow({ log, toolCall }: { log: any; toolCall?: ToolCall }) {
             if (log.command) {
               return (
                 <div>
-                  <div className="text-[9px] font-label uppercase tracking-wider text-theme-subtle mb-0.5">Command</div>
+                  <div className="overline mb-0.5">Command</div>
                   <pre className="text-[10px] font-mono text-theme-secondary whitespace-pre-wrap bg-surface-50/50 rounded-sm p-2 max-h-48 overflow-auto">$ {log.command}</pre>
                 </div>
               );
@@ -150,7 +150,7 @@ function LogRow({ log, toolCall }: { log: any; toolCall?: ToolCall }) {
             if (log.content && log.type !== 'tool_done' && log.type !== 'tool_complete') {
               return (
                 <div>
-                  <div className="text-[9px] font-label uppercase tracking-wider text-theme-subtle mb-0.5">Input</div>
+                  <div className="overline mb-0.5">Input</div>
                   <pre className="text-[10px] font-mono text-theme-secondary whitespace-pre-wrap bg-surface-50/50 rounded-sm p-2 max-h-48 overflow-auto">{log.content}</pre>
                 </div>
               );
@@ -170,7 +170,7 @@ function LogRow({ log, toolCall }: { log: any; toolCall?: ToolCall }) {
               const isError = toolCall.isError === true;
               return (
                 <div>
-                  <div className="text-[9px] font-label uppercase tracking-wider text-theme-subtle mb-0.5">
+                  <div className="overline mb-0.5">
                     {isError ? 'Error' : 'Output'}{toolCall.truncated?.result && <span className="text-accent-yellow ml-1">(truncated)</span>}
                   </div>
                   <pre className={`text-[10px] font-mono whitespace-pre-wrap rounded-sm p-2 max-h-64 overflow-auto ${isError ? 'text-accent-red bg-accent-red/5' : 'text-theme-secondary bg-surface-50/50'}`}>
@@ -182,7 +182,7 @@ function LogRow({ log, toolCall }: { log: any; toolCall?: ToolCall }) {
             if (hasLog) {
               return (
                 <div>
-                  <div className="text-[9px] font-label uppercase tracking-wider text-theme-subtle mb-0.5">Output (preview)</div>
+                  <div className="overline mb-0.5">Output (preview)</div>
                   <pre className="text-[10px] font-mono text-theme-secondary whitespace-pre-wrap bg-surface-50/50 rounded-sm p-2 max-h-48 overflow-auto">{logResult}</pre>
                 </div>
               );
@@ -390,7 +390,7 @@ function AgentExecutionView({ execution, agentName, traces, id, liveToolCalls, r
             <Bot className="w-5 h-5 text-accent-purple" />
           </div>
           <div>
-            <h1 className="font-heading text-sm font-semibold text-theme-primary tracking-wider uppercase">{agentName}</h1>
+            <h1 className="text-[14px] font-semibold text-theme-primary tracking-tight">{agentName}</h1>
             <div className="flex items-center gap-2 mt-0.5">
               <StatusBadge status={execution.status} />
               <span className="text-xs text-theme-muted font-mono">{id?.slice(0, 8)}</span>
@@ -470,31 +470,31 @@ function AgentExecutionView({ execution, agentName, traces, id, liveToolCalls, r
         {/* Metadata cards — 2 rows */}
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
           <div className="card p-3">
-            <span className="text-[10px] font-label uppercase tracking-widest text-theme-muted">Status</span>
+            <span className="overline">Status</span>
             <div className="mt-1"><StatusBadge status={execution.status} /></div>
           </div>
           <div className="card p-3">
-            <span className="text-[10px] font-label uppercase tracking-widest text-theme-muted">Duration</span>
+            <span className="overline">Duration</span>
             <div className="mt-1 text-sm text-theme-primary font-mono">{durationMs > 0 ? `${formatDuration(durationMs)}` : execution.status === 'running' ? '...' : '—'}</div>
           </div>
           <div className="card p-3">
-            <span className="text-[10px] font-label uppercase tracking-widest text-theme-muted">Cost</span>
+            <span className="overline">Cost</span>
             <div className="mt-1 text-sm text-theme-primary font-mono">${(cost.actual ?? cost.estimated ?? 0).toFixed(4)}</div>
           </div>
           <div className="card p-3">
-            <span className="text-[10px] font-label uppercase tracking-widest text-theme-muted">Model</span>
+            <span className="overline">Model</span>
             <div className="mt-1 text-sm text-theme-primary font-mono">{meta.model ?? cost.model ?? 'sonnet'}</div>
           </div>
           <div className="card p-3">
-            <span className="text-[10px] font-label uppercase tracking-widest text-theme-muted">Provider</span>
+            <span className="overline">Provider</span>
             <div className="mt-1 text-sm text-theme-primary font-mono">{meta.provider ?? 'claude'}</div>
           </div>
           <div className="card p-3">
-            <span className="text-[10px] font-label uppercase tracking-widest text-theme-muted">Spawned By</span>
+            <span className="overline">Spawned By</span>
             <div className="mt-1 text-sm text-theme-primary font-mono">{meta.spawnedBy ?? 'user'}</div>
           </div>
           <div className="card p-3 col-span-2">
-            <span className="text-[10px] font-label uppercase tracking-widest text-theme-muted">Working Directory</span>
+            <span className="overline">Working Directory</span>
             <div className="mt-1 text-xs text-blue-400 font-mono truncate" title={meta.cwd ?? execution.input?.repo_path}>{meta.cwd ?? execution.input?.repo_path ?? '/tmp'}</div>
           </div>
         </div>
@@ -512,7 +512,7 @@ function AgentExecutionView({ execution, agentName, traces, id, liveToolCalls, r
                 <button
                   key={n}
                   onClick={() => setSelectedAttempt(n)}
-                  className={`flex items-center gap-1.5 px-3 py-2 text-[11px] font-mono tracking-wider uppercase border-b-2 transition-colors shrink-0 ${
+                  className={`flex items-center gap-1.5 px-3 py-2 text-[12px] border-b-2 transition-colors shrink-0 ${
                     active
                       ? 'border-accent-blue text-theme-primary'
                       : 'border-transparent text-theme-muted hover:text-theme-secondary'
@@ -532,7 +532,7 @@ function AgentExecutionView({ execution, agentName, traces, id, liveToolCalls, r
           <button title="Toggle logs" onClick={() => setShowLogs(!showLogs)} className="w-full flex items-center gap-2 px-4 py-3 hover:bg-surface-200/30 transition-colors text-left">
             {showLogs ? <ChevronDown className="w-4 h-4 text-theme-muted" /> : <ChevronRight className="w-4 h-4 text-theme-muted" />}
             <Terminal className="w-4 h-4 text-accent-cyan" />
-            <span className="text-xs font-label uppercase tracking-widest text-theme-secondary">Live Logs</span>
+            <span className="overline text-[12px]">Live Logs</span>
             <span className="text-[10px] text-theme-subtle font-mono ml-auto">{allLogs.length} entries</span>
             {execution.status === 'running' && <span className="w-1.5 h-1.5 rounded-full bg-blue-400 animate-pulse" />}
           </button>
@@ -586,7 +586,7 @@ function AgentExecutionView({ execution, agentName, traces, id, liveToolCalls, r
           <button title="Toggle prompt" onClick={() => setShowPrompt(!showPrompt)} className="w-full flex items-center gap-2 px-4 py-3 hover:bg-surface-200/30 transition-colors text-left">
             {showPrompt ? <ChevronDown className="w-4 h-4 text-theme-muted" /> : <ChevronRight className="w-4 h-4 text-theme-muted" />}
             <Terminal className="w-4 h-4 text-accent-blue" />
-            <span className="text-xs font-label uppercase tracking-widest text-theme-secondary">Prompt</span>
+            <span className="overline text-[12px]">Prompt</span>
             <span className="text-[10px] text-theme-subtle font-mono ml-auto">{prompt.length} chars</span>
           </button>
           {showPrompt && (
@@ -601,7 +601,7 @@ function AgentExecutionView({ execution, agentName, traces, id, liveToolCalls, r
           <button title="Toggle response" onClick={() => setShowResponse(!showResponse)} className="w-full flex items-center gap-2 px-4 py-3 hover:bg-surface-200/30 transition-colors text-left">
             {showResponse ? <ChevronDown className="w-4 h-4 text-theme-muted" /> : <ChevronRight className="w-4 h-4 text-theme-muted" />}
             {execution.status === 'completed' ? <CheckCircle className="w-4 h-4 text-accent-green" /> : execution.status === 'running' ? <Brain className="w-4 h-4 text-accent-blue animate-pulse" /> : <AlertCircle className="w-4 h-4 text-accent-red" />}
-            <span className="text-xs font-label uppercase tracking-widest text-theme-secondary">Response</span>
+            <span className="overline text-[12px]">Response</span>
             <span className="text-[10px] text-theme-subtle font-mono ml-auto">{response.length} chars</span>
           </button>
           {showResponse && (
@@ -950,7 +950,7 @@ export default function ExecutionDetailPage() {
             <ArrowLeft className="w-4 h-4" />
           </Link>
           <div>
-            <h1 className="font-heading text-sm font-semibold text-theme-primary tracking-wider uppercase">{execution.workflowName}</h1>
+            <h1 className="text-[14px] font-semibold text-theme-primary tracking-tight">{execution.workflowName}</h1>
             <div className="flex items-center gap-2 mt-0.5">
               <span className="text-xs text-theme-muted font-mono">{id?.slice(0, 8)}</span>
               <StatusBadge status={execution.status} />
@@ -1149,7 +1149,7 @@ export default function ExecutionDetailPage() {
                     className="absolute right-0 top-full mt-1 w-56 rounded-lg border border-border/60 bg-surface shadow-lg py-1 z-50"
                     onMouseLeave={() => setResumePickerOpen(false)}
                   >
-                    <div className="px-3 py-1.5 text-[9px] font-label uppercase tracking-widest text-theme-subtle border-b border-border/30">
+                    <div className="px-3 py-1.5 overline border-b border-border/30">
                       Rewind to before…
                     </div>
                     {[...execution.completedNodes].reverse().map((n: string) => (
@@ -1210,7 +1210,7 @@ export default function ExecutionDetailPage() {
           decision history at a glance. */}
       {runInterventions.length > 0 && (
         <div className="px-6 py-2 border-b border-border/30 bg-surface-50 flex items-center gap-3 overflow-x-auto">
-          <span className="text-[10px] font-label uppercase tracking-widest text-theme-subtle shrink-0">
+          <span className="overline shrink-0">
             Interventions ({runInterventions.length})
           </span>
           {runInterventions.map((i: any) => (
@@ -1315,7 +1315,7 @@ export default function ExecutionDetailPage() {
           <div className="flex-1 overflow-auto">
             <table className="w-full text-xs font-body">
               <thead className="sticky top-0 z-10">
-                <tr className="text-theme-muted bg-surface-50 font-label uppercase tracking-wider">
+                <tr className="bg-app-muted overline border-b border-app">
                   <th className="text-left px-4 py-1.5 font-medium">Node</th>
                   <th className="text-left px-4 py-1.5 font-medium">Status</th>
                   <th className="text-left px-4 py-1.5 font-medium">Attempt</th>

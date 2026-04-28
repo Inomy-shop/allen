@@ -178,7 +178,7 @@ export default function RoleDialog({ open, onClose, onSave, role }: RoleDialogPr
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm" onClick={onClose}>
       <div
-        className="bg-surface-100 border border-border rounded-lg w-full max-w-6xl max-h-[92vh] overflow-hidden shadow-glow-blue/20 flex flex-col animate-in fade-in zoom-in-95 duration-200"
+        className="bg-surface-100 border border-border rounded-lg w-full max-w-6xl max-h-[92vh] overflow-hidden shadow-popover flex flex-col animate-in fade-in zoom-in-95 duration-200"
         onClick={e => e.stopPropagation()}
       >
         {/* Header */}

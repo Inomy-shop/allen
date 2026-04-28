@@ -99,7 +99,7 @@ export default function PullRequestDetailPage() {
       <div className="flex-1 flex overflow-hidden min-h-0">
         {/* File list */}
         <div className="w-64 border-r border-border/20 bg-surface-50/30 overflow-y-auto shrink-0">
-          <div className="px-3 py-2 text-[10px] font-label uppercase tracking-wider text-theme-subtle">Changed Files ({diff.files.length})</div>
+          <div className="px-3 py-2 overline">Changed files ({diff.files.length})</div>
           {diff.files.map(f => (
             <button key={f.path} onClick={() => setSelectedFile(f.path)}
               className={`w-full text-left px-3 py-1.5 text-[11px] font-mono truncate ${selectedFile === f.path ? 'bg-blue-500/10 text-blue-400' : 'text-theme-secondary hover:bg-surface-100/5'}`}>

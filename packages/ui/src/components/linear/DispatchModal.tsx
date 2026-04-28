@@ -61,7 +61,7 @@ export default function DispatchModal({
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-md" onClick={onClose}>
-      <div className="bg-surface-100 border border-border rounded-lg w-full max-w-xl shadow-glow-blue/20 animate-in fade-in zoom-in-95 duration-200 overflow-hidden" onClick={e => e.stopPropagation()}>
+      <div className="bg-surface-100 border border-border rounded-lg w-full max-w-xl shadow-popover animate-in fade-in zoom-in-95 duration-200 overflow-hidden" onClick={e => e.stopPropagation()}>
         {/* Header */}
         <div className="px-5 py-4 border-b border-border/60 flex items-center justify-between">
           <div>

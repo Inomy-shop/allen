@@ -258,7 +258,7 @@ function PreviewBar({ id, previewService, setPreviewService, services, onClose }
   return (
     <div className="flex items-center gap-2 px-3 py-1 bg-surface-100/30 border-b border-border/20 shrink-0">
       <Eye className="w-3 h-3 text-blue-400" />
-      <span className="text-[10px] font-label uppercase tracking-wider text-theme-muted">Preview</span>
+      <span className="overline">Preview</span>
       <select value={previewService} onChange={e => setPreviewService(e.target.value)} className="bg-surface-100 border border-border/30 rounded text-[10px] font-mono text-theme-secondary px-1.5 py-0.5">
         {ready.map((s: any) => (<option key={s.name} value={s.name}>{s.name} :{s.port}</option>))}
       </select>
@@ -320,7 +320,7 @@ function ServiceLogViewer({ workspaceId, serviceName, onClose }: { workspaceId: 
     <div className="flex flex-col h-full">
       <div className="flex items-center gap-2 px-3 py-1 border-b border-border/20 bg-surface-100/30 shrink-0">
         <ScrollText className="w-3 h-3 text-theme-muted" />
-        <span className="text-[10px] font-label uppercase tracking-wider text-theme-muted">Logs — {serviceName}</span>
+        <span className="overline">Logs — {serviceName}</span>
         <span className="flex-1" />
         <label className="flex items-center gap-1 text-[9px] text-theme-subtle cursor-pointer">
           <input type="checkbox" checked={autoScroll} onChange={e => setAutoScroll(e.target.checked)} className="w-3 h-3" />
@@ -707,7 +707,7 @@ export default function WorkspaceDetailPage() {
         <div className="shrink-0 overflow-y-auto bg-surface-50/30 flex flex-col" style={{ width: sidebar.size }}>
           {showDiffView ? (
             <>
-              <div className="px-3 py-1.5 text-[10px] font-label uppercase tracking-wider text-theme-subtle flex items-center justify-between shrink-0">
+              <div className="px-3 py-1.5 overline flex items-center justify-between shrink-0">
                 <span className="text-amber-400">Changes</span>
                 <span className="text-theme-subtle text-[9px]">{diffFiles.length}</span>
               </div>
@@ -724,7 +724,7 @@ export default function WorkspaceDetailPage() {
             </>
           ) : (
             <>
-              <div className="px-3 py-1.5 text-[10px] font-label uppercase tracking-wider text-theme-subtle flex items-center justify-between shrink-0">
+              <div className="px-3 py-1.5 overline flex items-center justify-between shrink-0">
                 <span>Explorer</span>
                 <div className="flex items-center gap-1">
                   <button onClick={() => setShowNewFile(true)} className="text-theme-subtle hover:text-theme-secondary p-0.5" title="New File"><FilePlus className="w-3.5 h-3.5" /></button>
@@ -926,7 +926,7 @@ export default function WorkspaceDetailPage() {
             <div className="w-72 border-l border-border/20 bg-surface-50/30 overflow-hidden flex flex-col shrink-0">
               <div className="flex items-center gap-2 px-3 py-1.5 border-b border-border/20 shrink-0">
                 <Server className="w-3 h-3 text-theme-muted" />
-                <span className="text-[10px] font-label uppercase tracking-wider text-theme-muted">Services</span>
+                <span className="overline">Services</span>
                 <span className="flex-1" />
                 <button onClick={() => setShowServices(false)} className="text-theme-subtle hover:text-theme-secondary p-0.5"><X className="w-3 h-3" /></button>
               </div>
@@ -944,7 +944,7 @@ export default function WorkspaceDetailPage() {
             <div className="w-64 border-l border-border/20 bg-surface-50/30 overflow-y-auto flex flex-col shrink-0">
               <div className="flex items-center gap-2 px-3 py-1.5 border-b border-border/20 shrink-0">
                 <History className="w-3 h-3 text-theme-muted" />
-                <span className="text-[10px] font-label uppercase tracking-wider text-theme-muted">Activity</span>
+                <span className="overline">Activity</span>
                 <span className="flex-1" />
                 <button onClick={() => setShowActivity(false)} className="text-theme-subtle hover:text-theme-secondary p-0.5"><X className="w-3 h-3" /></button>
               </div>
@@ -1014,7 +1014,7 @@ export default function WorkspaceDetailPage() {
           )}
 
           {!terminalVisible && (
-            <button onClick={() => setTerminalVisible(true)} className="border-t border-border/30 px-3 py-1 bg-surface-100/20 text-[10px] font-label uppercase tracking-wider text-theme-muted hover:text-theme-secondary w-full text-left flex items-center gap-1.5 shrink-0">
+            <button onClick={() => setTerminalVisible(true)} className="border-t border-border/30 px-3 py-1 bg-surface-100/20 overline hover:text-theme-secondary w-full text-left flex items-center gap-1.5 shrink-0">
               <Terminal className="w-3 h-3" /> Terminal
             </button>
           )}
@@ -1079,7 +1079,7 @@ export default function WorkspaceDetailPage() {
             <div className="flex-1 overflow-y-auto px-4 py-3 space-y-4 text-[11px]">
               {/* Ports */}
               <div>
-                <span className="text-[10px] font-label uppercase tracking-wider text-theme-subtle block mb-1">Assigned Ports</span>
+                <span className="overline block mb-1">Assigned Ports</span>
                 <div className="bg-surface-50/50 rounded p-2 font-mono space-y-1">
                   <div className="flex items-center gap-2"><span className="text-theme-muted w-20">Base port:</span><span className="text-emerald-400">{workspace.basePort}</span></div>
                   {workspace.services?.map((svc: any) => (
@@ -1094,13 +1094,13 @@ export default function WorkspaceDetailPage() {
 
               {/* Worktree */}
               <div>
-                <span className="text-[10px] font-label uppercase tracking-wider text-theme-subtle block mb-1">Worktree Path</span>
+                <span className="overline block mb-1">Worktree Path</span>
                 <div className="bg-surface-50/50 rounded p-2 font-mono text-theme-secondary break-all">{workspace.worktreePath}</div>
               </div>
 
               {/* Git */}
               <div>
-                <span className="text-[10px] font-label uppercase tracking-wider text-theme-subtle block mb-1">Git</span>
+                <span className="overline block mb-1">Git</span>
                 <div className="bg-surface-50/50 rounded p-2 font-mono space-y-1">
                   <div className="flex gap-2"><span className="text-theme-muted w-16">Branch:</span><span className="text-emerald-400">{workspace.branch}</span></div>
                   <div className="flex gap-2"><span className="text-theme-muted w-16">Base:</span><span className="text-theme-secondary">{workspace.baseBranch}</span></div>
@@ -1113,7 +1113,7 @@ export default function WorkspaceDetailPage() {
               {/* Setup log */}
               {workspace.setupProgress?.log?.length > 0 && (
                 <div>
-                  <span className="text-[10px] font-label uppercase tracking-wider text-theme-subtle block mb-1">Setup Log</span>
+                  <span className="overline block mb-1">Setup Log</span>
                   <div className="bg-[rgb(var(--color-editor-background))] rounded p-2 font-mono text-[10px] max-h-40 overflow-y-auto space-y-0.5">
                     {workspace.setupProgress.log.map((line: string, i: number) => (
                       <div key={i} className={line.startsWith('✓') ? 'text-emerald-400' : line.startsWith('✗') ? 'text-red-400' : 'text-theme-muted'}>{line}</div>

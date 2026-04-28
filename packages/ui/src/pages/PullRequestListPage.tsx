@@ -214,7 +214,7 @@ export default function PullRequestListPage() {
 
       {resolveOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-md">
-          <div className="card w-full max-w-lg overflow-hidden shadow-glow-blue/20 animate-in fade-in zoom-in-95 duration-200">
+          <div className="card w-full max-w-lg overflow-hidden shadow-popover animate-in fade-in zoom-in-95 duration-200">
             <div className="px-6 py-5 border-b border-border/60 flex items-center justify-between">
               <div className="flex items-center gap-3">
                 <div className="w-10 h-10 rounded-sm bg-accent-yellow/10 border border-accent-yellow/30 flex items-center justify-center">
