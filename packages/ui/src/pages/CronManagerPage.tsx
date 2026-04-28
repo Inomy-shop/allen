@@ -135,7 +135,7 @@ function HistoryDialog({ job, onClose }: { job: CronJob; onClose: () => void }) 
                 <History className="w-5 h-5 text-accent-blue" />
               </div>
               <div>
-                <h2 className="font-heading text-sm font-bold text-theme-primary tracking-wider uppercase">Run History</h2>
+                <h2 className="text-[14px] font-semibold text-theme-primary tracking-tight">Run History</h2>
                 <p className="text-[11px] text-theme-muted font-mono">{job.displayName}</p>
               </div>
             </div>
@@ -294,7 +294,7 @@ function CronFormDialog({ job, open, onClose, onSaved }: { job: CronJob | null; 
                 {isEdit ? <Pencil className="w-5 h-5 text-accent-blue" /> : <Plus className="w-5 h-5 text-accent-blue" />}
               </div>
               <div>
-                <h2 className="font-heading text-sm font-bold text-theme-primary tracking-wider uppercase">{isEdit ? 'Edit' : 'New'} Scheduled Job</h2>
+                <h2 className="text-[14px] font-semibold text-theme-primary tracking-tight">{isEdit ? 'Edit' : 'New'} Scheduled Job</h2>
                 <p className="text-[11px] text-theme-muted font-mono">{isEdit ? job!.name : 'Configure schedule + target'}</p>
               </div>
             </div>
@@ -554,17 +554,22 @@ export default function CronManagerPage() {
   };
 
   return (
-    <div className="p-6">
+    <div className="px-6 pt-5 pb-8">
       {/* Header */}
-      <div className="flex items-center justify-between mb-6">
-        <div>
-          <h1 className="font-heading text-xl font-bold text-theme-primary tracking-widest uppercase">Scheduled Jobs</h1>
-          <p className="text-xs text-theme-muted mt-1 font-body">{jobs.length} job{jobs.length !== 1 ? 's' : ''} configured</p>
+      <div className="flex items-center gap-2 mb-2 text-[12px] text-theme-muted">
+        <span>Build</span>
+        <span className="text-theme-subtle">/</span>
+        <span>Schedules</span>
+      </div>
+      <div className="flex items-center justify-between mb-5">
+        <div className="flex items-center gap-3">
+          <h1 className="text-[20px] font-semibold text-theme-primary tracking-tight">Schedules</h1>
+          <span className="text-[12px] font-mono text-theme-muted">{jobs.length}</span>
         </div>
         <div className="flex items-center gap-2">
-          <button title="Refresh" onClick={refresh} className="btn-ghost text-xs"><RefreshCw className="w-3.5 h-3.5" /></button>
-          <button onClick={() => { setEditJob(null); setFormOpen(true); }} className="btn-primary text-xs inline-flex items-center gap-1.5">
-            <Plus className="w-3.5 h-3.5" /> New Job
+          <button title="Refresh" onClick={refresh} className="btn btn-secondary btn-sm"><RefreshCw className="w-3.5 h-3.5" /></button>
+          <button onClick={() => { setEditJob(null); setFormOpen(true); }} className="btn btn-primary btn-sm">
+            <Plus className="w-3.5 h-3.5" /> New schedule
           </button>
         </div>
       </div>

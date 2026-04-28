@@ -360,10 +360,10 @@ export default function TicketsPage() {
   return (
     <div className="flex h-full min-h-0">
       {/* ── Sidebar ──────────────────────────────────────────────────────── */}
-      <aside className="w-72 shrink-0 border-r border-border/40 bg-surface-50/40 flex flex-col min-h-0">
-        <div className="px-4 py-4 border-b border-border/40">
-          <h1 className="font-heading text-sm font-bold text-theme-primary tracking-widest uppercase">Linear</h1>
-          <div className="mt-1.5 flex items-center gap-2 text-[10px] font-mono text-theme-muted">
+      <aside className="w-72 shrink-0 border-r border-app bg-app-muted/40 flex flex-col min-h-0">
+        <div className="px-4 py-4 border-b border-app">
+          <h1 className="text-[14px] font-semibold text-theme-primary tracking-tight">Linear</h1>
+          <div className="mt-1.5 flex items-center gap-2 text-[11px] font-mono text-theme-muted">
             <span className="inline-flex items-center gap-1">
               <span className="w-1.5 h-1.5 rounded-full bg-accent-green" /> {status.workspaceName ?? 'Linear'}
             </span>
@@ -507,7 +507,7 @@ export default function TicketsPage() {
         <div className="p-6">
           <div className="flex items-center justify-between mb-5">
             <div>
-              <h2 className="font-heading text-lg font-bold text-theme-primary tracking-widest uppercase">
+              <h2 className="text-[18px] font-semibold text-theme-primary tracking-tight">
                 {projectFilter
                   ? (projects.find(p => p.id === projectFilter)?.name ?? 'Project')
                   : 'All Tickets'}

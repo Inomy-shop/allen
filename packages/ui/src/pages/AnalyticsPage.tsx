@@ -54,10 +54,15 @@ export default function AnalyticsPage() {
   if (loading) return <div className="p-6 text-xs text-theme-subtle animate-pulse">Loading analytics...</div>;
 
   return (
-    <div className="p-6 space-y-6">
+    <div className="px-6 pt-5 pb-8 space-y-5">
       <div>
-        <h1 className="font-heading text-2xl text-theme-primary tracking-wider">Analytics</h1>
-        <p className="text-sm text-theme-muted font-body mt-1">Chat agent performance and tool usage</p>
+        <div className="flex items-center gap-2 mb-2 text-[12px] text-theme-muted">
+          <span>Insight</span>
+          <span className="text-theme-subtle">/</span>
+          <span>Analytics</span>
+        </div>
+        <h1 className="text-[20px] font-semibold text-theme-primary tracking-tight">Analytics</h1>
+        <p className="text-[13px] text-theme-muted font-body mt-1">Chat agent performance and tool usage</p>
       </div>
 
       {/* Stats cards */}
@@ -65,7 +70,7 @@ export default function AnalyticsPage() {
         <div className="card p-4">
           <div className="flex items-center gap-2 mb-2">
             <MessageSquare className="w-4 h-4 text-accent-blue" />
-            <span className="text-[10px] font-label uppercase tracking-widest text-theme-muted">Messages</span>
+            <span className="overline">Messages</span>
           </div>
           <div className="text-2xl font-heading text-theme-primary">{totalMessages}</div>
           <div className="text-[10px] text-theme-subtle font-mono">{totalConversations} conversations</div>
@@ -74,7 +79,7 @@ export default function AnalyticsPage() {
         <div className="card p-4">
           <div className="flex items-center gap-2 mb-2">
             <DollarSign className="w-4 h-4 text-accent-green" />
-            <span className="text-[10px] font-label uppercase tracking-widest text-theme-muted">Total Cost</span>
+            <span className="overline">Total Cost</span>
           </div>
           <div className="text-2xl font-heading text-theme-primary">${totalCost.toFixed(2)}</div>
           <div className="text-[10px] text-theme-subtle font-mono">${totalMessages > 0 ? (totalCost / totalMessages).toFixed(4) : '0'}/msg</div>
@@ -83,7 +88,7 @@ export default function AnalyticsPage() {
         <div className="card p-4">
           <div className="flex items-center gap-2 mb-2">
             <Clock className="w-4 h-4 text-accent-yellow" />
-            <span className="text-[10px] font-label uppercase tracking-widest text-theme-muted">Avg Response</span>
+            <span className="overline">Avg Response</span>
           </div>
           <div className="text-2xl font-heading text-theme-primary">{(avgDuration / 1000).toFixed(1)}s</div>
           <div className="text-[10px] text-theme-subtle font-mono">per message</div>
@@ -92,7 +97,7 @@ export default function AnalyticsPage() {
         <div className="card p-4">
           <div className="flex items-center gap-2 mb-2">
             <Wrench className="w-4 h-4 text-accent-purple" />
-            <span className="text-[10px] font-label uppercase tracking-widest text-theme-muted">Tool Calls</span>
+            <span className="overline">Tool Calls</span>
           </div>
           <div className="text-2xl font-heading text-theme-primary">{Object.values(toolCounts).reduce((a, b) => a + b, 0)}</div>
           <div className="text-[10px] text-theme-subtle font-mono">{Object.keys(toolCounts).length} unique tools</div>
@@ -101,7 +106,7 @@ export default function AnalyticsPage() {
 
       {/* Tool usage */}
       <div className="card p-5">
-        <h3 className="font-heading text-sm text-theme-primary tracking-wider mb-4 flex items-center gap-2">
+        <h3 className="text-[14px] font-medium text-theme-primary tracking-tight mb-4 flex items-center gap-2">
           <TrendingUp className="w-4 h-4 text-accent-blue" /> Top Tools
         </h3>
         {topTools.length === 0 ? (
@@ -129,7 +134,7 @@ export default function AnalyticsPage() {
       {/* Recent errors */}
       {errors.length > 0 && (
         <div className="card p-5">
-          <h3 className="font-heading text-sm text-theme-primary tracking-wider mb-4 flex items-center gap-2">
+          <h3 className="text-[14px] font-medium text-theme-primary tracking-tight mb-4 flex items-center gap-2">
             <BarChart3 className="w-4 h-4 text-accent-red" /> Recent Errors ({errors.length})
           </h3>
           <div className="space-y-2">
@@ -145,7 +150,7 @@ export default function AnalyticsPage() {
 
       {/* Recent messages log */}
       <div className="card p-5">
-        <h3 className="font-heading text-sm text-theme-primary tracking-wider mb-4">Recent Messages</h3>
+        <h3 className="text-[14px] font-medium text-theme-primary tracking-tight mb-4">Recent Messages</h3>
         <div className="space-y-1 max-h-80 overflow-y-auto">
           {logs.slice(0, 30).map(log => (
             <button

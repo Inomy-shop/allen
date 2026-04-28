@@ -105,36 +105,40 @@ export default function PullRequestListPage() {
   return (
     <div className="flex flex-col h-full overflow-hidden">
       {/* Header */}
-      <div className="px-6 py-4 border-b border-border/30 bg-surface-50/50 shrink-0">
+      <div className="px-6 pt-5 pb-3 border-b border-app shrink-0">
+        <div className="flex items-center gap-2 mb-2 text-[12px] text-theme-muted">
+          <span>Code</span>
+          <span className="text-theme-subtle">/</span>
+          <span>Pull requests</span>
+        </div>
         <div className="flex items-center gap-3">
-          <GitPullRequest className="w-5 h-5 text-blue-400" />
-          <h1 className="text-lg font-heading font-semibold text-theme-primary">Pull Requests</h1>
+          <h1 className="text-[20px] font-semibold text-theme-primary tracking-tight">Pull requests</h1>
+          <span className="text-[12px] font-mono text-theme-muted">{prs.length}</span>
           <span className="flex-1" />
           <button
             onClick={() => { setResolveOpen(true); setResolveUrl(''); setResolveError(null); }}
-            className="btn-ghost text-xs py-1.5 px-3 flex items-center gap-1.5"
+            className="btn btn-secondary btn-sm"
             title="Manually trigger CodeRabbit review resolution for any PR URL (including external ones)"
           >
             <Wrench className="w-3.5 h-3.5" />
             Resolve CodeRabbit
           </button>
-          <button onClick={handleSync} disabled={syncing} className="btn-ghost text-xs py-1.5 px-3 flex items-center gap-1.5 disabled:opacity-50">
+          <button onClick={handleSync} disabled={syncing} className="btn btn-secondary btn-sm disabled:opacity-50">
             <RefreshCw className={`w-3.5 h-3.5 ${syncing ? 'animate-spin' : ''}`} />
-            {syncing ? 'Syncing...' : 'Sync from GitHub'}
+            {syncing ? 'Syncing…' : 'Sync from GitHub'}
           </button>
         </div>
 
         {/* Filters */}
-        <div className="flex items-center gap-2 mt-3">
+        <div className="flex items-center gap-1 mt-3">
           {['open', 'merged', 'closed', ''].map(s => (
             <button key={s} onClick={() => setStatusFilter(s)}
-              className={`text-[11px] font-mono px-3 py-1 rounded-full border ${statusFilter === s
-                ? 'bg-blue-500/10 text-blue-400 border-blue-500/30'
-                : 'text-theme-muted border-border/20 hover:text-theme-secondary'}`}>
+              className={`text-[12px] font-mono px-2.5 py-1 rounded-md transition-colors ${statusFilter === s
+                ? 'bg-accent-soft text-accent'
+                : 'text-theme-muted hover:text-theme-primary hover:bg-app-muted'}`}>
               {s || 'All'}
             </button>
           ))}
-          <span className="text-[10px] text-theme-subtle ml-2">{prs.length} results</span>
         </div>
       </div>
 
@@ -151,7 +155,7 @@ export default function PullRequestListPage() {
         ) : (
           <div className="space-y-3">
             {prs.map(pr => (
-              <div key={pr._id} className="border border-border/20 rounded-lg p-4 hover:border-border/40 transition-colors bg-surface-50/20 cursor-pointer" onClick={() => navigate(`/pull-requests/${pr._id}`)}>
+              <div key={pr._id} className="card-hover p-4 cursor-pointer" onClick={() => navigate(`/pull-requests/${pr._id}`)}>
                 <div className="flex items-start gap-3">
                   {statusIcon(pr.status)}
                   <div className="flex-1 min-w-0">

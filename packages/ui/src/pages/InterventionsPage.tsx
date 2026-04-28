@@ -296,14 +296,18 @@ function InterventionsListView() {
 
   return (
     <div className="flex flex-col h-full">
-      <div className="sticky top-0 z-10 bg-surface-50 border-b border-border/30">
-        <div className="p-6 pb-4">
+      <div className="sticky top-0 z-10 bg-app border-b border-app">
+        <div className="px-6 pt-5 pb-4">
+          <div className="flex items-center gap-2 mb-2 text-[12px] text-theme-muted">
+            <span>Workspace</span>
+            <span className="text-theme-subtle">/</span>
+            <span>Needs review</span>
+          </div>
           <div className="flex items-center justify-between mb-4">
             <div>
               <div className="flex items-center gap-2 mb-1">
-                <Shield className="w-5 h-5 text-accent-blue" />
-                <h1 className="font-heading text-xl font-bold text-theme-primary tracking-widest uppercase">
-                  Interventions
+                <h1 className="text-[20px] font-semibold text-theme-primary tracking-tight">
+                  Needs review
                 </h1>
               </div>
               <div className="flex items-center gap-3 mt-1 text-[10px] font-mono text-theme-muted">

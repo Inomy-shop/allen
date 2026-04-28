@@ -201,35 +201,39 @@ export default function LearningsPage() {
   }, [activeTab, fetchEvolutionCandidates]);
 
   return (
-    <div className="p-6">
+    <div className="px-6 pt-5 pb-8">
       {/* Header */}
-      <div className="flex items-center justify-between mb-6">
+      <div className="flex items-center gap-2 mb-2 text-[12px] text-theme-muted">
+        <span>Insight</span>
+        <span className="text-theme-subtle">/</span>
+        <span>Learnings</span>
+      </div>
+      <div className="flex items-center justify-between mb-5">
         <div className="flex items-center gap-3">
-          <Brain className="w-6 h-6 text-accent-blue" />
-          <h1 className="font-heading text-xl font-bold text-theme-primary tracking-widest uppercase">Learnings</h1>
+          <h1 className="text-[20px] font-semibold text-theme-primary tracking-tight">Learnings</h1>
         </div>
         <div className="flex items-center gap-2">
-          <button title="Add learning" onClick={() => setShowAdd(!showAdd)} className="btn-primary text-xs inline-flex items-center gap-1.5 whitespace-nowrap">
-            <Plus className="w-3.5 h-3.5" /> Add Learning
+          <button title="Add learning" onClick={() => setShowAdd(!showAdd)} className="btn btn-primary btn-sm whitespace-nowrap">
+            <Plus className="w-3.5 h-3.5" /> Add learning
           </button>
-          <button title="Toggle statistics" onClick={toggleStats} className="btn-ghost text-xs">
+          <button title="Toggle statistics" onClick={toggleStats} className="btn btn-secondary btn-sm">
             <BarChart2 className="w-3.5 h-3.5" />
           </button>
-          <button title="Refresh learnings" onClick={fetchLearnings} className="btn-ghost text-xs">
+          <button title="Refresh learnings" onClick={fetchLearnings} className="btn btn-secondary btn-sm">
             <RefreshCw className="w-3.5 h-3.5" />
           </button>
         </div>
       </div>
 
       {/* Tab toggle */}
-      <div className="flex items-center gap-1 mb-6 border-b border-border/30 pb-2">
+      <div className="flex items-center gap-1 mb-5 border-b border-app">
         <button
           onClick={() => setActiveTab('learnings')}
           title="View learnings"
-          className={`px-4 py-1.5 text-xs font-heading uppercase tracking-wider rounded-t-sm transition-colors ${
+          className={`px-2.5 py-1.5 text-[13px] -mb-px transition-colors ${
             activeTab === 'learnings'
-              ? 'text-accent-blue border-b-2 border-accent-blue'
-              : 'text-theme-muted hover:text-theme-secondary'
+              ? 'text-theme-primary font-medium border-b-2 border-accent'
+              : 'text-theme-muted hover:text-theme-primary border-b-2 border-transparent'
           }`}
         >
           Learnings
@@ -237,10 +241,10 @@ export default function LearningsPage() {
         <button
           onClick={() => setActiveTab('evolution')}
           title="Agent evolution candidates"
-          className={`px-4 py-1.5 text-xs font-heading uppercase tracking-wider rounded-t-sm transition-colors flex items-center gap-1.5 ${
+          className={`px-2.5 py-1.5 text-[13px] -mb-px transition-colors flex items-center gap-1.5 ${
             activeTab === 'evolution'
-              ? 'text-accent-blue border-b-2 border-accent-blue'
-              : 'text-theme-muted hover:text-theme-secondary'
+              ? 'text-theme-primary font-medium border-b-2 border-accent'
+              : 'text-theme-muted hover:text-theme-primary border-b-2 border-transparent'
           }`}
         >
           <Sparkles className="w-3 h-3" /> Evolution
@@ -254,7 +258,7 @@ export default function LearningsPage() {
           {previewData && (
             <div className="card p-5 border border-accent-blue/30 space-y-4">
               <div className="flex items-center justify-between">
-                <h3 className="font-heading text-sm text-theme-primary tracking-wider uppercase">
+                <h3 className="text-[14px] font-semibold text-theme-primary tracking-tight">
                   Evolution Preview: {previewData.agentName}
                 </h3>
                 <button onClick={() => setPreviewData(null)} className="btn-ghost text-xs">
@@ -399,7 +403,7 @@ export default function LearningsPage() {
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm">
           <div className="bg-surface-100 border border-border rounded-sm w-full max-w-lg shadow-lg">
             <div className="flex items-center justify-between px-5 py-4 border-b border-border/50">
-              <h3 className="font-heading text-sm text-theme-primary tracking-wider uppercase">Add Learning</h3>
+              <h3 className="text-[14px] font-semibold text-theme-primary tracking-tight">Add Learning</h3>
               <button onClick={() => setShowAdd(false)} className="text-theme-secondary hover:text-theme-primary" title="Close">
                 <X className="w-4 h-4" />
               </button>

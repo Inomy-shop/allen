@@ -70,21 +70,26 @@ export default function WorkspaceListPage() {
   };
 
   return (
-    <div className="p-6">
-      <div className="flex items-center justify-between mb-6">
-        <div>
-          <h1 className="font-heading text-xl font-bold text-theme-primary tracking-widest uppercase">Workspaces</h1>
-          <p className="text-xs text-theme-muted mt-1 font-body">{list.length} active workspace{list.length !== 1 ? 's' : ''}</p>
+    <div className="px-6 pt-5 pb-8">
+      <div className="flex items-center gap-2 mb-2 text-[12px] text-theme-muted">
+        <span>Code</span>
+        <span className="text-theme-subtle">/</span>
+        <span>Sandboxes</span>
+      </div>
+      <div className="flex items-center justify-between mb-5">
+        <div className="flex items-center gap-3">
+          <h1 className="text-[20px] font-semibold text-theme-primary tracking-tight">Sandboxes</h1>
+          <span className="text-[12px] font-mono text-theme-muted">{list.length}</span>
         </div>
         <div className="flex items-center gap-2">
           {selected.size > 0 && (
-            <button onClick={handleBulkArchive} disabled={bulkArchiving} className="btn-ghost text-xs text-red-400 flex items-center gap-1 disabled:opacity-50">
+            <button onClick={handleBulkArchive} disabled={bulkArchiving} className="btn btn-secondary btn-sm hover:!text-accent-red flex items-center gap-1 disabled:opacity-50">
               <Trash2 className="w-3.5 h-3.5" /> Archive {selected.size}
             </button>
           )}
-          <button onClick={load} className="btn-ghost text-xs" title="Refresh"><RefreshCw className="w-3.5 h-3.5" /></button>
-          <button onClick={() => setCreating(!creating)} className="btn-primary text-xs inline-flex items-center gap-1.5">
-            <Plus className="w-3.5 h-3.5" /> New Workspace
+          <button onClick={load} className="btn btn-secondary btn-sm" title="Refresh"><RefreshCw className="w-3.5 h-3.5" /></button>
+          <button onClick={() => setCreating(!creating)} className="btn btn-primary btn-sm">
+            <Plus className="w-3.5 h-3.5" /> New sandbox
           </button>
         </div>
       </div>
@@ -94,22 +99,22 @@ export default function WorkspaceListPage() {
         <form onSubmit={handleCreate} className="mb-6 p-4 rounded-lg border border-border/20 bg-surface-100/30 space-y-3">
           <div className="grid grid-cols-2 gap-3">
             <div>
-              <label className="text-[10px] font-label uppercase tracking-wider text-theme-muted block mb-1">Repository</label>
+              <label className="overline block mb-1">Repository</label>
               <select value={form.repoId} onChange={e => selectRepo(e.target.value)} className="input w-full text-xs">
                 <option value="">Select repo...</option>
                 {repos.map(r => <option key={r._id} value={r._id}>{r.name}</option>)}
               </select>
             </div>
             <div>
-              <label className="text-[10px] font-label uppercase tracking-wider text-theme-muted block mb-1">Workspace Name</label>
+              <label className="overline block mb-1">Workspace Name</label>
               <input value={form.name} onChange={e => setForm(f => ({ ...f, name: e.target.value }))} placeholder="feature/light-theme" className="input w-full text-xs" />
             </div>
             <div>
-              <label className="text-[10px] font-label uppercase tracking-wider text-theme-muted block mb-1">Branch Name</label>
+              <label className="overline block mb-1">Branch Name</label>
               <input value={form.branch} onChange={e => setForm(f => ({ ...f, branch: e.target.value }))} placeholder="feature/my-feature" className="input w-full text-xs" />
             </div>
             <div>
-              <label className="text-[10px] font-label uppercase tracking-wider text-theme-muted block mb-1">Base Branch</label>
+              <label className="overline block mb-1">Base Branch</label>
               <input value={form.baseBranch} onChange={e => setForm(f => ({ ...f, baseBranch: e.target.value }))} placeholder="main" className="input w-full text-xs" />
             </div>
           </div>
@@ -147,11 +152,11 @@ export default function WorkspaceListPage() {
               <div key={group.repoId}>
                 {/* Repo header */}
                 <div className="flex items-center gap-2 mb-2 px-1">
-                  <FolderGit2 className="w-4 h-4 text-blue-400" />
-                  <span className="text-xs font-heading font-semibold text-theme-secondary uppercase tracking-wider">{group.repoName}</span>
-                  <span className="text-[10px] text-theme-subtle font-mono">{group.workspaces.length} workspace{group.workspaces.length !== 1 ? 's' : ''}</span>
+                  <FolderGit2 className="w-4 h-4 text-accent" />
+                  <span className="text-[13px] font-medium text-theme-primary">{group.repoName}</span>
+                  <span className="text-[11px] text-theme-muted font-mono">{group.workspaces.length} sandbox{group.workspaces.length !== 1 ? 'es' : ''}</span>
                   <span className="flex-1" />
-                  <button onClick={() => setConfigRepoId(group.repoId)} className="text-[10px] text-theme-subtle hover:text-theme-secondary flex items-center gap-1">
+                  <button onClick={() => setConfigRepoId(group.repoId)} className="text-[11px] text-theme-muted hover:text-theme-primary flex items-center gap-1">
                     <Settings className="w-3 h-3" /> Config
                   </button>
                 </div>
