@@ -24,12 +24,40 @@ export function executionRoutes(db: Db): Router {
   });
 
   // GET /api/executions
+  // Supports two response shapes for backward compatibility:
+  //  - if any of `limit`, `offset`, `search`, or `type` is supplied → returns
+  //    `{ items, total }` for pagination
+  //  - otherwise → returns a flat array (used by callers that just need the
+  //    full list, e.g. WorkflowListPage stats aggregation)
   router.get('/', async (req: Request, res: Response) => {
     try {
+      const status = req.query.status ? String(req.query.status) : undefined;
+      const workflowId = req.query.workflowId ? String(req.query.workflowId) : undefined;
+      const workflowName = req.query.workflowName ? String(req.query.workflowName) : undefined;
+      const search = req.query.search ? String(req.query.search) : undefined;
+      const typeRaw = req.query.type ? String(req.query.type) : undefined;
+      const type = typeRaw === 'agent' || typeRaw === 'workflow' ? typeRaw : undefined;
+
+      const wantsPaged = req.query.limit != null
+        || req.query.offset != null
+        || search != null
+        || type != null;
+
+      if (wantsPaged) {
+        const limit = req.query.limit != null ? Number(req.query.limit) : 50;
+        const offset = req.query.offset != null ? Number(req.query.offset) : 0;
+        const result = await service.listPaged({
+          status, workflowId, workflowName, type, search,
+          skip: Number.isFinite(offset) ? offset : 0,
+          limit: Number.isFinite(limit) ? limit : 50,
+        });
+        return res.json(result);
+      }
+
       const filter: Record<string, unknown> = {};
-      if (req.query.status) filter.status = String(req.query.status);
-      if (req.query.workflowId) filter.workflowId = String(req.query.workflowId);
-      if (req.query.workflowName) filter.workflowName = String(req.query.workflowName);
+      if (status) filter.status = status;
+      if (workflowId) filter.workflowId = workflowId;
+      if (workflowName) filter.workflowName = workflowName;
       const executions = await service.list(filter);
       res.json(executions);
     } catch (err: unknown) {

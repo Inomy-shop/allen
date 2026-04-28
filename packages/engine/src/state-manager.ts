@@ -226,6 +226,29 @@ export class StateManager {
     return docs as unknown as ExecutionState[];
   }
 
+  /**
+   * Paginated variant of listExecutions. Returns the page slice plus the
+   * total matching count so callers can render pagination controls.
+   * `skip` defaults to 0; `limit` is clamped to [1, 200].
+   */
+  async listExecutionsPaged(
+    filter: Record<string, unknown> = {},
+    opts: { skip?: number; limit?: number } = {},
+  ): Promise<{ items: ExecutionState[]; total: number }> {
+    const skip = Math.max(0, opts.skip ?? 0);
+    const limit = Math.min(200, Math.max(1, opts.limit ?? 50));
+    const [items, total] = await Promise.all([
+      this.executionsCol
+        .find(filter)
+        .sort({ startedAt: -1 })
+        .skip(skip)
+        .limit(limit)
+        .toArray(),
+      this.executionsCol.countDocuments(filter),
+    ]);
+    return { items: items as unknown as ExecutionState[], total };
+  }
+
   async getExecutionStats(): Promise<Record<string, unknown>> {
     const total = await this.executionsCol.countDocuments();
     const byStatus = await this.executionsCol

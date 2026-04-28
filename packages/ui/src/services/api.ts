@@ -147,6 +147,31 @@ export const executions = {
     const qs = params ? '?' + new URLSearchParams(params).toString() : '';
     return request<any[]>(`/executions${qs}`);
   },
+  /**
+   * Paginated list with search + agent/workflow type filter. Returns the
+   * page slice plus the total matching count so the UI can render
+   * pagination controls. Server is backward compatible — any of `limit`,
+   * `offset`, `search`, or `type` triggers the paged response shape.
+   */
+  listPaged: (params: {
+    status?: string;
+    workflowId?: string;
+    workflowName?: string;
+    type?: 'agent' | 'workflow';
+    search?: string;
+    limit?: number;
+    offset?: number;
+  } = {}) => {
+    const qs = new URLSearchParams();
+    if (params.status) qs.set('status', params.status);
+    if (params.workflowId) qs.set('workflowId', params.workflowId);
+    if (params.workflowName) qs.set('workflowName', params.workflowName);
+    if (params.type) qs.set('type', params.type);
+    if (params.search) qs.set('search', params.search);
+    qs.set('limit', String(params.limit ?? 50));
+    qs.set('offset', String(params.offset ?? 0));
+    return request<{ items: any[]; total: number }>(`/executions?${qs.toString()}`);
+  },
   get: (id: string) => request<any>(`/executions/${id}`),
   start: (workflowId: string, input: Record<string, unknown>) =>
     request<any>('/executions', { method: 'POST', body: JSON.stringify({ workflowId, input }) }),

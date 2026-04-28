@@ -1,6 +1,9 @@
-import { useState, useEffect, useCallback, useMemo } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
-import { Play, RefreshCw, RotateCcw, Download, ChevronUp, ChevronDown } from 'lucide-react';
+import {
+  Play, RefreshCw, RotateCcw, Download, ChevronUp, ChevronDown,
+  Search, ChevronLeft, ChevronRight,
+} from 'lucide-react';
 import { executions as api } from '../services/api';
 import StatusBadge from '../components/common/StatusBadge';
 import CostDisplay from '../components/common/CostDisplay';
@@ -8,16 +11,46 @@ import { TableSkeleton } from '../components/common/Skeleton';
 
 type SortKey = 'status' | 'workflowName' | 'durationMs' | 'startedAt';
 type SortDir = 'asc' | 'desc';
+type TypeFilter = '' | 'agent' | 'workflow';
+
+const PAGE_SIZE = 50;
 
 export default function ExecutionListPage() {
   const [data, setData] = useState<any[]>([]);
+  const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(true);
   const [searchParams, setSearchParams] = useSearchParams();
   const filter = searchParams.get('status') ?? '';
-  const setFilter = (s: string) => {
-    if (s) setSearchParams({ status: s });
-    else setSearchParams({});
+  const typeFilter = (searchParams.get('type') ?? '') as TypeFilter;
+  const search = searchParams.get('q') ?? '';
+  const page = Math.max(0, Number(searchParams.get('page') ?? '0') || 0);
+
+  const updateParams = (updates: Record<string, string | null>) => {
+    const next = new URLSearchParams(searchParams);
+    for (const [k, v] of Object.entries(updates)) {
+      if (v === null || v === '') next.delete(k);
+      else next.set(k, v);
+    }
+    setSearchParams(next);
   };
+
+  const setFilter = (s: string) => updateParams({ status: s || null, page: null });
+  const setTypeFilter = (t: string) => updateParams({ type: t || null, page: null });
+  const setPage = (p: number) => updateParams({ page: p > 0 ? String(p) : null });
+
+  // Local search input state — debounced into the URL so list refreshes
+  // don't fire on every keystroke.
+  const [searchInput, setSearchInput] = useState(search);
+  useEffect(() => { setSearchInput(search); }, [search]);
+  const searchDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const onSearchChange = (v: string) => {
+    setSearchInput(v);
+    if (searchDebounceRef.current) clearTimeout(searchDebounceRef.current);
+    searchDebounceRef.current = setTimeout(() => {
+      updateParams({ q: v || null, page: null });
+    }, 300);
+  };
+
   const [sortKey, setSortKey] = useState<SortKey>('startedAt');
   const [sortDir, setSortDir] = useState<SortDir>('desc');
   const navigate = useNavigate();
@@ -25,12 +58,18 @@ export default function ExecutionListPage() {
   const refresh = useCallback(async () => {
     setLoading(true);
     try {
-      const params = filter ? { status: filter } : undefined;
-      const result = await api.list(params);
-      setData(result);
+      const result = await api.listPaged({
+        status: filter || undefined,
+        type: typeFilter || undefined,
+        search: search || undefined,
+        limit: PAGE_SIZE,
+        offset: page * PAGE_SIZE,
+      });
+      setData(result.items);
+      setTotal(result.total);
     } catch { /* ignore */ }
     setLoading(false);
-  }, [filter]);
+  }, [filter, typeFilter, search, page]);
 
   useEffect(() => { refresh(); }, [refresh]);
 
@@ -100,12 +139,35 @@ export default function ExecutionListPage() {
   }, []);
 
   const statuses = ['', 'running', 'completed', 'failed', 'cancelled', 'queued', 'waiting_for_input'];
+  const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
+  const fromIdx = total === 0 ? 0 : page * PAGE_SIZE + 1;
+  const toIdx = Math.min(total, (page + 1) * PAGE_SIZE);
 
   return (
     <div className="p-6">
-      <div className="flex items-center justify-between mb-6">
+      <div className="flex items-center justify-between mb-6 gap-3 flex-wrap">
         <h1 className="font-heading text-xl font-bold text-theme-primary tracking-widest uppercase">Executions</h1>
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-2 flex-wrap">
+          <div className="relative">
+            <Search className="w-3.5 h-3.5 absolute left-2 top-1/2 -translate-y-1/2 text-theme-subtle pointer-events-none" />
+            <input
+              type="text"
+              value={searchInput}
+              onChange={e => onSearchChange(e.target.value)}
+              placeholder="Search id, workflow, node…"
+              className="input text-xs pl-7 w-56"
+            />
+          </div>
+          <select
+            value={typeFilter}
+            onChange={e => setTypeFilter(e.target.value)}
+            className="input text-xs"
+            title="Filter by execution type"
+          >
+            <option value="">All types</option>
+            <option value="workflow">Workflow</option>
+            <option value="agent">Agent</option>
+          </select>
           <select
             value={filter}
             onChange={e => setFilter(e.target.value)}
@@ -143,8 +205,17 @@ export default function ExecutionListPage() {
       ) : data.length === 0 ? (
         <div className="card p-8 text-center">
           <Play className="w-8 h-8 text-theme-subtle mx-auto mb-3" />
-          <p className="text-theme-secondary text-sm font-body">No executions yet</p>
-          <p className="text-theme-subtle text-xs mt-1 font-mono">START A WORKFLOW TO SEE EXECUTIONS HERE</p>
+          {(search || filter || typeFilter) ? (
+            <>
+              <p className="text-theme-secondary text-sm font-body">No executions match your filters</p>
+              <p className="text-theme-subtle text-xs mt-1 font-mono">CLEAR SEARCH OR FILTERS TO SEE MORE</p>
+            </>
+          ) : (
+            <>
+              <p className="text-theme-secondary text-sm font-body">No executions yet</p>
+              <p className="text-theme-subtle text-xs mt-1 font-mono">START A WORKFLOW TO SEE EXECUTIONS HERE</p>
+            </>
+          )}
         </div>
       ) : (
         <div className="card overflow-hidden">
@@ -239,6 +310,32 @@ export default function ExecutionListPage() {
               ))}
             </tbody>
           </table>
+          <div className="flex items-center justify-between px-4 py-3 border-t border-border/40 text-xs text-theme-secondary font-mono">
+            <span>
+              {fromIdx}–{toIdx} of {total}
+            </span>
+            <div className="flex items-center gap-2">
+              <button
+                onClick={() => setPage(page - 1)}
+                disabled={page === 0 || loading}
+                className="btn-ghost text-xs p-1 disabled:opacity-40 disabled:cursor-not-allowed"
+                title="Previous page"
+              >
+                <ChevronLeft className="w-3.5 h-3.5" />
+              </button>
+              <span>
+                Page {page + 1} of {totalPages}
+              </span>
+              <button
+                onClick={() => setPage(page + 1)}
+                disabled={page + 1 >= totalPages || loading}
+                className="btn-ghost text-xs p-1 disabled:opacity-40 disabled:cursor-not-allowed"
+                title="Next page"
+              >
+                <ChevronRight className="w-3.5 h-3.5" />
+              </button>
+            </div>
+          </div>
         </div>
       )}
     </div>

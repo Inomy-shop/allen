@@ -635,7 +635,7 @@ ${context}
         env: { ...process.env, ...spawnContextEnv },
         mcpServers: mcpServers && Object.keys(mcpServers).length > 0 ? (mcpServers as Record<string, unknown>) : undefined,
         abortSignal: deps.abortSignal,
-        stderr: (chunk) => emitLog(deps, nodeName, { level: 'debug', category: 'system', message: `[claude-cli stderr] ${chunk.slice(0, 300)}` }),
+        stderr: (chunk) => emitLog(deps, nodeName, { level: 'debug', category: 'system', message: `[claude-cli stderr] ${chunk.slice(0, 4000)}` }),
       });
     } else {
       conv = query({

@@ -345,6 +345,61 @@ export class ExecutionService {
     return results as unknown as Record<string, unknown>[];
   }
 
+  /**
+   * Paginated list with optional free-text search and agent/workflow type
+   * filter. `type='agent'` matches workflowName patterns produced by
+   * spawn_agent (`<caller>:spawn_agent/<name>`); `type='workflow'` excludes
+   * those. `search` is a case-insensitive substring match against
+   * workflowName, id, and failedNode.
+   */
+  async listPaged(opts: {
+    status?: string;
+    workflowId?: string;
+    workflowName?: string;
+    type?: 'agent' | 'workflow';
+    search?: string;
+    skip?: number;
+    limit?: number;
+  } = {}): Promise<{ items: Record<string, unknown>[]; total: number }> {
+    const query: Record<string, unknown> = {};
+    if (opts.status) query.status = opts.status;
+    if (opts.workflowId) query.workflowId = opts.workflowId;
+    if (opts.workflowName) query.workflowName = opts.workflowName;
+
+    if (opts.type === 'agent') {
+      query.workflowName = { $regex: ':spawn_agent/' };
+    } else if (opts.type === 'workflow') {
+      query.workflowName = { $not: { $regex: ':spawn_agent/' } };
+    }
+
+    if (opts.search && opts.search.trim()) {
+      const escaped = opts.search.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      const rx = { $regex: escaped, $options: 'i' };
+      const searchOr: Record<string, unknown>[] = [
+        { id: rx },
+        { failedNode: rx },
+      ];
+      // If we already constrained workflowName by type, combine via $and so
+      // the search OR doesn't override the type filter.
+      if (query.workflowName) {
+        const wfConstraint = query.workflowName;
+        delete query.workflowName;
+        query.$and = [
+          { workflowName: wfConstraint },
+          { $or: [...searchOr, { workflowName: rx }] },
+        ];
+      } else {
+        query.$or = [...searchOr, { workflowName: rx }];
+      }
+    }
+
+    const { items, total } = await this.stateManager.listExecutionsPaged(query, {
+      skip: opts.skip,
+      limit: opts.limit,
+    });
+    return { items: items as unknown as Record<string, unknown>[], total };
+  }
+
   async getById(id: string): Promise<Record<string, unknown> | null> {
     const result = await this.stateManager.getExecution(id);
     return result as unknown as Record<string, unknown> | null;

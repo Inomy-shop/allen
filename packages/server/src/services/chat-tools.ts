@@ -1321,7 +1321,7 @@ async function runSpawnInBackground(
           env: sdkOptions.env as NodeJS.ProcessEnv | undefined,
           mcpServers: sdkOptions.mcpServers as Record<string, unknown> | undefined,
           abortSignal: abortController.signal,
-          stderr: (chunk) => liveLog({ type: 'tool_start', content: `[claude-cli stderr] ${chunk.slice(0, 300)}` }),
+          stderr: (chunk) => liveLog({ type: 'tool_start', content: `[claude-cli stderr] ${chunk.slice(0, 4000)}` }),
         });
       } else {
         msgStream = query({ prompt, options: sdkOptions as any });
