@@ -126,6 +126,17 @@ export default function TicketsPage() {
   const [repos, setRepos] = useState<any[]>([]);
   const [reposLoading, setReposLoading] = useState(true);
 
+  // Top-tab filter — must live above the early-return paths to satisfy
+  // React's rules of hooks.
+  type TopTab = 'all' | 'mine' | 'active' | 'done';
+  const [topTab, setTopTab] = useState<TopTab>('all');
+  useEffect(() => {
+    if (topTab === 'all') setStateFilters(new Set<StateType>(['triage', 'backlog', 'unstarted', 'started', 'completed', 'canceled']));
+    else if (topTab === 'active') setStateFilters(new Set<StateType>(['started', 'unstarted']));
+    else if (topTab === 'done') setStateFilters(new Set<StateType>(['completed']));
+    else setStateFilters(new Set<StateType>(['triage', 'backlog', 'unstarted', 'started']));
+  }, [topTab]);
+
   // Teams list for agent dropdown grouping
   useEffect(() => {
     teamsApi.list()
@@ -356,194 +367,118 @@ export default function TicketsPage() {
   }
 
   const totalShown = filteredIssues.length;
+  const activeCount = (grouped.get('started')?.length ?? 0) + (grouped.get('unstarted')?.length ?? 0);
 
   return (
-    <div className="flex h-full min-h-0">
-      {/* ── Sidebar ──────────────────────────────────────────────────────── */}
-      <aside className="w-72 shrink-0 border-r border-app bg-app-muted/40 flex flex-col min-h-0">
-        <div className="px-4 py-4 border-b border-app">
-          <h1 className="text-[14px] font-semibold text-theme-primary tracking-tight">Linear</h1>
-          <div className="mt-1.5 flex items-center gap-2 text-[11px] font-mono text-theme-muted">
-            <span className="inline-flex items-center gap-1">
-              <span className="w-1.5 h-1.5 rounded-full bg-accent-green" /> {status.workspaceName ?? 'Linear'}
-            </span>
-            <span>·</span>
-            <span>{issues.length} issues</span>
-          </div>
+    <div className="flex h-full min-h-0 flex-col">
+      {/* ── Top bar (matches handoff/pages/remaining.jsx LinearV2) ──────── */}
+      <div className="px-6 pt-5 pb-0 border-b border-app shrink-0">
+        <div className="flex items-center gap-2 mb-2 text-[12px] text-theme-muted">
+          <span>Code</span>
+          <span className="text-theme-subtle">/</span>
+          <span>Linear</span>
         </div>
-
-        <div className="px-4 py-3 border-b border-app">
-          <div className="relative">
-            <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-theme-subtle pointer-events-none" />
-            <input
-              type="text"
-              value={search}
-              onChange={e => setSearch(e.target.value)}
-              placeholder="Search projects and issues…"
-              className="input text-xs pl-8 pr-3 py-1.5 w-full"
-            />
+        <div className="flex items-center justify-between mb-3">
+          <div className="flex items-center gap-3">
+            <h1 className="text-[20px] font-semibold text-theme-primary tracking-tight">Linear</h1>
+            <div className="flex items-center gap-1.5 text-[11px] font-mono text-theme-muted">
+              <span className="w-1.5 h-1.5 rounded-full bg-accent-green" />
+              {status.workspaceName ?? 'Linear'} · {issues.length} issues
+            </div>
           </div>
-        </div>
-
-        <div className="flex-1 overflow-y-auto min-h-0 px-4 py-3 space-y-5">
-          {/* Projects */}
-          <div>
-            <div className="overline mb-2">Projects</div>
+          <div className="flex items-center gap-2">
             <button
-              onClick={() => setProjectFilter('')}
-              className={`w-full flex items-center justify-between px-2 py-1.5 rounded-md text-[11px] font-mono transition-colors ${
-                projectFilter === ''
-                  ? 'bg-accent-soft text-accent'
-                  : 'text-theme-secondary hover:bg-app-muted'
+              onClick={() => { void loadStatus(); void loadProjects(); void loadIssues(); }}
+              disabled={listLoading}
+              className="btn btn-secondary btn-sm"
+            >
+              {listLoading ? <Loader2 className="w-3 h-3 animate-spin" /> : <RefreshCw className="w-3 h-3" />}
+              Refresh
+            </button>
+          </div>
+        </div>
+
+        {/* Tab row */}
+        <div className="flex items-center gap-1 -mb-px">
+          {([
+            { id: 'all', label: 'All', count: issues.length },
+            { id: 'mine', label: 'My issues' },
+            { id: 'active', label: 'Active', count: activeCount },
+            { id: 'done', label: 'Done' },
+          ] as { id: TopTab; label: string; count?: number }[]).map(t => (
+            <button
+              key={t.id}
+              onClick={() => setTopTab(t.id)}
+              className={`px-2.5 py-1.5 text-[13px] -mb-px transition-colors flex items-center gap-1.5 border-b-2 ${
+                topTab === t.id
+                  ? 'text-theme-primary font-medium border-accent'
+                  : 'text-theme-muted hover:text-theme-primary border-transparent'
               }`}
             >
-              <span>★ All projects</span>
-              <span className="text-theme-subtle">{issues.length}</span>
+              {t.label}
+              {t.count != null && <span className="text-[11px] text-theme-muted font-mono">{t.count}</span>}
             </button>
-            {filteredProjects.map(p => (
-              <button
-                key={p.id}
-                onClick={() => setProjectFilter(p.id)}
-                className={`w-full flex items-center gap-2 px-2 py-1.5 rounded-md text-[11px] font-mono transition-colors ${
-                  projectFilter === p.id
-                    ? 'bg-accent-soft text-accent'
-                    : 'text-theme-secondary hover:bg-app-muted'
-                }`}
-                title={p.description || p.name}
-              >
-                <span
-                  className="w-2 h-2 rounded-full shrink-0"
-                  style={{ backgroundColor: p.color ?? '#888' }}
-                />
-                <span className="truncate flex-1 text-left">{p.name}</span>
-              </button>
-            ))}
-            {search.trim() && filteredProjects.length === 0 && (
-              <div className="text-[10px] text-theme-subtle italic font-body py-1.5">
-                No projects match "{search}".
-              </div>
-            )}
-            {!search.trim() && projects.length === 0 && (
-              <div className="text-[10px] text-theme-subtle italic font-body py-1.5">No projects.</div>
-            )}
-          </div>
+          ))}
+        </div>
+      </div>
 
-          {/* Status */}
-          <div>
-            <div className="overline mb-2">Status</div>
-            {STATUS_GROUPS.map(g => (
-              <label
-                key={g.type}
-                className="flex items-center gap-2 px-2 py-1 rounded-md cursor-pointer text-[11px] font-mono text-theme-secondary hover:bg-app-muted"
-              >
+      {/* ── Filter row + main list ──────────────────────────────────────── */}
+      <div className="flex flex-1 min-h-0 overflow-hidden">
+        <div className="flex-1 overflow-y-auto min-h-0">
+          <div className="px-6 py-4 space-y-3">
+            {/* Filter row */}
+            <div className="flex items-center gap-3 text-[12px] text-theme-muted">
+              <div className="relative">
+                <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-theme-muted pointer-events-none" />
                 <input
-                  type="checkbox"
-                  checked={stateFilters.has(g.type)}
-                  onChange={() => toggleStateFilter(g.type)}
-                  className="accent-violet-500"
-                />
-                <span className="flex-1">{g.label}</span>
-                <span className="text-theme-subtle">{grouped.get(g.type)?.length ?? 0}</span>
-              </label>
-            ))}
-          </div>
-
-          {/* Assignee */}
-          <div>
-            <div className="overline mb-2">Agent assignee</div>
-            <div className="space-y-0.5">
-              <button
-                onClick={() => setAssigneeFilter('any')}
-                className={`w-full text-left px-2 py-1 rounded-md text-[11px] font-mono transition-colors ${
-                  assigneeFilter === 'any' ? 'bg-accent-soft text-accent' : 'text-theme-secondary hover:bg-app-muted'
-                }`}
-              >
-                Any
-              </button>
-              <button
-                onClick={() => setAssigneeFilter('unassigned')}
-                className={`w-full text-left px-2 py-1 rounded-md text-[11px] font-mono transition-colors ${
-                  assigneeFilter === 'unassigned' ? 'bg-accent-soft text-accent' : 'text-theme-secondary hover:bg-app-muted'
-                }`}
-              >
-                Unassigned
-              </button>
-              <div className="pt-1">
-                <AgentAssignDropdown
-                  value={assigneeFilter === 'any' || assigneeFilter === 'unassigned' ? null : assigneeFilter}
-                  onChange={(name) => setAssigneeFilter(name ?? 'any')}
-                  agents={agentOptions}
-                  teams={teamOptions}
-                  placeholder="Pick an agent…"
-                  size="input"
-                  allowClear={false}
+                  type="text"
+                  value={search}
+                  onChange={e => setSearch(e.target.value)}
+                  placeholder="Search issues…"
+                  className="input pl-8 pr-3 py-1.5 w-64 text-[12px]"
                 />
               </div>
+              <span>Project:</span>
+              <select
+                value={projectFilter}
+                onChange={e => setProjectFilter(e.target.value)}
+                className="input py-1.5 text-[12px] w-auto"
+              >
+                <option value="">All projects</option>
+                {projects.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+              </select>
+              <span>Assignee:</span>
+              <AgentAssignDropdown
+                value={assigneeFilter === 'any' || assigneeFilter === 'unassigned' ? null : assigneeFilter}
+                onChange={(name) => setAssigneeFilter(name ?? 'any')}
+                agents={agentOptions}
+                teams={teamOptions}
+                placeholder="Any"
+                size="pill"
+                allowClear={true}
+              />
+              <div className="flex-1" />
+              <span className="text-[11px] font-mono">{totalShown} of {issues.length}</span>
             </div>
-          </div>
 
-          <button
-            onClick={() => { setSearch(''); setProjectFilter(''); setAssigneeFilter('any'); setStateFilters(new Set(['backlog', 'unstarted', 'started', 'triage'])); }}
-            className="w-full text-[10px] font-mono text-theme-muted hover:text-theme-primary text-left"
-          >
-            Clear filters
-          </button>
-        </div>
-
-        <div className="p-3 border-t border-app">
-          <button
-            onClick={() => { void loadStatus(); void loadProjects(); void loadIssues(); }}
-            disabled={listLoading}
-            className="w-full inline-flex items-center justify-center gap-1.5 px-3 py-2 rounded-lg text-[11px] font-mono bg-accent-soft text-accent hover:bg-accent/20 disabled:opacity-50"
-          >
-            {listLoading ? <Loader2 className="w-3 h-3 animate-spin" /> : <RefreshCw className="w-3 h-3" />}
-            Refresh from Linear
-          </button>
-        </div>
-      </aside>
-
-      {/* ── Main list ───────────────────────────────────────────────────── */}
-      <main className="flex-1 overflow-y-auto min-h-0">
-        <div className="p-6">
-          <div className="flex items-center justify-between mb-5">
-            <div>
-              <h2 className="text-[18px] font-semibold text-theme-primary tracking-tight">
-                {projectFilter
-                  ? (projects.find(p => p.id === projectFilter)?.name ?? 'Project')
-                  : 'All Tickets'}
-              </h2>
-              <div className="text-[10px] font-mono text-theme-muted mt-0.5">
-                {totalShown} visible · grouped by status
-              </div>
-            </div>
-          </div>
-
-          {listLoading && issues.length === 0 ? (
-            <div className="flex items-center gap-2 text-[11px] font-mono text-theme-muted">
-              <Loader2 className="w-3 h-3 animate-spin" /> Loading from Linear…
-            </div>
-          ) : filteredIssues.length === 0 ? (
-            <div className="rounded-xl border border-dashed border-app p-12 text-center text-[12px] text-theme-muted font-body italic">
-              No tickets match the current filters.
-            </div>
-          ) : (
-            <div className="space-y-5">
+            {/* Issue groups (kept the same as v1, just rendered without sidebar) */}
+            <div className="space-y-3">
               {STATUS_GROUPS.map(g => {
                 const list = grouped.get(g.type) ?? [];
                 if (list.length === 0) return null;
                 const collapsed = collapsedGroups.has(g.type);
                 return (
-                  <div key={g.type}>
+                  <div key={g.type} className="card overflow-hidden">
                     <button
                       onClick={() => toggleGroupCollapsed(g.type)}
-                      className="w-full flex items-center gap-2 px-2 py-1.5 text-left hover:bg-surface-200/20 rounded-md transition-colors mb-1"
+                      className="w-full flex items-center gap-2 px-3.5 py-2 text-left bg-app-muted hover:bg-app-muted/80 border-b border-app transition-colors"
                     >
                       {collapsed ? <ChevronRight className="w-3.5 h-3.5 text-theme-muted" /> : <ChevronDown className="w-3.5 h-3.5 text-theme-muted" />}
-                      <span className="overline font-semibold">{g.label}</span>
-                      <span className="text-[10px] font-mono text-theme-subtle">{list.length}</span>
+                      <span className="text-[13px] font-medium text-theme-primary">{g.label}</span>
+                      <span className="text-[11px] font-mono text-theme-muted">{list.length} issue{list.length !== 1 ? 's' : ''}</span>
                     </button>
                     {!collapsed && (
-                      <div className="rounded-lg border border-app divide-y divide-border/20 overflow-hidden">
+                      <div className="divide-y divide-border">
                         {list.map(issue => (
                           <TicketRow
                             key={issue.id}
@@ -558,31 +493,41 @@ export default function TicketsPage() {
                   </div>
                 );
               })}
+              {!listLoading && filteredIssues.length === 0 && (
+                <div className="rounded-xl border border-dashed border-app p-12 text-center text-[12px] text-theme-muted font-body italic">
+                  No tickets match the current filters.
+                </div>
+              )}
+              {listLoading && issues.length === 0 && (
+                <div className="flex items-center gap-2 text-[11px] font-mono text-theme-muted py-6 px-2">
+                  <Loader2 className="w-3 h-3 animate-spin" /> Loading from Linear…
+                </div>
+              )}
             </div>
-          )}
+          </div>
         </div>
-      </main>
 
-      {/* ── Drawer ──────────────────────────────────────────────────────── */}
-      {selectedId && (
-        <div className="w-[32rem] shrink-0 border-l border-app bg-app-muted/50 overflow-y-auto min-h-0 flex flex-col">
-          {detailLoading && !detail ? (
-            <div className="p-6 flex items-center gap-2 text-[11px] font-mono text-theme-muted">
-              <Loader2 className="w-3 h-3 animate-spin" /> Loading…
-            </div>
-          ) : detail ? (
-            <TicketDrawer
-              issue={detail}
-              onClose={() => { setSelectedId(null); setDetail(null); }}
-              onDispatch={() => setDispatchFor(detail)}
-              onClearAssignment={() => handleClearAssignment(detail.id)}
-              navigate={navigate}
-            />
-          ) : (
-            <div className="p-6 text-[12px] text-theme-muted">Not found.</div>
-          )}
-        </div>
-      )}
+        {/* Drawer */}
+        {selectedId && (
+          <div className="w-[32rem] shrink-0 border-l border-app bg-app-muted/50 overflow-y-auto min-h-0 flex flex-col">
+            {detailLoading && !detail ? (
+              <div className="p-6 flex items-center gap-2 text-[11px] font-mono text-theme-muted">
+                <Loader2 className="w-3 h-3 animate-spin" /> Loading…
+              </div>
+            ) : detail ? (
+              <TicketDrawer
+                issue={detail}
+                onClose={() => { setSelectedId(null); setDetail(null); }}
+                onDispatch={() => setDispatchFor(detail)}
+                onClearAssignment={() => handleClearAssignment(detail.id)}
+                navigate={navigate}
+              />
+            ) : (
+              <div className="p-6 text-[12px] text-theme-muted">Not found.</div>
+            )}
+          </div>
+        )}
+      </div>
 
       {/* Dispatch modal */}
       {dispatchFor && (
@@ -601,6 +546,7 @@ export default function TicketsPage() {
     </div>
   );
 }
+
 
 // ── Row component ───────────────────────────────────────────────────────────
 
