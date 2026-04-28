@@ -55,7 +55,7 @@ export default function LoginPage() {
         >
           <h1 className="text-base font-heading text-theme-primary">Sign in</h1>
           <div className="space-y-2">
-            <label className="block text-xs font-label uppercase tracking-wider text-theme-muted">
+            <label className="block overline text-theme-muted">
               Email
             </label>
             <input
@@ -68,7 +68,7 @@ export default function LoginPage() {
             />
           </div>
           <div className="space-y-2">
-            <label className="block text-xs font-label uppercase tracking-wider text-theme-muted">
+            <label className="block overline text-theme-muted">
               Password
             </label>
             <input

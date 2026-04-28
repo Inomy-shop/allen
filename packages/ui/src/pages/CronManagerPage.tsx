@@ -131,7 +131,7 @@ function HistoryDialog({ job, onClose }: { job: CronJob; onClose: () => void }) 
         <div className="px-6 py-5 border-b border-border/60">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-3">
-              <div className="w-10 h-10 rounded-sm bg-accent-blue/10 border border-accent-blue/30 flex items-center justify-center">
+              <div className="w-10 h-10 rounded-sm bg-accent-soft flex items-center justify-center">
                 <History className="w-5 h-5 text-accent-blue" />
               </div>
               <div>
@@ -290,7 +290,7 @@ function CronFormDialog({ job, open, onClose, onSaved }: { job: CronJob | null; 
         <div className="px-6 py-5 border-b border-border/60">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-3">
-              <div className="w-10 h-10 rounded-sm bg-accent-blue/10 border border-accent-blue/30 flex items-center justify-center">
+              <div className="w-10 h-10 rounded-sm bg-accent-soft flex items-center justify-center">
                 {isEdit ? <Pencil className="w-5 h-5 text-accent-blue" /> : <Plus className="w-5 h-5 text-accent-blue" />}
               </div>
               <div>
@@ -403,7 +403,7 @@ function CronFormDialog({ job, open, onClose, onSaved }: { job: CronJob | null; 
               </div>
               {selectedWfInputSchema && Object.keys(selectedWfInputSchema).length > 0 && (
                 <div className="space-y-3">
-                  <span className="text-[10px] font-label uppercase tracking-widest text-theme-subtle">Workflow Inputs</span>
+                  <span className="overline">Workflow Inputs</span>
                   {Object.entries(selectedWfInputSchema).map(([key, def]: [string, any]) => {
                     const val = workflowInput[key] ?? '';
                     const fieldType = (def.type ?? 'string').toLowerCase();

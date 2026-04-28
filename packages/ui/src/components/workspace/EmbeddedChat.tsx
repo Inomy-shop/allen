@@ -96,7 +96,7 @@ export function EmbeddedChat({ workspaceId, workspaceName, worktreePath, linkedS
       {/* Header */}
       <div className="flex items-center gap-2 px-3 py-1.5 border-b border-border/20 shrink-0">
         <MessageSquare className="w-3 h-3 text-blue-400" />
-        <span className="text-[10px] font-label uppercase tracking-wider text-theme-muted">Chat</span>
+        <span className="overline">Chat</span>
         {activeSessionId && <span className="text-[9px] font-mono text-emerald-500">linked</span>}
         <span className="flex-1" />
         <button onClick={handleNewChat} className="text-theme-subtle hover:text-theme-secondary p-0.5" title="New Chat">

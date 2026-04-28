@@ -82,7 +82,7 @@ export function DelegationGraph({ agents }: Props) {
     <div className="rounded-lg border border-border/15 bg-surface-100/30 overflow-hidden">
       {/* Title bar */}
       <div className="px-4 py-2.5 border-b border-border/10 bg-surface-200/15 flex items-center justify-between">
-        <span className="text-[11px] font-label uppercase tracking-widest text-theme-secondary">Organisation</span>
+        <span className="overline">Organisation</span>
         <span className="text-[10px] font-mono text-theme-subtle">{allTeams.filter(t => (byTeam.get(t.name)?.length ?? 0) > 0).length} departments · {agents.length} people</span>
       </div>
 

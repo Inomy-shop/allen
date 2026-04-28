@@ -76,11 +76,11 @@ function AddRepoDialog({ open, onClose, onCreated }: { open: boolean; onClose: (
         <div className="px-6 py-5 border-b border-border/60">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-3">
-              <div className="w-10 h-10 rounded-sm bg-accent-blue/10 border border-accent-blue/30 flex items-center justify-center">
+              <div className="w-10 h-10 rounded-sm bg-accent-soft flex items-center justify-center">
                 <Plus className="w-5 h-5 text-accent-blue" />
               </div>
               <div>
-                <h2 className="font-heading text-sm font-bold text-theme-primary tracking-wider uppercase">Add Repository</h2>
+                <h2 className="text-[14px] font-semibold text-theme-primary tracking-tight">Add Repository</h2>
                 <p className="text-[11px] text-theme-muted font-mono">Clone from GitHub &middot; auto-detects language, framework</p>
               </div>
             </div>
@@ -197,11 +197,11 @@ function EditRepoDialog({ repo, open, onClose, onUpdated }: { repo: Repo | null;
         <div className="px-6 py-5 border-b border-border/60">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-3">
-              <div className="w-10 h-10 rounded-sm bg-accent-blue/10 border border-accent-blue/30 flex items-center justify-center">
+              <div className="w-10 h-10 rounded-sm bg-accent-soft flex items-center justify-center">
                 <Pencil className="w-5 h-5 text-accent-blue" />
               </div>
               <div>
-                <h2 className="font-heading text-sm font-bold text-theme-primary tracking-wider uppercase">Edit Repository</h2>
+                <h2 className="text-[14px] font-semibold text-theme-primary tracking-tight">Edit Repository</h2>
                 <p className="text-[11px] text-theme-muted font-mono">{repo.path}</p>
               </div>
             </div>
@@ -552,7 +552,7 @@ function RepoContextViewer({ repoId, repoName, onClose }: { repoId: string; repo
           <div className="flex items-center gap-3">
             <FileText className="w-5 h-5 text-accent-blue" />
             <div>
-              <h2 className="font-heading text-sm font-bold text-theme-primary tracking-wider uppercase">Repo Context</h2>
+              <h2 className="text-[14px] font-semibold text-theme-primary tracking-tight">Repo Context</h2>
               <p className="text-[10px] text-theme-muted font-mono">{repoName} — agent-generated codebase analysis</p>
             </div>
           </div>
@@ -649,16 +649,16 @@ function QuickWorkspaceDialog({ repo, onClose, onCreated }: { repo: Repo; onClos
         {error && <div className="text-xs text-red-400 bg-red-400/10 border border-red-400/20 rounded px-3 py-1.5 mb-3">{error}</div>}
         <div className="space-y-3">
           <div>
-            <label className="text-[10px] font-label uppercase tracking-wider text-theme-muted block mb-1">Workspace Name</label>
+            <label className="overline block mb-1">Workspace Name</label>
             <input value={name} onChange={e => setName(e.target.value)} placeholder="feature/my-feature" className="input w-full text-xs" autoFocus />
           </div>
           <div className="grid grid-cols-2 gap-3">
             <div>
-              <label className="text-[10px] font-label uppercase tracking-wider text-theme-muted block mb-1">Branch</label>
+              <label className="overline block mb-1">Branch</label>
               <input value={branch} onChange={e => setBranch(e.target.value)} placeholder="feature/new-thing" className="input w-full text-xs" />
             </div>
             <div>
-              <label className="text-[10px] font-label uppercase tracking-wider text-theme-muted block mb-1">Base Branch</label>
+              <label className="overline block mb-1">Base Branch</label>
               <input value={baseBranch} onChange={e => setBaseBranch(e.target.value)} className="input w-full text-xs" />
             </div>
           </div>

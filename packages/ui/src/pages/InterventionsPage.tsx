@@ -434,7 +434,7 @@ function SectionHeader({
   return (
     <div className="flex items-center gap-2 px-6 py-3">
       {icon}
-      <span className={`text-[10px] font-label uppercase tracking-widest ${
+      <span className={`overline ${
         emphasized ? 'text-theme-primary' : 'text-theme-muted'
       }`}>
         {label}
@@ -650,7 +650,7 @@ function InterventionDetailView() {
 
           {item.user_request && (
             <div className="mt-4 pt-3 border-t border-current/10">
-              <div className="text-[10px] font-label uppercase tracking-widest text-theme-muted mb-1 flex items-center gap-1.5">
+              <div className="overline mb-1 flex items-center gap-1.5">
                 <Sparkles className="w-3 h-3" /> Original request
               </div>
               <p className="text-sm italic text-theme-primary font-body leading-relaxed">
@@ -696,7 +696,7 @@ function InterventionDetailView() {
       {!isPending && item.response && (
         <div className="rounded-xl border border-border/30 bg-surface-50 overflow-hidden shadow-sm">
           <div className="px-6 py-4 border-b border-border/15 bg-surface-100/30">
-            <div className="text-[10px] font-label uppercase tracking-widest text-theme-muted">
+            <div className="overline">
               Response
             </div>
           </div>
@@ -757,7 +757,7 @@ function ResponseField({ label, value, pre, mono }: {
 }) {
   return (
     <div className="mb-4 last:mb-0">
-      <div className="text-[10px] font-label uppercase tracking-widest text-theme-subtle mb-1.5">{label}</div>
+      <div className="overline mb-1.5">{label}</div>
       {pre ? (
         <pre className={`text-xs whitespace-pre-wrap text-theme-primary font-body bg-surface-100/50 border border-border/20 rounded-md p-3 leading-relaxed ${mono ? 'font-mono' : ''}`}>
           {value}

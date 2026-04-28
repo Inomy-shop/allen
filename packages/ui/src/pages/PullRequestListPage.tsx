@@ -221,7 +221,7 @@ export default function PullRequestListPage() {
                   <Wrench className="w-5 h-5 text-accent-yellow" />
                 </div>
                 <div>
-                  <h2 className="font-heading text-sm font-bold text-theme-primary tracking-wider uppercase">Resolve CodeRabbit Comments</h2>
+                  <h2 className="text-[14px] font-semibold text-theme-primary tracking-tight">Resolve CodeRabbit Comments</h2>
                   <p className="text-[11px] text-theme-muted font-mono">Paste any GitHub PR URL — external PRs create a fresh workspace automatically.</p>
                 </div>
               </div>

@@ -78,7 +78,7 @@ export default function DispatchModal({
         {/* Body */}
         <div className="p-5 space-y-4">
           <div>
-            <label className="text-[10px] font-label uppercase tracking-widest text-theme-secondary font-semibold mb-1.5 block">
+            <label className="overline font-semibold mb-1.5 block">
               <Sparkles className="inline w-3 h-3 text-accent-blue mr-1" /> Agent
             </label>
             <AgentAssignDropdown
@@ -95,7 +95,7 @@ export default function DispatchModal({
           </div>
 
           <div>
-            <label className="text-[10px] font-label uppercase tracking-widest text-theme-secondary font-semibold mb-1.5 block">
+            <label className="overline font-semibold mb-1.5 block">
               <FolderGit2 className="inline w-3 h-3 text-accent-purple mr-1" /> Repository
             </label>
             <select
@@ -126,7 +126,7 @@ export default function DispatchModal({
           </div>
 
           <div>
-            <label className="text-[10px] font-label uppercase tracking-widest text-theme-secondary font-semibold mb-1.5 block">
+            <label className="overline font-semibold mb-1.5 block">
               Extra instructions <span className="text-theme-subtle normal-case">(optional)</span>
             </label>
             <textarea

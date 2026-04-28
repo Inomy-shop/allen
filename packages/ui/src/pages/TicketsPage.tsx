@@ -388,7 +388,7 @@ export default function TicketsPage() {
         <div className="flex-1 overflow-y-auto min-h-0 px-4 py-3 space-y-5">
           {/* Projects */}
           <div>
-            <div className="text-[9px] font-label uppercase tracking-widest text-theme-subtle mb-2">Projects</div>
+            <div className="overline mb-2">Projects</div>
             <button
               onClick={() => setProjectFilter('')}
               className={`w-full flex items-center justify-between px-2 py-1.5 rounded-md text-[11px] font-mono transition-colors ${
@@ -430,7 +430,7 @@ export default function TicketsPage() {
 
           {/* Status */}
           <div>
-            <div className="text-[9px] font-label uppercase tracking-widest text-theme-subtle mb-2">Status</div>
+            <div className="overline mb-2">Status</div>
             {STATUS_GROUPS.map(g => (
               <label
                 key={g.type}
@@ -450,7 +450,7 @@ export default function TicketsPage() {
 
           {/* Assignee */}
           <div>
-            <div className="text-[9px] font-label uppercase tracking-widest text-theme-subtle mb-2">Agent assignee</div>
+            <div className="overline mb-2">Agent assignee</div>
             <div className="space-y-0.5">
               <button
                 onClick={() => setAssigneeFilter('any')}
@@ -539,7 +539,7 @@ export default function TicketsPage() {
                       className="w-full flex items-center gap-2 px-2 py-1.5 text-left hover:bg-surface-200/20 rounded-md transition-colors mb-1"
                     >
                       {collapsed ? <ChevronRight className="w-3.5 h-3.5 text-theme-muted" /> : <ChevronDown className="w-3.5 h-3.5 text-theme-muted" />}
-                      <span className="text-[11px] font-label uppercase tracking-widest text-theme-secondary font-semibold">{g.label}</span>
+                      <span className="overline font-semibold">{g.label}</span>
                       <span className="text-[10px] font-mono text-theme-subtle">{list.length}</span>
                     </button>
                     {!collapsed && (
@@ -750,7 +750,7 @@ function TicketDrawer({
 
       <div className="px-5 py-4 border-b border-border/40 shrink-0 space-y-3">
         <div>
-          <div className="text-[10px] font-label uppercase tracking-widest text-theme-subtle mb-1.5">Agent assignment</div>
+          <div className="overline mb-1.5">Agent assignment</div>
           {assignee ? (
             <div className={`rounded-lg border px-3 py-2 space-y-2 ${statusTone}`}>
               <div className="flex items-center justify-between gap-2">
@@ -809,14 +809,14 @@ function TicketDrawer({
         </div>
         {issue.linearAssignee && (
           <div>
-            <div className="text-[10px] font-label uppercase tracking-widest text-theme-subtle mb-1">Linear assignee</div>
+            <div className="overline mb-1">Linear assignee</div>
             <div className="text-[11px] font-mono text-theme-secondary">{issue.linearAssignee.name}{issue.linearAssignee.email ? ` · ${issue.linearAssignee.email}` : ''}</div>
           </div>
         )}
       </div>
 
       <div className="flex-1 overflow-y-auto min-h-0 px-5 py-4">
-        <div className="text-[10px] font-label uppercase tracking-widest text-theme-subtle mb-3">Description</div>
+        <div className="overline mb-3">Description</div>
         {issue.description ? (
           <div className="text-[13px] text-theme-secondary leading-relaxed prose-allen">
             {renderMarkdown(issue.description)}
@@ -825,7 +825,7 @@ function TicketDrawer({
           <div className="text-[11px] text-theme-muted italic">No description.</div>
         )}
 
-        <div className="mt-6 text-[10px] font-label uppercase tracking-widest text-theme-subtle mb-2">Metadata</div>
+        <div className="mt-6 overline mb-2">Metadata</div>
         <div className="space-y-1 text-[11px] font-mono text-theme-muted">
           <div>Team: <span className="text-theme-secondary">{issue.team.name}</span></div>
           {issue.project && <div>Project: <span className="text-theme-secondary">{issue.project.name}</span></div>}

@@ -215,7 +215,7 @@ export default function ThreadDetailPanel({ thread, agents, onClose }: ThreadDet
                     {/* Tool calls */}
                     {msg.toolCalls && msg.toolCalls.length > 0 && (
                       <div className="mt-3 pt-3 border-t border-border/10">
-                        <span className="text-[10px] font-label uppercase tracking-wider text-theme-subtle mb-1.5 block">
+                        <span className="overline mb-1.5 block">
                           Tools used ({msg.toolCalls.length})
                         </span>
                         <div className="flex flex-wrap gap-1.5">
@@ -245,7 +245,7 @@ export default function ThreadDetailPanel({ thread, agents, onClose }: ThreadDet
 
         {/* Footer with task summary */}
         <div className="border-t border-border/50 px-5 py-3 bg-surface-100/30 shrink-0">
-          <span className="text-[10px] font-label uppercase tracking-wider text-theme-subtle block mb-1">Task</span>
+          <span className="overline block mb-1">Task</span>
           <p className="text-[12px] text-theme-secondary font-body leading-relaxed">{thread.task}</p>
         </div>
       </div>

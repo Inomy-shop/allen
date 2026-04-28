@@ -72,7 +72,7 @@ export default function ResetPasswordPage() {
             )}
           </div>
           <div className="space-y-2">
-            <label className="block text-xs font-label uppercase tracking-wider text-theme-muted">
+            <label className="block overline text-theme-muted">
               Current password
             </label>
             <input
@@ -85,7 +85,7 @@ export default function ResetPasswordPage() {
             />
           </div>
           <div className="space-y-2">
-            <label className="block text-xs font-label uppercase tracking-wider text-theme-muted">
+            <label className="block overline text-theme-muted">
               New password
             </label>
             <input
@@ -100,7 +100,7 @@ export default function ResetPasswordPage() {
             </p>
           </div>
           <div className="space-y-2">
-            <label className="block text-xs font-label uppercase tracking-wider text-theme-muted">
+            <label className="block overline text-theme-muted">
               Confirm new password
             </label>
             <input

@@ -98,7 +98,7 @@ function ProfileTab() {
       {/* Identity card */}
       <div className="card p-6">
         <div className="flex items-center gap-5">
-          <div className="w-16 h-16 rounded-sm bg-accent-blue/10 border border-accent-blue/30 flex items-center justify-center">
+          <div className="w-16 h-16 rounded-sm bg-accent-soft flex items-center justify-center">
             <span className="font-heading text-xl text-accent-blue tracking-wider">{initials || '?'}</span>
           </div>
           <div className="min-w-0 flex-1">
@@ -181,7 +181,7 @@ function ThemeCard({ preset, isActive, onSelect }: { preset: ThemePreset; isActi
           <div key={i} className="w-6 h-6 rounded-sm" style={{ background: c }} />
         ))}
       </div>
-      <span className="text-xs font-label uppercase tracking-wider text-theme-secondary">{preset.label}</span>
+      <span className="overline text-theme-secondary">{preset.label}</span>
       {isActive && (
         <div className="absolute top-2 right-2 w-5 h-5 rounded-full flex items-center justify-center" style={{ background: accent }}>
           <Check className="w-3 h-3 text-black" />
@@ -197,7 +197,7 @@ function FontCard({ preset, isActive, onSelect }: { preset: FontPreset; isActive
       onClick={onSelect}
       className={`relative group flex flex-col rounded-sm border p-3 transition-all duration-200 cursor-pointer text-left ${isActive ? 'border-accent-blue shadow-glow-blue bg-surface-100/80' : 'border-border/60 hover:border-border-light bg-surface-100/40'}`}
     >
-      <span className="text-xs font-label uppercase tracking-wider text-theme-muted mb-1">{preset.label}</span>
+      <span className="overline text-theme-muted mb-1">{preset.label}</span>
       <span className="text-lg text-theme-primary leading-snug" style={{ fontFamily: `'${preset.heading}', sans-serif` }}>Heading Aa</span>
       <span className="text-sm text-theme-secondary mt-0.5" style={{ fontFamily: `'${preset.body}', sans-serif` }}>Body text Bb Cc 123</span>
       <span className="text-xs text-theme-muted mt-0.5" style={{ fontFamily: `'${preset.mono}', monospace` }}>mono: 0x1F4A9</span>
@@ -293,7 +293,7 @@ function ThemeTab() {
                 }`}
               >
                 <Icon className="w-4 h-4" />
-                <span className="text-xs font-label uppercase tracking-wider">{option.label}</span>
+                <span className="overline">{option.label}</span>
               </button>
             );
           })}

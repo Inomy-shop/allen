@@ -80,7 +80,7 @@ function AgentDetailPanel({ agent, onClose }: { agent: Agent; onClose: () => voi
                 }`}
                 style={{ minWidth: '8rem' }}
               >
-                <div className="text-[10px] font-label uppercase tracking-widest px-3 py-1 border-b border-current/20 opacity-80">{provider}</div>
+                <div className="overline px-3 py-1 border-b border-current/20 opacity-80">{provider}</div>
                 <div className="text-xs font-mono px-3 py-1.5 text-theme-primary bg-surface-100/40">{model}</div>
               </div>
               <button onClick={onClose} className="p-2 rounded-md hover:bg-surface-200 text-theme-muted hover:text-theme-secondary transition-colors">

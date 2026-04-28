@@ -286,7 +286,7 @@ export default function Timeline({ logs, nodeFilter, onNodeFilterChange, workflo
                       if (argsObj && Object.keys(argsObj).length > 0) {
                         return (
                           <div>
-                            <div className="text-[9px] font-label uppercase tracking-wider text-theme-subtle mb-0.5">
+                            <div className="overline mb-0.5">
                               Input{toolCall?.truncated?.args && <span className="text-accent-yellow ml-1">(truncated)</span>}
                             </div>
                             <pre className="text-[10px] font-mono text-theme-secondary whitespace-pre-wrap bg-surface-50/50 rounded-sm p-2 max-h-48 overflow-auto">{previewJson(argsObj)}</pre>
@@ -296,7 +296,7 @@ export default function Timeline({ logs, nodeFilter, onNodeFilterChange, workflo
                       if (logCmd) {
                         return (
                           <div>
-                            <div className="text-[9px] font-label uppercase tracking-wider text-theme-subtle mb-0.5">Command</div>
+                            <div className="overline mb-0.5">Command</div>
                             <pre className="text-[10px] font-mono text-theme-secondary whitespace-pre-wrap bg-surface-50/50 rounded-sm p-2 max-h-48 overflow-auto">$ {logCmd}</pre>
                           </div>
                         );
@@ -305,7 +305,7 @@ export default function Timeline({ logs, nodeFilter, onNodeFilterChange, workflo
                     })()}
                     {toolCall?.result !== undefined ? (
                       <div>
-                        <div className="text-[9px] font-label uppercase tracking-wider text-theme-subtle mb-0.5">
+                        <div className="overline mb-0.5">
                           {toolCall.isError ? 'Error' : 'Output'}{toolCall.truncated?.result && <span className="text-accent-yellow ml-1">(truncated)</span>}
                         </div>
                         <pre className={`text-[10px] font-mono whitespace-pre-wrap rounded-sm p-2 max-h-64 overflow-auto ${toolCall.isError ? 'text-accent-red bg-accent-red/5' : 'text-theme-secondary bg-surface-50/50'}`}>{previewJson(toolCall.result)}</pre>

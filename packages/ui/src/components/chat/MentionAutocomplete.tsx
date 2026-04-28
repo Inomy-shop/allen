@@ -159,7 +159,7 @@ export default function MentionAutocomplete({
         const Icon = ICON_MAP[type] || Users;
         return (
           <div key={type}>
-            <div className="px-3 py-1.5 text-[10px] font-label uppercase tracking-widest text-theme-muted border-b border-border/30">
+            <div className="px-3 py-1.5 overline border-b border-border/30">
               {LABEL_MAP[type] || type}
             </div>
             {items.map(item => {

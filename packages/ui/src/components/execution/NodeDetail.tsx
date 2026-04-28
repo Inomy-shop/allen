@@ -805,7 +805,7 @@ export default function NodeDetail({
       {/* Attempt tabs + "Compare attempts" button when there are >1 */}
       {hasMultipleAttempts && (
         <div className="flex items-center gap-1 px-4 py-2 border-b border-border/50 shrink-0 bg-surface-50/50">
-          <span className="text-[10px] font-label uppercase tracking-wider text-theme-muted mr-2">Attempt:</span>
+          <span className="overline mr-2">Attempt:</span>
           {dedupedTraces.map(t => (
             <button
               key={t.attempt}
@@ -849,7 +849,7 @@ export default function NodeDetail({
             <div className="space-y-3">
               {waitingInput.fields.map(field => (
                 <div key={field.name}>
-                  <label className="block text-[11px] font-label uppercase tracking-wider text-theme-secondary mb-1">
+                  <label className="block overline mb-1">
                     {field.label ?? field.name}{field.required !== false && <span className="text-accent-red ml-0.5">*</span>}
                   </label>
                   {field.type === 'select' && field.options ? (

@@ -328,7 +328,7 @@ const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function ChatInput
                 {providers?.map(p => (
                   <div key={p.provider}>
                     <div className="px-3 py-1 bg-surface-200/30 border-b border-border/20">
-                      <span className={`text-[10px] font-label uppercase tracking-widest ${PROVIDER_COLORS[p.provider] ?? 'text-theme-muted'}`}>{p.label}</span>
+                      <span className={`overline ${PROVIDER_COLORS[p.provider] ?? 'text-theme-muted'}`}>{p.label}</span>
                     </div>
                     {p.models.map(m => (
                       <button
@@ -367,7 +367,7 @@ const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function ChatInput
             {showEffortPicker && (
               <div className="absolute bottom-full left-0 mb-1 z-30 bg-surface-100 border border-border/50 rounded-lg shadow-2xl overflow-hidden min-w-[220px]">
                 <div className="px-3 py-1 bg-surface-200/30 border-b border-border/20">
-                  <span className="text-[10px] font-label uppercase tracking-widest text-theme-muted">
+                  <span className="overline">
                     Reasoning Effort
                   </span>
                 </div>

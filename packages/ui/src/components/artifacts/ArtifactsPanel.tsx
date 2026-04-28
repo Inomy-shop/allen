@@ -139,7 +139,7 @@ export default function ArtifactsPanel({
         )}
         {grouped.map(([group, list]) => (
           <div key={group} className="border-b border-border/10 last:border-b-0">
-            <div className="sticky top-0 bg-surface-50/95 backdrop-blur-sm px-3 py-1 text-[9px] font-label uppercase tracking-widest text-theme-muted border-b border-border/10 truncate">
+            <div className="sticky top-0 bg-surface-50/95 backdrop-blur-sm px-3 py-1 overline border-b border-border/10 truncate">
               {group}
             </div>
             {list.map(a => (

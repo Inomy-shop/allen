@@ -233,7 +233,7 @@ export default function AgentAssignDropdown({
           <div className="overflow-y-auto min-h-0 py-1">
             {allowClear && (
               <>
-                <div className="px-3 pt-2 pb-1 text-[9px] font-label uppercase tracking-widest text-theme-subtle">
+                <div className="px-3 pt-2 pb-1 overline">
                   No assignee
                 </div>
                 <button
@@ -260,7 +260,7 @@ export default function AgentAssignDropdown({
                 if (group.key === '__unassigned__') return null;
                 return (
                   <div key={group.key}>
-                    <div className="px-3 pt-3 pb-1 text-[9px] font-label uppercase tracking-widest text-theme-subtle">
+                    <div className="px-3 pt-3 pb-1 overline">
                       {group.title}
                     </div>
                     <div className="px-3 py-1.5 text-[10px] text-accent-yellow/80 italic font-body">
@@ -271,7 +271,7 @@ export default function AgentAssignDropdown({
               }
               return (
                 <div key={group.key}>
-                  <div className="px-3 pt-3 pb-1 text-[9px] font-label uppercase tracking-widest text-theme-subtle">
+                  <div className="px-3 pt-3 pb-1 overline">
                     {group.title}
                   </div>
                   {group.lead && (

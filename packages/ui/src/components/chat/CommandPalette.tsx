@@ -128,7 +128,7 @@ export default function CommandPalette({ open, onClose, onSelect }: CommandPalet
           {grouped.map(group => (
             <div key={group.category}>
               <div className="px-4 py-1.5">
-                <span className="text-[10px] font-label uppercase tracking-widest text-theme-subtle">
+                <span className="overline">
                   {CATEGORY_LABELS[group.category]}
                 </span>
               </div>

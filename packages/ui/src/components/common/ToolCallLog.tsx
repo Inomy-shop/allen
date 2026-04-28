@@ -64,7 +64,7 @@ export function ToolCallRow({ tc, index }: { tc: ToolCall; index: number }) {
         <div className="mt-2 ml-6 space-y-2">
           {hasArgs && (
             <div>
-              <div className="text-[9px] font-label uppercase tracking-wider text-theme-subtle mb-1">
+              <div className="overline mb-1">
                 Input {tc.truncated?.args && <span className="text-accent-yellow">(truncated)</span>}
               </div>
               <pre className="text-[10px] font-mono text-theme-secondary whitespace-pre-wrap bg-surface-50/50 rounded-sm p-2 max-h-48 overflow-auto">{previewJson(tc.args)}</pre>
@@ -72,7 +72,7 @@ export function ToolCallRow({ tc, index }: { tc: ToolCall; index: number }) {
           )}
           {hasResult && (
             <div>
-              <div className="text-[9px] font-label uppercase tracking-wider text-theme-subtle mb-1">
+              <div className="overline mb-1">
                 {isError ? 'Error' : 'Output'} {tc.truncated?.result && <span className="text-accent-yellow">(truncated)</span>}
               </div>
               <pre className={`text-[10px] font-mono whitespace-pre-wrap rounded-sm p-2 max-h-64 overflow-auto ${isError ? 'text-accent-red bg-accent-red/5' : 'text-theme-secondary bg-surface-50/50'}`}>{previewJson(tc.result)}</pre>
@@ -96,7 +96,7 @@ export function ToolCallLog({ calls, title = 'Tool Calls', emptyText = 'No tool 
     <div className="card overflow-hidden">
       <div className="flex items-center gap-2 px-4 py-3 border-b border-border/20">
         <Wrench className="w-4 h-4 text-accent-yellow" />
-        <span className="text-xs font-label uppercase tracking-widest text-theme-secondary">{title}</span>
+        <span className="overline text-theme-secondary">{title}</span>
         <span className="text-[10px] text-theme-subtle font-mono ml-auto">{calls.length}</span>
       </div>
       {calls.length === 0 ? (

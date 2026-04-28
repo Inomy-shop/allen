@@ -73,13 +73,13 @@ function TraceEventRow({ event }: { event: TraceEvent }) {
         <div className="mx-3 mb-2 ml-8 p-2 bg-[rgb(var(--color-editor-background))] rounded-md border border-border/20 max-h-60 overflow-auto">
           {event.args && Object.keys(event.args).length > 0 && (
             <div className="mb-2">
-              <span className="text-[9px] font-label uppercase tracking-widest text-theme-subtle">Args</span>
+              <span className="overline">Args</span>
               <pre className="text-[11px] font-mono text-theme-secondary mt-0.5 whitespace-pre-wrap">{JSON.stringify(event.args, null, 2)}</pre>
             </div>
           )}
           {event.result && (
             <div>
-              <span className="text-[9px] font-label uppercase tracking-widest text-theme-subtle">Result</span>
+              <span className="overline">Result</span>
               <pre className="text-[11px] font-mono text-theme-secondary mt-0.5 whitespace-pre-wrap">{JSON.stringify(event.result, null, 2).slice(0, 2000)}</pre>
             </div>
           )}
@@ -128,7 +128,7 @@ function LogEntry({ log }: { log: ChatLogEntry }) {
 
           {log.assistantResponse && (
             <div className="mx-3 mt-2 mb-2 p-2 bg-surface-200/20 rounded-md border border-border/20">
-              <span className="text-[9px] font-label uppercase tracking-widest text-theme-subtle">Response preview</span>
+              <span className="overline">Response preview</span>
               <p className="text-[11px] text-theme-secondary font-body mt-1 line-clamp-3">{log.assistantResponse.slice(0, 300)}</p>
             </div>
           )}

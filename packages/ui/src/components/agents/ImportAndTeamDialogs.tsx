@@ -186,7 +186,7 @@ export function ImportAgentsFromRepoDialog({
     >
       {/* Step 1: repo picker */}
       <div className="mb-4">
-        <label className="block text-[10px] font-label uppercase tracking-widest text-theme-subtle mb-2">
+        <label className="block overline mb-2">
           Source Repo
         </label>
         <select
@@ -389,7 +389,7 @@ export function AssignToTeamDialog({
     >
       <div className="space-y-4">
         <div>
-          <label className="block text-[10px] font-label uppercase tracking-widest text-theme-subtle mb-2">
+          <label className="block overline mb-2">
             Target Team
           </label>
           <select value={teamName} onChange={e => setTeamName(e.target.value)} className="input text-xs w-full">
@@ -402,7 +402,7 @@ export function AssignToTeamDialog({
           </select>
         </div>
         <div>
-          <label className="block text-[10px] font-label uppercase tracking-widest text-theme-subtle mb-2">
+          <label className="block overline mb-2">
             Agents to Move
           </label>
           <div className="text-[11px] font-mono text-theme-muted">
@@ -527,7 +527,7 @@ export function CreateTeamFromAgentsDialog({
 
         <div className="grid grid-cols-2 gap-4">
           <div>
-            <label className="block text-[10px] font-label uppercase tracking-widest text-theme-subtle mb-2">
+            <label className="block overline mb-2">
               Display Name
             </label>
             <input
@@ -539,7 +539,7 @@ export function CreateTeamFromAgentsDialog({
             />
           </div>
           <div>
-            <label className="block text-[10px] font-label uppercase tracking-widest text-theme-subtle mb-2">
+            <label className="block overline mb-2">
               Slug
             </label>
             <input
@@ -553,7 +553,7 @@ export function CreateTeamFromAgentsDialog({
         </div>
 
         <div>
-          <label className="block text-[10px] font-label uppercase tracking-widest text-theme-subtle mb-2">
+          <label className="block overline mb-2">
             Description
           </label>
           <input
@@ -566,7 +566,7 @@ export function CreateTeamFromAgentsDialog({
         </div>
 
         <div>
-          <label className="block text-[10px] font-label uppercase tracking-widest text-theme-subtle mb-2">
+          <label className="block overline mb-2">
             Mission
           </label>
           <textarea
@@ -579,7 +579,7 @@ export function CreateTeamFromAgentsDialog({
         </div>
 
         <div>
-          <label className="block text-[10px] font-label uppercase tracking-widest text-theme-subtle mb-2">
+          <label className="block overline mb-2">
             Parent Team
           </label>
           <select value={parentTeamName} onChange={e => setParentTeamName(e.target.value)} className="input text-xs w-full">
@@ -593,7 +593,7 @@ export function CreateTeamFromAgentsDialog({
 
         {memberAgentNames.length > 0 && (
           <div>
-            <label className="block text-[10px] font-label uppercase tracking-widest text-theme-subtle mb-2">
+            <label className="block overline mb-2">
               Members ({memberAgentNames.length})
             </label>
             <div className="text-[11px] font-mono text-theme-muted">
@@ -613,7 +613,7 @@ export function CreateTeamFromAgentsDialog({
         {advancedOpen && (
           <div className="grid grid-cols-2 gap-4 p-3 border border-border/20 rounded-lg bg-surface-200/10">
             <div>
-              <label className="block text-[10px] font-label uppercase tracking-widest text-theme-subtle mb-2">
+              <label className="block overline mb-2">
                 Lead Model
               </label>
               <select value={leadModel} onChange={e => setLeadModel(e.target.value)} className="input text-xs w-full">
@@ -623,7 +623,7 @@ export function CreateTeamFromAgentsDialog({
               </select>
             </div>
             <div>
-              <label className="block text-[10px] font-label uppercase tracking-widest text-theme-subtle mb-2">
+              <label className="block overline mb-2">
                 Reasoning Effort
               </label>
               <select value={leadEffort} onChange={e => setLeadEffort(e.target.value as any)} className="input text-xs w-full">

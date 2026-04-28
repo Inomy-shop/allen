@@ -368,7 +368,7 @@ export default function RoleDialog({ open, onClose, onSave, role }: RoleDialogPr
               <div className="px-5 py-2.5 border-b border-border/60 flex items-center justify-between gap-3 shrink-0 bg-surface-200/10">
                 <div className="flex items-center gap-2">
                   <FileText className="w-3.5 h-3.5 text-accent-blue" />
-                  <span className="text-[11px] font-label uppercase tracking-widest text-theme-secondary font-semibold">
+                  <span className="overline font-semibold">
                     Agent Instructions
                   </span>
                   <span className="text-[10px] font-mono text-theme-subtle">README.md</span>

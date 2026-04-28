@@ -148,7 +148,7 @@ export default function WorkflowRunDialog({ workflow, onClose, onStarted }: Work
                 <Play className="w-5 h-5 text-accent-blue" />
               </div>
               <div>
-                <h2 className="font-heading text-sm font-bold text-theme-primary tracking-wider uppercase">
+                <h2 className="text-[14px] font-semibold text-theme-primary tracking-tight">
                   Run Workflow
                 </h2>
                 <p className="text-[11px] text-theme-muted font-mono">

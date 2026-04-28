@@ -400,7 +400,7 @@ function AgentNodeOverrides({
         onClick={() => setExpanded((v) => !v)}
         className="flex items-center justify-between w-full text-left"
       >
-        <span className="text-xs font-label uppercase tracking-wider text-theme-secondary">
+        <span className="overline text-theme-secondary">
           Override agent settings {hasAnyOverride && <span className="text-accent-blue">●</span>}
         </span>
         <span className="text-[10px] text-theme-subtle">{expanded ? '▾' : '▸'}</span>
