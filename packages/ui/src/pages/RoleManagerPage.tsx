@@ -54,7 +54,7 @@ function AgentDetailPanel({ agent, onClose }: { agent: Agent; onClose: () => voi
               </div>
               <div className="min-w-0">
                 <div className="flex items-center gap-2">
-                  <h2 className="font-heading text-lg font-bold text-theme-primary tracking-wide truncate">
+                  <h2 className="text-[18px] font-semibold text-theme-primary tracking-tight truncate">
                     {(agent.displayName as string) ?? (agent.name as string)}
                   </h2>
                   {agent.teamRole === 'lead' && (
@@ -95,7 +95,7 @@ function AgentDetailPanel({ agent, onClose }: { agent: Agent; onClose: () => voi
           <div className="px-7 py-3 border-b border-border/30 flex items-center gap-5 flex-wrap shrink-0 bg-surface-200/15">
             {capabilities.length > 0 && (
               <div className="flex items-center gap-2">
-                <span className="text-[9px] font-label uppercase tracking-widest text-theme-subtle">Capabilities:</span>
+                <span className="overline">Capabilities:</span>
                 <div className="flex items-center gap-1 flex-wrap">
                   {capabilities.map(cap => (
                     <span key={cap} className="text-[9px] font-mono px-1.5 py-0.5 rounded bg-accent-purple/8 text-accent-purple/80 border border-accent-purple/20">{cap}</span>
@@ -105,13 +105,13 @@ function AgentDetailPanel({ agent, onClose }: { agent: Agent; onClose: () => voi
             )}
             {tools.length > 0 && (
               <div className="flex items-center gap-2">
-                <span className="text-[9px] font-label uppercase tracking-widest text-theme-subtle">Tools:</span>
+                <span className="overline">Tools:</span>
                 <span className="text-[11px] text-theme-secondary font-mono">{tools.join(', ')}</span>
               </div>
             )}
             {delegateTargets.length > 0 && (
               <div className="flex items-center gap-2">
-                <span className="text-[9px] font-label uppercase tracking-widest text-theme-subtle">Delegates to:</span>
+                <span className="overline">Delegates to:</span>
                 <span className="text-[11px] text-theme-secondary font-mono">{delegateTargets.join(', ')}</span>
               </div>
             )}
@@ -123,7 +123,7 @@ function AgentDetailPanel({ agent, onClose }: { agent: Agent; onClose: () => voi
           <div className="max-w-3xl mx-auto px-8 py-8">
             <div className="flex items-center gap-2 mb-5">
               <div className="h-px flex-1 bg-border/40" />
-              <div className="text-[10px] font-label uppercase tracking-widest text-theme-subtle font-semibold">
+              <div className="overline font-semibold">
                 Agent Instructions · README.md
               </div>
               <div className="h-px flex-1 bg-border/40" />
@@ -225,7 +225,7 @@ function RunAgentDialog({
                 <RoleIcon icon={agent.icon as string} color={agent.color as string} size={22} />
               </div>
               <div>
-                <h2 className="font-heading text-sm font-bold text-theme-primary tracking-wider uppercase">
+                <h2 className="text-[14px] font-semibold text-theme-primary tracking-tight">
                   Run {(agent.displayName as string) ?? (agent.name as string)}
                 </h2>
                 <div className="text-[10px] text-theme-subtle font-mono mt-0.5">{agent.name as string}</div>
@@ -538,16 +538,16 @@ export default function RoleManagerPage() {
   if (loading) {
     return (
       <div className="p-6">
-        <h1 className="font-heading text-xl font-bold text-theme-primary tracking-widest uppercase mb-6">Agents & Teams</h1>
+        <h1 className="text-[20px] font-semibold text-theme-primary tracking-tight mb-6">Agents</h1>
         <div className="grid grid-cols-[18rem_1fr] gap-4">
           <div className="space-y-2">
             {Array.from({ length: 6 }).map((_, i) => (
-              <div key={i} className="h-12 rounded-lg bg-surface-200/30 animate-pulse" />
+              <div key={i} className="h-12 rounded-md bg-app-muted animate-pulse" />
             ))}
           </div>
           <div className="space-y-3">
             {Array.from({ length: 4 }).map((_, i) => (
-              <div key={i} className="h-24 rounded-xl bg-surface-200/30 animate-pulse" />
+              <div key={i} className="h-24 rounded-lg bg-app-muted animate-pulse" />
             ))}
           </div>
         </div>
@@ -558,29 +558,29 @@ export default function RoleManagerPage() {
   return (
     <div className="flex h-full min-h-0">
       {/* ── Left sidebar ─────────────────────────────────────────────────── */}
-      <aside className="w-72 shrink-0 border-r border-border/40 bg-surface-50/40 flex flex-col min-h-0">
+      <aside className="w-72 shrink-0 border-r border-app bg-app-muted/40 flex flex-col min-h-0">
         {/* Title + refresh */}
-        <div className="px-4 py-4 border-b border-border/40 flex items-center justify-between">
-          <h1 className="font-heading text-sm font-bold text-theme-primary tracking-widest uppercase">Agents & Teams</h1>
+        <div className="px-4 py-4 border-b border-app flex items-center justify-between">
+          <h1 className="text-[14px] font-semibold text-theme-primary tracking-tight">Agents &amp; Teams</h1>
           <button
             title="Refresh"
             onClick={() => { refresh(); void reloadTeams(); }}
-            className="p-1.5 rounded-md text-theme-muted hover:text-theme-primary hover:bg-surface-200/50 transition-colors"
+            className="p-1.5 rounded-md text-theme-muted hover:text-theme-primary hover:bg-app-card transition-colors"
           >
             <RefreshCw className="w-3.5 h-3.5" />
           </button>
         </div>
 
         {/* Search */}
-        <div className="px-4 py-3 border-b border-border/40">
+        <div className="px-4 py-3 border-b border-app">
           <div className="relative">
-            <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-theme-subtle pointer-events-none" />
+            <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-theme-muted pointer-events-none" />
             <input
               type="text"
               value={sidebarSearch}
               onChange={e => setSidebarSearch(e.target.value)}
               placeholder="Search teams or agents…"
-              className="input text-xs pl-8 pr-3 py-1.5 w-full"
+              className="input pl-8 pr-3 py-1.5 w-full text-[12px]"
             />
           </div>
         </div>
@@ -590,17 +590,17 @@ export default function RoleManagerPage() {
           {/* Overview entry */}
           <button
             onClick={() => setSelection({ kind: 'overview' })}
-            className={`w-full flex items-center gap-2 px-4 py-2 text-left transition-colors ${
+            className={`w-full flex items-center gap-2 px-4 py-1.5 text-left transition-colors border-l-2 ${
               selection.kind === 'overview'
-                ? 'bg-accent-blue/10 text-accent-blue border-l-2 border-accent-blue'
-                : 'text-theme-secondary hover:bg-surface-200/30 border-l-2 border-transparent'
+                ? 'bg-app-card text-theme-primary border-accent font-medium'
+                : 'text-theme-secondary hover:bg-app-card border-transparent'
             }`}
           >
-            <Home className="w-3.5 h-3.5" />
-            <span className="text-[12px] font-heading font-semibold tracking-wide">Overview</span>
+            <Home className={`w-3.5 h-3.5 ${selection.kind === 'overview' ? 'text-accent' : 'text-theme-muted'}`} />
+            <span className="text-[13px]">Overview</span>
           </button>
 
-          <div className="px-4 py-2 text-[9px] font-label uppercase tracking-widest text-theme-subtle">
+          <div className="px-4 py-2 overline">
             Teams
           </div>
 
@@ -654,7 +654,7 @@ export default function RoleManagerPage() {
           {/* Unassigned */}
           {unassigned.length > 0 && (
             <>
-              <div className="px-4 pt-4 pb-2 text-[9px] font-label uppercase tracking-widest text-theme-subtle">
+              <div className="px-4 pt-4 pb-2 overline">
                 Other
               </div>
               <button
@@ -681,7 +681,7 @@ export default function RoleManagerPage() {
           {/* Matching agent results during search */}
           {q && matchingAgents.length > 0 && (
             <>
-              <div className="px-4 pt-4 pb-2 text-[9px] font-label uppercase tracking-widest text-theme-subtle">
+              <div className="px-4 pt-4 pb-2 overline">
                 Matching agents
               </div>
               {matchingAgents.map(a => (
@@ -897,7 +897,7 @@ function OverviewContent({
     <div className="p-6 space-y-6">
       <div className="flex items-center gap-3">
         <Home className="w-5 h-5 text-accent-blue" />
-        <h2 className="font-heading text-lg font-bold text-theme-primary tracking-widest uppercase">Overview</h2>
+        <h2 className="text-[18px] font-semibold text-theme-primary tracking-tight">Overview</h2>
       </div>
 
       {/* Global stats grid */}
@@ -918,7 +918,7 @@ function OverviewContent({
       <div className="rounded-xl border border-border/40 bg-surface-100/30 p-4">
         <div className="flex items-center gap-2 mb-3">
           <LayoutGrid className="w-4 h-4 text-accent-blue" />
-          <span className="text-[11px] font-label uppercase tracking-widest text-theme-secondary">Delegation Graph</span>
+          <span className="overline">Delegation Graph</span>
         </div>
         {allAgents.length > 0 ? (
           <DelegationGraph agents={allAgents} />
@@ -933,7 +933,7 @@ function OverviewContent({
       <div className="rounded-xl border border-border/40 bg-surface-100/30 p-4">
         <div className="flex items-center gap-2 mb-3">
           <Users className="w-4 h-4 text-accent-purple" />
-          <span className="text-[11px] font-label uppercase tracking-widest text-theme-secondary">Largest Teams</span>
+          <span className="overline">Largest Teams</span>
         </div>
         {topTeams.length === 0 ? (
           <div className="text-[11px] text-theme-muted italic font-body py-2">No teams yet.</div>
@@ -978,7 +978,7 @@ function StatTile({ label, value, accent }: { label: string; value: number; acce
     : 'text-accent-yellow';
   return (
     <div className={`rounded-xl border ${tone} p-4`}>
-      <div className="text-[10px] font-label uppercase tracking-widest text-theme-subtle mb-1">{label}</div>
+      <div className="overline mb-1">{label}</div>
       <div className={`text-3xl font-heading font-bold ${text}`}>{value}</div>
     </div>
   );
@@ -988,7 +988,7 @@ function DistributionCard({ title, entries, accent }: { title: string; entries: 
   const tone = accent === 'blue' ? 'text-accent-blue' : 'text-accent-purple';
   return (
     <div className="rounded-xl border border-border/40 bg-surface-100/30 p-4">
-      <div className="text-[10px] font-label uppercase tracking-widest text-theme-subtle mb-3">{title}</div>
+      <div className="overline mb-3">{title}</div>
       {entries.length === 0 ? (
         <div className="text-[11px] text-theme-muted italic font-body">—</div>
       ) : (
@@ -1043,7 +1043,7 @@ function TeamDetailContent({
           </div>
           <div className="flex-1 min-w-0">
             <div className="flex items-center gap-2 flex-wrap">
-              <h2 className="font-heading text-lg font-bold text-theme-primary tracking-wide">{team.displayName}</h2>
+              <h2 className="text-[18px] font-semibold text-theme-primary tracking-tight">{team.displayName}</h2>
               {team.isBuiltIn && (
                 <span className="text-[9px] font-mono px-1.5 py-0.5 rounded-full bg-surface-200/60 text-theme-muted">built-in</span>
               )}
@@ -1061,7 +1061,7 @@ function TeamDetailContent({
             <div className="flex items-center gap-4 mt-3 flex-wrap">
               {lead ? (
                 <div className="flex items-center gap-1.5 text-[11px]">
-                  <span className="text-theme-subtle font-label uppercase tracking-widest text-[9px]">Lead:</span>
+                  <span className="text-theme-subtle overline">Lead:</span>
                   <Crown className="w-3.5 h-3.5 text-accent-yellow" />
                   <span className="font-mono text-theme-secondary">{lead.displayName ?? lead.name}</span>
                 </div>
@@ -1072,7 +1072,7 @@ function TeamDetailContent({
               )}
               {team.parentTeamName && (
                 <div className="flex items-center gap-1.5 text-[11px]">
-                  <span className="text-theme-subtle font-label uppercase tracking-widest text-[9px]">Parent:</span>
+                  <span className="text-theme-subtle overline">Parent:</span>
                   <span className="font-mono text-theme-secondary">{team.parentTeamName}</span>
                 </div>
               )}
@@ -1117,7 +1117,7 @@ function TeamDetailContent({
       {/* Member search + list */}
       <div className="space-y-3">
         <div className="flex items-center justify-between gap-3">
-          <div className="text-[11px] font-label uppercase tracking-widest text-theme-secondary">
+          <div className="overline">
             Members ({filteredMembers.length}{filteredMembers.length !== members.length ? ` of ${members.length}` : ''})
           </div>
           <div className="relative">
@@ -1186,7 +1186,7 @@ function UnassignedContent({
     <div className="p-6 space-y-4">
       <div className="flex items-center gap-3">
         <Users className="w-5 h-5 text-theme-muted" />
-        <h2 className="font-heading text-lg font-bold text-theme-primary tracking-widest uppercase">Unassigned</h2>
+        <h2 className="text-[18px] font-semibold text-theme-primary tracking-tight">Unassigned</h2>
         <span className="text-[11px] font-mono text-theme-muted">
           {agents.length} {agents.length === 1 ? 'agent' : 'agents'}
         </span>
