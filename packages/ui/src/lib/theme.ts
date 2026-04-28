@@ -4,31 +4,31 @@ export const DEFAULT_COLOR_MODE: ColorMode = 'system';
 
 export const COLOR_MODE_TOKENS = {
   dark: {
+    // Surface & border are null so each theme preset controls its own colors.
+    // The Linear preset provides Linear-night near-black surfaces; legacy
+    // presets keep their custom navy/black/etc.
     surface: null,
     surface100: null,
     surface200: null,
     border: null,
-    textPrimary: '#f8fafc',
-    textSecondary: '#cbd5e1',
-    textMuted: '#94a3b8',
-    textSubtle: '#64748b',
-    terminalChrome: '#6b7280',
-    // Muted gray for all edges so unselected edges recede. On
-    // selection the connected edges switch to the theme accent (in
-    // Canvas.tsx / LiveGraph.tsx) to stand out. Type is still
-    // distinguishable via chrome, not color: conditional carries a
-    // label pill, retry stays dashed.
-    flowEdgeDefault: '#6b7280',       // muted gray-500
-    flowEdgeConditional: '#6b7280',
-    flowEdgeRetry: '#6b7280',
-    editorBackground: '#141620',
-    editorLineHighlight: '#1a1d2b',
-    editorGutter: '#0f1117',
-    mermaidLine: '#4b5563',
-    mermaidNodeBorder: '#4b5563',
-    mermaidClusterBg: '#222536',
-    mermaidMainBg: '#1a1d2b',
-    mermaidEdgeLabelBg: '#1a1d2b',
+    textPrimary: '#f4f4f5',
+    textSecondary: '#c2c3c8',
+    textMuted: '#8f8f95',
+    textSubtle: '#5c5d63',
+    terminalChrome: '#8f8f95',
+    // Muted gray for all edges so unselected edges recede. On selection
+    // the connected edges switch to the theme accent (Canvas / LiveGraph).
+    flowEdgeDefault: '#5c5d63',
+    flowEdgeConditional: '#5c5d63',
+    flowEdgeRetry: '#5c5d63',
+    editorBackground: '#16171b',
+    editorLineHighlight: '#1c1d22',
+    editorGutter: '#0f1014',
+    mermaidLine: '#5c5d63',
+    mermaidNodeBorder: '#34353c',
+    mermaidClusterBg: '#1c1d22',
+    mermaidMainBg: '#16171b',
+    mermaidEdgeLabelBg: '#16171b',
   },
   light: {
     // Surface & border are null so each theme preset controls its own colors.
@@ -37,22 +37,22 @@ export const COLOR_MODE_TOKENS = {
     surface100: null,
     surface200: null,
     border: null,
-    textPrimary: '#0f172a', // 4.5:1 contrast on white (WCAG AA)
-    textSecondary: '#1e293b', // 4.6:1 contrast on white (WCAG AA)
-    textMuted: '#374151', // 4.5:1 contrast on white (WCAG AA)
-    textSubtle: '#4b5563', // 7.0:1 contrast on white (WCAG AAA)
-    terminalChrome: '#4b5563',
+    textPrimary: '#18181a', // ink — high contrast on FBFBFA
+    textSecondary: '#4a4a4f',
+    textMuted: '#8a8a8f',
+    textSubtle: '#b8b8bc',
+    terminalChrome: '#8a8a8f',
     // Lighter gray for edges on a white surface so they recede by
     // default. Selection promotes connected edges to the accent.
-    flowEdgeDefault: '#d1d5db',       // gray-300
-    flowEdgeConditional: '#d1d5db',
-    flowEdgeRetry: '#d1d5db',
+    flowEdgeDefault: '#b8b8bc',
+    flowEdgeConditional: '#b8b8bc',
+    flowEdgeRetry: '#b8b8bc',
     editorBackground: '#ffffff',
-    editorLineHighlight: '#f8fafc',
-    editorGutter: '#f1f5f9',
-    mermaidLine: '#4b5563',
-    mermaidNodeBorder: '#6b7280',
-    mermaidClusterBg: '#e2e8f0',
+    editorLineHighlight: '#f8f9fc',
+    editorGutter: '#fbfbfa',
+    mermaidLine: '#b8b8bc',
+    mermaidNodeBorder: '#d8d6d2',
+    mermaidClusterBg: '#f4f4f2',
     mermaidMainBg: '#ffffff',
     mermaidEdgeLabelBg: '#ffffff',
   },

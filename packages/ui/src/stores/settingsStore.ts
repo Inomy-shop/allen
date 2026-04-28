@@ -16,7 +16,7 @@ export interface ThemePreset {
   name: string;
   label: string;
   /** When set, selecting this theme auto-switches the color mode. */
-  preferredColorMode?: 'dark' | 'light';
+  preferredColorMode?: 'dark' | 'light' | 'system';
   colors: {
     surface: string;
     surface100: string;
@@ -29,9 +29,58 @@ export interface ThemePreset {
     accentPurple: string;
     accentOrange?: string;
   };
+  /**
+   * Optional dark-mode override for surface/border/accent. Used by themes
+   * that ship a calibrated dark variant (e.g. Linear-night) rather than
+   * just inverting their light palette. When omitted, the light `colors`
+   * are used in both modes (preserved v1 behavior).
+   */
+  colorsDark?: {
+    surface?: string;
+    surface100?: string;
+    surface200?: string;
+    border?: string;
+    accent?: string;
+    accentGreen?: string;
+    accentRed?: string;
+    accentYellow?: string;
+    accentPurple?: string;
+    accentOrange?: string;
+  };
 }
 
 export const THEME_PRESETS: ThemePreset[] = [
+  {
+    name: 'linear',
+    label: 'Linear',
+    preferredColorMode: 'system',
+    colors: {
+      // Light (D2 / Linear-clean)
+      surface: '#fbfbfa',
+      surface100: '#ffffff',
+      surface200: '#f4f4f2',
+      border: '#e8e7e4',
+      accent: '#5e6ad2',
+      accentGreen: '#059669',
+      accentRed: '#dc2626',
+      accentYellow: '#d97706',
+      accentPurple: '#a855f7',
+      accentOrange: '#ea580c',
+    },
+    colorsDark: {
+      // Dark (Linear-night) — calibrated near-black, brighter accent
+      surface: '#0f1014',
+      surface100: '#16171b',
+      surface200: '#1c1d22',
+      border: '#26272d',
+      accent: '#7170ff',
+      accentGreen: '#34c782',
+      accentRed: '#f85555',
+      accentYellow: '#f5ad3f',
+      accentPurple: '#c084fc',
+      accentOrange: '#fb923c',
+    },
+  },
   {
     name: 'cyberpunk',
     label: 'Cyberpunk',
@@ -524,13 +573,11 @@ interface PersistedSettings {
 }
 
 function loadFromStorage(): PersistedSettings {
-  // Choose default theme based on system preference
-  const systemPreference = detectSystemThemePreference();
-  const defaultTheme = systemPreference === 'light' ? 'light-modern' : 'cyberpunk';
-
+  // Default theme is Linear (Linear-clean light + Linear-night dark).
+  // The preset itself adapts to the resolved color mode.
   const defaults: PersistedSettings = {
     colorMode: DEFAULT_COLOR_MODE,
-    themeName: defaultTheme,
+    themeName: 'linear',
     fontName: 'clean',
     customAccent: null,
     agentIcon: 'sparkles',
@@ -561,19 +608,34 @@ function applyThemeColors(theme: ThemePreset, customAccent: string | null, color
   const resolvedMode = resolveColorMode(colorMode);
   const modeTokens = COLOR_MODE_TOKENS[resolvedMode];
 
-  root.setProperty('--color-surface', hexToRgbChannels(modeTokens.surface ?? theme.colors.surface));
-  root.setProperty('--color-surface-100', hexToRgbChannels(modeTokens.surface100 ?? theme.colors.surface100));
-  root.setProperty('--color-surface-200', hexToRgbChannels(modeTokens.surface200 ?? theme.colors.surface200));
-  root.setProperty('--color-border', hexToRgbChannels(modeTokens.border ?? theme.colors.border));
-  const accentHex = customAccent ?? theme.colors.accent;
+  // Themes can ship a calibrated dark variant via `colorsDark`. When the
+  // resolved mode is dark we prefer that, falling back to the (light)
+  // `colors` for backwards-compat with presets that don't define one.
+  const dark = resolvedMode === 'dark' ? (theme.colorsDark ?? {}) : {};
+  const surface = dark.surface ?? theme.colors.surface;
+  const surface100 = dark.surface100 ?? theme.colors.surface100;
+  const surface200 = dark.surface200 ?? theme.colors.surface200;
+  const border = dark.border ?? theme.colors.border;
+  const accentBase = dark.accent ?? theme.colors.accent;
+  const accentGreen = dark.accentGreen ?? theme.colors.accentGreen;
+  const accentRed = dark.accentRed ?? theme.colors.accentRed;
+  const accentYellow = dark.accentYellow ?? theme.colors.accentYellow;
+  const accentPurple = dark.accentPurple ?? theme.colors.accentPurple;
+  const accentOrange = dark.accentOrange ?? theme.colors.accentOrange ?? '#f97316';
+
+  root.setProperty('--color-surface', hexToRgbChannels(modeTokens.surface ?? surface));
+  root.setProperty('--color-surface-100', hexToRgbChannels(modeTokens.surface100 ?? surface100));
+  root.setProperty('--color-surface-200', hexToRgbChannels(modeTokens.surface200 ?? surface200));
+  root.setProperty('--color-border', hexToRgbChannels(modeTokens.border ?? border));
+  const accentHex = customAccent ?? accentBase;
   root.setProperty('--color-accent', hexToRgbChannels(accentHex));
   root.setProperty('--accent-hex', accentHex);
-  root.setProperty('--color-accent-green', hexToRgbChannels(theme.colors.accentGreen));
-  root.setProperty('--color-accent-red', hexToRgbChannels(theme.colors.accentRed));
-  root.setProperty('--accent-red-hex', theme.colors.accentRed);
-  root.setProperty('--color-accent-yellow', hexToRgbChannels(theme.colors.accentYellow));
-  root.setProperty('--color-accent-purple', hexToRgbChannels(theme.colors.accentPurple));
-  root.setProperty('--color-accent-orange', hexToRgbChannels(theme.colors.accentOrange ?? '#f97316'));
+  root.setProperty('--color-accent-green', hexToRgbChannels(accentGreen));
+  root.setProperty('--color-accent-red', hexToRgbChannels(accentRed));
+  root.setProperty('--accent-red-hex', accentRed);
+  root.setProperty('--color-accent-yellow', hexToRgbChannels(accentYellow));
+  root.setProperty('--color-accent-purple', hexToRgbChannels(accentPurple));
+  root.setProperty('--color-accent-orange', hexToRgbChannels(accentOrange));
   root.setProperty('--color-text-primary', hexToRgbChannels(modeTokens.textPrimary));
   root.setProperty('--color-text-secondary', hexToRgbChannels(modeTokens.textSecondary));
   root.setProperty('--color-text-muted', hexToRgbChannels(modeTokens.textMuted));
@@ -653,7 +715,7 @@ interface SettingsState {
 
 export const useSettingsStore = create<SettingsState>((set, get) => ({
   colorMode: DEFAULT_COLOR_MODE,
-  themeName: 'cyberpunk',
+  themeName: 'linear',
   fontName: 'clean',
   customAccent: null,
   agentIcon: 'sparkles',
@@ -707,11 +769,11 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
   resetToDefaults: () => {
     localStorage.removeItem(STORAGE_KEY);
     const colorMode = DEFAULT_COLOR_MODE;
-    const theme = getTheme('cyberpunk');
+    const theme = getTheme('linear');
     const font = getFont('clean');
     applyThemeColors(theme, null, colorMode);
     applyFontPreset(font);
-    set({ colorMode, themeName: 'cyberpunk', fontName: 'clean', customAccent: null, agentIcon: 'bot' });
+    set({ colorMode, themeName: 'linear', fontName: 'clean', customAccent: null, agentIcon: 'sparkles' });
   },
 
   initFromLocalStorage: () => {
