@@ -649,13 +649,17 @@ export default function WorkspaceDetailPage() {
 
   return (
     <div className="flex flex-col h-full overflow-hidden">
-      {/* Header */}
-      <div className="px-4 py-1.5 border-b border-app bg-app-card/50 shrink-0">
+      {/* Header — matches handoff/pages/detail-views.jsx WorkspaceDetailV2 */}
+      <div className="px-4 py-2 border-b border-app shrink-0">
         <div className="flex items-center gap-3">
-          <Link to="/workspaces" className="text-theme-secondary hover:text-theme-primary"><ArrowLeft className="w-4 h-4" /></Link>
-          <GitBranch className="w-3.5 h-3.5 text-accent-green" />
-          <span className="text-xs font-heading font-semibold text-theme-primary">{workspace.name}</span>
-          <span className="text-[10px] font-mono text-theme-muted">{workspace.branch} → {workspace.baseBranch}</span>
+          <Link to="/workspaces" className="text-theme-muted hover:text-theme-primary flex items-center gap-1 text-[12px]" title="Back to Sandboxes">
+            <ArrowLeft className="w-3.5 h-3.5" />
+            <span>Sandboxes</span>
+          </Link>
+          <span className="text-theme-subtle">/</span>
+          <GitBranch className="w-3.5 h-3.5 text-accent" />
+          <span className="text-[14px] font-semibold text-theme-primary tracking-tight truncate">{workspace.name}</span>
+          <span className="text-[11px] font-mono text-theme-muted">{workspace.branch} → {workspace.baseBranch}</span>
           <span className="flex-1" />
 
           {workspace.services?.length > 0 && (
@@ -736,7 +740,7 @@ export default function WorkspaceDetailPage() {
                   <input value={newFilePath} onChange={e => setNewFilePath(e.target.value)}
                     onKeyDown={e => { if (e.key === 'Enter') handleNewFile(); if (e.key === 'Escape') setShowNewFile(false); }}
                     placeholder="path/to/file.ts" autoFocus
-                    className="w-full bg-surface-100 border border-app rounded px-2 py-0.5 text-[10px] font-mono text-theme-secondary placeholder:text-theme-subtle focus:outline-none focus:border-blue-500/50" />
+                    className="w-full bg-surface-100 border border-app rounded px-2 py-0.5 text-[10px] font-mono text-theme-secondary placeholder:text-theme-subtle focus:outline-none focus:border-accent" />
                 </div>
               )}
               <div className="flex-1 overflow-y-auto min-h-0">
@@ -1031,7 +1035,7 @@ export default function WorkspaceDetailPage() {
               {changedCount > 0 && <span className="text-[10px] font-mono text-accent-yellow">{changedCount} changed</span>}
             </div>
             <textarea value={commitMsg} onChange={e => setCommitMsg(e.target.value)} placeholder="Commit message..." autoFocus rows={3}
-              className="w-full bg-surface-50 border border-app rounded px-3 py-2 text-sm font-mono text-theme-secondary placeholder:text-theme-subtle focus:outline-none focus:border-blue-500/50 resize-none" />
+              className="w-full bg-surface-50 border border-app rounded px-3 py-2 text-sm font-mono text-theme-secondary placeholder:text-theme-subtle focus:outline-none focus:border-accent resize-none" />
             <div className="flex items-center gap-2 mt-3 justify-end">
               <button onClick={() => setShowCommitModal(false)} className="btn-ghost text-xs py-1.5 px-3">Cancel</button>
               <button onClick={handleCommit} disabled={!commitMsg.trim() || committing} className="btn-primary text-xs py-1.5 px-4 disabled:opacity-50">
@@ -1052,9 +1056,9 @@ export default function WorkspaceDetailPage() {
               <span className="text-[10px] font-mono text-theme-muted">{workspace.branch} → {workspace.baseBranch}</span>
             </div>
             <input value={prTitle} onChange={e => setPrTitle(e.target.value)} placeholder="PR title..." autoFocus
-              className="w-full bg-surface-50 border border-app rounded px-3 py-2 text-sm text-theme-secondary placeholder:text-theme-subtle focus:outline-none focus:border-blue-500/50 mb-2" />
+              className="w-full bg-surface-50 border border-app rounded px-3 py-2 text-sm text-theme-secondary placeholder:text-theme-subtle focus:outline-none focus:border-accent mb-2" />
             <textarea value={prBody} onChange={e => setPrBody(e.target.value)} placeholder="Description (optional)..." rows={4}
-              className="w-full bg-surface-50 border border-app rounded px-3 py-2 text-sm font-mono text-theme-secondary placeholder:text-theme-subtle focus:outline-none focus:border-blue-500/50 resize-none" />
+              className="w-full bg-surface-50 border border-app rounded px-3 py-2 text-sm font-mono text-theme-secondary placeholder:text-theme-subtle focus:outline-none focus:border-accent resize-none" />
             <div className="flex items-center gap-2 mt-3 justify-end">
               <button onClick={() => setShowPrModal(false)} className="btn-ghost text-xs py-1.5 px-3">Cancel</button>
               <button onClick={handleCreatePR} disabled={!prTitle.trim() || creatingPr} className="btn-primary text-xs py-1.5 px-4 disabled:opacity-50 flex items-center gap-1">

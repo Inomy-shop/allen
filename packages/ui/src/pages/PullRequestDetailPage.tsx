@@ -61,29 +61,44 @@ export default function PullRequestDetailPage() {
     return langMap[ext] ?? 'plaintext';
   }
 
+  // Map PR status → v2 .badge class
+  const statusBadge = pr.status === 'merged' ? 'badge-human' : pr.status === 'closed' ? 'badge-err' : 'badge-ok';
+
   return (
     <div className="flex flex-col h-full overflow-hidden">
-      {/* Header */}
-      <div className="px-6 py-3 border-b border-app bg-app-card/50 shrink-0">
-        <div className="flex items-center gap-3">
-          <Link to="/pull-requests" className="text-theme-secondary hover:text-theme-primary"><ArrowLeft className="w-4 h-4" /></Link>
-          {pr.status === 'merged' ? <GitMerge className="w-4 h-4 text-accent-purple" /> : pr.status === 'closed' ? <XCircle className="w-4 h-4 text-accent-red" /> : <GitPullRequest className="w-4 h-4 text-accent-green" />}
-          <span className="text-sm font-semibold text-theme-primary">#{pr.number}</span>
-          <span className="text-sm text-theme-secondary">{pr.title}</span>
-          <span className={`text-[10px] font-mono px-2 py-0.5 rounded-full border ${statusColor(pr.status)} border-current/20 bg-current/5`}>{pr.status}</span>
-          <span className="flex-1" />
+      {/* Header — matches handoff/pages/detail-views.jsx PRDetailV2 */}
+      <div className="px-6 pt-4 pb-3 border-b border-app shrink-0">
+        <div className="flex items-center gap-2 mb-2 text-[12px] text-theme-muted">
+          <Link to="/pull-requests" className="hover:text-theme-primary transition-colors flex items-center gap-1">
+            <ArrowLeft className="w-3 h-3" /> Pull requests
+          </Link>
+          <span className="text-theme-subtle">/</span>
+          <span className="font-mono">#{pr.number}</span>
+        </div>
+        <div className="flex items-center gap-3 mb-1.5">
+          {pr.status === 'merged'
+            ? <GitMerge className="w-4 h-4 text-accent-purple shrink-0" />
+            : pr.status === 'closed'
+              ? <XCircle className="w-4 h-4 text-accent-red shrink-0" />
+              : <GitPullRequest className="w-4 h-4 text-accent-green shrink-0" />}
+          <h1 className="text-[20px] font-semibold text-theme-primary tracking-tight truncate">
+            <span className="font-mono text-theme-muted text-[16px] mr-2">#{pr.number}</span>
+            {pr.title}
+          </h1>
+          <span className={`badge ${statusBadge}`}>{pr.status}</span>
+          <div className="flex-1" />
           {pr.status === 'open' && (
-            <button onClick={handleCreateWorkspace} className="btn-ghost text-xs py-1.5 px-3 flex items-center gap-1.5">
-              <FolderGit2 className="w-3.5 h-3.5" /> Open Workspace
+            <button onClick={handleCreateWorkspace} className="btn btn-secondary btn-sm">
+              <FolderGit2 className="w-3.5 h-3.5" /> Open workspace
             </button>
           )}
           {pr.url && (
-            <a href={pr.url} target="_blank" rel="noopener noreferrer" className="btn-ghost text-xs py-1.5 px-3 flex items-center gap-1.5">
+            <a href={pr.url} target="_blank" rel="noopener noreferrer" className="btn btn-primary btn-sm">
               <ExternalLink className="w-3.5 h-3.5" /> GitHub
             </a>
           )}
         </div>
-        <div className="flex items-center gap-4 mt-2 text-[11px] font-mono text-theme-muted">
+        <div className="flex items-center gap-4 text-[11px] font-mono text-theme-muted">
           <span>{pr.repoName}</span>
           <span className="flex items-center gap-1">{pr.branch} <ArrowRight className="w-3 h-3" /> {pr.baseBranch}</span>
           <span>by {pr.author}</span>
@@ -92,7 +107,7 @@ export default function PullRequestDetailPage() {
           <span className="text-accent-green"><Plus className="w-3 h-3 inline" />{pr.additions}</span>
           <span className="text-accent-red"><Minus className="w-3 h-3 inline" />{pr.deletions}</span>
         </div>
-        {pr.description && <p className="mt-2 text-xs text-theme-muted line-clamp-2">{pr.description}</p>}
+        {pr.description && <p className="mt-2 text-[12px] text-theme-muted line-clamp-2">{pr.description}</p>}
       </div>
 
       {/* Body: file list + diff */}
@@ -102,7 +117,7 @@ export default function PullRequestDetailPage() {
           <div className="px-3 py-2 overline">Changed files ({diff.files.length})</div>
           {diff.files.map(f => (
             <button key={f.path} onClick={() => setSelectedFile(f.path)}
-              className={`w-full text-left px-3 py-1.5 text-[11px] font-mono truncate ${selectedFile === f.path ? 'bg-accent-soft text-accent' : 'text-theme-secondary hover:bg-surface-100/5'}`}>
+              className={`w-full text-left px-3 py-1.5 text-[11px] font-mono truncate ${selectedFile === f.path ? 'bg-accent-soft text-accent' : 'text-theme-secondary hover:bg-app-muted/50'}`}>
               {f.path}
             </button>
           ))}
