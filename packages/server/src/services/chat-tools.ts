@@ -1341,7 +1341,7 @@ async function runSpawnInBackground(
       //     Anthropic's 15-min server-side watchdog by a wide margin.
       // On timeout we abort the controller and let the existing catch/
       // retry logic at `isTimeout` take over.
-      const STREAM_IDLE_MS = 300_000; // 5 min — general stall
+      const STREAM_IDLE_MS = 900_000; // 15 min — general stall
       const STREAM_IDLE_AFTER_TOOLSEARCH_MS = 60_000; // 1 min — after ToolSearch
       let toolSearchSeen = false;
       const streamIterator = (msgStream as AsyncIterable<any>)[Symbol.asyncIterator]();

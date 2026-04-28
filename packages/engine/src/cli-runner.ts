@@ -25,7 +25,7 @@ import { normalizeModelAlias } from './model-alias.js';
 // incident. Idle watchdog is the real protection; total cap is a backstop
 // for runaway-output loops the idle timer can't catch. Numbers are matched
 // to the codex path so behaviour is consistent across providers.
-const CLI_STREAM_IDLE_MS = 5 * 60_000;          // kill if no stdout for 5 min
+const CLI_STREAM_IDLE_MS = 15 * 60_000;         // kill if no stdout for 15 min
 const CLI_TOTAL_TIMEOUT_MS = 12 * 60 * 60_000;  // backstop: 12 h wall time
 const CLI_KILL_GRACE_MS = 5_000;                // SIGTERM → SIGKILL escalation
 const CLI_STDERR_TAIL_BYTES = 4096;             // bounded stderr tail for diagnostics
