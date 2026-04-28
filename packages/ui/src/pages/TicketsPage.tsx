@@ -315,13 +315,13 @@ export default function TicketsPage() {
               Add a Linear API token to Allen Secrets under the key:
             </p>
           </div>
-          <div className="inline-flex items-center gap-2 px-3 py-2 rounded-md bg-app-muted border border-app text-[11px] font-mono text-accent-blue">
+          <div className="inline-flex items-center gap-2 px-3 py-2 rounded-md bg-app-muted border border-app text-[11px] font-mono text-accent">
             <KeyRound className="w-3.5 h-3.5" /> ALLEN_LINEAR_ACCESS_TOKEN
           </div>
           <div className="flex items-center justify-center gap-2 pt-2">
             <button
               onClick={() => navigate('/settings/secrets')}
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-[11px] font-mono bg-accent-blue/10 text-accent-blue hover:bg-accent-blue/20 transition-colors"
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-[11px] font-mono bg-accent-soft text-accent hover:bg-accent/20 transition-colors"
             >
               <Settings className="w-3 h-3" /> Open Settings · Secrets
             </button>
@@ -393,7 +393,7 @@ export default function TicketsPage() {
               onClick={() => setProjectFilter('')}
               className={`w-full flex items-center justify-between px-2 py-1.5 rounded-md text-[11px] font-mono transition-colors ${
                 projectFilter === ''
-                  ? 'bg-accent-blue/10 text-accent-blue'
+                  ? 'bg-accent-soft text-accent'
                   : 'text-theme-secondary hover:bg-app-muted'
               }`}
             >
@@ -406,7 +406,7 @@ export default function TicketsPage() {
                 onClick={() => setProjectFilter(p.id)}
                 className={`w-full flex items-center gap-2 px-2 py-1.5 rounded-md text-[11px] font-mono transition-colors ${
                   projectFilter === p.id
-                    ? 'bg-accent-blue/10 text-accent-blue'
+                    ? 'bg-accent-soft text-accent'
                     : 'text-theme-secondary hover:bg-app-muted'
                 }`}
                 title={p.description || p.name}
@@ -440,7 +440,7 @@ export default function TicketsPage() {
                   type="checkbox"
                   checked={stateFilters.has(g.type)}
                   onChange={() => toggleStateFilter(g.type)}
-                  className="accent-accent-blue"
+                  className="accent-violet-500"
                 />
                 <span className="flex-1">{g.label}</span>
                 <span className="text-theme-subtle">{grouped.get(g.type)?.length ?? 0}</span>
@@ -455,7 +455,7 @@ export default function TicketsPage() {
               <button
                 onClick={() => setAssigneeFilter('any')}
                 className={`w-full text-left px-2 py-1 rounded-md text-[11px] font-mono transition-colors ${
-                  assigneeFilter === 'any' ? 'bg-accent-blue/10 text-accent-blue' : 'text-theme-secondary hover:bg-app-muted'
+                  assigneeFilter === 'any' ? 'bg-accent-soft text-accent' : 'text-theme-secondary hover:bg-app-muted'
                 }`}
               >
                 Any
@@ -463,7 +463,7 @@ export default function TicketsPage() {
               <button
                 onClick={() => setAssigneeFilter('unassigned')}
                 className={`w-full text-left px-2 py-1 rounded-md text-[11px] font-mono transition-colors ${
-                  assigneeFilter === 'unassigned' ? 'bg-accent-blue/10 text-accent-blue' : 'text-theme-secondary hover:bg-app-muted'
+                  assigneeFilter === 'unassigned' ? 'bg-accent-soft text-accent' : 'text-theme-secondary hover:bg-app-muted'
                 }`}
               >
                 Unassigned
@@ -494,7 +494,7 @@ export default function TicketsPage() {
           <button
             onClick={() => { void loadStatus(); void loadProjects(); void loadIssues(); }}
             disabled={listLoading}
-            className="w-full inline-flex items-center justify-center gap-1.5 px-3 py-2 rounded-lg text-[11px] font-mono bg-accent-blue/10 text-accent-blue hover:bg-accent-blue/20 disabled:opacity-50"
+            className="w-full inline-flex items-center justify-center gap-1.5 px-3 py-2 rounded-lg text-[11px] font-mono bg-accent-soft text-accent hover:bg-accent/20 disabled:opacity-50"
           >
             {listLoading ? <Loader2 className="w-3 h-3 animate-spin" /> : <RefreshCw className="w-3 h-3" />}
             Refresh from Linear
@@ -620,7 +620,7 @@ function AssignmentPill({ assignee, onClick }: { assignee: AgentAssignee | null;
     status === 'running' ? 'bg-accent-green/10 text-accent-green border-accent-green/30'
     : status === 'pending' ? 'bg-accent-yellow/10 text-accent-yellow border-accent-yellow/30'
     : status === 'failed' ? 'bg-accent-red/10 text-accent-red border-accent-red/30'
-    : 'bg-accent-blue/10 text-accent-blue border-accent-blue/30';
+    : 'bg-accent-soft text-accent border-accent/30';
   const icon =
     status === 'running' ? <Play className="w-3 h-3" />
     : status === 'pending' ? <Loader2 className="w-3 h-3 animate-spin" />
@@ -653,7 +653,7 @@ function TicketRow({
   onDispatch: () => void;
 }) {
   return (
-    <div className={`flex items-center gap-3 px-3 py-2.5 transition-colors cursor-pointer ${active ? 'bg-accent-blue/8' : 'hover:bg-surface-200/25'}`}>
+    <div className={`flex items-center gap-3 px-3 py-2.5 transition-colors cursor-pointer ${active ? 'bg-accent-soft' : 'hover:bg-app-muted/50'}`}>
       <div className="shrink-0" title={issue.priorityLabel}>
         <PriorityIcon p={issue.priority} />
       </div>
@@ -703,7 +703,7 @@ function TicketDrawer({
     status === 'running' ? 'bg-accent-green/10 text-accent-green border-accent-green/30'
     : status === 'pending' ? 'bg-accent-yellow/10 text-accent-yellow border-accent-yellow/30'
     : status === 'failed' ? 'bg-accent-red/10 text-accent-red border-accent-red/30'
-    : 'bg-accent-blue/10 text-accent-blue border-accent-blue/30';
+    : 'bg-accent-soft text-accent border-accent/30';
 
   const statusLabel =
     status === 'running' ? 'Agent is working'

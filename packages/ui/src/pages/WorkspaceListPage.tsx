@@ -60,13 +60,14 @@ export default function WorkspaceListPage() {
     setForm(f => ({ ...f, repoId, repoPath: repo?.path ?? '', repoName: repo?.name ?? '' }));
   }
 
-  const statusColors: Record<string, string> = {
-    creating: 'text-accent-yellow bg-accent-yellow/10 border-accent-yellow/20',
-    setting_up: 'text-accent-yellow bg-accent-yellow/10 border-accent-yellow/20',
-    active: 'text-accent-green bg-accent-green/10 border-accent-green/20',
-    running: 'text-accent-blue bg-accent-blue/10 border-accent-blue/20',
-    archiving: 'text-theme-secondary bg-gray-400/10 border-gray-400/20',
-    failed: 'text-accent-red bg-accent-red/10 border-accent-red/30',
+  // Map workspace status → v2 .badge class (soft tints, mono font)
+  const statusBadge: Record<string, string> = {
+    creating: 'badge-warn',
+    setting_up: 'badge-warn',
+    active: 'badge-ok',
+    running: 'badge-info',
+    archiving: 'badge-muted',
+    failed: 'badge-err',
   };
 
   return (
@@ -147,45 +148,71 @@ export default function WorkspaceListPage() {
           grouped.get(key)!.workspaces.push(ws);
         }
         return (
-          <div className="space-y-6">
+          <div className="space-y-5">
             {Array.from(grouped.values()).map(group => (
               <div key={group.repoId}>
-                {/* Repo header */}
-                <div className="flex items-center gap-2 mb-2 px-1">
+                {/* Repo header — 13px/600 with accent icon, matches v2 reference */}
+                <div className="flex items-center gap-2 mb-2.5 px-1">
                   <FolderGit2 className="w-4 h-4 text-accent" />
-                  <span className="text-[13px] font-medium text-theme-primary">{group.repoName}</span>
-                  <span className="text-[11px] text-theme-muted font-mono">{group.workspaces.length} sandbox{group.workspaces.length !== 1 ? 'es' : ''}</span>
+                  <span className="text-[13px] font-semibold text-theme-primary">{group.repoName}</span>
+                  <span className="text-[11px] text-theme-muted font-body">· {group.workspaces.length} sandbox{group.workspaces.length !== 1 ? 'es' : ''}</span>
                   <span className="flex-1" />
                   <button onClick={() => setConfigRepoId(group.repoId)} className="text-[11px] text-theme-muted hover:text-theme-primary flex items-center gap-1">
                     <Settings className="w-3 h-3" /> Config
                   </button>
                 </div>
 
-                {/* Workspace cards */}
-                <div className="space-y-2 pl-6 border-l-2 border-blue-500/10 ml-2">
+                {/* Workspace cards — 2-col grid (matches handoff/references/07-workspaces.html) */}
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-2.5">
                   {group.workspaces.map((ws: any) => (
-                    <div key={ws._id} className="p-3 rounded-lg border border-app bg-app-muted/30 hover:bg-app-muted/50 transition-colors group">
-                      <div className="flex items-center gap-3">
-                        <input type="checkbox" checked={selected.has(ws._id)} onChange={() => toggleSelect(ws._id)} className="rounded border-app bg-surface-50 shrink-0" onClick={e => e.stopPropagation()} />
-                        <GitBranch className="w-4 h-4 text-accent-green shrink-0" />
-                        <div className="flex-1 min-w-0">
-                          <div className="flex items-center gap-2">
-                            <Link to={`/workspaces/${ws._id}`} className="text-sm font-heading font-semibold text-theme-primary hover:text-accent transition-colors">{ws.name}</Link>
-                            <span className={`text-[10px] font-mono px-1.5 py-0.5 rounded border ${statusColors[ws.status] ?? 'text-theme-secondary'}`}>{ws.status}</span>
-                            {ws.source === 'pr' && <span className="text-[10px] font-mono text-accent-purple bg-accent-purple/10 px-1.5 py-0.5 rounded border border-accent-purple/30">PR #{ws.prNumber}</span>}
-                          </div>
-                          <div className="flex items-center gap-3 mt-1 text-[10px] text-theme-muted font-mono">
-                            <span>{ws.branch} → {ws.baseBranch}</span>
-                            {ws.changedFiles > 0 && <span className="text-accent-yellow">{ws.changedFiles} changed</span>}
-                            {ws.services?.some((s: any) => s.status === 'ready') && <span className="text-accent-green">● services</span>}
-                            {ws.basePort && <span className="text-theme-subtle">port {ws.basePort}</span>}
-                          </div>
-                        </div>
-                        <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                          <Link to={`/workspaces/${ws._id}`} className="btn-ghost p-1.5 text-xs" title="Open"><Terminal className="w-3.5 h-3.5" /></Link>
-                          <Link to={`/workspaces/${ws._id}?tab=diff`} className="btn-ghost p-1.5 text-xs" title="Diff"><FileCode className="w-3.5 h-3.5" /></Link>
-                          <button onClick={() => setDeleting({ id: ws._id, name: ws.name })} className="btn-ghost p-1.5 text-xs text-accent-red" title="Archive"><Trash2 className="w-3.5 h-3.5" /></button>
-                        </div>
+                    <div key={ws._id} className="card-hover p-3 group flex flex-col gap-2">
+                      {/* Title row */}
+                      <div className="flex items-center gap-2">
+                        <input type="checkbox" checked={selected.has(ws._id)} onChange={() => toggleSelect(ws._id)} className="rounded border-app shrink-0" onClick={e => e.stopPropagation()} />
+                        <FolderGit2 className="w-3.5 h-3.5 text-accent shrink-0" />
+                        <Link
+                          to={`/workspaces/${ws._id}`}
+                          className="flex-1 min-w-0 text-[12.5px] font-mono font-medium text-theme-primary hover:text-accent transition-colors truncate"
+                        >
+                          {ws.name}
+                        </Link>
+                        <span className={`badge ${statusBadge[ws.status] ?? 'badge-muted'}`}>{ws.status}</span>
+                        {ws.source === 'pr' && (
+                          <span className="badge badge-human">PR #{ws.prNumber}</span>
+                        )}
+                      </div>
+
+                      {/* Branch row */}
+                      <div className="font-mono text-[10.5px] text-theme-muted truncate pl-6">
+                        {ws.branch} → {ws.baseBranch}
+                      </div>
+
+                      {/* Meta row */}
+                      <div className="flex items-center gap-3 text-[11px] text-theme-muted font-mono pl-6">
+                        {ws.basePort && <span>:{ws.basePort}</span>}
+                        {ws.changedFiles > 0 && <span className="text-accent">+{ws.changedFiles} changed</span>}
+                        {ws.services?.some((s: any) => s.status === 'ready') && (
+                          <span className="text-accent-green">● services</span>
+                        )}
+                        <div className="flex-1" />
+                        <Link to={`/workspaces/${ws._id}`} className="btn btn-secondary btn-sm">
+                          <Terminal className="w-3 h-3" /> Open
+                        </Link>
+                        <Link
+                          to={`/workspaces/${ws._id}?tab=diff`}
+                          className="p-1 rounded text-theme-muted hover:text-theme-primary hover:bg-app-muted transition-colors"
+                          title="Diff"
+                          onClick={e => e.stopPropagation()}
+                        >
+                          <FileCode className="w-3.5 h-3.5" />
+                        </Link>
+                        <button
+                          onClick={() => setDeleting({ id: ws._id, name: ws.name })}
+                          className="p-1 rounded text-theme-muted hover:text-accent-red hover:bg-accent-red/10 transition-colors"
+                          title="Archive"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
                       </div>
                     </div>
                   ))}
