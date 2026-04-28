@@ -137,7 +137,7 @@ export default function CheckpointsPanel({ executionId, executionStatus }: Props
           needing to hover every icon. Only rendered when there's at least
           one checkpoint so empty-state copy isn't doubled up. */}
       {!loading && checkpoints.length > 0 && (
-        <div className="text-[11px] text-theme-muted font-body bg-surface-100/40 border border-border/30 rounded-md px-3 py-2 leading-relaxed">
+        <div className="text-[11px] text-theme-muted font-body bg-app-muted/50 border border-app rounded-md px-3 py-2 leading-relaxed">
           <span className="text-theme-primary font-semibold">Edit and re-run:</span> click{' '}
           <Edit2 className="w-3 h-3 inline align-text-bottom text-accent-yellow" /> to open
           the state editor, save your changes, then click{' '}
@@ -146,21 +146,21 @@ export default function CheckpointsPanel({ executionId, executionStatus }: Props
           the execution is <span className="font-mono">failed</span> or{' '}
           <span className="font-mono">cancelled</span>.
           {isActive && (
-            <span className="block mt-1 text-amber-400">
+            <span className="block mt-1 text-accent-yellow">
               Editing and resuming are disabled while the execution is active.
             </span>
           )}
         </div>
       )}
 
-      {error && <div className="text-xs text-red-400 font-mono">{error}</div>}
+      {error && <div className="text-xs text-accent-red font-mono">{error}</div>}
 
       {loading ? (
         <div className="text-xs text-theme-muted flex items-center gap-2">
           <Loader2 className="w-3 h-3 animate-spin" /> loading…
         </div>
       ) : checkpoints.length === 0 ? (
-        <div className="border border-dashed border-border/40 rounded-lg p-6 text-center">
+        <div className="border border-dashed border-app rounded-lg p-6 text-center">
           <AlertCircle className="w-5 h-5 mx-auto text-theme-subtle mb-1.5" />
           <div className="text-xs text-theme-muted font-body">
             No checkpoints saved for this execution yet.
@@ -174,7 +174,7 @@ export default function CheckpointsPanel({ executionId, executionStatus }: Props
           {checkpoints.map((cp) => (
             <div
               key={cp._id}
-              className="border border-border/40 rounded-lg bg-surface-100/60 overflow-hidden"
+              className="border border-app rounded-lg bg-app-card overflow-hidden"
             >
               <div className="flex items-center gap-3 px-3 py-2">
                 <input
@@ -211,7 +211,7 @@ export default function CheckpointsPanel({ executionId, executionStatus }: Props
                     </span>
                     {cp.editedAt && (
                       <span
-                        className="text-[10px] font-mono text-amber-400 flex items-center gap-0.5"
+                        className="text-[10px] font-mono text-accent-yellow flex items-center gap-0.5"
                         title={`Edited ${new Date(cp.editedAt).toLocaleString()}`}
                       >
                         <Edit2 className="w-2.5 h-2.5" /> edited
@@ -226,7 +226,7 @@ export default function CheckpointsPanel({ executionId, executionStatus }: Props
                 <div className="flex items-center gap-1 shrink-0">
                   <button
                     onClick={() => toggleExpand(cp._id)}
-                    className="p-1.5 rounded-md hover:bg-surface-200/60 text-theme-muted hover:text-accent-blue transition-colors"
+                    className="p-1.5 rounded-md hover:bg-app-muted text-theme-muted hover:text-accent-blue transition-colors"
                     title="View full state"
                   >
                     <Eye className="w-3.5 h-3.5" />
@@ -234,7 +234,7 @@ export default function CheckpointsPanel({ executionId, executionStatus }: Props
                   <button
                     onClick={() => setEditing(cp)}
                     disabled={isActive}
-                    className="p-1.5 rounded-md hover:bg-surface-200/60 text-theme-muted hover:text-accent-yellow disabled:opacity-30 transition-colors"
+                    className="p-1.5 rounded-md hover:bg-app-muted text-theme-muted hover:text-accent-yellow disabled:opacity-30 transition-colors"
                     title={isActive ? 'Can\'t edit while execution is active' : 'Edit state'}
                   >
                     <Edit2 className="w-3.5 h-3.5" />
@@ -242,7 +242,7 @@ export default function CheckpointsPanel({ executionId, executionStatus }: Props
                   <button
                     onClick={() => handleRun(cp)}
                     disabled={!canRunFromCheckpoint || busy[cp._id] === 'run'}
-                    className="p-1.5 rounded-md hover:bg-surface-200/60 text-theme-muted hover:text-accent-green disabled:opacity-30 transition-colors"
+                    className="p-1.5 rounded-md hover:bg-app-muted text-theme-muted hover:text-accent-green disabled:opacity-30 transition-colors"
                     title={canRunFromCheckpoint
                       ? 'Resume same execution from this checkpoint'
                       : 'Only failed or cancelled executions can resume'}
@@ -254,7 +254,7 @@ export default function CheckpointsPanel({ executionId, executionStatus }: Props
                   <button
                     onClick={() => handleFork(cp)}
                     disabled={busy[cp._id] === 'fork'}
-                    className="p-1.5 rounded-md hover:bg-surface-200/60 text-theme-muted hover:text-accent-blue disabled:opacity-30 transition-colors"
+                    className="p-1.5 rounded-md hover:bg-app-muted text-theme-muted hover:text-accent-blue disabled:opacity-30 transition-colors"
                     title="Fork: create a new execution id from this checkpoint"
                   >
                     {busy[cp._id] === 'fork'
@@ -265,9 +265,9 @@ export default function CheckpointsPanel({ executionId, executionStatus }: Props
               </div>
 
               {expanded.has(cp._id) && (
-                <div className="border-t border-border/20 bg-surface-200/20 px-3 py-3 space-y-2">
+                <div className="border-t border-app bg-surface-200/20 px-3 py-3 space-y-2">
                   <div className="flex gap-3 text-xs">
-                    <div className="w-24 shrink-0 text-[10px] font-label uppercase tracking-[0.15em] text-theme-muted pt-0.5">
+                    <div className="w-24 shrink-0 overline pt-0.5">
                       Completed
                     </div>
                     <div className="flex-1 font-mono text-[11px] text-theme-secondary break-all">
@@ -275,18 +275,18 @@ export default function CheckpointsPanel({ executionId, executionStatus }: Props
                     </div>
                   </div>
                   <div className="flex gap-3 text-xs">
-                    <div className="w-24 shrink-0 text-[10px] font-label uppercase tracking-[0.15em] text-theme-muted pt-0.5">
+                    <div className="w-24 shrink-0 overline pt-0.5">
                       State
                     </div>
                     <div className="flex-1 min-w-0">
-                      <pre className="bg-surface-100/60 border border-border/20 rounded p-2 font-mono text-[10px] text-theme-secondary overflow-x-auto max-h-64">
+                      <pre className="bg-app-card border border-app rounded p-2 font-mono text-[10px] text-theme-secondary overflow-x-auto max-h-64">
                         {JSON.stringify(cp.state, null, 2)}
                       </pre>
                     </div>
                   </div>
                   {Object.keys(cp.sessions).length > 0 && (
                     <div className="flex gap-3 text-xs">
-                      <div className="w-24 shrink-0 text-[10px] font-label uppercase tracking-[0.15em] text-theme-muted pt-0.5">
+                      <div className="w-24 shrink-0 overline pt-0.5">
                         Sessions
                       </div>
                       <div className="flex-1 font-mono text-[11px] text-theme-subtle">

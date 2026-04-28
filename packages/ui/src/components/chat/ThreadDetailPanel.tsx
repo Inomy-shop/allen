@@ -19,7 +19,7 @@ function CopyBtn({ text }: { text: string }) {
   return (
     <button
       onClick={() => { navigator.clipboard.writeText(text); setCopied(true); setTimeout(() => setCopied(false), 1500); }}
-      className="p-1 rounded hover:bg-surface-200/50 text-theme-subtle hover:text-theme-secondary transition-colors"
+      className="p-1 rounded hover:bg-app-muted text-theme-subtle hover:text-theme-secondary transition-colors"
       title="Copy"
     >
       {copied ? <Check className="w-3 h-3 text-accent-green" /> : <Copy className="w-3 h-3" />}
@@ -42,8 +42,8 @@ function renderContent(text: string) {
     const lang = match[1] || 'code';
     const code = match[2].replace(/\n$/, '');
     parts.push(
-      <div key={key++} className="group relative my-3 rounded-md overflow-hidden border border-border/40 bg-[rgb(var(--color-editor-background))]">
-        <div className="flex items-center justify-between px-3 py-1.5 bg-surface-200/60 border-b border-border/30">
+      <div key={key++} className="group relative my-3 rounded-md overflow-hidden border border-app bg-[rgb(var(--color-editor-background))]">
+        <div className="flex items-center justify-between px-3 py-1.5 bg-app-muted border-b border-app">
           <span className="text-[10px] font-mono text-theme-muted uppercase tracking-wider">{lang}</span>
           <CopyBtn text={code} />
         </div>
@@ -87,7 +87,7 @@ function renderSpan(text: string): React.ReactNode {
   const parts = text.split(/(\*\*.*?\*\*|`[^`]+`|_[^_]+_)/g);
   return parts.map((part, i) => {
     if (part.startsWith('**') && part.endsWith('**')) return <strong key={i} className="text-theme-secondary font-semibold">{part.slice(2, -2)}</strong>;
-    if (part.startsWith('`') && part.endsWith('`')) return <code key={i} className="text-accent-blue/80 bg-surface-200/50 px-1 py-0.5 rounded text-[11px] font-mono">{part.slice(1, -1)}</code>;
+    if (part.startsWith('`') && part.endsWith('`')) return <code key={i} className="text-accent-blue/80 bg-app-muted px-1 py-0.5 rounded text-[11px] font-mono">{part.slice(1, -1)}</code>;
     if (part.startsWith('_') && part.endsWith('_')) return <em key={i} className="text-theme-secondary italic">{part.slice(1, -1)}</em>;
     return <span key={i}>{part}</span>;
   });
@@ -101,7 +101,7 @@ function ToolCallBadge({ tool }: { tool: string }) {
     .replace('mcp__mongodb__', 'mongo:');
 
   return (
-    <span className="inline-flex items-center gap-1 text-[10px] font-mono px-2 py-0.5 rounded bg-surface-200/50 text-theme-muted border border-border/20">
+    <span className="inline-flex items-center gap-1 text-[10px] font-mono px-2 py-0.5 rounded bg-app-muted text-theme-muted border border-app">
       <Wrench className="w-2.5 h-2.5 text-theme-subtle" />
       {shortName}
     </span>
@@ -122,11 +122,11 @@ export default function ThreadDetailPanel({ thread, agents, onClose }: ThreadDet
     <div className="fixed inset-0 z-50 flex justify-end" onClick={onClose}>
       <div className="bg-black/40 absolute inset-0" />
       <div
-        className="relative w-full max-w-2xl bg-surface-50 border-l border-border/50 flex flex-col shadow-2xl animate-in slide-in-from-right duration-200"
+        className="relative w-full max-w-2xl bg-surface-50 border-l border-app flex flex-col shadow-2xl animate-in slide-in-from-right duration-200"
         onClick={e => e.stopPropagation()}
       >
         {/* Header */}
-        <div className="flex items-center justify-between px-5 py-3.5 border-b border-border/50 bg-surface-100/50 shrink-0">
+        <div className="flex items-center justify-between px-5 py-3.5 border-b border-app bg-surface-100/50 shrink-0">
           <div className="flex items-center gap-3">
             {/* From agent */}
             <div className="flex items-center gap-2">
@@ -152,7 +152,7 @@ export default function ThreadDetailPanel({ thread, agents, onClose }: ThreadDet
                 <Loader2 className="w-3 h-3 animate-spin" /> Running
               </span>
             ) : isFailed ? (
-              <span className="flex items-center gap-1 text-[10px] font-mono text-red-400 bg-red-500/10 px-2 py-0.5 rounded border border-red-500/20">
+              <span className="flex items-center gap-1 text-[10px] font-mono text-accent-red bg-accent-red/10 px-2 py-0.5 rounded border border-accent-red/30">
                 <XCircle className="w-3 h-3" /> Failed
               </span>
             ) : (
@@ -190,7 +190,7 @@ export default function ThreadDetailPanel({ thread, agents, onClose }: ThreadDet
               const isFrom = msg.agent === thread.fromAgent;
 
               return (
-                <div key={i} className={`border-b border-border/10 ${isFrom ? 'bg-surface-100/20' : 'bg-surface-50'}`}>
+                <div key={i} className={`border-b border-border/10 ${isFrom ? 'bg-app-muted/30' : 'bg-surface-50'}`}>
                   {/* Agent header */}
                   <div className="flex items-center gap-2.5 px-5 pt-4 pb-2">
                     <div className="w-8 h-8 rounded-full flex items-center justify-center" style={{ backgroundColor: agentColor + '15', border: `1px solid ${agentColor}25` }}>
@@ -244,7 +244,7 @@ export default function ThreadDetailPanel({ thread, agents, onClose }: ThreadDet
         </div>
 
         {/* Footer with task summary */}
-        <div className="border-t border-border/50 px-5 py-3 bg-surface-100/30 shrink-0">
+        <div className="border-t border-app px-5 py-3 bg-app-muted/40 shrink-0">
           <span className="overline block mb-1">Task</span>
           <p className="text-[12px] text-theme-secondary font-body leading-relaxed">{thread.task}</p>
         </div>

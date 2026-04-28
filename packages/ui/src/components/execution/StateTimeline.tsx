@@ -51,10 +51,10 @@ export default function StateTimeline({ executionId }: Props) {
       </div>
     );
   }
-  if (error) return <div className="text-[11px] text-red-400 font-mono">{error}</div>;
+  if (error) return <div className="text-[11px] text-accent-red font-mono">{error}</div>;
   if (checkpoints.length === 0) {
     return (
-      <div className="border border-dashed border-border/40 rounded-md p-5 text-center">
+      <div className="border border-dashed border-app rounded-md p-5 text-center">
         <div className="text-xs text-theme-muted font-body">
           No state changes yet.
         </div>
@@ -68,14 +68,14 @@ export default function StateTimeline({ executionId }: Props) {
   return (
     <div className="space-y-3">
       {/* Intro — tells the user what they're looking at. */}
-      <div className="flex items-start gap-2 border border-border/30 rounded-md bg-surface-100/40 p-3">
+      <div className="flex items-start gap-2 border border-app rounded-md bg-app-muted/50 p-3">
         <Info className="w-3.5 h-3.5 text-accent-blue shrink-0 mt-0.5" />
         <div className="text-[11px] text-theme-secondary font-body leading-relaxed">
           <div className="text-theme-primary font-semibold mb-0.5">How to read this</div>
           Each row is one completed node, in the order it ran. Under each row you can see{' '}
           <span className="text-accent-green font-mono">new keys</span> the node added to the
           workflow state, and{' '}
-          <span className="text-amber-400 font-mono">existing keys</span> it modified. Click a row
+          <span className="text-accent-yellow font-mono">existing keys</span> it modified. Click a row
           to see the actual values.
         </div>
       </div>
@@ -105,7 +105,7 @@ export default function StateTimeline({ executionId }: Props) {
                     return next;
                   });
                 }}
-                className="w-full flex items-start gap-3 rounded-md p-2 hover:bg-surface-200/40 transition-colors text-left"
+                className="w-full flex items-start gap-3 rounded-md p-2 hover:bg-app-muted transition-colors text-left"
               >
                 {/* Step number bubble */}
                 <div className="shrink-0 w-8 h-8 rounded-full border border-accent-blue/40 bg-accent-blue/10 flex items-center justify-center text-[11px] font-mono font-semibold text-accent-blue">
@@ -133,7 +133,7 @@ export default function StateTimeline({ executionId }: Props) {
                         {diff.added.length > 0 && diff.modified.length > 0 && ', '}
                         {diff.modified.length > 0 && (
                           <>
-                            modified <span className="text-amber-400 font-mono">{diff.modified.length}</span>{' '}
+                            modified <span className="text-accent-yellow font-mono">{diff.modified.length}</span>{' '}
                             existing{' '}
                             {diff.modified.length === 1 ? 'key' : 'keys'}
                           </>
@@ -152,7 +152,7 @@ export default function StateTimeline({ executionId }: Props) {
                 <div className="ml-11 mb-2 space-y-2">
                   {diff.added.length > 0 && (
                     <div>
-                      <div className="text-[10px] font-label uppercase tracking-[0.15em] text-accent-green mb-1">
+                      <div className="overline text-accent-green mb-1">
                         New keys
                       </div>
                       <div className="space-y-1">
@@ -169,14 +169,14 @@ export default function StateTimeline({ executionId }: Props) {
                   )}
                   {diff.modified.length > 0 && (
                     <div>
-                      <div className="text-[10px] font-label uppercase tracking-[0.15em] text-amber-400 mb-1">
+                      <div className="overline text-accent-yellow mb-1">
                         Modified keys
                       </div>
                       <div className="space-y-1">
                         {diff.modified.map((k) => (
                           <div key={`~${k}`} className="border-l-2 border-amber-400/40 pl-2 py-1">
                             <div className="text-[11px] font-mono text-theme-primary">{k}</div>
-                            <div className="text-[10px] font-mono text-red-400/80 break-all whitespace-pre-wrap">
+                            <div className="text-[10px] font-mono text-accent-red/80 break-all whitespace-pre-wrap">
                               <span className="text-theme-subtle">before: </span>
                               {previewValue((prev as Record<string, unknown>)[k])}
                             </div>

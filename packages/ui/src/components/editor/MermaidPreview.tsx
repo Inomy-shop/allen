@@ -190,14 +190,14 @@ export default function MermaidPreview({ workflow }: Props) {
 
   // Toolbar buttons
   const zoomControls = (
-    <div className="flex items-center gap-0.5 px-1.5 py-0.5 rounded-full bg-surface-200/40 border border-border/20">
-      <button onClick={zoomOut} className="p-1 rounded hover:bg-surface-200/60 text-theme-muted hover:text-theme-secondary transition-colors" title="Zoom out (Ctrl+Scroll)">
+    <div className="flex items-center gap-0.5 px-1.5 py-0.5 rounded-full bg-app-muted border border-app">
+      <button onClick={zoomOut} className="p-1 rounded hover:bg-app-muted text-theme-muted hover:text-theme-secondary transition-colors" title="Zoom out (Ctrl+Scroll)">
         <ZoomOut className="w-3.5 h-3.5" />
       </button>
-      <button onClick={zoomReset} className="px-1.5 py-0.5 rounded hover:bg-surface-200/60 text-[10px] font-mono text-theme-muted hover:text-theme-secondary transition-colors min-w-[40px] text-center" title="Reset zoom">
+      <button onClick={zoomReset} className="px-1.5 py-0.5 rounded hover:bg-app-muted text-[10px] font-mono text-theme-muted hover:text-theme-secondary transition-colors min-w-[40px] text-center" title="Reset zoom">
         {Math.round(zoom * 100)}%
       </button>
-      <button onClick={zoomIn} className="p-1 rounded hover:bg-surface-200/60 text-theme-muted hover:text-theme-secondary transition-colors" title="Zoom in (Ctrl+Scroll)">
+      <button onClick={zoomIn} className="p-1 rounded hover:bg-app-muted text-theme-muted hover:text-theme-secondary transition-colors" title="Zoom in (Ctrl+Scroll)">
         <ZoomIn className="w-3.5 h-3.5" />
       </button>
     </div>
@@ -205,15 +205,15 @@ export default function MermaidPreview({ workflow }: Props) {
 
   const actionButtons = (
     <div className="flex items-center gap-1">
-      <button onClick={handleCopyCode} className="p-1.5 rounded hover:bg-surface-200/50 text-theme-muted hover:text-theme-secondary transition-colors" title="Copy Mermaid code">
+      <button onClick={handleCopyCode} className="p-1.5 rounded hover:bg-app-muted text-theme-muted hover:text-theme-secondary transition-colors" title="Copy Mermaid code">
         {copied ? <Check className="w-3.5 h-3.5 text-accent-green" /> : <Copy className="w-3.5 h-3.5" />}
       </button>
       {svgHtml && (
-        <button onClick={handleDownloadSvg} className="p-1.5 rounded hover:bg-surface-200/50 text-theme-muted hover:text-theme-secondary transition-colors" title="Download SVG">
+        <button onClick={handleDownloadSvg} className="p-1.5 rounded hover:bg-app-muted text-theme-muted hover:text-theme-secondary transition-colors" title="Download SVG">
           <Download className="w-3.5 h-3.5" />
         </button>
       )}
-      <button onClick={() => setFullscreen(!fullscreen)} className="p-1.5 rounded hover:bg-surface-200/50 text-theme-muted hover:text-theme-secondary transition-colors" title={fullscreen ? 'Exit fullscreen' : 'Fullscreen'}>
+      <button onClick={() => setFullscreen(!fullscreen)} className="p-1.5 rounded hover:bg-app-muted text-theme-muted hover:text-theme-secondary transition-colors" title={fullscreen ? 'Exit fullscreen' : 'Fullscreen'}>
         {fullscreen ? <Minimize2 className="w-3.5 h-3.5" /> : <Maximize2 className="w-3.5 h-3.5" />}
       </button>
     </div>
@@ -251,7 +251,7 @@ export default function MermaidPreview({ workflow }: Props) {
       {fullscreen && (
         <div className="fixed inset-0 z-50 bg-surface-50 flex flex-col" onClick={() => setFullscreen(false)}>
           {/* Header */}
-          <div className="flex items-center justify-between px-6 py-3 border-b border-border/30 bg-surface-100/80 backdrop-blur-sm shrink-0" onClick={e => e.stopPropagation()}>
+          <div className="flex items-center justify-between px-6 py-3 border-b border-app bg-surface-100/80 backdrop-blur-sm shrink-0" onClick={e => e.stopPropagation()}>
             <div className="flex items-center gap-3">
               <span className="text-sm font-heading font-semibold text-theme-primary tracking-wider uppercase">
                 {workflow?.name ?? 'Workflow'} — Diagram
@@ -263,7 +263,7 @@ export default function MermaidPreview({ workflow }: Props) {
             <div className="flex items-center gap-2">
               {zoomControls}
               {actionButtons}
-              <button onClick={() => setFullscreen(false)} className="p-2 rounded hover:bg-surface-200/50 text-theme-muted hover:text-theme-secondary transition-colors" title="Close (Esc)">
+              <button onClick={() => setFullscreen(false)} className="p-2 rounded hover:bg-app-muted text-theme-muted hover:text-theme-secondary transition-colors" title="Close (Esc)">
                 <X className="w-4 h-4" />
               </button>
             </div>
@@ -287,7 +287,7 @@ export default function MermaidPreview({ workflow }: Props) {
           </div>
 
           {/* Footer with raw code */}
-          <div className="border-t border-border/30 bg-surface-100/80 backdrop-blur-sm shrink-0" onClick={e => e.stopPropagation()}>
+          <div className="border-t border-app bg-surface-100/80 backdrop-blur-sm shrink-0" onClick={e => e.stopPropagation()}>
             <details className="px-6 py-2">
               <summary className="text-xs text-theme-muted cursor-pointer hover:text-theme-secondary">
                 Raw Mermaid code

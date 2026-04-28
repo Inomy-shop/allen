@@ -10,19 +10,19 @@ import Select from '../components/common/Select';
 
 const TYPE_COLORS: Record<string, string> = {
   fact: 'bg-accent-blue/10 text-accent-blue border-accent-blue/20',
-  pattern: 'bg-purple-500/10 text-purple-400 border-purple-500/20',
+  pattern: 'bg-accent-purple/10 text-accent-purple border-accent-purple/30',
   mistake: 'bg-accent-red/10 text-accent-red border-accent-red/20',
   preference: 'bg-accent-green/10 text-accent-green border-accent-green/20',
-  skill: 'bg-cyan-500/10 text-cyan-400 border-cyan-500/20',
-  optimization: 'bg-yellow-500/10 text-yellow-400 border-yellow-500/20',
+  skill: 'bg-accent-cyan/10 text-accent border-accent-cyan/30',
+  optimization: 'bg-accent-yellow/10 text-accent-yellow border-accent-yellow/30',
 };
 
 const SCOPE_COLORS: Record<string, string> = {
   global: 'bg-gray-500/10 text-theme-secondary border-gray-500/20',
   workflow: 'bg-accent-blue/10 text-accent-blue border-accent-blue/20',
-  context: 'bg-purple-500/10 text-purple-400 border-purple-500/20',
+  context: 'bg-accent-purple/10 text-accent-purple border-accent-purple/30',
   agent: 'bg-accent-green/10 text-accent-green border-accent-green/20',
-  node_pattern: 'bg-cyan-500/10 text-cyan-400 border-cyan-500/20',
+  node_pattern: 'bg-accent-cyan/10 text-accent border-accent-cyan/30',
 };
 
 const TYPES = ['fact', 'pattern', 'mistake', 'preference', 'skill', 'optimization'];
@@ -268,14 +268,14 @@ export default function LearningsPage() {
 
               <div>
                 <div className="text-[10px] text-theme-muted font-label uppercase tracking-wider mb-1">Current Prompt</div>
-                <div className="bg-surface-200 border border-border/30 rounded-sm p-3 text-xs text-theme-secondary font-mono whitespace-pre-wrap max-h-48 overflow-y-auto">
+                <div className="bg-surface-200 border border-app rounded-sm p-3 text-xs text-theme-secondary font-mono whitespace-pre-wrap max-h-48 overflow-y-auto">
                   {previewData.currentPrompt || '(empty)'}
                 </div>
               </div>
 
               <div>
                 <div className="text-[10px] text-theme-muted font-label uppercase tracking-wider mb-1">Evolved Prompt</div>
-                <div className="bg-surface-200 border border-accent-green/20 rounded-sm p-3 text-xs text-gray-200 font-mono whitespace-pre-wrap max-h-48 overflow-y-auto">
+                <div className="bg-surface-200 border border-accent-green/20 rounded-sm p-3 text-xs text-theme-primary font-mono whitespace-pre-wrap max-h-48 overflow-y-auto">
                   {previewData.newPrompt || '(LLM returned empty — try again)'}
                 </div>
               </div>
@@ -402,7 +402,7 @@ export default function LearningsPage() {
       {showAdd && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm">
           <div className="bg-surface-100 border border-border rounded-sm w-full max-w-lg shadow-lg">
-            <div className="flex items-center justify-between px-5 py-4 border-b border-border/50">
+            <div className="flex items-center justify-between px-5 py-4 border-b border-app">
               <h3 className="text-[14px] font-semibold text-theme-primary tracking-tight">Add Learning</h3>
               <button onClick={() => setShowAdd(false)} className="text-theme-secondary hover:text-theme-primary" title="Close">
                 <X className="w-4 h-4" />
@@ -415,7 +415,7 @@ export default function LearningsPage() {
                   value={addContent}
                   onChange={e => setAddContent(e.target.value)}
                   placeholder="Learning content..."
-                  className="w-full bg-surface-200 border border-accent-blue/30 rounded-sm px-3 py-2 text-sm text-gray-200 font-body focus:outline-none focus:border-accent-blue focus:shadow-glow-blue transition-all resize-y"
+                  className="w-full bg-surface-200 border border-accent-blue/30 rounded-sm px-3 py-2 text-sm text-theme-primary font-body focus:outline-none focus:border-accent-blue focus:transition-all resize-y"
                   rows={3}
                 />
               </div>
@@ -461,7 +461,7 @@ export default function LearningsPage() {
                 </div>
               )}
             </div>
-            <div className="flex justify-end gap-2 px-5 py-3 border-t border-border/50">
+            <div className="flex justify-end gap-2 px-5 py-3 border-t border-app">
               <button onClick={() => setShowAdd(false)} className="btn-ghost text-xs inline-flex items-center whitespace-nowrap">Cancel</button>
               <button onClick={handleAdd} disabled={!addContent.trim()} className="btn-primary text-xs inline-flex items-center whitespace-nowrap">Save Learning</button>
             </div>
@@ -564,7 +564,7 @@ function LearningCard({ item, isEditing, editContent, editType, editTags, onEdit
           <span className={`badge text-[10px] border ${typeBadge}`}>{item.type}</span>
           <span className={`badge text-[10px] border ${scopeBadge}`}>{item.scope?.level}</span>
           {item.status !== 'active' && (
-            <span className="badge text-[10px] bg-surface-200/40 text-theme-muted border border-border/20">{item.status}</span>
+            <span className="badge text-[10px] bg-app-muted text-theme-muted border border-app">{item.status}</span>
           )}
         </div>
         <div className="flex items-center gap-1.5">
@@ -589,7 +589,7 @@ function LearningCard({ item, isEditing, editContent, editType, editTags, onEdit
           <textarea
             value={editContent}
             onChange={e => onEditContent(e.target.value)}
-            className="w-full bg-surface-200 border border-accent-blue/30 rounded-sm px-3 py-2 text-sm text-gray-200 font-body focus:outline-none focus:border-accent-blue focus:shadow-glow-blue transition-all resize-y"
+            className="w-full bg-surface-200 border border-accent-blue/30 rounded-sm px-3 py-2 text-sm text-theme-primary font-body focus:outline-none focus:border-accent-blue focus:transition-all resize-y"
             rows={2}
           />
           <div className="flex gap-2">
@@ -609,7 +609,7 @@ function LearningCard({ item, isEditing, editContent, editType, editTags, onEdit
           </div>
         </div>
       ) : (
-        <p className="text-sm text-gray-200 mb-2 font-body">{item.content}</p>
+        <p className="text-sm text-theme-primary mb-2 font-body">{item.content}</p>
       )}
 
       {/* Tags */}
@@ -625,7 +625,7 @@ function LearningCard({ item, isEditing, editContent, editType, editTags, onEdit
 
       {/* Source info + actions */}
       {!isEditing && (
-        <div className="flex items-center justify-between mt-2 pt-2 border-t border-border/30">
+        <div className="flex items-center justify-between mt-2 pt-2 border-t border-app">
           <div className="text-[10px] text-theme-subtle font-mono flex items-center gap-2 flex-wrap">
             <span>{item.source?.sourceType}</span>
             {item.source?.workflowName && <span>{item.source.workflowName} run</span>}

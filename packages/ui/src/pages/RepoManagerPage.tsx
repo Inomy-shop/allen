@@ -73,7 +73,7 @@ function AddRepoDialog({ open, onClose, onCreated }: { open: boolean; onClose: (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-md">
       <div className="card w-full max-w-lg overflow-hidden shadow-popover animate-in fade-in zoom-in-95 duration-200">
         {/* Header */}
-        <div className="px-6 py-5 border-b border-border/60">
+        <div className="px-6 py-5 border-b border-app">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-3">
               <div className="w-10 h-10 rounded-sm bg-accent-soft flex items-center justify-center">
@@ -129,7 +129,7 @@ function AddRepoDialog({ open, onClose, onCreated }: { open: boolean; onClose: (
         </div>
 
         {/* Footer */}
-        <div className="flex items-center gap-3 px-6 py-5 border-t border-border/60 bg-surface-50/50">
+        <div className="flex items-center gap-3 px-6 py-5 border-t border-app bg-app-card/50">
           <button onClick={onClose} className="flex-1 btn-ghost">Cancel</button>
           <button onClick={handleSubmit} disabled={saving} className="flex-1 btn-primary inline-flex items-center justify-center gap-2">
             {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : <FolderGit2 className="w-4 h-4" />}
@@ -194,7 +194,7 @@ function EditRepoDialog({ repo, open, onClose, onUpdated }: { repo: Repo | null;
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-md">
       <div className="card w-full max-w-lg overflow-hidden shadow-popover animate-in fade-in zoom-in-95 duration-200">
-        <div className="px-6 py-5 border-b border-border/60">
+        <div className="px-6 py-5 border-b border-app">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-3">
               <div className="w-10 h-10 rounded-sm bg-accent-soft flex items-center justify-center">
@@ -259,7 +259,7 @@ function EditRepoDialog({ repo, open, onClose, onUpdated }: { repo: Repo | null;
           </div>
         </div>
 
-        <div className="flex items-center gap-3 px-6 py-5 border-t border-border/60 bg-surface-50/50">
+        <div className="flex items-center gap-3 px-6 py-5 border-t border-app bg-app-card/50">
           <button onClick={onClose} className="flex-1 btn-ghost">Cancel</button>
           <button onClick={handleSubmit} disabled={saving} className="flex-1 btn-primary inline-flex items-center justify-center gap-2">
             {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Pencil className="w-4 h-4" />}
@@ -548,7 +548,7 @@ function RepoContextViewer({ repoId, repoName, onClose }: { repoId: string; repo
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-md" onClick={onClose}>
       <div className="card w-full max-w-4xl max-h-[90vh] overflow-hidden shadow-popover animate-in fade-in zoom-in-95 duration-200 flex flex-col" onClick={e => e.stopPropagation()}>
         {/* Header */}
-        <div className="px-6 py-4 border-b border-border/60 shrink-0 flex items-center justify-between">
+        <div className="px-6 py-4 border-b border-app shrink-0 flex items-center justify-between">
           <div className="flex items-center gap-3">
             <FileText className="w-5 h-5 text-accent-blue" />
             <div>
@@ -603,7 +603,7 @@ function RepoContextViewer({ repoId, repoName, onClose }: { repoId: string; repo
         </div>
 
         {/* Footer */}
-        <div className="px-6 py-3 border-t border-border/60 bg-surface-50/50 shrink-0">
+        <div className="px-6 py-3 border-t border-app bg-app-card/50 shrink-0">
           <button onClick={onClose} className="btn-ghost text-xs">Close</button>
         </div>
       </div>
@@ -640,13 +640,13 @@ function QuickWorkspaceDialog({ repo, onClose, onCreated }: { repo: Repo; onClos
 
   return (
     <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50" onClick={onClose}>
-      <div className="bg-surface-100 border border-border/30 rounded-lg w-[440px] p-4" onClick={e => e.stopPropagation()}>
+      <div className="bg-surface-100 border border-app rounded-lg w-[440px] p-4" onClick={e => e.stopPropagation()}>
         <div className="flex items-center gap-2 mb-4">
-          <Monitor className="w-4 h-4 text-emerald-400" />
+          <Monitor className="w-4 h-4 text-accent-green" />
           <span className="text-sm font-semibold text-theme-primary">New Workspace</span>
           <span className="text-[10px] font-mono text-theme-muted">{repo.name}</span>
         </div>
-        {error && <div className="text-xs text-red-400 bg-red-400/10 border border-red-400/20 rounded px-3 py-1.5 mb-3">{error}</div>}
+        {error && <div className="text-xs text-accent-red bg-accent-red/10 border border-accent-red/30 rounded px-3 py-1.5 mb-3">{error}</div>}
         <div className="space-y-3">
           <div>
             <label className="overline block mb-1">Workspace Name</label>

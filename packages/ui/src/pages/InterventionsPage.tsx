@@ -169,7 +169,7 @@ function InterventionRow({ item, emphasized }: { item: Intervention; emphasized:
     <Link
       to={`/interventions/${item.intervention_id}`}
       className={`group flex items-stretch border-b border-border/10 last:border-b-0 transition-colors ${
-        emphasized ? 'hover:bg-surface-200/30' : 'hover:bg-surface-200/15'
+        emphasized ? 'hover:bg-app-muted/50' : 'hover:bg-surface-200/15'
       }`}
     >
       {/* Severity strip */}
@@ -331,7 +331,7 @@ function InterventionsListView() {
             <button
               onClick={load}
               disabled={loading}
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-[10px] font-mono bg-surface-200/30 text-theme-muted hover:bg-surface-200/50 disabled:opacity-50"
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-[10px] font-mono bg-app-muted/50 text-theme-muted hover:bg-app-muted disabled:opacity-50"
             >
               <RefreshCw className={`w-3 h-3 ${loading ? 'animate-spin' : ''}`} />
               Refresh
@@ -394,7 +394,7 @@ function InterventionsListView() {
                   count={pending.length}
                   emphasized
                 />
-                <div className="border-y border-border/30 bg-surface-100">
+                <div className="border-y border-app bg-surface-100">
                   {pending.map(i => (
                     <InterventionRow key={i.intervention_id} item={i} emphasized />
                   ))}
@@ -409,7 +409,7 @@ function InterventionsListView() {
                   count={history.length}
                   emphasized={false}
                 />
-                <div className="border-y border-border/20 bg-surface-50">
+                <div className="border-y border-app bg-surface-50">
                   {history.map(i => (
                     <InterventionRow key={i.intervention_id} item={i} emphasized={false} />
                   ))}
@@ -451,7 +451,7 @@ function SectionHeader({
 function EmptyState({ hasFilters }: { hasFilters: boolean }) {
   return (
     <div className="flex flex-col items-center justify-center py-20 px-6 text-center">
-      <div className="w-16 h-16 rounded-full bg-surface-200/30 flex items-center justify-center mb-4">
+      <div className="w-16 h-16 rounded-full bg-app-muted/50 flex items-center justify-center mb-4">
         <Inbox className="w-8 h-8 text-theme-subtle" />
       </div>
       {hasFilters ? (
@@ -517,7 +517,7 @@ function InterventionDetailView() {
         <p className="text-xs text-theme-muted mt-1">It may have been archived or the ID is wrong.</p>
         <button
           onClick={() => navigate('/interventions')}
-          className="mt-4 inline-flex items-center gap-1 px-3 py-1.5 rounded-full text-[10px] font-mono bg-surface-200/30 text-theme-muted hover:bg-surface-200/50"
+          className="mt-4 inline-flex items-center gap-1 px-3 py-1.5 rounded-full text-[10px] font-mono bg-app-muted/50 text-theme-muted hover:bg-app-muted"
         >
           <ChevronLeft className="w-3 h-3" /> Back to interventions
         </button>
@@ -600,7 +600,7 @@ function InterventionDetailView() {
               <span className="w-1.5 h-1.5 rounded-full bg-accent-yellow animate-pulse" /> Awaiting response
             </span>
           ) : (
-            <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full bg-surface-200/40 text-theme-muted border border-border/30">
+            <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full bg-app-muted text-theme-muted border border-app">
               <Check className="w-3 h-3" /> Resolved
             </span>
           )}
@@ -625,7 +625,7 @@ function InterventionDetailView() {
                 </span>
                 <span className="text-[10px] font-mono text-theme-muted">{humaniseStage(item.stage)}</span>
                 {item.round_info && (
-                  <span className="text-[10px] font-mono text-theme-muted bg-surface-200/40 px-2 py-0.5 rounded-full border border-border/20">
+                  <span className="text-[10px] font-mono text-theme-muted bg-app-muted px-2 py-0.5 rounded-full border border-app">
                     Round {item.round_info.current} / {item.round_info.max}
                   </span>
                 )}
@@ -665,7 +665,7 @@ function InterventionDetailView() {
           summary would just repeat the question (common for short
           single-sentence clarifies). */}
       {item.context_summary && item.context_summary !== item.question && (
-        <div className="mb-5 px-4 py-3 rounded-lg bg-surface-100/40 border border-border/20 text-sm text-theme-secondary font-body leading-relaxed">
+        <div className="mb-5 px-4 py-3 rounded-lg bg-app-muted/50 border border-app text-sm text-theme-secondary font-body leading-relaxed">
           {item.context_summary}
         </div>
       )}
@@ -674,7 +674,7 @@ function InterventionDetailView() {
           Note: we pass no `title` so the panel skips its own header and
           doesn't duplicate the hero above. */}
       {isPending && (
-        <div className="rounded-xl border border-border/30 bg-surface-50 overflow-hidden shadow-sm">
+        <div className="rounded-xl border border-app bg-surface-50 overflow-hidden shadow-sm">
           <ClarificationPanel
             layout="inline"
             prompt={item.question}
@@ -694,8 +694,8 @@ function InterventionDetailView() {
 
       {/* Answered record */}
       {!isPending && item.response && (
-        <div className="rounded-xl border border-border/30 bg-surface-50 overflow-hidden shadow-sm">
-          <div className="px-6 py-4 border-b border-border/15 bg-surface-100/30">
+        <div className="rounded-xl border border-app bg-surface-50 overflow-hidden shadow-sm">
+          <div className="px-6 py-4 border-b border-app bg-app-muted/40">
             <div className="overline">
               Response
             </div>
@@ -713,8 +713,8 @@ function AnsweredBlock({ item }: { item: Intervention }) {
   const decision = responseDecisionLabel(item.response?.decision);
   return (
     <div>
-      <div className="flex items-center gap-3 mb-5 pb-4 border-b border-border/15">
-        <div className={`w-11 h-11 rounded-xl bg-surface-200/40 border border-border/20 flex items-center justify-center ${decision.color}`}>
+      <div className="flex items-center gap-3 mb-5 pb-4 border-b border-app">
+        <div className={`w-11 h-11 rounded-xl bg-app-muted border border-app flex items-center justify-center ${decision.color}`}>
           <Check className="w-5 h-5" />
         </div>
         <div className="flex-1">
@@ -739,7 +739,7 @@ function AnsweredBlock({ item }: { item: Intervention }) {
         <ResponseField label="Answer" value={item.response.answer} pre />
       )}
       {item.retry_triggered && (
-        <div className="mt-4 pt-4 border-t border-border/15 text-[11px] font-mono text-theme-muted flex items-center gap-2">
+        <div className="mt-4 pt-4 border-t border-app text-[11px] font-mono text-theme-muted flex items-center gap-2">
           <RefreshCw className="w-3 h-3" />
           Retry triggered at <span className="text-accent-blue">{item.retry_triggered.target_node}</span>
           <span>(attempt {item.retry_triggered.retry_attempt} · {item.retry_triggered.retry_source})</span>
@@ -759,7 +759,7 @@ function ResponseField({ label, value, pre, mono }: {
     <div className="mb-4 last:mb-0">
       <div className="overline mb-1.5">{label}</div>
       {pre ? (
-        <pre className={`text-xs whitespace-pre-wrap text-theme-primary font-body bg-surface-100/50 border border-border/20 rounded-md p-3 leading-relaxed ${mono ? 'font-mono' : ''}`}>
+        <pre className={`text-xs whitespace-pre-wrap text-theme-primary font-body bg-surface-100/50 border border-app rounded-md p-3 leading-relaxed ${mono ? 'font-mono' : ''}`}>
           {value}
         </pre>
       ) : (

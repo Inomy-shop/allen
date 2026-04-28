@@ -182,10 +182,10 @@ export default function RoleDialog({ open, onClose, onSave, role }: RoleDialogPr
         onClick={e => e.stopPropagation()}
       >
         {/* Header */}
-        <div className="flex items-center justify-between px-5 py-3.5 border-b border-border/60 shrink-0">
+        <div className="flex items-center justify-between px-5 py-3.5 border-b border-app shrink-0">
           <div className="flex items-center gap-3">
             <div
-              className="w-9 h-9 rounded-lg flex items-center justify-center border border-border/30"
+              className="w-9 h-9 rounded-lg flex items-center justify-center border border-app"
               style={{ backgroundColor: color + '18' }}
             >
               <RoleIcon icon={icon} color={color} size={20} />
@@ -199,7 +199,7 @@ export default function RoleDialog({ open, onClose, onSave, role }: RoleDialogPr
               </div>
             </div>
           </div>
-          <button type="button" onClick={onClose} className="p-1.5 rounded-md text-theme-muted hover:text-theme-primary hover:bg-surface-200/50 transition-colors" title="Close">
+          <button type="button" onClick={onClose} className="p-1.5 rounded-md text-theme-muted hover:text-theme-primary hover:bg-app-muted transition-colors" title="Close">
             <X className="w-4 h-4" />
           </button>
         </div>
@@ -207,9 +207,9 @@ export default function RoleDialog({ open, onClose, onSave, role }: RoleDialogPr
         <form onSubmit={handleSubmit} className="flex-1 min-h-0 flex flex-col">
           <div className="flex-1 min-h-0 grid grid-cols-[22rem_1fr]">
             {/* ── Left column: metadata fields ───────────────────────────── */}
-            <div className="border-r border-border/60 overflow-y-auto p-5 space-y-4 min-h-0">
+            <div className="border-r border-app overflow-y-auto p-5 space-y-4 min-h-0">
               {error && (
-                <div className="flex items-start gap-2 text-xs text-red-400 bg-red-400/10 border border-red-400/20 rounded-md px-3 py-2">
+                <div className="flex items-start gap-2 text-xs text-accent-red bg-accent-red/10 border border-accent-red/30 rounded-md px-3 py-2">
                   <AlertCircle className="w-3.5 h-3.5 shrink-0 mt-0.5" />
                   <span>{error}</span>
                 </div>
@@ -268,7 +268,7 @@ export default function RoleDialog({ open, onClose, onSave, role }: RoleDialogPr
                   {provider === 'claude' ? (
                     <Select value={planMode} onChange={setPlanMode} options={PLAN_MODE_OPTIONS} />
                   ) : (
-                    <div className="px-3 py-2 bg-surface-50 border border-border/30 rounded-sm text-[11px] text-theme-subtle">
+                    <div className="px-3 py-2 bg-surface-50 border border-app rounded-sm text-[11px] text-theme-subtle">
                       Claude only
                     </div>
                   )}
@@ -281,7 +281,7 @@ export default function RoleDialog({ open, onClose, onSave, role }: RoleDialogPr
                   <div className="flex items-center gap-2">
                     <Select value={icon} onChange={setIcon} options={iconOptions} className="flex-1" />
                     <div
-                      className="w-9 h-9 rounded-md flex items-center justify-center border border-border/40 shrink-0"
+                      className="w-9 h-9 rounded-md flex items-center justify-center border border-app shrink-0"
                       style={{ backgroundColor: color + '15' }}
                     >
                       <RoleIcon icon={icon} color={color} size={18} />
@@ -295,7 +295,7 @@ export default function RoleDialog({ open, onClose, onSave, role }: RoleDialogPr
                       type="color"
                       value={color}
                       onChange={e => setColor(e.target.value)}
-                      className="w-9 h-9 rounded-md border border-border/40 cursor-pointer bg-transparent"
+                      className="w-9 h-9 rounded-md border border-app cursor-pointer bg-transparent"
                     />
                     <input
                       type="text"
@@ -317,7 +317,7 @@ export default function RoleDialog({ open, onClose, onSave, role }: RoleDialogPr
                       className={`flex items-center gap-2 text-[11px] font-mono px-2 py-1.5 rounded-md cursor-pointer transition-colors border ${
                         tools.includes(tool)
                           ? 'bg-accent-blue/10 text-accent-blue border-accent-blue/30'
-                          : 'bg-surface-200/30 text-theme-muted border-border/30 hover:bg-surface-200/50'
+                          : 'bg-app-muted/50 text-theme-muted border-app hover:bg-app-muted'
                       }`}
                     >
                       <input
@@ -334,13 +334,13 @@ export default function RoleDialog({ open, onClose, onSave, role }: RoleDialogPr
 
               {/* Previous prompt */}
               {isEdit && !!role?.previousSystemPrompt && (
-                <div className="pt-2 border-t border-border/30">
+                <div className="pt-2 border-t border-app">
                   <button
                     type="button"
                     onClick={() => setShowPreviousPrompt(!showPreviousPrompt)}
                     className="btn-ghost text-[11px] flex items-center gap-1.5"
                   >
-                    <Sparkles className="w-3 h-3 text-yellow-400" />
+                    <Sparkles className="w-3 h-3 text-accent-yellow" />
                     {showPreviousPrompt ? 'Hide Previous Prompt' : 'View Previous Prompt'}
                   </button>
                   {showPreviousPrompt && (
@@ -352,7 +352,7 @@ export default function RoleDialog({ open, onClose, onSave, role }: RoleDialogPr
                         type="button"
                         onClick={handleRollback}
                         disabled={saving}
-                        className="btn-ghost text-[11px] text-yellow-400 hover:text-yellow-300"
+                        className="btn-ghost text-[11px] text-accent-yellow hover:text-yellow-300"
                       >
                         Rollback to Previous Prompt
                       </button>
@@ -365,7 +365,7 @@ export default function RoleDialog({ open, onClose, onSave, role }: RoleDialogPr
             {/* ── Right column: README-style editor ───────────────────────── */}
             <div className="flex flex-col min-h-0">
               {/* Editor tab bar */}
-              <div className="px-5 py-2.5 border-b border-border/60 flex items-center justify-between gap-3 shrink-0 bg-surface-200/10">
+              <div className="px-5 py-2.5 border-b border-app flex items-center justify-between gap-3 shrink-0 bg-surface-200/10">
                 <div className="flex items-center gap-2">
                   <FileText className="w-3.5 h-3.5 text-accent-blue" />
                   <span className="overline font-semibold">
@@ -377,14 +377,14 @@ export default function RoleDialog({ open, onClose, onSave, role }: RoleDialogPr
                   <div className="text-[9px] font-mono text-theme-subtle">
                     {lineCount} {lineCount === 1 ? 'line' : 'lines'} · {wordCount} {wordCount === 1 ? 'word' : 'words'} · {charCount} chars
                   </div>
-                  <div className="flex items-center rounded-md border border-border/50 overflow-hidden bg-surface-200/30">
+                  <div className="flex items-center rounded-md border border-app overflow-hidden bg-app-muted/50">
                     <button
                       type="button"
                       onClick={() => setEditorMode('edit')}
                       className={`inline-flex items-center gap-1 px-2.5 py-1 text-[10px] font-mono transition-colors ${
                         editorMode === 'edit'
                           ? 'bg-accent-blue/15 text-accent-blue'
-                          : 'text-theme-muted hover:text-theme-primary hover:bg-surface-200/50'
+                          : 'text-theme-muted hover:text-theme-primary hover:bg-app-muted'
                       }`}
                       title="Edit only"
                     >
@@ -393,10 +393,10 @@ export default function RoleDialog({ open, onClose, onSave, role }: RoleDialogPr
                     <button
                       type="button"
                       onClick={() => setEditorMode('split')}
-                      className={`inline-flex items-center gap-1 px-2.5 py-1 text-[10px] font-mono transition-colors border-l border-border/50 ${
+                      className={`inline-flex items-center gap-1 px-2.5 py-1 text-[10px] font-mono transition-colors border-l border-app ${
                         editorMode === 'split'
                           ? 'bg-accent-blue/15 text-accent-blue'
-                          : 'text-theme-muted hover:text-theme-primary hover:bg-surface-200/50'
+                          : 'text-theme-muted hover:text-theme-primary hover:bg-app-muted'
                       }`}
                       title="Split view"
                     >
@@ -405,10 +405,10 @@ export default function RoleDialog({ open, onClose, onSave, role }: RoleDialogPr
                     <button
                       type="button"
                       onClick={() => setEditorMode('preview')}
-                      className={`inline-flex items-center gap-1 px-2.5 py-1 text-[10px] font-mono transition-colors border-l border-border/50 ${
+                      className={`inline-flex items-center gap-1 px-2.5 py-1 text-[10px] font-mono transition-colors border-l border-app ${
                         editorMode === 'preview'
                           ? 'bg-accent-blue/15 text-accent-blue'
-                          : 'text-theme-muted hover:text-theme-primary hover:bg-surface-200/50'
+                          : 'text-theme-muted hover:text-theme-primary hover:bg-app-muted'
                       }`}
                       title="Preview only"
                     >
@@ -426,13 +426,13 @@ export default function RoleDialog({ open, onClose, onSave, role }: RoleDialogPr
                     onChange={e => setSystem(e.target.value)}
                     placeholder={`# Agent Role\n\nDescribe what this agent does, its responsibilities, and how it should behave.\n\n## Responsibilities\n\n- Responsibility 1\n- Responsibility 2\n\n## Examples\n\n\`\`\`\nExample interaction\n\`\`\`\n`}
                     spellCheck={false}
-                    className={`flex-1 min-h-0 w-full px-5 py-4 bg-surface-50/40 border-0 outline-none resize-none text-[13px] text-theme-primary font-mono leading-relaxed placeholder:text-theme-subtle focus:bg-surface-50/70 transition-colors ${
-                      editorMode === 'split' ? 'border-r border-border/60' : ''
+                    className={`flex-1 min-h-0 w-full px-5 py-4 bg-app-muted/40 border-0 outline-none resize-none text-[13px] text-theme-primary font-mono leading-relaxed placeholder:text-theme-subtle focus:bg-surface-50/70 transition-colors ${
+                      editorMode === 'split' ? 'border-r border-app' : ''
                     }`}
                   />
                 )}
                 {(editorMode === 'preview' || editorMode === 'split') && (
-                  <div className="flex-1 min-h-0 overflow-y-auto px-5 py-4 bg-surface-100/20">
+                  <div className="flex-1 min-h-0 overflow-y-auto px-5 py-4 bg-app-muted/30">
                     {system.trim() ? (
                       <div className="text-sm text-theme-secondary leading-relaxed prose-allen">
                         {renderMarkdown(system)}
@@ -449,7 +449,7 @@ export default function RoleDialog({ open, onClose, onSave, role }: RoleDialogPr
           </div>
 
           {/* Footer actions */}
-          <div className="px-5 py-3.5 border-t border-border/60 flex items-center justify-between gap-2 shrink-0 bg-surface-200/10">
+          <div className="px-5 py-3.5 border-t border-app flex items-center justify-between gap-2 shrink-0 bg-surface-200/10">
             <div className="text-[10px] font-mono text-theme-subtle">
               Tip: Markdown supported — headings, lists, links, code blocks.
             </div>

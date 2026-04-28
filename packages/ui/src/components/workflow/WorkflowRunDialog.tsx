@@ -141,7 +141,7 @@ export default function WorkflowRunDialog({ workflow, onClose, onStarted }: Work
         className="card w-full max-w-lg overflow-hidden shadow-popover"
         onClick={(e) => e.stopPropagation()}
       >
-        <div className="px-6 py-5 border-b border-border/60">
+        <div className="px-6 py-5 border-b border-app">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-3">
               <div className="w-10 h-10 rounded-lg bg-accent-blue/10 flex items-center justify-center">
@@ -307,7 +307,7 @@ export default function WorkflowRunDialog({ workflow, onClose, onStarted }: Work
           </div>
         )}
 
-        <div className="flex items-center gap-3 px-6 py-5 border-t border-border/60 bg-surface-50/50">
+        <div className="flex items-center gap-3 px-6 py-5 border-t border-app bg-app-card/50">
           <button onClick={onClose} className="flex-1 btn-ghost" disabled={submitting}>
             Cancel
           </button>

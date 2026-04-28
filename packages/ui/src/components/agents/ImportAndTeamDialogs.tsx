@@ -59,11 +59,11 @@ function DialogShell({
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
       <div
-        className={`bg-surface-100 border border-border/30 rounded-lg shadow-xl flex flex-col max-h-[85vh] ${
+        className={`bg-surface-100 border border-app rounded-lg shadow-xl flex flex-col max-h-[85vh] ${
           wide ? 'w-[720px] max-w-full' : 'w-[520px] max-w-full'
         }`}
       >
-        <div className="flex items-center justify-between px-5 py-4 border-b border-border/20">
+        <div className="flex items-center justify-between px-5 py-4 border-b border-app">
           <h3 className="font-heading text-sm font-bold text-theme-primary tracking-widest uppercase">
             {title}
           </h3>
@@ -73,7 +73,7 @@ function DialogShell({
         </div>
         <div className="flex-1 overflow-y-auto px-5 py-4">{children}</div>
         {footer && (
-          <div className="px-5 py-3 border-t border-border/20 flex items-center justify-end gap-2">
+          <div className="px-5 py-3 border-t border-app flex items-center justify-end gap-2">
             {footer}
           </div>
         )}
@@ -167,7 +167,7 @@ export function ImportAgentsFromRepoDialog({
         <>
           <button
             onClick={onClose}
-            className="px-4 py-1.5 rounded-full text-[11px] font-mono bg-surface-200/30 text-theme-muted hover:bg-surface-200/50"
+            className="px-4 py-1.5 rounded-full text-[11px] font-mono bg-app-muted/50 text-theme-muted hover:bg-app-muted"
           >
             Cancel
           </button>
@@ -251,14 +251,14 @@ export function ImportAgentsFromRepoDialog({
                   type="button"
                   onClick={() => setSelected(new Set())}
                   disabled={selected.size === 0}
-                  className="px-2 py-0.5 rounded-full text-[9px] font-mono bg-surface-200/30 text-theme-muted hover:bg-surface-200/50 disabled:opacity-40 disabled:cursor-not-allowed"
+                  className="px-2 py-0.5 rounded-full text-[9px] font-mono bg-app-muted/50 text-theme-muted hover:bg-app-muted disabled:opacity-40 disabled:cursor-not-allowed"
                 >
                   Deselect all
                 </button>
               </div>
             )}
           </div>
-          <div className="border border-border/20 rounded-lg overflow-hidden">
+          <div className="border border-app rounded-lg overflow-hidden">
             {verdicts.map((v, i) => {
               if (v.kind === 'skip:parse-error') {
                 return (
@@ -373,7 +373,7 @@ export function AssignToTeamDialog({
       onClose={onClose}
       footer={
         <>
-          <button onClick={onClose} className="px-4 py-1.5 rounded-full text-[11px] font-mono bg-surface-200/30 text-theme-muted hover:bg-surface-200/50">
+          <button onClick={onClose} className="px-4 py-1.5 rounded-full text-[11px] font-mono bg-app-muted/50 text-theme-muted hover:bg-app-muted">
             Cancel
           </button>
           <button
@@ -503,7 +503,7 @@ export function CreateTeamFromAgentsDialog({
       wide
       footer={
         <>
-          <button onClick={onClose} className="px-4 py-1.5 rounded-full text-[11px] font-mono bg-surface-200/30 text-theme-muted hover:bg-surface-200/50">
+          <button onClick={onClose} className="px-4 py-1.5 rounded-full text-[11px] font-mono bg-app-muted/50 text-theme-muted hover:bg-app-muted">
             Cancel
           </button>
           <button
@@ -611,7 +611,7 @@ export function CreateTeamFromAgentsDialog({
         </button>
 
         {advancedOpen && (
-          <div className="grid grid-cols-2 gap-4 p-3 border border-border/20 rounded-lg bg-surface-200/10">
+          <div className="grid grid-cols-2 gap-4 p-3 border border-app rounded-lg bg-surface-200/10">
             <div>
               <label className="block overline mb-2">
                 Lead Model

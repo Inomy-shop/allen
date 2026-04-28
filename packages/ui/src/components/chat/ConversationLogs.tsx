@@ -36,7 +36,7 @@ interface ChatLogEntry {
 
 const TYPE_STYLE: Record<string, { icon: React.ElementType; color: string; label: string }> = {
   session_start: { icon: Play, color: 'text-accent-blue', label: 'Session' },
-  thinking: { icon: Brain, color: 'text-purple-400', label: 'Thinking' },
+  thinking: { icon: Brain, color: 'text-accent-purple', label: 'Thinking' },
   tool_call: { icon: Wrench, color: 'text-accent-yellow', label: 'Tool Call' },
   tool_result: { icon: CheckCircle, color: 'text-accent-green', label: 'Tool Result' },
   builtin_tool_call: { icon: Zap, color: 'text-accent-orange', label: 'Built-in Call' },
@@ -54,10 +54,10 @@ function TraceEventRow({ event }: { event: TraceEvent }) {
   const hasDetail = event.args || event.result || (event.text && event.text.length > 80);
 
   return (
-    <div className={`border-l-2 ${event.isError ? 'border-accent-red/50' : 'border-border/30'} ml-3`}>
+    <div className={`border-l-2 ${event.isError ? 'border-accent-red/50' : 'border-app'} ml-3`}>
       <button
         onClick={() => hasDetail && setExpanded(!expanded)}
-        className={`w-full flex items-center gap-2 px-3 py-1.5 text-left transition-colors ${hasDetail ? 'hover:bg-surface-200/30 cursor-pointer' : ''}`}
+        className={`w-full flex items-center gap-2 px-3 py-1.5 text-left transition-colors ${hasDetail ? 'hover:bg-app-muted/50 cursor-pointer' : ''}`}
       >
         <span className="text-[10px] font-mono text-theme-subtle w-16 shrink-0">{time}</span>
         <Icon className={`w-3.5 h-3.5 shrink-0 ${event.isError ? 'text-accent-red' : style.color}`} />
@@ -70,7 +70,7 @@ function TraceEventRow({ event }: { event: TraceEvent }) {
       </button>
 
       {expanded && (
-        <div className="mx-3 mb-2 ml-8 p-2 bg-[rgb(var(--color-editor-background))] rounded-md border border-border/20 max-h-60 overflow-auto">
+        <div className="mx-3 mb-2 ml-8 p-2 bg-[rgb(var(--color-editor-background))] rounded-md border border-app max-h-60 overflow-auto">
           {event.args && Object.keys(event.args).length > 0 && (
             <div className="mb-2">
               <span className="overline">Args</span>
@@ -98,11 +98,11 @@ function LogEntry({ log }: { log: ChatLogEntry }) {
   const toolCount = (log.trace ?? []).filter(t => t.type === 'tool_call' || t.type === 'builtin_tool_call').length;
 
   return (
-    <div className="border border-border/30 rounded-lg overflow-hidden mb-3">
+    <div className="border border-app rounded-lg overflow-hidden mb-3">
       <button
         onClick={() => setExpanded(!expanded)}
         title={expanded ? "Collapse" : "Expand"}
-        className="w-full flex items-center gap-3 px-4 py-3 bg-surface-200/20 hover:bg-surface-200/40 transition-colors text-left"
+        className="w-full flex items-center gap-3 px-4 py-3 bg-surface-200/20 hover:bg-app-muted transition-colors text-left"
       >
         <span className={`w-2 h-2 rounded-full shrink-0 ${log.status === 'completed' ? 'bg-accent-green' : 'bg-accent-red'}`} />
         <MessageSquare className="w-3.5 h-3.5 text-theme-muted shrink-0" />
@@ -127,7 +127,7 @@ function LogEntry({ log }: { log: ChatLogEntry }) {
           )}
 
           {log.assistantResponse && (
-            <div className="mx-3 mt-2 mb-2 p-2 bg-surface-200/20 rounded-md border border-border/20">
+            <div className="mx-3 mt-2 mb-2 p-2 bg-surface-200/20 rounded-md border border-app">
               <span className="overline">Response preview</span>
               <p className="text-[11px] text-theme-secondary font-body mt-1 line-clamp-3">{log.assistantResponse.slice(0, 300)}</p>
             </div>
@@ -164,11 +164,11 @@ export default function ConversationLogs({ sessionId, onClose }: ConversationLog
     <div className="fixed top-0 right-0 bottom-0 left-0 z-50 flex justify-end" onClick={onClose}>
       <div className="absolute inset-0 bg-black/50 backdrop-blur-sm" />
       <div
-        className="relative w-full max-w-2xl h-full bg-surface-100 border-l border-border/50 shadow-2xl overflow-hidden flex flex-col"
+        className="relative w-full max-w-2xl h-full bg-surface-100 border-l border-app shadow-2xl overflow-hidden flex flex-col"
         onClick={e => e.stopPropagation()}
       >
         {/* Header */}
-        <div className="flex items-center justify-between px-4 py-3 border-b border-border/40 bg-surface-50">
+        <div className="flex items-center justify-between px-4 py-3 border-b border-app bg-surface-50">
           <div>
             <h2 className="font-heading text-sm text-theme-primary tracking-wider">{session?.title ?? 'Conversation Logs'}</h2>
             <div className="flex items-center gap-3 mt-0.5">
@@ -177,7 +177,7 @@ export default function ConversationLogs({ sessionId, onClose }: ConversationLog
               {session?.totalCostUsd > 0 && <span className="text-[10px] text-theme-muted font-mono">${session.totalCostUsd.toFixed(4)}</span>}
             </div>
           </div>
-          <button onClick={onClose} className="p-1.5 rounded-md hover:bg-surface-200/50 text-theme-muted hover:text-theme-secondary transition-colors" title="Close logs">
+          <button onClick={onClose} className="p-1.5 rounded-md hover:bg-app-muted text-theme-muted hover:text-theme-secondary transition-colors" title="Close logs">
             <X className="w-4 h-4" />
           </button>
         </div>
@@ -190,7 +190,7 @@ export default function ConversationLogs({ sessionId, onClose }: ConversationLog
         </div>
 
         {/* Footer */}
-        <div className="px-4 py-2 border-t border-border/30 flex items-center gap-4 text-[10px] text-theme-subtle font-mono">
+        <div className="px-4 py-2 border-t border-app flex items-center gap-4 text-[10px] text-theme-subtle font-mono">
           <span>Session: {session?.llmSessionId?.slice(0, 8) ?? 'n/a'}...</span>
           <span>Created: {session?.createdAt ? new Date(session.createdAt).toLocaleString() : 'n/a'}</span>
         </div>

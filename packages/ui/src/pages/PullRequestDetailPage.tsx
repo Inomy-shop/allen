@@ -46,7 +46,7 @@ export default function PullRequestDetailPage() {
   }
 
   function statusColor(status: string) {
-    return status === 'merged' ? 'text-purple-400' : status === 'closed' ? 'text-red-400' : 'text-emerald-400';
+    return status === 'merged' ? 'text-accent-purple' : status === 'closed' ? 'text-accent-red' : 'text-accent-green';
   }
 
   if (loading || !pr) return <div className="flex items-center justify-center h-full"><Loader2 className="w-6 h-6 animate-spin text-theme-muted" /></div>;
@@ -64,10 +64,10 @@ export default function PullRequestDetailPage() {
   return (
     <div className="flex flex-col h-full overflow-hidden">
       {/* Header */}
-      <div className="px-6 py-3 border-b border-border/30 bg-surface-50/50 shrink-0">
+      <div className="px-6 py-3 border-b border-app bg-app-card/50 shrink-0">
         <div className="flex items-center gap-3">
           <Link to="/pull-requests" className="text-theme-secondary hover:text-theme-primary"><ArrowLeft className="w-4 h-4" /></Link>
-          {pr.status === 'merged' ? <GitMerge className="w-4 h-4 text-purple-400" /> : pr.status === 'closed' ? <XCircle className="w-4 h-4 text-red-400" /> : <GitPullRequest className="w-4 h-4 text-emerald-400" />}
+          {pr.status === 'merged' ? <GitMerge className="w-4 h-4 text-accent-purple" /> : pr.status === 'closed' ? <XCircle className="w-4 h-4 text-accent-red" /> : <GitPullRequest className="w-4 h-4 text-accent-green" />}
           <span className="text-sm font-semibold text-theme-primary">#{pr.number}</span>
           <span className="text-sm text-theme-secondary">{pr.title}</span>
           <span className={`text-[10px] font-mono px-2 py-0.5 rounded-full border ${statusColor(pr.status)} border-current/20 bg-current/5`}>{pr.status}</span>
@@ -89,8 +89,8 @@ export default function PullRequestDetailPage() {
           <span>by {pr.author}</span>
           <span className="flex items-center gap-1"><Clock className="w-3 h-3" />{timeAgo(pr.updatedAt)}</span>
           <span className="flex items-center gap-1"><FileDiff className="w-3 h-3" />{pr.changedFiles} files</span>
-          <span className="text-emerald-400"><Plus className="w-3 h-3 inline" />{pr.additions}</span>
-          <span className="text-red-400"><Minus className="w-3 h-3 inline" />{pr.deletions}</span>
+          <span className="text-accent-green"><Plus className="w-3 h-3 inline" />{pr.additions}</span>
+          <span className="text-accent-red"><Minus className="w-3 h-3 inline" />{pr.deletions}</span>
         </div>
         {pr.description && <p className="mt-2 text-xs text-theme-muted line-clamp-2">{pr.description}</p>}
       </div>
@@ -98,11 +98,11 @@ export default function PullRequestDetailPage() {
       {/* Body: file list + diff */}
       <div className="flex-1 flex overflow-hidden min-h-0">
         {/* File list */}
-        <div className="w-64 border-r border-border/20 bg-surface-50/30 overflow-y-auto shrink-0">
+        <div className="w-64 border-r border-app bg-app-muted/30 overflow-y-auto shrink-0">
           <div className="px-3 py-2 overline">Changed files ({diff.files.length})</div>
           {diff.files.map(f => (
             <button key={f.path} onClick={() => setSelectedFile(f.path)}
-              className={`w-full text-left px-3 py-1.5 text-[11px] font-mono truncate ${selectedFile === f.path ? 'bg-blue-500/10 text-blue-400' : 'text-theme-secondary hover:bg-surface-100/5'}`}>
+              className={`w-full text-left px-3 py-1.5 text-[11px] font-mono truncate ${selectedFile === f.path ? 'bg-accent-soft text-accent' : 'text-theme-secondary hover:bg-surface-100/5'}`}>
               {f.path}
             </button>
           ))}

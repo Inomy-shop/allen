@@ -47,13 +47,13 @@ export default function HumanInputDialog({
           overflow-hidden, which clipped tall prompts/forms and hid the
           submit button below the fold with no scroll path. */}
       <div
-        className={`bg-surface-50 border border-border/30 rounded-xl shadow-2xl w-full my-[4vh] flex flex-col ${
+        className={`bg-surface-50 border border-app rounded-xl shadow-2xl w-full my-[4vh] flex flex-col ${
           hasReview ? 'max-w-6xl' : 'max-w-2xl'
         }`}
         onClick={(e) => e.stopPropagation()}
       >
         {/* Tight top bar with node name and close */}
-        <div className="flex items-center justify-between px-4 py-2.5 bg-surface-100/50 border-b border-border/20 shrink-0">
+        <div className="flex items-center justify-between px-4 py-2.5 bg-surface-100/50 border-b border-app shrink-0">
           <div className="text-[11px] font-mono text-theme-muted flex items-center gap-2">
             <span className="w-1.5 h-1.5 rounded-full bg-accent-yellow animate-pulse" />
             <span>Waiting at node</span>
@@ -61,7 +61,7 @@ export default function HumanInputDialog({
           </div>
           <button
             onClick={onCancel}
-            className="p-1 rounded-md hover:bg-surface-200/60 text-theme-muted hover:text-theme-secondary transition-colors"
+            className="p-1 rounded-md hover:bg-app-muted text-theme-muted hover:text-theme-secondary transition-colors"
             title="Close — does not discard the pending request"
           >
             <XIcon className="w-4 h-4" />

@@ -121,33 +121,33 @@ export default function UsersAdminPage() {
         <div className="card overflow-hidden">
           <table className="w-full text-sm">
             <thead>
-              <tr className="bg-surface-200/30 border-b border-border/40">
-                <th className="text-left px-5 py-3 text-[10px] font-label uppercase tracking-[0.15em] text-theme-muted">
+              <tr className="bg-app-muted/50 border-b border-app">
+                <th className="text-left px-5 py-3 overline">
                   Email
                 </th>
-                <th className="text-left px-5 py-3 text-[10px] font-label uppercase tracking-[0.15em] text-theme-muted">
+                <th className="text-left px-5 py-3 overline">
                   Name
                 </th>
-                <th className="text-left px-5 py-3 text-[10px] font-label uppercase tracking-[0.15em] text-theme-muted">
+                <th className="text-left px-5 py-3 overline">
                   Role
                 </th>
-                <th className="text-left px-5 py-3 text-[10px] font-label uppercase tracking-[0.15em] text-theme-muted">
+                <th className="text-left px-5 py-3 overline">
                   Status
                 </th>
-                <th className="text-left px-5 py-3 text-[10px] font-label uppercase tracking-[0.15em] text-theme-muted">
+                <th className="text-left px-5 py-3 overline">
                   Created
                 </th>
-                <th className="text-left px-5 py-3 text-[10px] font-label uppercase tracking-[0.15em] text-theme-muted">
+                <th className="text-left px-5 py-3 overline">
                   Last Login
                 </th>
-                <th className="text-right px-5 py-3 text-[10px] font-label uppercase tracking-[0.15em] text-theme-muted">
+                <th className="text-right px-5 py-3 overline">
                   Actions
                 </th>
               </tr>
             </thead>
             <tbody>
               {list.map((u) => (
-                <tr key={u.id} className="border-t border-border/20 hover:bg-surface-200/20 transition-colors">
+                <tr key={u.id} className="border-t border-app hover:bg-surface-200/20 transition-colors">
                   <td className="px-5 py-3 text-theme-primary font-body">
                     <div className="flex items-center gap-2">
                       {u.email}
@@ -166,7 +166,7 @@ export default function UsersAdminPage() {
                       className={`text-[10px] font-mono uppercase tracking-wider px-2 py-1 rounded-sm border transition-colors disabled:opacity-60 disabled:cursor-not-allowed ${
                         u.role === 'admin'
                           ? 'bg-accent-blue/10 text-accent-blue border-accent-blue/40 hover:bg-accent-blue/20'
-                          : 'bg-surface-200/60 text-theme-muted border-border/40 hover:bg-surface-200'
+                          : 'bg-app-muted text-theme-muted border-app hover:bg-surface-200'
                       }`}
                       title={u.id === me?.id ? 'Cannot change your own role' : 'Click to toggle role'}
                     >
@@ -190,7 +190,7 @@ export default function UsersAdminPage() {
                     <div className="inline-flex items-center gap-1">
                       <button
                         onClick={() => handleResetTemp(u)}
-                        className="p-2 rounded-sm hover:bg-surface-200/60 text-theme-muted hover:text-accent-blue transition-colors"
+                        className="p-2 rounded-sm hover:bg-app-muted text-theme-muted hover:text-accent-blue transition-colors"
                         title="Reset to temp password"
                       >
                         <RefreshCw className="w-4 h-4" />
@@ -230,7 +230,7 @@ export default function UsersAdminPage() {
                 autoFocus
                 value={newEmail}
                 onChange={(e) => setNewEmail(e.target.value)}
-                className="w-full px-3 py-2 bg-surface-50 border border-border/60 rounded-sm text-sm text-theme-primary font-body focus:outline-none focus:border-accent-blue"
+                className="w-full px-3 py-2 bg-surface-50 border border-app rounded-sm text-sm text-theme-primary font-body focus:outline-none focus:border-accent-blue"
               />
             </Field>
             <Field label="Name">
@@ -239,14 +239,14 @@ export default function UsersAdminPage() {
                 required
                 value={newName}
                 onChange={(e) => setNewName(e.target.value)}
-                className="w-full px-3 py-2 bg-surface-50 border border-border/60 rounded-sm text-sm text-theme-primary font-body focus:outline-none focus:border-accent-blue"
+                className="w-full px-3 py-2 bg-surface-50 border border-app rounded-sm text-sm text-theme-primary font-body focus:outline-none focus:border-accent-blue"
               />
             </Field>
             <div className="flex justify-end gap-2 pt-2">
               <button
                 type="button"
                 onClick={() => setCreating(false)}
-                className="btn border-border/50 text-theme-muted hover:text-theme-primary"
+                className="btn border-app text-theme-muted hover:text-theme-primary"
               >
                 Cancel
               </button>
@@ -267,13 +267,13 @@ export default function UsersAdminPage() {
             forced to set a new password on first login. This password will{' '}
             <span className="text-accent-yellow">not be shown again</span>.
           </p>
-          <div className="flex items-center gap-2 bg-surface-50 border border-border/60 rounded-sm px-3 py-2.5">
+          <div className="flex items-center gap-2 bg-surface-50 border border-app rounded-sm px-3 py-2.5">
             <code className="flex-1 text-sm font-mono text-theme-primary select-all">
               {tempModal.tempPassword}
             </code>
             <button
               onClick={() => navigator.clipboard.writeText(tempModal.tempPassword)}
-              className="p-1.5 rounded-sm hover:bg-surface-200/60 text-theme-muted hover:text-accent-blue transition-colors"
+              className="p-1.5 rounded-sm hover:bg-app-muted text-theme-muted hover:text-accent-blue transition-colors"
               title="Copy to clipboard"
             >
               <Copy className="w-4 h-4" />
@@ -312,7 +312,7 @@ function StatCard({
     <div className="card p-4">
       <div className="flex items-start justify-between">
         <div>
-          <div className="text-[10px] font-label uppercase tracking-[0.15em] text-theme-muted">
+          <div className="overline">
             {label}
           </div>
           <div className="font-heading text-2xl font-bold text-theme-primary mt-2">{value}</div>
@@ -328,7 +328,7 @@ function StatCard({
 function Field({ label, children }: { label: string; children: React.ReactNode }) {
   return (
     <div>
-      <label className="block text-[10px] font-label uppercase tracking-[0.15em] text-theme-muted mb-1.5">
+      <label className="block overline mb-1.5">
         {label}
       </label>
       {children}
@@ -360,7 +360,7 @@ function Modal({
           </h2>
           <button
             onClick={onClose}
-            className="p-1 rounded-sm text-theme-muted hover:text-theme-primary hover:bg-surface-200/60 transition-colors"
+            className="p-1 rounded-sm text-theme-muted hover:text-theme-primary hover:bg-app-muted transition-colors"
           >
             <X className="w-4 h-4" />
           </button>

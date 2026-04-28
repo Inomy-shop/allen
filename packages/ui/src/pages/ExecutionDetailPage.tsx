@@ -70,12 +70,12 @@ function LogRow({ log, toolCall }: { log: any; toolCall?: ToolCall }) {
     log.type === 'started' ? '▶' :
     log.type === 'completed' ? '✅' : '·';
   const iconColor =
-    log.type === 'tool_start' || log.type === 'tool_call' ? 'text-amber-400 shrink-0' :
-    log.type === 'tool_done' || log.type === 'tool_complete' ? 'text-emerald-400 shrink-0' :
-    log.type === 'thinking' ? 'text-purple-400 shrink-0' :
-    log.type === 'text' ? 'text-blue-400 shrink-0' :
-    log.type === 'started' ? 'text-blue-400 shrink-0' :
-    log.type === 'completed' ? 'text-emerald-400 shrink-0' :
+    log.type === 'tool_start' || log.type === 'tool_call' ? 'text-accent-yellow shrink-0' :
+    log.type === 'tool_done' || log.type === 'tool_complete' ? 'text-accent-green shrink-0' :
+    log.type === 'thinking' ? 'text-accent-purple shrink-0' :
+    log.type === 'text' ? 'text-accent shrink-0' :
+    log.type === 'started' ? 'text-accent shrink-0' :
+    log.type === 'completed' ? 'text-accent-green shrink-0' :
     'text-theme-muted shrink-0';
 
   // Build the one-line description to show next to the tool name.
@@ -89,9 +89,9 @@ function LogRow({ log, toolCall }: { log: any; toolCall?: ToolCall }) {
     ? rawDesc.slice(toolName.length).trimStart().replace(/^[:\-—]\s*/, '')
     : rawDesc;
   return (
-    <div className={`py-1 text-[11px] font-mono ${canExpand && open ? 'bg-surface-100/30 -mx-2 px-2 rounded-sm' : ''}`}>
+    <div className={`py-1 text-[11px] font-mono ${canExpand && open ? 'bg-app-muted/40 -mx-2 px-2 rounded-sm' : ''}`}>
       <div
-        className={`flex items-start gap-2 ${canExpand ? 'cursor-pointer hover:bg-surface-200/30 -mx-1 px-1 rounded-sm' : ''}`}
+        className={`flex items-start gap-2 ${canExpand ? 'cursor-pointer hover:bg-app-muted/50 -mx-1 px-1 rounded-sm' : ''}`}
         onClick={canExpand ? () => setOpen(o => !o) : undefined}
       >
         {canExpand ? (
@@ -110,7 +110,7 @@ function LogRow({ log, toolCall }: { log: any; toolCall?: ToolCall }) {
               ) : null}
             </>
           ) : log.type === 'thinking' ? (
-            <span className="text-purple-400/70">{log.content ?? 'thinking...'}</span>
+            <span className="text-accent-purple/70">{log.content ?? 'thinking...'}</span>
           ) : log.type === 'text' ? (
             <span className="text-theme-secondary line-clamp-2">{log.content}</span>
           ) : (
@@ -133,7 +133,7 @@ function LogRow({ log, toolCall }: { log: any; toolCall?: ToolCall }) {
                   <div className="overline mb-0.5">
                     Input{toolCall?.truncated?.args && <span className="text-accent-yellow ml-1">(truncated)</span>}
                   </div>
-                  <pre className="text-[10px] font-mono text-theme-secondary whitespace-pre-wrap bg-surface-50/50 rounded-sm p-2 max-h-48 overflow-auto">
+                  <pre className="text-[10px] font-mono text-theme-secondary whitespace-pre-wrap bg-app-card/50 rounded-sm p-2 max-h-48 overflow-auto">
                     {JSON.stringify(argsObj, null, 2)}
                   </pre>
                 </div>
@@ -143,7 +143,7 @@ function LogRow({ log, toolCall }: { log: any; toolCall?: ToolCall }) {
               return (
                 <div>
                   <div className="overline mb-0.5">Command</div>
-                  <pre className="text-[10px] font-mono text-theme-secondary whitespace-pre-wrap bg-surface-50/50 rounded-sm p-2 max-h-48 overflow-auto">$ {log.command}</pre>
+                  <pre className="text-[10px] font-mono text-theme-secondary whitespace-pre-wrap bg-app-card/50 rounded-sm p-2 max-h-48 overflow-auto">$ {log.command}</pre>
                 </div>
               );
             }
@@ -151,7 +151,7 @@ function LogRow({ log, toolCall }: { log: any; toolCall?: ToolCall }) {
               return (
                 <div>
                   <div className="overline mb-0.5">Input</div>
-                  <pre className="text-[10px] font-mono text-theme-secondary whitespace-pre-wrap bg-surface-50/50 rounded-sm p-2 max-h-48 overflow-auto">{log.content}</pre>
+                  <pre className="text-[10px] font-mono text-theme-secondary whitespace-pre-wrap bg-app-card/50 rounded-sm p-2 max-h-48 overflow-auto">{log.content}</pre>
                 </div>
               );
             }
@@ -173,7 +173,7 @@ function LogRow({ log, toolCall }: { log: any; toolCall?: ToolCall }) {
                   <div className="overline mb-0.5">
                     {isError ? 'Error' : 'Output'}{toolCall.truncated?.result && <span className="text-accent-yellow ml-1">(truncated)</span>}
                   </div>
-                  <pre className={`text-[10px] font-mono whitespace-pre-wrap rounded-sm p-2 max-h-64 overflow-auto ${isError ? 'text-accent-red bg-accent-red/5' : 'text-theme-secondary bg-surface-50/50'}`}>
+                  <pre className={`text-[10px] font-mono whitespace-pre-wrap rounded-sm p-2 max-h-64 overflow-auto ${isError ? 'text-accent-red bg-accent-red/5' : 'text-theme-secondary bg-app-card/50'}`}>
                     {typeof recordResult === 'string' ? recordResult : JSON.stringify(recordResult, null, 2)}
                   </pre>
                 </div>
@@ -183,7 +183,7 @@ function LogRow({ log, toolCall }: { log: any; toolCall?: ToolCall }) {
               return (
                 <div>
                   <div className="overline mb-0.5">Output (preview)</div>
-                  <pre className="text-[10px] font-mono text-theme-secondary whitespace-pre-wrap bg-surface-50/50 rounded-sm p-2 max-h-48 overflow-auto">{logResult}</pre>
+                  <pre className="text-[10px] font-mono text-theme-secondary whitespace-pre-wrap bg-app-card/50 rounded-sm p-2 max-h-48 overflow-auto">{logResult}</pre>
                 </div>
               );
             }
@@ -381,7 +381,7 @@ function AgentExecutionView({ execution, agentName, traces, id, liveToolCalls, r
   return (
     <div className="flex flex-col h-full">
       {/* Header */}
-      <header className="flex items-center justify-between px-6 py-3 border-b border-border/50 bg-surface-50 shrink-0">
+      <header className="flex items-center justify-between px-6 py-3 border-b border-app bg-surface-50 shrink-0">
         <div className="flex items-center gap-3">
           <Link to="/executions" className="text-theme-secondary hover:text-accent-blue transition-colors">
             <ArrowLeft className="w-4 h-4" />
@@ -415,7 +415,7 @@ function AgentExecutionView({ execution, agentName, traces, id, liveToolCalls, r
             <span>Artifacts</span>
           </button>
           {execution.status === 'running' && (
-            <button onClick={async () => { await api.cancel(id); window.location.reload(); }} className="flex items-center gap-1 text-xs text-red-400 hover:text-red-300 bg-red-400/10 hover:bg-red-400/20 border border-red-400/20 rounded px-2.5 py-1 font-mono transition-colors">
+            <button onClick={async () => { await api.cancel(id); window.location.reload(); }} className="flex items-center gap-1 text-xs text-accent-red hover:text-red-300 bg-accent-red/10 hover:bg-red-400/20 border border-accent-red/30 rounded px-2.5 py-1 font-mono transition-colors">
               <XCircle className="w-3.5 h-3.5" /> Cancel
             </button>
           )}
@@ -443,7 +443,7 @@ function AgentExecutionView({ execution, agentName, traces, id, liveToolCalls, r
               onKeyDown={e => { if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') handleResume(); }}
               rows={2}
               placeholder="Follow-up prompt — the agent will resume its prior session with full context from this run…"
-              className="w-full px-3 py-2 rounded-lg bg-surface-200/40 border border-border/50 text-sm text-theme-primary placeholder:text-theme-subtle focus:outline-none focus:border-accent-blue/50 font-mono resize-none"
+              className="w-full px-3 py-2 rounded-lg bg-app-muted border border-app text-sm text-theme-primary placeholder:text-theme-subtle focus:outline-none focus:border-accent-blue/50 font-mono resize-none"
             />
           </div>
           <div className="flex flex-col gap-1.5 shrink-0">
@@ -495,7 +495,7 @@ function AgentExecutionView({ execution, agentName, traces, id, liveToolCalls, r
           </div>
           <div className="card p-3 col-span-2">
             <span className="overline">Working Directory</span>
-            <div className="mt-1 text-xs text-blue-400 font-mono truncate" title={meta.cwd ?? execution.input?.repo_path}>{meta.cwd ?? execution.input?.repo_path ?? '/tmp'}</div>
+            <div className="mt-1 text-xs text-accent font-mono truncate" title={meta.cwd ?? execution.input?.repo_path}>{meta.cwd ?? execution.input?.repo_path ?? '/tmp'}</div>
           </div>
         </div>
 
@@ -503,7 +503,7 @@ function AgentExecutionView({ execution, agentName, traces, id, liveToolCalls, r
             Each tab switches which trace (rawResponse / toolCalls / cost /
             duration) the rest of the page reflects. */}
         {sortedTraces.length > 1 && (
-          <div className="flex items-center gap-1 border-b border-border/30 -mx-1 px-1 overflow-x-auto">
+          <div className="flex items-center gap-1 border-b border-app -mx-1 px-1 overflow-x-auto">
             {sortedTraces.map(t => {
               const n = t.attempt ?? 1;
               const failed = t.status === 'failed';
@@ -529,7 +529,7 @@ function AgentExecutionView({ execution, agentName, traces, id, liveToolCalls, r
 
         {/* Live Logs — shown by default for running, togglable for completed */}
         <div className="card overflow-hidden">
-          <button title="Toggle logs" onClick={() => setShowLogs(!showLogs)} className="w-full flex items-center gap-2 px-4 py-3 hover:bg-surface-200/30 transition-colors text-left">
+          <button title="Toggle logs" onClick={() => setShowLogs(!showLogs)} className="w-full flex items-center gap-2 px-4 py-3 hover:bg-app-muted/50 transition-colors text-left">
             {showLogs ? <ChevronDown className="w-4 h-4 text-theme-muted" /> : <ChevronRight className="w-4 h-4 text-theme-muted" />}
             <Terminal className="w-4 h-4 text-accent-cyan" />
             <span className="overline text-[12px]">Live Logs</span>
@@ -537,7 +537,7 @@ function AgentExecutionView({ execution, agentName, traces, id, liveToolCalls, r
             {execution.status === 'running' && <span className="w-1.5 h-1.5 rounded-full bg-blue-400 animate-pulse" />}
           </button>
           {showLogs && (
-            <div className="px-4 pb-4 border-t border-border/20 max-h-[50vh] overflow-y-auto bg-[rgb(var(--color-editor-background))] rounded-b">
+            <div className="px-4 pb-4 border-t border-app max-h-[50vh] overflow-y-auto bg-[rgb(var(--color-editor-background))] rounded-b">
               {allLogs.length === 0 && execution.status === 'running' && (
                 <div className="text-xs text-theme-subtle font-mono py-3 animate-pulse">Waiting for activity...</div>
               )}
@@ -583,14 +583,14 @@ function AgentExecutionView({ execution, agentName, traces, id, liveToolCalls, r
 
         {/* Prompt */}
         <div className="card overflow-hidden">
-          <button title="Toggle prompt" onClick={() => setShowPrompt(!showPrompt)} className="w-full flex items-center gap-2 px-4 py-3 hover:bg-surface-200/30 transition-colors text-left">
+          <button title="Toggle prompt" onClick={() => setShowPrompt(!showPrompt)} className="w-full flex items-center gap-2 px-4 py-3 hover:bg-app-muted/50 transition-colors text-left">
             {showPrompt ? <ChevronDown className="w-4 h-4 text-theme-muted" /> : <ChevronRight className="w-4 h-4 text-theme-muted" />}
             <Terminal className="w-4 h-4 text-accent-blue" />
             <span className="overline text-[12px]">Prompt</span>
             <span className="text-[10px] text-theme-subtle font-mono ml-auto">{prompt.length} chars</span>
           </button>
           {showPrompt && (
-            <div className="px-4 pb-4 border-t border-border/20">
+            <div className="px-4 pb-4 border-t border-app">
               <pre className="text-xs text-theme-secondary font-mono whitespace-pre-wrap mt-2 max-h-[40vh] overflow-y-auto">{prompt}</pre>
             </div>
           )}
@@ -598,14 +598,14 @@ function AgentExecutionView({ execution, agentName, traces, id, liveToolCalls, r
 
         {/* Response */}
         <div className="card overflow-hidden">
-          <button title="Toggle response" onClick={() => setShowResponse(!showResponse)} className="w-full flex items-center gap-2 px-4 py-3 hover:bg-surface-200/30 transition-colors text-left">
+          <button title="Toggle response" onClick={() => setShowResponse(!showResponse)} className="w-full flex items-center gap-2 px-4 py-3 hover:bg-app-muted/50 transition-colors text-left">
             {showResponse ? <ChevronDown className="w-4 h-4 text-theme-muted" /> : <ChevronRight className="w-4 h-4 text-theme-muted" />}
             {execution.status === 'completed' ? <CheckCircle className="w-4 h-4 text-accent-green" /> : execution.status === 'running' ? <Brain className="w-4 h-4 text-accent-blue animate-pulse" /> : <AlertCircle className="w-4 h-4 text-accent-red" />}
             <span className="overline text-[12px]">Response</span>
             <span className="text-[10px] text-theme-subtle font-mono ml-auto">{response.length} chars</span>
           </button>
           {showResponse && (
-            <div className="px-4 pb-4 border-t border-border/20">
+            <div className="px-4 pb-4 border-t border-app">
               <div className="text-sm text-theme-secondary font-body mt-2 leading-relaxed max-h-[60vh] overflow-y-auto prose-allen">
                 {response
                   ? renderMarkdown(response)
@@ -623,7 +623,7 @@ function AgentExecutionView({ execution, agentName, traces, id, liveToolCalls, r
         <div className="text-[10px] text-theme-subtle font-mono flex gap-4 flex-wrap">
           <span>Started: {execution.startedAt ? new Date(execution.startedAt).toLocaleString() : 'n/a'}</span>
           <span>Completed: {execution.completedAt ? new Date(execution.completedAt).toLocaleString() : 'n/a'}</span>
-          {meta.chatSessionId && <a href={`/chat/${meta.chatSessionId}`} className="text-blue-400 hover:underline">Open Chat →</a>}
+          {meta.chatSessionId && <a href={`/chat/${meta.chatSessionId}`} className="text-accent hover:underline">Open Chat →</a>}
         </div>
       </div>
 
@@ -944,7 +944,7 @@ export default function ExecutionDetailPage() {
   return (
     <div className="flex flex-col h-full">
       {/* Top bar */}
-      <header className="flex items-center justify-between px-6 py-3 border-b border-border/50 bg-surface-50 shrink-0">
+      <header className="flex items-center justify-between px-6 py-3 border-b border-app bg-surface-50 shrink-0">
         <div className="flex items-center gap-3">
           <Link to="/executions" className="text-theme-secondary hover:text-accent-blue transition-colors">
             <ArrowLeft className="w-4 h-4" />
@@ -987,7 +987,7 @@ export default function ExecutionDetailPage() {
           {(learningCounts.injected > 0 || learningCounts.extracted > 0) && (
             <Link
               to={`/learnings?search=${encodeURIComponent(id ?? '')}`}
-              className="flex items-center gap-1 text-[10px] font-mono text-purple-400 hover:text-purple-300 transition-colors"
+              className="flex items-center gap-1 text-[10px] font-mono text-accent-purple hover:text-purple-300 transition-colors"
               title="Learnings"
             >
               <Brain className="w-3 h-3" />
@@ -1139,24 +1139,24 @@ export default function ExecutionDetailPage() {
                 <button
                   onClick={() => setResumePickerOpen(v => !v)}
                   disabled={resumeBusy}
-                  className="inline-flex items-center gap-1 px-2 py-1.5 rounded-full text-[11px] font-mono bg-surface-200/60 text-theme-primary hover:bg-surface-200 disabled:opacity-40 transition-colors"
+                  className="inline-flex items-center gap-1 px-2 py-1.5 rounded-full text-[11px] font-mono bg-app-muted text-theme-primary hover:bg-surface-200 disabled:opacity-40 transition-colors"
                   title="Resume from an earlier node"
                 >
                   Other node <ChevronDown className="w-3 h-3" />
                 </button>
                 {resumePickerOpen && (
                   <div
-                    className="absolute right-0 top-full mt-1 w-56 rounded-lg border border-border/60 bg-surface shadow-lg py-1 z-50"
+                    className="absolute right-0 top-full mt-1 w-56 rounded-lg border border-app bg-surface shadow-lg py-1 z-50"
                     onMouseLeave={() => setResumePickerOpen(false)}
                   >
-                    <div className="px-3 py-1.5 overline border-b border-border/30">
+                    <div className="px-3 py-1.5 overline border-b border-app">
                       Rewind to before…
                     </div>
                     {[...execution.completedNodes].reverse().map((n: string) => (
                       <button
                         key={n}
                         onClick={() => handleRetryFrom(n)}
-                        className="w-full text-left px-3 py-1.5 text-[11px] font-mono text-theme-primary hover:bg-surface-200/60 transition-colors"
+                        className="w-full text-left px-3 py-1.5 text-[11px] font-mono text-theme-primary hover:bg-app-muted transition-colors"
                       >
                         {n}
                       </button>
@@ -1174,7 +1174,7 @@ export default function ExecutionDetailPage() {
           /interventions/:id page, not inline here. */}
       {pendingIntervention && (
         <div
-          className={`flex items-center gap-4 px-6 py-3 border-b border-border/50 ${
+          className={`flex items-center gap-4 px-6 py-3 border-b border-app ${
             pendingIntervention.severity === 'escalation'
               ? 'bg-accent-red/10 border-accent-red/30'
               : pendingIntervention.severity === 'approval'
@@ -1209,7 +1209,7 @@ export default function ExecutionDetailPage() {
           intervention fired on this run so the operator can see the
           decision history at a glance. */}
       {runInterventions.length > 0 && (
-        <div className="px-6 py-2 border-b border-border/30 bg-surface-50 flex items-center gap-3 overflow-x-auto">
+        <div className="px-6 py-2 border-b border-app bg-surface-50 flex items-center gap-3 overflow-x-auto">
           <span className="overline shrink-0">
             Interventions ({runInterventions.length})
           </span>
@@ -1217,7 +1217,7 @@ export default function ExecutionDetailPage() {
             <Link
               key={i.intervention_id}
               to={`/interventions/${i.intervention_id}`}
-              className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[9px] font-mono bg-surface-200/40 text-theme-muted hover:bg-surface-200/60 transition-colors shrink-0"
+              className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[9px] font-mono bg-app-muted text-theme-muted hover:bg-app-muted transition-colors shrink-0"
               title={`${i.title} — ${i.status}`}
             >
               <span>{i.severity === 'escalation' ? '🔴' : i.severity === 'approval' ? '🟢' : '🟡'}</span>
@@ -1250,7 +1250,7 @@ export default function ExecutionDetailPage() {
 
           {/* Right: Node detail + inline human input — resizable */}
           <div
-            className="overflow-hidden shrink-0 bg-surface border-l-2 border-border/50 hover:border-accent-blue/50 transition-colors relative"
+            className="overflow-hidden shrink-0 bg-surface border-l-2 border-app hover:border-accent-blue/50 transition-colors relative"
             style={{ width: `${rightWidth}%` }}
           >
             {/* Invisible resize grab zone on the left edge */}
@@ -1284,7 +1284,7 @@ export default function ExecutionDetailPage() {
 
         {/* Bottom: Timeline (horizontal) + Execution log table — resizable */}
         <div
-          className="shrink-0 bg-surface overflow-hidden flex flex-col border-t-2 border-border/50 group/bottom"
+          className="shrink-0 bg-surface overflow-hidden flex flex-col border-t-2 border-app group/bottom"
           style={{ minHeight: 120, height: bottomHeight, maxHeight: '60%' }}
         >
           {/* Resize grab zone — full width strip at top, overlapping border */}
@@ -1298,7 +1298,7 @@ export default function ExecutionDetailPage() {
           <div className="flex flex-1 overflow-hidden">
           {/* Logs — resizable */}
           <div
-            className="shrink-0 overflow-hidden border-r-2 border-border/50 hover:border-accent-blue/50 transition-colors relative"
+            className="shrink-0 overflow-hidden border-r-2 border-app hover:border-accent-blue/50 transition-colors relative"
             style={{ width: `${logsPct}%` }}
           >
             <div className="absolute top-0 right-0 bottom-0 w-2 cursor-col-resize z-10" onMouseDown={logsResizeStart} />
@@ -1352,7 +1352,7 @@ export default function ExecutionDetailPage() {
                       className={`cursor-pointer hover:bg-accent-blue/5 transition-colors
                         ${selectedNode === name ? 'bg-accent-blue/10' : ''}`}
                     >
-                      <td className="px-4 py-1.5 font-mono text-gray-200">{name}</td>
+                      <td className="px-4 py-1.5 font-mono text-theme-primary">{name}</td>
                       <td className="px-4 py-1.5"><StatusBadge status={state.status} /></td>
                       <td className="px-4 py-1.5 text-theme-secondary tabular-nums font-mono">{state.attempt}</td>
                       <td className="px-4 py-1.5 text-theme-secondary tabular-nums font-mono">

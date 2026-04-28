@@ -142,10 +142,10 @@ export default function YamlEditor({ value, onChange, errors, warnings, readOnly
       {((errors?.length ?? 0) > 0 || (warnings?.length ?? 0) > 0) && (
         <div className="flex items-center gap-2 px-3 py-1.5 bg-surface-50 border-b border-border text-xs shrink-0 text-theme-secondary">
           {(errors?.length ?? 0) > 0 && (
-            <span className="text-red-400">{errors!.length} error{errors!.length > 1 ? 's' : ''}</span>
+            <span className="text-accent-red">{errors!.length} error{errors!.length > 1 ? 's' : ''}</span>
           )}
           {(warnings?.length ?? 0) > 0 && (
-            <span className="text-yellow-400">{warnings!.length} warning{warnings!.length > 1 ? 's' : ''}</span>
+            <span className="text-accent-yellow">{warnings!.length} warning{warnings!.length > 1 ? 's' : ''}</span>
           )}
         </div>
       )}

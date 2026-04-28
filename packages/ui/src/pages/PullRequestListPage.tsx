@@ -82,15 +82,15 @@ export default function PullRequestListPage() {
   }
 
   function statusIcon(status: string) {
-    if (status === 'merged') return <GitMerge className="w-4 h-4 text-purple-400" />;
-    if (status === 'closed') return <XCircle className="w-4 h-4 text-red-400" />;
-    return <GitPullRequest className="w-4 h-4 text-emerald-400" />;
+    if (status === 'merged') return <GitMerge className="w-4 h-4 text-accent-purple" />;
+    if (status === 'closed') return <XCircle className="w-4 h-4 text-accent-red" />;
+    return <GitPullRequest className="w-4 h-4 text-accent-green" />;
   }
 
   function statusBadge(status: string) {
-    const cls = status === 'merged' ? 'bg-purple-500/10 text-purple-400 border-purple-500/20'
-      : status === 'closed' ? 'bg-red-500/10 text-red-400 border-red-500/20'
-      : 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20';
+    const cls = status === 'merged' ? 'bg-accent-purple/10 text-accent-purple border-accent-purple/30'
+      : status === 'closed' ? 'bg-accent-red/10 text-accent-red border-accent-red/30'
+      : 'bg-accent-green/10 text-accent-green border-accent-green/30';
     return <span className={`text-[10px] font-mono px-2 py-0.5 rounded-full border ${cls}`}>{status}</span>;
   }
 
@@ -168,13 +168,13 @@ export default function PullRequestListPage() {
                       <span>{pr.repoName}</span>
                       <span className="flex items-center gap-1">{pr.branch} <ArrowRight className="w-3 h-3" /> {pr.baseBranch}</span>
                       <span>by {pr.author}</span>
-                      {pr.createdByAgent && <span className="text-blue-400">🤖 {pr.createdByAgent}</span>}
+                      {pr.createdByAgent && <span className="text-accent">🤖 {pr.createdByAgent}</span>}
                     </div>
                     <div className="flex items-center gap-3 mt-1.5 text-[10px] text-theme-subtle">
                       <span className="flex items-center gap-1"><Clock className="w-3 h-3" />{timeAgo(pr.updatedAt)}</span>
                       <span className="flex items-center gap-1"><FileDiff className="w-3 h-3" />{pr.changedFiles} files</span>
-                      <span className="text-emerald-400 flex items-center gap-0.5"><Plus className="w-3 h-3" />{pr.additions}</span>
-                      <span className="text-red-400 flex items-center gap-0.5"><Minus className="w-3 h-3" />{pr.deletions}</span>
+                      <span className="text-accent-green flex items-center gap-0.5"><Plus className="w-3 h-3" />{pr.additions}</span>
+                      <span className="text-accent-red flex items-center gap-0.5"><Minus className="w-3 h-3" />{pr.deletions}</span>
                     </div>
                   </div>
                   <div className="flex items-center gap-2 shrink-0">
@@ -215,7 +215,7 @@ export default function PullRequestListPage() {
       {resolveOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-md">
           <div className="card w-full max-w-lg overflow-hidden shadow-popover animate-in fade-in zoom-in-95 duration-200">
-            <div className="px-6 py-5 border-b border-border/60 flex items-center justify-between">
+            <div className="px-6 py-5 border-b border-app flex items-center justify-between">
               <div className="flex items-center gap-3">
                 <div className="w-10 h-10 rounded-sm bg-accent-yellow/10 border border-accent-yellow/30 flex items-center justify-center">
                   <Wrench className="w-5 h-5 text-accent-yellow" />
@@ -254,7 +254,7 @@ export default function PullRequestListPage() {
                 <strong>Flow B:</strong> otherwise, the repo must be registered at /repos — a fresh workspace will be created and archived after the fix lands.
               </p>
             </div>
-            <div className="flex items-center gap-3 px-6 py-5 border-t border-border/60 bg-surface-50/50">
+            <div className="flex items-center gap-3 px-6 py-5 border-t border-app bg-app-card/50">
               <button onClick={() => setResolveOpen(false)} className="flex-1 btn-ghost">Cancel</button>
               <button
                 onClick={() => handleTriggerResolve(resolveUrl, true)}

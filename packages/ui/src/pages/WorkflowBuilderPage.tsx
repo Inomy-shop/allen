@@ -318,7 +318,7 @@ export default function WorkflowBuilderPage() {
         ) : (
           <div className="flex h-full">
             {/* YAML editor */}
-            <div className="flex-1 border-r border-border/50">
+            <div className="flex-1 border-r border-app">
               <YamlEditor
                 value={yamlContent}
                 onChange={handleYamlChange}

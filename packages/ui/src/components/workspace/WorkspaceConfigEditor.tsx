@@ -82,9 +82,9 @@ export function WorkspaceConfigEditor({ repoId, onClose }: { repoId: string; onC
 
   return (
     <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50" onClick={onClose}>
-      <div className="bg-surface-100 border border-border/30 rounded-lg w-[900px] max-h-[92vh] flex flex-col" onClick={e => e.stopPropagation()}>
+      <div className="bg-surface-100 border border-app rounded-lg w-[900px] max-h-[92vh] flex flex-col" onClick={e => e.stopPropagation()}>
         {/* Header */}
-        <div className="flex items-center gap-2 px-4 py-3 border-b border-border/20 shrink-0">
+        <div className="flex items-center gap-2 px-4 py-3 border-b border-app shrink-0">
           <Settings className="w-4 h-4 text-theme-secondary" />
           <span className="text-sm font-semibold text-theme-primary">Workspace Configuration</span>
           <span className="flex-1" />
@@ -98,35 +98,35 @@ export function WorkspaceConfigEditor({ repoId, onClose }: { repoId: string; onC
           {/* Env Files */}
           <div>
             <div className="flex items-center gap-2 mb-2">
-              <FileText className="w-3.5 h-3.5 text-amber-400" />
+              <FileText className="w-3.5 h-3.5 text-accent-yellow" />
               <span className="text-xs font-semibold text-theme-secondary">Environment Files</span>
               <span className="text-[10px] text-theme-subtle">Generated in worktree before setup scripts run</span>
             </div>
 
-            <div className="bg-surface-50/50 border border-border/20 rounded-lg p-0.5 mb-2">
+            <div className="bg-app-card/50 border border-app rounded-lg p-0.5 mb-2">
               <div className="flex items-center gap-1 text-[9px] text-theme-subtle px-2 py-1">
                 <Info className="w-3 h-3" />
-                Use <code className="text-amber-400 bg-surface-200/50 px-1 rounded">{'{port:0}'}</code> for base port, <code className="text-amber-400 bg-surface-200/50 px-1 rounded">{'{port:1}'}</code> for base+1, etc. Ports auto-assigned per workspace.
+                Use <code className="text-accent-yellow bg-app-muted px-1 rounded">{'{port:0}'}</code> for base port, <code className="text-accent-yellow bg-app-muted px-1 rounded">{'{port:1}'}</code> for base+1, etc. Ports auto-assigned per workspace.
               </div>
             </div>
 
             {/* Env file tabs */}
             <div className="flex items-center gap-1 mb-2 flex-wrap">
               {config.envFiles.map((f, i) => (
-                <div key={i} className={`flex items-center gap-1 text-[10px] font-mono px-2 py-1 rounded cursor-pointer ${activeEnvIdx === i ? 'bg-blue-500/10 text-blue-400 border border-blue-500/20' : 'text-theme-muted hover:text-theme-secondary border border-border/20'}`}>
+                <div key={i} className={`flex items-center gap-1 text-[10px] font-mono px-2 py-1 rounded cursor-pointer ${activeEnvIdx === i ? 'bg-accent-soft text-accent border border-accent/30' : 'text-theme-muted hover:text-theme-secondary border border-app'}`}>
                   <button onClick={() => setActiveEnvIdx(i)} className="truncate max-w-[120px]">{f.path || 'untitled'}</button>
-                  <button onClick={() => removeEnvFile(i)} className="hover:text-red-400"><Trash2 className="w-2.5 h-2.5" /></button>
+                  <button onClick={() => removeEnvFile(i)} className="hover:text-accent-red"><Trash2 className="w-2.5 h-2.5" /></button>
                 </div>
               ))}
-              <button onClick={addEnvFile} className="text-[10px] text-theme-muted hover:text-theme-secondary flex items-center gap-0.5 px-2 py-1 border border-dashed border-border/30 rounded">
+              <button onClick={addEnvFile} className="text-[10px] text-theme-muted hover:text-theme-secondary flex items-center gap-0.5 px-2 py-1 border border-dashed border-app rounded">
                 <Plus className="w-3 h-3" /> Add .env
               </button>
             </div>
 
             {/* Active env file editor */}
             {config.envFiles.length > 0 && config.envFiles[activeEnvIdx] && (
-              <div className="border border-border/20 rounded-lg overflow-hidden">
-                <div className="flex items-center gap-2 px-3 py-1.5 bg-surface-200/30 border-b border-border/20">
+              <div className="border border-app rounded-lg overflow-hidden">
+                <div className="flex items-center gap-2 px-3 py-1.5 bg-app-muted/50 border-b border-app">
                   <span className="text-[10px] text-theme-muted">File path:</span>
                   <input value={config.envFiles[activeEnvIdx].path}
                     onChange={e => updateEnvFile(activeEnvIdx, 'path', e.target.value)}
@@ -163,7 +163,7 @@ export function WorkspaceConfigEditor({ repoId, onClose }: { repoId: string; onC
           </div>
 
           {/* Setup Script */}
-          <Section icon={<Play className="w-3.5 h-3.5 text-emerald-400" />} title="Setup Script" subtitle="Runs after .env generation (e.g. npm install)">
+          <Section icon={<Play className="w-3.5 h-3.5 text-accent-green" />} title="Setup Script" subtitle="Runs after .env generation (e.g. npm install)">
             {config.setupScript.map((cmd, i) => (
               <ScriptRow key={i} value={cmd} onChange={v => updateScript('setupScript', i, v)} onRemove={() => removeScript('setupScript', i)} idx={i} />
             ))}
@@ -171,7 +171,7 @@ export function WorkspaceConfigEditor({ repoId, onClose }: { repoId: string; onC
           </Section>
 
           {/* Services */}
-          <Section icon={<Terminal className="w-3.5 h-3.5 text-blue-400" />} title="Services" subtitle="Use {port:N} in commands — N = portOffset">
+          <Section icon={<Terminal className="w-3.5 h-3.5 text-accent" />} title="Services" subtitle="Use {port:N} in commands — N = portOffset">
             <div className="text-[9px] text-theme-subtle mb-2 grid grid-cols-[80px_1fr_48px_80px_24px] gap-2 font-mono px-1">
               <span>Name</span><span>Command</span><span>Offset</span><span>Health</span><span></span>
             </div>
@@ -181,7 +181,7 @@ export function WorkspaceConfigEditor({ repoId, onClose }: { repoId: string; onC
                 <input value={svc.command} onChange={e => updateService(i, 'command', e.target.value)} placeholder="npm run dev" className="input text-[11px] py-1 font-mono" />
                 <input value={svc.portOffset} onChange={e => updateService(i, 'portOffset', parseInt(e.target.value) || 0)} className="input text-[11px] py-1 text-center" type="number" />
                 <input value={svc.healthCheck ?? ''} onChange={e => updateService(i, 'healthCheck', e.target.value)} placeholder="/health" className="input text-[11px] py-1" />
-                <button onClick={() => removeService(i)} className="text-theme-subtle hover:text-red-400 p-0.5"><Trash2 className="w-3 h-3" /></button>
+                <button onClick={() => removeService(i)} className="text-theme-subtle hover:text-accent-red p-0.5"><Trash2 className="w-3 h-3" /></button>
               </div>
             ))}
             <button onClick={addService} className="text-[10px] text-theme-muted hover:text-theme-secondary flex items-center gap-1 mt-1"><Plus className="w-3 h-3" /> Add service</button>
@@ -189,12 +189,12 @@ export function WorkspaceConfigEditor({ repoId, onClose }: { repoId: string; onC
 
           {/* Auto-start */}
           <label className="flex items-center gap-2 text-xs text-theme-secondary cursor-pointer">
-            <input type="checkbox" checked={config.autoStart} onChange={e => setConfig(c => ({ ...c, autoStart: e.target.checked }))} className="rounded border-border/30 bg-surface-50" />
+            <input type="checkbox" checked={config.autoStart} onChange={e => setConfig(c => ({ ...c, autoStart: e.target.checked }))} className="rounded border-app bg-surface-50" />
             Auto-start services when workspace opens
           </label>
 
           {/* Pre-PR Checks */}
-          <Section icon={<FileText className="w-3.5 h-3.5 text-amber-400" />} title="Pre-PR Checks" subtitle="Must pass before creating PR">
+          <Section icon={<FileText className="w-3.5 h-3.5 text-accent-yellow" />} title="Pre-PR Checks" subtitle="Must pass before creating PR">
             {config.prePrScript.map((cmd, i) => (
               <ScriptRow key={i} value={cmd} onChange={v => updateScript('prePrScript', i, v)} onRemove={() => removeScript('prePrScript', i)} idx={i} />
             ))}
@@ -202,7 +202,7 @@ export function WorkspaceConfigEditor({ repoId, onClose }: { repoId: string; onC
           </Section>
 
           {/* Cleanup Script */}
-          <Section icon={<Trash2 className="w-3.5 h-3.5 text-red-400" />} title="Cleanup Script" subtitle="Runs before workspace archive">
+          <Section icon={<Trash2 className="w-3.5 h-3.5 text-accent-red" />} title="Cleanup Script" subtitle="Runs before workspace archive">
             {config.cleanupScript.map((cmd, i) => (
               <ScriptRow key={i} value={cmd} onChange={v => updateScript('cleanupScript', i, v)} onRemove={() => removeScript('cleanupScript', i)} idx={i} />
             ))}
@@ -232,7 +232,7 @@ function ScriptRow({ value, onChange, onRemove, idx }: { value: string; onChange
       <span className="text-[10px] text-theme-subtle w-4 text-right shrink-0">{idx + 1}.</span>
       <input value={value} onChange={e => onChange(e.target.value)} className="input text-[11px] py-1 flex-1 font-mono" placeholder="command..." />
       <CopyButton text={value} />
-      <button onClick={onRemove} className="text-theme-subtle hover:text-red-400 p-1"><Trash2 className="w-3 h-3" /></button>
+      <button onClick={onRemove} className="text-theme-subtle hover:text-accent-red p-1"><Trash2 className="w-3 h-3" /></button>
     </div>
   );
 }
@@ -247,7 +247,7 @@ function CopyButton({ text }: { text: string }) {
   };
   return (
     <button onClick={handleCopy} className="text-theme-subtle hover:text-theme-secondary p-1 shrink-0" title="Copy">
-      {copied ? <Check className="w-3 h-3 text-emerald-400" /> : <Copy className="w-3 h-3" />}
+      {copied ? <Check className="w-3 h-3 text-accent-green" /> : <Copy className="w-3 h-3" />}
     </button>
   );
 }

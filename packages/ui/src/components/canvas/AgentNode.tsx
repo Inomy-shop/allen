@@ -5,7 +5,7 @@ import { outputsAsKeys } from '../../utils/outputs';
 export default function AgentNode({ data, selected }: NodeProps) {
   return (
     <div className={`px-4 py-3 rounded-lg border-2 bg-surface-100/90 backdrop-blur-sm w-[280px] transition-all
-      ${selected ? 'border-accent-blue ring-2 ring-accent-blue/30 shadow-glow-blue' : 'border-accent-blue/30 hover:border-accent-blue/50'}
+      ${selected ? 'border-accent-blue ring-2 ring-accent-blue/30' : 'border-accent-blue/30 hover:border-accent-blue/50'}
     `}>
       <Handle type="target" position={Position.Top} id="top" className="!bg-accent-blue !w-2.5 !h-2.5 !border-surface" />
       <Handle type="target" position={Position.Right} id="right" className="!bg-accent-yellow !w-2 !h-2 !border-surface" />

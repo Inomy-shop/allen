@@ -48,7 +48,7 @@ function CopyBtn({ text }: { text: string }) {
   const [copied, setCopied] = useState(false);
   return (
     <button onClick={(e) => { e.stopPropagation(); navigator.clipboard.writeText(text); setCopied(true); setTimeout(() => setCopied(false), 1500); }}
-      className="p-0.5 rounded hover:bg-surface-200/50 text-theme-subtle hover:text-theme-secondary transition-colors" title="Copy">
+      className="p-0.5 rounded hover:bg-app-muted text-theme-subtle hover:text-theme-secondary transition-colors" title="Copy">
       {copied ? <Check className="w-3 h-3 text-accent-green" /> : <Copy className="w-3 h-3" />}
     </button>
   );
@@ -70,20 +70,20 @@ function ToolItem({ tc }: { tc: { tool: string; args?: Record<string, unknown>; 
   return (
     <div className="text-[11px] font-mono">
       <button onClick={() => hasDetail && setOpen(!open)} className={`flex items-center gap-1.5 ${hasDetail ? 'hover:text-theme-secondary cursor-pointer' : ''}`}>
-        {isErr ? <AlertCircle className="w-2.5 h-2.5 text-red-400 shrink-0" /> : <CheckCircle className="w-2.5 h-2.5 text-accent-green/40 shrink-0" />}
+        {isErr ? <AlertCircle className="w-2.5 h-2.5 text-accent-red shrink-0" /> : <CheckCircle className="w-2.5 h-2.5 text-accent-green/40 shrink-0" />}
         <span className="text-theme-muted">{short}</span>
         {tc.durationMs != null && <span className="text-theme-subtle">{tc.durationMs}ms</span>}
         {hasDetail && (open ? <ChevronDown className="w-2.5 h-2.5 text-theme-subtle" /> : <ChevronRight className="w-2.5 h-2.5 text-theme-subtle" />)}
       </button>
       {open && (
-        <div className="ml-4 mt-1 border-l border-border/15 pl-2 space-y-1">
+        <div className="ml-4 mt-1 border-l border-app pl-2 space-y-1">
           {tc.args && Object.keys(tc.args).length > 0 && (
             <div><div className="flex items-center gap-1 text-theme-subtle text-[9px] uppercase tracking-wider">Input <CopyBtn text={JSON.stringify(tc.args, null, 2)} /></div>
               <pre className="text-[10px] text-theme-muted whitespace-pre-wrap max-h-20 overflow-auto">{JSON.stringify(tc.args, null, 2)}</pre></div>
           )}
           {tc.result && Object.keys(tc.result).length > 0 && (
             <div><div className="flex items-center gap-1 text-theme-subtle text-[9px] uppercase tracking-wider">Output <CopyBtn text={JSON.stringify(tc.result, null, 2)} /></div>
-              <pre className={`text-[10px] whitespace-pre-wrap max-h-24 overflow-auto ${isErr ? 'text-red-400/80' : 'text-theme-muted'}`}>{JSON.stringify(tc.result, null, 2)}</pre></div>
+              <pre className={`text-[10px] whitespace-pre-wrap max-h-24 overflow-auto ${isErr ? 'text-accent-red/80' : 'text-theme-muted'}`}>{JSON.stringify(tc.result, null, 2)}</pre></div>
           )}
         </div>
       )}
@@ -115,15 +115,15 @@ function ThreadMsg({ msg, agentInfo, collapsed: initCollapsed }: {
           isQ ? 'bg-amber-400/15 border border-amber-400/25' :
           isA ? 'bg-accent-green/15 border border-accent-green/25' : ''
         }`} style={!isQ && !isA ? { backgroundColor: color + '15', border: `1px solid ${color}25` } : {}}>
-          {isQ ? <HelpCircle className="w-3 h-3 text-amber-400" />
+          {isQ ? <HelpCircle className="w-3 h-3 text-accent-yellow" />
             : isA ? <CheckCircle className="w-3 h-3 text-accent-green" />
             : <RoleIcon icon={agentInfo?.icon} color={color} size={12} />}
         </div>
         <span className="text-[12px] font-heading font-semibold tracking-wide" style={{ color: isQ ? '#f59e0b' : isA ? '#22c55e' : color }}>{name}</span>
-        {isQ && <span className="text-[10px] font-mono text-amber-400/70 bg-amber-400/10 px-1.5 py-0.5 rounded">asking</span>}
+        {isQ && <span className="text-[10px] font-mono text-accent-yellow/70 bg-accent-yellow/10 px-1.5 py-0.5 rounded">asking</span>}
         {isA && <span className="text-[10px] font-mono text-accent-green/70 bg-accent-green/10 px-1.5 py-0.5 rounded">answered</span>}
         {isLong && (
-          <button onClick={() => setCollapsed(!collapsed)} className="p-0.5 rounded text-theme-subtle hover:text-theme-secondary hover:bg-surface-200/30 ml-auto transition-colors" title={collapsed ? 'Expand' : 'Collapse'}>
+          <button onClick={() => setCollapsed(!collapsed)} className="p-0.5 rounded text-theme-subtle hover:text-theme-secondary hover:bg-app-muted/50 ml-auto transition-colors" title={collapsed ? 'Expand' : 'Collapse'}>
             {collapsed ? <ChevronRight className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
           </button>
         )}
@@ -176,7 +176,7 @@ function LiveFeed({ activity, agentName }: { activity: ThreadActivityItem[]; age
     <div className="pl-5 py-1 space-y-0.5">
       {activity.slice(-12).map((act, i) => (
         <div key={i} className="flex items-center gap-1.5 text-[10px] font-mono animate-in fade-in duration-200">
-          {act.type === 'thinking' && <><Brain className="w-2.5 h-2.5 text-purple-400 animate-pulse shrink-0" /><span className="text-purple-400/60 truncate">{act.content?.slice(0, 80)}</span></>}
+          {act.type === 'thinking' && <><Brain className="w-2.5 h-2.5 text-accent-purple animate-pulse shrink-0" /><span className="text-accent-purple/60 truncate">{act.content?.slice(0, 80)}</span></>}
           {act.type === 'text' && <><span className="w-1 h-1 rounded-full bg-theme-muted shrink-0" /><span className="text-theme-muted truncate">{act.content?.slice(0, 100)}</span></>}
           {act.type === 'tool_call' && <><Loader2 className="w-2.5 h-2.5 text-accent-yellow animate-spin shrink-0" /><span className="text-accent-yellow/70">{act.tool?.replace('mcp__allen__', 'al:')}</span></>}
           {act.type === 'tool_result' && <><CheckCircle className="w-2.5 h-2.5 text-accent-green/40 shrink-0" /><span className="text-theme-subtle">{act.tool?.replace('mcp__allen__', 'al:')}</span></>}
@@ -210,7 +210,7 @@ export function AgentThread({ thread, agents }: AgentThreadProps) {
   return (
     <div className="my-1.5">
       {/* Toggle header */}
-      <button onClick={() => setExpanded(!expanded)} className="w-full flex items-center gap-2 py-1.5 px-2 -mx-2 text-left group/th hover:bg-surface-100/30 rounded-md transition-colors">
+      <button onClick={() => setExpanded(!expanded)} className="w-full flex items-center gap-2 py-1.5 px-2 -mx-2 text-left group/th hover:bg-app-muted/40 rounded-md transition-colors">
         {expanded ? <ChevronDown className="w-3.5 h-3.5 text-theme-muted shrink-0" /> : <ChevronRight className="w-3.5 h-3.5 text-theme-muted shrink-0" />}
 
         {/* From agent avatar */}
@@ -228,9 +228,9 @@ export function AgentThread({ thread, agents }: AgentThreadProps) {
         <span className="text-[12px] font-heading font-semibold tracking-wide" style={{ color: toColor }}>{toName}</span>
 
         {/* Status badge */}
-        {isWaiting ? <span className="flex items-center gap-1 text-[10px] font-mono text-amber-400 bg-amber-400/10 px-1.5 py-0.5 rounded"><HelpCircle className="w-3 h-3" />asking</span>
+        {isWaiting ? <span className="flex items-center gap-1 text-[10px] font-mono text-accent-yellow bg-accent-yellow/10 px-1.5 py-0.5 rounded"><HelpCircle className="w-3 h-3" />asking</span>
           : isActive ? <span className="flex items-center gap-1 text-[10px] font-mono text-accent-cyan bg-accent-cyan/10 px-1.5 py-0.5 rounded"><Loader2 className="w-3 h-3 animate-spin" />working</span>
-          : isFailed ? <span className="flex items-center gap-1 text-[10px] font-mono text-red-400 bg-red-400/10 px-1.5 py-0.5 rounded"><XCircle className="w-3 h-3" />failed</span>
+          : isFailed ? <span className="flex items-center gap-1 text-[10px] font-mono text-accent-red bg-accent-red/10 px-1.5 py-0.5 rounded"><XCircle className="w-3 h-3" />failed</span>
           : <span className="flex items-center gap-1 text-[10px] font-mono text-accent-green bg-accent-green/10 px-1.5 py-0.5 rounded"><CheckCircle className="w-3 h-3" />done</span>}
 
         <span className="flex-1" />
@@ -270,9 +270,9 @@ export function AgentThread({ thread, agents }: AgentThreadProps) {
           {isWaiting && thread.pendingQuestion && (
             <div className="py-1.5 pl-2 border-l-2 border-amber-400/40">
               <div className="flex items-center gap-1.5 mb-0.5">
-                <HelpCircle className="w-3 h-3 text-amber-400 shrink-0" />
-                <span className="text-[11px] font-heading text-amber-400">{agents?.[thread.pendingQuestion.fromAgent]?.displayName ?? thread.pendingQuestion.fromAgent}</span>
-                <span className="text-[10px] text-amber-400/60">waiting for answer</span>
+                <HelpCircle className="w-3 h-3 text-accent-yellow shrink-0" />
+                <span className="text-[11px] font-heading text-accent-yellow">{agents?.[thread.pendingQuestion.fromAgent]?.displayName ?? thread.pendingQuestion.fromAgent}</span>
+                <span className="text-[10px] text-accent-yellow/60">waiting for answer</span>
               </div>
               <div className="text-[12px] text-theme-secondary font-body pl-5">{thread.pendingQuestion.question}</div>
             </div>

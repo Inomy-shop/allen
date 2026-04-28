@@ -90,19 +90,19 @@ export default function ArtifactsPanel({
   return (
     <div className="flex flex-col h-full">
       {/* Header */}
-      <div className="shrink-0 px-3 py-2.5 border-b border-border/20 bg-surface-100/30">
+      <div className="shrink-0 px-3 py-2.5 border-b border-app bg-app-muted/40">
         <div className="flex items-center gap-2 mb-2">
           <FileText className="w-4 h-4 text-accent-blue shrink-0" />
           <h3 className="font-heading text-sm font-semibold text-theme-primary tracking-wide truncate">
             Artifacts
           </h3>
-          <span className="text-[10px] font-mono text-theme-muted bg-surface-200/40 px-1.5 py-0.5 rounded-full shrink-0">
+          <span className="text-[10px] font-mono text-theme-muted bg-app-muted px-1.5 py-0.5 rounded-full shrink-0">
             {items.length}
           </span>
           <button
             onClick={load}
             disabled={loading}
-            className="ml-auto p-1 rounded-md hover:bg-surface-200/60 text-theme-muted hover:text-theme-secondary transition-colors disabled:opacity-50"
+            className="ml-auto p-1 rounded-md hover:bg-app-muted text-theme-muted hover:text-theme-secondary transition-colors disabled:opacity-50"
             title="Refresh"
           >
             <RefreshCw className={`w-3.5 h-3.5 ${loading ? 'animate-spin' : ''}`} />
@@ -110,7 +110,7 @@ export default function ArtifactsPanel({
           {onClose && (
             <button
               onClick={onClose}
-              className="p-1 rounded-md hover:bg-surface-200/60 text-theme-muted hover:text-theme-secondary transition-colors"
+              className="p-1 rounded-md hover:bg-app-muted text-theme-muted hover:text-theme-secondary transition-colors"
               title="Close"
             >
               <XIcon className="w-4 h-4" />
@@ -124,7 +124,7 @@ export default function ArtifactsPanel({
             value={search}
             onChange={e => setSearch(e.target.value)}
             placeholder="Filter…"
-            className="w-full pl-7 pr-2 py-1.5 text-[11px] rounded-md border border-border/40 bg-surface-100/60 text-theme-primary focus:outline-none focus:border-accent-blue/60 focus:ring-1 focus:ring-accent-blue/30"
+            className="w-full pl-7 pr-2 py-1.5 text-[11px] rounded-md border border-app bg-app-card text-theme-primary focus:outline-none focus:border-accent-blue/60 focus:ring-1 focus:ring-accent-blue/30"
           />
         </div>
       </div>
@@ -170,7 +170,7 @@ function ArtifactRow({
   return (
     <button
       onClick={onClick}
-      className={`w-full flex items-start gap-2 px-3 py-2 text-left hover:bg-surface-200/30 transition-colors border-l-2 ${
+      className={`w-full flex items-start gap-2 px-3 py-2 text-left hover:bg-app-muted/50 transition-colors border-l-2 ${
         selected
           ? 'bg-accent-blue/5 border-accent-blue'
           : 'border-transparent'

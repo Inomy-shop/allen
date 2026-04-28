@@ -80,7 +80,7 @@ export default function Select({ value, onChange, options, placeholder = 'Select
         type="button"
         onClick={handleOpen}
         className={`input w-full text-left flex items-center justify-between gap-2 cursor-pointer ${
-          open ? 'border-accent-blue shadow-glow-blue' : ''
+          open ? 'border-accent-blue' : ''
         }`}
       >
         {selected ? (

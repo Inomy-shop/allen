@@ -59,7 +59,7 @@ export default function ResetPasswordPage() {
       <div className="w-full max-w-sm">
         <form
           onSubmit={handleSubmit}
-          className="bg-surface-100 border border-border/50 rounded-lg p-6 space-y-4"
+          className="bg-surface-100 border border-app rounded-lg p-6 space-y-4"
         >
           <div>
             <h1 className="text-base font-heading text-theme-primary">
@@ -81,7 +81,7 @@ export default function ResetPasswordPage() {
               autoFocus
               value={currentPassword}
               onChange={(e) => setCurrent(e.target.value)}
-              className="w-full px-3 py-2 bg-surface-50 border border-border/50 rounded-md text-sm text-theme-primary focus:outline-none focus:border-accent-blue"
+              className="w-full px-3 py-2 bg-surface-50 border border-app rounded-md text-sm text-theme-primary focus:outline-none focus:border-accent-blue"
             />
           </div>
           <div className="space-y-2">
@@ -93,7 +93,7 @@ export default function ResetPasswordPage() {
               required
               value={newPassword}
               onChange={(e) => setNew(e.target.value)}
-              className="w-full px-3 py-2 bg-surface-50 border border-border/50 rounded-md text-sm text-theme-primary focus:outline-none focus:border-accent-blue"
+              className="w-full px-3 py-2 bg-surface-50 border border-app rounded-md text-sm text-theme-primary focus:outline-none focus:border-accent-blue"
             />
             <p className="text-[10px] text-theme-subtle">
               Min 8 chars, with uppercase, lowercase, number, and symbol.
@@ -108,7 +108,7 @@ export default function ResetPasswordPage() {
               required
               value={confirm}
               onChange={(e) => setConfirm(e.target.value)}
-              className="w-full px-3 py-2 bg-surface-50 border border-border/50 rounded-md text-sm text-theme-primary focus:outline-none focus:border-accent-blue"
+              className="w-full px-3 py-2 bg-surface-50 border border-app rounded-md text-sm text-theme-primary focus:outline-none focus:border-accent-blue"
             />
           </div>
           {error && <div className="text-xs text-accent-red">{error}</div>}

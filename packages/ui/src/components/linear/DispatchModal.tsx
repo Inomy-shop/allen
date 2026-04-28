@@ -63,14 +63,14 @@ export default function DispatchModal({
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-md" onClick={onClose}>
       <div className="bg-surface-100 border border-border rounded-lg w-full max-w-xl shadow-popover animate-in fade-in zoom-in-95 duration-200 overflow-hidden" onClick={e => e.stopPropagation()}>
         {/* Header */}
-        <div className="px-5 py-4 border-b border-border/60 flex items-center justify-between">
+        <div className="px-5 py-4 border-b border-app flex items-center justify-between">
           <div>
             <h2 className="font-heading text-sm font-bold text-theme-primary tracking-widest uppercase">Dispatch to agent</h2>
             <div className="mt-0.5 text-[11px] font-mono text-theme-muted">
               <span className="text-theme-subtle">{issue.identifier}</span> · {issue.title}
             </div>
           </div>
-          <button onClick={onClose} className="p-1.5 rounded-md text-theme-muted hover:text-theme-primary hover:bg-surface-200/50">
+          <button onClick={onClose} className="p-1.5 rounded-md text-theme-muted hover:text-theme-primary hover:bg-app-muted">
             <X className="w-4 h-4" />
           </button>
         </div>
@@ -102,7 +102,7 @@ export default function DispatchModal({
               value={repoId}
               onChange={e => setRepoId(e.target.value)}
               disabled={reposLoading}
-              className="w-full px-3 py-2 rounded-lg bg-surface-200/40 border border-border/50 text-sm text-theme-primary focus:outline-none focus:border-accent-blue/50 disabled:opacity-50"
+              className="w-full px-3 py-2 rounded-lg bg-app-muted border border-app text-sm text-theme-primary focus:outline-none focus:border-accent-blue/50 disabled:opacity-50"
             >
               <option value="">
                 {reposLoading ? 'Loading repos…' : '— Pick a repository —'}
@@ -134,7 +134,7 @@ export default function DispatchModal({
               onChange={e => setExtra(e.target.value)}
               rows={4}
               placeholder="Any additional context beyond the ticket body…"
-              className="w-full px-3 py-2 rounded-lg bg-surface-200/40 border border-border/50 text-sm text-theme-primary placeholder:text-theme-subtle focus:outline-none focus:border-accent-blue/50 resize-y"
+              className="w-full px-3 py-2 rounded-lg bg-app-muted border border-app text-sm text-theme-primary placeholder:text-theme-subtle focus:outline-none focus:border-accent-blue/50 resize-y"
             />
           </div>
 
@@ -147,7 +147,7 @@ export default function DispatchModal({
         </div>
 
         {/* Footer */}
-        <div className="px-5 py-3.5 border-t border-border/60 bg-surface-200/10 flex items-center justify-between">
+        <div className="px-5 py-3.5 border-t border-app bg-surface-200/10 flex items-center justify-between">
           <div className="text-[10px] font-mono text-theme-subtle">
             Workspace creates first, then the agent starts working in it.
           </div>

@@ -36,10 +36,10 @@ const TYPE_ICON: Record<string, React.ComponentType<{ className?: string }>> = {
 // ── Status-aware border/glow styles ──
 const statusBorder: Record<string, string> = {
   pending: 'border-theme-subtle/40',
-  running: 'border-accent-blue shadow-glow-blue',
+  running: 'border-accent-blue',
   completed: 'border-accent-green',
-  failed: 'border-accent-red shadow-glow-red',
-  waiting_for_input: 'border-accent-yellow shadow-glow-yellow animate-pulse',
+  failed: 'border-accent-red',
+  waiting_for_input: 'border-accent-yellow animate-pulse',
 };
 
 const statusRing: Record<string, string> = {
@@ -650,7 +650,7 @@ function LiveGraphInner({
         <Background variant={BackgroundVariant.Lines} gap={30} size={1} color="rgb(var(--color-border) / 0.2)" />
         <Controls
           showInteractive={false}
-          className="!bg-surface-100 !border-border/50 !shadow-lg [&>button]:!bg-surface-200 [&>button]:!border-border/50 [&>button]:!text-theme-secondary [&>button:hover]:!bg-surface-300 [&>button:hover]:!text-accent-blue"
+          className="!bg-surface-100 !border-app !shadow-lg [&>button]:!bg-surface-200 [&>button]:!border-app [&>button]:!text-theme-secondary [&>button:hover]:!bg-surface-300 [&>button:hover]:!text-accent-blue"
         />
       </ReactFlow>
 

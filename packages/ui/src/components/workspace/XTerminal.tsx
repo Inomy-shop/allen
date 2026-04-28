@@ -202,9 +202,9 @@ export function XTerminal({ workspaceId, terminalId = 'default', className, init
 
   const badge = (() => {
     if (status === 'connected') return null;
-    if (status === 'connecting') return { text: 'connecting…', cls: 'text-amber-400 bg-amber-400/10 border-amber-400/20' };
-    if (status === 'reconnecting') return { text: `reconnecting… (${attempt}/${MAX_RECONNECT_ATTEMPTS})`, cls: 'text-amber-400 bg-amber-400/10 border-amber-400/20' };
-    return { text: 'disconnected', cls: 'text-red-400 bg-red-400/10 border-red-400/20' };
+    if (status === 'connecting') return { text: 'connecting…', cls: 'text-accent-yellow bg-accent-yellow/10 border-accent-yellow/30' };
+    if (status === 'reconnecting') return { text: `reconnecting… (${attempt}/${MAX_RECONNECT_ATTEMPTS})`, cls: 'text-accent-yellow bg-accent-yellow/10 border-accent-yellow/30' };
+    return { text: 'disconnected', cls: 'text-accent-red bg-accent-red/10 border-accent-red/30' };
   })();
 
   return (

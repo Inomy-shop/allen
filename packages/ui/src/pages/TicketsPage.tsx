@@ -77,7 +77,7 @@ const STATUS_GROUPS: { type: StateType; label: string }[] = [
 function PriorityIcon({ p }: { p: number }) {
   const tone =
     p === 1 ? 'text-accent-red'
-    : p === 2 ? 'text-orange-400'
+    : p === 2 ? 'text-accent-orange'
     : p === 3 ? 'text-accent-yellow'
     : p === 4 ? 'text-accent-green'
     : 'text-theme-subtle';
@@ -305,7 +305,7 @@ export default function TicketsPage() {
   if (!status?.configured) {
     return (
       <div className="flex items-center justify-center h-full p-8">
-        <div className="max-w-md w-full rounded-xl border border-border/40 bg-surface-100/40 p-8 text-center space-y-4">
+        <div className="max-w-md w-full rounded-xl border border-app bg-app-muted/50 p-8 text-center space-y-4">
           <div className="w-12 h-12 mx-auto rounded-full bg-accent-yellow/10 flex items-center justify-center">
             <AlertCircle className="w-6 h-6 text-accent-yellow" />
           </div>
@@ -315,7 +315,7 @@ export default function TicketsPage() {
               Add a Linear API token to Allen Secrets under the key:
             </p>
           </div>
-          <div className="inline-flex items-center gap-2 px-3 py-2 rounded-md bg-surface-200/40 border border-border/40 text-[11px] font-mono text-accent-blue">
+          <div className="inline-flex items-center gap-2 px-3 py-2 rounded-md bg-app-muted border border-app text-[11px] font-mono text-accent-blue">
             <KeyRound className="w-3.5 h-3.5" /> ALLEN_LINEAR_ACCESS_TOKEN
           </div>
           <div className="flex items-center justify-center gap-2 pt-2">
@@ -327,7 +327,7 @@ export default function TicketsPage() {
             </button>
             <button
               onClick={loadStatus}
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-[11px] font-mono bg-surface-200/40 text-theme-muted hover:bg-surface-200/60 transition-colors"
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-[11px] font-mono bg-app-muted text-theme-muted hover:bg-app-muted transition-colors"
             >
               <RefreshCw className="w-3 h-3" /> Recheck
             </button>
@@ -346,7 +346,7 @@ export default function TicketsPage() {
           <p className="text-[12px] text-theme-muted font-body">{status.error}</p>
           <button
             onClick={loadStatus}
-            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-[11px] font-mono bg-surface-200/40 text-theme-muted hover:bg-surface-200/60"
+            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-[11px] font-mono bg-app-muted text-theme-muted hover:bg-app-muted"
           >
             <RefreshCw className="w-3 h-3" /> Retry
           </button>
@@ -372,7 +372,7 @@ export default function TicketsPage() {
           </div>
         </div>
 
-        <div className="px-4 py-3 border-b border-border/40">
+        <div className="px-4 py-3 border-b border-app">
           <div className="relative">
             <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-theme-subtle pointer-events-none" />
             <input
@@ -394,7 +394,7 @@ export default function TicketsPage() {
               className={`w-full flex items-center justify-between px-2 py-1.5 rounded-md text-[11px] font-mono transition-colors ${
                 projectFilter === ''
                   ? 'bg-accent-blue/10 text-accent-blue'
-                  : 'text-theme-secondary hover:bg-surface-200/40'
+                  : 'text-theme-secondary hover:bg-app-muted'
               }`}
             >
               <span>★ All projects</span>
@@ -407,7 +407,7 @@ export default function TicketsPage() {
                 className={`w-full flex items-center gap-2 px-2 py-1.5 rounded-md text-[11px] font-mono transition-colors ${
                   projectFilter === p.id
                     ? 'bg-accent-blue/10 text-accent-blue'
-                    : 'text-theme-secondary hover:bg-surface-200/40'
+                    : 'text-theme-secondary hover:bg-app-muted'
                 }`}
                 title={p.description || p.name}
               >
@@ -434,7 +434,7 @@ export default function TicketsPage() {
             {STATUS_GROUPS.map(g => (
               <label
                 key={g.type}
-                className="flex items-center gap-2 px-2 py-1 rounded-md cursor-pointer text-[11px] font-mono text-theme-secondary hover:bg-surface-200/40"
+                className="flex items-center gap-2 px-2 py-1 rounded-md cursor-pointer text-[11px] font-mono text-theme-secondary hover:bg-app-muted"
               >
                 <input
                   type="checkbox"
@@ -455,7 +455,7 @@ export default function TicketsPage() {
               <button
                 onClick={() => setAssigneeFilter('any')}
                 className={`w-full text-left px-2 py-1 rounded-md text-[11px] font-mono transition-colors ${
-                  assigneeFilter === 'any' ? 'bg-accent-blue/10 text-accent-blue' : 'text-theme-secondary hover:bg-surface-200/40'
+                  assigneeFilter === 'any' ? 'bg-accent-blue/10 text-accent-blue' : 'text-theme-secondary hover:bg-app-muted'
                 }`}
               >
                 Any
@@ -463,7 +463,7 @@ export default function TicketsPage() {
               <button
                 onClick={() => setAssigneeFilter('unassigned')}
                 className={`w-full text-left px-2 py-1 rounded-md text-[11px] font-mono transition-colors ${
-                  assigneeFilter === 'unassigned' ? 'bg-accent-blue/10 text-accent-blue' : 'text-theme-secondary hover:bg-surface-200/40'
+                  assigneeFilter === 'unassigned' ? 'bg-accent-blue/10 text-accent-blue' : 'text-theme-secondary hover:bg-app-muted'
                 }`}
               >
                 Unassigned
@@ -490,7 +490,7 @@ export default function TicketsPage() {
           </button>
         </div>
 
-        <div className="p-3 border-t border-border/40">
+        <div className="p-3 border-t border-app">
           <button
             onClick={() => { void loadStatus(); void loadProjects(); void loadIssues(); }}
             disabled={listLoading}
@@ -523,7 +523,7 @@ export default function TicketsPage() {
               <Loader2 className="w-3 h-3 animate-spin" /> Loading from Linear…
             </div>
           ) : filteredIssues.length === 0 ? (
-            <div className="rounded-xl border border-dashed border-border/40 p-12 text-center text-[12px] text-theme-muted font-body italic">
+            <div className="rounded-xl border border-dashed border-app p-12 text-center text-[12px] text-theme-muted font-body italic">
               No tickets match the current filters.
             </div>
           ) : (
@@ -543,7 +543,7 @@ export default function TicketsPage() {
                       <span className="text-[10px] font-mono text-theme-subtle">{list.length}</span>
                     </button>
                     {!collapsed && (
-                      <div className="rounded-lg border border-border/30 divide-y divide-border/20 overflow-hidden">
+                      <div className="rounded-lg border border-app divide-y divide-border/20 overflow-hidden">
                         {list.map(issue => (
                           <TicketRow
                             key={issue.id}
@@ -565,7 +565,7 @@ export default function TicketsPage() {
 
       {/* ── Drawer ──────────────────────────────────────────────────────── */}
       {selectedId && (
-        <div className="w-[32rem] shrink-0 border-l border-border/40 bg-surface-100/40 overflow-y-auto min-h-0 flex flex-col">
+        <div className="w-[32rem] shrink-0 border-l border-app bg-app-muted/50 overflow-y-auto min-h-0 flex flex-col">
           {detailLoading && !detail ? (
             <div className="p-6 flex items-center gap-2 text-[11px] font-mono text-theme-muted">
               <Loader2 className="w-3 h-3 animate-spin" /> Loading…
@@ -609,7 +609,7 @@ function AssignmentPill({ assignee, onClick }: { assignee: AgentAssignee | null;
     return (
       <button
         onClick={onClick}
-        className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[10px] font-mono bg-surface-200/40 text-theme-muted hover:bg-accent-green/10 hover:text-accent-green border border-border/40 hover:border-accent-green/40 transition-colors"
+        className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[10px] font-mono bg-app-muted text-theme-muted hover:bg-accent-green/10 hover:text-accent-green border border-app hover:border-accent-green/40 transition-colors"
       >
         <Sparkles className="w-3 h-3" /> Dispatch
       </button>
@@ -713,18 +713,18 @@ function TicketDrawer({
 
   return (
     <>
-      <div className="px-5 py-4 border-b border-border/40 flex items-center justify-between shrink-0">
+      <div className="px-5 py-4 border-b border-app flex items-center justify-between shrink-0">
         <div className="flex items-center gap-2">
           <span className="text-[11px] font-mono text-theme-subtle">{issue.identifier}</span>
           {issue.project && (
             <span className="text-[11px] font-mono text-theme-muted">· {issue.project.name}</span>
           )}
         </div>
-        <button onClick={onClose} className="p-1.5 rounded-md text-theme-muted hover:text-theme-primary hover:bg-surface-200/50">
+        <button onClick={onClose} className="p-1.5 rounded-md text-theme-muted hover:text-theme-primary hover:bg-app-muted">
           <X className="w-4 h-4" />
         </button>
       </div>
-      <div className="px-5 py-4 border-b border-border/40 shrink-0 space-y-3">
+      <div className="px-5 py-4 border-b border-app shrink-0 space-y-3">
         <h3 className="font-heading text-base font-bold text-theme-primary tracking-wide leading-snug">{issue.title}</h3>
         <div className="flex items-center gap-2 flex-wrap">
           <span
@@ -733,7 +733,7 @@ function TicketDrawer({
           >
             {issue.state.name}
           </span>
-          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-mono bg-surface-200/40 text-theme-muted border border-border/40">
+          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-mono bg-app-muted text-theme-muted border border-app">
             <PriorityIcon p={issue.priority} /> {issue.priorityLabel}
           </span>
           {issue.labels.map(l => (
@@ -748,7 +748,7 @@ function TicketDrawer({
         </div>
       </div>
 
-      <div className="px-5 py-4 border-b border-border/40 shrink-0 space-y-3">
+      <div className="px-5 py-4 border-b border-app shrink-0 space-y-3">
         <div>
           <div className="overline mb-1.5">Agent assignment</div>
           {assignee ? (
@@ -835,12 +835,12 @@ function TicketDrawer({
         </div>
       </div>
 
-      <div className="px-5 py-4 border-t border-border/40 shrink-0 flex items-center gap-2">
+      <div className="px-5 py-4 border-t border-app shrink-0 flex items-center gap-2">
         <a
           href={issue.url}
           target="_blank"
           rel="noreferrer"
-          className="inline-flex items-center gap-1.5 px-3 py-2 rounded-full text-[11px] font-mono bg-surface-200/40 text-theme-muted hover:bg-surface-200/60 transition-colors"
+          className="inline-flex items-center gap-1.5 px-3 py-2 rounded-full text-[11px] font-mono bg-app-muted text-theme-muted hover:bg-app-muted transition-colors"
         >
           <ExternalLink className="w-3 h-3" /> Open in Linear
         </a>

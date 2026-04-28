@@ -29,24 +29,24 @@ function RowSkeleton() {
   return (
     <div className="flex items-center gap-4 px-4 py-3 border-b border-border/10 animate-pulse">
       <div className="w-5" />
-      <div className="w-8 h-8 rounded-lg bg-surface-200/50" />
+      <div className="w-8 h-8 rounded-lg bg-app-muted" />
       <div className="w-48 space-y-1.5">
-        <div className="h-3.5 w-32 bg-surface-200/50 rounded" />
-        <div className="h-2.5 w-20 bg-surface-200/30 rounded" />
+        <div className="h-3.5 w-32 bg-app-muted rounded" />
+        <div className="h-2.5 w-20 bg-app-muted/50 rounded" />
       </div>
       <div className="flex-1">
-        <div className="h-3 w-40 bg-surface-200/30 rounded" />
+        <div className="h-3 w-40 bg-app-muted/50 rounded" />
       </div>
-      <div className="h-5 w-10 bg-surface-200/30 rounded-full" />
+      <div className="h-5 w-10 bg-app-muted/50 rounded-full" />
       <div className="flex gap-2">
         <div className="h-4 w-10 bg-surface-200/20 rounded" />
         <div className="h-4 w-10 bg-surface-200/20 rounded" />
         <div className="h-4 w-10 bg-surface-200/20 rounded" />
       </div>
       <div className="flex gap-1.5">
-        <div className="h-6 w-14 bg-surface-200/30 rounded-full" />
-        <div className="h-6 w-14 bg-surface-200/30 rounded-full" />
-        <div className="h-6 w-16 bg-surface-200/30 rounded-full" />
+        <div className="h-6 w-14 bg-app-muted/50 rounded-full" />
+        <div className="h-6 w-14 bg-app-muted/50 rounded-full" />
+        <div className="h-6 w-16 bg-app-muted/50 rounded-full" />
       </div>
     </div>
   );
@@ -270,7 +270,7 @@ export default function WorkflowListPage() {
                     </Link>
                     <button
                       onClick={() => setDeletingWf({ id: wf._id, name: wf.name })}
-                      className="btn btn-ghost btn-sm hover:!text-accent-red"
+                      className="btn btn-ghost btn-sm hover:text-accent-red"
                       title="Delete workflow"
                     >
                       <Trash2 className="w-3 h-3" />

@@ -47,7 +47,7 @@ export function ToolCallRow({ tc, index }: { tc: ToolCall; index: number }) {
     <div className={`px-4 py-2 border-b border-border/10 last:border-0 ${isError ? 'bg-accent-red/5' : ''}`}>
       <button
         onClick={() => setOpen(o => !o)}
-        className="w-full flex items-center gap-2 text-left hover:bg-surface-200/30 -mx-1 px-1 py-0.5 rounded-sm transition-colors"
+        className="w-full flex items-center gap-2 text-left hover:bg-app-muted/50 -mx-1 px-1 py-0.5 rounded-sm transition-colors"
         title={open ? 'Collapse' : 'Expand'}
       >
         {open ? <ChevronDown className="w-3 h-3 shrink-0 text-theme-muted" /> : <ChevronRight className="w-3 h-3 shrink-0 text-theme-muted" />}
@@ -55,7 +55,7 @@ export function ToolCallRow({ tc, index }: { tc: ToolCall; index: number }) {
         {isError
           ? <AlertCircle className="w-3 h-3 shrink-0 text-accent-red" />
           : <CheckCircle className="w-3 h-3 shrink-0 text-accent-green/60" />}
-        <span className="text-[11px] font-mono text-amber-400 shrink-0">{tc.tool}</span>
+        <span className="text-[11px] font-mono text-accent-yellow shrink-0">{tc.tool}</span>
         <span className="text-[11px] text-theme-secondary truncate flex-1">{desc}</span>
         <span className="text-[10px] font-mono text-theme-subtle shrink-0">{formatToolDuration(tc.durationMs ?? 0)}</span>
         {tsLabel && <span className="text-[10px] font-mono text-theme-subtle shrink-0">{tsLabel}</span>}
@@ -67,7 +67,7 @@ export function ToolCallRow({ tc, index }: { tc: ToolCall; index: number }) {
               <div className="overline mb-1">
                 Input {tc.truncated?.args && <span className="text-accent-yellow">(truncated)</span>}
               </div>
-              <pre className="text-[10px] font-mono text-theme-secondary whitespace-pre-wrap bg-surface-50/50 rounded-sm p-2 max-h-48 overflow-auto">{previewJson(tc.args)}</pre>
+              <pre className="text-[10px] font-mono text-theme-secondary whitespace-pre-wrap bg-app-card/50 rounded-sm p-2 max-h-48 overflow-auto">{previewJson(tc.args)}</pre>
             </div>
           )}
           {hasResult && (
@@ -75,7 +75,7 @@ export function ToolCallRow({ tc, index }: { tc: ToolCall; index: number }) {
               <div className="overline mb-1">
                 {isError ? 'Error' : 'Output'} {tc.truncated?.result && <span className="text-accent-yellow">(truncated)</span>}
               </div>
-              <pre className={`text-[10px] font-mono whitespace-pre-wrap rounded-sm p-2 max-h-64 overflow-auto ${isError ? 'text-accent-red bg-accent-red/5' : 'text-theme-secondary bg-surface-50/50'}`}>{previewJson(tc.result)}</pre>
+              <pre className={`text-[10px] font-mono whitespace-pre-wrap rounded-sm p-2 max-h-64 overflow-auto ${isError ? 'text-accent-red bg-accent-red/5' : 'text-theme-secondary bg-app-card/50'}`}>{previewJson(tc.result)}</pre>
             </div>
           )}
           {!hasArgs && !hasResult && (
@@ -94,7 +94,7 @@ export function ToolCallLog({ calls, title = 'Tool Calls', emptyText = 'No tool 
 }) {
   return (
     <div className="card overflow-hidden">
-      <div className="flex items-center gap-2 px-4 py-3 border-b border-border/20">
+      <div className="flex items-center gap-2 px-4 py-3 border-b border-app">
         <Wrench className="w-4 h-4 text-accent-yellow" />
         <span className="overline text-theme-secondary">{title}</span>
         <span className="text-[10px] text-theme-subtle font-mono ml-auto">{calls.length}</span>

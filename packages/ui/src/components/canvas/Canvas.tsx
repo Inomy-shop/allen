@@ -265,7 +265,7 @@ export default function Canvas({ nodes, edges, onNodesChange, onEdgesChange, wor
       </div>
 
       {/* Right: Node properties — resizable */}
-      <div className="bg-surface shrink-0 overflow-auto border-l-2 border-border/50 hover:border-accent-blue/50 transition-colors relative" style={{ width: propsWidth }}>
+      <div className="bg-surface shrink-0 overflow-auto border-l-2 border-app hover:border-accent-blue/50 transition-colors relative" style={{ width: propsWidth }}>
         <div className="absolute top-0 left-0 bottom-0 w-2 cursor-col-resize z-10" onMouseDown={propsResizeStart} />
         <NodeProperties
           node={selectedNode}
@@ -318,7 +318,7 @@ function CanvasInner({
         <Background variant={BackgroundVariant.Lines} gap={30} size={1} color="rgb(var(--color-border) / 0.2)" />
         <Controls
           showInteractive={false}
-          className="!bg-surface-100 !border-border/50 !shadow-lg [&>button]:!bg-surface-200 [&>button]:!border-border/50 [&>button]:!text-theme-secondary [&>button:hover]:!bg-surface-300 [&>button:hover]:!text-accent-blue"
+          className="!bg-surface-100 !border-app !shadow-lg [&>button]:!bg-surface-200 [&>button]:!border-app [&>button]:!text-theme-secondary [&>button:hover]:!bg-surface-300 [&>button:hover]:!text-accent-blue"
         />
       </ReactFlow>
 

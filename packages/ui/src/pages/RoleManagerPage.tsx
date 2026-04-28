@@ -43,11 +43,11 @@ function AgentDetailPanel({ agent, onClose }: { agent: Agent; onClose: () => voi
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-md p-6" onClick={onClose}>
       <div className="card w-full max-w-5xl h-[92vh] overflow-hidden shadow-popover animate-in fade-in zoom-in-95 duration-200 flex flex-col" onClick={e => e.stopPropagation()}>
         {/* Header */}
-        <div className="px-7 py-5 border-b border-border/60 shrink-0">
+        <div className="px-7 py-5 border-b border-app shrink-0">
           <div className="flex items-center justify-between gap-4">
             <div className="flex items-center gap-4 min-w-0">
               <div
-                className="w-14 h-14 rounded-xl flex items-center justify-center border border-border/30 shrink-0"
+                className="w-14 h-14 rounded-xl flex items-center justify-center border border-app shrink-0"
                 style={{ backgroundColor: ((agent.color as string) ?? '#666') + '18' }}
               >
                 <RoleIcon icon={agent.icon as string} color={agent.color as string} size={30} />
@@ -75,13 +75,13 @@ function AgentDetailPanel({ agent, onClose }: { agent: Agent; onClose: () => voi
               <div
                 className={`rounded-lg border overflow-hidden text-center ${
                   provider === 'codex' ? 'bg-accent-green/10 text-accent-green border-accent-green/30'
-                  : provider === 'openai' ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/30'
+                  : provider === 'openai' ? 'bg-accent-green/10 text-accent-green border-emerald-500/30'
                   : 'bg-accent-blue/10 text-accent-blue border-accent-blue/30'
                 }`}
                 style={{ minWidth: '8rem' }}
               >
                 <div className="overline px-3 py-1 border-b border-current/20 opacity-80">{provider}</div>
-                <div className="text-xs font-mono px-3 py-1.5 text-theme-primary bg-surface-100/40">{model}</div>
+                <div className="text-xs font-mono px-3 py-1.5 text-theme-primary bg-app-muted/50">{model}</div>
               </div>
               <button onClick={onClose} className="p-2 rounded-md hover:bg-surface-200 text-theme-muted hover:text-theme-secondary transition-colors">
                 <X className="w-4 h-4" />
@@ -92,7 +92,7 @@ function AgentDetailPanel({ agent, onClose }: { agent: Agent; onClose: () => voi
 
         {/* Metadata strip */}
         {(capabilities.length > 0 || tools.length > 0 || delegateTargets.length > 0) && (
-          <div className="px-7 py-3 border-b border-border/30 flex items-center gap-5 flex-wrap shrink-0 bg-surface-200/15">
+          <div className="px-7 py-3 border-b border-app flex items-center gap-5 flex-wrap shrink-0 bg-surface-200/15">
             {capabilities.length > 0 && (
               <div className="flex items-center gap-2">
                 <span className="overline">Capabilities:</span>
@@ -141,7 +141,7 @@ function AgentDetailPanel({ agent, onClose }: { agent: Agent; onClose: () => voi
         </div>
 
         {/* Footer */}
-        <div className="px-7 py-4 border-t border-border/60 bg-surface-200/10 shrink-0 flex items-center justify-between">
+        <div className="px-7 py-4 border-t border-app bg-surface-200/10 shrink-0 flex items-center justify-between">
           <div className="text-[10px] font-mono text-theme-subtle">
             Read-only view. Use Edit to modify.
           </div>
@@ -215,11 +215,11 @@ function RunAgentDialog({
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-md" onClick={onClose}>
       <div className="card w-full max-w-2xl shadow-popover animate-in fade-in zoom-in-95 duration-200" onClick={e => e.stopPropagation()}>
-        <div className="px-6 py-5 border-b border-border/60">
+        <div className="px-6 py-5 border-b border-app">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-3">
               <div
-                className="w-10 h-10 rounded-lg flex items-center justify-center border border-border/30"
+                className="w-10 h-10 rounded-lg flex items-center justify-center border border-app"
                 style={{ backgroundColor: ((agent.color as string) ?? '#666') + '15' }}
               >
                 <RoleIcon icon={agent.icon as string} color={agent.color as string} size={22} />
@@ -231,7 +231,7 @@ function RunAgentDialog({
                 <div className="text-[10px] text-theme-subtle font-mono mt-0.5">{agent.name as string}</div>
               </div>
             </div>
-            <button onClick={onClose} className="p-1.5 rounded-lg hover:bg-surface-200/50 transition-colors">
+            <button onClick={onClose} className="p-1.5 rounded-lg hover:bg-app-muted transition-colors">
               <X className="w-4 h-4 text-theme-muted" />
             </button>
           </div>
@@ -246,7 +246,7 @@ function RunAgentDialog({
               onKeyDown={e => { if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') submit(); }}
               rows={8}
               placeholder="Describe the task for the agent…"
-              className="w-full px-3 py-2 rounded-lg bg-surface-200/40 border border-border/50 text-sm text-theme-primary placeholder:text-theme-subtle focus:outline-none focus:border-accent-blue/50"
+              className="w-full px-3 py-2 rounded-lg bg-app-muted border border-app text-sm text-theme-primary placeholder:text-theme-subtle focus:outline-none focus:border-accent-blue/50"
             />
           </div>
           <div>
@@ -257,7 +257,7 @@ function RunAgentDialog({
               value={repoId}
               onChange={e => setRepoId(e.target.value)}
               disabled={loadingRepos}
-              className="w-full px-3 py-2 rounded-lg bg-surface-200/40 border border-border/50 text-sm text-theme-primary focus:outline-none focus:border-accent-blue/50 disabled:opacity-50"
+              className="w-full px-3 py-2 rounded-lg bg-app-muted border border-app text-sm text-theme-primary focus:outline-none focus:border-accent-blue/50 disabled:opacity-50"
             >
               <option value="">
                 {loadingRepos ? 'Loading repos…' : '— No repository (agent runs without a repo) —'}
@@ -280,8 +280,8 @@ function RunAgentDialog({
             )}
           </div>
         </div>
-        <div className="px-6 py-4 border-t border-border/60 flex items-center justify-end gap-2">
-          <button onClick={onClose} className="px-4 py-2 rounded-lg text-[11px] font-mono text-theme-muted hover:text-theme-primary hover:bg-surface-200/40 transition-colors">Cancel</button>
+        <div className="px-6 py-4 border-t border-app flex items-center justify-end gap-2">
+          <button onClick={onClose} className="px-4 py-2 rounded-lg text-[11px] font-mono text-theme-muted hover:text-theme-primary hover:bg-app-muted transition-colors">Cancel</button>
           <button
             onClick={submit}
             disabled={submitting || !prompt.trim()}
@@ -621,7 +621,7 @@ export default function RoleManagerPage() {
                 className={`w-full flex items-start gap-2.5 px-4 py-2.5 text-left transition-colors border-l-2 ${
                   isActive
                     ? 'bg-accent-blue/10 border-accent-blue'
-                    : 'border-transparent hover:bg-surface-200/30'
+                    : 'border-transparent hover:bg-app-muted/50'
                 }`}
               >
                 <div className="w-7 h-7 rounded-md bg-accent-blue/10 flex items-center justify-center shrink-0 mt-0.5">
@@ -633,7 +633,7 @@ export default function RoleManagerPage() {
                       isActive ? 'text-accent-blue' : 'text-theme-primary'
                     }`}>{team.displayName}</span>
                     {team.isBuiltIn && (
-                      <span className="text-[8px] font-mono px-1 py-0 rounded-full bg-surface-200/60 text-theme-muted">BI</span>
+                      <span className="text-[8px] font-mono px-1 py-0 rounded-full bg-app-muted text-theme-muted">BI</span>
                     )}
                   </div>
                   <div className="flex items-center gap-2 mt-0.5">
@@ -662,10 +662,10 @@ export default function RoleManagerPage() {
                 className={`w-full flex items-center gap-2.5 px-4 py-2.5 text-left transition-colors border-l-2 ${
                   selection.kind === 'unassigned'
                     ? 'bg-accent-yellow/10 border-accent-yellow'
-                    : 'border-transparent hover:bg-surface-200/30'
+                    : 'border-transparent hover:bg-app-muted/50'
                 }`}
               >
-                <div className="w-7 h-7 rounded-md bg-surface-200/40 flex items-center justify-center shrink-0">
+                <div className="w-7 h-7 rounded-md bg-app-muted flex items-center justify-center shrink-0">
                   <Users className="w-3.5 h-3.5 text-theme-muted" />
                 </div>
                 <div className="flex-1 min-w-0">
@@ -688,7 +688,7 @@ export default function RoleManagerPage() {
                 <button
                   key={a.name as string}
                   onClick={() => jumpToAgent(a)}
-                  className="w-full flex items-center gap-2.5 px-4 py-2 text-left hover:bg-surface-200/30 transition-colors"
+                  className="w-full flex items-center gap-2.5 px-4 py-2 text-left hover:bg-app-muted/50 transition-colors"
                 >
                   <div
                     className="w-6 h-6 rounded flex items-center justify-center shrink-0"
@@ -712,7 +712,7 @@ export default function RoleManagerPage() {
         </div>
 
         {/* Footer CTAs */}
-        <div className="p-3 border-t border-border/40 flex flex-col gap-2">
+        <div className="p-3 border-t border-app flex flex-col gap-2">
           <button
             onClick={handleCreate}
             className="w-full inline-flex items-center justify-center gap-1.5 px-3 py-2 rounded-lg text-[11px] font-mono bg-accent-blue/10 text-accent-blue hover:bg-accent-blue/20 transition-colors"
@@ -729,14 +729,14 @@ export default function RoleManagerPage() {
             <button
               onClick={handleBuildTeamWithAi}
               title="Build a team with AI"
-              className="flex-1 inline-flex items-center justify-center gap-1 px-2 py-1.5 rounded-lg text-[10px] font-mono bg-surface-200/40 text-theme-muted hover:bg-surface-200/60 transition-colors"
+              className="flex-1 inline-flex items-center justify-center gap-1 px-2 py-1.5 rounded-lg text-[10px] font-mono bg-app-muted text-theme-muted hover:bg-app-muted transition-colors"
             >
               <Sparkles className="w-3 h-3" /> AI
             </button>
             <button
               onClick={() => setImportOpen(true)}
               title="Import agents from a repository"
-              className="flex-1 inline-flex items-center justify-center gap-1 px-2 py-1.5 rounded-lg text-[10px] font-mono bg-surface-200/40 text-theme-muted hover:bg-surface-200/60 transition-colors"
+              className="flex-1 inline-flex items-center justify-center gap-1 px-2 py-1.5 rounded-lg text-[10px] font-mono bg-app-muted text-theme-muted hover:bg-app-muted transition-colors"
             >
               <FolderGit2 className="w-3 h-3" /> Import
             </button>
@@ -767,7 +767,7 @@ export default function RoleManagerPage() {
               </button>
               <button
                 onClick={clearSelection}
-                className="inline-flex items-center gap-1 px-3 py-1 rounded-full text-[10px] font-mono bg-surface-200/30 text-theme-muted hover:bg-surface-200/50"
+                className="inline-flex items-center gap-1 px-3 py-1 rounded-full text-[10px] font-mono bg-app-muted/50 text-theme-muted hover:bg-app-muted"
               >
                 <X className="w-3 h-3" /> Clear
               </button>
@@ -915,7 +915,7 @@ function OverviewContent({
       </div>
 
       {/* Org chart */}
-      <div className="rounded-xl border border-border/40 bg-surface-100/30 p-4">
+      <div className="rounded-xl border border-app bg-app-muted/40 p-4">
         <div className="flex items-center gap-2 mb-3">
           <LayoutGrid className="w-4 h-4 text-accent-blue" />
           <span className="overline">Delegation Graph</span>
@@ -930,7 +930,7 @@ function OverviewContent({
       </div>
 
       {/* Largest teams */}
-      <div className="rounded-xl border border-border/40 bg-surface-100/30 p-4">
+      <div className="rounded-xl border border-app bg-app-muted/40 p-4">
         <div className="flex items-center gap-2 mb-3">
           <Users className="w-4 h-4 text-accent-purple" />
           <span className="overline">Largest Teams</span>
@@ -946,12 +946,12 @@ function OverviewContent({
                 <button
                   key={team.name}
                   onClick={() => onSelectTeam(team.name)}
-                  className="w-full flex items-center gap-3 px-2 py-1.5 rounded-md hover:bg-surface-200/40 transition-colors group"
+                  className="w-full flex items-center gap-3 px-2 py-1.5 rounded-md hover:bg-app-muted transition-colors group"
                 >
                   <span className="w-32 text-[11px] font-heading font-semibold text-theme-primary tracking-wide truncate text-left">
                     {team.displayName}
                   </span>
-                  <div className="flex-1 h-2 rounded-full bg-surface-200/30 overflow-hidden">
+                  <div className="flex-1 h-2 rounded-full bg-app-muted/50 overflow-hidden">
                     <div className="h-full bg-accent-blue/40 group-hover:bg-accent-blue/60 transition-colors" style={{ width: `${pct}%` }} />
                   </div>
                   <span className="w-14 text-right text-[10px] font-mono text-theme-muted">{count} {count === 1 ? 'agent' : 'agents'}</span>
@@ -987,7 +987,7 @@ function StatTile({ label, value, accent }: { label: string; value: number; acce
 function DistributionCard({ title, entries, accent }: { title: string; entries: [string, number][]; accent: 'blue' | 'purple' }) {
   const tone = accent === 'blue' ? 'text-accent-blue' : 'text-accent-purple';
   return (
-    <div className="rounded-xl border border-border/40 bg-surface-100/30 p-4">
+    <div className="rounded-xl border border-app bg-app-muted/40 p-4">
       <div className="overline mb-3">{title}</div>
       {entries.length === 0 ? (
         <div className="text-[11px] text-theme-muted italic font-body">—</div>
@@ -1036,7 +1036,7 @@ function TeamDetailContent({
   return (
     <div className="p-6 space-y-5">
       {/* Team header */}
-      <div className="rounded-xl border border-border/40 bg-surface-100/30 p-5">
+      <div className="rounded-xl border border-app bg-app-muted/40 p-5">
         <div className="flex items-start gap-4">
           <div className="w-12 h-12 rounded-lg bg-accent-blue/10 flex items-center justify-center shrink-0">
             <Users className="w-6 h-6 text-accent-blue" />
@@ -1045,7 +1045,7 @@ function TeamDetailContent({
             <div className="flex items-center gap-2 flex-wrap">
               <h2 className="text-[18px] font-semibold text-theme-primary tracking-tight">{team.displayName}</h2>
               {team.isBuiltIn && (
-                <span className="text-[9px] font-mono px-1.5 py-0.5 rounded-full bg-surface-200/60 text-theme-muted">built-in</span>
+                <span className="text-[9px] font-mono px-1.5 py-0.5 rounded-full bg-app-muted text-theme-muted">built-in</span>
               )}
               <span className="text-[11px] font-mono text-theme-subtle">{team.name}</span>
             </div>
@@ -1053,7 +1053,7 @@ function TeamDetailContent({
               <p className="text-[12px] text-theme-muted font-body mt-1">{team.description}</p>
             )}
             {team.mission && (
-              <div className="mt-3 flex items-start gap-2 px-3 py-2 rounded-md bg-surface-200/25 border border-border/30">
+              <div className="mt-3 flex items-start gap-2 px-3 py-2 rounded-md bg-surface-200/25 border border-app">
                 <Info className="w-3.5 h-3.5 text-accent-blue shrink-0 mt-0.5" />
                 <div className="text-[12px] text-theme-secondary font-body italic">{team.mission}</div>
               </div>
@@ -1133,7 +1133,7 @@ function TeamDetailContent({
         </div>
 
         {members.length === 0 ? (
-          <div className="rounded-xl border border-dashed border-border/40 p-8 text-center">
+          <div className="rounded-xl border border-dashed border-app p-8 text-center">
             <div className="text-[13px] text-theme-muted font-body">No members in this team yet.</div>
             {canAddAgent && (
               <button
@@ -1145,7 +1145,7 @@ function TeamDetailContent({
             )}
           </div>
         ) : filteredMembers.length === 0 ? (
-          <div className="rounded-xl border border-dashed border-border/40 p-6 text-center text-[12px] text-theme-muted font-body italic">
+          <div className="rounded-xl border border-dashed border-app p-6 text-center text-[12px] text-theme-muted font-body italic">
             No members match "{memberSearch}".
           </div>
         ) : (
@@ -1195,7 +1195,7 @@ function UnassignedContent({
         These agents aren't members of any team. Select them to assign to an existing team or create a new one.
       </p>
       {agents.length === 0 ? (
-        <div className="rounded-xl border border-dashed border-border/40 p-8 text-center text-[12px] text-theme-muted font-body italic">
+        <div className="rounded-xl border border-dashed border-app p-8 text-center text-[12px] text-theme-muted font-body italic">
           No unassigned agents.
         </div>
       ) : (

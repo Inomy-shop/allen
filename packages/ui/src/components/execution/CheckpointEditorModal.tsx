@@ -81,10 +81,10 @@ export default function CheckpointEditorModal({
       onClick={onClose}
     >
       <div
-        className="bg-surface-50 border border-border/40 rounded-lg w-full max-w-4xl max-h-[90vh] overflow-hidden flex flex-col shadow-2xl mt-[5vh]"
+        className="bg-surface-50 border border-app rounded-lg w-full max-w-4xl max-h-[90vh] overflow-hidden flex flex-col shadow-2xl mt-[5vh]"
         onClick={(e) => e.stopPropagation()}
       >
-        <div className="flex items-center justify-between px-5 py-3.5 border-b border-border/20">
+        <div className="flex items-center justify-between px-5 py-3.5 border-b border-app">
           <div className="min-w-0">
             <h3 className="font-heading text-sm text-theme-primary tracking-wider">
               Edit checkpoint state
@@ -95,7 +95,7 @@ export default function CheckpointEditorModal({
           </div>
           <button
             onClick={onClose}
-            className="p-1 rounded-md hover:bg-surface-200/60 text-theme-muted hover:text-theme-secondary transition-colors"
+            className="p-1 rounded-md hover:bg-app-muted text-theme-muted hover:text-theme-secondary transition-colors"
             title="Close editor"
           >
             <XIcon className="w-4 h-4" />
@@ -104,7 +104,7 @@ export default function CheckpointEditorModal({
 
         {locked && (
           <div className="px-5 py-3 bg-amber-500/10 border-b border-amber-500/30 flex items-start gap-2">
-            <AlertTriangle className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
+            <AlertTriangle className="w-4 h-4 text-accent-yellow shrink-0 mt-0.5" />
             <div className="text-xs text-amber-300 font-body">
               <div className="font-semibold mb-0.5">Edits are disabled</div>
               <div>{lockedReason ?? 'Execution is active.'}</div>
@@ -112,9 +112,9 @@ export default function CheckpointEditorModal({
           </div>
         )}
 
-        <div className="px-5 py-3 border-b border-border/20 bg-red-500/5">
+        <div className="px-5 py-3 border-b border-app bg-red-500/5">
           <div className="flex items-start gap-2">
-            <AlertTriangle className="w-4 h-4 text-red-400 shrink-0 mt-0.5" />
+            <AlertTriangle className="w-4 h-4 text-accent-red shrink-0 mt-0.5" />
             <div className="text-[11px] text-theme-muted font-body">
               Editing a checkpoint's state directly changes what downstream nodes will see if you
               resume from this point. Missing keys that a node expects will cause it to fail. No
@@ -124,11 +124,11 @@ export default function CheckpointEditorModal({
         </div>
 
         <div className="flex-1 overflow-hidden flex flex-col">
-          <label className="block text-[10px] font-label uppercase tracking-[0.15em] text-theme-muted px-5 pt-3 mb-1">
+          <label className="block overline px-5 pt-3 mb-1">
             state (JSON)
           </label>
           <textarea
-            className="flex-1 mx-5 mb-3 px-3 py-2 rounded-md border border-border/40 bg-surface-100/60 text-theme-primary text-xs font-mono focus:outline-none focus:border-accent-blue/60 resize-none min-h-[280px]"
+            className="flex-1 mx-5 mb-3 px-3 py-2 rounded-md border border-app bg-app-card text-theme-primary text-xs font-mono focus:outline-none focus:border-accent-blue/60 resize-none min-h-[280px]"
             spellCheck={false}
             value={text}
             onChange={(e) => setText(e.target.value)}
@@ -137,7 +137,7 @@ export default function CheckpointEditorModal({
 
           <div className="px-5 pb-2 min-h-[20px]">
             {error ? (
-              <div className="text-[11px] text-red-400 font-mono">✗ {error}</div>
+              <div className="text-[11px] text-accent-red font-mono">✗ {error}</div>
             ) : dirty ? (
               <div className="text-[11px] text-accent-green font-mono">✓ JSON valid</div>
             ) : (
@@ -146,14 +146,14 @@ export default function CheckpointEditorModal({
           </div>
 
           {saveError && (
-            <div className="px-5 pb-2 text-[11px] text-red-400 font-mono">{saveError}</div>
+            <div className="px-5 pb-2 text-[11px] text-accent-red font-mono">{saveError}</div>
           )}
         </div>
 
-        <div className="flex items-center justify-end gap-2 px-5 py-3 border-t border-border/20 bg-surface-100/40">
+        <div className="flex items-center justify-end gap-2 px-5 py-3 border-t border-app bg-app-muted/50">
           <button
             onClick={onClose}
-            className="px-3 py-1.5 rounded-md border border-border/40 text-theme-secondary hover:bg-surface-200/60 text-sm font-body transition-colors"
+            className="px-3 py-1.5 rounded-md border border-app text-theme-secondary hover:bg-app-muted text-sm font-body transition-colors"
           >
             Cancel
           </button>

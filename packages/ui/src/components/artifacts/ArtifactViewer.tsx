@@ -64,7 +64,7 @@ export default function ArtifactViewer({ artifact, onClose, onDelete }: Artifact
   return (
     <div className="flex flex-col h-full">
       {/* Header */}
-      <div className="shrink-0 px-4 py-2.5 border-b border-border/20 bg-surface-100/30">
+      <div className="shrink-0 px-4 py-2.5 border-b border-app bg-app-muted/40">
         <div className="flex items-center gap-2.5 mb-1">
           <Icon className={`w-4 h-4 shrink-0 ${colorForType(artifact.contentType)}`} />
           <div className="flex-1 min-w-0">
@@ -94,7 +94,7 @@ export default function ArtifactViewer({ artifact, onClose, onDelete }: Artifact
               onClick={handleCopy}
               disabled={!content || artifact.contentType === 'binary'}
               title="Copy content"
-              className="p-1.5 rounded-md hover:bg-surface-200/60 text-theme-muted hover:text-theme-secondary transition-colors disabled:opacity-30"
+              className="p-1.5 rounded-md hover:bg-app-muted text-theme-muted hover:text-theme-secondary transition-colors disabled:opacity-30"
             >
               <Copy className="w-3.5 h-3.5" />
             </button>
@@ -103,7 +103,7 @@ export default function ArtifactViewer({ artifact, onClose, onDelete }: Artifact
               target="_blank"
               rel="noreferrer"
               title="Open in new tab"
-              className="p-1.5 rounded-md hover:bg-surface-200/60 text-theme-muted hover:text-theme-secondary transition-colors"
+              className="p-1.5 rounded-md hover:bg-app-muted text-theme-muted hover:text-theme-secondary transition-colors"
             >
               <ExternalLink className="w-3.5 h-3.5" />
             </a>
@@ -111,7 +111,7 @@ export default function ArtifactViewer({ artifact, onClose, onDelete }: Artifact
               href={url}
               download={artifact.filename}
               title="Download"
-              className="p-1.5 rounded-md hover:bg-surface-200/60 text-theme-muted hover:text-theme-secondary transition-colors"
+              className="p-1.5 rounded-md hover:bg-app-muted text-theme-muted hover:text-theme-secondary transition-colors"
             >
               <Download className="w-3.5 h-3.5" />
             </a>
@@ -128,7 +128,7 @@ export default function ArtifactViewer({ artifact, onClose, onDelete }: Artifact
               <button
                 onClick={onClose}
                 title="Close viewer"
-                className="p-1.5 rounded-md hover:bg-surface-200/60 text-theme-muted hover:text-theme-secondary transition-colors"
+                className="p-1.5 rounded-md hover:bg-app-muted text-theme-muted hover:text-theme-secondary transition-colors"
               >
                 <XIcon className="w-3.5 h-3.5" />
               </button>
@@ -167,7 +167,7 @@ export default function ArtifactViewer({ artifact, onClose, onDelete }: Artifact
               <CsvTable text={content ?? ''} />
             )}
             {artifact.contentType === 'code' && (
-              <pre className="text-[12px] font-mono text-theme-primary whitespace-pre-wrap break-words leading-relaxed bg-surface-100/40 p-3 rounded border border-border/20">
+              <pre className="text-[12px] font-mono text-theme-primary whitespace-pre-wrap break-words leading-relaxed bg-app-muted/50 p-3 rounded border border-app">
                 {content}
               </pre>
             )}
@@ -194,7 +194,7 @@ function JsonViewer({ text }: { text: string }) {
     catch { return text; }
   }, [text]);
   return (
-    <pre className="text-[12px] font-mono text-theme-primary whitespace-pre-wrap break-words leading-relaxed bg-[rgb(var(--color-editor-background))] p-3 rounded border border-border/20">
+    <pre className="text-[12px] font-mono text-theme-primary whitespace-pre-wrap break-words leading-relaxed bg-[rgb(var(--color-editor-background))] p-3 rounded border border-app">
       {formatted}
     </pre>
   );
@@ -244,9 +244,9 @@ function CsvTable({ text }: { text: string }) {
   }
   const [header, ...body] = rows;
   return (
-    <div className="overflow-x-auto rounded-md border border-border/30">
+    <div className="overflow-x-auto rounded-md border border-app">
       <table className="min-w-full text-[11px] font-mono">
-        <thead className="bg-surface-200/40 border-b border-border/30 sticky top-0">
+        <thead className="bg-app-muted border-b border-app sticky top-0">
           <tr>
             {header.map((h, i) => (
               <th key={i} className="px-3 py-1.5 text-left font-label uppercase tracking-wider text-theme-muted whitespace-nowrap">
@@ -267,7 +267,7 @@ function CsvTable({ text }: { text: string }) {
           ))}
         </tbody>
       </table>
-      <div className="px-3 py-1.5 text-[10px] font-mono text-theme-subtle bg-surface-100/40 border-t border-border/20">
+      <div className="px-3 py-1.5 text-[10px] font-mono text-theme-subtle bg-app-muted/50 border-t border-app">
         {body.length} row{body.length === 1 ? '' : 's'} · {header.length} column{header.length === 1 ? '' : 's'}
       </div>
     </div>
@@ -287,14 +287,14 @@ function BinaryPreview({ url, filename, size }: { url: string; filename: string;
         <img
           src={url}
           alt={filename}
-          className="max-w-full max-h-[70vh] rounded border border-border/30 bg-surface-100/30"
+          className="max-w-full max-h-[70vh] rounded border border-app bg-app-muted/40"
         />
         <div className="text-[10px] font-mono text-theme-subtle">{filename} · {formatSize(size)}</div>
       </div>
     );
   }
   return (
-    <div className="flex items-center gap-3 p-4 rounded-md border border-border/30 bg-surface-100/40">
+    <div className="flex items-center gap-3 p-4 rounded-md border border-app bg-app-muted/50">
       <Database className="w-6 h-6 text-theme-muted shrink-0" />
       <div className="flex-1 min-w-0">
         <div className="text-xs font-mono text-theme-primary truncate">{filename}</div>

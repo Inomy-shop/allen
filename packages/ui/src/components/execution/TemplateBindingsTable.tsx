@@ -23,10 +23,10 @@ export default function TemplateBindingsTable({ bindings, defaultOpen = false }:
 
   const missing = bindings.filter((b) => b.status === 'missing').length;
   return (
-    <div className="border border-border/30 rounded-md bg-surface-100/40 overflow-hidden">
+    <div className="border border-app rounded-md bg-app-muted/50 overflow-hidden">
       <button
         onClick={() => setOpen(!open)}
-        className="w-full flex items-center gap-2 px-2.5 py-1.5 hover:bg-surface-200/40 text-left"
+        className="w-full flex items-center gap-2 px-2.5 py-1.5 hover:bg-app-muted text-left"
       >
         {open ? <ChevronDown className="w-3 h-3 text-theme-muted" /> : <ChevronRight className="w-3 h-3 text-theme-muted" />}
         <Info className="w-3 h-3 text-accent-blue" />
@@ -34,11 +34,11 @@ export default function TemplateBindingsTable({ bindings, defaultOpen = false }:
           Template bindings ({bindings.length})
         </span>
         {missing > 0 && (
-          <span className="text-[10px] font-mono text-amber-400 ml-auto">⚠ {missing} missing</span>
+          <span className="text-[10px] font-mono text-accent-yellow ml-auto">⚠ {missing} missing</span>
         )}
       </button>
       {open && (
-        <div className="border-t border-border/20 bg-surface-200/20 p-2 overflow-x-auto">
+        <div className="border-t border-app bg-surface-200/20 p-2 overflow-x-auto">
           <table className="w-full text-[11px] font-mono">
             <thead>
               <tr className="text-theme-muted">
@@ -54,7 +54,7 @@ export default function TemplateBindingsTable({ bindings, defaultOpen = false }:
                   </td>
                   <td className="py-1 break-all">
                     {b.status === 'missing' ? (
-                      <span className="text-amber-400">⚠ missing</span>
+                      <span className="text-accent-yellow">⚠ missing</span>
                     ) : b.status === 'redacted' ? (
                       <span className="text-theme-subtle">🔒 redacted</span>
                     ) : (

@@ -56,7 +56,7 @@ export default function CheckpointsDrawer({ executionId, executionStatus, open, 
           The `calc(100vw - 40px)` cap guarantees the user can't drag it
           off-screen on narrow viewports. */}
       <aside
-        className="absolute top-0 right-0 h-full bg-surface-50 border-l border-border/40 shadow-2xl flex flex-col animate-in slide-in-from-right duration-200"
+        className="absolute top-0 right-0 h-full bg-surface-50 border-l border-app shadow-2xl flex flex-col animate-in slide-in-from-right duration-200"
         style={{ width: `min(${drawerWidth}px, calc(100vw - 40px))` }}
         onClick={(e) => e.stopPropagation()}
       >
@@ -70,13 +70,13 @@ export default function CheckpointsDrawer({ executionId, executionStatus, open, 
         >
           <div className="absolute left-1/2 -translate-x-1/2 top-0 bottom-0 w-px bg-transparent group-hover:bg-accent-blue/60 transition-colors" />
         </div>
-        <div className="flex items-center justify-between px-5 py-3.5 border-b border-border/20 shrink-0">
-          <h3 className="font-heading text-sm text-theme-primary tracking-wider uppercase">
+        <div className="flex items-center justify-between px-5 py-3.5 border-b border-app shrink-0">
+          <h3 className="text-[14px] font-medium text-theme-primary tracking-tight">
             Checkpoints
           </h3>
           <button
             onClick={onClose}
-            className="p-1 rounded-md hover:bg-surface-200/60 text-theme-muted hover:text-theme-secondary transition-colors"
+            className="p-1 rounded-md hover:bg-app-muted text-theme-muted hover:text-theme-secondary transition-colors"
             title="Close"
           >
             <XIcon className="w-4 h-4" />

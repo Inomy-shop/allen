@@ -66,7 +66,7 @@ export default function WorkspaceListPage() {
     active: 'text-accent-green bg-accent-green/10 border-accent-green/20',
     running: 'text-accent-blue bg-accent-blue/10 border-accent-blue/20',
     archiving: 'text-theme-secondary bg-gray-400/10 border-gray-400/20',
-    failed: 'text-red-400 bg-red-400/10 border-red-400/20',
+    failed: 'text-accent-red bg-accent-red/10 border-accent-red/30',
   };
 
   return (
@@ -83,7 +83,7 @@ export default function WorkspaceListPage() {
         </div>
         <div className="flex items-center gap-2">
           {selected.size > 0 && (
-            <button onClick={handleBulkArchive} disabled={bulkArchiving} className="btn btn-secondary btn-sm hover:!text-accent-red flex items-center gap-1 disabled:opacity-50">
+            <button onClick={handleBulkArchive} disabled={bulkArchiving} className="btn btn-secondary btn-sm hover:text-accent-red flex items-center gap-1 disabled:opacity-50">
               <Trash2 className="w-3.5 h-3.5" /> Archive {selected.size}
             </button>
           )}
@@ -96,7 +96,7 @@ export default function WorkspaceListPage() {
 
       {/* Create form */}
       {creating && (
-        <form onSubmit={handleCreate} className="mb-6 p-4 rounded-lg border border-border/20 bg-surface-100/30 space-y-3">
+        <form onSubmit={handleCreate} className="mb-6 p-4 rounded-lg border border-app bg-app-muted/40 space-y-3">
           <div className="grid grid-cols-2 gap-3">
             <div>
               <label className="overline block mb-1">Repository</label>
@@ -164,27 +164,27 @@ export default function WorkspaceListPage() {
                 {/* Workspace cards */}
                 <div className="space-y-2 pl-6 border-l-2 border-blue-500/10 ml-2">
                   {group.workspaces.map((ws: any) => (
-                    <div key={ws._id} className="p-3 rounded-lg border border-border/20 bg-surface-100/20 hover:bg-surface-100/40 transition-colors group">
+                    <div key={ws._id} className="p-3 rounded-lg border border-app bg-app-muted/30 hover:bg-app-muted/50 transition-colors group">
                       <div className="flex items-center gap-3">
-                        <input type="checkbox" checked={selected.has(ws._id)} onChange={() => toggleSelect(ws._id)} className="rounded border-border/30 bg-surface-50 shrink-0" onClick={e => e.stopPropagation()} />
-                        <GitBranch className="w-4 h-4 text-emerald-400 shrink-0" />
+                        <input type="checkbox" checked={selected.has(ws._id)} onChange={() => toggleSelect(ws._id)} className="rounded border-app bg-surface-50 shrink-0" onClick={e => e.stopPropagation()} />
+                        <GitBranch className="w-4 h-4 text-accent-green shrink-0" />
                         <div className="flex-1 min-w-0">
                           <div className="flex items-center gap-2">
-                            <Link to={`/workspaces/${ws._id}`} className="text-sm font-heading font-semibold text-theme-primary hover:text-blue-400 transition-colors">{ws.name}</Link>
+                            <Link to={`/workspaces/${ws._id}`} className="text-sm font-heading font-semibold text-theme-primary hover:text-accent transition-colors">{ws.name}</Link>
                             <span className={`text-[10px] font-mono px-1.5 py-0.5 rounded border ${statusColors[ws.status] ?? 'text-theme-secondary'}`}>{ws.status}</span>
-                            {ws.source === 'pr' && <span className="text-[10px] font-mono text-purple-400 bg-purple-400/10 px-1.5 py-0.5 rounded border border-purple-400/20">PR #{ws.prNumber}</span>}
+                            {ws.source === 'pr' && <span className="text-[10px] font-mono text-accent-purple bg-accent-purple/10 px-1.5 py-0.5 rounded border border-accent-purple/30">PR #{ws.prNumber}</span>}
                           </div>
                           <div className="flex items-center gap-3 mt-1 text-[10px] text-theme-muted font-mono">
                             <span>{ws.branch} → {ws.baseBranch}</span>
-                            {ws.changedFiles > 0 && <span className="text-amber-400">{ws.changedFiles} changed</span>}
-                            {ws.services?.some((s: any) => s.status === 'ready') && <span className="text-emerald-400">● services</span>}
+                            {ws.changedFiles > 0 && <span className="text-accent-yellow">{ws.changedFiles} changed</span>}
+                            {ws.services?.some((s: any) => s.status === 'ready') && <span className="text-accent-green">● services</span>}
                             {ws.basePort && <span className="text-theme-subtle">port {ws.basePort}</span>}
                           </div>
                         </div>
                         <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
                           <Link to={`/workspaces/${ws._id}`} className="btn-ghost p-1.5 text-xs" title="Open"><Terminal className="w-3.5 h-3.5" /></Link>
                           <Link to={`/workspaces/${ws._id}?tab=diff`} className="btn-ghost p-1.5 text-xs" title="Diff"><FileCode className="w-3.5 h-3.5" /></Link>
-                          <button onClick={() => setDeleting({ id: ws._id, name: ws.name })} className="btn-ghost p-1.5 text-xs text-red-400" title="Archive"><Trash2 className="w-3.5 h-3.5" /></button>
+                          <button onClick={() => setDeleting({ id: ws._id, name: ws.name })} className="btn-ghost p-1.5 text-xs text-accent-red" title="Archive"><Trash2 className="w-3.5 h-3.5" /></button>
                         </div>
                       </div>
                     </div>

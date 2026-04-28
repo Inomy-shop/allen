@@ -120,7 +120,7 @@ export default function AnalyticsPage() {
               return (
                 <div key={tool} className="flex items-center gap-3">
                   <span className="text-xs font-mono text-theme-secondary w-40 truncate" title={tool}>{name}</span>
-                  <div className="flex-1 h-2 bg-surface-200/50 rounded-full overflow-hidden">
+                  <div className="flex-1 h-2 bg-app-muted rounded-full overflow-hidden">
                     <div className="h-full bg-accent-blue/50 rounded-full transition-all" style={{ width: `${pct}%` }} />
                   </div>
                   <span className="text-xs font-mono text-theme-muted w-8 text-right">{count}</span>
@@ -141,7 +141,7 @@ export default function AnalyticsPage() {
             {errors.slice(0, 5).map(e => (
               <div key={e._id} className="flex items-center gap-3 text-xs">
                 <span className="text-theme-subtle font-mono w-20 shrink-0">{new Date(e.timestamp).toLocaleDateString()}</span>
-                <span className="text-red-400 truncate">{e.userMessage?.slice(0, 50)}</span>
+                <span className="text-accent-red truncate">{e.userMessage?.slice(0, 50)}</span>
               </div>
             ))}
           </div>
@@ -156,7 +156,7 @@ export default function AnalyticsPage() {
             <button
               key={log._id}
               onClick={() => setViewingSessionId(log.sessionId)}
-              className="w-full flex items-center gap-3 py-1.5 border-b border-border/20 last:border-0 text-xs hover:bg-surface-200/30 transition-colors text-left"
+              className="w-full flex items-center gap-3 py-1.5 border-b border-app last:border-0 text-xs hover:bg-app-muted/50 transition-colors text-left"
             >
               <span className={`w-2 h-2 rounded-full shrink-0 ${log.status === 'completed' ? 'bg-accent-green' : 'bg-accent-red'}`} />
               <span className="text-theme-subtle font-mono w-16 shrink-0">{(log.durationMs / 1000).toFixed(1)}s</span>

@@ -75,7 +75,7 @@ function ThinkingBlock({ text }: { text: string }) {
     <div className="mb-2">
       <button
         onClick={() => setExpanded(!expanded)}
-        className="flex items-center gap-1.5 text-[11px] text-purple-400/70 hover:text-purple-400 transition-colors font-mono"
+        className="flex items-center gap-1.5 text-[11px] text-accent-purple/70 hover:text-accent-purple transition-colors font-mono"
         title={expanded ? 'Collapse thinking' : 'Expand thinking'}
       >
         <Brain className="w-3 h-3 animate-pulse" />
@@ -135,8 +135,8 @@ export function renderMarkdown(content: string): React.ReactNode {
       parts.push(<MermaidChatBlock key={key++} code={code} />);
     } else {
       parts.push(
-        <div key={key++} className="group/code relative my-3 rounded-md overflow-hidden border border-border/40 bg-[rgb(var(--color-editor-background))]">
-          <div className="flex items-center justify-between px-3 py-1.5 bg-surface-200/60 border-b border-border/30">
+        <div key={key++} className="group/code relative my-3 rounded-md overflow-hidden border border-app bg-[rgb(var(--color-editor-background))]">
+          <div className="flex items-center justify-between px-3 py-1.5 bg-app-muted border-b border-app">
             <span className="text-[10px] font-mono text-theme-muted uppercase tracking-wider">
               {lang || 'code'}
             </span>
@@ -205,7 +205,7 @@ function highlightCode(code: string, lang: string): React.ReactNode {
         tokens.push(<span key={tk++} className="text-accent-orange">{m[0]}</span>);
       } else if (m[4] && kwSet.has(m[4].toLowerCase())) {
         // Keyword (case-insensitive)
-        tokens.push(<span key={tk++} className="text-purple-400">{m[0]}</span>);
+        tokens.push(<span key={tk++} className="text-accent-purple">{m[0]}</span>);
       } else if (m[4] && m[4][0] === m[4][0].toUpperCase() && m[4][0] !== m[4][0].toLowerCase()) {
         // Type/Class name (starts with capital)
         tokens.push(<span key={tk++} className="text-accent-blue/90">{m[0]}</span>);
@@ -376,12 +376,12 @@ function renderTable(lines: string[]): React.ReactNode {
   const rows = lines.slice(2).map(parseRow);
 
   return (
-    <div className="my-3 overflow-x-auto rounded-md border border-border/40">
+    <div className="my-3 overflow-x-auto rounded-md border border-app">
       <table className="w-full text-sm">
         <thead>
-          <tr className="bg-surface-200/60">
+          <tr className="bg-app-muted">
             {headers.map((h, i) => (
-              <th key={i} className="px-3 py-2 text-left overline text-theme-secondary border-b border-border/40">
+              <th key={i} className="px-3 py-2 text-left overline text-theme-secondary border-b border-app">
                 {renderInline(h)}
               </th>
             ))}
@@ -389,7 +389,7 @@ function renderTable(lines: string[]): React.ReactNode {
         </thead>
         <tbody>
           {rows.map((row, ri) => (
-            <tr key={ri} className="border-b border-border/20 last:border-0 hover:bg-surface-200/30 transition-colors">
+            <tr key={ri} className="border-b border-app last:border-0 hover:bg-app-muted/50 transition-colors">
               {row.map((cell, ci) => (
                 <td key={ci} className="px-3 py-1.5 text-theme-secondary">
                   {renderInline(cell)}
@@ -419,7 +419,7 @@ function renderInline(text: string): React.ReactNode {
     if (m[1]) {
       // inline code
       parts.push(
-        <code key={k++} className="px-1.5 py-0.5 bg-surface-200/80 border border-border/30 rounded text-[12px] font-mono text-accent-blue/90">
+        <code key={k++} className="px-1.5 py-0.5 bg-surface-200/80 border border-app rounded text-[12px] font-mono text-accent-blue/90">
           {m[1].slice(1, -1)}
         </code>,
       );
@@ -547,16 +547,16 @@ function ToolCallCard({ call, active }: { call: ToolCallRecord | ActiveToolCall;
   const executionId = result?.execution_id as string | undefined;
 
   return (
-    <div className="border border-border/30 rounded-lg bg-surface-200/30 overflow-hidden">
+    <div className="border border-app rounded-lg bg-app-muted/50 overflow-hidden">
       <button
         onClick={() => setExpanded(!expanded)}
-        className="w-full flex items-center gap-2 px-3 py-2 hover:bg-surface-200/50 transition-colors text-left"
+        className="w-full flex items-center gap-2 px-3 py-2 hover:bg-app-muted transition-colors text-left"
         title={expanded ? 'Collapse tool result' : 'Expand tool result'}
       >
         {isRunning ? (
           <Loader2 className={`w-3.5 h-3.5 ${meta.color} animate-spin`} />
         ) : result?.error ? (
-          <AlertCircle className="w-3.5 h-3.5 text-red-400" />
+          <AlertCircle className="w-3.5 h-3.5 text-accent-red" />
         ) : (
           <CheckCircle className="w-3.5 h-3.5 text-accent-green/70" />
         )}
@@ -589,7 +589,7 @@ function ToolCallCard({ call, active }: { call: ToolCallRecord | ActiveToolCall;
       </button>
 
       {expanded && result && (
-        <div className="border-t border-border/20 px-3 py-2 bg-[rgb(var(--color-editor-background))] max-h-48 overflow-auto">
+        <div className="border-t border-app px-3 py-2 bg-[rgb(var(--color-editor-background))] max-h-48 overflow-auto">
           <pre className="text-[11px] font-mono text-theme-secondary whitespace-pre-wrap">
             {JSON.stringify(result, null, 2)}
           </pre>
@@ -625,7 +625,7 @@ function ToolCallsSection({ calls, threads, agentMap }: { calls?: ToolCallRecord
             {showTools ? <ChevronDown className="w-3 h-3" /> : <ChevronRight className="w-3 h-3" />}
             <Wrench className="w-2.5 h-2.5" />
             <span>{calls.length} tool call{calls.length !== 1 ? 's' : ''}</span>
-            {hasErrors && <span className="text-red-400">· errors</span>}
+            {hasErrors && <span className="text-accent-red">· errors</span>}
           </button>
           {showTools && (
             <div className="ml-4 pl-3 border-l border-border/10 space-y-1.5 max-h-[400px] overflow-y-auto py-1">
@@ -764,7 +764,7 @@ export default function ChatMessageList({ messages, streamText, thinkingText, st
                 <button
                   key={action.label}
                   onClick={() => onSuggestionClick(action.prompt)}
-                  className="flex items-center gap-2.5 px-3 py-2 rounded-lg bg-surface-200/40 border border-border/30 hover:bg-surface-200/70 hover:border-accent-blue/30 transition-all text-left group"
+                  className="flex items-center gap-2.5 px-3 py-2 rounded-lg bg-app-muted border border-app hover:bg-surface-200/70 hover:border-accent-blue/30 transition-all text-left group"
                   title={action.prompt}
                 >
                   {QUICK_ICONS[action.icon]}
@@ -856,7 +856,7 @@ export default function ChatMessageList({ messages, streamText, thinkingText, st
 
                       {/* Error */}
                       {msg.error && (
-                        <div className="mt-1 flex items-center gap-1.5 text-xs text-red-400 font-mono bg-red-500/5 border border-red-500/10 px-2.5 py-1.5 rounded-md">
+                        <div className="mt-1 flex items-center gap-1.5 text-xs text-accent-red font-mono bg-red-500/5 border border-red-500/10 px-2.5 py-1.5 rounded-md">
                           <AlertCircle className="w-3 h-3 shrink-0" />
                           {msg.error}
                         </div>
@@ -923,7 +923,7 @@ export default function ChatMessageList({ messages, streamText, thinkingText, st
                     <span className="inline-block w-0.5 h-4 bg-accent-blue/70 ml-0.5 animate-pulse align-middle" />
                   </>
                 ) : thinkingText ? (
-                  <span className="text-purple-400/60 text-xs font-mono flex items-center gap-1.5">
+                  <span className="text-accent-purple/60 text-xs font-mono flex items-center gap-1.5">
                     <Brain className="w-3 h-3 animate-pulse" />
                     Processing...
                   </span>
@@ -986,14 +986,14 @@ export default function ChatMessageList({ messages, streamText, thinkingText, st
       {spawnedAgents.length > 0 && (
         <div className="px-4 space-y-2 my-3">
           {spawnedAgents.map(s => (
-            <div key={s.executionId} className={`border rounded-lg p-3 ${s.status === 'running' ? 'border-blue-500/30 bg-blue-500/5' : s.status === 'completed' ? 'border-emerald-500/20 bg-emerald-500/5' : 'border-red-500/20 bg-red-500/5'}`}>
+            <div key={s.executionId} className={`border rounded-lg p-3 ${s.status === 'running' ? 'border-accent/40 bg-blue-500/5' : s.status === 'completed' ? 'border-accent-green/30 bg-emerald-500/5' : 'border-accent-red/30 bg-red-500/5'}`}>
               <div className="flex items-center gap-2 mb-1.5">
                 {s.status === 'running' && <span className="w-2 h-2 rounded-full bg-blue-400 animate-pulse" />}
                 {s.status === 'completed' && <span className="w-2 h-2 rounded-full bg-emerald-400" />}
                 {s.status === 'failed' && <span className="w-2 h-2 rounded-full bg-red-400" />}
                 <span className="text-[11px] font-mono font-bold text-theme-secondary">{s.agent}</span>
                 <span className="text-[9px] text-theme-subtle font-mono">{s.executionId.slice(0, 8)}</span>
-                <a href={`/executions/${s.executionId}`} target="_blank" rel="noopener noreferrer" className="text-[9px] text-blue-400 hover:underline ml-auto">View Execution →</a>
+                <a href={`/executions/${s.executionId}`} target="_blank" rel="noopener noreferrer" className="text-[9px] text-accent hover:underline ml-auto">View Execution →</a>
               </div>
               <p className="text-[10px] text-theme-muted mb-1.5 truncate">{s.prompt}</p>
               {/* Live activity feed */}
@@ -1001,15 +1001,15 @@ export default function ChatMessageList({ messages, streamText, thinkingText, st
                 <div className="space-y-0.5 max-h-32 overflow-y-auto">
                   {s.activity.map((a, i) => (
                     <div key={i} className="flex items-center gap-1.5 text-[10px] font-mono">
-                      {a.type === 'thinking' && <span className="text-purple-400">💭 thinking...</span>}
-                      {a.type === 'tool_start' && <span className="text-amber-400">⚡ {a.tool}</span>}
+                      {a.type === 'thinking' && <span className="text-accent-purple">💭 thinking...</span>}
+                      {a.type === 'tool_start' && <span className="text-accent-yellow">⚡ {a.tool}</span>}
                       {a.type === 'tool_done' && <span className="text-theme-muted">✓ {a.tool}{a.command ? ` (${a.command})` : ''}</span>}
                     </div>
                   ))}
                 </div>
               )}
               {s.status === 'running' && s.activity.length === 0 && (
-                <span className="text-[10px] text-blue-400 animate-pulse">Starting agent...</span>
+                <span className="text-[10px] text-accent animate-pulse">Starting agent...</span>
               )}
               {s.status === 'completed' && s.durationMs && (
                 <div className="text-[9px] text-theme-subtle mt-1">{s.toolCount} tools · {(s.durationMs / 1000).toFixed(1)}s</div>

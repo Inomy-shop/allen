@@ -157,7 +157,7 @@ function FileTreeNode({ name, path, isDir, children, selectedFile, onSelect, onD
   const [expanded, setExpanded] = useState(level < 1);
   const [hovered, setHovered] = useState(false);
   const isSelected = selectedFile === path;
-  const sc = changedStatus === 'added' ? 'text-emerald-400' : changedStatus === 'deleted' ? 'text-red-400' : changedStatus === 'modified' ? 'text-amber-400' : '';
+  const sc = changedStatus === 'added' ? 'text-accent-green' : changedStatus === 'deleted' ? 'text-accent-red' : changedStatus === 'modified' ? 'text-accent-yellow' : '';
 
   if (isDir) {
     return (
@@ -177,7 +177,7 @@ function FileTreeNode({ name, path, isDir, children, selectedFile, onSelect, onD
   return (
     <div className="relative" onMouseEnter={() => setHovered(true)} onMouseLeave={() => setHovered(false)}>
       <button onClick={() => onSelect(path)}
-        className={`w-full flex items-center gap-1.5 px-2 py-[3px] text-left rounded text-[11px] font-mono truncate ${isSelected ? 'bg-blue-500/15 text-blue-400' : `hover:bg-white/5 ${sc || 'text-theme-secondary'}`}`}
+        className={`w-full flex items-center gap-1.5 px-2 py-[3px] text-left rounded text-[11px] font-mono truncate ${isSelected ? 'bg-blue-500/15 text-accent' : `hover:bg-white/5 ${sc || 'text-theme-secondary'}`}`}
         style={{ paddingLeft: `${level * 14 + 8}px` }}>
         <FileIcon name={name} className="w-4 h-4" />
         <span className="truncate">{name}</span>
@@ -185,7 +185,7 @@ function FileTreeNode({ name, path, isDir, children, selectedFile, onSelect, onD
       </button>
       {hovered && (
         <button onClick={(e) => { e.stopPropagation(); onDelete(path); }}
-          className="absolute right-1 top-0.5 p-0.5 text-theme-subtle hover:text-red-400 rounded" title="Delete file">
+          className="absolute right-1 top-0.5 p-0.5 text-theme-subtle hover:text-accent-red rounded" title="Delete file">
           <Trash2 className="w-3 h-3" />
         </button>
       )}
@@ -219,9 +219,9 @@ function DiffView({ diff }: { diff: string }) {
     <pre className="text-[11px] font-mono leading-relaxed overflow-auto h-full">
       {diff.split('\n').map((line, i) => {
         let cls = 'text-theme-secondary px-4 py-px';
-        if (line.startsWith('+') && !line.startsWith('+++')) cls = 'text-emerald-400 bg-emerald-400/5 px-4 py-px';
-        else if (line.startsWith('-') && !line.startsWith('---')) cls = 'text-red-400 bg-red-400/5 px-4 py-px';
-        else if (line.startsWith('@@')) cls = 'text-blue-400/60 bg-blue-400/5 px-4 py-px';
+        if (line.startsWith('+') && !line.startsWith('+++')) cls = 'text-accent-green bg-emerald-400/5 px-4 py-px';
+        else if (line.startsWith('-') && !line.startsWith('---')) cls = 'text-accent-red bg-red-400/5 px-4 py-px';
+        else if (line.startsWith('@@')) cls = 'text-accent/60 bg-blue-400/5 px-4 py-px';
         else if (line.startsWith('diff ') || line.startsWith('index ')) cls = 'text-theme-subtle px-4 py-px';
         return <div key={i} className={cls}>{line || ' '}</div>;
       })}
@@ -256,10 +256,10 @@ function PreviewBar({ id, previewService, setPreviewService, services, onClose }
   const active = ready.find((s: any) => s.name === previewService) ?? ready[0];
   const url = previewUrlFor(active, id);
   return (
-    <div className="flex items-center gap-2 px-3 py-1 bg-surface-100/30 border-b border-border/20 shrink-0">
-      <Eye className="w-3 h-3 text-blue-400" />
+    <div className="flex items-center gap-2 px-3 py-1 bg-app-muted/40 border-b border-app shrink-0">
+      <Eye className="w-3 h-3 text-accent" />
       <span className="overline">Preview</span>
-      <select value={previewService} onChange={e => setPreviewService(e.target.value)} className="bg-surface-100 border border-border/30 rounded text-[10px] font-mono text-theme-secondary px-1.5 py-0.5">
+      <select value={previewService} onChange={e => setPreviewService(e.target.value)} className="bg-surface-100 border border-app rounded text-[10px] font-mono text-theme-secondary px-1.5 py-0.5">
         {ready.map((s: any) => (<option key={s.name} value={s.name}>{s.name} :{s.port}</option>))}
       </select>
       {url && <a href={url} target="_blank" rel="noopener noreferrer" className="text-theme-subtle hover:text-theme-secondary p-0.5" title="Open in new tab"><ExternalLink className="w-3 h-3" /></a>}
@@ -318,7 +318,7 @@ function ServiceLogViewer({ workspaceId, serviceName, onClose }: { workspaceId: 
 
   return (
     <div className="flex flex-col h-full">
-      <div className="flex items-center gap-2 px-3 py-1 border-b border-border/20 bg-surface-100/30 shrink-0">
+      <div className="flex items-center gap-2 px-3 py-1 border-b border-app bg-app-muted/40 shrink-0">
         <ScrollText className="w-3 h-3 text-theme-muted" />
         <span className="overline">Logs — {serviceName}</span>
         <span className="flex-1" />
@@ -337,7 +337,7 @@ function ServiceLogViewer({ workspaceId, serviceName, onClose }: { workspaceId: 
         {lines.length === 0 ? (
           <span className="text-theme-subtle">Waiting for logs...</span>
         ) : lines.map((l, i) => (
-          <div key={i} className={l.stream === 'stderr' ? 'text-red-400' : 'text-theme-secondary'}>
+          <div key={i} className={l.stream === 'stderr' ? 'text-accent-red' : 'text-theme-secondary'}>
             <span className="text-theme-subtle mr-2 select-none">{new Date(l.ts).toLocaleTimeString()}</span>
             {l.text}
           </div>
@@ -384,27 +384,27 @@ function ServicesPanel({ workspaceId, services, onRefresh }: {
         const isRunning = svc.status === 'ready' || svc.status === 'starting';
         const statusColor = svc.status === 'ready' ? 'bg-emerald-400' : svc.status === 'starting' ? 'bg-amber-400 animate-pulse' : svc.status === 'failed' ? 'bg-red-400' : 'bg-surface-200';
         return (
-          <div key={svc.name} className="flex items-center gap-2 px-2 py-1.5 rounded bg-surface-100/30 hover:bg-surface-100/50 transition-colors">
+          <div key={svc.name} className="flex items-center gap-2 px-2 py-1.5 rounded bg-app-muted/40 hover:bg-surface-100/50 transition-colors">
             <span className={`w-2 h-2 rounded-full ${statusColor} shrink-0`} />
             <span className="text-[11px] font-mono text-theme-secondary flex-1 min-w-0 truncate">{svc.name}</span>
             <span className="text-[9px] font-mono text-theme-subtle">:{svc.port}</span>
-            <span className={`text-[9px] px-1.5 py-0.5 rounded ${svc.status === 'ready' ? 'bg-emerald-400/10 text-emerald-400' : svc.status === 'starting' ? 'bg-amber-400/10 text-amber-400' : svc.status === 'failed' ? 'bg-red-400/10 text-red-400' : 'bg-surface-200/30 text-theme-subtle'}`}>
+            <span className={`text-[9px] px-1.5 py-0.5 rounded ${svc.status === 'ready' ? 'bg-accent-green/10 text-accent-green' : svc.status === 'starting' ? 'bg-accent-yellow/10 text-accent-yellow' : svc.status === 'failed' ? 'bg-accent-red/10 text-accent-red' : 'bg-app-muted/50 text-theme-subtle'}`}>
               {svc.status}
             </span>
             <div className="flex items-center gap-0.5 ml-1">
               {!isRunning ? (
                 <button onClick={() => doAction(svc.name, 'start')} disabled={actionLoading === `${svc.name}:start`}
-                  className="p-1 text-emerald-400 hover:bg-emerald-400/10 rounded disabled:opacity-50" title="Start">
+                  className="p-1 text-accent-green hover:bg-accent-green/10 rounded disabled:opacity-50" title="Start">
                   {actionLoading === `${svc.name}:start` ? <Loader2 className="w-3 h-3 animate-spin" /> : <Play className="w-3 h-3" />}
                 </button>
               ) : (
                 <>
                   <button onClick={() => doAction(svc.name, 'restart')} disabled={!!actionLoading}
-                    className="p-1 text-amber-400 hover:bg-amber-400/10 rounded disabled:opacity-50" title="Restart">
+                    className="p-1 text-accent-yellow hover:bg-accent-yellow/10 rounded disabled:opacity-50" title="Restart">
                     {actionLoading === `${svc.name}:restart` ? <Loader2 className="w-3 h-3 animate-spin" /> : <RotateCw className="w-3 h-3" />}
                   </button>
                   <button onClick={() => doAction(svc.name, 'stop')} disabled={!!actionLoading}
-                    className="p-1 text-red-400 hover:bg-red-400/10 rounded disabled:opacity-50" title="Stop">
+                    className="p-1 text-accent-red hover:bg-accent-red/10 rounded disabled:opacity-50" title="Stop">
                     {actionLoading === `${svc.name}:stop` ? <Loader2 className="w-3 h-3 animate-spin" /> : <Square className="w-3 h-3" />}
                   </button>
                 </>
@@ -415,7 +415,7 @@ function ServicesPanel({ workspaceId, services, onRefresh }: {
               </button>
               {svc.status === 'ready' && (
                 <button onClick={() => openPreview(svc)}
-                  className="p-1 text-blue-400 hover:bg-blue-400/10 rounded" title="Open Preview in New Window">
+                  className="p-1 text-accent hover:bg-accent-soft rounded" title="Open Preview in New Window">
                   <ExternalLink className="w-3 h-3" />
                 </button>
               )}
@@ -650,53 +650,53 @@ export default function WorkspaceDetailPage() {
   return (
     <div className="flex flex-col h-full overflow-hidden">
       {/* Header */}
-      <div className="px-4 py-1.5 border-b border-border/30 bg-surface-50/50 shrink-0">
+      <div className="px-4 py-1.5 border-b border-app bg-app-card/50 shrink-0">
         <div className="flex items-center gap-3">
           <Link to="/workspaces" className="text-theme-secondary hover:text-theme-primary"><ArrowLeft className="w-4 h-4" /></Link>
-          <GitBranch className="w-3.5 h-3.5 text-emerald-400" />
+          <GitBranch className="w-3.5 h-3.5 text-accent-green" />
           <span className="text-xs font-heading font-semibold text-theme-primary">{workspace.name}</span>
           <span className="text-[10px] font-mono text-theme-muted">{workspace.branch} → {workspace.baseBranch}</span>
           <span className="flex-1" />
 
           {workspace.services?.length > 0 && (
             <button onClick={() => setShowServices(v => !v)}
-              className={`flex items-center gap-1.5 text-[10px] font-mono px-2 py-0.5 rounded hover:bg-white/5 ${showServices ? 'text-blue-400' : 'text-theme-secondary'}`}
+              className={`flex items-center gap-1.5 text-[10px] font-mono px-2 py-0.5 rounded hover:bg-white/5 ${showServices ? 'text-accent' : 'text-theme-secondary'}`}
               title="Toggle Services Panel">
               <Server className="w-3 h-3" />
               {workspace.services.filter((s: any) => s.status === 'ready').length}/{workspace.services.length} running
             </button>
           )}
 
-          <div className="flex items-center gap-1 border-l border-border/20 pl-3 ml-2">
+          <div className="flex items-center gap-1 border-l border-app pl-3 ml-2">
             <button onClick={() => setShowCommitModal(true)} className="btn-ghost text-[11px] py-1 px-2 flex items-center gap-1" title="Commit">
               <GitCommit className="w-3.5 h-3.5" />Commit
-              {changedCount > 0 && <span className="bg-amber-400/20 text-amber-400 text-[9px] px-1 rounded-full">{changedCount}</span>}
+              {changedCount > 0 && <span className="bg-amber-400/20 text-accent-yellow text-[9px] px-1 rounded-full">{changedCount}</span>}
             </button>
             <button onClick={handlePush} disabled={pushing} className="btn-ghost text-[11px] py-1 px-2 flex items-center gap-1 disabled:opacity-50">
               <Upload className="w-3.5 h-3.5" />{pushing ? '...' : 'Push'}
             </button>
-            <button onClick={() => setShowPrModal(true)} className="btn-ghost text-[11px] py-1 px-2 flex items-center gap-1 text-blue-400">
+            <button onClick={() => setShowPrModal(true)} className="btn-ghost text-[11px] py-1 px-2 flex items-center gap-1 text-accent">
               <GitPullRequest className="w-3.5 h-3.5" />PR
             </button>
-            <button onClick={() => { if (showDiffView) { setShowDiffView(false); } else { openDiffView(); } }} className={`btn-ghost text-[11px] py-1 px-2 flex items-center gap-1 ${showDiffView ? 'text-amber-400' : ''}`} title="View Changes">
+            <button onClick={() => { if (showDiffView) { setShowDiffView(false); } else { openDiffView(); } }} className={`btn-ghost text-[11px] py-1 px-2 flex items-center gap-1 ${showDiffView ? 'text-accent-yellow' : ''}`} title="View Changes">
               <GitCompareArrows className="w-3.5 h-3.5" />Changes
-              {changedCount > 0 && !showDiffView && <span className="bg-amber-400/20 text-amber-400 text-[9px] px-1 rounded-full">{changedCount}</span>}
+              {changedCount > 0 && !showDiffView && <span className="bg-amber-400/20 text-accent-yellow text-[9px] px-1 rounded-full">{changedCount}</span>}
             </button>
           </div>
           {/* Preview toggle — only when a service is ready */}
           {workspace.services?.some((s: any) => s.status === 'ready') && (
-            <button onClick={() => setShowPreview(v => !v)} className={`btn-ghost p-1 text-xs ${showPreview ? 'text-blue-400' : ''}`} title="Toggle Preview">
+            <button onClick={() => setShowPreview(v => !v)} className={`btn-ghost p-1 text-xs ${showPreview ? 'text-accent' : ''}`} title="Toggle Preview">
               <Eye className="w-3.5 h-3.5" />
             </button>
           )}
           {showPreview && (
-            <button onClick={() => setSplitPreview(v => !v)} className={`btn-ghost p-1 text-xs ${splitPreview ? 'text-blue-400' : ''}`} title="Split Preview">
+            <button onClick={() => setSplitPreview(v => !v)} className={`btn-ghost p-1 text-xs ${splitPreview ? 'text-accent' : ''}`} title="Split Preview">
               <PanelRightOpen className="w-3.5 h-3.5" />
             </button>
           )}
-          <button onClick={() => setShowChat(v => !v)} className={`btn-ghost p-1 text-xs ${showChat ? 'text-blue-400' : ''}`} title="Chat (⌘J)"><MessageSquare className="w-3.5 h-3.5" /></button>
-          <button onClick={() => setShowActivity(v => !v)} className={`btn-ghost p-1 text-xs ${showActivity ? 'text-blue-400' : ''}`} title="Activity"><History className="w-3.5 h-3.5" /></button>
-          <button onClick={() => setShowInfo(v => !v)} className={`btn-ghost p-1 text-xs ${showInfo ? 'text-blue-400' : ''}`} title="Workspace Info"><Settings className="w-3.5 h-3.5" /></button>
+          <button onClick={() => setShowChat(v => !v)} className={`btn-ghost p-1 text-xs ${showChat ? 'text-accent' : ''}`} title="Chat (⌘J)"><MessageSquare className="w-3.5 h-3.5" /></button>
+          <button onClick={() => setShowActivity(v => !v)} className={`btn-ghost p-1 text-xs ${showActivity ? 'text-accent' : ''}`} title="Activity"><History className="w-3.5 h-3.5" /></button>
+          <button onClick={() => setShowInfo(v => !v)} className={`btn-ghost p-1 text-xs ${showInfo ? 'text-accent' : ''}`} title="Workspace Info"><Settings className="w-3.5 h-3.5" /></button>
           <button onClick={load} className="btn-ghost p-1 text-xs" title="Refresh"><RefreshCw className="w-3.5 h-3.5" /></button>
         </div>
       </div>
@@ -704,11 +704,11 @@ export default function WorkspaceDetailPage() {
       {/* Body — fixed, no scroll */}
       <div className="flex-1 flex overflow-hidden min-h-0">
         {/* Sidebar — Explorer or Changed Files */}
-        <div className="shrink-0 overflow-y-auto bg-surface-50/30 flex flex-col" style={{ width: sidebar.size }}>
+        <div className="shrink-0 overflow-y-auto bg-app-muted/30 flex flex-col" style={{ width: sidebar.size }}>
           {showDiffView ? (
             <>
               <div className="px-3 py-1.5 overline flex items-center justify-between shrink-0">
-                <span className="text-amber-400">Changes</span>
+                <span className="text-accent-yellow">Changes</span>
                 <span className="text-theme-subtle text-[9px]">{diffFiles.length}</span>
               </div>
               <div className="flex-1 overflow-y-auto min-h-0">
@@ -736,7 +736,7 @@ export default function WorkspaceDetailPage() {
                   <input value={newFilePath} onChange={e => setNewFilePath(e.target.value)}
                     onKeyDown={e => { if (e.key === 'Enter') handleNewFile(); if (e.key === 'Escape') setShowNewFile(false); }}
                     placeholder="path/to/file.ts" autoFocus
-                    className="w-full bg-surface-100 border border-border/30 rounded px-2 py-0.5 text-[10px] font-mono text-theme-secondary placeholder:text-theme-subtle focus:outline-none focus:border-blue-500/50" />
+                    className="w-full bg-surface-100 border border-app rounded px-2 py-0.5 text-[10px] font-mono text-theme-secondary placeholder:text-theme-subtle focus:outline-none focus:border-blue-500/50" />
                 </div>
               )}
               <div className="flex-1 overflow-y-auto min-h-0">
@@ -748,7 +748,7 @@ export default function WorkspaceDetailPage() {
         </div>
 
         {/* Sidebar resize handle */}
-        <div onMouseDown={sidebar.onMouseDown} className="w-1 shrink-0 cursor-col-resize bg-transparent hover:bg-blue-500/30 active:bg-blue-500/50 transition-colors" />
+        <div onMouseDown={sidebar.onMouseDown} className="w-1 shrink-0 cursor-col-resize bg-transparent hover:bg-accent/30 active:bg-blue-500/50 transition-colors" />
 
         {/* Right: editor + terminal */}
         <div className="flex-1 flex flex-col min-w-0 min-h-0 overflow-hidden">
@@ -763,13 +763,13 @@ export default function WorkspaceDetailPage() {
               const fileName = diffSelectedFile.split('/').pop() ?? diffSelectedFile;
               return (
                 <>
-                  <div className="flex items-center gap-1.5 px-3 py-1 border-b border-border/20 bg-surface-100/30 shrink-0">
+                  <div className="flex items-center gap-1.5 px-3 py-1 border-b border-app bg-app-muted/40 shrink-0">
                     <FileIcon name={fileName} className="w-3.5 h-3.5" />
                     <span className="text-[11px] font-mono text-theme-secondary truncate">{diffSelectedFile}</span>
                     <span className="flex-1" />
                     <span className="text-[9px] font-mono text-theme-subtle">{workspace.baseBranch}</span>
                     <span className="text-[9px] text-theme-subtle">↔</span>
-                    <span className="text-[9px] font-mono text-emerald-400">{workspace.branch}</span>
+                    <span className="text-[9px] font-mono text-accent-green">{workspace.branch}</span>
                   </div>
                   <div className="flex-1 min-h-0">
                     <DiffEditor
@@ -799,13 +799,13 @@ export default function WorkspaceDetailPage() {
               </div>
             ) : selectedFile ? (
               <>
-                <div className="flex items-center gap-1 px-3 py-1 border-b border-border/20 bg-surface-100/30 shrink-0">
+                <div className="flex items-center gap-1 px-3 py-1 border-b border-app bg-app-muted/40 shrink-0">
                   <FileText className="w-3 h-3 text-theme-muted" />
                   <span className="text-[11px] font-mono text-theme-secondary truncate">{selectedFile}</span>
                   {dirty && <span className="w-1.5 h-1.5 rounded-full bg-amber-400 shrink-0" />}
                   <span className="flex-1" />
                   {dirty && !isImageFile && (
-                    <button onClick={handleSave} disabled={saving} className="text-[10px] px-2 py-0.5 rounded bg-blue-500/10 text-blue-400 hover:bg-blue-500/20 flex items-center gap-1 disabled:opacity-50">
+                    <button onClick={handleSave} disabled={saving} className="text-[10px] px-2 py-0.5 rounded bg-accent-soft text-accent hover:bg-accent/20 flex items-center gap-1 disabled:opacity-50">
                       <Save className="w-3 h-3" />{saving ? '...' : 'Save'} <span className="text-theme-subtle text-[9px]">⌘S</span>
                     </button>
                   )}
@@ -813,11 +813,11 @@ export default function WorkspaceDetailPage() {
                     <span className="text-[10px] text-theme-muted px-2">Image Preview</span>
                   ) : (
                     <>
-                      <button onClick={() => setViewMode('code')} className={`text-[10px] font-mono px-2 py-0.5 rounded ${viewMode === 'code' ? 'bg-blue-500/10 text-blue-400' : 'text-theme-muted hover:text-theme-secondary'}`}>Code</button>
+                      <button onClick={() => setViewMode('code')} className={`text-[10px] font-mono px-2 py-0.5 rounded ${viewMode === 'code' ? 'bg-accent-soft text-accent' : 'text-theme-muted hover:text-theme-secondary'}`}>Code</button>
                       {selectedFile.endsWith('.md') && (
-                        <button onClick={() => setViewMode('preview')} className={`text-[10px] font-mono px-2 py-0.5 rounded ${viewMode === 'preview' ? 'bg-blue-500/10 text-blue-400' : 'text-theme-muted hover:text-theme-secondary'}`}>Preview</button>
+                        <button onClick={() => setViewMode('preview')} className={`text-[10px] font-mono px-2 py-0.5 rounded ${viewMode === 'preview' ? 'bg-accent-soft text-accent' : 'text-theme-muted hover:text-theme-secondary'}`}>Preview</button>
                       )}
-                      <button onClick={() => setViewMode('diff')} className={`text-[10px] font-mono px-2 py-0.5 rounded ${viewMode === 'diff' ? 'bg-blue-500/10 text-blue-400' : 'text-theme-muted hover:text-theme-secondary'}`}>Diff</button>
+                      <button onClick={() => setViewMode('diff')} className={`text-[10px] font-mono px-2 py-0.5 rounded ${viewMode === 'diff' ? 'bg-accent-soft text-accent' : 'text-theme-muted hover:text-theme-secondary'}`}>Diff</button>
                     </>
                   )}
                   <button onClick={() => { if (dirty && !confirm('Discard?')) return; setSelectedFile(null); setDirty(false); setIsImageFile(false); setImageMimeType(''); }} className="text-theme-subtle hover:text-theme-secondary p-0.5"><X className="w-3 h-3" /></button>
@@ -830,7 +830,7 @@ export default function WorkspaceDetailPage() {
                           <img
                             src={`data:${imageMimeType};base64,${fileContent}`}
                             alt={selectedFile}
-                            className="max-w-full max-h-full object-contain rounded border border-border/20"
+                            className="max-w-full max-h-full object-contain rounded border border-app"
                             style={{ maxHeight: 'calc(100vh - 200px)' }}
                           />
                           <div className="text-center mt-2 text-xs text-theme-muted">
@@ -871,18 +871,18 @@ export default function WorkspaceDetailPage() {
                   ) : viewMode === 'preview' ? (
                     <div className="h-full overflow-auto bg-[rgb(var(--color-editor-background))] px-4 py-4">
                       <div className="w-full !max-w-none prose prose-invert prose-sm
-                        prose-headings:text-gray-200 prose-headings:font-semibold prose-headings:border-b prose-headings:border-border/20 prose-headings:pb-2 prose-headings:mb-4
+                        prose-headings:text-theme-primary prose-headings:font-semibold prose-headings:border-b prose-headings:border-app prose-headings:pb-2 prose-headings:mb-4
                         prose-h1:text-2xl prose-h2:text-xl prose-h3:text-lg
                         prose-p:text-theme-secondary prose-p:leading-relaxed
-                        prose-a:text-blue-400 prose-a:no-underline hover:prose-a:underline
+                        prose-a:text-accent prose-a:no-underline hover:prose-a:underline
                         prose-strong:text-theme-secondary
-                        prose-code:text-amber-400 prose-code:bg-surface-200/50 prose-code:px-1.5 prose-code:py-0.5 prose-code:rounded prose-code:text-[12px] prose-code:font-mono
-                        prose-pre:bg-surface-200/30 prose-pre:border prose-pre:border-border/20 prose-pre:rounded-lg
+                        prose-code:text-accent-yellow prose-code:bg-app-muted prose-code:px-1.5 prose-code:py-0.5 prose-code:rounded prose-code:text-[12px] prose-code:font-mono
+                        prose-pre:bg-app-muted/50 prose-pre:border prose-pre:border-app prose-pre:rounded-lg
                         prose-li:text-theme-secondary prose-li:marker:text-theme-subtle
                         prose-blockquote:border-blue-500/40 prose-blockquote:text-theme-muted
-                        prose-table:text-theme-secondary prose-th:text-theme-secondary prose-th:border-border/30 prose-td:border-border/20
-                        prose-hr:border-border/30
-                        prose-img:rounded-lg prose-img:border prose-img:border-border/20
+                        prose-table:text-theme-secondary prose-th:text-theme-secondary prose-th:border-app prose-td:border-app
+                        prose-hr:border-app
+                        prose-img:rounded-lg prose-img:border prose-img:border-app
                       ">
                         {renderMarkdown(editedContent)}
                       </div>
@@ -911,7 +911,7 @@ export default function WorkspaceDetailPage() {
             const active = ready.find((s: any) => s.name === previewService) ?? ready[0];
             const url = previewUrlFor(active, id!);
             return (
-              <div className="w-1/2 border-l border-border/20 flex flex-col overflow-hidden">
+              <div className="w-1/2 border-l border-app flex flex-col overflow-hidden">
                 <PreviewBar id={id!} previewService={previewService} setPreviewService={setPreviewService} services={workspace.services} onClose={() => setShowPreview(false)} />
                 {url
                   ? <iframe src={url} className="flex-1 w-full bg-surface-100 border-none" title="Preview" />
@@ -923,8 +923,8 @@ export default function WorkspaceDetailPage() {
           {/* Activity panel — side panel */}
           {/* Services panel — right side panel */}
           {showServices && !showChat && (
-            <div className="w-72 border-l border-border/20 bg-surface-50/30 overflow-hidden flex flex-col shrink-0">
-              <div className="flex items-center gap-2 px-3 py-1.5 border-b border-border/20 shrink-0">
+            <div className="w-72 border-l border-app bg-app-muted/30 overflow-hidden flex flex-col shrink-0">
+              <div className="flex items-center gap-2 px-3 py-1.5 border-b border-app shrink-0">
                 <Server className="w-3 h-3 text-theme-muted" />
                 <span className="overline">Services</span>
                 <span className="flex-1" />
@@ -941,8 +941,8 @@ export default function WorkspaceDetailPage() {
           )}
 
           {showActivity && !showChat && !showServices && (
-            <div className="w-64 border-l border-border/20 bg-surface-50/30 overflow-y-auto flex flex-col shrink-0">
-              <div className="flex items-center gap-2 px-3 py-1.5 border-b border-border/20 shrink-0">
+            <div className="w-64 border-l border-app bg-app-muted/30 overflow-y-auto flex flex-col shrink-0">
+              <div className="flex items-center gap-2 px-3 py-1.5 border-b border-app shrink-0">
                 <History className="w-3 h-3 text-theme-muted" />
                 <span className="overline">Activity</span>
                 <span className="flex-1" />
@@ -955,8 +955,8 @@ export default function WorkspaceDetailPage() {
           {/* Chat panel — full-featured embedded chat */}
           {showChat && (
             <>
-            <div onMouseDown={chatPanel.onMouseDown} className="w-1 shrink-0 cursor-col-resize bg-transparent hover:bg-blue-500/30 active:bg-blue-500/50 transition-colors" />
-            <div className="border-l border-border/20 bg-surface-50/30 flex flex-col shrink-0" style={{ width: chatPanel.size }}>
+            <div onMouseDown={chatPanel.onMouseDown} className="w-1 shrink-0 cursor-col-resize bg-transparent hover:bg-accent/30 active:bg-blue-500/50 transition-colors" />
+            <div className="border-l border-app bg-app-muted/30 flex flex-col shrink-0" style={{ width: chatPanel.size }}>
               <EmbeddedChat
                 workspaceId={id!}
                 workspaceName={workspace.name}
@@ -975,7 +975,7 @@ export default function WorkspaceDetailPage() {
             const active = ready.find((s: any) => s.name === previewService) ?? ready[0];
             const url = previewUrlFor(active, id!);
             return (
-              <div className="shrink-0 border-t border-border/30 flex flex-col" style={{ height: 300 }}>
+              <div className="shrink-0 border-t border-app flex flex-col" style={{ height: 300 }}>
                 <PreviewBar id={id!} previewService={previewService} setPreviewService={setPreviewService} services={workspace.services} onClose={() => setShowPreview(false)} />
                 {url
                   ? <iframe src={url} className="flex-1 w-full bg-surface-100 border-none" title="Preview" />
@@ -985,17 +985,17 @@ export default function WorkspaceDetailPage() {
           })()}
 
           {/* Terminal resize handle */}
-          {terminalVisible && <div onMouseDown={termPanel.onMouseDown} className="h-1 shrink-0 cursor-row-resize bg-transparent hover:bg-blue-500/30 active:bg-blue-500/50 transition-colors border-t border-border/30" />}
+          {terminalVisible && <div onMouseDown={termPanel.onMouseDown} className="h-1 shrink-0 cursor-row-resize bg-transparent hover:bg-accent/30 active:bg-blue-500/50 transition-colors border-t border-app" />}
 
           {/* Terminal */}
           {terminalVisible && (
             <div className="shrink-0 flex flex-col overflow-hidden" style={{ height: termPanel.size }}>
-              <div className="flex items-center gap-0 bg-surface-100/30 border-b border-border/20 shrink-0 px-1">
+              <div className="flex items-center gap-0 bg-app-muted/40 border-b border-app shrink-0 px-1">
                 {terminals.map(t => (
                   <div key={t.id} onClick={() => setActiveTerminal(t.id)}
-                    className={`flex items-center gap-1 px-2.5 py-1 text-[10px] font-mono cursor-pointer border-b-2 ${activeTerminal === t.id ? 'border-blue-400 text-blue-400' : 'border-transparent text-theme-muted hover:text-theme-secondary'}`}>
+                    className={`flex items-center gap-1 px-2.5 py-1 text-[10px] font-mono cursor-pointer border-b-2 ${activeTerminal === t.id ? 'border-blue-400 text-accent' : 'border-transparent text-theme-muted hover:text-theme-secondary'}`}>
                     <Terminal className="w-3 h-3" />{t.label}
-                    {terminals.length > 1 && <button onClick={e => { e.stopPropagation(); closeTerminal(t.id); }} className="hover:text-red-400 ml-0.5"><X className="w-2.5 h-2.5" /></button>}
+                    {terminals.length > 1 && <button onClick={e => { e.stopPropagation(); closeTerminal(t.id); }} className="hover:text-accent-red ml-0.5"><X className="w-2.5 h-2.5" /></button>}
                   </div>
                 ))}
                 <button onClick={addTerminal} className="px-1.5 py-1 text-theme-subtle hover:text-theme-secondary" title="New Terminal"><Plus className="w-3 h-3" /></button>
@@ -1005,7 +1005,7 @@ export default function WorkspaceDetailPage() {
               </div>
               <div className="flex-1 flex min-h-0">
                 {terminals.map(t => (
-                  <div key={t.id} className={`flex-1 min-h-0 ${terminals.length > 1 ? 'border-r border-border/20 last:border-r-0' : ''} ${activeTerminal === t.id || terminals.length > 1 ? '' : 'hidden'}`}>
+                  <div key={t.id} className={`flex-1 min-h-0 ${terminals.length > 1 ? 'border-r border-app last:border-r-0' : ''} ${activeTerminal === t.id || terminals.length > 1 ? '' : 'hidden'}`}>
                     <XTerminal workspaceId={id!} terminalId={t.id} className="h-full" initialCommand={t.command} />
                   </div>
                 ))}
@@ -1014,7 +1014,7 @@ export default function WorkspaceDetailPage() {
           )}
 
           {!terminalVisible && (
-            <button onClick={() => setTerminalVisible(true)} className="border-t border-border/30 px-3 py-1 bg-surface-100/20 overline hover:text-theme-secondary w-full text-left flex items-center gap-1.5 shrink-0">
+            <button onClick={() => setTerminalVisible(true)} className="border-t border-app px-3 py-1 bg-app-muted/30 overline hover:text-theme-secondary w-full text-left flex items-center gap-1.5 shrink-0">
               <Terminal className="w-3 h-3" /> Terminal
             </button>
           )}
@@ -1024,14 +1024,14 @@ export default function WorkspaceDetailPage() {
       {/* Commit Modal */}
       {showCommitModal && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50" onClick={() => setShowCommitModal(false)}>
-          <div className="bg-surface-100 border border-border/30 rounded-lg w-[480px] p-4" onClick={e => e.stopPropagation()}>
+          <div className="bg-surface-100 border border-app rounded-lg w-[480px] p-4" onClick={e => e.stopPropagation()}>
             <div className="flex items-center gap-2 mb-3">
               <GitCommit className="w-4 h-4 text-theme-secondary" />
               <span className="text-sm font-semibold text-theme-primary">Commit Changes</span>
-              {changedCount > 0 && <span className="text-[10px] font-mono text-amber-400">{changedCount} changed</span>}
+              {changedCount > 0 && <span className="text-[10px] font-mono text-accent-yellow">{changedCount} changed</span>}
             </div>
             <textarea value={commitMsg} onChange={e => setCommitMsg(e.target.value)} placeholder="Commit message..." autoFocus rows={3}
-              className="w-full bg-surface-50 border border-border/30 rounded px-3 py-2 text-sm font-mono text-theme-secondary placeholder:text-theme-subtle focus:outline-none focus:border-blue-500/50 resize-none" />
+              className="w-full bg-surface-50 border border-app rounded px-3 py-2 text-sm font-mono text-theme-secondary placeholder:text-theme-subtle focus:outline-none focus:border-blue-500/50 resize-none" />
             <div className="flex items-center gap-2 mt-3 justify-end">
               <button onClick={() => setShowCommitModal(false)} className="btn-ghost text-xs py-1.5 px-3">Cancel</button>
               <button onClick={handleCommit} disabled={!commitMsg.trim() || committing} className="btn-primary text-xs py-1.5 px-4 disabled:opacity-50">
@@ -1045,16 +1045,16 @@ export default function WorkspaceDetailPage() {
       {/* PR Modal */}
       {showPrModal && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50" onClick={() => setShowPrModal(false)}>
-          <div className="bg-surface-100 border border-border/30 rounded-lg w-[520px] p-4" onClick={e => e.stopPropagation()}>
+          <div className="bg-surface-100 border border-app rounded-lg w-[520px] p-4" onClick={e => e.stopPropagation()}>
             <div className="flex items-center gap-2 mb-3">
-              <GitPullRequest className="w-4 h-4 text-blue-400" />
+              <GitPullRequest className="w-4 h-4 text-accent" />
               <span className="text-sm font-semibold text-theme-primary">Create Pull Request</span>
               <span className="text-[10px] font-mono text-theme-muted">{workspace.branch} → {workspace.baseBranch}</span>
             </div>
             <input value={prTitle} onChange={e => setPrTitle(e.target.value)} placeholder="PR title..." autoFocus
-              className="w-full bg-surface-50 border border-border/30 rounded px-3 py-2 text-sm text-theme-secondary placeholder:text-theme-subtle focus:outline-none focus:border-blue-500/50 mb-2" />
+              className="w-full bg-surface-50 border border-app rounded px-3 py-2 text-sm text-theme-secondary placeholder:text-theme-subtle focus:outline-none focus:border-blue-500/50 mb-2" />
             <textarea value={prBody} onChange={e => setPrBody(e.target.value)} placeholder="Description (optional)..." rows={4}
-              className="w-full bg-surface-50 border border-border/30 rounded px-3 py-2 text-sm font-mono text-theme-secondary placeholder:text-theme-subtle focus:outline-none focus:border-blue-500/50 resize-none" />
+              className="w-full bg-surface-50 border border-app rounded px-3 py-2 text-sm font-mono text-theme-secondary placeholder:text-theme-subtle focus:outline-none focus:border-blue-500/50 resize-none" />
             <div className="flex items-center gap-2 mt-3 justify-end">
               <button onClick={() => setShowPrModal(false)} className="btn-ghost text-xs py-1.5 px-3">Cancel</button>
               <button onClick={handleCreatePR} disabled={!prTitle.trim() || creatingPr} className="btn-primary text-xs py-1.5 px-4 disabled:opacity-50 flex items-center gap-1">
@@ -1069,8 +1069,8 @@ export default function WorkspaceDetailPage() {
       {/* Workspace Info Modal (read-only) */}
       {showInfo && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50" onClick={() => setShowInfo(false)}>
-          <div className="bg-surface-100 border border-border/30 rounded-lg w-[520px] max-h-[80vh] flex flex-col" onClick={e => e.stopPropagation()}>
-            <div className="flex items-center gap-2 px-4 py-3 border-b border-border/20 shrink-0">
+          <div className="bg-surface-100 border border-app rounded-lg w-[520px] max-h-[80vh] flex flex-col" onClick={e => e.stopPropagation()}>
+            <div className="flex items-center gap-2 px-4 py-3 border-b border-app shrink-0">
               <Settings className="w-4 h-4 text-theme-secondary" />
               <span className="text-sm font-semibold text-theme-primary">Workspace Info</span>
               <span className="flex-1" />
@@ -1080,13 +1080,13 @@ export default function WorkspaceDetailPage() {
               {/* Ports */}
               <div>
                 <span className="overline block mb-1">Assigned Ports</span>
-                <div className="bg-surface-50/50 rounded p-2 font-mono space-y-1">
-                  <div className="flex items-center gap-2"><span className="text-theme-muted w-20">Base port:</span><span className="text-emerald-400">{workspace.basePort}</span></div>
+                <div className="bg-app-card/50 rounded p-2 font-mono space-y-1">
+                  <div className="flex items-center gap-2"><span className="text-theme-muted w-20">Base port:</span><span className="text-accent-green">{workspace.basePort}</span></div>
                   {workspace.services?.map((svc: any) => (
                     <div key={svc.name} className="flex items-center gap-2">
                       <span className="text-theme-muted w-20">{svc.name}:</span>
-                      <span className="text-blue-400">{svc.port}</span>
-                      <span className={`text-[9px] ${svc.status === 'ready' ? 'text-emerald-400' : svc.status === 'starting' ? 'text-amber-400' : 'text-theme-subtle'}`}>{svc.status}</span>
+                      <span className="text-accent">{svc.port}</span>
+                      <span className={`text-[9px] ${svc.status === 'ready' ? 'text-accent-green' : svc.status === 'starting' ? 'text-accent-yellow' : 'text-theme-subtle'}`}>{svc.status}</span>
                     </div>
                   ))}
                 </div>
@@ -1095,16 +1095,16 @@ export default function WorkspaceDetailPage() {
               {/* Worktree */}
               <div>
                 <span className="overline block mb-1">Worktree Path</span>
-                <div className="bg-surface-50/50 rounded p-2 font-mono text-theme-secondary break-all">{workspace.worktreePath}</div>
+                <div className="bg-app-card/50 rounded p-2 font-mono text-theme-secondary break-all">{workspace.worktreePath}</div>
               </div>
 
               {/* Git */}
               <div>
                 <span className="overline block mb-1">Git</span>
-                <div className="bg-surface-50/50 rounded p-2 font-mono space-y-1">
-                  <div className="flex gap-2"><span className="text-theme-muted w-16">Branch:</span><span className="text-emerald-400">{workspace.branch}</span></div>
+                <div className="bg-app-card/50 rounded p-2 font-mono space-y-1">
+                  <div className="flex gap-2"><span className="text-theme-muted w-16">Branch:</span><span className="text-accent-green">{workspace.branch}</span></div>
                   <div className="flex gap-2"><span className="text-theme-muted w-16">Base:</span><span className="text-theme-secondary">{workspace.baseBranch}</span></div>
-                  <div className="flex gap-2"><span className="text-theme-muted w-16">Changed:</span><span className="text-amber-400">{workspace.changedFiles} files</span></div>
+                  <div className="flex gap-2"><span className="text-theme-muted w-16">Changed:</span><span className="text-accent-yellow">{workspace.changedFiles} files</span></div>
                   <div className="flex gap-2"><span className="text-theme-muted w-16">Ahead:</span><span className="text-theme-secondary">{workspace.ahead}</span></div>
                   {workspace.lastCommit && <div className="flex gap-2"><span className="text-theme-muted w-16">Last:</span><span className="text-theme-secondary truncate">{workspace.lastCommit.hash?.slice(0, 7)} {workspace.lastCommit.message}</span></div>}
                 </div>
@@ -1116,15 +1116,15 @@ export default function WorkspaceDetailPage() {
                   <span className="overline block mb-1">Setup Log</span>
                   <div className="bg-[rgb(var(--color-editor-background))] rounded p-2 font-mono text-[10px] max-h-40 overflow-y-auto space-y-0.5">
                     {workspace.setupProgress.log.map((line: string, i: number) => (
-                      <div key={i} className={line.startsWith('✓') ? 'text-emerald-400' : line.startsWith('✗') ? 'text-red-400' : 'text-theme-muted'}>{line}</div>
+                      <div key={i} className={line.startsWith('✓') ? 'text-accent-green' : line.startsWith('✗') ? 'text-accent-red' : 'text-theme-muted'}>{line}</div>
                     ))}
                   </div>
                 </div>
               )}
 
               {/* Repo config link */}
-              <div className="text-[10px] text-theme-subtle pt-2 border-t border-border/20">
-                To edit setup scripts, services, or env files, go to <a href="/repos" className="text-blue-400 hover:underline">Repos → {workspace.repoName} → Workspace</a>
+              <div className="text-[10px] text-theme-subtle pt-2 border-t border-app">
+                To edit setup scripts, services, or env files, go to <a href="/repos" className="text-accent hover:underline">Repos → {workspace.repoName} → Workspace</a>
               </div>
             </div>
           </div>
@@ -1132,10 +1132,10 @@ export default function WorkspaceDetailPage() {
       )}
 
       {workspace.setupProgress?.status === 'running' && (
-        <div className="px-4 py-1.5 border-t border-border/30 bg-amber-400/5 shrink-0">
+        <div className="px-4 py-1.5 border-t border-app bg-amber-400/5 shrink-0">
           <div className="flex items-center gap-2 text-xs">
-            <Loader2 className="w-3.5 h-3.5 animate-spin text-amber-400" />
-            <span className="text-amber-400 font-mono">Setting up ({workspace.setupProgress.currentStep}/{workspace.setupProgress.totalSteps})</span>
+            <Loader2 className="w-3.5 h-3.5 animate-spin text-accent-yellow" />
+            <span className="text-accent-yellow font-mono">Setting up ({workspace.setupProgress.currentStep}/{workspace.setupProgress.totalSteps})</span>
           </div>
         </div>
       )}

@@ -89,7 +89,7 @@ function ServerCard({
   }
 
   return (
-    <div className={`border rounded-lg overflow-hidden transition-colors ${server.enabled ? 'border-border/40 bg-surface-100/60' : 'border-border/20 bg-surface-100/30 opacity-60'}`}>
+    <div className={`border rounded-lg overflow-hidden transition-colors ${server.enabled ? 'border-app bg-app-card' : 'border-app bg-app-muted/40 opacity-60'}`}>
       <div className="flex items-center gap-3 px-4 py-3">
         <button
           onClick={() => setExpanded(!expanded)}
@@ -102,7 +102,7 @@ function ServerCard({
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2">
             <span className="text-sm font-body text-theme-primary">{server.name}</span>
-            <span className="text-[10px] font-mono text-theme-subtle bg-surface-200/50 px-1.5 py-0.5 rounded">{server.type}</span>
+            <span className="text-[10px] font-mono text-theme-subtle bg-app-muted px-1.5 py-0.5 rounded">{server.type}</span>
             {server.toolCount != null && server.toolCount > 0 && (
               <span className="text-[10px] font-mono text-theme-subtle flex items-center gap-0.5">
                 <Wrench className="w-2.5 h-2.5" />{server.toolCount} tools
@@ -112,7 +112,7 @@ function ServerCard({
           <div className="text-[11px] text-theme-muted font-body truncate">{server.description || sourceLabel}</div>
         </div>
         {flash && (
-          <span className={`text-[11px] font-mono ${flash.kind === 'ok' ? 'text-accent-green' : 'text-red-400'}`}>
+          <span className={`text-[11px] font-mono ${flash.kind === 'ok' ? 'text-accent-green' : 'text-accent-red'}`}>
             {flash.kind === 'ok' ? '✓' : '✗'} {flash.text}
           </span>
         )}
@@ -121,7 +121,7 @@ function ServerCard({
           <button
             onClick={handleTest}
             disabled={!!busy || !server.enabled}
-            className="p-1.5 rounded-md hover:bg-surface-200/60 text-theme-muted hover:text-accent-blue disabled:opacity-30 transition-colors"
+            className="p-1.5 rounded-md hover:bg-app-muted text-theme-muted hover:text-accent-blue disabled:opacity-30 transition-colors"
             title="Test connection"
           >
             {busy === 'test' ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <RefreshCw className="w-3.5 h-3.5" />}
@@ -130,7 +130,7 @@ function ServerCard({
             <button
               onClick={handleReinstall}
               disabled={!!busy}
-              className="p-1.5 rounded-md hover:bg-surface-200/60 text-theme-muted hover:text-accent-blue disabled:opacity-30 transition-colors"
+              className="p-1.5 rounded-md hover:bg-app-muted text-theme-muted hover:text-accent-blue disabled:opacity-30 transition-colors"
               title="Reinstall dependencies"
             >
               {busy === 'reinstall' ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Package className="w-3.5 h-3.5" />}
@@ -139,7 +139,7 @@ function ServerCard({
           <button
             onClick={handleToggle}
             disabled={!!busy}
-            className="p-1.5 rounded-md hover:bg-surface-200/60 text-theme-muted hover:text-accent-yellow disabled:opacity-30 transition-colors"
+            className="p-1.5 rounded-md hover:bg-app-muted text-theme-muted hover:text-accent-yellow disabled:opacity-30 transition-colors"
             title={server.enabled ? 'Disable' : 'Enable'}
           >
             {server.enabled ? <Power className="w-3.5 h-3.5" /> : <PowerOff className="w-3.5 h-3.5" />}
@@ -147,7 +147,7 @@ function ServerCard({
           <button
             onClick={handleDelete}
             disabled={!!busy}
-            className="p-1.5 rounded-md hover:bg-red-500/10 text-theme-muted hover:text-red-400 disabled:opacity-30 transition-colors"
+            className="p-1.5 rounded-md hover:bg-accent-red/10 text-theme-muted hover:text-accent-red disabled:opacity-30 transition-colors"
             title="Delete"
           >
             <Trash2 className="w-3.5 h-3.5" />
@@ -156,7 +156,7 @@ function ServerCard({
       </div>
 
       {expanded && (
-        <div className="px-4 py-3 border-t border-border/20 bg-surface-200/20 space-y-2 text-xs">
+        <div className="px-4 py-3 border-t border-app bg-surface-200/20 space-y-2 text-xs">
           <DetailRow label="Source">{sourceLabel}</DetailRow>
           {server.command && (
             <DetailRow label="Command">
@@ -194,7 +194,7 @@ function ServerCard({
           )}
           {server.lastError && (
             <DetailRow label="Last error">
-              <span className="text-red-400 font-mono whitespace-pre-wrap">{server.lastError}</span>
+              <span className="text-accent-red font-mono whitespace-pre-wrap">{server.lastError}</span>
             </DetailRow>
           )}
           {server.lastTestedAt && (
@@ -211,7 +211,7 @@ function ServerCard({
 function DetailRow({ label, children }: { label: string; children: React.ReactNode }) {
   return (
     <div className="flex gap-3">
-      <div className="w-24 text-[10px] font-label uppercase tracking-[0.15em] text-theme-muted shrink-0 pt-0.5">
+      <div className="w-24 overline shrink-0 pt-0.5">
         {label}
       </div>
       <div className="flex-1 min-w-0">{children}</div>
@@ -232,26 +232,26 @@ function MissingEnvError({ missing, onDismiss }: { missing: string[]; onDismiss:
   return (
     <div className="border border-red-500/40 bg-red-500/5 rounded-lg p-3 text-xs">
       <div className="flex items-start gap-2">
-        <AlertCircle className="w-4 h-4 text-red-400 shrink-0 mt-0.5" />
+        <AlertCircle className="w-4 h-4 text-accent-red shrink-0 mt-0.5" />
         <div className="flex-1 min-w-0">
-          <div className="font-body font-semibold text-red-400 mb-1">
+          <div className="font-body font-semibold text-accent-red mb-1">
             Missing required env var{missing.length > 1 ? 's' : ''} in Allen's .env
           </div>
           <div className="text-theme-muted mb-2">
             Add the following to <code className="font-mono text-theme-secondary">.env</code> at the Allen project root, then restart the server:
           </div>
-          <pre className="bg-surface-200/40 border border-border/20 rounded p-2 font-mono text-[11px] text-theme-secondary select-all overflow-x-auto">{block}</pre>
+          <pre className="bg-app-muted border border-app rounded p-2 font-mono text-[11px] text-theme-secondary select-all overflow-x-auto">{block}</pre>
           <div className="flex gap-2 mt-2">
             <button
               onClick={copy}
-              className="px-2 py-1 rounded-md border border-border/40 hover:bg-surface-200/60 text-theme-secondary flex items-center gap-1 text-[11px] transition-colors"
+              className="px-2 py-1 rounded-md border border-app hover:bg-app-muted text-theme-secondary flex items-center gap-1 text-[11px] transition-colors"
             >
               {copied ? <Check className="w-3 h-3 text-accent-green" /> : <Copy className="w-3 h-3" />}
               {copied ? 'Copied' : 'Copy'}
             </button>
             <button
               onClick={onDismiss}
-              className="px-2 py-1 rounded-md border border-border/40 hover:bg-surface-200/60 text-theme-muted text-[11px] transition-colors"
+              className="px-2 py-1 rounded-md border border-app hover:bg-app-muted text-theme-muted text-[11px] transition-colors"
             >
               Dismiss
             </button>
@@ -292,16 +292,16 @@ function AddServerModal({ onClose, onAdded }: { onClose: () => void; onAdded: ()
       onClick={onClose}
     >
       <div
-        className="bg-surface-50 border border-border/40 rounded-lg w-full max-w-2xl max-h-[85vh] overflow-hidden flex flex-col shadow-2xl mt-[8vh]"
+        className="bg-surface-50 border border-app rounded-lg w-full max-w-2xl max-h-[85vh] overflow-hidden flex flex-col shadow-2xl mt-[8vh]"
         onClick={(e) => e.stopPropagation()}
       >
-        <div className="flex items-center justify-between px-5 py-3.5 border-b border-border/20">
+        <div className="flex items-center justify-between px-5 py-3.5 border-b border-app">
           <h3 className="font-heading text-sm text-theme-primary tracking-wider">Add MCP Server</h3>
-          <button onClick={onClose} className="p-1 rounded-md hover:bg-surface-200/60 text-theme-muted hover:text-theme-secondary transition-colors">
+          <button onClick={onClose} className="p-1 rounded-md hover:bg-app-muted text-theme-muted hover:text-theme-secondary transition-colors">
             <XIcon className="w-4 h-4" />
           </button>
         </div>
-        <div className="flex gap-1 px-5 pt-3 border-b border-border/20">
+        <div className="flex gap-1 px-5 pt-3 border-b border-app">
           <TabButton active={mode === 'preset'} onClick={() => setMode('preset')} icon={<Package className="w-3.5 h-3.5" />}>From Preset</TabButton>
           <TabButton active={mode === 'repo'} onClick={() => setMode('repo')} icon={<FolderGit2 className="w-3.5 h-3.5" />}>From Repo</TabButton>
         </div>
@@ -369,14 +369,14 @@ function AddFromPreset({ onAdded, onClose }: { onAdded: () => void; onClose: () 
         Click a preset to add it. If any <code className="font-mono text-theme-secondary">ALLEN_*</code> env vars are missing from Allen's <code className="font-mono text-theme-secondary">.env</code>, we'll tell you exactly which ones.
       </p>
       {missing && <MissingEnvError missing={missing} onDismiss={() => setMissing(null)} />}
-      {error && <div className="text-xs text-red-400 font-mono">{error}</div>}
+      {error && <div className="text-xs text-accent-red font-mono">{error}</div>}
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
         {presets.map((p) => (
           <button
             key={p.name}
             onClick={() => add(p)}
             disabled={!!busy}
-            className="text-left p-3 rounded-lg border border-border/40 bg-surface-100/40 hover:border-accent-blue/60 hover:bg-surface-100/60 disabled:opacity-50 transition-colors"
+            className="text-left p-3 rounded-lg border border-app bg-app-muted/50 hover:border-accent-blue/60 hover:bg-app-card disabled:opacity-50 transition-colors"
           >
             <div className="flex items-center justify-between gap-2">
               <div className="font-mono text-xs text-theme-primary font-semibold">{p.name}</div>
@@ -482,7 +482,7 @@ function AddFromRepo({ onAdded, onClose }: { onAdded: () => void; onClose: () =>
     <div className="space-y-4">
       <Field label="Repo">
         <select
-          className="w-full px-2.5 py-1.5 rounded-md border border-border/40 bg-surface-100/60 text-theme-primary text-sm font-body focus:outline-none focus:border-accent-blue/60"
+          className="w-full px-2.5 py-1.5 rounded-md border border-app bg-app-card text-theme-primary text-sm font-body focus:outline-none focus:border-accent-blue/60"
           value={selectedRepo?._id ?? ''}
           onChange={(e) => {
             const repo = userRepos.find((r) => r._id === e.target.value);
@@ -504,7 +504,7 @@ function AddFromRepo({ onAdded, onClose }: { onAdded: () => void; onClose: () =>
             <div className="space-y-1.5">
               {(discover?.candidates ?? []).length > 0 && (
                 <select
-                  className="w-full px-2.5 py-1.5 rounded-md border border-border/40 bg-surface-100/60 text-theme-primary text-sm font-mono focus:outline-none focus:border-accent-blue/60"
+                  className="w-full px-2.5 py-1.5 rounded-md border border-app bg-app-card text-theme-primary text-sm font-mono focus:outline-none focus:border-accent-blue/60"
                   value={entryPath}
                   onChange={(e) => {
                     setEntryPath(e.target.value);
@@ -523,7 +523,7 @@ function AddFromRepo({ onAdded, onClose }: { onAdded: () => void; onClose: () =>
                 placeholder="or type path, e.g. .claude/mcp/postgres/server.mjs"
                 value={entryPath}
                 onChange={(e) => setEntryPath(e.target.value)}
-                className="w-full px-2.5 py-1.5 rounded-md border border-border/40 bg-surface-100/60 text-theme-primary text-sm font-mono placeholder:text-theme-subtle focus:outline-none focus:border-accent-blue/60"
+                className="w-full px-2.5 py-1.5 rounded-md border border-app bg-app-card text-theme-primary text-sm font-mono placeholder:text-theme-subtle focus:outline-none focus:border-accent-blue/60"
               />
             </div>
           )}
@@ -538,7 +538,7 @@ function AddFromRepo({ onAdded, onClose }: { onAdded: () => void; onClose: () =>
               placeholder="auto (entry file's directory)"
               value={installPath}
               onChange={(e) => setInstallPath(e.target.value)}
-              className="w-full px-2.5 py-1.5 rounded-md border border-border/40 bg-surface-100/60 text-theme-primary text-sm font-mono placeholder:text-theme-subtle focus:outline-none focus:border-accent-blue/60"
+              className="w-full px-2.5 py-1.5 rounded-md border border-app bg-app-card text-theme-primary text-sm font-mono placeholder:text-theme-subtle focus:outline-none focus:border-accent-blue/60"
             />
             <div className="text-[10px] text-theme-subtle mt-1 font-body">
               Directory containing <code className="font-mono text-theme-muted">package.json</code>. Leave blank to use the entry file's folder.
@@ -551,7 +551,7 @@ function AddFromRepo({ onAdded, onClose }: { onAdded: () => void; onClose: () =>
               placeholder="e.g. inomy-postgres"
               value={name}
               onChange={(e) => setName(e.target.value)}
-              className="w-full px-2.5 py-1.5 rounded-md border border-border/40 bg-surface-100/60 text-theme-primary text-sm font-mono placeholder:text-theme-subtle focus:outline-none focus:border-accent-blue/60"
+              className="w-full px-2.5 py-1.5 rounded-md border border-app bg-app-card text-theme-primary text-sm font-mono placeholder:text-theme-subtle focus:outline-none focus:border-accent-blue/60"
             />
           </Field>
 
@@ -560,7 +560,7 @@ function AddFromRepo({ onAdded, onClose }: { onAdded: () => void; onClose: () =>
               placeholder="Bare env var names (comma or newline separated) — e.g. POSTGRES_HOST, POSTGRES_PORT"
               value={envKeysInput}
               onChange={(e) => setEnvKeysInput(e.target.value)}
-              className="w-full px-2.5 py-1.5 rounded-md border border-border/40 bg-surface-100/60 text-theme-primary text-sm font-mono placeholder:text-theme-subtle focus:outline-none focus:border-accent-blue/60 min-h-[60px]"
+              className="w-full px-2.5 py-1.5 rounded-md border border-app bg-app-card text-theme-primary text-sm font-mono placeholder:text-theme-subtle focus:outline-none focus:border-accent-blue/60 min-h-[60px]"
             />
             {envKeys.length > 0 && (
               <div className="text-[10px] text-theme-subtle mt-1 font-mono">
@@ -572,12 +572,12 @@ function AddFromRepo({ onAdded, onClose }: { onAdded: () => void; onClose: () =>
       )}
 
       {missing && <MissingEnvError missing={missing} onDismiss={() => setMissing(null)} />}
-      {error && <div className="text-xs text-red-400 font-mono">{error}</div>}
+      {error && <div className="text-xs text-accent-red font-mono">{error}</div>}
 
       <div className="flex justify-end gap-2 pt-2">
         <button
           onClick={onClose}
-          className="px-3 py-1.5 rounded-md border border-border/40 text-theme-secondary hover:bg-surface-200/60 text-sm font-body transition-colors"
+          className="px-3 py-1.5 rounded-md border border-app text-theme-secondary hover:bg-app-muted text-sm font-body transition-colors"
         >
           Cancel
         </button>
@@ -597,7 +597,7 @@ function AddFromRepo({ onAdded, onClose }: { onAdded: () => void; onClose: () =>
 function Field({ label, children }: { label: string; children: React.ReactNode }) {
   return (
     <div>
-      <label className="block text-[10px] font-label uppercase tracking-[0.15em] text-theme-muted mb-1.5">
+      <label className="block overline mb-1.5">
         {label}
       </label>
       {children}
@@ -628,7 +628,7 @@ export default function McpServerManager() {
           `top-0` sticks to the nearest scroll ancestor (SettingsPage's
           overflow-auto container). Solid bg-surface-100 masks list rows
           scrolling underneath, and z-20 keeps it above ServerCards. */}
-      <div className="sticky top-0 z-20 bg-surface-100/95 backdrop-blur-sm border-b border-border/40 rounded-t-sm px-6 py-4">
+      <div className="sticky top-0 z-20 bg-surface-100/95 backdrop-blur-sm border-b border-app rounded-t-sm px-6 py-4">
         <div className="flex items-center justify-between gap-3">
           <div className="min-w-0">
             <div className="flex items-center gap-2 mb-1">
@@ -649,14 +649,14 @@ export default function McpServerManager() {
       </div>
 
       <div className="p-6 space-y-3">
-        {err && <div className="text-xs text-red-400 font-mono">{err}</div>}
+        {err && <div className="text-xs text-accent-red font-mono">{err}</div>}
 
         {loading ? (
           <div className="text-xs text-theme-muted flex items-center gap-2">
             <Loader2 className="w-3 h-3 animate-spin" /> loading…
           </div>
         ) : servers.length === 0 ? (
-          <div className="border border-dashed border-border/40 rounded-lg p-8 text-center">
+          <div className="border border-dashed border-app rounded-lg p-8 text-center">
             <Server className="w-6 h-6 mx-auto text-theme-subtle mb-2" />
             <div className="text-sm text-theme-secondary font-body mb-1">No MCP servers yet</div>
             <div className="text-xs text-theme-muted font-body">
