@@ -73,7 +73,6 @@ interface LinearStatus {
 }
 
 const STATUS_GROUPS: { type: StateType; label: string }[] = [
-  { type: 'triage', label: 'Triage' },
   { type: 'backlog', label: 'Backlog' },
   { type: 'unstarted', label: 'Todo' },
   { type: 'started', label: 'In Progress' },
@@ -118,7 +117,7 @@ export default function TicketsPage() {
 
   const [projectFilter, setProjectFilter] = useState<string>(''); // '' = all
   const [stateFilters, setStateFilters] = useState<Set<StateType>>(
-    new Set<StateType>(['backlog', 'unstarted', 'started', 'triage']),
+    new Set<StateType>(['backlog', 'unstarted', 'started']),
   );
   const [assigneeFilter, setAssigneeFilter] = useState<'any' | 'unassigned' | string>('any');
   const [search, setSearch] = useState('');
@@ -143,7 +142,7 @@ export default function TicketsPage() {
   useEffect(() => {
     if (topTab === 'active') setStateFilters(new Set<StateType>(['started', 'unstarted']));
     else if (topTab === 'done') setStateFilters(new Set<StateType>(['completed']));
-    else setStateFilters(new Set<StateType>(['triage', 'backlog', 'unstarted', 'started', 'completed', 'canceled']));
+    else setStateFilters(new Set<StateType>(['backlog', 'unstarted', 'started', 'completed', 'canceled']));
   }, [topTab]);
 
   // Teams list for agent dropdown grouping
@@ -790,16 +789,19 @@ function BoardCard({
         {issue.title}
       </div>
       {issue.labels.length > 0 && (
-        <div className="flex items-center gap-1 flex-wrap">
+        <div className="flex items-center gap-1.5 flex-wrap">
           {issue.labels.slice(0, 3).map(l => (
             <span
               key={l.id}
-              className="text-[9.5px] font-mono px-1.5 py-px rounded bg-app-muted text-theme-secondary"
-              style={{ borderLeft: `2px solid ${l.color}` }}
+              className="text-[9px] font-mono px-1.5 py-0.5 rounded border"
+              style={{ color: l.color, borderColor: l.color + '60', backgroundColor: l.color + '15' }}
             >
               {l.name}
             </span>
           ))}
+          {issue.labels.length > 3 && (
+            <span className="text-[9px] text-theme-subtle font-mono">+{issue.labels.length - 3}</span>
+          )}
         </div>
       )}
       <div className="flex items-center justify-between gap-2 mt-0.5" onClick={e => e.stopPropagation()}>

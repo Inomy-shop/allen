@@ -196,6 +196,23 @@ export default function ChatPage() {
   const sessionTitle = activeSessionId ? activeSession?.title ?? 'Chat' : CHAT_TITLE;
   const messageCount = activeSession?.messageCount ?? 0;
 
+  // Inline title edit. Persists via chatApi.updateSession + nudges
+  // useChat to refresh the sessions list so the sidebar shows the
+  // new title. Only enabled when there's an active session.
+  const [titleDraft, setTitleDraft] = useState<string | null>(null);
+  const [savingTitle, setSavingTitle] = useState(false);
+  async function commitTitle() {
+    const next = (titleDraft ?? '').trim();
+    setTitleDraft(null);
+    if (!activeSessionId || !next || next === sessionTitle) return;
+    setSavingTitle(true);
+    try {
+      await chatApi.updateSession(activeSessionId, { title: next });
+    } finally {
+      setSavingTitle(false);
+    }
+  }
+
   return (
     <div className="flex-1 flex h-full min-w-0">
       {/* Conversations sidebar (matches handoff/pages/chat.jsx ChatV2) */}
@@ -215,9 +232,28 @@ export default function ChatPage() {
         </div>
         <div className="flex items-center justify-between gap-3">
           <div className="flex items-center gap-3 min-w-0">
-            <h1 className="text-[20px] font-semibold text-theme-primary tracking-tight truncate">
-              {sessionTitle}
-            </h1>
+            {activeSessionId && titleDraft !== null ? (
+              <input
+                autoFocus
+                value={titleDraft}
+                onChange={(e) => setTitleDraft(e.target.value)}
+                onBlur={commitTitle}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') (e.target as HTMLInputElement).blur();
+                  if (e.key === 'Escape') setTitleDraft(null);
+                }}
+                className="text-[20px] font-semibold text-theme-primary tracking-tight bg-transparent border border-app rounded px-2 py-0.5 focus:outline-none focus:border-accent w-[40rem] max-w-full"
+                disabled={savingTitle}
+              />
+            ) : (
+              <h1
+                className={`text-[20px] font-semibold text-theme-primary tracking-tight truncate ${activeSessionId ? 'cursor-text hover:text-accent transition-colors' : ''}`}
+                onClick={() => activeSessionId && setTitleDraft(sessionTitle)}
+                title={activeSessionId ? 'Click to rename' : undefined}
+              >
+                {sessionTitle}
+              </h1>
+            )}
             {activeSessionId && activeProvider && (
               <span className={`badge badge-muted ${PROVIDER_DISPLAY[activeProvider]?.color ?? 'text-theme-muted'}`}>
                 {PROVIDER_DISPLAY[activeProvider]?.label}

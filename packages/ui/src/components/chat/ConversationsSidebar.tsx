@@ -1,6 +1,6 @@
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Plus, Trash2 } from 'lucide-react';
+import { Plus, Trash2, Search } from 'lucide-react';
 import { useChat } from '../../hooks/useChat';
 import DeleteConfirmDialog from '../common/DeleteConfirmDialog';
 
@@ -29,6 +29,13 @@ export default function ConversationsSidebar() {
   const navigate = useNavigate();
   const { sessions, activeSessionId, loadingSessions, switchSession, deleteSession } = useChat();
   const [deleting, setDeleting] = useState<{ id: string; title: string } | null>(null);
+  const [query, setQuery] = useState('');
+
+  const filtered = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    if (!q) return sessions;
+    return sessions.filter((s) => (s.title ?? '').toLowerCase().includes(q));
+  }, [sessions, query]);
 
   function handleNew() {
     switchSession('');
@@ -54,6 +61,17 @@ export default function ConversationsSidebar() {
           <Plus className="w-3.5 h-3.5" />
         </button>
       </div>
+      <div className="px-2 pt-2 pb-1">
+        <div className="relative">
+          <Search className="w-3.5 h-3.5 absolute left-2.5 top-1/2 -translate-y-1/2 text-theme-muted pointer-events-none" />
+          <input
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder="Search conversations…"
+            className="input pl-8 pr-3 py-1.5 w-full text-[12px]"
+          />
+        </div>
+      </div>
       <div className="flex-1 overflow-y-auto px-1.5 py-1.5 space-y-1">
         {loadingSessions && sessions.length === 0 && (
           <div className="px-3 py-4 text-center text-[12px] text-theme-subtle animate-pulse">Loading conversations…</div>
@@ -61,7 +79,10 @@ export default function ConversationsSidebar() {
         {!loadingSessions && sessions.length === 0 && (
           <div className="px-3 py-4 text-center text-[12px] text-theme-subtle">No conversations yet</div>
         )}
-        {sessions.map((s) => {
+        {!loadingSessions && sessions.length > 0 && filtered.length === 0 && (
+          <div className="px-3 py-4 text-center text-[12px] text-theme-subtle">No matches.</div>
+        )}
+        {filtered.map((s) => {
           const isActive = s._id === activeSessionId;
           const p = PROV[s.provider] ?? { label: s.provider, color: 'text-theme-muted' };
           const dotBg = p.color.replace('text-', 'bg-');

@@ -6,7 +6,7 @@ import {
   LayoutDashboard, GitBranch, Play, Users, Settings,
   FolderGit2, Brain, MessageSquare,
   Server, User, ChevronDown, ChevronRight,
-  GitPullRequest, Clock, HelpCircle, Ticket, Search, LogOut, ShieldCheck,
+  GitPullRequest, Clock, HelpCircle, Ticket, LogOut, ShieldCheck,
   Sun, Moon,
 } from 'lucide-react';
 import { useSettingsStore } from './stores/settingsStore';
@@ -159,13 +159,6 @@ export default function App() {
             <span className="font-heading text-[13px] font-semibold text-theme-primary truncate">{BRAND_NAME}</span>
           </NavLink>
           <ChevronDown className="w-3 h-3 text-theme-muted shrink-0" />
-        </div>
-
-        {/* Search box */}
-        <div className="mx-2 mb-3 flex items-center gap-1.5 px-2 py-1.5 rounded-md bg-app-card border border-app text-theme-muted text-[12px] cursor-pointer hover:border-app-strong transition-colors">
-          <Search className="w-3.5 h-3.5 shrink-0" />
-          <span className="flex-1 truncate">Search…</span>
-          <span className="font-mono text-[10px] px-1 py-0.5 rounded bg-app-muted text-theme-subtle">⌘K</span>
         </div>
 
         {/* Nav groups */}
