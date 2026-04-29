@@ -1,7 +1,12 @@
 import { useState, useEffect } from 'react';
-import { dashboard } from '../services/api';
-import { Activity, RefreshCw, CheckCircle2, XCircle, DollarSign, Clock, Layers } from 'lucide-react';
+import { Link } from 'react-router-dom';
+import { dashboard, executions } from '../services/api';
+import {
+  Activity, RefreshCw, CheckCircle2, XCircle, DollarSign, Clock, Layers,
+  PlayCircle, ArrowRight,
+} from 'lucide-react';
 import { Skeleton } from '../components/common/Skeleton';
+import StatusBadge from '../components/common/StatusBadge';
 
 interface StatsShape {
   total: number;
@@ -12,17 +17,69 @@ interface StatsShape {
 interface CostShape {
   byWorkflow: Record<string, { totalEstimated: number; totalActual: number; count: number }>;
 }
+interface ExecutionItem {
+  id: string;
+  workflowName: string;
+  status: string;
+  durationMs: number | null;
+  startedAt: string;
+  cost?: { actual?: number | null; estimated?: number };
+}
+
+function formatDuration(ms: number | null | undefined): string {
+  if (ms == null) return '—';
+  const s = ms / 1000;
+  if (s < 60) return `${s.toFixed(1)}s`;
+  const m = Math.floor(s / 60);
+  const r = Math.floor(s % 60);
+  return `${m}m ${r}s`;
+}
+
+function liveDuration(startedAt: string): string {
+  const ms = Date.now() - new Date(startedAt).getTime();
+  if (ms < 0) return '—';
+  return formatDuration(ms);
+}
+
+function timeAgo(dateStr: string): string {
+  const ms = Date.now() - new Date(dateStr).getTime();
+  const s = Math.floor(ms / 1000);
+  if (s < 60) return 'just now';
+  if (s < 3600) return `${Math.floor(s / 60)}m ago`;
+  if (s < 86400) return `${Math.floor(s / 3600)}h ago`;
+  return `${Math.floor(s / 86400)}d ago`;
+}
 
 export default function DashboardPage() {
   const [stats, setStats] = useState<StatsShape | null>(null);
   const [costData, setCostData] = useState<CostShape | null>(null);
+  const [running, setRunning] = useState<ExecutionItem[]>([]);
+  const [recent, setRecent] = useState<ExecutionItem[]>([]);
   const [loading, setLoading] = useState(true);
+  // Re-render every second so live durations on running rows tick.
+  const [, setNow] = useState(0);
+
+  const load = () => Promise.all([
+    dashboard.stats(),
+    dashboard.cost(),
+    executions.listPaged({ status: 'running', limit: 20, offset: 0 } as any).catch(() => ({ items: [] })),
+    executions.listPaged({ limit: 8, offset: 0 } as any).catch(() => ({ items: [] })),
+  ])
+    .then(([s, c, run, rec]: any) => {
+      setStats(s);
+      setCostData(c);
+      setRunning(run.items ?? []);
+      setRecent(rec.items ?? []);
+    })
+    .catch(() => {})
+    .finally(() => setLoading(false));
 
   useEffect(() => {
-    Promise.all([dashboard.stats(), dashboard.cost()])
-      .then(([s, c]) => { setStats(s); setCostData(c); })
-      .catch(() => {})
-      .finally(() => setLoading(false));
+    void load();
+    const tick = setInterval(() => setNow((n) => n + 1), 1000);
+    const refresh = setInterval(() => void load(), 10000);
+    return () => { clearInterval(tick); clearInterval(refresh); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const byStatus = stats?.byStatus ?? {};
@@ -122,6 +179,92 @@ export default function DashboardPage() {
                 </div>
               );
             })}
+      </div>
+
+      {/* Running executions — live ticker */}
+      <div className="card overflow-hidden mb-5">
+        <div className="flex items-center gap-2 px-4 py-3 border-b border-app">
+          <PlayCircle className="w-3.5 h-3.5 text-accent" />
+          <span className="overline">Running now</span>
+          <span className="text-[11px] font-mono text-theme-muted">{running.length}</span>
+          {running.length > 0 && (
+            <span className="ml-1 w-1.5 h-1.5 rounded-full bg-accent animate-pulse" />
+          )}
+          <div className="flex-1" />
+          <Link to="/executions?status=running" className="text-[11px] text-theme-muted hover:text-accent transition-colors flex items-center gap-1">
+            View all <ArrowRight className="w-3 h-3" />
+          </Link>
+        </div>
+        {loading ? (
+          <div className="p-4 space-y-2">
+            {Array.from({ length: 3 }).map((_, i) => <Skeleton key={i} className="h-7 w-full" />)}
+          </div>
+        ) : running.length === 0 ? (
+          <div className="px-4 py-6 text-center text-[12px] text-theme-subtle">No executions running.</div>
+        ) : (
+          <div className="divide-y divide-border">
+            {running.map((e) => (
+              <Link
+                key={e.id}
+                to={`/executions/${e.id}`}
+                className="flex items-center gap-3 px-4 py-2 hover:bg-app-muted/50 transition-colors"
+              >
+                <Link
+                  to={`/executions/${e.id}`}
+                  onClick={(ev) => ev.stopPropagation()}
+                  className="text-[12px] font-mono text-accent hover:text-accent-hover w-20 truncate"
+                >
+                  {e.id?.slice(0, 8)}
+                </Link>
+                <span className="flex-1 min-w-0 text-[13px] text-theme-primary truncate">{e.workflowName}</span>
+                <StatusBadge status={e.status} />
+                <span className="text-[12px] font-mono text-theme-secondary tabular-nums w-20 text-right">
+                  {liveDuration(e.startedAt)}
+                </span>
+                <span className="text-[11px] font-mono text-theme-subtle w-20 text-right">{timeAgo(e.startedAt)}</span>
+              </Link>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {/* Recent executions */}
+      <div className="card overflow-hidden mb-5">
+        <div className="flex items-center gap-2 px-4 py-3 border-b border-app">
+          <Activity className="w-3.5 h-3.5 text-theme-muted" />
+          <span className="overline">Recent executions</span>
+          <div className="flex-1" />
+          <Link to="/executions" className="text-[11px] text-theme-muted hover:text-accent transition-colors flex items-center gap-1">
+            View all <ArrowRight className="w-3 h-3" />
+          </Link>
+        </div>
+        {loading ? (
+          <div className="p-4 space-y-2">
+            {Array.from({ length: 5 }).map((_, i) => <Skeleton key={i} className="h-7 w-full" />)}
+          </div>
+        ) : recent.length === 0 ? (
+          <div className="px-4 py-6 text-center text-[12px] text-theme-subtle">No executions yet.</div>
+        ) : (
+          <div className="divide-y divide-border">
+            {recent.map((e) => (
+              <Link
+                key={e.id}
+                to={`/executions/${e.id}`}
+                className="flex items-center gap-3 px-4 py-2 hover:bg-app-muted/50 transition-colors"
+              >
+                <span className="text-[12px] font-mono text-accent hover:text-accent-hover w-20 truncate">
+                  {e.id?.slice(0, 8)}
+                </span>
+                <span className="flex-1 min-w-0 text-[13px] text-theme-primary truncate">{e.workflowName}</span>
+                <StatusBadge status={e.status} />
+                <span className="text-[12px] font-mono text-theme-secondary tabular-nums w-20 text-right">
+                  {formatDuration(e.durationMs)}
+                </span>
+                <span className="text-[11px] font-mono text-theme-subtle w-20 text-right">{timeAgo(e.startedAt)}</span>
+              </Link>
+            ))}
+          </div>
+        )}
       </div>
 
       {/* 2-up panels */}
