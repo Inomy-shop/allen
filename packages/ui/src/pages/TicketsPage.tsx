@@ -1,14 +1,21 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { linear as linearApi, teams as teamsApi, repos as reposApi } from '../services/api';
+import {
+  linear as linearApi,
+  teams as teamsApi,
+  repos as reposApi,
+  workflows as workflowsApi,
+  executions as executionsApi,
+} from '../services/api';
 import { useAgents } from '../hooks/useAgents';
 import { useToast } from '../components/common/Toast';
 import { renderMarkdown } from '../components/chat/ChatMessageList';
-import AgentAssignDropdown, { type AgentOption, type TeamOption } from '../components/agents/AgentAssignDropdown';
-import DispatchModal from '../components/linear/DispatchModal';
+import { type AgentOption, type TeamOption } from '../components/agents/AgentAssignDropdown';
+import DispatchModal, { type DispatchTarget, type WorkflowOption } from '../components/linear/DispatchModal';
 import {
   AlertCircle, ChevronDown, ChevronRight, Circle, Clock, ExternalLink,
   KeyRound, Loader2, MinusCircle, Play, RefreshCw, Search, Settings, X, Sparkles,
+  List as ListIcon, LayoutGrid,
 } from 'lucide-react';
 
 type StateType = 'backlog' | 'unstarted' | 'started' | 'completed' | 'canceled' | 'triage';
@@ -125,16 +132,18 @@ export default function TicketsPage() {
   const [dispatchFor, setDispatchFor] = useState<LinearIssue | null>(null);
   const [repos, setRepos] = useState<any[]>([]);
   const [reposLoading, setReposLoading] = useState(true);
+  const [workflowList, setWorkflowList] = useState<WorkflowOption[]>([]);
+  const [workflowsLoading, setWorkflowsLoading] = useState(true);
 
-  // Top-tab filter — must live above the early-return paths to satisfy
-  // React's rules of hooks.
-  type TopTab = 'all' | 'mine' | 'active' | 'done';
+  // Top-tab filter + view mode — must live above the early-return paths
+  // to satisfy React's rules of hooks.
+  type TopTab = 'all' | 'active' | 'done';
   const [topTab, setTopTab] = useState<TopTab>('all');
+  const [viewMode, setViewMode] = useState<'list' | 'board'>('list');
   useEffect(() => {
-    if (topTab === 'all') setStateFilters(new Set<StateType>(['triage', 'backlog', 'unstarted', 'started', 'completed', 'canceled']));
-    else if (topTab === 'active') setStateFilters(new Set<StateType>(['started', 'unstarted']));
+    if (topTab === 'active') setStateFilters(new Set<StateType>(['started', 'unstarted']));
     else if (topTab === 'done') setStateFilters(new Set<StateType>(['completed']));
-    else setStateFilters(new Set<StateType>(['triage', 'backlog', 'unstarted', 'started']));
+    else setStateFilters(new Set<StateType>(['triage', 'backlog', 'unstarted', 'started', 'completed', 'canceled']));
   }, [topTab]);
 
   // Teams list for agent dropdown grouping
@@ -151,6 +160,20 @@ export default function TicketsPage() {
       .then((r: any[]) => setRepos((r ?? []).slice().sort((a, b) => String(a.name).localeCompare(b.name))))
       .catch(() => setRepos([]))
       .finally(() => setReposLoading(false));
+  }, []);
+
+  // Workflows (for dispatch modal — third dispatch target type)
+  useEffect(() => {
+    setWorkflowsLoading(true);
+    workflowsApi.list()
+      .then((wfs: any[]) => setWorkflowList(
+        (wfs ?? [])
+          .filter((w: any) => w.validation?.valid !== false)
+          .map((w: any) => ({ _id: w._id, name: w.name, description: w.description, parsed: w.parsed }))
+          .sort((a: WorkflowOption, b: WorkflowOption) => a.name.localeCompare(b.name)),
+      ))
+      .catch(() => setWorkflowList([]))
+      .finally(() => setWorkflowsLoading(false));
   }, []);
 
   // Initial status check
@@ -289,13 +312,42 @@ export default function TicketsPage() {
     }
   }
 
-  async function handleDispatch(issue: LinearIssue, args: { agentName: string; repoId: string; extraInstructions: string }) {
-    const { assignment } = await linearApi.dispatch(issue.id, args);
+  async function handleDispatch(
+    issue: LinearIssue,
+    args: { target: DispatchTarget; repoId: string; extraInstructions: string },
+  ) {
+    if (args.target.kind === 'workflow') {
+      // Run the workflow with the ticket as the `task` input. Extra
+      // instructions get appended to the task body so the workflow has
+      // the full context.
+      const taskBody = [
+        `[${issue.identifier}] ${issue.title}`,
+        issue.description || '',
+        args.extraInstructions ? `\nAdditional instructions:\n${args.extraInstructions}` : '',
+      ].filter(Boolean).join('\n\n');
+      const exec = await executionsApi.start(args.target.workflowId, {
+        task: taskBody,
+        ticket_id: issue.identifier,
+        ticket_url: issue.url,
+      });
+      toast.success(`Started ${args.target.workflowName} on ${issue.identifier}`);
+      setDispatchFor(null);
+      navigate(`/executions/${exec.id}`);
+      return;
+    }
+
+    // Both 'agent' and 'team-lead' route through the existing
+    // /linear/dispatch endpoint with the resolved agent name.
+    const agentName = args.target.kind === 'agent' ? args.target.name : args.target.agentName;
+    const { assignment } = await linearApi.dispatch(issue.id, {
+      agentName,
+      repoId: args.repoId,
+      extraInstructions: args.extraInstructions,
+    });
     setIssues(prev => prev.map(i => i.id === issue.id ? { ...i, agentAssignee: assignment } : i));
     if (detail?.id === issue.id) setDetail({ ...detail, agentAssignee: assignment });
-    toast.success(`Dispatching ${args.agentName} to ${issue.identifier}…`);
+    toast.success(`Dispatching ${agentName} to ${issue.identifier}…`);
     setDispatchFor(null);
-    // Refresh the detail view after a beat so the user sees the workspace link once the setup finishes
     setTimeout(() => { if (selectedId === issue.id) void linearApi.issue(issue.id).then(setDetail).catch(() => {}); }, 3000);
   }
 
@@ -399,6 +451,27 @@ export default function TicketsPage() {
             </div>
           </div>
           <div className="flex items-center gap-2">
+            {/* List/Board view toggle */}
+            <div className="flex items-center bg-app-muted rounded-md p-0.5">
+              <button
+                onClick={() => setViewMode('list')}
+                className={`flex items-center gap-1.5 px-2.5 py-1 rounded text-[12px] transition-colors ${
+                  viewMode === 'list' ? 'bg-app-card text-theme-primary shadow-sm font-medium' : 'text-theme-muted hover:text-theme-primary'
+                }`}
+                title="List view"
+              >
+                <ListIcon className="w-3.5 h-3.5" /> List
+              </button>
+              <button
+                onClick={() => setViewMode('board')}
+                className={`flex items-center gap-1.5 px-2.5 py-1 rounded text-[12px] transition-colors ${
+                  viewMode === 'board' ? 'bg-app-card text-theme-primary shadow-sm font-medium' : 'text-theme-muted hover:text-theme-primary'
+                }`}
+                title="Board view"
+              >
+                <LayoutGrid className="w-3.5 h-3.5" /> Board
+              </button>
+            </div>
             <button
               onClick={() => { void loadStatus(); void loadProjects(); void loadIssues(); }}
               disabled={listLoading}
@@ -414,7 +487,6 @@ export default function TicketsPage() {
         <div className="flex items-center gap-1 -mb-px">
           {([
             { id: 'all', label: 'All', count: issues.length },
-            { id: 'mine', label: 'My issues' },
             { id: 'active', label: 'Active', count: activeCount },
             { id: 'done', label: 'Done' },
           ] as { id: TopTab; label: string; count?: number }[]).map(t => (
@@ -475,26 +547,71 @@ export default function TicketsPage() {
               <span className="text-[11px] font-mono">{totalShown} of {issues.length}</span>
             </div>
 
-            {/* Issue groups (kept the same as v1, just rendered without sidebar) */}
-            <div className="space-y-3">
-              {STATUS_GROUPS.map(g => {
-                const list = grouped.get(g.type) ?? [];
-                if (list.length === 0) return null;
-                const collapsed = collapsedGroups.has(g.type);
-                return (
-                  <div key={g.type} className="card overflow-hidden">
-                    <button
-                      onClick={() => toggleGroupCollapsed(g.type)}
-                      className="w-full flex items-center gap-2 px-3.5 py-2 text-left bg-app-muted hover:bg-app-muted/80 border-b border-app transition-colors"
-                    >
-                      {collapsed ? <ChevronRight className="w-3.5 h-3.5 text-theme-muted" /> : <ChevronDown className="w-3.5 h-3.5 text-theme-muted" />}
-                      <span className="text-[13px] font-medium text-theme-primary">{g.label}</span>
-                      <span className="text-[11px] font-mono text-theme-muted">{list.length} issue{list.length !== 1 ? 's' : ''}</span>
-                    </button>
-                    {!collapsed && (
-                      <div className="divide-y divide-border">
+            {/* Issue groups — list view */}
+            {viewMode === 'list' && (
+              <div className="space-y-3">
+                {STATUS_GROUPS.map(g => {
+                  const list = grouped.get(g.type) ?? [];
+                  if (list.length === 0) return null;
+                  const collapsed = collapsedGroups.has(g.type);
+                  return (
+                    <div key={g.type} className="card overflow-hidden">
+                      <button
+                        onClick={() => toggleGroupCollapsed(g.type)}
+                        className="w-full flex items-center gap-2 px-3.5 py-2 text-left bg-app-muted hover:bg-app-muted/80 border-b border-app transition-colors"
+                      >
+                        {collapsed ? <ChevronRight className="w-3.5 h-3.5 text-theme-muted" /> : <ChevronDown className="w-3.5 h-3.5 text-theme-muted" />}
+                        <span className="text-[13px] font-medium text-theme-primary">{g.label}</span>
+                        <span className="text-[11px] font-mono text-theme-muted">{list.length} issue{list.length !== 1 ? 's' : ''}</span>
+                      </button>
+                      {!collapsed && (
+                        <div className="divide-y divide-border">
+                          {list.map(issue => (
+                            <TicketRow
+                              key={issue.id}
+                              issue={issue}
+                              active={issue.id === selectedId}
+                              onSelect={() => setSelectedId(issue.id)}
+                              onDispatch={() => setDispatchFor(issue)}
+                            />
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+                {!listLoading && filteredIssues.length === 0 && (
+                  <div className="rounded-xl border border-dashed border-app p-12 text-center text-[12px] text-theme-muted font-body italic">
+                    No tickets match the current filters.
+                  </div>
+                )}
+                {listLoading && issues.length === 0 && (
+                  <div className="flex items-center gap-2 text-[11px] font-mono text-theme-muted py-6 px-2">
+                    <Loader2 className="w-3 h-3 animate-spin" /> Loading from Linear…
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* Board view — Kanban columns by status */}
+            {viewMode === 'board' && (
+              <div className="flex gap-3 overflow-x-auto pb-3">
+                {STATUS_GROUPS.map(g => {
+                  const list = grouped.get(g.type) ?? [];
+                  return (
+                    <div key={g.type} className="w-[300px] shrink-0 flex flex-col card overflow-hidden">
+                      <div className="flex items-center gap-2 px-3 py-2 bg-app-muted border-b border-app shrink-0">
+                        <span className="text-[13px] font-medium text-theme-primary">{g.label}</span>
+                        <span className="text-[11px] font-mono text-theme-muted">{list.length}</span>
+                      </div>
+                      <div className="flex-1 overflow-y-auto p-2 space-y-2 min-h-[200px]">
+                        {list.length === 0 && (
+                          <div className="text-[11px] text-theme-subtle italic font-body py-4 text-center">
+                            No issues
+                          </div>
+                        )}
                         {list.map(issue => (
-                          <TicketRow
+                          <BoardCard
                             key={issue.id}
                             issue={issue}
                             active={issue.id === selectedId}
@@ -503,21 +620,16 @@ export default function TicketsPage() {
                           />
                         ))}
                       </div>
-                    )}
+                    </div>
+                  );
+                })}
+                {!listLoading && filteredIssues.length === 0 && (
+                  <div className="rounded-xl border border-dashed border-app p-12 text-center text-[12px] text-theme-muted font-body italic w-full">
+                    No tickets match the current filters.
                   </div>
-                );
-              })}
-              {!listLoading && filteredIssues.length === 0 && (
-                <div className="rounded-xl border border-dashed border-app p-12 text-center text-[12px] text-theme-muted font-body italic">
-                  No tickets match the current filters.
-                </div>
-              )}
-              {listLoading && issues.length === 0 && (
-                <div className="flex items-center gap-2 text-[11px] font-mono text-theme-muted py-6 px-2">
-                  <Loader2 className="w-3 h-3 animate-spin" /> Loading from Linear…
-                </div>
-              )}
-            </div>
+                )}
+              </div>
+            )}
           </div>
         </div>
 
@@ -547,10 +659,12 @@ export default function TicketsPage() {
       {dispatchFor && (
         <DispatchModal
           open={true}
-          issue={{ id: dispatchFor.id, identifier: dispatchFor.identifier, title: dispatchFor.title }}
+          issue={{ id: dispatchFor.id, identifier: dispatchFor.identifier, title: dispatchFor.title, description: dispatchFor.description ?? null }}
           currentAgent={dispatchFor.agentAssignee?.agentName ?? null}
           agents={agentOptions}
           teams={teamOptions}
+          workflows={workflowList}
+          workflowsLoading={workflowsLoading}
           repos={repos}
           reposLoading={reposLoading}
           onClose={() => setDispatchFor(null)}
@@ -641,6 +755,57 @@ function TicketRow({
         <AssignmentPill assignee={issue.agentAssignee} onClick={onDispatch} />
       </div>
       <span className="text-[10px] font-mono text-theme-subtle shrink-0 w-16 text-right">{relative(issue.updatedAt)}</span>
+    </div>
+  );
+}
+
+// ── Board card (Kanban) ─────────────────────────────────────────────────────
+
+function BoardCard({
+  issue, active, onSelect, onDispatch,
+}: {
+  issue: LinearIssue;
+  active: boolean;
+  onSelect: () => void;
+  onDispatch: () => void;
+}) {
+  return (
+    <div
+      onClick={onSelect}
+      className={`card-hover p-2.5 cursor-pointer flex flex-col gap-1.5 ${
+        active ? 'border-accent shadow-sm' : ''
+      }`}
+    >
+      <div className="flex items-center gap-1.5">
+        <PriorityIcon p={issue.priority} />
+        <span className="text-[10.5px] font-mono text-theme-muted">{issue.identifier}</span>
+        <span className="flex-1" />
+        {issue.project && (
+          <span className="text-[10px] font-mono text-theme-subtle truncate max-w-[100px]" title={issue.project.name}>
+            {issue.project.name}
+          </span>
+        )}
+      </div>
+      <div className="text-[12.5px] text-theme-primary leading-snug line-clamp-2 font-body">
+        {issue.title}
+      </div>
+      {issue.labels.length > 0 && (
+        <div className="flex items-center gap-1 flex-wrap">
+          {issue.labels.slice(0, 3).map(l => (
+            <span
+              key={l.id}
+              className="text-[9.5px] font-mono px-1.5 py-px rounded bg-app-muted text-theme-secondary"
+              style={{ borderLeft: `2px solid ${l.color}` }}
+            >
+              {l.name}
+            </span>
+          ))}
+        </div>
+      )}
+      <div className="flex items-center justify-between gap-2 mt-0.5" onClick={e => e.stopPropagation()}>
+        <AssignmentPill assignee={issue.agentAssignee} onClick={onDispatch} />
+        <span className="text-[10px] font-mono text-theme-subtle">{relative(issue.updatedAt)}</span>
+      </div>
     </div>
   );
 }
