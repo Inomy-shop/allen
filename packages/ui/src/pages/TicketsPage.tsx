@@ -602,7 +602,7 @@ export default function TicketsPage() {
             </div>
 
             {topTab === 'running' ? (
-              <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
+              <div className="space-y-3">
                 <div className="card overflow-hidden">
                   <div className="flex items-center justify-between gap-2 border-b border-app bg-app-muted px-3.5 py-2">
                     <div>
@@ -629,7 +629,6 @@ export default function TicketsPage() {
                     </div>
                   )}
                 </div>
-
                 <div className="card overflow-hidden">
                   <div className="flex items-center justify-between gap-2 border-b border-app bg-accent-green/5 px-3.5 py-2">
                     <div>

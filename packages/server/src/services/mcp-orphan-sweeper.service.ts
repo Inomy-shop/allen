@@ -25,12 +25,20 @@
  *
  * Conservative by design — only touches processes that are
  *   (a) listed in /sys/fs/cgroup/system.slice/allen.service/cgroup.procs,
- *   (b) currently orphans (PPID=1, so reparented to init), AND
- *   (c) older than MIN_ORPHAN_AGE_MS, so a freshly-spawned child briefly
+ *   (b) currently orphans (PPID=1, so reparented to init),
+ *   (c) NOT allen's own main process (allen's PPID is also 1 by systemd
+ *       design — without this guard the sweeper kills the parent every
+ *       10 min in a perfect loop, which is exactly the failure mode the
+ *       2026-04-30 audit traced 6 systemd auto-restarts to), AND
+ *   (d) older than MIN_ORPHAN_AGE_MS, so a freshly-spawned child briefly
  *       orphan during a parent setpgid race is never killed.
  *
- * Anything in allen.service's cgroup with PPID=1 is, by allen's design,
- * a leaked subtree — allen never deliberately re-parents to init.
+ * Long-running agents are safe: their MCP wrapper chain (npx → npm → sh
+ * → node) all stay alive while the claude binary is running, so the
+ * MCPs are NOT orphans during the run. They become orphans only after
+ * claude exits, at which point they're correct to reap. The age guard
+ * is irrelevant for long agents — by the time their MCP becomes orphan
+ * (after claude exit) the process is already hours old.
  */
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
@@ -87,9 +95,45 @@ async function readAllenCgroupPids(): Promise<Set<number>> {
   }
 }
 
+/**
+ * Build the set of PIDs we must NEVER kill: this process, the
+ * systemd-tracked MainPID for allen.service (which is the same PID under
+ * normal conditions but defended against `--inspect`/`fork()`-style
+ * setups where they could differ), and the immediate ancestor chain of
+ * this process inside allen's cgroup so we don't blow up our own
+ * supervisor (e.g. a wrapping `node --import` loader).
+ */
+async function buildSelfPidGuard(): Promise<Set<number>> {
+  const guard = new Set<number>([process.pid]);
+
+  // systemd's MainPID — read from `systemctl show` if available.
+  try {
+    const { stdout } = await execFileP('systemctl', ['show', 'allen', '--no-pager', '-p', 'MainPID', '--value']);
+    const main = parseInt(stdout.trim(), 10);
+    if (Number.isFinite(main) && main > 0) guard.add(main);
+  } catch { /* systemctl unavailable — process.pid still in guard */ }
+
+  // Walk our own ancestor chain — anything from PID 1 down to us is
+  // structural (init, our supervisor) and must not be killed.
+  let cur: number | null = process.pid;
+  for (let depth = 0; depth < 8 && cur != null && cur > 1; depth++) {
+    try {
+      const { stdout } = await execFileP('ps', ['-o', 'ppid=', '-p', String(cur)]);
+      const ppid = parseInt(stdout.trim(), 10);
+      if (!Number.isFinite(ppid) || ppid <= 1) break;
+      guard.add(ppid);
+      cur = ppid;
+    } catch { break; }
+  }
+
+  return guard;
+}
+
 async function findOrphanMcps(): Promise<OrphanProc[]> {
   const cgroupPids = await readAllenCgroupPids();
   if (cgroupPids.size === 0) return []; // not in systemd or no permission — bail safely
+
+  const guard = await buildSelfPidGuard();
 
   const { stdout } = await execFileP('ps', ['-eo', 'pid,ppid,etime,args']);
   const out: OrphanProc[] = [];
@@ -103,6 +147,16 @@ async function findOrphanMcps(): Promise<OrphanProc[]> {
     const ppid = parseInt(m[2], 10);
     const etime = m[3];
     const args = m[4];
+    // Hard guard: never reap our own process or our supervisor chain.
+    // Without this, allen's main PID matches every other criterion (in
+    // its own cgroup, PPID=1 by systemd design, etime grows past
+    // MIN_ORPHAN_AGE_MS after 10 min) and the sweeper kills the parent
+    // it's running inside. systemd Restart=always then bounces us, the
+    // new instance kills itself 10 min later, ad infinitum.
+    if (guard.has(pid)) continue;
+    // Belt-and-suspenders: never kill a process whose cmdline looks like
+    // the allen entrypoint, even if guard-set construction failed.
+    if (args.includes('node dist/app.js') || args.includes('packages/server/dist/app')) continue;
     // Require all three: orphan, in allen's cgroup, old enough.
     if (ppid !== 1) continue;
     if (!cgroupPids.has(pid)) continue;

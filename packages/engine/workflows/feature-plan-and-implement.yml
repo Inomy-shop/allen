@@ -550,22 +550,47 @@ nodes:
     # produced and which specialists ran. That lets retries act as "fix
     # what broke" rather than "re-do everything from scratch".
     resume_on_retry: true
-    # Single-node dispatch in MODE 2 — the workspace is already
+    # Scoped implementation-only dispatch. The workspace is already
     # provisioned by the upstream `create_workspace` code node. The
     # engineering-lead produces the file-level plan from the approved
     # PRD/HLA/TDD, reuses the existing worktree, and dispatches
-    # specialists via spawn_agent. It MUST NOT call create_workspace.
+    # specialists via spawn_agent. It MUST NOT call create_workspace or
+    # run downstream QA/docs/review responsibilities.
     prompt: |
-      MODE: 2 (execute — plan + dispatch into an existing worktree)
+      SCOPE: implementation_only
+      qa_handled_downstream: true
+      review_handled_downstream: true
+      docs_handled_downstream: true
+
+      This is the implementation node of feature-plan-and-implement.
+      PRD/HLA/TDD have already been produced and audited upstream.
+      The workspace has already been created upstream.
+      Your job is ONLY to translate the approved design into a file-level
+      plan and dispatch implementation specialists inside the existing
+      worktree. Stop after implementation specialists finish and emit your
+      implementation summary. Do NOT run QA, code review, security review,
+      documentation updates, PR creation, or final summary; downstream
+      workflow nodes handle those.
 
       You are the Engineering Lead. Translate the approved design into a
       file-level plan, then dispatch specialists through spawn_agent
       inside the worktree that was ALREADY created upstream. You DO NOT
       write code yourself.
 
-      APPROVED PRD: {{prd_artifact_url}}
-      APPROVED HLA: {{hla_artifact_url}}
-      APPROVED TDD: {{tdd_artifact_url}}
+      APPROVED PRD MARKDOWN:
+      {{prd_markdown}}
+
+      APPROVED HLA MARKDOWN:
+      {{hla_markdown}}
+
+      APPROVED TDD MARKDOWN:
+      {{tdd_markdown}}
+
+      Artifact references for downstream traceability:
+        PRD URL: {{prd_artifact_url}}
+        HLA URL: {{hla_artifact_url}}
+        TDD URL: {{tdd_artifact_url}}
+
       USER REQUEST: {{user_request}}
 
       EXISTING WORKSPACE (do NOT create a new one):
@@ -574,15 +599,13 @@ nodes:
         workspace_id:  {{workspace_id}}
         base_branch:   {{base_branch}}
 
-      The PRD/HLA/TDD URLs point to public markdown files — fetch each
-      with WebFetch or curl before reading. Do NOT guess from the URL alone.
-
       Step-by-step:
-        1. Fetch + read PRD, HLA, TDD.
-        2. Scan the worktree ({{worktree_path}}) — get_repo_context, Read
-           the files TDD touches. Treat the worktree as the target
-           repo; it's an isolated clone.
-        3. Build the plan (see your MODE 2 contract — file entries with
+        1. Read the inline PRD, HLA, and TDD markdown above.
+        2. Delegate to codebase-navigator with repo_path={{worktree_path}}
+           to inspect the files TDD touches, identify existing patterns,
+           dependency order, and validation commands. Treat the worktree
+           as the target repo; it's an isolated clone.
+        3. Build the plan (file entries with
            specialist hints, validation commands, risks).
         4. DO NOT call create_workspace. The worktree above already
            exists — all specialists must work inside {{worktree_path}}.
@@ -591,17 +614,18 @@ nodes:
            serialise conflicts.
         6. Wait on each batch, retry each specialist once on failure,
            aggregate files_changed.
-        7. Emit the MODE 2 JSON output block including
+        7. Stop here. Emit a JSON output block including
            implementation_plan_json, specialists_used, batches,
-           files_changed, any_failures, failure_details. Do NOT re-emit
-           worktree_path / branch_name / workspace_id — the upstream
-           create_workspace node already put those in state; downstream
-           nodes read them directly from there.
+           files_changed, any_failures, failure_details. For qa_review,
+           mark qa_lead/code_review/security_review/docs_review as
+           "not_run" because downstream workflow nodes own those stages.
 
       HARD RULES:
         - NEVER edit files yourself. Use spawn_agent for every change.
         - ALWAYS pass repo_path={{worktree_path}} to every spawn_agent call.
         - NEVER call create_workspace — the workspace is already provisioned.
+        - NEVER run QA, code review, security review, docs update, PR creation,
+          or summary from this node.
 
       {{#if retry_context}}
       RETRY FEEDBACK:
