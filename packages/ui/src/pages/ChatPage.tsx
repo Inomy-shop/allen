@@ -50,6 +50,7 @@ export default function ChatPage() {
     spawnedAgents, pendingUserQuestion, answerUserQuestion,
     loadingSessions, loadingMessages,
     sendMessage, createSession, switchSession, cancelStream,
+    updateSessionTitle, refresh: refreshSessions,
   } = useChat();
 
   useEffect(() => {
@@ -170,6 +171,11 @@ export default function ChatPage() {
       );
       navigate(`/chat/${session._id}`, { replace: true });
       sendMessage(content, session._id, selectedAgent ?? undefined);
+      // Server auto-summarizes the title from the first message; pull
+      // a fresh sessions list shortly after so the sidebar shows the
+      // summarized title instead of the placeholder.
+      setTimeout(() => { void refreshSessions(); }, 1500);
+      setTimeout(() => { void refreshSessions(); }, 5000);
       return;
     }
     sendMessage(content, undefined, selectedAgent ?? undefined);
@@ -196,9 +202,9 @@ export default function ChatPage() {
   const sessionTitle = activeSessionId ? activeSession?.title ?? 'Chat' : CHAT_TITLE;
   const messageCount = activeSession?.messageCount ?? 0;
 
-  // Inline title edit. Persists via chatApi.updateSession + nudges
-  // useChat to refresh the sessions list so the sidebar shows the
-  // new title. Only enabled when there's an active session.
+  // Inline title edit. Persists via useChat.updateSessionTitle which
+  // does an optimistic local update so the sidebar reflects the new
+  // title immediately. Only enabled when there's an active session.
   const [titleDraft, setTitleDraft] = useState<string | null>(null);
   const [savingTitle, setSavingTitle] = useState(false);
   async function commitTitle() {
@@ -207,7 +213,8 @@ export default function ChatPage() {
     if (!activeSessionId || !next || next === sessionTitle) return;
     setSavingTitle(true);
     try {
-      await chatApi.updateSession(activeSessionId, { title: next });
+      // Optimistic — sidebar updates immediately via setSessions.
+      await updateSessionTitle(activeSessionId, next);
     } finally {
       setSavingTitle(false);
     }
