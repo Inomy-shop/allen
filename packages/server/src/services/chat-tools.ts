@@ -1344,15 +1344,18 @@ async function runSpawnInBackground(
       // tool_use in this stream:
       //   - Default: 5 min. Longer than any legit single tool call
       //     should run, so false positives are rare.
-      //   - After ToolSearch: 1 min. ToolSearch has no handler in the
+      //   - After ToolSearch: 5 min. ToolSearch has no handler in the
       //     spawn env, so the stream is very likely to stall from here
-      //     on — give it a short grace window (in case the model
-      //     recovers on its own) before aborting. 1 min still beats
-      //     Anthropic's 15-min server-side watchdog by a wide margin.
+      //     on — but the model can sometimes recover by emitting a
+      //     different tool call after a long pause. 5 min beats
+      //     Anthropic's 15-min server-side watchdog by a comfortable
+      //     margin while giving the model time to course-correct.
+      //     Bumped from 60s after agent runs were getting prematurely
+      //     failed by the tighter window.
       // On timeout we abort the controller and let the existing catch/
       // retry logic at `isTimeout` take over.
       const STREAM_IDLE_MS = 900_000; // 15 min — general stall
-      const STREAM_IDLE_AFTER_TOOLSEARCH_MS = 60_000; // 1 min — after ToolSearch
+      const STREAM_IDLE_AFTER_TOOLSEARCH_MS = 300_000; // 5 min — after ToolSearch
       let toolSearchSeen = false;
       const streamIterator = (msgStream as AsyncIterable<any>)[Symbol.asyncIterator]();
       while (true) {
