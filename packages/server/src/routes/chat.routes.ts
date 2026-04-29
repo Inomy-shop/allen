@@ -242,6 +242,20 @@ export function chatRoutes(db: Db): Router {
     res.json({ streaming });
   });
 
+  // POST /api/chat/sessions/:id/generate-title — (Re)generate a title for an
+  // existing session using the LLM. Useful for manual backfill of sessions
+  // that were created before auto-title was implemented.
+  router.post('/sessions/:id/generate-title', async (req: Request, res: Response) => {
+    try {
+      const sessionId = param(req, 'id');
+      const title = await chatService.generateTitleForSession(sessionId);
+      if (!title) return res.status(404).json({ error: 'No messages found for session' });
+      res.json({ title });
+    } catch (err) {
+      res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
+    }
+  });
+
   // PATCH /api/chat/sessions/:id — Update session
   // Accepts: title, status, provider, model, agentOverrides
   router.patch('/sessions/:id', async (req: Request, res: Response) => {

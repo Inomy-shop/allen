@@ -502,6 +502,79 @@ export class ChatService {
   }
 
   /**
+   * Generate (or regenerate) a title for an existing session by fetching
+   * its first user + assistant messages and running them through the LLM
+   * title generator. Used by the manual backfill endpoint so operators can
+   * fix sessions that were created before auto-title was implemented.
+   *
+   * Returns the generated title string, or null if the session doesn't have
+   * both a user message and an assistant message yet.
+   */
+  async generateTitleForSession(sessionId: string): Promise<string | null> {
+    const [userMsg, assistantMsg] = await Promise.all([
+      this.messages.findOne(
+        { sessionId, role: 'user' },
+        { sort: { createdAt: 1 } },
+      ),
+      this.messages.findOne(
+        { sessionId, role: 'assistant' },
+        { sort: { createdAt: 1 } },
+      ),
+    ]);
+
+    if (!userMsg || !assistantMsg) return null;
+
+    const title = await this.generateTitleWithLLM(
+      userMsg.content as string,
+      assistantMsg.content as string,
+    );
+
+    await this.sessions.updateOne(
+      { _id: new ObjectId(sessionId) },
+      { $set: { title, updatedAt: new Date() } },
+    );
+
+    this.broadcastToSession(sessionId, 'session_update', { title });
+
+    return title;
+  }
+
+  /**
+   * Generate a concise, meaningful title for a conversation using the LLM.
+   * Uses claude-haiku with no tools (fast, cheap). Falls back to string truncation.
+   */
+  private async generateTitleWithLLM(userMessage: string, assistantResponse: string): Promise<string> {
+    const prompt = `Based on this conversation, generate a short, descriptive title of 3-7 words. The title should capture the main topic or task. Return ONLY the title text — no quotes, no punctuation at the end, no explanation.
+
+User: ${userMessage.slice(0, 400)}
+
+Assistant: ${assistantResponse.slice(0, 400)}`;
+
+    try {
+      const result = await runChatLLM(this.db, {
+        provider: 'claude-cli',
+        model: 'haiku',
+        systemPrompt: '',
+        messages: [{ role: 'user', content: prompt }],
+        skipTools: true,
+        onText: () => {},
+        onToolStart: () => {},
+        onToolResult: () => {},
+      });
+      const raw = result.text.trim();
+      if (raw.length > 0 && raw.length <= 120) {
+        return raw.replace(/^["']|["']$/g, '').replace(/[.!?]+$/, '').trim();
+      }
+    } catch (err) {
+      console.error('LLM title generation failed:', err instanceof Error ? err.message : err);
+    }
+    // Fallback: string truncation
+    let title = userMessage.slice(0, 50).trim();
+    title = title.charAt(0).toUpperCase() + title.slice(1);
+    return title.replace(/[?.!,;:]+$/, '').trim();
+  }
+
+  /**
    * Run LLM via Anthropic Messages API with native tool calling.
    */
   private async runLLM(sessionId: string, assistantMsgId: string, content: string, entry: ActiveQuery, agent?: string, retryCount = 0): Promise<void> {
@@ -714,22 +787,11 @@ export class ChatService {
         messageId: assistantMsgId, text: result.text, costUsd, durationMs, toolCalls: entry.toolCalls,
       });
 
-      // Auto-title on first response — extract from content, no LLM call
+      // Auto-title on first response — use LLM to generate a meaningful title
       const currentSession = await this.sessions.findOne({ _id: new ObjectId(sessionId) });
       if (currentSession && (currentSession.title as string) === 'New Conversation') {
         try {
-          // Generate title from user message + response without spawning another LLM
-          let title = content.slice(0, 50).trim();
-          // Clean up: capitalize first letter, remove trailing punctuation
-          title = title.charAt(0).toUpperCase() + title.slice(1);
-          title = title.replace(/[?.!,;:]+$/, '').trim();
-          // If too short, append from response
-          if (title.length < 10 && result.text) {
-            const firstLine = result.text.split('\n').find(l => l.trim().length > 5)?.trim() ?? '';
-            if (firstLine) title = firstLine.slice(0, 40).replace(/[#*_`]+/g, '').trim();
-          }
-          if (title.length > 50) title = title.slice(0, 47) + '...';
-
+          const title = await this.generateTitleWithLLM(content, result.text ?? '');
           if (title && title.length > 0) {
             await this.sessions.updateOne(
               { _id: new ObjectId(sessionId) },
