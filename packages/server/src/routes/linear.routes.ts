@@ -79,18 +79,21 @@ export function linearRoutes(db: Db): Router {
     }
   });
 
-  // POST /api/linear/issues/:id/dispatch  body: { agentName, repoId, extraInstructions? }
+  // POST /api/linear/issues/:id/dispatch  body: { agentName, repoId, extraInstructions?, promptTemplate? }
   // Creates a workspace from the chosen repo, waits for it to be ready, then
   // spawns the agent with the ticket body as the prompt. Returns the initial
   // "pending" assignment immediately; the UI polls /issues/:id to see progress.
   router.post('/issues/:id/dispatch', async (req: AuthedRequest, res: Response) => {
     try {
-      const { agentName, repoId, extraInstructions } = req.body ?? {};
+      const { agentName, repoId, extraInstructions, promptTemplate } = req.body ?? {};
       if (typeof agentName !== 'string' || !agentName.trim()) {
         return res.status(400).json({ error: 'agentName is required' });
       }
       if (typeof repoId !== 'string' || !repoId.trim()) {
         return res.status(400).json({ error: 'repoId is required' });
+      }
+      if (promptTemplate != null && typeof promptTemplate !== 'string') {
+        return res.status(400).json({ error: 'promptTemplate must be a string' });
       }
       const dispatchedBy = req.user?.email ?? 'unknown';
       const assignment = await service.dispatch({
@@ -98,6 +101,30 @@ export function linearRoutes(db: Db): Router {
         agentName,
         repoId,
         extraInstructions: typeof extraInstructions === 'string' ? extraInstructions : undefined,
+        promptTemplate: typeof promptTemplate === 'string' ? promptTemplate : undefined,
+        dispatchedBy,
+      });
+      res.status(202).json({ assignment });
+    } catch (err: unknown) {
+      res.status(500).json({ error: (err as Error).message });
+    }
+  });
+
+  // POST /api/linear/issues/:id/dispatch-workflow  body: { workflowId, input }
+  router.post('/issues/:id/dispatch-workflow', async (req: AuthedRequest, res: Response) => {
+    try {
+      const { workflowId, input } = req.body ?? {};
+      if (typeof workflowId !== 'string' || !workflowId.trim()) {
+        return res.status(400).json({ error: 'workflowId is required' });
+      }
+      if (input != null && typeof input !== 'object') {
+        return res.status(400).json({ error: 'input must be an object' });
+      }
+      const dispatchedBy = req.user?.email ?? 'unknown';
+      const assignment = await service.dispatchWorkflow({
+        linearIssueId: param(req, 'id'),
+        workflowId,
+        input: (input ?? {}) as Record<string, unknown>,
         dispatchedBy,
       });
       res.status(202).json({ assignment });
