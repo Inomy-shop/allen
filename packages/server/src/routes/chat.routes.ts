@@ -439,5 +439,34 @@ export function chatRoutes(db: Db): Router {
     }
   });
 
+  // POST /api/chat/query-database — Generic read-only MongoDB query.
+  // Used by the allen_query_database MCP tool so any collection can be queried
+  // without maintaining a hard-coded allowlist. Accepts collection, filter,
+  // projection, sort, and limit. Results are capped at 100 documents.
+  router.post('/query-database', async (req: Request, res: Response) => {
+    try {
+      const { collection, filter, projection, sort, limit } = req.body as {
+        collection?: string;
+        filter?: Record<string, unknown>;
+        projection?: Record<string, unknown>;
+        sort?: Record<string, unknown>;
+        limit?: number;
+      };
+      if (!collection || typeof collection !== 'string') {
+        return res.status(400).json({ error: 'collection is required' });
+      }
+      const cap = Math.min(Number(limit) || 20, 100);
+      const cursor = db
+        .collection(collection)
+        .find(filter ?? {}, { projection: projection ?? {} })
+        .sort((sort ?? {}) as Record<string, 1 | -1>)
+        .limit(cap);
+      const docs = await cursor.toArray();
+      res.json(docs);
+    } catch (err: unknown) {
+      res.status(500).json({ error: (err as Error).message });
+    }
+  });
+
   return router;
 }

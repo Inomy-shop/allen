@@ -212,7 +212,7 @@ const TOOLS = [
   { name: 'search_learnings', description: 'Search the learning system. Filter by workflow, type, or limit.', params: { workflow_name: 'string', type: 'string', limit: 'number' } },
   { name: 'save_learning', description: 'Save a learning/correction to memory. Call when user corrects you or states a preference.', params: { content: 'string (required) — generalized rule', type: 'string (required) — fact, pattern, mistake, or preference' } },
   { name: 'get_dashboard_stats', description: 'Get dashboard statistics: workflow count, executions, success rate, agent count.', params: {} },
-  { name: 'query_database', description: 'Read-only MongoDB query. Allowed collections: workflows, executions, agents, repos, learnings, chat_sessions, execution_logs, node_traces.', params: { collection: 'string (required)', filter: 'object', projection: 'object', sort: 'object', limit: 'number (max 20)' } },
+  { name: 'query_database', description: 'Read-only MongoDB query against any collection (e.g. workflows, executions, agents, repos, learnings, chat_sessions, chat_threads, execution_logs, node_traces, workspaces, teams, …). Pass filter/projection/sort for precise results.', params: { collection: 'string (required)', filter: 'object', projection: 'object', sort: 'object', limit: 'number (max 100, default 20)' } },
 
   // ── File upload ──
   { name: 'upload_file', description: 'Upload a file to Allen storage. Returns a permanent public URL.', params: { content: 'string (required) — file content', filename: 'string (required) — e.g. "report.md"', mime_type: 'string — MIME type (default: text/plain)' } },
@@ -575,11 +575,18 @@ async function executeTool(name: string, args: Record<string, unknown>): Promise
     }
     case 'query_database': {
       const collection = args.collection as string;
-      const allowed = ['workflows', 'executions', 'agents', 'repos', 'learnings', 'chat_sessions', 'execution_logs', 'node_traces'];
-      if (!allowed.includes(collection)) return { error: `Collection "${collection}" not allowed. Allowed: ${allowed.join(', ')}` };
-      const params = new URLSearchParams();
-      if (args.limit) params.set('limit', String(args.limit));
-      const res = await fetch(`${API_BASE}/api/${collection === 'chat_sessions' ? 'chat/sessions' : collection}?${params}`);
+      if (!collection) return { error: 'collection is required' };
+      const res = await fetch(`${API_BASE}/api/chat/query-database`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          collection,
+          filter: args.filter ?? {},
+          projection: args.projection ?? {},
+          sort: args.sort ?? {},
+          limit: args.limit ?? 20,
+        }),
+      });
       return res.json();
     }
 
