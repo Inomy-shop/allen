@@ -154,14 +154,19 @@ export async function* queryViaCli(opts: CliQueryOptions): AsyncGenerator<any, v
   // The 2026-04-28 incident traced ~325 leaked mcp-mongo-server processes
   // to this exact gap; see cli-runner.ts:178 detached:true.
   const killGroup = (sig: NodeJS.Signals) => {
-    if (!child || child.exitCode !== null || child.pid == null) return;
+    if (!child || child.pid == null) return;
+    // Don't gate on child.exitCode — even after the leader exits, the
+    // PGID stays valid for any surviving group members (the leaked MCPs
+    // we're trying to clean up). Bailing here was the bug behind the
+    // 2026-04-29 audit's ~17 remaining post-clean-exit survivors.
     try { process.kill(-child.pid, sig); }
     catch (err) {
-      // ESRCH = group already gone (race with normal exit) — fine.
-      // EPERM = not group leader (shouldn't happen with detached:true) —
-      // fall back to per-PID kill so we still terminate claude.
+      // ESRCH = group is fully gone (every member exited) — fine.
+      // EPERM = caller doesn't own group (shouldn't happen with
+      // detached:true; fall back to per-PID kill so we at least
+      // terminate claude itself).
       const code = (err as NodeJS.ErrnoException).code;
-      if (code !== 'ESRCH') {
+      if (code !== 'ESRCH' && child.exitCode === null) {
         try { child.kill(sig); } catch { /* ignore */ }
       }
     }
@@ -343,21 +348,23 @@ export async function* queryViaCli(opts: CliQueryOptions): AsyncGenerator<any, v
       try { opts.abortSignal.removeEventListener('abort', abortListener as any); } catch { /* ignore */ }
       abortListener = null;
     }
-    // Best-effort kill if child is somehow still alive (e.g. caller called
-    // generator.return() mid-stream). SIGTERM the whole process group,
-    // then SIGKILL after grace — same shape as escalateKill but unguarded
-    // by the abort/timeout codepath.
+    // Always send a process-group SIGTERM here, even if claude itself
+    // already exited cleanly. Claude's MCP children (mcp-mongo-server +
+    // friends) can outlive their parent — empirically they sit in
+    // ep_poll forever holding 11 threads + ~30 MB swap each, because
+    // the @modelcontextprotocol/sdk transport doesn't tear down on
+    // stdin EOF when the mongodb driver keeps the event loop alive.
+    // After the leader exits the kernel keeps the PGID record as long
+    // as any group member is alive, so process.kill(-pgid) still
+    // reaches the surviving children. The 12h-after-fix audit on
+    // 2026-04-29 found ~17 such survivors per session — they only
+    // existed because this branch used to require child.exitCode ===
+    // null and skipped the kill on clean exits.
     try {
-      if (child && child.exitCode === null) {
-        killGroup('SIGTERM');
-        const t = setTimeout(() => {
-          if (child && child.exitCode === null) {
-            killGroup('SIGKILL');
-          }
-        }, CLI_KILL_GRACE_MS);
-        // Don't keep the event loop alive just for this final escalation.
-        t.unref();
-      }
+      killGroup('SIGTERM');
+      const t = setTimeout(() => { killGroup('SIGKILL'); }, CLI_KILL_GRACE_MS);
+      // Don't keep the event loop alive just for this final escalation.
+      t.unref();
     } catch { /* ignore */ }
     materialized.cleanup();
   }

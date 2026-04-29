@@ -34,17 +34,44 @@ function isPidAlive(pid: number): boolean {
   }
 }
 
+/** Errors that mean "DocDB is having a transient blip" — log at warn,
+ *  don't bail the whole tick, just retry on the next interval. */
+function isTransientDbError(err: unknown): boolean {
+  const e = err as NodeJS.ErrnoException & { name?: string };
+  const msg = (e?.message ?? '').toLowerCase();
+  const code = e?.code ?? '';
+  return (
+    e?.name === 'MongoNetworkError'
+    || e?.name === 'MongoServerSelectionError'
+    || code === 'ECONNRESET'
+    || code === 'ETIMEDOUT'
+    || msg.includes('network socket disconnected')
+    || msg.includes('econnreset')
+    || msg.includes('topology was destroyed')
+  );
+}
+
 async function reconcileOnce(db: Db): Promise<void> {
   const cutoff = new Date(Date.now() - RUNTIME_GRACE_MS);
-  const candidates = await db
-    .collection('executions')
-    .find(
-      { status: { $in: ['running', 'waiting_for_input'] } },
-      { projection: { id: 1, status: 1, startedAt: 1, workflowName: 1, meta: 1 } },
-    )
-    .toArray();
+  let candidates: Record<string, unknown>[];
+  try {
+    candidates = await db
+      .collection('executions')
+      .find(
+        { status: { $in: ['running', 'waiting_for_input'] } },
+        { projection: { id: 1, status: 1, startedAt: 1, workflowName: 1, meta: 1 } },
+      )
+      .toArray();
+  } catch (err) {
+    if (isTransientDbError(err)) {
+      console.warn(`[zombie-reconciler] transient DB error, will retry next tick: ${(err as Error).message}`);
+      return;
+    }
+    throw err;
+  }
 
   let reconciled = 0;
+  let skippedTransient = 0;
   for (const row of candidates) {
     const id = row.id as string | undefined;
     if (!id) continue;
@@ -60,34 +87,50 @@ async function reconcileOnce(db: Db): Promise<void> {
 
     if (!reason) continue;
 
-    const result = await db.collection('executions').updateOne(
-      { id, status: { $in: ['running', 'waiting_for_input'] } },
-      {
-        $set: {
-          status: 'failed',
-          completedAt: new Date(),
-          errorMessage: `Zombie reconciler: ${reason}`,
-          currentNodes: [],
+    try {
+      const result = await db.collection('executions').updateOne(
+        { id, status: { $in: ['running', 'waiting_for_input'] } },
+        {
+          $set: {
+            status: 'failed',
+            completedAt: new Date(),
+            errorMessage: `Zombie reconciler: ${reason}`,
+            currentNodes: [],
+          },
         },
-      },
-    );
-    if (result.modifiedCount > 0) {
-      reconciled++;
-      console.log(
-        `[zombie-reconciler] failed exec=${id.slice(0, 8)} workflow=${row.workflowName ?? '?'} reason=${reason}`,
       );
+      if (result.modifiedCount > 0) {
+        reconciled++;
+        console.log(
+          `[zombie-reconciler] failed exec=${id.slice(0, 8)} workflow=${row.workflowName ?? '?'} reason=${reason}`,
+        );
+      }
+    } catch (err) {
+      if (isTransientDbError(err)) {
+        skippedTransient++;
+        continue;
+      }
+      throw err;
     }
   }
 
-  if (reconciled > 0) {
-    console.log(`[zombie-reconciler] swept ${reconciled} zombie execution(s)`);
+  if (reconciled > 0 || skippedTransient > 0) {
+    console.log(
+      `[zombie-reconciler] swept ${reconciled} zombie(s)${skippedTransient ? `, ${skippedTransient} skipped (transient)` : ''}`,
+    );
   }
 }
 
 export function startZombieReconciler(db: Db): NodeJS.Timeout {
   const tick = (): void => {
     reconcileOnce(db).catch((err) => {
-      console.error('[zombie-reconciler] tick failed:', (err as Error).message);
+      // Transient DocDB hiccups already log at warn from inside
+      // reconcileOnce. Anything that bubbles up here is unexpected.
+      if (isTransientDbError(err)) {
+        console.warn('[zombie-reconciler] transient outer error:', (err as Error).message);
+      } else {
+        console.error('[zombie-reconciler] tick failed:', (err as Error).message);
+      }
     });
   };
   // Fire once at boot, then on interval.
