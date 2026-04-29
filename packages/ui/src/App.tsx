@@ -5,10 +5,12 @@ import NotificationBell from './components/common/NotificationBell';
 import {
   LayoutDashboard, GitBranch, Play, Users, Settings,
   FolderGit2, Brain, MessageSquare, BarChart3, Plus, Trash2,
-  Server, Palette, User, ChevronDown, ChevronRight,
+  Server, User, ChevronDown, ChevronRight,
   GitPullRequest, Clock, HelpCircle, Ticket, Search, LogOut, ShieldCheck,
+  Sun, Moon,
 } from 'lucide-react';
 import { useSettingsStore } from './stores/settingsStore';
+import { resolveColorMode } from './lib/theme';
 import { useAuthStore } from './stores/authStore';
 import { useChat } from './hooks/useChat';
 import DeleteConfirmDialog from './components/common/DeleteConfirmDialog';
@@ -52,7 +54,6 @@ const SETTINGS_TABS: SettingsTab[] = [
   { id: 'profile', label: 'Profile', icon: User },
   { id: 'users', label: 'Users', icon: ShieldCheck, adminOnly: true },
   { id: 'mcp', label: 'MCP Servers', icon: Server },
-  { id: 'theme', label: 'Appearance', icon: Palette },
 ];
 
 // Provider display
@@ -259,6 +260,14 @@ export default function App() {
     || currentUser?.email?.charAt(0)?.toUpperCase()
     || '?';
 
+  // Theme toggle — flips between light and dark, persists via the
+  // existing settings store (which also handles the .dark class +
+  // re-renders all CSS-variable-dependent surfaces).
+  const colorMode = useSettingsStore((s) => s.colorMode);
+  const setColorMode = useSettingsStore((s) => s.setColorMode);
+  const resolvedMode = resolveColorMode(colorMode);
+  const toggleColorMode = () => setColorMode(resolvedMode === 'dark' ? 'light' : 'dark');
+
   return (
     <div className="flex h-screen bg-app">
       <nav className="w-[228px] bg-app-muted flex flex-col shrink-0 border-r border-app">
@@ -363,7 +372,20 @@ export default function App() {
 
           <div className="flex items-center justify-between px-3 py-1.5">
             <span className="text-[10px] text-theme-subtle font-mono">v0.1.0</span>
-            <NotificationBell />
+            <div className="flex items-center gap-1">
+              <button
+                type="button"
+                onClick={toggleColorMode}
+                className="p-1 rounded text-theme-muted hover:text-theme-primary hover:bg-app-card transition-colors"
+                title={`Switch to ${resolvedMode === 'dark' ? 'light' : 'dark'} mode`}
+                aria-label="Toggle theme"
+              >
+                {resolvedMode === 'dark'
+                  ? <Sun className="w-3.5 h-3.5" />
+                  : <Moon className="w-3.5 h-3.5" />}
+              </button>
+              <NotificationBell />
+            </div>
           </div>
         </div>
       </nav>

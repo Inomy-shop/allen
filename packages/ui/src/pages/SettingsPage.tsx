@@ -29,7 +29,6 @@ const TABS = [
   { id: 'profile', label: 'Profile', icon: User, description: 'Your account', adminOnly: false },
   { id: 'users', label: 'Users', icon: ShieldCheck, description: 'Team member management', adminOnly: true },
   { id: 'mcp', label: 'MCP Servers', icon: Server, description: 'External tool integrations', adminOnly: false },
-  { id: 'theme', label: 'Appearance', icon: Palette, description: 'Theme, fonts & agent icon', adminOnly: false },
 ] as const;
 
 type TabId = (typeof TABS)[number]['id'];
@@ -395,7 +394,6 @@ function McpTab() {
 const TAB_COMPONENTS: Record<TabId, React.FC> = {
   profile: ProfileTab,
   users: UsersTab,
-  theme: ThemeTab,
   mcp: McpTab,
 };
 
