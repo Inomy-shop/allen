@@ -30,6 +30,34 @@ interface McpConnection {
 
 // ── Active connections ──
 const connections = new Map<string, McpConnection>();
+// In-flight spawn promises so two concurrent loadMcpTools() calls don't
+// double-spawn the same server. Without this, the 2026-04-29 audit found
+// 481 leaked mcp-mongo-server processes accumulated over 11h — the gap
+// between spawn() and connections.set() (after a 1s sleep + handshake) is
+// long enough for many parallel callers to all decide "no existing
+// connection, spawn a fresh one." Keyed by server name; resolves to the
+// connection once handshake completes.
+const inFlightSpawns = new Map<string, Promise<McpConnection>>();
+
+// Force-kill the entire process group of an MCP child. Without this,
+// mcp-mongo-server keeps its node event loop alive via the MongoDB
+// driver's heartbeat timers and never exits on stdin EOF, leaking 11
+// threads and ~30 MB of swap per orphan. Pairs with detached:true on
+// spawn so the MCP becomes its own group leader and a negative-pid kill
+// reaches every descendant (npx → npm → sh → node).
+function killMcpProcessGroup(proc: ChildProcess, sig: NodeJS.Signals = 'SIGTERM'): void {
+  if (proc.pid == null) return;
+  try { process.kill(-proc.pid, sig); }
+  catch (err) {
+    const code = (err as NodeJS.ErrnoException).code;
+    // ESRCH = group already gone, fine. EPERM = group leader gap (we
+    // missed the detached path); fall back to per-PID kill so we at
+    // least terminate the immediate child.
+    if (code !== 'ESRCH') {
+      try { proc.kill(sig); } catch { /* ignore */ }
+    }
+  }
+}
 
 // ── JSON-RPC helpers ──
 
@@ -72,69 +100,105 @@ function handleStdout(conn: McpConnection, data: string): void {
 // ── Connection Management ──
 
 async function connectServer(server: McpServerRecord, db: Db): Promise<McpConnection> {
-  // Check if already connected
+  // Already connected?
   const existing = connections.get(server.name);
-  if (existing && !existing.process.killed) return existing;
+  if (existing && !existing.process.killed && existing.process.exitCode === null) {
+    return existing;
+  }
+
+  // Already being spawned by a concurrent caller? Wait for it instead of
+  // racing. This was the 2026-04-29 leak's primary cause: the gap between
+  // spawn() and connections.set() (post-handshake) let parallel agent
+  // starts double-spawn the same MCP server.
+  const inFlight = inFlightSpawns.get(server.name);
+  if (inFlight) return inFlight;
 
   if (server.type !== 'stdio') {
     throw new Error(`MCP client only supports stdio servers, got: ${server.type}`);
   }
 
-  // Resolve via the shared spawn-config resolver so source-based (preset/repo)
-  // and legacy bundle records both spawn through a single code path.
-  const cfg = await buildSingleServerConfig(server as unknown as Record<string, unknown>, db);
-  if (!cfg) throw new Error(`Could not resolve spawn config for MCP server "${server.name}"`);
-  const resolvedArgs = (cfg.args as string[]) ?? [];
-  const resolvedEnv = (cfg.env as Record<string, string>) ?? {};
-  const resolvedCwd = cfg.cwd as string | undefined;
-  const resolvedCmd = (cfg.command as string) ?? server.command ?? '';
+  const promise = (async (): Promise<McpConnection> => {
+    // Resolve via the shared spawn-config resolver so source-based
+    // (preset/repo) and legacy bundle records both spawn through a single
+    // code path.
+    const cfg = await buildSingleServerConfig(server as unknown as Record<string, unknown>, db);
+    if (!cfg) throw new Error(`Could not resolve spawn config for MCP server "${server.name}"`);
+    const resolvedArgs = (cfg.args as string[]) ?? [];
+    const resolvedEnv = (cfg.env as Record<string, string>) ?? {};
+    const resolvedCwd = cfg.cwd as string | undefined;
+    const resolvedCmd = (cfg.command as string) ?? server.command ?? '';
 
-  const proc = spawn(resolvedCmd, resolvedArgs, {
-    cwd: resolvedCwd,
-    env: { ...process.env, ...resolvedEnv },
-    stdio: ['pipe', 'pipe', 'pipe'],
-  });
+    const proc = spawn(resolvedCmd, resolvedArgs, {
+      cwd: resolvedCwd,
+      env: { ...process.env, ...resolvedEnv },
+      stdio: ['pipe', 'pipe', 'pipe'],
+      // Make this MCP its own process-group leader so killMcpProcessGroup()
+      // can take down its npx → npm → sh → node descendant chain in one
+      // negative-pid signal. Without this, killing the immediate proc
+      // leaves zombies that pin allen.service's cgroup pids ceiling.
+      detached: true,
+    });
 
-  const conn: McpConnection = {
-    serverName: server.name,
-    process: proc,
-    tools: [],
-    pendingRequests: new Map(),
-    buffer: '',
-  };
+    const conn: McpConnection = {
+      serverName: server.name,
+      process: proc,
+      tools: [],
+      pendingRequests: new Map(),
+      buffer: '',
+    };
 
-  proc.stdout?.on('data', (data: Buffer) => handleStdout(conn, data.toString()));
-  proc.stderr?.on('data', (data: Buffer) => {
-    const msg = data.toString().trim();
-    if (msg) console.log(`\x1b[33m[mcp:${server.name}]\x1b[0m ${msg}`);
-  });
-  proc.on('close', () => { connections.delete(server.name); });
+    proc.stdout?.on('data', (data: Buffer) => handleStdout(conn, data.toString()));
+    proc.stderr?.on('data', (data: Buffer) => {
+      const msg = data.toString().trim();
+      if (msg) console.log(`\x1b[33m[mcp:${server.name}]\x1b[0m ${msg}`);
+    });
+    proc.on('close', () => { connections.delete(server.name); });
 
-  connections.set(server.name, conn);
+    try {
+      // Wait for process to start
+      await new Promise(resolve => setTimeout(resolve, 1000));
 
-  // Wait for process to start
-  await new Promise(resolve => setTimeout(resolve, 1000));
+      // Initialize MCP handshake
+      await sendRpc(conn, 'initialize', {
+        protocolVersion: '2024-11-05',
+        capabilities: {},
+        clientInfo: { name: 'allen-chat', version: '1.0.0' },
+      });
 
-  // Initialize MCP handshake
-  await sendRpc(conn, 'initialize', {
-    protocolVersion: '2024-11-05',
-    capabilities: {},
-    clientInfo: { name: 'allen-chat', version: '1.0.0' },
-  });
+      // Discover tools
+      const toolsResult = await sendRpc(conn, 'tools/list') as { tools: Array<{ name: string; description: string; inputSchema: Record<string, unknown> }> };
 
-  // Discover tools
-  const toolsResult = await sendRpc(conn, 'tools/list') as { tools: Array<{ name: string; description: string; inputSchema: Record<string, unknown> }> };
+      conn.tools = (toolsResult.tools ?? []).map(t => ({
+        serverName: server.name,
+        name: t.name,
+        fullName: `mcp__${server.name}__${t.name}`,
+        description: t.description ?? '',
+        inputSchema: t.inputSchema ?? { type: 'object', properties: {} },
+      }));
 
-  conn.tools = (toolsResult.tools ?? []).map(t => ({
-    serverName: server.name,
-    name: t.name,
-    fullName: `mcp__${server.name}__${t.name}`,
-    description: t.description ?? '',
-    inputSchema: t.inputSchema ?? { type: 'object', properties: {} },
-  }));
+      // Only register AFTER the handshake succeeds, so a partially-spawned
+      // server isn't mistaken for a healthy one by later callers.
+      connections.set(server.name, conn);
 
-  console.log(`\x1b[32m[mcp]\x1b[0m Connected to ${server.name}: ${conn.tools.length} tools`);
-  return conn;
+      console.log(`\x1b[32m[mcp]\x1b[0m Connected to ${server.name}: ${conn.tools.length} tools`);
+      return conn;
+    } catch (err) {
+      // Handshake failed — kill the spawned process tree so it doesn't
+      // leak. Without this, every failed handshake left a 65 MB
+      // mcp-mongo-server orphan running in ep_poll forever.
+      console.warn(`\x1b[31m[mcp]\x1b[0m ${server.name} handshake failed, killing process group:`, (err as Error).message);
+      killMcpProcessGroup(proc, 'SIGTERM');
+      setTimeout(() => killMcpProcessGroup(proc, 'SIGKILL'), 2_000).unref();
+      throw err;
+    }
+  })();
+
+  inFlightSpawns.set(server.name, promise);
+  try {
+    return await promise;
+  } finally {
+    inFlightSpawns.delete(server.name);
+  }
 }
 
 // ── Public API ──
@@ -208,11 +272,15 @@ export function isMcpTool(name: string): boolean {
 }
 
 /**
- * Disconnect all MCP servers.
+ * Disconnect all MCP servers. Sends SIGTERM to each MCP's whole process
+ * group (because each was spawned with detached:true) so the npx → npm
+ * → sh → node descendant chain dies together. SIGKILL escalation 2s
+ * later catches anything that ignores SIGTERM.
  */
 export function disconnectAll(): void {
   for (const conn of connections.values()) {
-    try { conn.process.kill(); } catch {}
+    killMcpProcessGroup(conn.process, 'SIGTERM');
+    setTimeout(() => killMcpProcessGroup(conn.process, 'SIGKILL'), 2_000).unref();
   }
   connections.clear();
 }
