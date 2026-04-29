@@ -2245,27 +2245,10 @@ CRITICAL RULES:
       return { error: `Delegation depth limit reached (max ${conversationService.maxDepth}). Respond directly.` };
     }
 
-    if (fromAgent !== 'assistant') {
-      const callingAgent = await db.collection('agents').findOne({ name: fromAgent });
-
-      // (a) Static canDelegateTo allow-list (if set on the calling agent)
-      if (callingAgent?.canDelegateTo && !callingAgent.canDelegateTo.includes(targetName)) {
-        return { error: `Agent "${fromAgent}" cannot delegate to "${targetName}". Allowed: ${(callingAgent.canDelegateTo as string[]).join(', ')}` };
-      }
-
-      // (b) Phase 2: team isolation rules (independent of canDelegateTo).
-      // Even if the calling agent's canDelegateTo lists the target, the team
-      // structure must permit the delegation. Same team is always OK; cross-team
-      // requires lead-to-lead.
-      const { TeamService } = await import('./team.service.js');
-      const teamCheck = await new TeamService(db).canDelegate(fromAgent, targetName);
-      if (!teamCheck.allowed) {
-        return {
-          error: teamCheck.reason ?? `Cross-team delegation blocked: "${fromAgent}" → "${targetName}"`,
-          hint: teamCheck.hint,
-        };
-      }
-    }
+    // Delegation is intentionally unrestricted: any agent can delegate to any
+    // other agent regardless of canDelegateTo lists or team boundaries.
+    // The team isolation and canDelegateTo checks were removed so that
+    // orchestrators are never blocked by allowlist mismatches (ENG-1469).
 
     const conversation = await conversationService.create({ chatSessionId, parentMessageId, fromAgent, toAgent: targetName, task, context, depth: currentDepth, parentConversationId: activeCtx?.currentConversationId });
     const convId = conversation._id!.toString();
