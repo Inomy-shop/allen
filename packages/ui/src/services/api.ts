@@ -665,8 +665,16 @@ export const linear = {
       method: 'PATCH',
       body: JSON.stringify({ agentName }),
     }),
-  dispatch: (id: string, body: { agentName: string; repoId: string; extraInstructions?: string }) =>
+  dispatch: (
+    id: string,
+    body: { agentName: string; repoId: string; extraInstructions?: string; promptTemplate?: string },
+  ) =>
     request<{ assignment: any }>(`/linear/issues/${id}/dispatch`, {
+      method: 'POST',
+      body: JSON.stringify(body),
+    }),
+  dispatchWorkflow: (id: string, body: { workflowId: string; input: Record<string, unknown> }) =>
+    request<{ assignment: any }>(`/linear/issues/${id}/dispatch-workflow`, {
       method: 'POST',
       body: JSON.stringify(body),
     }),

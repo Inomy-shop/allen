@@ -45,6 +45,7 @@ export interface DispatchModalProps {
     target: DispatchTarget;
     repoId: string;
     extraInstructions: string;
+    promptTemplate?: string;
     /** Schema-driven input map when target is a workflow. Already
      *  type-cast (string/number/boolean) per the workflow's input schema. */
     workflowInput?: Record<string, unknown>;
@@ -86,6 +87,13 @@ interface PickerSection {
   entries: PickerEntry[];
 }
 
+function buildAgentDispatchPromptTemplate(issue: DispatchModalProps['issue'], extraInstructions: string): string {
+  const header = `You've been assigned Linear ticket ${issue.identifier}: ${issue.title}.`;
+  const body = issue.description ? `\n\n---\n${issue.description}` : '';
+  const extra = extraInstructions.trim() ? `\n\n---\nAdditional instructions:\n${extraInstructions.trim()}` : '';
+  return `${header}${body}${extra}\n\nWORKSPACE CONTEXT:\n- Worktree path: {{worktreePath}}\n- Repository path: {{repoPath}}\n\nWork inside this workspace. Start by skimming the repo structure, then plan your approach before editing code. Ask clarifying questions if anything is ambiguous.`;
+}
+
 /**
  * Dispatch picker — supports three target kinds in a searchable grouped
  * dropdown (Team leads / Agents per team / Workflows). The parent
@@ -107,6 +115,8 @@ export default function DispatchModal({
   const [fullWorkflow, setFullWorkflow] = useState<any | null>(null);
   const [loadingWorkflow, setLoadingWorkflow] = useState(false);
   const [workflowInput, setWorkflowInput] = useState<Record<string, string>>({});
+  const [promptTemplate, setPromptTemplate] = useState('');
+  const [promptCustomized, setPromptCustomized] = useState(false);
 
   // Build all picker sections once. Each entry carries a denormalized
   // searchHaystack so filtering matches across team / agent / workflow
@@ -202,6 +212,8 @@ export default function DispatchModal({
     setSubmitting(false);
     setFullWorkflow(null);
     setWorkflowInput({});
+    setPromptTemplate(buildAgentDispatchPromptTemplate(issue, ''));
+    setPromptCustomized(false);
   }, [open, currentAgent]);
 
   // When the target switches to a workflow, fetch its full record (so we
@@ -251,6 +263,11 @@ export default function DispatchModal({
     return () => { cancelled = true; };
   }, [open, targetKey, issue]);
 
+  useEffect(() => {
+    if (!open || targetKey.startsWith('workflow:') || promptCustomized) return;
+    setPromptTemplate(buildAgentDispatchPromptTemplate(issue, extra));
+  }, [open, targetKey, promptCustomized, issue, extra]);
+
   if (!open) return null;
 
   const selectedRepo = repos.find(r => String(r._id) === repoId);
@@ -271,6 +288,11 @@ export default function DispatchModal({
     }
     return null;
   }
+
+  const selectedTarget = decodeTarget();
+  const promptPreview = selectedTarget && selectedTarget.kind !== 'workflow'
+    ? promptTemplate
+    : '';
 
   async function submit() {
     setError(null);
@@ -320,6 +342,7 @@ export default function DispatchModal({
         target,
         repoId,
         extraInstructions: extra.trim(),
+        promptTemplate: target.kind === 'workflow' ? undefined : promptTemplate,
         workflowInput: castInput,
       });
     } catch (err) {
@@ -336,9 +359,9 @@ export default function DispatchModal({
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-md" onClick={onClose}>
-      <div className="bg-app-card border border-app rounded-lg w-full max-w-xl shadow-popover animate-in fade-in zoom-in-95 duration-200 overflow-visible" onClick={e => e.stopPropagation()}>
+      <div className="bg-app-card border border-app rounded-lg w-full max-w-3xl max-h-[85vh] shadow-popover animate-in fade-in zoom-in-95 duration-200 overflow-hidden flex flex-col" onClick={e => e.stopPropagation()}>
         {/* Header */}
-        <div className="px-5 py-4 border-b border-app flex items-center justify-between">
+        <div className="px-5 py-4 border-b border-app flex items-center justify-between shrink-0">
           <div>
             <h2 className="text-[14px] font-semibold text-theme-primary tracking-tight">Dispatch</h2>
             <div className="mt-0.5 text-[11px] font-mono text-theme-muted">
@@ -351,7 +374,7 @@ export default function DispatchModal({
         </div>
 
         {/* Body */}
-        <div className="p-5 space-y-4">
+        <div className="p-5 space-y-4 overflow-y-auto min-h-0 flex-1">
           <div>
             <label className="overline mb-1.5 block">
               <Sparkles className="inline w-3 h-3 text-accent mr-1" /> Target
@@ -367,58 +390,96 @@ export default function DispatchModal({
             </div>
           </div>
 
-          {targetKind !== 'workflow' && (
-            <div>
-              <label className="overline mb-1.5 block">
-                <FolderGit2 className="inline w-3 h-3 text-accent-purple mr-1" /> Repository
-              </label>
-              <select
-                value={repoId}
-                onChange={e => setRepoId(e.target.value)}
-                disabled={reposLoading}
-                className="input py-2 text-[13px] w-full disabled:opacity-50"
-              >
-                <option value="">
-                  {reposLoading ? 'Loading repos…' : '— Pick a repository —'}
-                </option>
-                {repos.map(r => (
-                  <option key={String(r._id)} value={String(r._id)}>
-                    {r.name}{r.path ? ` · ${r.path}` : ''}
-                  </option>
-                ))}
-              </select>
-              {selectedRepo?.path && (
-                <div className="mt-1.5 text-[10px] font-mono text-theme-subtle">
-                  A fresh workspace will be created from <span className="text-theme-muted">{selectedRepo.path}</span>. The agent works on its own branch; original repo isn't touched.
-                </div>
-              )}
-              {!reposLoading && repos.length === 0 && (
-                <div className="mt-1.5 text-[10px] font-mono text-theme-muted italic">
-                  No repositories registered. Add one on the Repos page first.
-                </div>
-              )}
-            </div>
-          )}
-
           {targetKind === 'workflow' ? (
             <WorkflowInputs
               loading={loadingWorkflow}
               workflow={fullWorkflow}
               values={workflowInput}
+              repos={repos}
               onChange={(k, v) => setWorkflowInput((prev) => ({ ...prev, [k]: v }))}
             />
           ) : (
-            <div>
-              <label className="overline mb-1.5 block">
-                Extra instructions <span className="text-theme-subtle normal-case">(optional)</span>
-              </label>
-              <textarea
-                value={extra}
-                onChange={e => setExtra(e.target.value)}
-                rows={4}
-                placeholder="Any additional context beyond the ticket body…"
-                className="input py-2 text-[13px] resize-y w-full"
-              />
+            <div className="space-y-4">
+              <div>
+                <label className="overline mb-1.5 block">
+                  Prompt template
+                </label>
+                <div className="mb-1.5 flex items-center justify-between gap-3">
+                  <div className="text-[10px] font-mono text-theme-subtle">
+                    {selectedTarget?.kind === 'team-lead'
+                      ? `Editable prompt that will be sent to the selected team lead (${selectedTarget.agentName}).`
+                      : selectedTarget?.kind === 'agent'
+                        ? `Editable prompt that will be sent to the selected agent (${selectedTarget.name}).`
+                        : 'Pick an agent or team lead to edit the prompt.'}
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setPromptTemplate(buildAgentDispatchPromptTemplate(issue, extra));
+                      setPromptCustomized(false);
+                    }}
+                    className="text-[10px] font-mono text-accent hover:underline shrink-0"
+                  >
+                    Reset from ticket
+                  </button>
+                </div>
+                <textarea
+                  value={promptPreview}
+                  onChange={(e) => {
+                    setPromptTemplate(e.target.value);
+                    setPromptCustomized(true);
+                  }}
+                  rows={14}
+                  className="input py-2 text-[12px] font-mono resize-y w-full"
+                />
+                <div className="mt-1.5 text-[10px] font-mono text-theme-subtle">
+                  Placeholders: <span className="text-theme-muted">{'{{worktreePath}}'}</span> and <span className="text-theme-muted">{'{{repoPath}}'}</span> are replaced after workspace creation.
+                </div>
+              </div>
+
+              <div>
+                <label className="overline mb-1.5 block">
+                  <FolderGit2 className="inline w-3 h-3 text-accent-purple mr-1" /> Repository
+                </label>
+                <select
+                  value={repoId}
+                  onChange={e => setRepoId(e.target.value)}
+                  disabled={reposLoading}
+                  className="input py-2 text-[13px] w-full disabled:opacity-50"
+                >
+                  <option value="">
+                    {reposLoading ? 'Loading repos…' : '— Pick a repository —'}
+                  </option>
+                  {repos.map(r => (
+                    <option key={String(r._id)} value={String(r._id)}>
+                      {r.name}{r.path ? ` · ${r.path}` : ''}
+                    </option>
+                  ))}
+                </select>
+                {selectedRepo?.path && (
+                  <div className="mt-1.5 text-[10px] font-mono text-theme-subtle">
+                    A fresh workspace will be created from <span className="text-theme-muted">{selectedRepo.path}</span>. The agent works on its own branch; original repo isn't touched.
+                  </div>
+                )}
+                {!reposLoading && repos.length === 0 && (
+                  <div className="mt-1.5 text-[10px] font-mono text-theme-muted italic">
+                    No repositories registered. Add one on the Repos page first.
+                  </div>
+                )}
+              </div>
+
+              <div>
+                <label className="overline mb-1.5 block">
+                  Extra instructions <span className="text-theme-subtle normal-case">(optional)</span>
+                </label>
+                <textarea
+                  value={extra}
+                  onChange={e => setExtra(e.target.value)}
+                  rows={4}
+                  placeholder="Any additional context beyond the ticket body…"
+                  className="input py-2 text-[13px] resize-y w-full"
+                />
+              </div>
             </div>
           )}
 
@@ -431,7 +492,7 @@ export default function DispatchModal({
         </div>
 
         {/* Footer */}
-        <div className="px-5 py-3.5 border-t border-app bg-app-muted/40 flex items-center justify-between">
+        <div className="px-5 py-3.5 border-t border-app bg-app-muted/40 flex items-center justify-between shrink-0">
           <div className="text-[10px] font-mono text-theme-subtle">
             {targetKind === 'workflow'
               ? 'Workflow runs as a normal execution. Results show up in Activity.'
@@ -723,12 +784,22 @@ function widgetFor(key: string, schema: any): 'text' | 'textarea' | 'number' | '
   return 'text';
 }
 
+function isRepoPickerField(schema: any): boolean {
+  return typeof schema?.widget === 'string' && schema.widget.toLowerCase() === 'repo_picker';
+}
+
+function findRepoByPath(repos: Repo[], value: string): Repo | null {
+  if (!value) return null;
+  return repos.find(r => (r.path ?? '') === value) ?? null;
+}
+
 function WorkflowInputs({
-  loading, workflow, values, onChange,
+  loading, workflow, values, repos, onChange,
 }: {
   loading: boolean;
   workflow: any | null;
   values: Record<string, string>;
+  repos: Repo[];
   onChange: (key: string, value: string) => void;
 }) {
   if (loading) {
@@ -763,11 +834,13 @@ function WorkflowInputs({
       {keys.map((key) => {
         const s = schema[key];
         const w = widgetFor(key, s);
+        const repoPicker = isRepoPickerField(s);
         const required = s?.required !== false;
         const label = s?.label ?? key.replace(/_/g, ' ');
         const description = s?.description as string | undefined;
         const placeholder = s?.placeholder ?? `Enter ${key.replace(/_/g, ' ')}…`;
         const value = values[key] ?? '';
+        const selectedRepo = repoPicker ? findRepoByPath(repos, value) : null;
 
         return (
           <div key={key}>
@@ -779,7 +852,38 @@ function WorkflowInputs({
               <p className="text-[11px] text-theme-muted font-body mb-1.5 leading-relaxed">{description}</p>
             )}
 
-            {w === 'textarea' && (
+            {repoPicker && (
+              <>
+                <select
+                  value={value}
+                  onChange={(e) => onChange(key, e.target.value)}
+                  className="input py-2 text-[13px] w-full"
+                >
+                  <option value="">— Pick a repository —</option>
+                  {repos.map(repo => {
+                    const optionValue = repo.path ?? '';
+                    const disabled = !repo.path;
+                    return (
+                      <option key={String(repo._id)} value={optionValue} disabled={disabled}>
+                        {repo.name}{repo.path ? ` · ${repo.path}` : ''}{disabled ? ' · missing path' : ''}
+                      </option>
+                    );
+                  })}
+                </select>
+                {selectedRepo?.path && (
+                  <div className="mt-1.5 text-[10px] font-mono text-theme-subtle">
+                    Selected repo path: <span className="text-theme-muted">{selectedRepo.path}</span>
+                  </div>
+                )}
+                {repos.length === 0 && (
+                  <div className="mt-1.5 text-[10px] font-mono text-theme-muted italic">
+                    No repositories registered. Add one on the Repos page first.
+                  </div>
+                )}
+              </>
+            )}
+
+            {!repoPicker && w === 'textarea' && (
               <textarea
                 value={value}
                 onChange={(e) => onChange(key, e.target.value)}
@@ -789,7 +893,7 @@ function WorkflowInputs({
               />
             )}
 
-            {w === 'text' && (
+            {!repoPicker && w === 'text' && (
               <input
                 type="text"
                 value={value}
@@ -799,7 +903,7 @@ function WorkflowInputs({
               />
             )}
 
-            {w === 'number' && (
+            {!repoPicker && w === 'number' && (
               <input
                 type="number"
                 value={value}
@@ -809,7 +913,7 @@ function WorkflowInputs({
               />
             )}
 
-            {w === 'checkbox' && (
+            {!repoPicker && w === 'checkbox' && (
               <label className="flex items-start gap-2 cursor-pointer">
                 <input
                   type="checkbox"
@@ -823,7 +927,7 @@ function WorkflowInputs({
               </label>
             )}
 
-            {w === 'select' && Array.isArray(s.enum) && (
+            {!repoPicker && w === 'select' && Array.isArray(s.enum) && (
               <select
                 value={value}
                 onChange={(e) => onChange(key, e.target.value)}

@@ -1,10 +1,10 @@
 /**
  * MCP orphan sweeper.
  *
- * Background loop that hunts down MCP server processes that have been
- * orphaned (PPID=1, reparented to systemd) and have been alive long
- * enough that no live execution could plausibly own them, then group-
- * kills each one. Catches the leak edge cases that escape the
+ * Background loop that hunts down processes inside allen.service's cgroup
+ * that have been orphaned (reparented to systemd, PPID=1) and have been
+ * alive long enough that no live execution could plausibly own them, then
+ * group-kills each one. Catches the leak edge cases that escape the
  * cli-runner.ts and chat-mcp-client.ts cleanup paths:
  *
  *   - mcp-mongo-server keeps its node event loop alive via the MongoDB
@@ -15,34 +15,33 @@
  *   - Edge-case race conditions where claude exits before its MCP
  *     children fully attach to its PGID.
  *
+ * Approach (rev'd 2026-04-30 after observing the v15 sweeper miss leaks):
+ *   The leaked tree is `sh -c "mongodb …"` (PPID=1, ORPHAN) → `node …
+ *   /bin/mongodb mongodb://…` (PPID=sh, NOT orphan). The earlier
+ *   pattern-match-the-MCP rule only saw the node child, never killed
+ *   the wrapper shell, and the chain survived. Switching to "any orphan
+ *   in allen.service's cgroup" — that captures the wrapper shells too,
+ *   and group-killing the shell cascades down to the node MCP.
+ *
  * Conservative by design — only touches processes that are
- *   (a) matching one of the known MCP command patterns,
+ *   (a) listed in /sys/fs/cgroup/system.slice/allen.service/cgroup.procs,
  *   (b) currently orphans (PPID=1, so reparented to init), AND
- *   (c) older than MIN_ORPHAN_AGE_MS, so a freshly-spawned child
- *       mid-handshake (briefly orphan before the parent attaches) is
- *       never killed.
+ *   (c) older than MIN_ORPHAN_AGE_MS, so a freshly-spawned child briefly
+ *       orphan during a parent setpgid race is never killed.
+ *
+ * Anything in allen.service's cgroup with PPID=1 is, by allen's design,
+ * a leaked subtree — allen never deliberately re-parents to init.
  */
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
+import { readFile } from 'node:fs/promises';
 
 const execFileP = promisify(execFile);
 
 const SWEEP_INTERVAL_MS = 5 * 60_000;     // every 5 min
 const MIN_ORPHAN_AGE_MS = 10 * 60_000;    // only orphans alive >10 min
 const KILL_GRACE_MS = 5_000;              // SIGTERM → SIGKILL escalation
-
-/** cmdline substrings that identify allen-spawned MCP servers. */
-const MCP_PATTERNS: string[] = [
-  '_npx/fa13bc4275c777e5/node_modules/.bin/mongodb',  // mcp-mongo-server (bin name = mongodb)
-  'mcp-server-github',
-  'mcp-server-linear',
-  '@henkey/postgres-mcp-server',
-  'aws-server.mjs',
-  'opensearch-server.mjs',
-  'oxylabs-server.mjs',
-  'api-caller-server.mjs',
-  'allen-mcp-server',
-];
+const ALLEN_CGROUP_PROCS = '/sys/fs/cgroup/system.slice/allen.service/cgroup.procs';
 
 interface OrphanProc {
   pid: number;
@@ -72,8 +71,26 @@ function parseEtimeMs(etime: string): number {
   return (days * 86400 + secs) * 1000;
 }
 
+/** Read PIDs in allen.service's cgroup. Returns empty Set on error. */
+async function readAllenCgroupPids(): Promise<Set<number>> {
+  try {
+    const raw = await readFile(ALLEN_CGROUP_PROCS, 'utf8');
+    const pids = new Set<number>();
+    for (const line of raw.split('\n')) {
+      const n = parseInt(line.trim(), 10);
+      if (Number.isFinite(n)) pids.add(n);
+    }
+    return pids;
+  } catch {
+    // cgroup file may be unreadable in dev / non-systemd environments.
+    return new Set();
+  }
+}
+
 async function findOrphanMcps(): Promise<OrphanProc[]> {
-  // Use ppid=1 filter directly to keep ps output small.
+  const cgroupPids = await readAllenCgroupPids();
+  if (cgroupPids.size === 0) return []; // not in systemd or no permission — bail safely
+
   const { stdout } = await execFileP('ps', ['-eo', 'pid,ppid,etime,args']);
   const out: OrphanProc[] = [];
   for (const line of stdout.split('\n')) {
@@ -86,8 +103,9 @@ async function findOrphanMcps(): Promise<OrphanProc[]> {
     const ppid = parseInt(m[2], 10);
     const etime = m[3];
     const args = m[4];
+    // Require all three: orphan, in allen's cgroup, old enough.
     if (ppid !== 1) continue;
-    if (!MCP_PATTERNS.some((p) => args.includes(p))) continue;
+    if (!cgroupPids.has(pid)) continue;
     const ageMs = parseEtimeMs(etime);
     if (ageMs < MIN_ORPHAN_AGE_MS) continue;
     out.push({ pid, ageMs, cmd: args.slice(0, 120) });

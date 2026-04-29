@@ -5,7 +5,6 @@ import {
   teams as teamsApi,
   repos as reposApi,
   workflows as workflowsApi,
-  executions as executionsApi,
 } from '../services/api';
 import { useAgents } from '../hooks/useAgents';
 import { useToast } from '../components/common/Toast';
@@ -14,7 +13,7 @@ import { type AgentOption, type TeamOption } from '../components/agents/AgentAss
 import DispatchModal, { type DispatchTarget, type WorkflowOption } from '../components/linear/DispatchModal';
 import {
   AlertCircle, ChevronDown, ChevronRight, Circle, Clock, ExternalLink,
-  KeyRound, Loader2, MinusCircle, Play, RefreshCw, Search, Settings, X, Sparkles,
+  FolderGit2, KeyRound, Loader2, MinusCircle, Play, RefreshCw, Search, Settings, X, Sparkles, CheckCircle,
   List as ListIcon, LayoutGrid,
 } from 'lucide-react';
 
@@ -24,14 +23,19 @@ type AssignmentStatus = 'manual' | 'pending' | 'running' | 'failed' | 'completed
 
 interface AgentAssignee {
   linearIssueId: string;
-  agentName: string;
+  agentName?: string;
+  targetKind?: 'agent' | 'workflow';
+  targetName?: string;
+  workflowId?: string;
+  workflowName?: string;
   assignedAt: string;
   assignedBy: string;
   status?: AssignmentStatus;
   workspaceId?: string;
   workspacePath?: string;
   executionId?: string;
-  error?: string;
+  executionStatus?: string | null;
+  error?: string | null;
   branch?: string;
 }
 
@@ -72,13 +76,22 @@ interface LinearStatus {
   error?: string;
 }
 
-const STATUS_GROUPS: { type: StateType; label: string }[] = [
-  { type: 'backlog', label: 'Backlog' },
-  { type: 'unstarted', label: 'Todo' },
-  { type: 'started', label: 'In Progress' },
-  { type: 'completed', label: 'Done' },
-  { type: 'canceled', label: 'Canceled' },
-];
+const STATE_TYPE_ORDER: Record<string, number> = {
+  backlog: 0,
+  unstarted: 1,
+  triage: 2,
+  started: 3,
+  completed: 4,
+  canceled: 5,
+};
+
+interface IssueStateGroup {
+  key: string;
+  label: string;
+  color: string;
+  type: string;
+  issues: LinearIssue[];
+}
 
 function PriorityIcon({ p }: { p: number }) {
   const tone =
@@ -103,6 +116,29 @@ function relative(dateIso: string): string {
   return new Date(dateIso).toLocaleDateString();
 }
 
+function runTargetKind(assignee: AgentAssignee | null): 'agent' | 'workflow' {
+  return assignee?.targetKind === 'workflow' ? 'workflow' : 'agent';
+}
+
+function runTargetName(assignee: AgentAssignee | null): string {
+  if (!assignee) return '';
+  return assignee.targetName ?? assignee.agentName ?? assignee.workflowName ?? 'Unknown';
+}
+
+function isActiveRun(assignee: AgentAssignee | null): boolean {
+  return !!assignee && (assignee.status === 'pending' || assignee.status === 'running');
+}
+
+function isCompletedRun(assignee: AgentAssignee | null): boolean {
+  return assignee?.status === 'completed';
+}
+
+function compareRunRecency(a: LinearIssue, b: LinearIssue): number {
+  const aTime = a.agentAssignee?.assignedAt ? new Date(a.agentAssignee.assignedAt).getTime() : 0;
+  const bTime = b.agentAssignee?.assignedAt ? new Date(b.agentAssignee.assignedAt).getTime() : 0;
+  return bTime - aTime;
+}
+
 export default function TicketsPage() {
   const navigate = useNavigate();
   const toast = useToast();
@@ -121,7 +157,7 @@ export default function TicketsPage() {
   );
   const [assigneeFilter, setAssigneeFilter] = useState<'any' | 'unassigned' | string>('any');
   const [search, setSearch] = useState('');
-  const [collapsedGroups, setCollapsedGroups] = useState<Set<StateType>>(new Set());
+  const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(new Set());
 
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [detail, setDetail] = useState<LinearIssue | null>(null);
@@ -136,12 +172,13 @@ export default function TicketsPage() {
 
   // Top-tab filter + view mode — must live above the early-return paths
   // to satisfy React's rules of hooks.
-  type TopTab = 'all' | 'active' | 'done';
+  type TopTab = 'all' | 'active' | 'done' | 'running';
   const [topTab, setTopTab] = useState<TopTab>('all');
   const [viewMode, setViewMode] = useState<'list' | 'board'>('list');
   useEffect(() => {
     if (topTab === 'active') setStateFilters(new Set<StateType>(['started', 'unstarted']));
     else if (topTab === 'done') setStateFilters(new Set<StateType>(['completed']));
+    else if (topTab === 'running') setStateFilters(new Set<StateType>(['backlog', 'unstarted', 'started', 'completed', 'canceled']));
     else setStateFilters(new Set<StateType>(['backlog', 'unstarted', 'started', 'completed', 'canceled']));
   }, [topTab]);
 
@@ -243,10 +280,21 @@ export default function TicketsPage() {
   // Filter by Linear assignee (the human user assigned in Linear).
   // assigneeFilter holds the linear user id ('any' / 'unassigned' / <id>).
   const filteredIssues = useMemo(() => {
-    if (assigneeFilter === 'any') return issues;
-    if (assigneeFilter === 'unassigned') return issues.filter(i => !i.linearAssignee);
-    return issues.filter(i => i.linearAssignee?.id === assigneeFilter);
+    let next = issues;
+    if (assigneeFilter === 'unassigned') next = next.filter(i => !i.linearAssignee);
+    else if (assigneeFilter !== 'any') next = next.filter(i => i.linearAssignee?.id === assigneeFilter);
+    return next;
   }, [issues, assigneeFilter]);
+
+  const runningIssues = useMemo(
+    () => filteredIssues.filter(i => isActiveRun(i.agentAssignee)).sort(compareRunRecency),
+    [filteredIssues],
+  );
+
+  const recentCompletedIssues = useMemo(
+    () => filteredIssues.filter(i => isCompletedRun(i.agentAssignee)).sort(compareRunRecency).slice(0, 12),
+    [filteredIssues],
+  );
 
   // Build the unique list of Linear assignees we've seen across the
   // issue set. Sorted by name for a stable dropdown order.
@@ -271,27 +319,29 @@ export default function TicketsPage() {
   }, [projects, search]);
 
   // Group by status type
-  const grouped = useMemo(() => {
-    const m = new Map<StateType, LinearIssue[]>();
-    for (const g of STATUS_GROUPS) m.set(g.type, []);
+  const groupedStateSections = useMemo(() => {
+    const m = new Map<string, IssueStateGroup>();
     for (const issue of filteredIssues) {
-      const key = issue.state?.type ?? 'backlog';
-      if (!m.has(key)) m.set(key, []);
-      m.get(key)!.push(issue);
+      const key = issue.state?.id || issue.state?.name || 'unknown';
+      if (!m.has(key)) {
+        m.set(key, {
+          key,
+          label: issue.state?.name || 'Unknown',
+          color: issue.state?.color || '#999',
+          type: issue.state?.type || 'backlog',
+          issues: [],
+        });
+      }
+      m.get(key)!.issues.push(issue);
     }
-    return m;
+    return Array.from(m.values()).sort((a, b) => {
+      const typeDelta = (STATE_TYPE_ORDER[a.type] ?? 999) - (STATE_TYPE_ORDER[b.type] ?? 999);
+      if (typeDelta !== 0) return typeDelta;
+      return a.label.localeCompare(b.label);
+    });
   }, [filteredIssues]);
 
-  function toggleStateFilter(t: StateType) {
-    setStateFilters(prev => {
-      const next = new Set(prev);
-      if (next.has(t)) next.delete(t);
-      else next.add(t);
-      return next;
-    });
-  }
-
-  function toggleGroupCollapsed(t: StateType) {
+  function toggleGroupCollapsed(t: string) {
     setCollapsedGroups(prev => {
       const next = new Set(prev);
       if (next.has(t)) next.delete(t);
@@ -300,20 +350,15 @@ export default function TicketsPage() {
     });
   }
 
-  async function handleClearAssignment(issueId: string) {
-    try {
-      const { assignment } = await linearApi.assignAgent(issueId, null);
-      setIssues(prev => prev.map(i => i.id === issueId ? { ...i, agentAssignee: assignment } : i));
-      if (detail?.id === issueId) setDetail({ ...detail, agentAssignee: assignment });
-      toast.success('Assignment cleared');
-    } catch (err) {
-      toast.error(`Failed to clear assignment: ${(err as Error).message}`);
-    }
-  }
-
   async function handleDispatch(
     issue: LinearIssue,
-    args: { target: DispatchTarget; repoId: string; extraInstructions: string; workflowInput?: Record<string, unknown> },
+    args: {
+      target: DispatchTarget;
+      repoId: string;
+      extraInstructions: string;
+      promptTemplate?: string;
+      workflowInput?: Record<string, unknown>;
+    },
   ) {
     if (args.target.kind === 'workflow') {
       // Schema-driven: the dialog already collected + cast inputs per
@@ -328,10 +373,16 @@ export default function TicketsPage() {
         ticket_id: issue.identifier,
         ticket_url: issue.url,
       };
-      const exec = await executionsApi.start(args.target.workflowId, input);
+      const { assignment } = await linearApi.dispatchWorkflow(issue.id, {
+        workflowId: args.target.workflowId,
+        input,
+      });
+      setIssues(prev => prev.map(i => i.id === issue.id ? { ...i, agentAssignee: assignment } : i));
+      if (detail?.id === issue.id) setDetail({ ...detail, agentAssignee: assignment });
+      if (selectedId !== issue.id) setSelectedId(issue.id);
       toast.success(`Started ${args.target.workflowName} on ${issue.identifier}`);
       setDispatchFor(null);
-      navigate(`/executions/${exec.id}`);
+      setTimeout(() => { void linearApi.issue(issue.id).then(setDetail).catch(() => {}); }, 1500);
       return;
     }
 
@@ -342,12 +393,14 @@ export default function TicketsPage() {
       agentName,
       repoId: args.repoId,
       extraInstructions: args.extraInstructions,
+      promptTemplate: args.promptTemplate,
     });
     setIssues(prev => prev.map(i => i.id === issue.id ? { ...i, agentAssignee: assignment } : i));
     if (detail?.id === issue.id) setDetail({ ...detail, agentAssignee: assignment });
+    if (selectedId !== issue.id) setSelectedId(issue.id);
     toast.success(`Dispatching ${agentName} to ${issue.identifier}…`);
     setDispatchFor(null);
-    setTimeout(() => { if (selectedId === issue.id) void linearApi.issue(issue.id).then(setDetail).catch(() => {}); }, 3000);
+    setTimeout(() => { void linearApi.issue(issue.id).then(setDetail).catch(() => {}); }, 3000);
   }
 
   const agentOptions: AgentOption[] = useMemo(
@@ -429,8 +482,9 @@ export default function TicketsPage() {
     );
   }
 
-  const totalShown = filteredIssues.length;
-  const activeCount = (grouped.get('started')?.length ?? 0) + (grouped.get('unstarted')?.length ?? 0);
+  const totalShown = topTab === 'running' ? runningIssues.length + recentCompletedIssues.length : filteredIssues.length;
+  const activeCount = issues.filter(i => i.state.type === 'started' || i.state.type === 'unstarted').length;
+  const runningCount = issues.filter(i => isActiveRun(i.agentAssignee) || isCompletedRun(i.agentAssignee)).length;
 
   return (
     <div className="flex h-full min-h-0 flex-col">
@@ -487,6 +541,7 @@ export default function TicketsPage() {
           {([
             { id: 'all', label: 'All', count: issues.length },
             { id: 'active', label: 'Active', count: activeCount },
+            { id: 'running', label: 'Running', count: runningCount },
             { id: 'done', label: 'Done' },
           ] as { id: TopTab; label: string; count?: number }[]).map(t => (
             <button
@@ -546,21 +601,81 @@ export default function TicketsPage() {
               <span className="text-[11px] font-mono">{totalShown} of {issues.length}</span>
             </div>
 
-            {/* Issue groups — list view */}
-            {viewMode === 'list' && (
+            {topTab === 'running' ? (
+              <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
+                <div className="card overflow-hidden">
+                  <div className="flex items-center justify-between gap-2 border-b border-app bg-app-muted px-3.5 py-2">
+                    <div>
+                      <div className="text-[13px] font-medium text-theme-primary">Running now</div>
+                      <div className="text-[10px] font-mono text-theme-muted">Pending and active ticket runs</div>
+                    </div>
+                    <span className="text-[11px] font-mono text-theme-muted">{runningIssues.length}</span>
+                  </div>
+                  {runningIssues.length > 0 ? (
+                    <div className="divide-y divide-border">
+                      {runningIssues.map(issue => (
+                        <TicketRow
+                          key={issue.id}
+                          issue={issue}
+                          active={issue.id === selectedId}
+                          onSelect={() => setSelectedId(issue.id)}
+                          onDispatch={() => setDispatchFor(issue)}
+                        />
+                      ))}
+                    </div>
+                  ) : (
+                    <div className="px-4 py-8 text-center text-[12px] italic text-theme-muted">
+                      No ticket runs are active right now.
+                    </div>
+                  )}
+                </div>
+
+                <div className="card overflow-hidden">
+                  <div className="flex items-center justify-between gap-2 border-b border-app bg-accent-green/5 px-3.5 py-2">
+                    <div>
+                      <div className="text-[13px] font-medium text-theme-primary">Recent completed</div>
+                      <div className="text-[10px] font-mono text-theme-muted">Latest successful ticket runs</div>
+                    </div>
+                    <span className="text-[11px] font-mono text-theme-muted">{recentCompletedIssues.length}</span>
+                  </div>
+                  {recentCompletedIssues.length > 0 ? (
+                    <div className="divide-y divide-border">
+                      {recentCompletedIssues.map(issue => (
+                        <TicketRow
+                          key={issue.id}
+                          issue={issue}
+                          active={issue.id === selectedId}
+                          onSelect={() => setSelectedId(issue.id)}
+                          onDispatch={() => setDispatchFor(issue)}
+                        />
+                      ))}
+                    </div>
+                  ) : (
+                    <div className="px-4 py-8 text-center text-[12px] italic text-theme-muted">
+                      No completed ticket runs yet.
+                    </div>
+                  )}
+                </div>
+              </div>
+            ) : viewMode === 'list' && (
               <div className="space-y-3">
-                {STATUS_GROUPS.map(g => {
-                  const list = grouped.get(g.type) ?? [];
+                {groupedStateSections.map(g => {
+                  const list = g.issues;
                   if (list.length === 0) return null;
-                  const collapsed = collapsedGroups.has(g.type);
+                  const collapsed = collapsedGroups.has(g.key);
                   return (
-                    <div key={g.type} className="card overflow-hidden">
+                    <div key={g.key} className="card overflow-hidden">
                       <button
-                        onClick={() => toggleGroupCollapsed(g.type)}
+                        onClick={() => toggleGroupCollapsed(g.key)}
                         className="w-full flex items-center gap-2 px-3.5 py-2 text-left bg-app-muted hover:bg-app-muted/80 border-b border-app transition-colors"
                       >
                         {collapsed ? <ChevronRight className="w-3.5 h-3.5 text-theme-muted" /> : <ChevronDown className="w-3.5 h-3.5 text-theme-muted" />}
-                        <span className="text-[13px] font-medium text-theme-primary">{g.label}</span>
+                        <span
+                          className="inline-flex items-center gap-2 text-[13px] font-medium text-theme-primary"
+                        >
+                          <span className="h-2 w-2 rounded-full" style={{ backgroundColor: g.color }} />
+                          {g.label}
+                        </span>
                         <span className="text-[11px] font-mono text-theme-muted">{list.length} issue{list.length !== 1 ? 's' : ''}</span>
                       </button>
                       {!collapsed && (
@@ -595,12 +710,15 @@ export default function TicketsPage() {
             {/* Board view — Kanban columns by status */}
             {viewMode === 'board' && (
               <div className="flex gap-3 overflow-x-auto pb-3">
-                {STATUS_GROUPS.map(g => {
-                  const list = grouped.get(g.type) ?? [];
+                {groupedStateSections.map(g => {
+                  const list = g.issues;
                   return (
-                    <div key={g.type} className="w-[300px] shrink-0 flex flex-col card overflow-hidden">
+                    <div key={g.key} className="w-[300px] shrink-0 flex flex-col card overflow-hidden">
                       <div className="flex items-center gap-2 px-3 py-2 bg-app-muted border-b border-app shrink-0">
-                        <span className="text-[13px] font-medium text-theme-primary">{g.label}</span>
+                        <span className="inline-flex items-center gap-2 text-[13px] font-medium text-theme-primary">
+                          <span className="h-2 w-2 rounded-full" style={{ backgroundColor: g.color }} />
+                          {g.label}
+                        </span>
                         <span className="text-[11px] font-mono text-theme-muted">{list.length}</span>
                       </div>
                       <div className="flex-1 overflow-y-auto p-2 space-y-2 min-h-[200px]">
@@ -644,7 +762,6 @@ export default function TicketsPage() {
                 issue={detail}
                 onClose={() => { setSelectedId(null); setDetail(null); }}
                 onDispatch={() => setDispatchFor(detail)}
-                onClearAssignment={() => handleClearAssignment(detail.id)}
                 navigate={navigate}
               />
             ) : (
@@ -659,7 +776,7 @@ export default function TicketsPage() {
         <DispatchModal
           open={true}
           issue={{ id: dispatchFor.id, identifier: dispatchFor.identifier, title: dispatchFor.title, description: dispatchFor.description ?? null }}
-          currentAgent={dispatchFor.agentAssignee?.agentName ?? null}
+          currentAgent={runTargetKind(dispatchFor.agentAssignee) === 'agent' ? (dispatchFor.agentAssignee?.agentName ?? dispatchFor.agentAssignee?.targetName ?? null) : null}
           agents={agentOptions}
           teams={teamOptions}
           workflows={workflowList}
@@ -689,31 +806,123 @@ function AssignmentPill({ assignee, onClick }: { assignee: AgentAssignee | null;
     );
   }
   const status = assignee.status ?? 'manual';
+  const kind = runTargetKind(assignee);
+  const targetName = runTargetName(assignee);
   const tone =
-    status === 'running' ? 'bg-accent-green/10 text-accent-green border-accent-green/30'
+    status === 'running' ? 'bg-accent/10 text-accent border-accent/30'
     : status === 'pending' ? 'bg-accent-yellow/10 text-accent-yellow border-accent-yellow/30'
     : status === 'failed' ? 'bg-accent-red/10 text-accent-red border-accent-red/30'
+    : status === 'completed' ? 'bg-accent-green/10 text-accent-green border-accent-green/30'
     : 'bg-accent-soft text-accent border-accent/30';
   const icon =
     status === 'running' ? <Play className="w-3 h-3" />
     : status === 'pending' ? <Loader2 className="w-3 h-3 animate-spin" />
     : status === 'failed' ? <AlertCircle className="w-3 h-3" />
+    : status === 'completed' ? <CheckCircle className="w-3 h-3" />
     : <Sparkles className="w-3 h-3" />;
   const label =
     status === 'running' ? 'running'
     : status === 'pending' ? 'starting'
     : status === 'failed' ? 'failed'
+    : status === 'completed' ? 'done'
     : null;
   return (
     <button
       onClick={onClick}
       className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[10px] font-mono border transition-colors hover:brightness-110 ${tone}`}
-      title={status === 'failed' ? assignee.error : `Dispatched to ${assignee.agentName}${label ? ` · ${label}` : ''}`}
+      title={status === 'failed' ? (assignee.error ?? undefined) : `${kind === 'workflow' ? 'Workflow' : 'Agent'} ${targetName}${label ? ` · ${label}` : ''}`}
     >
       {icon}
-      <span className="truncate max-w-[8rem]">{assignee.agentName}</span>
+      <span className="truncate max-w-[8rem]">{targetName}</span>
       {label && <span className="text-current/60">· {label}</span>}
     </button>
+  );
+}
+
+type RunStepState = 'done' | 'current' | 'pending' | 'failed';
+
+function StepIndicator({ state }: { state: RunStepState }) {
+  if (state === 'done') return <CheckCircle className="h-4 w-4 text-accent-green" />;
+  if (state === 'current') return <Loader2 className="h-4 w-4 animate-spin text-accent" />;
+  if (state === 'failed') return <AlertCircle className="h-4 w-4 text-accent-red" />;
+  return <Circle className="h-4 w-4 text-theme-subtle" />;
+}
+
+function TicketRunSteps({ assignee }: { assignee: AgentAssignee }) {
+  const isWorkflowRun = runTargetKind(assignee) === 'workflow';
+  const status = assignee.status ?? 'manual';
+  const hasExecution = !!assignee.executionId;
+
+  const steps = isWorkflowRun
+    ? [
+        {
+          label: 'Ticket dispatched',
+          detail: `Sent to ${runTargetName(assignee)}`,
+          state: 'done' as RunStepState,
+        },
+        {
+          label: 'Execution started',
+          detail: assignee.executionId ? `Execution ${assignee.executionId}` : 'Waiting for execution to start',
+          state: (
+            status === 'failed' ? 'failed'
+            : status === 'completed' ? 'done'
+            : status === 'pending' || status === 'running' ? 'current'
+            : 'pending'
+          ) as RunStepState,
+        },
+        {
+          label: 'Execution completed',
+          detail: status === 'completed' ? 'Finished successfully' : 'Completion pending',
+          state: (status === 'completed' ? 'done' : 'pending') as RunStepState,
+        },
+      ]
+    : [
+        {
+          label: 'Ticket dispatched',
+          detail: `Assigned to ${runTargetName(assignee)}`,
+          state: 'done' as RunStepState,
+        },
+        {
+          label: 'Worktree prepared',
+          detail: assignee.workspaceId ? `Workspace ${assignee.workspaceId}` : 'Waiting for workspace reservation',
+          state: (
+            status === 'failed' && !hasExecution ? 'failed'
+            : hasExecution || status === 'completed' ? 'done'
+            : status === 'pending' ? 'current'
+            : 'pending'
+          ) as RunStepState,
+        },
+        {
+          label: 'Parent agent started',
+          detail: assignee.executionId ? `Execution ${assignee.executionId}` : 'Waiting for agent startup',
+          state: (
+            status === 'failed' && hasExecution ? 'failed'
+            : status === 'completed' ? 'done'
+            : status === 'running' ? 'current'
+            : 'pending'
+          ) as RunStepState,
+        },
+        {
+          label: 'Execution completed',
+          detail: status === 'completed' ? 'Finished successfully' : 'Completion pending',
+          state: (status === 'completed' ? 'done' : 'pending') as RunStepState,
+        },
+      ];
+
+  return (
+    <div className="space-y-2 rounded-lg border border-app/70 bg-black/5 px-3 py-2">
+      {steps.map(step => (
+        <div key={step.label} className="flex items-start gap-2.5">
+          <div className="pt-0.5">
+            <StepIndicator state={step.state} />
+          </div>
+          <div className="min-w-0">
+            <div className="text-[11px] font-mono text-theme-primary">{step.label}</div>
+            <div className="text-[10px] font-mono text-theme-subtle break-all">{step.detail}</div>
+          </div>
+        </div>
+      ))}
+    </div>
   );
 }
 
@@ -737,6 +946,12 @@ function TicketRow({
         </span>
       </button>
       <div className="flex items-center gap-1.5 shrink-0">
+        <span
+          className="inline-flex items-center gap-1 rounded-full border px-1.5 py-0.5 text-[9px] font-mono"
+          style={{ color: issue.state.color, borderColor: issue.state.color + '60', backgroundColor: issue.state.color + '15' }}
+        >
+          {issue.state.name}
+        </span>
         {issue.labels.slice(0, 2).map(l => (
           <span
             key={l.id}
@@ -788,6 +1003,14 @@ function BoardCard({
       <div className="text-[12.5px] text-theme-primary leading-snug line-clamp-2 font-body">
         {issue.title}
       </div>
+      <div className="flex items-center gap-1.5">
+        <span
+          className="inline-flex items-center gap-1 rounded-full border px-1.5 py-0.5 text-[9px] font-mono"
+          style={{ color: issue.state.color, borderColor: issue.state.color + '60', backgroundColor: issue.state.color + '15' }}
+        >
+          {issue.state.name}
+        </span>
+      </div>
       {issue.labels.length > 0 && (
         <div className="flex items-center gap-1.5 flex-wrap">
           {issue.labels.slice(0, 3).map(l => (
@@ -815,27 +1038,31 @@ function BoardCard({
 // ── Drawer component ────────────────────────────────────────────────────────
 
 function TicketDrawer({
-  issue, onClose, onDispatch, onClearAssignment, navigate,
+  issue, onClose, onDispatch, navigate,
 }: {
   issue: LinearIssue;
   onClose: () => void;
   onDispatch: () => void;
-  onClearAssignment: () => void;
   navigate: ReturnType<typeof useNavigate>;
 }) {
   const assignee = issue.agentAssignee;
   const status = assignee?.status ?? 'manual';
+  const targetKind = runTargetKind(assignee);
+  const targetName = runTargetName(assignee);
+  const isWorkflowRun = targetKind === 'workflow';
 
   const statusTone =
-    status === 'running' ? 'bg-accent-green/10 text-accent-green border-accent-green/30'
+    status === 'running' ? 'bg-accent/10 text-accent border-accent/30'
     : status === 'pending' ? 'bg-accent-yellow/10 text-accent-yellow border-accent-yellow/30'
     : status === 'failed' ? 'bg-accent-red/10 text-accent-red border-accent-red/30'
+    : status === 'completed' ? 'bg-accent-green/10 text-accent-green border-accent-green/30'
     : 'bg-accent-soft text-accent border-accent/30';
 
   const statusLabel =
-    status === 'running' ? 'Agent is working'
-    : status === 'pending' ? 'Workspace is being created…'
+    status === 'running' ? (isWorkflowRun ? 'Workflow is running' : 'Agent is working')
+    : status === 'pending' ? (isWorkflowRun ? 'Workflow is queued…' : 'Workspace is being created…')
     : status === 'failed' ? 'Dispatch failed'
+    : status === 'completed' ? 'Completed'
     : 'Assigned (not yet started)';
 
   return (
@@ -877,20 +1104,22 @@ function TicketDrawer({
 
       <div className="px-5 py-4 border-b border-app shrink-0 space-y-3">
         <div>
-          <div className="overline mb-1.5">Agent assignment</div>
+          <div className="overline mb-1.5">Ticket run</div>
           {assignee ? (
             <div className={`rounded-lg border px-3 py-2 space-y-2 ${statusTone}`}>
               <div className="flex items-center justify-between gap-2">
                 <div className="flex items-center gap-2 min-w-0">
-                  {status === 'pending' ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Sparkles className="w-3.5 h-3.5" />}
-                  <span className="text-[13px] font-mono font-semibold truncate">{assignee.agentName}</span>
+                  {status === 'pending' ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : status === 'completed' ? <CheckCircle className="w-3.5 h-3.5" /> : status === 'running' ? <Play className="w-3.5 h-3.5" /> : status === 'failed' ? <AlertCircle className="w-3.5 h-3.5" /> : <Sparkles className="w-3.5 h-3.5" />}
+                  <span className="text-[13px] font-mono font-semibold truncate">{targetName}</span>
                 </div>
                 <span className="text-[10px] font-mono opacity-80">{statusLabel}</span>
               </div>
               <div className="text-[10px] font-mono text-theme-subtle">
                 by {assignee.assignedBy} · {relative(assignee.assignedAt)}
+                {isWorkflowRun && assignee.workflowId && <> · workflow <span className="text-theme-muted">{assignee.workflowName ?? assignee.workflowId}</span></>}
                 {assignee.branch && <> · branch <span className="text-theme-muted">{assignee.branch}</span></>}
               </div>
+              <TicketRunSteps assignee={assignee} />
               {assignee.error && (
                 <div className="text-[10px] font-mono text-accent-red break-words">{assignee.error}</div>
               )}
@@ -898,30 +1127,27 @@ function TicketDrawer({
                 {assignee.workspaceId && (
                   <button
                     onClick={() => navigate(`/workspaces/${assignee.workspaceId}`)}
-                    className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-mono bg-surface-100/50 text-theme-secondary hover:bg-surface-100"
+                    className="inline-flex items-center gap-1.5 rounded-full border border-accent/25 bg-accent/10 px-2.5 py-1 text-[10px] font-mono text-accent transition-colors hover:bg-accent/15 hover:border-accent/40"
                   >
-                    Open workspace →
+                    <FolderGit2 className="h-3.5 w-3.5" />
+                    Open workspace
                   </button>
                 )}
                 {assignee.executionId && (
                   <button
                     onClick={() => navigate(`/executions/${assignee.executionId}`)}
-                    className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-mono bg-surface-100/50 text-theme-secondary hover:bg-surface-100"
+                    className="inline-flex items-center gap-1.5 rounded-full border border-accent-green/30 bg-accent-green/10 px-2.5 py-1 text-[10px] font-mono text-accent-green transition-colors hover:bg-accent-green/15 hover:border-accent-green/45"
                   >
-                    View execution →
+                    <ExternalLink className="h-3.5 w-3.5" />
+                    View {isWorkflowRun ? 'workflow' : 'agent'} execution
                   </button>
                 )}
                 <button
                   onClick={onDispatch}
-                  className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-mono bg-surface-100/50 text-theme-secondary hover:bg-surface-100"
+                  className="inline-flex items-center gap-1.5 rounded-full border border-accent-yellow/30 bg-accent-yellow/10 px-2.5 py-1 text-[10px] font-mono text-accent-yellow transition-colors hover:bg-accent-yellow/15 hover:border-accent-yellow/45"
                 >
+                  <RefreshCw className="h-3.5 w-3.5" />
                   Re-dispatch
-                </button>
-                <button
-                  onClick={onClearAssignment}
-                  className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-mono bg-surface-100/50 text-theme-muted hover:bg-accent-red/10 hover:text-accent-red"
-                >
-                  Clear
                 </button>
               </div>
             </div>
@@ -975,4 +1201,3 @@ function TicketDrawer({
     </>
   );
 }
-

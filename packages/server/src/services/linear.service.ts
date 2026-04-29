@@ -14,6 +14,7 @@ import { SecretService } from './secret.service.js';
 import { TicketAssignmentService, type TicketAssignment } from './ticket-assignment.service.js';
 import { WorkspaceManager } from './workspace.service.js';
 import { executeChatTool } from './chat-tools.js';
+import { ExecutionService } from './execution.service.js';
 
 // TTL caches — Linear's rate limit is 4500 req/hr. Without caching a naive
 // page refresh can easily hit hundreds of requests because every `issue.state`,
@@ -84,6 +85,22 @@ const PRIORITY_LABELS: Record<number, string> = {
   4: 'Low',
 };
 
+function buildAgentDispatchPromptTemplate(issue: LinearIssueDetail, extraInstructions?: string): string {
+  const header = `You've been assigned Linear ticket ${issue.identifier}: ${issue.title}.`;
+  const body = issue.description ? `\n\n---\n${issue.description}` : '';
+  const extra = extraInstructions?.trim() ? `\n\n---\nAdditional instructions:\n${extraInstructions.trim()}` : '';
+  return `${header}${body}${extra}\n\nWORKSPACE CONTEXT:\n- Worktree path: {{worktreePath}}\n- Repository path: {{repoPath}}\n\nWork inside this workspace. Start by skimming the repo structure, then plan your approach before editing code. Ask clarifying questions if anything is ambiguous.`;
+}
+
+function resolveAgentDispatchPrompt(
+  template: string,
+  replacements: { worktreePath: string; repoPath: string },
+): string {
+  return template
+    .replaceAll('{{worktreePath}}', replacements.worktreePath)
+    .replaceAll('{{repoPath}}', replacements.repoPath);
+}
+
 export class LinearService {
   private db: Db;
   private secretSvc: SecretService;
@@ -99,6 +116,78 @@ export class LinearService {
     this.db = db;
     this.secretSvc = new SecretService(db);
     this.assignmentSvc = new TicketAssignmentService(db);
+  }
+
+  private async hydrateAssignmentStatuses(assignments: TicketAssignment[]): Promise<Map<string, TicketAssignment>> {
+    if (assignments.length === 0) return new Map();
+    const executionIds = assignments
+      .map(a => a.executionId)
+      .filter((id): id is string => typeof id === 'string' && id.length > 0);
+
+    if (executionIds.length === 0) {
+      return new Map(assignments.map(a => [a.linearIssueId, a]));
+    }
+
+    const executions = await this.db.collection('executions')
+      .find(
+        { id: { $in: executionIds } },
+        { projection: { id: 1, status: 1, errorMessage: 1 } },
+      )
+      .toArray();
+    const byExecutionId = new Map<string, { status?: string; errorMessage?: string | null }>(
+      executions.map(doc => [
+        String(doc.id),
+        {
+          status: typeof doc.status === 'string' ? doc.status : undefined,
+          errorMessage: typeof doc.errorMessage === 'string' ? doc.errorMessage : null,
+        },
+      ]),
+    );
+
+    const out = new Map<string, TicketAssignment>();
+    const writes: Promise<unknown>[] = [];
+    for (const assignment of assignments) {
+      const exec = assignment.executionId ? byExecutionId.get(assignment.executionId) : undefined;
+      if (!exec?.status) {
+        out.set(assignment.linearIssueId, assignment);
+        continue;
+      }
+
+      const nextStatus =
+        exec.status === 'queued' ? 'pending'
+        : exec.status === 'running' || exec.status === 'waiting_for_input' ? 'running'
+        : exec.status === 'completed' ? 'completed'
+        : exec.status === 'failed' || exec.status === 'cancelled' ? 'failed'
+        : assignment.status;
+      const nextError =
+        exec.status === 'failed' ? (exec.errorMessage ?? assignment.error ?? 'Execution failed')
+        : exec.status === 'cancelled' ? 'Execution cancelled'
+        : null;
+      const nextAssignment: TicketAssignment = {
+        ...assignment,
+        status: nextStatus,
+        executionStatus: exec.status,
+        error: nextError,
+      };
+      out.set(assignment.linearIssueId, nextAssignment);
+
+      if (
+        nextAssignment.status !== assignment.status
+        || nextAssignment.executionStatus !== assignment.executionStatus
+        || nextAssignment.error !== assignment.error
+      ) {
+        writes.push(
+          this.assignmentSvc.patch(assignment.linearIssueId, {
+            status: nextAssignment.status,
+            executionStatus: nextAssignment.executionStatus,
+            error: nextAssignment.error,
+          }).catch(() => null),
+        );
+      }
+    }
+
+    if (writes.length > 0) await Promise.all(writes);
+    return out;
   }
 
   /** Evict all Linear data caches. Call after assignment changes or manual refresh. */
@@ -205,7 +294,9 @@ export class LinearService {
 
     const cacheKey = `${token}::${limit}::${JSON.stringify(linearFilter)}`;
     const cached = LinearService.issuesCache.get(cacheKey);
-    const assignmentsMap = await this.assignmentSvc.getAllAsMap();
+    const assignmentsMap = await this.hydrateAssignmentStatuses(
+      Array.from((await this.assignmentSvc.getAllAsMap()).values()),
+    );
 
     if (cached && Date.now() - cached.at < ISSUES_TTL_MS) {
       // Re-hydrate assignments from Mongo (cheap) so assignment changes are visible
@@ -268,7 +359,10 @@ export class LinearService {
 
     const issue = resp.issue;
     if (!issue) return null;
-    const agentAssignee = await this.assignmentSvc.get(issue.id);
+    const rawAssignment = await this.assignmentSvc.get(issue.id);
+    const agentAssignee = rawAssignment
+      ? (await this.hydrateAssignmentStatuses([rawAssignment])).get(issue.id) ?? rawAssignment
+      : null;
     return {
       id: issue.id,
       identifier: issue.identifier,
@@ -311,6 +405,58 @@ export class LinearService {
     return this.assignmentSvc.set(linearIssueId, agentName, assignedBy);
   }
 
+  async dispatchWorkflow(params: {
+    linearIssueId: string;
+    workflowId: string;
+    input: Record<string, unknown>;
+    dispatchedBy: string;
+  }): Promise<TicketAssignment> {
+    const { linearIssueId, workflowId, input, dispatchedBy } = params;
+    const issue = await this.getIssue(linearIssueId);
+    if (!issue) throw new Error('Linear ticket not found');
+
+    let workflowOid: ObjectId;
+    try {
+      workflowOid = new ObjectId(workflowId);
+    } catch {
+      throw new Error('Workflow not found');
+    }
+
+    const workflowDoc = await this.db.collection('workflows').findOne(
+      { _id: workflowOid },
+      { projection: { name: 1, parsed: 1 } },
+    );
+    if (!workflowDoc) throw new Error('Workflow not found');
+
+    const executionSvc = new ExecutionService(this.db);
+    const started = await executionSvc.start(workflowId, input);
+    const executionId = typeof started.id === 'string' ? started.id : null;
+    const executionStatus = typeof started.status === 'string' ? started.status : null;
+    const workflowName =
+      typeof started.workflowName === 'string' ? started.workflowName
+      : typeof workflowDoc.name === 'string' ? workflowDoc.name
+      : typeof (workflowDoc.parsed as Record<string, unknown> | undefined)?.name === 'string'
+        ? String((workflowDoc.parsed as Record<string, unknown>).name)
+        : 'Workflow';
+
+    const assignment: TicketAssignment = {
+      linearIssueId,
+      targetKind: 'workflow',
+      targetName: workflowName,
+      workflowId,
+      workflowName,
+      assignedAt: new Date(),
+      assignedBy: dispatchedBy,
+      status: executionStatus === 'queued' ? 'pending' : 'running',
+      executionId: executionId ?? undefined,
+      executionStatus,
+      error: null,
+    };
+    await this.assignmentSvc.upsertDispatch(assignment);
+    LinearService.issuesCache.clear();
+    return assignment;
+  }
+
   /**
    * Dispatch a ticket to an agent:
    * 1. Fetch the ticket from Linear.
@@ -327,9 +473,17 @@ export class LinearService {
     agentName: string;
     repoId: string;
     extraInstructions?: string;
+    promptTemplate?: string;
     dispatchedBy: string;
   }): Promise<TicketAssignment> {
-    const { linearIssueId, agentName, repoId, extraInstructions, dispatchedBy } = params;
+    const {
+      linearIssueId,
+      agentName,
+      repoId,
+      extraInstructions,
+      promptTemplate,
+      dispatchedBy,
+    } = params;
 
     const issue = await this.getIssue(linearIssueId);
     if (!issue) throw new Error('Linear ticket not found');
@@ -355,6 +509,8 @@ export class LinearService {
     const initial: TicketAssignment = {
       linearIssueId,
       agentName,
+      targetKind: 'agent',
+      targetName: agentName,
       assignedAt: new Date(),
       assignedBy: dispatchedBy,
       status: 'pending',
@@ -367,7 +523,11 @@ export class LinearService {
     LinearService.issuesCache.clear();
 
     // Background: wait for workspace readiness + spawn agent
-    void this.finishDispatch(initial, wsManager, issue, extraInstructions);
+    void this.finishDispatch(initial, wsManager, issue, {
+      extraInstructions,
+      promptTemplate,
+      repoPath: String(repo.path ?? ''),
+    });
 
     return initial;
   }
@@ -376,7 +536,11 @@ export class LinearService {
     initial: TicketAssignment,
     wsManager: WorkspaceManager,
     issue: LinearIssueDetail,
-    extraInstructions: string | undefined,
+    options: {
+      extraInstructions?: string;
+      promptTemplate?: string;
+      repoPath: string;
+    },
   ): Promise<void> {
     try {
       const ready = await this.waitForWorkspaceReady(wsManager, initial.workspaceId!, 120_000);
@@ -389,11 +553,13 @@ export class LinearService {
         return;
       }
 
-      // Build the prompt seeded with ticket context
-      const header = `You've been assigned Linear ticket ${issue.identifier}: ${issue.title}.`;
-      const body = issue.description ? `\n\n---\n${issue.description}` : '';
-      const extra = extraInstructions?.trim() ? `\n\n---\nAdditional instructions:\n${extraInstructions.trim()}` : '';
-      const prompt = `${header}${body}${extra}\n\nWork inside this workspace. Start by skimming the repo structure, then plan your approach before editing code. Ask clarifying questions if anything is ambiguous.`;
+      const promptTemplate = options.promptTemplate?.trim()
+        ? options.promptTemplate
+        : buildAgentDispatchPromptTemplate(issue, options.extraInstructions);
+      const prompt = resolveAgentDispatchPrompt(promptTemplate, {
+        worktreePath: ready.worktreePath,
+        repoPath: options.repoPath,
+      });
 
       const result = await executeChatTool(
         'spawn_agent',
@@ -406,6 +572,7 @@ export class LinearService {
       await this.assignmentSvc.patch(initial.linearIssueId, {
         status: spawnError ? 'failed' : 'running',
         executionId,
+        executionStatus: spawnError ? 'failed' : 'running',
         error: spawnError,
       });
       LinearService.issuesCache.clear();
@@ -481,4 +648,3 @@ const ISSUES_QUERY = `
     }
   }
 `;
-

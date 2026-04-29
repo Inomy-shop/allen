@@ -10,10 +10,15 @@
 import type { Collection, Db } from 'mongodb';
 
 export type TicketAssignmentStatus = 'manual' | 'pending' | 'running' | 'failed' | 'completed';
+export type TicketAssignmentTargetKind = 'agent' | 'workflow';
 
 export interface TicketAssignment {
   linearIssueId: string;
-  agentName: string;
+  agentName?: string;
+  targetKind?: TicketAssignmentTargetKind;
+  targetName?: string;
+  workflowId?: string;
+  workflowName?: string;
   assignedAt: Date;
   assignedBy: string;
   note?: string;
@@ -26,7 +31,8 @@ export interface TicketAssignment {
   workspaceId?: string;
   workspacePath?: string;
   executionId?: string;
-  error?: string;
+  executionStatus?: string | null;
+  error?: string | null;
   repoId?: string;
   branch?: string;
 }
@@ -54,6 +60,8 @@ export class TicketAssignmentService {
     const doc: TicketAssignment = {
       linearIssueId,
       agentName,
+      targetKind: 'agent',
+      targetName: agentName,
       assignedAt: now,
       assignedBy,
       status: 'manual',
