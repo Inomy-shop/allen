@@ -50,29 +50,33 @@ export function XTerminal({ workspaceId, terminalId = 'default', className, init
       fontFamily: "'JetBrainsMono Nerd Font', 'JetBrains Mono', 'Fira Code', 'SF Mono', Menlo, monospace",
       lineHeight: 1.3,
       letterSpacing: 0,
+      // Linear-night palette — matches the v2 dark-mode tokens (surface
+       // #16171B / accent #7170FF) so the terminal blends into the IDE
+       // shell. Terminals stay dark in both light and dark page themes
+       // since terminals are universally expected to be dark.
       theme: {
-        background: '#0d111c',
-        foreground: '#c9d1d9',
-        cursor: '#58a6ff',
-        cursorAccent: '#0d111c',
-        selectionBackground: '#264f7844',
-        selectionForeground: '#c9d1d9',
-        black: '#484f58',
-        red: '#ff7b72',
-        green: '#7ee787',
-        yellow: '#d29922',
-        blue: '#58a6ff',
-        magenta: '#bc8cff',
-        cyan: '#39d353',
-        white: '#c9d1d9',
-        brightBlack: '#6e7681',
-        brightRed: '#ffa198',
-        brightGreen: '#56d364',
-        brightYellow: '#e3b341',
-        brightBlue: '#79c0ff',
+        background: '#16171b',
+        foreground: '#c2c3c8',
+        cursor: '#7170ff',
+        cursorAccent: '#16171b',
+        selectionBackground: '#7170ff44',
+        selectionForeground: '#f4f4f5',
+        black: '#34353c',
+        red: '#f85555',
+        green: '#34c782',
+        yellow: '#f5ad3f',
+        blue: '#7170ff',
+        magenta: '#c084fc',
+        cyan: '#38bdf8',
+        white: '#c2c3c8',
+        brightBlack: '#5c5d63',
+        brightRed: '#ff7676',
+        brightGreen: '#5ad99c',
+        brightYellow: '#ffc35c',
+        brightBlue: '#8f8eff',
         brightMagenta: '#d2a8ff',
-        brightCyan: '#56d364',
-        brightWhite: '#f0f6fc',
+        brightCyan: '#56cdf6',
+        brightWhite: '#f4f4f5',
       },
       scrollback: 10000,
       allowProposedApi: true,
@@ -202,9 +206,9 @@ export function XTerminal({ workspaceId, terminalId = 'default', className, init
 
   const badge = (() => {
     if (status === 'connected') return null;
-    if (status === 'connecting') return { text: 'connecting…', cls: 'text-amber-400 bg-amber-400/10 border-amber-400/20' };
-    if (status === 'reconnecting') return { text: `reconnecting… (${attempt}/${MAX_RECONNECT_ATTEMPTS})`, cls: 'text-amber-400 bg-amber-400/10 border-amber-400/20' };
-    return { text: 'disconnected', cls: 'text-red-400 bg-red-400/10 border-red-400/20' };
+    if (status === 'connecting') return { text: 'connecting…', cls: 'text-accent-yellow bg-accent-yellow/10 border-accent-yellow/30' };
+    if (status === 'reconnecting') return { text: `reconnecting… (${attempt}/${MAX_RECONNECT_ATTEMPTS})`, cls: 'text-accent-yellow bg-accent-yellow/10 border-accent-yellow/30' };
+    return { text: 'disconnected', cls: 'text-accent-red bg-accent-red/10 border-accent-red/30' };
   })();
 
   return (

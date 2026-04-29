@@ -25,7 +25,7 @@ const ICON_MAP: Record<string, typeof GitBranch> = {
 const COLOR_MAP: Record<string, string> = {
   workflow: 'text-accent-blue',
   repo: 'text-green-400',
-  agent: 'text-purple-400',
+  agent: 'text-accent-purple',
 };
 
 const LABEL_MAP: Record<string, string> = {
@@ -153,13 +153,13 @@ export default function MentionAutocomplete({
   return (
     <div
       ref={listRef}
-      className="absolute bottom-full left-0 right-0 mb-1 bg-surface-100 border border-border/50 rounded-sm shadow-xl max-h-64 overflow-y-auto z-50"
+      className="absolute bottom-full left-0 right-0 mb-1 bg-surface-100 border border-app rounded-sm shadow-xl max-h-64 overflow-y-auto z-50"
     >
       {Object.entries(grouped).map(([type, items]) => {
         const Icon = ICON_MAP[type] || Users;
         return (
           <div key={type}>
-            <div className="px-3 py-1.5 text-[10px] font-label uppercase tracking-widest text-theme-muted border-b border-border/30">
+            <div className="px-3 py-1.5 overline border-b border-app">
               {LABEL_MAP[type] || type}
             </div>
             {items.map(item => {
@@ -172,7 +172,7 @@ export default function MentionAutocomplete({
                   className={`w-full flex items-center gap-2.5 px-3 py-2 text-left text-sm transition-colors ${
                     isSelected
                       ? 'bg-accent-blue/10 text-theme-primary'
-                      : 'text-theme-secondary hover:bg-surface-200/50 hover:text-theme-primary'
+                      : 'text-theme-secondary hover:bg-app-muted hover:text-theme-primary'
                   }`}
                   onMouseDown={e => {
                     e.preventDefault(); // Prevent blur

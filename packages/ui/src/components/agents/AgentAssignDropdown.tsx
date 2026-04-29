@@ -163,9 +163,9 @@ export default function AgentAssignDropdown({
             ? `inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[10px] font-mono transition-colors border ${
                 selected
                   ? 'bg-accent-blue/10 text-accent-blue border-accent-blue/30 hover:bg-accent-blue/20'
-                  : 'bg-surface-200/30 text-theme-muted border-border/40 hover:bg-surface-200/50'
+                  : 'bg-app-muted/50 text-theme-muted border-app hover:bg-app-muted'
               } disabled:opacity-50 disabled:cursor-not-allowed`
-            : `input w-full text-left flex items-center justify-between gap-2 cursor-pointer ${open ? 'border-accent-blue shadow-glow-blue' : ''} disabled:opacity-50 disabled:cursor-not-allowed`
+            : `input w-full text-left flex items-center justify-between gap-2 cursor-pointer ${open ? 'border-accent-blue' : ''} disabled:opacity-50 disabled:cursor-not-allowed`
         }
       >
         {selected ? (
@@ -205,7 +205,7 @@ export default function AgentAssignDropdown({
           }}
         >
           {/* Search */}
-          <div className="p-2 border-b border-border/60 shrink-0">
+          <div className="p-2 border-b border-app shrink-0">
             <div className="relative">
               <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-theme-subtle pointer-events-none" />
               <input
@@ -214,7 +214,7 @@ export default function AgentAssignDropdown({
                 value={query}
                 onChange={e => setQuery(e.target.value)}
                 placeholder="Search agents or teams…"
-                className="w-full text-xs pl-8 pr-7 py-1.5 rounded-md bg-surface-200/40 border border-border/50 text-theme-primary placeholder:text-theme-subtle focus:outline-none focus:border-accent-blue/50"
+                className="w-full text-xs pl-8 pr-7 py-1.5 rounded-md bg-app-muted border border-app text-theme-primary placeholder:text-theme-subtle focus:outline-none focus:border-accent-blue/50"
               />
               {query && (
                 <button
@@ -233,14 +233,14 @@ export default function AgentAssignDropdown({
           <div className="overflow-y-auto min-h-0 py-1">
             {allowClear && (
               <>
-                <div className="px-3 pt-2 pb-1 text-[9px] font-label uppercase tracking-widest text-theme-subtle">
+                <div className="px-3 pt-2 pb-1 overline">
                   No assignee
                 </div>
                 <button
                   type="button"
                   onClick={() => pick(null)}
                   className={`w-full text-left px-3 py-2 text-xs flex items-center gap-2 transition-colors ${
-                    value === null ? 'bg-accent-blue/10 text-accent-blue' : 'text-theme-muted hover:bg-surface-200/40'
+                    value === null ? 'bg-accent-blue/10 text-accent-blue' : 'text-theme-muted hover:bg-app-muted'
                   }`}
                 >
                   <X className="w-3 h-3 shrink-0" /> Clear assignment
@@ -260,7 +260,7 @@ export default function AgentAssignDropdown({
                 if (group.key === '__unassigned__') return null;
                 return (
                   <div key={group.key}>
-                    <div className="px-3 pt-3 pb-1 text-[9px] font-label uppercase tracking-widest text-theme-subtle">
+                    <div className="px-3 pt-3 pb-1 overline">
                       {group.title}
                     </div>
                     <div className="px-3 py-1.5 text-[10px] text-accent-yellow/80 italic font-body">
@@ -271,7 +271,7 @@ export default function AgentAssignDropdown({
               }
               return (
                 <div key={group.key}>
-                  <div className="px-3 pt-3 pb-1 text-[9px] font-label uppercase tracking-widest text-theme-subtle">
+                  <div className="px-3 pt-3 pb-1 overline">
                     {group.title}
                   </div>
                   {group.lead && (
@@ -301,7 +301,7 @@ export default function AgentAssignDropdown({
                       type="button"
                       onClick={() => pick(agent.name)}
                       className={`w-full text-left pl-6 pr-3 py-1.5 text-xs flex items-center gap-2 transition-colors ${
-                        value === agent.name ? 'bg-accent-blue/10 text-accent-blue' : 'text-theme-secondary hover:bg-surface-200/40'
+                        value === agent.name ? 'bg-accent-blue/10 text-accent-blue' : 'text-theme-secondary hover:bg-app-muted'
                       }`}
                     >
                       <div

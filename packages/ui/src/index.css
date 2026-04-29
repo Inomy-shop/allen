@@ -1,342 +1,393 @@
+/* ================================================================
+   ALLEN UI · v2 (Linear-clean direction)
+   ----------------------------------------------------------------
+   Surface: deep-navy → near-white. Light theme by default.
+   Accent: cyan #00D4FF → violet #5E6AD2 (single-accent rule).
+   Type:   Inter + JetBrains Mono → Inter Tight + Geist Mono.
+   Chrome: clip-path corners, scan-lines, glow shadows REMOVED.
+           Replaced by 1px borders, 6/10/14px radius, soft shadow.
+   Buttons: uppercase tracking-wider → sentence-case, tighter.
+   Status: saturated colors retained — only used for run state.
+
+   Backwards-compat: every legacy class name is preserved as a no-op
+   so existing JSX keeps compiling.
+   ================================================================ */
+
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
 
 @layer base {
   :root {
-    /* RGB channel values for Tailwind opacity support */
-    --color-surface: 10 14 26;
-    --color-surface-100: 17 23 48;
-    --color-surface-200: 24 30 56;
-    --color-border: 30 39 64;
-    --color-text-primary: 248 250 252;
-    --color-text-secondary: 203 213 225;
-    --color-text-muted: 148 163 184;
-    --color-text-subtle: 100 116 139;
-    --color-accent: 0 212 255;
-    --color-accent-green: 0 255 136;
-    --color-accent-red: 255 51 102;
-    --color-accent-yellow: 255 170 0;
-    --color-accent-purple: 168 85 247;
-    --color-terminal-chrome: 107 114 128;
-    /* All edges share one muted gray so the graph reads as a calm
-       visual layer. Edges recede by default; selecting a node
-       promotes its connected edges to the theme accent. Type is still
-       distinguishable without color: conditional carries a label pill;
-       retry stays dashed. */
-    --color-flow-edge-default: 107 114 128;      /* #6b7280 — gray-500 */
-    --color-flow-edge-conditional: 107 114 128;  /* same gray, distinguished by label */
-    --color-flow-edge-retry: 107 114 128;        /* same gray, distinguished by dash */
-    --color-editor-background: 20 22 32;
-    --color-editor-line-highlight: 26 29 43;
-    --color-editor-gutter: 15 17 23;
-    --color-mermaid-line: 75 85 99;
-    --color-mermaid-node-border: 75 85 99;
-    --color-mermaid-cluster-bg: 34 37 54;
-    --color-mermaid-main-bg: 26 29 43;
-    --color-mermaid-edge-label-bg: 26 29 43;
-    /* Hex values for non-Tailwind usage (gradients, box-shadow, etc.) */
-    --accent-hex: #00d4ff;
-    --accent-red-hex: #ff3366;
-    --font-heading: 'Inter', sans-serif;
-    --font-body: 'Inter', sans-serif;
-    --font-mono: 'JetBrains Mono', monospace;
-    --font-label: 'Inter', sans-serif;
+    /* Light (D2 / Linear-clean) — default */
+    --color-surface:        251 251 250;   /* #FBFBFA  page bg          */
+    --color-surface-100:    255 255 255;   /* #FFFFFF  card surface     */
+    --color-surface-200:    244 244 242;   /* #F4F4F2  muted band       */
+    --color-surface-300:    237 237 235;   /* #EDEDEB  sunken band      */
+
+    --color-border:         232 231 228;   /* #E8E7E4  hairline         */
+    --color-border-strong:  216 214 210;   /* #D8D6D2  emphasis hairline*/
+
+    --color-text-primary:    24  24  26;   /* #18181A  ink              */
+    --color-text-secondary:  74  74  79;   /* #4A4A4F  ink-2            */
+    --color-text-muted:     138 138 143;   /* #8A8A8F  ink-3 / muted    */
+    --color-text-subtle:    184 184 188;   /* #B8B8BC  ink-4 / disabled */
+
+    --color-terminal-chrome: 138 138 143;  /* #8A8A8F                   */
+
+    /* Single brand accent — violet */
+    --color-accent:          94 106 210;   /* #5E6AD2  primary CTA      */
+    --color-accent-soft:    238 240 251;   /* #EEF0FB  accent fill 100  */
+    --color-accent-hover:    79  91 199;   /* #4F5BC7  600              */
+
+    /* Status — reserved for run state (pills, dots) */
+    --color-accent-green:     5 150 105;   /* #059669  ok / completed   */
+    --color-accent-red:     220  38  38;   /* #DC2626  failed           */
+    --color-accent-yellow:  217 119   6;   /* #D97706  warn / queued    */
+    --color-accent-purple:  168  85 247;   /* #A855F7  human-in-loop    */
+    --color-accent-cyan:      2 132 199;   /* #0284C7  running / info   */
+    --color-accent-orange:  234  88  12;   /* #EA580C  retry            */
+
+    /* Graph edges — recede by default */
+    --color-flow-edge-default:     184 184 188;
+    --color-flow-edge-conditional: 184 184 188;
+    --color-flow-edge-retry:       184 184 188;
+
+    /* Editor (Monaco) */
+    --color-editor-background:    255 255 255;
+    --color-editor-line-highlight:248 249 252;
+    --color-editor-gutter:        251 251 250;
+
+    /* Mermaid diagrams */
+    --color-mermaid-line:           184 184 188;
+    --color-mermaid-node-border:    216 214 210;
+    --color-mermaid-cluster-bg:     244 244 242;
+    --color-mermaid-main-bg:        255 255 255;
+    --color-mermaid-edge-label-bg: 255 255 255;
+
+    /* Hex aliases for non-Tailwind use (gradients, focus rings, etc.) */
+    --accent-hex:        #5E6AD2;
+    --accent-soft-hex:   #EEF0FB;
+    --accent-red-hex:    #DC2626;
+
+    /* Type stack */
+    --font-heading: 'Inter Tight', 'Inter', system-ui, sans-serif;
+    --font-body:    'Inter Tight', 'Inter', system-ui, sans-serif;
+    --font-mono:    'Geist Mono', 'JetBrains Mono', ui-monospace, monospace;
+    --font-label:   'Geist Mono', 'JetBrains Mono', ui-monospace, monospace;
+
+    /* Radii */
+    --radius-sm: 4px;
+    --radius:    6px;
+    --radius-lg: 10px;
+    --radius-xl: 14px;
+
+    /* Elevation */
+    --shadow-sm:      0 1px 2px rgb(0 0 0 / 0.04), 0 1px 1px rgb(0 0 0 / 0.04);
+    --shadow-popover: 0 8px 24px rgb(24 24 26 / 0.08), 0 2px 6px rgb(24 24 26 / 0.06);
+
+    /* Focus ring */
+    --focus-ring: 0 0 0 3px rgb(var(--color-accent) / 0.18);
+  }
+
+  /* Dark — Linear-night (calibrated) */
+  .dark {
+    --color-surface:         15  16  20;   /* #0F1014  page bg          */
+    --color-surface-100:     22  23  27;   /* #16171B  card surface     */
+    --color-surface-200:     28  29  34;   /* #1C1D22  muted band       */
+    --color-surface-300:     35  36  42;   /* #23242A  sunken / hover   */
+
+    --color-border:          38  39  45;   /* #26272D  hairline         */
+    --color-border-strong:   52  53  60;   /* #34353C  emphasis         */
+
+    --color-text-primary:   244 244 245;   /* #F4F4F5                   */
+    --color-text-secondary: 194 195 200;   /* #C2C3C8                   */
+    --color-text-muted:     143 143 149;   /* #8F8F95                   */
+    --color-text-subtle:     92  93  99;   /* #5C5D63                   */
+
+    --color-terminal-chrome: 143 143 149;
+
+    --color-accent:         113 112 255;   /* #7170FF  brighter on dark */
+    --color-accent-soft:     27  26  60;   /* tinted fill on dark       */
+    --color-accent-hover:    94  91 255;   /* #5E5BFF                   */
+
+    /* Status — desaturated lift for AA on dark */
+    --color-accent-green:    52 199 130;   /* #34C782                   */
+    --color-accent-red:     248  85  85;   /* #F85555                   */
+    --color-accent-yellow:  245 173  63;   /* #F5AD3F                   */
+    --color-accent-purple:  192 132 252;   /* #C084FC                   */
+    --color-accent-cyan:     56 189 248;   /* #38BDF8                   */
+    --color-accent-orange:  251 146  60;   /* #FB923C                   */
+
+    --color-flow-edge-default:     92  93  99;
+    --color-flow-edge-conditional: 92  93  99;
+    --color-flow-edge-retry:       92  93  99;
+
+    --color-editor-background:    22 23 27;
+    --color-editor-line-highlight:28 29 34;
+    --color-editor-gutter:        15 16 20;
+
+    --color-mermaid-line:          92  93  99;
+    --color-mermaid-node-border:   52  53  60;
+    --color-mermaid-cluster-bg:    28  29  34;
+    --color-mermaid-main-bg:       22  23  27;
+    --color-mermaid-edge-label-bg: 22  23  27;
+
+    --accent-hex:      #7170FF;
+    --accent-soft-hex: #1B1A3C;
+    --accent-red-hex:  #F85555;
   }
 
   body {
-    @apply font-body;
+    @apply font-body antialiased;
     background-color: rgb(var(--color-surface));
     color: rgb(var(--color-text-primary));
+    font-feature-settings: 'cv11', 'ss01';
+    letter-spacing: -0.005em;
+    font-size: 13px;
+    line-height: 1.55;
   }
 
   h1, h2, h3, h4, h5, h6 {
-    @apply font-heading tracking-wide;
+    @apply font-heading;
+    letter-spacing: -0.025em;
   }
 
-  /* Sci-fi scrollbars */
-  ::-webkit-scrollbar {
-    width: 5px;
-    height: 5px;
+  /* Calm scrollbars */
+  ::-webkit-scrollbar         { width: 10px; height: 10px; }
+  ::-webkit-scrollbar-track   { background: transparent; }
+  ::-webkit-scrollbar-thumb   {
+    background: rgb(var(--color-border-strong));
+    border-radius: 99px;
+    border: 2px solid rgb(var(--color-surface));
   }
-  ::-webkit-scrollbar-track {
-    @apply bg-surface;
-  }
-  ::-webkit-scrollbar-thumb {
-    @apply bg-accent-blue/30 rounded-full;
-    border: 1px solid rgb(var(--color-accent) / 0.1);
-  }
-  ::-webkit-scrollbar-thumb:hover {
-    @apply bg-accent-blue/50;
-  }
+  ::-webkit-scrollbar-thumb:hover { background: rgb(var(--color-text-muted)); }
 
-  /* Terminal-style inputs */
-  input, textarea, select {
-    @apply font-body;
-  }
-
-  /* Global scan-line overlay for main layout */
-  .scan-lines::after {
-    content: '';
-    position: absolute;
-    inset: 0;
-    background: repeating-linear-gradient(
-      0deg,
-      transparent,
-      transparent 2px,
-      rgb(var(--color-accent) / 0.015) 2px,
-      rgb(var(--color-accent) / 0.015) 4px
-    );
-    pointer-events: none;
-    z-index: 50;
-  }
-}
-
-@layer components {
-  /* ─── Cards: Sci-fi panel style ─── */
-  .card {
-    @apply bg-surface-100/80 backdrop-blur-sm border border-border/60 rounded-sm relative;
-    clip-path: polygon(0 0, calc(100% - 12px) 0, 100% 12px, 100% 100%, 4px 100%, 0 calc(100% - 4px));
-  }
-  .card::before {
-    content: '';
-    position: absolute;
-    top: 0;
-    left: 0;
-    right: 0;
-    height: 1px;
-    background: linear-gradient(90deg, transparent, rgb(var(--color-accent) / 0.4), transparent);
-  }
-
-  /* ─── Buttons: Robotic / clipped corners ─── */
-  .btn {
-    @apply font-label uppercase tracking-wider text-xs font-semibold;
-    @apply px-4 py-2 rounded-sm border;
-    @apply transition-all duration-200 cursor-pointer;
-    @apply disabled:opacity-40 disabled:cursor-not-allowed disabled:shadow-none;
-    clip-path: polygon(0 0, calc(100% - 6px) 0, 100% 6px, 100% 100%, 2px 100%, 0 calc(100% - 2px));
-  }
-
-  .btn-primary {
-    @apply btn bg-accent-blue/15 border-accent-blue/50 text-accent-blue;
-    @apply hover:bg-accent-blue/25 hover:shadow-glow-blue hover:border-accent-blue/80;
-    @apply active:scale-[0.97];
-    text-shadow: 0 0 8px rgb(var(--color-accent) / 0.5);
-  }
-
-  .btn-danger {
-    @apply btn bg-accent-red/15 border-accent-red/50 text-accent-red;
-    @apply hover:bg-accent-red/25 hover:shadow-glow-red hover:border-accent-red/80;
-    @apply active:scale-[0.97];
-    text-shadow: 0 0 8px rgb(var(--color-accent-red) / 0.5);
-  }
-
-  .btn-ghost {
-    @apply btn bg-transparent;
-    border-color: rgb(var(--color-border) / 0.35);
-    color: rgb(var(--color-text-secondary));
-    @apply hover:text-accent-blue hover:bg-accent-blue/5;
-    @apply hover:border-accent-blue/40;
-    @apply active:scale-[0.97];
-  }
-
-  /* ─── Inputs: Terminal style with bottom accent ─── */
-  .input {
-    @apply bg-surface-200/80 border-0 border-b-2 border-accent-blue/30 rounded-none px-3 py-2 text-sm font-body;
-    @apply focus:outline-none focus:border-accent-blue focus:shadow-glow-blue;
-    @apply transition-all duration-200;
+  /* Selection */
+  ::selection {
+    background: rgb(var(--color-accent) / 0.25);
     color: rgb(var(--color-text-primary));
   }
 
-  /* ─── Selects: Themed dropdowns ─── */
+  /* v1 had a global .scan-lines overlay — kept as no-op so existing JSX
+     with className="scan-lines" doesn't blow up. */
+  .scan-lines::after { content: none; }
+
+  input, textarea, select { @apply font-body; }
+}
+
+@layer components {
+  /* ─── Cards ─── */
+  .card {
+    @apply bg-surface-100 border border-border rounded-lg;
+  }
+  .card::before { content: none; }
+
+  .card-hover {
+    @apply card transition-colors;
+  }
+  .card-hover:hover {
+    border-color: rgb(var(--color-border-strong));
+    background: rgb(var(--color-surface-100));
+    box-shadow: var(--shadow-sm);
+  }
+
+  /* ─── Buttons ─── */
+  .btn {
+    @apply font-body font-medium text-[13px] tracking-tight;
+    @apply inline-flex items-center gap-1.5 px-3 py-1.5 rounded;
+    @apply border transition-colors cursor-pointer;
+    @apply disabled:opacity-50 disabled:cursor-not-allowed;
+    line-height: 1.4;
+  }
+  .btn:focus-visible { outline: none; box-shadow: var(--focus-ring); }
+
+  .btn-primary {
+    @apply btn text-white;
+    background: rgb(var(--color-accent));
+    border-color: rgb(var(--color-accent-hover));
+  }
+  .btn-primary:hover { background: rgb(var(--color-accent-hover)); }
+
+  .btn-secondary {
+    @apply btn bg-surface-100 text-theme-primary border-border;
+  }
+  .btn-secondary:hover { background: rgb(var(--color-surface-200)); }
+
+  .btn-ghost {
+    @apply btn bg-transparent border-transparent text-theme-secondary;
+  }
+  .btn-ghost:hover {
+    background: rgb(var(--color-surface-200));
+    color: rgb(var(--color-text-primary));
+  }
+
+  .btn-danger {
+    @apply btn text-white;
+    background: rgb(var(--color-accent-red));
+    border-color: rgb(var(--color-accent-red));
+  }
+  .btn-danger:hover { background: #B91C1C; }
+
+  .btn-sm { @apply px-2 py-0.5 text-[12px]; }
+  .btn-lg { @apply px-4 py-2 text-[14px]; }
+
+  /* ─── Inputs ─── */
+  .input {
+    @apply w-full bg-surface-100 border border-border rounded;
+    @apply px-3 py-2 text-[13px] font-body;
+    @apply transition-colors;
+    color: rgb(var(--color-text-primary));
+  }
+  .input::placeholder { color: rgb(var(--color-text-muted)); }
+  .input:focus {
+    outline: none;
+    border-color: rgb(var(--color-accent));
+    box-shadow: var(--focus-ring);
+  }
+
   select.input {
     appearance: none;
     -webkit-appearance: none;
-    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%239ca3af' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%238A8A8F' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
     background-repeat: no-repeat;
     background-position: right 10px center;
     padding-right: 32px;
     cursor: pointer;
   }
-  select.input:focus {
-    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%2300d4ff' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
-  }
   select.input option {
-    background: rgb(var(--color-surface-200));
-    color: rgb(var(--color-accent) / 0.9);
-    padding: 8px;
-  }
-  select.input option:checked {
-    background: rgb(var(--color-accent) / 0.15);
+    background: rgb(var(--color-surface-100));
+    color: rgb(var(--color-text-primary));
   }
 
-  /* ─── Badges: Glowing status indicators ─── */
+  /* ─── Badges / pills ─── */
   .badge {
-    @apply inline-flex items-center px-2.5 py-0.5 rounded-sm text-xs font-label font-semibold uppercase tracking-wider;
+    @apply inline-flex items-center gap-1 px-2 py-0.5 rounded-full;
+    @apply text-[11.5px] font-mono font-medium;
+    text-transform: none;
+    letter-spacing: 0;
+  }
+  .badge-ok    { background: rgb(var(--color-accent-green) / 0.15); color: rgb(var(--color-accent-green)); }
+  .badge-info  { background: rgb(var(--color-accent-cyan) / 0.15); color: rgb(var(--color-accent-cyan)); }
+  .badge-warn  { background: rgb(var(--color-accent-yellow) / 0.15); color: rgb(var(--color-accent-yellow)); }
+  .badge-err   { background: rgb(var(--color-accent-red) / 0.15); color: rgb(var(--color-accent-red)); }
+  .badge-human { background: rgb(var(--color-accent-purple) / 0.15); color: rgb(var(--color-accent-purple)); }
+  .badge-muted { background: rgb(var(--color-surface-200)); color: rgb(var(--color-text-muted)); }
+
+  /* ─── Status dots ─── */
+  .dot { @apply inline-block w-1.5 h-1.5 rounded-full mr-1.5 align-middle; }
+  .dot-ok   { background: rgb(var(--color-accent-green)); }
+  .dot-run  { background: rgb(var(--color-accent-cyan)); }
+  .dot-warn { background: rgb(var(--color-accent-yellow)); }
+  .dot-err  { background: rgb(var(--color-accent-red)); }
+  .dot-idle { background: rgb(var(--color-text-subtle)); }
+
+  /* ─── Status glows (legacy names kept; no-ops in v2) ─── */
+  .glow-running   { animation: pulse-running 2s ease-in-out infinite; }
+  .glow-completed { /* no-op — completed state shown via badge color */ }
+  .glow-failed    { /* no-op — failed state shown via badge color */ }
+
+  @keyframes pulse-running {
+    0%,100% { box-shadow: 0 0 0 0 rgb(var(--color-accent-cyan) / 0.45); }
+    50%     { box-shadow: 0 0 0 5px rgb(var(--color-accent-cyan) / 0); }
   }
 
-  /* ─── Status glow effects ─── */
-  .glow-running {
-    @apply shadow-glow-blue;
-    animation: pulse-glow 2s ease-in-out infinite;
+  /* Legacy keyframes preserved as no-ops for existing className refs */
+  @keyframes pulse-glow {
+    0%, 100% { opacity: 1; }
+    50%      { opacity: 0.6; }
   }
-  .glow-completed {
-    @apply shadow-glow-green;
-  }
-  .glow-failed {
-    @apply shadow-glow-red;
+  @keyframes scan-line {
+    0%   { transform: translateY(-100%); }
+    100% { transform: translateY(100%); }
   }
 
-  /* ─── Grid background pattern ─── */
+  /* ─── Grid background ─── kept but lighter ─── */
   .grid-bg {
     background-image:
-      linear-gradient(rgb(var(--color-accent) / 0.03) 1px, transparent 1px),
-      linear-gradient(90deg, rgb(var(--color-accent) / 0.03) 1px, transparent 1px);
-    background-size: 40px 40px;
+      linear-gradient(rgb(var(--color-border) / 0.6) 1px, transparent 1px),
+      linear-gradient(90deg, rgb(var(--color-border) / 0.6) 1px, transparent 1px);
+    background-size: 32px 32px;
   }
 
-  /* ─── Chat markdown body ─── */
-  .markdown-body {
-    word-break: break-word;
-  }
-  .markdown-body > *:first-child {
-    margin-top: 0;
-  }
-  .markdown-body > *:last-child {
-    margin-bottom: 0;
+  /* ─── Section / overline label ─── */
+  .overline {
+    @apply font-mono text-[11px] font-medium uppercase tracking-wider;
+    color: rgb(var(--color-text-muted));
+    letter-spacing: 0.05em;
   }
 
-  /* ─── Prose typography for markdown rendering (execution responses, docs) ─── */
-  .prose-allen .markdown-body h1 {
-    font-size: 1.25rem;
-    font-weight: 700;
-    margin-top: 1.5rem;
-    margin-bottom: 0.5rem;
-    color: rgb(var(--color-text-primary));
-    letter-spacing: 0.01em;
-  }
-  .prose-allen .markdown-body h2 {
-    font-size: 1.1rem;
-    font-weight: 600;
-    margin-top: 1.25rem;
-    margin-bottom: 0.4rem;
-    color: rgb(var(--color-text-primary));
-  }
-  .prose-allen .markdown-body h3 {
-    font-size: 0.95rem;
-    font-weight: 600;
-    margin-top: 1rem;
-    margin-bottom: 0.3rem;
-    color: rgb(var(--color-text-primary));
-  }
+  /* ─── Markdown body ─── */
+  .markdown-body { word-break: break-word; }
+  .markdown-body > *:first-child { margin-top: 0; }
+  .markdown-body > *:last-child  { margin-bottom: 0; }
+
+  .prose-allen .markdown-body h1 { font-size: 1.25rem; font-weight: 600; margin: 1.5rem 0 0.5rem; color: rgb(var(--color-text-primary)); letter-spacing: -0.02em; }
+  .prose-allen .markdown-body h2 { font-size: 1.10rem; font-weight: 600; margin: 1.25rem 0 0.4rem; color: rgb(var(--color-text-primary)); }
+  .prose-allen .markdown-body h3 { font-size: 0.95rem; font-weight: 600; margin: 1rem 0 0.3rem; color: rgb(var(--color-text-primary)); }
   .prose-allen .markdown-body h4,
   .prose-allen .markdown-body h5,
   .prose-allen .markdown-body h6 {
-    font-size: 0.85rem;
-    font-weight: 600;
-    margin-top: 0.75rem;
-    margin-bottom: 0.25rem;
+    font-size: 0.85rem; font-weight: 600;
+    margin-top: 0.75rem; margin-bottom: 0.25rem;
     color: rgb(var(--color-text-secondary));
   }
-  .prose-allen .markdown-body p {
-    margin-top: 0.4rem;
-    margin-bottom: 0.4rem;
-    line-height: 1.65;
-  }
+  .prose-allen .markdown-body p  { margin: 0.4rem 0; line-height: 1.65; color: rgb(var(--color-text-secondary)); }
   .prose-allen .markdown-body ul,
-  .prose-allen .markdown-body ol {
-    margin-top: 0.3rem;
-    margin-bottom: 0.3rem;
-    padding-left: 1.5rem;
-  }
-  .prose-allen .markdown-body ul {
-    list-style: disc;
-  }
-  .prose-allen .markdown-body ol {
-    list-style: decimal;
-  }
-  .prose-allen .markdown-body li {
-    margin-top: 0.15rem;
-    margin-bottom: 0.15rem;
-    line-height: 1.55;
-  }
-  .prose-allen .markdown-body strong {
-    font-weight: 600;
-    color: rgb(var(--color-text-primary));
-  }
+  .prose-allen .markdown-body ol { margin: 0.3rem 0; padding-left: 1.5rem; }
+  .prose-allen .markdown-body ul { list-style: disc; }
+  .prose-allen .markdown-body ol { list-style: decimal; }
+  .prose-allen .markdown-body li { margin: 0.15rem 0; line-height: 1.55; }
+  .prose-allen .markdown-body strong { font-weight: 600; color: rgb(var(--color-text-primary)); }
   .prose-allen .markdown-body code:not(pre code) {
-    font-size: 0.85em;
-    padding: 0.15em 0.35em;
-    border-radius: 3px;
-    background: rgb(var(--color-surface-200) / 0.6);
-    color: rgb(var(--color-text-secondary));
-  }
-  .prose-allen .markdown-body hr {
-    border: none;
-    border-top: 1px solid rgb(var(--color-border) / 0.3);
-    margin: 1rem 0;
-  }
-  .prose-allen .markdown-body table {
-    border-collapse: collapse;
-    margin: 0.5rem 0;
-    font-size: 0.8rem;
-    width: 100%;
-  }
-  .prose-allen .markdown-body th,
-  .prose-allen .markdown-body td {
-    border: 1px solid rgb(var(--color-border) / 0.3);
-    padding: 0.35rem 0.6rem;
-    text-align: left;
-  }
-  .prose-allen .markdown-body th {
-    background: rgb(var(--color-surface-200) / 0.4);
-    font-weight: 600;
+    font-size: 0.85em; padding: 0.15em 0.35em; border-radius: 3px;
+    background: rgb(var(--color-surface-200));
     color: rgb(var(--color-text-primary));
+    font-family: var(--font-mono);
+  }
+  .prose-allen .markdown-body hr { border: none; border-top: 1px solid rgb(var(--color-border)); margin: 1rem 0; }
+  .prose-allen .markdown-body table { border-collapse: collapse; margin: 0.5rem 0; font-size: 0.8rem; width: 100%; }
+  .prose-allen .markdown-body th,
+  .prose-allen .markdown-body td { border: 1px solid rgb(var(--color-border)); padding: 0.35rem 0.6rem; text-align: left; }
+  .prose-allen .markdown-body th { background: rgb(var(--color-surface-200)); font-weight: 600; color: rgb(var(--color-text-primary)); }
+
+  /* ─── Chat message entry ─── */
+  .al-msg-enter { animation: al-msg-enter 0.3s ease-out; }
+  @keyframes al-msg-enter {
+    from { opacity: 0; transform: translateY(0.5rem); }
+    to   { opacity: 1; transform: translateY(0); }
   }
 
-  /* ─── Chat message entry animation ─── */
-  .al-msg-enter {
-    animation: al-msg-enter 0.3s ease-out;
+  /* ─── Agent thinking ─── softer than v1 ─── */
+  .al-agent-thinking { animation: al-agent-pulse 1.6s ease-in-out infinite; }
+  @keyframes al-agent-pulse {
+    0%,100% { opacity: 0.55; }
+    50%     { opacity: 1; }
   }
-
-  /* ─── Agent icon streaming animation ─── */
-  .al-agent-thinking {
-    animation: al-agent-glow 2s ease-in-out infinite, al-agent-spin 3s linear infinite;
+  /* Legacy keyframes referenced by v1 components — kept as no-ops */
+  @keyframes al-agent-glow {
+    0%, 100% { filter: none; }
+    50%      { filter: none; }
+  }
+  @keyframes al-agent-spin {
+    0%, 100% { transform: none; }
   }
 }
 
 @layer utilities {
-  .text-theme-primary {
-    color: rgb(var(--color-text-primary));
-  }
+  .text-theme-primary   { color: rgb(var(--color-text-primary)); }
+  .text-theme-secondary { color: rgb(var(--color-text-secondary)); }
+  .text-theme-muted     { color: rgb(var(--color-text-muted)); }
+  .text-theme-subtle    { color: rgb(var(--color-text-subtle)); }
 
-  .text-theme-secondary {
-    color: rgb(var(--color-text-secondary));
-  }
+  .bg-app           { background: rgb(var(--color-surface)); }
+  .bg-app-card      { background: rgb(var(--color-surface-100)); }
+  .bg-app-muted     { background: rgb(var(--color-surface-200)); }
+  .bg-app-sunken    { background: rgb(var(--color-surface-300)); }
 
-  .text-theme-muted {
-    color: rgb(var(--color-text-muted));
-  }
+  .border-app       { border-color: rgb(var(--color-border)); }
+  .border-app-strong{ border-color: rgb(var(--color-border-strong)); }
 
-  .text-theme-subtle {
-    color: rgb(var(--color-text-subtle));
-  }
-}
-
-@keyframes al-msg-enter {
-  from { opacity: 0; transform: translateY(0.5rem); }
-  to { opacity: 1; transform: translateY(0); }
-}
-
-@keyframes al-agent-glow {
-  0%, 100% { filter: drop-shadow(0 0 2px rgb(var(--color-accent) / 0.3)); }
-  50% { filter: drop-shadow(0 0 8px rgb(var(--color-accent) / 0.6)); }
-}
-
-@keyframes al-agent-spin {
-  0% { transform: rotate(0deg) scale(1); }
-  25% { transform: rotate(5deg) scale(1.05); }
-  50% { transform: rotate(0deg) scale(1); }
-  75% { transform: rotate(-5deg) scale(1.05); }
-  100% { transform: rotate(0deg) scale(1); }
+  .shadow-popover   { box-shadow: var(--shadow-popover); }
+  .ring-focus       { box-shadow: var(--focus-ring); }
 }

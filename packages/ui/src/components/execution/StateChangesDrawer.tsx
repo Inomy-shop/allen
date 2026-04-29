@@ -35,14 +35,14 @@ export default function StateChangesDrawer({ executionId, open, onClose }: Props
         onClick={onClose}
       />
       <aside
-        className="absolute top-0 right-0 h-full w-full sm:w-[560px] max-w-full bg-surface-50 border-l border-border/40 shadow-2xl flex flex-col animate-in slide-in-from-right duration-200"
+        className="absolute top-0 right-0 h-full w-full sm:w-[560px] max-w-full bg-surface-50 border-l border-app shadow-2xl flex flex-col animate-in slide-in-from-right duration-200"
         onClick={(e) => e.stopPropagation()}
       >
-        <div className="flex items-center justify-between px-5 py-3.5 border-b border-border/20 shrink-0">
-          <h3 className="font-heading text-sm text-theme-primary tracking-wider uppercase">State Changes</h3>
+        <div className="flex items-center justify-between px-5 py-3.5 border-b border-app shrink-0">
+          <h3 className="text-[14px] font-medium text-theme-primary tracking-tight">State Changes</h3>
           <button
             onClick={onClose}
-            className="p-1 rounded-md hover:bg-surface-200/60 text-theme-muted hover:text-theme-secondary transition-colors"
+            className="p-1 rounded-md hover:bg-app-muted text-theme-muted hover:text-theme-secondary transition-colors"
             title="Close"
           >
             <XIcon className="w-4 h-4" />

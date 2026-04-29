@@ -78,7 +78,7 @@ const statusColors: Record<string, string> = {
 
 function StatusBadge({ status }: { status: string | null }) {
   if (!status) return null;
-  const cls = statusColors[status] ?? 'bg-surface-200/60 text-theme-muted border-border/30';
+  const cls = statusColors[status] ?? 'bg-app-muted text-theme-muted border-app';
   return <span className={`text-[10px] px-1.5 py-0.5 rounded-sm font-mono uppercase border ${cls}`}>{status}</span>;
 }
 
@@ -102,7 +102,7 @@ function ToggleSwitch({ enabled, onChange }: { enabled: boolean; onChange: () =>
       onClick={onChange}
       title={enabled ? 'Disable' : 'Enable'}
       className={`relative inline-flex h-5 w-9 shrink-0 cursor-pointer rounded-full transition-colors duration-200 ease-in-out focus:outline-none ${
-        enabled ? 'bg-accent-blue' : 'bg-surface-200/40'
+        enabled ? 'bg-accent-blue' : 'bg-app-muted'
       }`}
     >
       <span
@@ -126,16 +126,16 @@ function HistoryDialog({ job, onClose }: { job: CronJob; onClose: () => void }) 
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-md">
-      <div className="card w-full max-w-2xl overflow-hidden shadow-glow-blue/20 animate-in fade-in zoom-in-95 duration-200 max-h-[80vh] flex flex-col">
+      <div className="card w-full max-w-2xl overflow-hidden shadow-popover animate-in fade-in zoom-in-95 duration-200 max-h-[80vh] flex flex-col">
         {/* Header */}
-        <div className="px-6 py-5 border-b border-border/60">
+        <div className="px-6 py-5 border-b border-app">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-3">
-              <div className="w-10 h-10 rounded-sm bg-accent-blue/10 border border-accent-blue/30 flex items-center justify-center">
+              <div className="w-10 h-10 rounded-sm bg-accent-soft flex items-center justify-center">
                 <History className="w-5 h-5 text-accent-blue" />
               </div>
               <div>
-                <h2 className="font-heading text-sm font-bold text-theme-primary tracking-wider uppercase">Run History</h2>
+                <h2 className="text-[14px] font-semibold text-theme-primary tracking-tight">Run History</h2>
                 <p className="text-[11px] text-theme-muted font-mono">{job.displayName}</p>
               </div>
             </div>
@@ -159,13 +159,13 @@ function HistoryDialog({ job, onClose }: { job: CronJob; onClose: () => void }) 
             </div>
           )}
           {runs.map(r => (
-            <div key={r._id} className="flex items-start gap-3 py-3 border-b border-border/20 last:border-0">
+            <div key={r._id} className="flex items-start gap-3 py-3 border-b border-app last:border-0">
               <div className="w-16 shrink-0 pt-0.5"><StatusBadge status={r.status} /></div>
               <div className="flex-1 min-w-0">
                 <div className="flex items-center gap-3 text-[11px]">
                   <span className="text-theme-secondary font-mono">{new Date(r.startedAt).toLocaleString()}</span>
                   <span className={`text-[10px] px-1.5 py-0.5 rounded-sm font-mono uppercase border ${
-                    r.triggeredBy === 'manual' ? 'bg-accent-yellow/10 text-accent-yellow border-accent-yellow/20' : 'bg-surface-200/40 text-theme-subtle border-border/20'
+                    r.triggeredBy === 'manual' ? 'bg-accent-yellow/10 text-accent-yellow border-accent-yellow/20' : 'bg-app-muted text-theme-subtle border-app'
                   }`}>{r.triggeredBy}</span>
                   {r.durationMs != null && <span className="text-theme-subtle font-mono">{(r.durationMs / 1000).toFixed(1)}s</span>}
                 </div>
@@ -186,7 +186,7 @@ function HistoryDialog({ job, onClose }: { job: CronJob; onClose: () => void }) 
         </div>
 
         {/* Footer */}
-        <div className="flex items-center gap-3 px-6 py-4 border-t border-border/60 bg-surface-50/50">
+        <div className="flex items-center gap-3 px-6 py-4 border-t border-app bg-app-card/50">
           <span className="text-[11px] text-theme-subtle font-mono">{runs.length} run{runs.length !== 1 ? 's' : ''}</span>
           <div className="flex-1" />
           <button onClick={onClose} className="btn-ghost text-xs">Close</button>
@@ -285,16 +285,16 @@ function CronFormDialog({ job, open, onClose, onSaved }: { job: CronJob | null; 
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-md">
-      <div className="card w-full max-w-lg overflow-hidden shadow-glow-blue/20 animate-in fade-in zoom-in-95 duration-200 max-h-[90vh] flex flex-col">
+      <div className="card w-full max-w-lg overflow-hidden shadow-popover animate-in fade-in zoom-in-95 duration-200 max-h-[90vh] flex flex-col">
         {/* Header */}
-        <div className="px-6 py-5 border-b border-border/60">
+        <div className="px-6 py-5 border-b border-app">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-3">
-              <div className="w-10 h-10 rounded-sm bg-accent-blue/10 border border-accent-blue/30 flex items-center justify-center">
+              <div className="w-10 h-10 rounded-sm bg-accent-soft flex items-center justify-center">
                 {isEdit ? <Pencil className="w-5 h-5 text-accent-blue" /> : <Plus className="w-5 h-5 text-accent-blue" />}
               </div>
               <div>
-                <h2 className="font-heading text-sm font-bold text-theme-primary tracking-wider uppercase">{isEdit ? 'Edit' : 'New'} Scheduled Job</h2>
+                <h2 className="text-[14px] font-semibold text-theme-primary tracking-tight">{isEdit ? 'Edit' : 'New'} Scheduled Job</h2>
                 <p className="text-[11px] text-theme-muted font-mono">{isEdit ? job!.name : 'Configure schedule + target'}</p>
               </div>
             </div>
@@ -359,7 +359,7 @@ function CronFormDialog({ job, open, onClose, onSaved }: { job: CronJob | null; 
                   className={`px-3 py-1.5 rounded-sm text-[11px] font-mono uppercase border transition-colors ${
                     targetType === t
                       ? targetTypeColors[t]
-                      : 'bg-surface-200/40 text-theme-subtle border-border/20 hover:text-theme-secondary'
+                      : 'bg-app-muted text-theme-subtle border-app hover:text-theme-secondary'
                   }`}
                 >
                   {t}
@@ -403,7 +403,7 @@ function CronFormDialog({ job, open, onClose, onSaved }: { job: CronJob | null; 
               </div>
               {selectedWfInputSchema && Object.keys(selectedWfInputSchema).length > 0 && (
                 <div className="space-y-3">
-                  <span className="text-[10px] font-label uppercase tracking-widest text-theme-subtle">Workflow Inputs</span>
+                  <span className="overline">Workflow Inputs</span>
                   {Object.entries(selectedWfInputSchema).map(([key, def]: [string, any]) => {
                     const val = workflowInput[key] ?? '';
                     const fieldType = (def.type ?? 'string').toLowerCase();
@@ -479,7 +479,7 @@ function CronFormDialog({ job, open, onClose, onSaved }: { job: CronJob | null; 
         </div>
 
         {/* Footer */}
-        <div className="flex items-center gap-3 px-6 py-5 border-t border-border/60 bg-surface-50/50">
+        <div className="flex items-center gap-3 px-6 py-5 border-t border-app bg-app-card/50">
           <button onClick={onClose} className="flex-1 btn-ghost">Cancel</button>
           <button onClick={handleSubmit} disabled={saving} className="flex-1 btn-primary inline-flex items-center justify-center gap-2">
             {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : isEdit ? <Pencil className="w-4 h-4" /> : <Plus className="w-4 h-4" />}
@@ -554,17 +554,22 @@ export default function CronManagerPage() {
   };
 
   return (
-    <div className="p-6">
+    <div className="px-6 pt-5 pb-8">
       {/* Header */}
-      <div className="flex items-center justify-between mb-6">
-        <div>
-          <h1 className="font-heading text-xl font-bold text-theme-primary tracking-widest uppercase">Scheduled Jobs</h1>
-          <p className="text-xs text-theme-muted mt-1 font-body">{jobs.length} job{jobs.length !== 1 ? 's' : ''} configured</p>
+      <div className="flex items-center gap-2 mb-2 text-[12px] text-theme-muted">
+        <span>Build</span>
+        <span className="text-theme-subtle">/</span>
+        <span>Schedules</span>
+      </div>
+      <div className="flex items-center justify-between mb-5">
+        <div className="flex items-center gap-3">
+          <h1 className="text-[20px] font-semibold text-theme-primary tracking-tight">Schedules</h1>
+          <span className="text-[12px] font-mono text-theme-muted">{jobs.length}</span>
         </div>
         <div className="flex items-center gap-2">
-          <button title="Refresh" onClick={refresh} className="btn-ghost text-xs"><RefreshCw className="w-3.5 h-3.5" /></button>
-          <button onClick={() => { setEditJob(null); setFormOpen(true); }} className="btn-primary text-xs inline-flex items-center gap-1.5">
-            <Plus className="w-3.5 h-3.5" /> New Job
+          <button title="Refresh" onClick={refresh} className="btn btn-secondary btn-sm"><RefreshCw className="w-3.5 h-3.5" /></button>
+          <button onClick={() => { setEditJob(null); setFormOpen(true); }} className="btn btn-primary btn-sm">
+            <Plus className="w-3.5 h-3.5" /> New schedule
           </button>
         </div>
       </div>
@@ -595,11 +600,11 @@ export default function CronManagerPage() {
             const isRunning = runningId === job._id;
             return (
               <div key={job._id}
-                className={`p-4 rounded-lg border border-border/20 bg-surface-100/20 hover:bg-surface-100/40 transition-colors group ${!job.enabled ? 'opacity-50' : ''}`}
+                className={`p-4 rounded-lg border border-app bg-app-muted/30 hover:bg-app-muted/50 transition-colors group ${!job.enabled ? 'opacity-50' : ''}`}
               >
                 <div className="flex items-center gap-4">
                   {/* Icon */}
-                  <Clock className="w-5 h-5 text-blue-400 shrink-0" />
+                  <Clock className="w-5 h-5 text-accent shrink-0" />
 
                   {/* Info */}
                   <div className="flex-1 min-w-0">
@@ -609,7 +614,7 @@ export default function CronManagerPage() {
                         <span className="text-[10px] px-1.5 py-0.5 rounded-sm font-mono uppercase border bg-accent-blue/10 text-accent-blue border-accent-blue/30">built-in</span>
                       )}
                       <span className={`text-[10px] px-1.5 py-0.5 rounded-sm font-mono uppercase border ${
-                        targetTypeColors[job.target?.type] ?? 'bg-surface-200/40 text-theme-subtle border-border/20'
+                        targetTypeColors[job.target?.type] ?? 'bg-app-muted text-theme-subtle border-app'
                       }`}>{job.target?.type ?? '-'}</span>
                     </div>
                     <div className="flex items-center gap-3 mt-1 text-[10px] text-theme-muted font-mono">
@@ -640,7 +645,7 @@ export default function CronManagerPage() {
 
                   {/* Actions */}
                   <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity shrink-0">
-                    <button onClick={() => runNow(job)} disabled={isRunning} className="btn-ghost p-1.5 text-xs text-emerald-400" title="Run now">
+                    <button onClick={() => runNow(job)} disabled={isRunning} className="btn-ghost p-1.5 text-xs text-accent-green" title="Run now">
                       {isRunning ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Play className="w-3.5 h-3.5" />}
                     </button>
                     <button onClick={() => setHistoryJob(job)} className="btn-ghost p-1.5 text-xs" title="Run history">
@@ -650,14 +655,14 @@ export default function CronManagerPage() {
                       <Pencil className="w-3.5 h-3.5" />
                     </button>
                     {!job.isBuiltIn && (
-                      <button onClick={() => setDeletingJob({ id: job._id, name: job.displayName })} className="btn-ghost p-1.5 text-xs text-red-400" title="Delete">
+                      <button onClick={() => setDeletingJob({ id: job._id, name: job.displayName })} className="btn-ghost p-1.5 text-xs text-accent-red" title="Delete">
                         <Trash2 className="w-3.5 h-3.5" />
                       </button>
                     )}
                   </div>
 
                   {/* Toggle — far right, always visible */}
-                  <div className="shrink-0 pl-2 border-l border-border/20">
+                  <div className="shrink-0 pl-2 border-l border-app">
                     <ToggleSwitch enabled={job.enabled} onChange={() => toggle(job)} />
                   </div>
                 </div>

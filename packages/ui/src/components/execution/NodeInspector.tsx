@@ -55,9 +55,9 @@ export default function NodeInspector({ trace, workflowEdges }: Props) {
     <div className="space-y-3">
       {trace.retryReason && (
         <div className="border border-amber-500/40 bg-amber-500/5 rounded-lg p-2.5 flex items-start gap-2">
-          <AlertCircle className="w-3.5 h-3.5 text-amber-400 shrink-0 mt-0.5" />
+          <AlertCircle className="w-3.5 h-3.5 text-accent-yellow shrink-0 mt-0.5" />
           <div className="text-xs font-body">
-            <span className="text-amber-400 font-semibold">Retry reason:</span>{' '}
+            <span className="text-accent-yellow font-semibold">Retry reason:</span>{' '}
             <span className="text-theme-secondary font-mono">{trace.retryReason}</span>
           </div>
         </div>
@@ -105,7 +105,7 @@ export default function NodeInspector({ trace, workflowEdges }: Props) {
                   className={`px-1.5 py-0.5 rounded text-[10px] font-mono ${
                     used
                       ? 'bg-accent-green/10 text-accent-green border border-accent-green/30'
-                      : 'bg-surface-200/40 text-theme-subtle border border-border/20'
+                      : 'bg-app-muted text-theme-subtle border border-app'
                   }`}
                   title={used ? 'used at least once' : 'available but not used'}
                 >
@@ -121,7 +121,7 @@ export default function NodeInspector({ trace, workflowEdges }: Props) {
         {trace.learningsInjected && trace.learningsInjected.length > 0 ? (
           <div className="space-y-1.5">
             {trace.learningsInjected.map((l, i) => (
-              <div key={l.id ?? i} className="border border-border/20 rounded-md p-2 bg-surface-100/40">
+              <div key={l.id ?? i} className="border border-app rounded-md p-2 bg-app-muted/50">
                 <div className="text-[10px] font-mono text-theme-subtle mb-0.5">
                   {l.id ?? `(no id)`} {l.contextTags && l.contextTags.length > 0 && `· ${l.contextTags.join(', ')}`}
                 </div>
@@ -147,7 +147,7 @@ export default function NodeInspector({ trace, workflowEdges }: Props) {
                   <td className="py-1 text-theme-secondary align-top pr-3">{'{{'}{b.placeholder}{'}}'}</td>
                   <td className="py-1 align-top break-all">
                     {b.status === 'missing' ? (
-                      <span className="text-amber-400">⚠ missing</span>
+                      <span className="text-accent-yellow">⚠ missing</span>
                     ) : b.status === 'redacted' ? (
                       <span className="text-theme-subtle">🔒 redacted</span>
                     ) : (
@@ -164,13 +164,13 @@ export default function NodeInspector({ trace, workflowEdges }: Props) {
       <Section icon={GitBranch} title="DAG edges">
         <div className="space-y-1.5 text-xs">
           <div>
-            <span className="text-[10px] font-label uppercase tracking-[0.15em] text-theme-muted">Upstream</span>
+            <span className="overline">Upstream</span>
             <div className="font-mono text-[11px] text-theme-secondary mt-0.5">
               {upstream.length > 0 ? upstream.join(' · ') : '(none — this is an entry node)'}
             </div>
           </div>
           <div>
-            <span className="text-[10px] font-label uppercase tracking-[0.15em] text-theme-muted">Downstream</span>
+            <span className="overline">Downstream</span>
             <div className="font-mono text-[11px] text-theme-secondary mt-0.5">
               {downstream.length > 0 ? downstream.join(' · ') : '(none — terminal node)'}
             </div>
@@ -193,9 +193,9 @@ export default function NodeInspector({ trace, workflowEdges }: Props) {
             ))}
             {stateDiff.modified.map((k) => (
               <div key={k} className="text-[11px] font-mono border-l-2 border-amber-400/40 pl-2">
-                <span className="text-amber-400">~ {k}</span>
+                <span className="text-accent-yellow">~ {k}</span>
                 <div className="text-theme-subtle pl-2 break-all whitespace-pre-wrap">
-                  <span className="text-red-400">− </span>{previewValue((trace.inputState as Record<string, unknown>)[k])}
+                  <span className="text-accent-red">− </span>{previewValue((trace.inputState as Record<string, unknown>)[k])}
                 </div>
                 <div className="text-theme-subtle pl-2 break-all whitespace-pre-wrap">
                   <span className="text-accent-green">+ </span>{previewValue((trace.output as Record<string, unknown>)[k])}
@@ -244,16 +244,16 @@ function Section({
 }: { icon: typeof Settings; title: string; children: React.ReactNode; defaultOpen?: boolean }) {
   const [open, setOpen] = useState(defaultOpen);
   return (
-    <div className="border border-border/40 rounded-lg bg-surface-100/40 overflow-hidden">
+    <div className="border border-app rounded-lg bg-app-muted/50 overflow-hidden">
       <button
         onClick={() => setOpen(!open)}
-        className="w-full flex items-center gap-2 px-3 py-2 hover:bg-surface-200/40"
+        className="w-full flex items-center gap-2 px-3 py-2 hover:bg-app-muted"
       >
         {open ? <ChevronDown className="w-3.5 h-3.5 text-theme-muted" /> : <ChevronRight className="w-3.5 h-3.5 text-theme-muted" />}
         <Icon className="w-3.5 h-3.5 text-accent-blue" />
         <span className="font-label text-[11px] uppercase tracking-[0.15em] text-theme-secondary">{title}</span>
       </button>
-      {open && <div className="px-3 py-2.5 border-t border-border/20 bg-surface-200/20">{children}</div>}
+      {open && <div className="px-3 py-2.5 border-t border-app bg-surface-200/20">{children}</div>}
     </div>
   );
 }
@@ -283,8 +283,8 @@ function KeyValueGrid({ rows }: { rows: Array<[string, unknown, string?]> }) {
 }
 
 function GateDecisionBanner({ g }: { g: NonNullable<Trace['gateDecision']> }) {
-  const icon = g.action === 'stop' ? <XCircle className="w-3.5 h-3.5 text-red-400" />
-    : g.action === 'skip' ? <CheckCircle className="w-3.5 h-3.5 text-amber-400" />
+  const icon = g.action === 'stop' ? <XCircle className="w-3.5 h-3.5 text-accent-red" />
+    : g.action === 'skip' ? <CheckCircle className="w-3.5 h-3.5 text-accent-yellow" />
     : <Info className="w-3.5 h-3.5 text-accent-blue" />;
   const color = g.action === 'stop' ? 'border-red-500/40 bg-red-500/5'
     : g.action === 'skip' ? 'border-amber-500/40 bg-amber-500/5'

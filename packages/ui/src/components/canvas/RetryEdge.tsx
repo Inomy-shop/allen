@@ -79,7 +79,7 @@ export default function RetryEdge(props: EdgeProps) {
           className="pointer-events-none"
         >
           <div className="flex items-center justify-center">
-            <span className="bg-surface-200 border border-border/60 text-theme-secondary text-base px-3 py-1 rounded-sm font-mono font-semibold">
+            <span className="bg-surface-200 border border-app text-theme-secondary text-base px-3 py-1 rounded-sm font-mono font-semibold">
               ↻ ≤{maxRetries}
             </span>
           </div>

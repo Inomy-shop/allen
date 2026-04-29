@@ -29,7 +29,6 @@ const TABS = [
   { id: 'profile', label: 'Profile', icon: User, description: 'Your account', adminOnly: false },
   { id: 'users', label: 'Users', icon: ShieldCheck, description: 'Team member management', adminOnly: true },
   { id: 'mcp', label: 'MCP Servers', icon: Server, description: 'External tool integrations', adminOnly: false },
-  { id: 'theme', label: 'Appearance', icon: Palette, description: 'Theme, fonts & agent icon', adminOnly: false },
 ] as const;
 
 type TabId = (typeof TABS)[number]['id'];
@@ -49,8 +48,8 @@ function SectionHeader({ icon: Icon, title }: { icon: React.ElementType; title: 
 
 function ProfileRow({ label, value }: { label: string; value: React.ReactNode }) {
   return (
-    <div className="flex items-center justify-between py-2 border-b border-border/20 last:border-0">
-      <span className="text-[10px] font-label uppercase tracking-[0.15em] text-theme-muted">{label}</span>
+    <div className="flex items-center justify-between py-2 border-b border-app last:border-0">
+      <span className="overline">{label}</span>
       <span className="text-sm text-theme-secondary font-mono">{value}</span>
     </div>
   );
@@ -98,7 +97,7 @@ function ProfileTab() {
       {/* Identity card */}
       <div className="card p-6">
         <div className="flex items-center gap-5">
-          <div className="w-16 h-16 rounded-sm bg-accent-blue/10 border border-accent-blue/30 flex items-center justify-center">
+          <div className="w-16 h-16 rounded-sm bg-accent-soft flex items-center justify-center">
             <span className="font-heading text-xl text-accent-blue tracking-wider">{initials || '?'}</span>
           </div>
           <div className="min-w-0 flex-1">
@@ -109,7 +108,7 @@ function ProfileTab() {
                 className={`text-[10px] font-mono uppercase tracking-wider px-2 py-0.5 rounded-sm border ${
                   user.role === 'admin'
                     ? 'bg-accent-blue/10 text-accent-blue border-accent-blue/40'
-                    : 'bg-surface-200/60 text-theme-muted border-border/40'
+                    : 'bg-app-muted text-theme-muted border-app'
                 }`}
               >
                 {user.role}
@@ -173,7 +172,7 @@ function ThemeCard({ preset, isActive, onSelect }: { preset: ThemePreset; isActi
     <button
       onClick={onSelect}
       title={preset.label}
-      className={`relative group flex flex-col rounded-sm border p-3 transition-all duration-200 cursor-pointer ${isActive ? 'border-accent-blue shadow-glow-blue' : 'border-border/60 hover:border-border-light'}`}
+      className={`relative group flex flex-col rounded-sm border p-3 transition-all duration-200 cursor-pointer ${isActive ? 'border-accent-blue' : 'border-app hover:border-border-light'}`}
       style={isActive ? { borderColor: accent, boxShadow: `0 0 12px ${accent}40` } : undefined}
     >
       <div className="flex gap-1 mb-2">
@@ -181,7 +180,7 @@ function ThemeCard({ preset, isActive, onSelect }: { preset: ThemePreset; isActi
           <div key={i} className="w-6 h-6 rounded-sm" style={{ background: c }} />
         ))}
       </div>
-      <span className="text-xs font-label uppercase tracking-wider text-theme-secondary">{preset.label}</span>
+      <span className="overline text-theme-secondary">{preset.label}</span>
       {isActive && (
         <div className="absolute top-2 right-2 w-5 h-5 rounded-full flex items-center justify-center" style={{ background: accent }}>
           <Check className="w-3 h-3 text-black" />
@@ -195,9 +194,9 @@ function FontCard({ preset, isActive, onSelect }: { preset: FontPreset; isActive
   return (
     <button
       onClick={onSelect}
-      className={`relative group flex flex-col rounded-sm border p-3 transition-all duration-200 cursor-pointer text-left ${isActive ? 'border-accent-blue shadow-glow-blue bg-surface-100/80' : 'border-border/60 hover:border-border-light bg-surface-100/40'}`}
+      className={`relative group flex flex-col rounded-sm border p-3 transition-all duration-200 cursor-pointer text-left ${isActive ? 'border-accent-blue bg-surface-100/80' : 'border-app hover:border-border-light bg-app-muted/50'}`}
     >
-      <span className="text-xs font-label uppercase tracking-wider text-theme-muted mb-1">{preset.label}</span>
+      <span className="overline text-theme-muted mb-1">{preset.label}</span>
       <span className="text-lg text-theme-primary leading-snug" style={{ fontFamily: `'${preset.heading}', sans-serif` }}>Heading Aa</span>
       <span className="text-sm text-theme-secondary mt-0.5" style={{ fontFamily: `'${preset.body}', sans-serif` }}>Body text Bb Cc 123</span>
       <span className="text-xs text-theme-muted mt-0.5" style={{ fontFamily: `'${preset.mono}', monospace` }}>mono: 0x1F4A9</span>
@@ -220,7 +219,7 @@ function LivePreview() {
       <div className="space-y-3">
         <h4 className="font-heading text-base text-accent-blue">Heading Font Sample</h4>
         <p className="font-body text-sm text-theme-secondary">This is body text rendered in the currently selected body font with longer content for readability testing.</p>
-        <pre className="font-mono text-xs text-accent-green bg-surface-200/60 p-3 rounded-sm border border-border/40 overflow-x-auto">
+        <pre className="font-mono text-xs text-accent-green bg-app-muted p-3 rounded-sm border border-app overflow-x-auto">
 {`const pipeline = await Allen.execute({
   workflow: "data-enrichment",
   batchSize: 250,
@@ -289,11 +288,11 @@ function ThemeTab() {
                 className={`flex items-center gap-2 px-3 py-2 rounded-sm border transition-all ${
                   isActive
                     ? 'border-accent-blue bg-accent-blue/15 text-accent-blue'
-                    : 'border-border/50 text-theme-secondary hover:border-border hover:text-theme-secondary'
+                    : 'border-app text-theme-secondary hover:border-border hover:text-theme-secondary'
                 }`}
               >
                 <Icon className="w-4 h-4" />
-                <span className="text-xs font-label uppercase tracking-wider">{option.label}</span>
+                <span className="overline">{option.label}</span>
               </button>
             );
           })}
@@ -326,7 +325,7 @@ function ThemeTab() {
                   {currentAccent === opt.color && <Check className="w-3 h-3 text-theme-primary" />}
                 </button>
               ))}
-              <button onClick={() => setCustomAccent(null)} className="w-8 h-8 rounded-lg border border-dashed border-border/50 flex items-center justify-center text-theme-subtle hover:text-theme-secondary hover:border-border transition-colors cursor-pointer" title="Reset to theme default">
+              <button onClick={() => setCustomAccent(null)} className="w-8 h-8 rounded-lg border border-dashed border-app flex items-center justify-center text-theme-subtle hover:text-theme-secondary hover:border-border transition-colors cursor-pointer" title="Reset to theme default">
                 <RotateCcw className="w-3 h-3" />
               </button>
             </div>
@@ -342,7 +341,7 @@ function ThemeTab() {
                   <button
                     key={preset.name}
                     onClick={() => setAgentIcon(preset.name)}
-                    className={`w-9 h-9 rounded-lg flex items-center justify-center transition-all duration-200 cursor-pointer ${isActive ? 'bg-accent-blue/15 text-accent-blue border border-accent-blue/30' : 'bg-surface-200/30 text-theme-muted border border-transparent hover:border-border/50 hover:text-theme-secondary'}`}
+                    className={`w-9 h-9 rounded-lg flex items-center justify-center transition-all duration-200 cursor-pointer ${isActive ? 'bg-accent-blue/15 text-accent-blue border border-accent-blue/30' : 'bg-app-muted/50 text-theme-muted border border-transparent hover:border-app hover:text-theme-secondary'}`}
                     title={preset.label}
                   >
                     <IconComp className="w-4 h-4" />
@@ -395,7 +394,6 @@ function McpTab() {
 const TAB_COMPONENTS: Record<TabId, React.FC> = {
   profile: ProfileTab,
   users: UsersTab,
-  theme: ThemeTab,
   mcp: McpTab,
 };
 
@@ -426,7 +424,7 @@ export default function SettingsPage() {
   if (!activeTab) {
     return (
       <div className="flex-1 flex flex-col items-center justify-center text-center p-6">
-        <div className="w-14 h-14 rounded-xl bg-surface-100 border border-border/40 flex items-center justify-center mb-4">
+        <div className="w-14 h-14 rounded-xl bg-surface-100 border border-app flex items-center justify-center mb-4">
           <Settings className="w-6 h-6 text-theme-muted" strokeWidth={1.5} />
         </div>
         <h2 className="font-heading text-base text-theme-primary tracking-wide mb-1">Settings</h2>

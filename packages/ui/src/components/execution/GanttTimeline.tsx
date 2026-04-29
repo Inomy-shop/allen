@@ -50,7 +50,7 @@ export default function GanttTimeline({ traces, onNodeClick }: Props) {
 
   if (traces.length === 0) {
     return (
-      <div className="border border-dashed border-border/40 rounded-md p-5 text-center">
+      <div className="border border-dashed border-app rounded-md p-5 text-center">
         <div className="text-xs text-theme-muted font-body">No timeline data yet.</div>
         <div className="text-[11px] text-theme-subtle font-body mt-1">
           A bar appears per node attempt as the workflow runs.
@@ -90,7 +90,7 @@ export default function GanttTimeline({ traces, onNodeClick }: Props) {
           <button
             key={r.key}
             onClick={() => onNodeClick?.(r.node)}
-            className="w-full grid grid-cols-[140px_1fr_60px] gap-2 items-center py-1 px-1 rounded-sm hover:bg-surface-200/40 transition-colors text-left"
+            className="w-full grid grid-cols-[140px_1fr_60px] gap-2 items-center py-1 px-1 rounded-sm hover:bg-app-muted transition-colors text-left"
             title={`${r.node} (attempt ${r.attempt}) — ${formatDuration(r.durationMs)}`}
           >
             {/* Node name, truncated */}
@@ -103,12 +103,12 @@ export default function GanttTimeline({ traces, onNodeClick }: Props) {
                 {r.node}
               </span>
               {r.attempt > 1 && (
-                <span className="text-[9px] font-mono text-amber-400 shrink-0">#{r.attempt}</span>
+                <span className="text-[9px] font-mono text-accent-yellow shrink-0">#{r.attempt}</span>
               )}
             </div>
 
             {/* Bar lane — relative positioning within a fixed-width lane */}
-            <div className="relative h-3 bg-surface-200/30 rounded-sm overflow-hidden">
+            <div className="relative h-3 bg-app-muted/50 rounded-sm overflow-hidden">
               {/* vertical tick guides */}
               {tickPositions.map((p) => (
                 <span
@@ -137,7 +137,7 @@ export default function GanttTimeline({ traces, onNodeClick }: Props) {
       </div>
 
       {/* Legend */}
-      <div className="flex items-center gap-3 pt-2 border-t border-border/20 text-[10px] font-mono text-theme-subtle">
+      <div className="flex items-center gap-3 pt-2 border-t border-app text-[10px] font-mono text-theme-subtle">
         <span className="flex items-center gap-1">
           <span className="w-2 h-2 rounded-sm bg-accent-green/60" /> completed
         </span>

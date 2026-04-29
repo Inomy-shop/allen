@@ -144,24 +144,34 @@ export default function ExecutionListPage() {
   const toIdx = Math.min(total, (page + 1) * PAGE_SIZE);
 
   return (
-    <div className="p-6">
-      <div className="flex items-center justify-between mb-6 gap-3 flex-wrap">
-        <h1 className="font-heading text-xl font-bold text-theme-primary tracking-widest uppercase">Executions</h1>
+    <div className="px-6 pt-5 pb-8">
+      {/* Breadcrumb */}
+      <div className="flex items-center gap-2 mb-2 text-[12px] text-theme-muted">
+        <span>Workspace</span>
+        <span className="text-theme-subtle">/</span>
+        <span>Activity</span>
+      </div>
+
+      <div className="flex items-center justify-between mb-5 gap-3 flex-wrap">
+        <div className="flex items-center gap-3">
+          <h1 className="text-[20px] font-semibold text-theme-primary tracking-tight">Activity</h1>
+          <span className="text-[12px] font-mono text-theme-muted">{total}</span>
+        </div>
         <div className="flex items-center gap-2 flex-wrap">
           <div className="relative">
-            <Search className="w-3.5 h-3.5 absolute left-2 top-1/2 -translate-y-1/2 text-theme-subtle pointer-events-none" />
+            <Search className="w-3.5 h-3.5 absolute left-2.5 top-1/2 -translate-y-1/2 text-theme-muted pointer-events-none" />
             <input
               type="text"
               value={searchInput}
               onChange={e => onSearchChange(e.target.value)}
               placeholder="Search id, workflow, node…"
-              className="input text-xs pl-7 w-56"
+              className="input pl-8 w-64 py-1.5 text-[12px]"
             />
           </div>
           <select
             value={typeFilter}
             onChange={e => setTypeFilter(e.target.value)}
-            className="input text-xs"
+            className="input py-1.5 text-[12px] w-auto"
             title="Filter by execution type"
           >
             <option value="">All types</option>
@@ -171,13 +181,13 @@ export default function ExecutionListPage() {
           <select
             value={filter}
             onChange={e => setFilter(e.target.value)}
-            className="input text-xs"
+            className="input py-1.5 text-[12px] w-auto"
           >
             {statuses.map(s => (
               <option key={s} value={s}>{s || 'All statuses'}</option>
             ))}
           </select>
-          <button title="Refresh executions" onClick={refresh} className="btn-ghost text-xs">
+          <button title="Refresh executions" onClick={refresh} className="btn btn-secondary btn-sm">
             <RefreshCw className="w-3.5 h-3.5" />
           </button>
         </div>
@@ -187,14 +197,14 @@ export default function ExecutionListPage() {
         <div className="card overflow-hidden">
           <table className="w-full text-sm">
             <thead>
-              <tr className="text-theme-muted bg-surface-50 text-xs font-label uppercase tracking-wider">
-                <th className="text-left px-4 py-3 font-medium">ID</th>
-                <th className="text-left px-4 py-3 font-medium">Workflow</th>
-                <th className="text-left px-4 py-3 font-medium">Status</th>
-                <th className="text-left px-4 py-3 font-medium">Duration</th>
-                <th className="text-left px-4 py-3 font-medium">Cost</th>
-                <th className="text-left px-4 py-3 font-medium">Started</th>
-                <th className="text-left px-4 py-3 font-medium">Actions</th>
+              <tr className="bg-app-muted overline border-b border-app">
+                <th className="text-left px-4 py-2">ID</th>
+                <th className="text-left px-4 py-2">Workflow</th>
+                <th className="text-left px-4 py-2">Status</th>
+                <th className="text-left px-4 py-2">Duration</th>
+                <th className="text-left px-4 py-2">Cost</th>
+                <th className="text-left px-4 py-2">Started</th>
+                <th className="text-left px-4 py-2">Actions</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-border/40">
@@ -221,29 +231,29 @@ export default function ExecutionListPage() {
         <div className="card overflow-hidden">
           <table className="w-full text-sm font-body">
             <thead>
-              <tr className="text-theme-muted bg-surface-50 text-xs font-label uppercase tracking-wider">
-                <th className="text-left px-4 py-3 font-medium">ID</th>
+              <tr className="bg-app-muted overline border-b border-app">
+                <th className="text-left px-4 py-2">ID</th>
                 <th
-                  className="text-left px-4 py-3 font-medium cursor-pointer hover:text-accent-blue transition-colors"
+                  className="text-left px-4 py-2 cursor-pointer hover:text-theme-primary transition-colors"
                   onClick={() => toggleSort('workflowName')}
                 >
                   Workflow <SortIcon col="workflowName" />
                 </th>
                 <th
-                  className="text-left px-4 py-3 font-medium cursor-pointer hover:text-accent-blue transition-colors"
+                  className="text-left px-4 py-2 cursor-pointer hover:text-theme-primary transition-colors"
                   onClick={() => toggleSort('status')}
                 >
                   Status <SortIcon col="status" />
                 </th>
                 <th
-                  className="text-left px-4 py-3 font-medium cursor-pointer hover:text-accent-blue transition-colors"
+                  className="text-left px-4 py-2 cursor-pointer hover:text-theme-primary transition-colors"
                   onClick={() => toggleSort('durationMs')}
                 >
                   Duration <SortIcon col="durationMs" />
                 </th>
                 <th className="text-left px-4 py-3 font-medium">Cost</th>
                 <th
-                  className="text-left px-4 py-3 font-medium cursor-pointer hover:text-accent-blue transition-colors"
+                  className="text-left px-4 py-2 cursor-pointer hover:text-theme-primary transition-colors"
                   onClick={() => toggleSort('startedAt')}
                 >
                   Started <SortIcon col="startedAt" />
@@ -253,31 +263,31 @@ export default function ExecutionListPage() {
             </thead>
             <tbody className="divide-y divide-border/40">
               {sorted.map((exec: any) => (
-                <tr key={exec.id ?? exec._id} className="hover:bg-accent-blue/5 transition-colors">
-                  <td className="px-4 py-3">
+                <tr key={exec.id ?? exec._id} className="hover:bg-app-muted/50 transition-colors">
+                  <td className="px-4 py-2.5">
                     <Link
                       to={`/executions/${exec.id}`}
-                      className="text-accent-blue hover:text-accent-blue/80 font-mono text-xs"
+                      className="text-accent hover:text-accent-hover font-mono text-[12px]"
                     >
                       {exec.id?.slice(0, 8) ?? 'N/A'}
                     </Link>
                   </td>
-                  <td className="px-4 py-3 text-gray-200">{exec.workflowName}</td>
-                  <td className="px-4 py-3"><StatusBadge status={exec.status} /></td>
-                  <td className="px-4 py-3 text-theme-secondary text-xs tabular-nums font-mono">
+                  <td className="px-4 py-2.5 text-[13px] text-theme-primary">{exec.workflowName}</td>
+                  <td className="px-4 py-2.5"><StatusBadge status={exec.status} /></td>
+                  <td className="px-4 py-2.5 text-theme-secondary text-[12px] tabular-nums font-mono">
                     {exec.durationMs != null ? `${(exec.durationMs / 1000).toFixed(1)}s` : '-'}
                   </td>
-                  <td className="px-4 py-3"><CostDisplay cost={exec.cost} /></td>
-                  <td className="px-4 py-3 text-theme-secondary text-xs font-mono">
+                  <td className="px-4 py-2.5"><CostDisplay cost={exec.cost} /></td>
+                  <td className="px-4 py-2.5 text-theme-secondary text-[12px] font-mono">
                     {exec.startedAt ? new Date(exec.startedAt).toLocaleString() : '-'}
                   </td>
-                  <td className="px-4 py-3">
-                    <div className="flex items-center gap-1">
+                  <td className="px-4 py-2.5">
+                    <div className="flex items-center gap-0.5">
                       {/* Re-run */}
                       {exec.workflowId && (
                         <button
                           onClick={() => handleRerun(exec)}
-                          className="btn-ghost text-xs p-1"
+                          className="p-1.5 rounded text-theme-muted hover:text-accent hover:bg-app-muted transition-colors"
                           title="Re-run workflow"
                         >
                           <Play className="w-3.5 h-3.5" />
@@ -290,7 +300,7 @@ export default function ExecutionListPage() {
                             await api.retryFrom(exec.id, exec.failedNode);
                             refresh();
                           }}
-                          className="btn-ghost text-xs p-1 text-accent-yellow"
+                          className="p-1.5 rounded text-accent-yellow hover:bg-accent-yellow/10 transition-colors"
                           title={`Retry from ${exec.failedNode}`}
                         >
                           <RotateCcw className="w-3.5 h-3.5" />
@@ -299,7 +309,7 @@ export default function ExecutionListPage() {
                       {/* Export traces */}
                       <button
                         onClick={() => handleExport(exec.id)}
-                        className="btn-ghost text-xs p-1"
+                        className="p-1.5 rounded text-theme-muted hover:text-theme-primary hover:bg-app-muted transition-colors"
                         title="Export traces as JSON"
                       >
                         <Download className="w-3.5 h-3.5" />
@@ -310,7 +320,7 @@ export default function ExecutionListPage() {
               ))}
             </tbody>
           </table>
-          <div className="flex items-center justify-between px-4 py-3 border-t border-border/40 text-xs text-theme-secondary font-mono">
+          <div className="flex items-center justify-between px-4 py-2.5 border-t border-app text-[12px] text-theme-muted font-mono">
             <span>
               {fromIdx}–{toIdx} of {total}
             </span>
@@ -318,7 +328,7 @@ export default function ExecutionListPage() {
               <button
                 onClick={() => setPage(page - 1)}
                 disabled={page === 0 || loading}
-                className="btn-ghost text-xs p-1 disabled:opacity-40 disabled:cursor-not-allowed"
+                className="p-1.5 rounded text-theme-muted hover:text-theme-primary hover:bg-app-muted transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
                 title="Previous page"
               >
                 <ChevronLeft className="w-3.5 h-3.5" />
@@ -329,7 +339,7 @@ export default function ExecutionListPage() {
               <button
                 onClick={() => setPage(page + 1)}
                 disabled={page + 1 >= totalPages || loading}
-                className="btn-ghost text-xs p-1 disabled:opacity-40 disabled:cursor-not-allowed"
+                className="p-1.5 rounded text-theme-muted hover:text-theme-primary hover:bg-app-muted transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
                 title="Next page"
               >
                 <ChevronRight className="w-3.5 h-3.5" />

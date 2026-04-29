@@ -58,7 +58,7 @@ export default function NodeProperties({ node, onUpdate, onDelete, workflowInput
       <div className="p-4 space-y-3 overflow-auto h-full">
         <h3 className="font-heading text-sm font-semibold text-theme-primary tracking-wider">Workflow Input</h3>
         <p className="text-[11px] text-theme-muted font-body">
-          Fields the user is prompted for when running this workflow. Edit in the YAML view under <code className="bg-surface-200/60 px-1 rounded text-[10px]">input:</code>.
+          Fields the user is prompted for when running this workflow. Edit in the YAML view under <code className="bg-app-muted px-1 rounded text-[10px]">input:</code>.
         </p>
         {inputs.length === 0 ? (
           <div className="text-xs text-theme-subtle italic">No inputs declared.</div>
@@ -67,7 +67,7 @@ export default function NodeProperties({ node, onUpdate, onDelete, workflowInput
             {inputs.map(([name, def]) => {
               const d = (def ?? {}) as Record<string, any>;
               return (
-                <div key={name} className="border border-border/30 rounded-md p-2.5 bg-surface-100/30">
+                <div key={name} className="border border-app rounded-md p-2.5 bg-app-muted/40">
                   <div className="flex items-center gap-2 mb-1">
                     <span className="text-xs font-mono text-theme-primary font-semibold">{name}</span>
                     <span className="text-[9px] font-mono uppercase tracking-wider px-1.5 py-0.5 rounded bg-accent-blue/10 text-accent-blue">
@@ -228,7 +228,7 @@ export default function NodeProperties({ node, onUpdate, onDelete, workflowInput
             </div>
             <div className="space-y-2">
               {fields.map((field, idx) => (
-                <div key={idx} className="bg-surface-200/80 rounded-sm p-2 space-y-1.5 border border-border/30">
+                <div key={idx} className="bg-surface-200/80 rounded-sm p-2 space-y-1.5 border border-app">
                   <div className="flex items-center gap-1">
                     <input className="input flex-1 text-xs" placeholder="name" value={field.name} onChange={e => updateField(idx, 'name', e.target.value)} />
                     <select className="input text-xs w-20" value={field.type} onChange={e => updateField(idx, 'type', e.target.value)}>
@@ -241,7 +241,7 @@ export default function NodeProperties({ node, onUpdate, onDelete, workflowInput
                   <input className="input w-full text-xs" placeholder="Label" value={field.label ?? ''} onChange={e => updateField(idx, 'label', e.target.value)} />
                   <div className="flex items-center gap-2">
                     <input type="checkbox" checked={!!field.required} onChange={e => updateField(idx, 'required', e.target.checked)} className="w-3 h-3 rounded-sm bg-surface border-border accent-accent-blue" />
-                    <span className="text-[10px] text-theme-secondary font-label uppercase tracking-wider">Required</span>
+                    <span className="overline">Required</span>
                   </div>
                   {field.type === 'select' && (
                     <input className="input w-full text-xs" placeholder="Options (comma-separated)" value={(field.options ?? []).join(', ')} onChange={e => updateField(idx, 'options', e.target.value.split(',').map(s => s.trim()).filter(Boolean))} />
@@ -394,13 +394,13 @@ function AgentNodeOverrides({
     (overrides.planMode != null);
 
   return (
-    <div className="mt-3 border-t border-border/30 pt-3">
+    <div className="mt-3 border-t border-app pt-3">
       <button
         type="button"
         onClick={() => setExpanded((v) => !v)}
         className="flex items-center justify-between w-full text-left"
       >
-        <span className="text-xs font-label uppercase tracking-wider text-theme-secondary">
+        <span className="overline text-theme-secondary">
           Override agent settings {hasAnyOverride && <span className="text-accent-blue">●</span>}
         </span>
         <span className="text-[10px] text-theme-subtle">{expanded ? '▾' : '▸'}</span>
@@ -415,7 +415,7 @@ function AgentNodeOverrides({
 
           {/* Provider + Model (grouped dropdown) */}
           <div>
-            <label className="block text-[10px] font-label uppercase tracking-[0.15em] text-theme-muted mb-1">
+            <label className="block overline mb-1">
               Model
             </label>
             <select
@@ -443,7 +443,7 @@ function AgentNodeOverrides({
 
           {/* Effort */}
           <div>
-            <label className="block text-[10px] font-label uppercase tracking-[0.15em] text-theme-muted mb-1">
+            <label className="block overline mb-1">
               Reasoning Effort
             </label>
             <select
@@ -465,7 +465,7 @@ function AgentNodeOverrides({
           {/* Plan mode — only when effective provider is Claude */}
           {effectiveIsClaude ? (
             <div>
-              <label className="block text-[10px] font-label uppercase tracking-[0.15em] text-theme-muted mb-1">
+              <label className="block overline mb-1">
                 Plan Mode
               </label>
               <select

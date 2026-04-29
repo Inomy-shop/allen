@@ -51,11 +51,11 @@ export default function LoginPage() {
         </div>
         <form
           onSubmit={handleSubmit}
-          className="bg-surface-100 border border-border/50 rounded-lg p-6 space-y-4"
+          className="bg-surface-100 border border-app rounded-lg p-6 space-y-4"
         >
           <h1 className="text-base font-heading text-theme-primary">Sign in</h1>
           <div className="space-y-2">
-            <label className="block text-xs font-label uppercase tracking-wider text-theme-muted">
+            <label className="block overline text-theme-muted">
               Email
             </label>
             <input
@@ -64,11 +64,11 @@ export default function LoginPage() {
               autoFocus
               value={email}
               onChange={(e) => setEmail(e.target.value)}
-              className="w-full px-3 py-2 bg-surface-50 border border-border/50 rounded-md text-sm text-theme-primary focus:outline-none focus:border-accent-blue"
+              className="w-full px-3 py-2 bg-surface-50 border border-app rounded-md text-sm text-theme-primary focus:outline-none focus:border-accent-blue"
             />
           </div>
           <div className="space-y-2">
-            <label className="block text-xs font-label uppercase tracking-wider text-theme-muted">
+            <label className="block overline text-theme-muted">
               Password
             </label>
             <input
@@ -76,7 +76,7 @@ export default function LoginPage() {
               required
               value={password}
               onChange={(e) => setPassword(e.target.value)}
-              className="w-full px-3 py-2 bg-surface-50 border border-border/50 rounded-md text-sm text-theme-primary focus:outline-none focus:border-accent-blue"
+              className="w-full px-3 py-2 bg-surface-50 border border-app rounded-md text-sm text-theme-primary focus:outline-none focus:border-accent-blue"
             />
           </div>
           {error && <div className="text-xs text-accent-red">{error}</div>}

@@ -66,7 +66,7 @@ export default function NotificationBell() {
         ref={buttonRef}
         onClick={() => { setOpen(!open); if (!open) loadAlerts(); }}
         className={`relative p-2 rounded-sm transition-all duration-200 ${
-          open ? 'text-accent-blue bg-accent-blue/10' : 'text-theme-muted hover:text-theme-secondary hover:bg-surface-200/40'
+          open ? 'text-accent-blue bg-accent-blue/10' : 'text-theme-muted hover:text-theme-secondary hover:bg-app-muted'
         }`}
         title="Notifications"
       >
@@ -85,11 +85,11 @@ export default function NotificationBell() {
 
           {/* Dropdown */}
           <div
-            className="fixed z-50 w-80 bg-surface-100 border border-border/50 rounded-lg shadow-2xl overflow-hidden"
+            className="fixed z-50 w-80 bg-surface-100 border border-app rounded-lg shadow-2xl overflow-hidden"
             style={{ left: rect.right + 8, bottom: window.innerHeight - rect.bottom }}
           >
             {/* Header */}
-            <div className="flex items-center justify-between px-4 py-2.5 border-b border-border/30 bg-surface-50">
+            <div className="flex items-center justify-between px-4 py-2.5 border-b border-app bg-surface-50">
               <div className="flex items-center gap-2">
                 <Bell className="w-3.5 h-3.5 text-accent-blue" />
                 <span className="text-xs font-heading text-theme-primary tracking-wider">Notifications</span>

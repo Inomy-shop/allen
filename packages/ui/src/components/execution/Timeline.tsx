@@ -25,7 +25,7 @@ function previewJson(value: unknown, max = 1200): string {
 }
 
 const categoryColors: Record<string, string> = {
-  system: 'text-theme-secondary bg-surface-200/40',
+  system: 'text-theme-secondary bg-app-muted',
   agent: 'text-accent-blue bg-accent-blue/10',
   tool: 'text-accent-cyan bg-accent-cyan/10',
   condition: 'text-accent-yellow bg-accent-yellow/10',
@@ -139,7 +139,7 @@ export default function Timeline({ logs, nodeFilter, onNodeFilterChange, workflo
   return (
     <div className="flex flex-col h-full relative">
       {/* Header with filter and search */}
-      <div className="px-3 py-1.5 border-b border-border/50 sticky top-0 bg-surface-50 z-10 flex items-center gap-2">
+      <div className="px-3 py-1.5 border-b border-app sticky top-0 bg-surface-50 z-10 flex items-center gap-2">
         <h2 className="font-heading text-[10px] font-semibold text-theme-secondary uppercase tracking-widest shrink-0">Logs</h2>
         <Select
           value={nodeFilter ?? '__all__'}
@@ -190,7 +190,7 @@ export default function Timeline({ logs, nodeFilter, onNodeFilterChange, workflo
         ) : (
           filtered.map((log, i) => {
             const isError = log.level === 'error';
-            const catClass = isError ? 'text-accent-red bg-accent-red/10' : (categoryColors[log.category] ?? 'text-theme-secondary bg-surface-200/40');
+            const catClass = isError ? 'text-accent-red bg-accent-red/10' : (categoryColors[log.category] ?? 'text-theme-secondary bg-app-muted');
             const child = isChildLog(log) ? (log.data as {
               childExecutionId: string;
               childAgentName: string;
@@ -280,24 +280,24 @@ export default function Timeline({ logs, nodeFilter, onNodeFilterChange, workflo
                     matching ToolCallRecord, falling back to what the log
                     itself carries. */}
                 {isToolRow && isOpen && (
-                  <div className="space-y-1.5 px-3 py-1.5 bg-surface-100/30" style={{ paddingLeft: 64 + indentPx }}>
+                  <div className="space-y-1.5 px-3 py-1.5 bg-app-muted/40" style={{ paddingLeft: 64 + indentPx }}>
                     {(() => {
                       const argsObj = toolCall?.args ?? logArgs;
                       if (argsObj && Object.keys(argsObj).length > 0) {
                         return (
                           <div>
-                            <div className="text-[9px] font-label uppercase tracking-wider text-theme-subtle mb-0.5">
+                            <div className="overline mb-0.5">
                               Input{toolCall?.truncated?.args && <span className="text-accent-yellow ml-1">(truncated)</span>}
                             </div>
-                            <pre className="text-[10px] font-mono text-theme-secondary whitespace-pre-wrap bg-surface-50/50 rounded-sm p-2 max-h-48 overflow-auto">{previewJson(argsObj)}</pre>
+                            <pre className="text-[10px] font-mono text-theme-secondary whitespace-pre-wrap bg-app-card/50 rounded-sm p-2 max-h-48 overflow-auto">{previewJson(argsObj)}</pre>
                           </div>
                         );
                       }
                       if (logCmd) {
                         return (
                           <div>
-                            <div className="text-[9px] font-label uppercase tracking-wider text-theme-subtle mb-0.5">Command</div>
-                            <pre className="text-[10px] font-mono text-theme-secondary whitespace-pre-wrap bg-surface-50/50 rounded-sm p-2 max-h-48 overflow-auto">$ {logCmd}</pre>
+                            <div className="overline mb-0.5">Command</div>
+                            <pre className="text-[10px] font-mono text-theme-secondary whitespace-pre-wrap bg-app-card/50 rounded-sm p-2 max-h-48 overflow-auto">$ {logCmd}</pre>
                           </div>
                         );
                       }
@@ -305,10 +305,10 @@ export default function Timeline({ logs, nodeFilter, onNodeFilterChange, workflo
                     })()}
                     {toolCall?.result !== undefined ? (
                       <div>
-                        <div className="text-[9px] font-label uppercase tracking-wider text-theme-subtle mb-0.5">
+                        <div className="overline mb-0.5">
                           {toolCall.isError ? 'Error' : 'Output'}{toolCall.truncated?.result && <span className="text-accent-yellow ml-1">(truncated)</span>}
                         </div>
-                        <pre className={`text-[10px] font-mono whitespace-pre-wrap rounded-sm p-2 max-h-64 overflow-auto ${toolCall.isError ? 'text-accent-red bg-accent-red/5' : 'text-theme-secondary bg-surface-50/50'}`}>{previewJson(toolCall.result)}</pre>
+                        <pre className={`text-[10px] font-mono whitespace-pre-wrap rounded-sm p-2 max-h-64 overflow-auto ${toolCall.isError ? 'text-accent-red bg-accent-red/5' : 'text-theme-secondary bg-app-card/50'}`}>{previewJson(toolCall.result)}</pre>
                       </div>
                     ) : null}
                   </div>

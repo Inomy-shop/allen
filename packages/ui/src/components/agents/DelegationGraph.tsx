@@ -79,10 +79,10 @@ export function DelegationGraph({ agents }: Props) {
   });
 
   return (
-    <div className="rounded-lg border border-border/15 bg-surface-100/30 overflow-hidden">
+    <div className="rounded-lg border border-app bg-app-muted/40 overflow-hidden">
       {/* Title bar */}
       <div className="px-4 py-2.5 border-b border-border/10 bg-surface-200/15 flex items-center justify-between">
-        <span className="text-[11px] font-label uppercase tracking-widest text-theme-secondary">Organisation</span>
+        <span className="overline">Organisation</span>
         <span className="text-[10px] font-mono text-theme-subtle">{allTeams.filter(t => (byTeam.get(t.name)?.length ?? 0) > 0).length} departments · {agents.length} people</span>
       </div>
 
@@ -130,12 +130,12 @@ function OrgNode({
       {/* Tree connector for nested teams */}
       {depth > 0 && (
         <div className="flex items-center gap-0 -ml-6 mb-0">
-          <div className={`w-6 border-l-2 border-b-2 border-border/20 h-4 rounded-bl-md ${isLast ? '' : ''}`} />
+          <div className={`w-6 border-l-2 border-b-2 border-app h-4 rounded-bl-md ${isLast ? '' : ''}`} />
         </div>
       )}
 
       {/* Team card */}
-      <div className={`rounded-lg border border-border/15 bg-surface-100/40 overflow-hidden mb-3 ${depth === 0 ? '' : ''}`}>
+      <div className={`rounded-lg border border-app bg-app-muted/50 overflow-hidden mb-3 ${depth === 0 ? '' : ''}`}>
         {/* Team header — clickable to collapse */}
         <button
           onClick={() => hasContent && onToggle(team.name)}
@@ -179,7 +179,7 @@ function OrgNode({
               {specialists.map(agent => (
                 <div
                   key={agent.name}
-                  className="inline-flex items-center gap-1.5 px-2 py-1 rounded-md border border-border/15 bg-surface-100/50 hover:bg-surface-100/80 transition-colors"
+                  className="inline-flex items-center gap-1.5 px-2 py-1 rounded-md border border-app bg-surface-100/50 hover:bg-surface-100/80 transition-colors"
                 >
                   <div className="w-4.5 h-4.5 rounded flex items-center justify-center shrink-0"
                     style={{ backgroundColor: (agent.color ?? '#666') + '18' }}>
@@ -195,7 +195,7 @@ function OrgNode({
 
       {/* Child teams — nested recursively with tree lines */}
       {!isCollapsed && children.length > 0 && (
-        <div className={`${depth > 0 ? 'border-l-2 border-border/15 ml-1' : 'ml-1'}`}>
+        <div className={`${depth > 0 ? 'border-l-2 border-app ml-1' : 'ml-1'}`}>
           {children.map((child, i) => (
             <OrgNode
               key={child.name}

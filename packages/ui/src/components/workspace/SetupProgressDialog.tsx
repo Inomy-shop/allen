@@ -34,13 +34,13 @@ export function SetupProgressDialog({ workspaceId, onComplete, onFailed }: Props
 
   return (
     <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50">
-      <div className="bg-surface-100 border border-border/30 rounded-lg w-[500px] overflow-hidden">
+      <div className="bg-surface-100 border border-app rounded-lg w-[500px] overflow-hidden">
         {/* Header */}
-        <div className="flex items-center gap-2 px-4 py-3 border-b border-border/20">
+        <div className="flex items-center gap-2 px-4 py-3 border-b border-app">
           {ws?.status === 'failed' ? (
-            <XCircle className="w-4 h-4 text-red-400" />
+            <XCircle className="w-4 h-4 text-accent-red" />
           ) : (
-            <Loader2 className="w-4 h-4 text-blue-400 animate-spin" />
+            <Loader2 className="w-4 h-4 text-accent animate-spin" />
           )}
           <span className="text-sm font-semibold text-theme-primary">
             {ws?.status === 'failed' ? 'Setup Failed' : 'Setting up workspace...'}
@@ -71,19 +71,19 @@ export function SetupProgressDialog({ workspaceId, onComplete, onFailed }: Props
               <div className="text-theme-subtle animate-pulse">Initializing workspace...</div>
             )}
             {log.map((line: string, i: number) => (
-              <div key={i} className={line.startsWith('✓') ? 'text-emerald-400' : line.startsWith('✗') ? 'text-red-400' : 'text-theme-muted'}>
+              <div key={i} className={line.startsWith('✓') ? 'text-accent-green' : line.startsWith('✗') ? 'text-accent-red' : 'text-theme-muted'}>
                 {line.split('\n')[0]}
               </div>
             ))}
             {ws?.status !== 'failed' && progress?.status === 'running' && (
-              <div className="text-blue-400 animate-pulse">Running: {progress.currentCommand}...</div>
+              <div className="text-accent animate-pulse">Running: {progress.currentCommand}...</div>
             )}
           </div>
         </div>
 
         {/* Footer */}
         {ws?.status === 'failed' && (
-          <div className="px-4 py-3 border-t border-border/20 flex justify-end">
+          <div className="px-4 py-3 border-t border-app flex justify-end">
             <button onClick={() => onFailed('Setup failed')} className="btn-ghost text-xs">Close</button>
           </div>
         )}

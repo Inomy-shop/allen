@@ -8,7 +8,7 @@ export default function ConditionNode({ data, selected }: NodeProps) {
           the other node types (180px). */}
       <div
         className={`absolute border-2 bg-surface-100/90 backdrop-blur-sm
-          ${selected ? 'border-accent-yellow ring-2 ring-accent-yellow/30 shadow-glow-yellow' : 'border-accent-yellow/30'}
+          ${selected ? 'border-accent-yellow ring-2 ring-accent-yellow/30' : 'border-accent-yellow/30'}
         `}
         style={{ transform: 'rotate(45deg)', borderRadius: 4, width: 130, height: 130, top: 25, left: 25 }}
       />

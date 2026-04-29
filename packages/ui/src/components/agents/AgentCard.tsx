@@ -28,12 +28,12 @@ export function AgentCard({
 
   const providerTone =
     provider === 'codex' ? 'bg-accent-green/10 text-accent-green border-accent-green/30'
-    : provider === 'openai' ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/30'
+    : provider === 'openai' ? 'bg-accent-green/10 text-accent-green border-emerald-500/30'
     : 'bg-accent-blue/10 text-accent-blue border-accent-blue/30';
 
   return (
     <div
-      className={`group relative rounded-xl border border-border/40 bg-surface-100/40 hover:bg-surface-100/70 hover:border-border/70 transition-all p-4 ${
+      className={`group relative rounded-xl border border-app bg-app-muted/50 hover:bg-surface-100/70 hover:border-border/70 transition-all p-4 ${
         selected ? 'ring-1 ring-accent-blue/50 border-accent-blue/50' : ''
       } ${isLead ? 'bg-accent-yellow/[0.03]' : ''}`}
     >
@@ -51,7 +51,7 @@ export function AgentCard({
         {/* Agent icon */}
         <button
           onClick={() => onView(agent)}
-          className="w-12 h-12 rounded-lg flex items-center justify-center shrink-0 hover:opacity-80 transition-opacity border border-border/30"
+          className="w-12 h-12 rounded-lg flex items-center justify-center shrink-0 hover:opacity-80 transition-opacity border border-app"
           style={{ backgroundColor: color + '18' }}
           title="View instructions"
         >
@@ -84,7 +84,7 @@ export function AgentCard({
               </span>
             )}
             {isBuiltIn && (
-              <span className="text-[9px] font-mono px-1.5 py-0.5 rounded-full bg-surface-200/60 text-theme-muted">
+              <span className="text-[9px] font-mono px-1.5 py-0.5 rounded-full bg-app-muted text-theme-muted">
                 built-in
               </span>
             )}
@@ -121,17 +121,17 @@ export function AgentCard({
           className={`shrink-0 rounded-lg border overflow-hidden text-center ${providerTone}`}
           style={{ minWidth: '7rem' }}
         >
-          <div className="text-[9px] font-label uppercase tracking-widest px-3 py-1 border-b border-current/20 opacity-80">
+          <div className="overline px-3 py-1 border-b border-current/20 opacity-80">
             {provider}
           </div>
-          <div className="text-[11px] font-mono px-3 py-1.5 text-theme-primary bg-surface-100/40">
+          <div className="text-[11px] font-mono px-3 py-1.5 text-theme-primary bg-app-muted/50">
             {model}
           </div>
         </div>
       </div>
 
       {/* Actions — second row */}
-      <div className="flex items-center justify-end gap-1.5 mt-3 pt-3 border-t border-border/30">
+      <div className="flex items-center justify-end gap-1.5 mt-3 pt-3 border-t border-app">
         <button
           onClick={() => onView(agent)}
           className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[10px] font-mono bg-accent-blue/10 text-accent-blue hover:bg-accent-blue/20 transition-colors"

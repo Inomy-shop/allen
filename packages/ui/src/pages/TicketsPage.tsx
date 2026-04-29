@@ -1,14 +1,21 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { linear as linearApi, teams as teamsApi, repos as reposApi } from '../services/api';
+import {
+  linear as linearApi,
+  teams as teamsApi,
+  repos as reposApi,
+  workflows as workflowsApi,
+  executions as executionsApi,
+} from '../services/api';
 import { useAgents } from '../hooks/useAgents';
 import { useToast } from '../components/common/Toast';
 import { renderMarkdown } from '../components/chat/ChatMessageList';
-import AgentAssignDropdown, { type AgentOption, type TeamOption } from '../components/agents/AgentAssignDropdown';
-import DispatchModal from '../components/linear/DispatchModal';
+import { type AgentOption, type TeamOption } from '../components/agents/AgentAssignDropdown';
+import DispatchModal, { type DispatchTarget, type WorkflowOption } from '../components/linear/DispatchModal';
 import {
   AlertCircle, ChevronDown, ChevronRight, Circle, Clock, ExternalLink,
   KeyRound, Loader2, MinusCircle, Play, RefreshCw, Search, Settings, X, Sparkles,
+  List as ListIcon, LayoutGrid,
 } from 'lucide-react';
 
 type StateType = 'backlog' | 'unstarted' | 'started' | 'completed' | 'canceled' | 'triage';
@@ -66,7 +73,6 @@ interface LinearStatus {
 }
 
 const STATUS_GROUPS: { type: StateType; label: string }[] = [
-  { type: 'triage', label: 'Triage' },
   { type: 'backlog', label: 'Backlog' },
   { type: 'unstarted', label: 'Todo' },
   { type: 'started', label: 'In Progress' },
@@ -77,7 +83,7 @@ const STATUS_GROUPS: { type: StateType; label: string }[] = [
 function PriorityIcon({ p }: { p: number }) {
   const tone =
     p === 1 ? 'text-accent-red'
-    : p === 2 ? 'text-orange-400'
+    : p === 2 ? 'text-accent-orange'
     : p === 3 ? 'text-accent-yellow'
     : p === 4 ? 'text-accent-green'
     : 'text-theme-subtle';
@@ -111,7 +117,7 @@ export default function TicketsPage() {
 
   const [projectFilter, setProjectFilter] = useState<string>(''); // '' = all
   const [stateFilters, setStateFilters] = useState<Set<StateType>>(
-    new Set<StateType>(['backlog', 'unstarted', 'started', 'triage']),
+    new Set<StateType>(['backlog', 'unstarted', 'started']),
   );
   const [assigneeFilter, setAssigneeFilter] = useState<'any' | 'unassigned' | string>('any');
   const [search, setSearch] = useState('');
@@ -125,6 +131,19 @@ export default function TicketsPage() {
   const [dispatchFor, setDispatchFor] = useState<LinearIssue | null>(null);
   const [repos, setRepos] = useState<any[]>([]);
   const [reposLoading, setReposLoading] = useState(true);
+  const [workflowList, setWorkflowList] = useState<WorkflowOption[]>([]);
+  const [workflowsLoading, setWorkflowsLoading] = useState(true);
+
+  // Top-tab filter + view mode — must live above the early-return paths
+  // to satisfy React's rules of hooks.
+  type TopTab = 'all' | 'active' | 'done';
+  const [topTab, setTopTab] = useState<TopTab>('all');
+  const [viewMode, setViewMode] = useState<'list' | 'board'>('list');
+  useEffect(() => {
+    if (topTab === 'active') setStateFilters(new Set<StateType>(['started', 'unstarted']));
+    else if (topTab === 'done') setStateFilters(new Set<StateType>(['completed']));
+    else setStateFilters(new Set<StateType>(['backlog', 'unstarted', 'started', 'completed', 'canceled']));
+  }, [topTab]);
 
   // Teams list for agent dropdown grouping
   useEffect(() => {
@@ -140,6 +159,20 @@ export default function TicketsPage() {
       .then((r: any[]) => setRepos((r ?? []).slice().sort((a, b) => String(a.name).localeCompare(b.name))))
       .catch(() => setRepos([]))
       .finally(() => setReposLoading(false));
+  }, []);
+
+  // Workflows (for dispatch modal — third dispatch target type)
+  useEffect(() => {
+    setWorkflowsLoading(true);
+    workflowsApi.list()
+      .then((wfs: any[]) => setWorkflowList(
+        (wfs ?? [])
+          .filter((w: any) => w.validation?.valid !== false)
+          .map((w: any) => ({ _id: w._id, name: w.name, description: w.description, parsed: w.parsed }))
+          .sort((a: WorkflowOption, b: WorkflowOption) => a.name.localeCompare(b.name)),
+      ))
+      .catch(() => setWorkflowList([]))
+      .finally(() => setWorkflowsLoading(false));
   }, []);
 
   // Initial status check
@@ -207,12 +240,24 @@ export default function TicketsPage() {
       .finally(() => setDetailLoading(false));
   }, [selectedId, toast]);
 
-  // Filter by agent assignee locally
+  // Filter by Linear assignee (the human user assigned in Linear).
+  // assigneeFilter holds the linear user id ('any' / 'unassigned' / <id>).
   const filteredIssues = useMemo(() => {
     if (assigneeFilter === 'any') return issues;
-    if (assigneeFilter === 'unassigned') return issues.filter(i => !i.agentAssignee);
-    return issues.filter(i => i.agentAssignee?.agentName === assigneeFilter);
+    if (assigneeFilter === 'unassigned') return issues.filter(i => !i.linearAssignee);
+    return issues.filter(i => i.linearAssignee?.id === assigneeFilter);
   }, [issues, assigneeFilter]);
+
+  // Build the unique list of Linear assignees we've seen across the
+  // issue set. Sorted by name for a stable dropdown order.
+  const linearAssignees = useMemo(() => {
+    const seen = new Map<string, { id: string; name: string }>();
+    for (const i of issues) {
+      const a = i.linearAssignee;
+      if (a?.id && !seen.has(a.id)) seen.set(a.id, { id: a.id, name: a.name });
+    }
+    return Array.from(seen.values()).sort((x, y) => x.name.localeCompare(y.name));
+  }, [issues]);
 
   // Filter projects locally by the sidebar search — so "search projects and issues"
   // narrows both lists at once.
@@ -266,13 +311,42 @@ export default function TicketsPage() {
     }
   }
 
-  async function handleDispatch(issue: LinearIssue, args: { agentName: string; repoId: string; extraInstructions: string }) {
-    const { assignment } = await linearApi.dispatch(issue.id, args);
+  async function handleDispatch(
+    issue: LinearIssue,
+    args: { target: DispatchTarget; repoId: string; extraInstructions: string; workflowInput?: Record<string, unknown> },
+  ) {
+    if (args.target.kind === 'workflow') {
+      // Schema-driven: the dialog already collected + cast inputs per
+      // the workflow's parsed.input. Fall back to the old auto-built
+      // task payload if the workflow has no schema.
+      const input = args.workflowInput ?? {
+        task: [
+          `[${issue.identifier}] ${issue.title}`,
+          issue.description || '',
+          args.extraInstructions ? `\nAdditional instructions:\n${args.extraInstructions}` : '',
+        ].filter(Boolean).join('\n\n'),
+        ticket_id: issue.identifier,
+        ticket_url: issue.url,
+      };
+      const exec = await executionsApi.start(args.target.workflowId, input);
+      toast.success(`Started ${args.target.workflowName} on ${issue.identifier}`);
+      setDispatchFor(null);
+      navigate(`/executions/${exec.id}`);
+      return;
+    }
+
+    // Both 'agent' and 'team-lead' route through the existing
+    // /linear/dispatch endpoint with the resolved agent name.
+    const agentName = args.target.kind === 'agent' ? args.target.name : args.target.agentName;
+    const { assignment } = await linearApi.dispatch(issue.id, {
+      agentName,
+      repoId: args.repoId,
+      extraInstructions: args.extraInstructions,
+    });
     setIssues(prev => prev.map(i => i.id === issue.id ? { ...i, agentAssignee: assignment } : i));
     if (detail?.id === issue.id) setDetail({ ...detail, agentAssignee: assignment });
-    toast.success(`Dispatching ${args.agentName} to ${issue.identifier}…`);
+    toast.success(`Dispatching ${agentName} to ${issue.identifier}…`);
     setDispatchFor(null);
-    // Refresh the detail view after a beat so the user sees the workspace link once the setup finishes
     setTimeout(() => { if (selectedId === issue.id) void linearApi.issue(issue.id).then(setDetail).catch(() => {}); }, 3000);
   }
 
@@ -305,7 +379,7 @@ export default function TicketsPage() {
   if (!status?.configured) {
     return (
       <div className="flex items-center justify-center h-full p-8">
-        <div className="max-w-md w-full rounded-xl border border-border/40 bg-surface-100/40 p-8 text-center space-y-4">
+        <div className="max-w-md w-full rounded-xl border border-app bg-app-muted/50 p-8 text-center space-y-4">
           <div className="w-12 h-12 mx-auto rounded-full bg-accent-yellow/10 flex items-center justify-center">
             <AlertCircle className="w-6 h-6 text-accent-yellow" />
           </div>
@@ -315,19 +389,19 @@ export default function TicketsPage() {
               Add a Linear API token to Allen Secrets under the key:
             </p>
           </div>
-          <div className="inline-flex items-center gap-2 px-3 py-2 rounded-md bg-surface-200/40 border border-border/40 text-[11px] font-mono text-accent-blue">
+          <div className="inline-flex items-center gap-2 px-3 py-2 rounded-md bg-app-muted border border-app text-[11px] font-mono text-accent">
             <KeyRound className="w-3.5 h-3.5" /> ALLEN_LINEAR_ACCESS_TOKEN
           </div>
           <div className="flex items-center justify-center gap-2 pt-2">
             <button
               onClick={() => navigate('/settings/secrets')}
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-[11px] font-mono bg-accent-blue/10 text-accent-blue hover:bg-accent-blue/20 transition-colors"
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-[11px] font-mono bg-accent-soft text-accent hover:bg-accent/20 transition-colors"
             >
               <Settings className="w-3 h-3" /> Open Settings · Secrets
             </button>
             <button
               onClick={loadStatus}
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-[11px] font-mono bg-surface-200/40 text-theme-muted hover:bg-surface-200/60 transition-colors"
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-[11px] font-mono bg-app-muted text-theme-muted hover:bg-app-muted transition-colors"
             >
               <RefreshCw className="w-3 h-3" /> Recheck
             </button>
@@ -346,7 +420,7 @@ export default function TicketsPage() {
           <p className="text-[12px] text-theme-muted font-body">{status.error}</p>
           <button
             onClick={loadStatus}
-            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-[11px] font-mono bg-surface-200/40 text-theme-muted hover:bg-surface-200/60"
+            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-[11px] font-mono bg-app-muted text-theme-muted hover:bg-app-muted"
           >
             <RefreshCw className="w-3 h-3" /> Retry
           </button>
@@ -356,196 +430,187 @@ export default function TicketsPage() {
   }
 
   const totalShown = filteredIssues.length;
+  const activeCount = (grouped.get('started')?.length ?? 0) + (grouped.get('unstarted')?.length ?? 0);
 
   return (
-    <div className="flex h-full min-h-0">
-      {/* ── Sidebar ──────────────────────────────────────────────────────── */}
-      <aside className="w-72 shrink-0 border-r border-border/40 bg-surface-50/40 flex flex-col min-h-0">
-        <div className="px-4 py-4 border-b border-border/40">
-          <h1 className="font-heading text-sm font-bold text-theme-primary tracking-widest uppercase">Linear</h1>
-          <div className="mt-1.5 flex items-center gap-2 text-[10px] font-mono text-theme-muted">
-            <span className="inline-flex items-center gap-1">
-              <span className="w-1.5 h-1.5 rounded-full bg-accent-green" /> {status.workspaceName ?? 'Linear'}
-            </span>
-            <span>·</span>
-            <span>{issues.length} issues</span>
-          </div>
+    <div className="flex h-full min-h-0 flex-col">
+      {/* ── Top bar (matches handoff/pages/remaining.jsx LinearV2) ──────── */}
+      <div className="px-6 pt-5 pb-0 border-b border-app shrink-0">
+        <div className="flex items-center gap-2 mb-2 text-[12px] text-theme-muted">
+          <span>Code</span>
+          <span className="text-theme-subtle">/</span>
+          <span>Linear</span>
         </div>
-
-        <div className="px-4 py-3 border-b border-border/40">
-          <div className="relative">
-            <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-theme-subtle pointer-events-none" />
-            <input
-              type="text"
-              value={search}
-              onChange={e => setSearch(e.target.value)}
-              placeholder="Search projects and issues…"
-              className="input text-xs pl-8 pr-3 py-1.5 w-full"
-            />
+        <div className="flex items-center justify-between mb-3">
+          <div className="flex items-center gap-3">
+            <h1 className="text-[20px] font-semibold text-theme-primary tracking-tight">Linear</h1>
+            <div className="flex items-center gap-1.5 text-[11px] font-mono text-theme-muted">
+              <span className="w-1.5 h-1.5 rounded-full bg-accent-green" />
+              {status.workspaceName ?? 'Linear'} · {issues.length} issues
+            </div>
           </div>
-        </div>
-
-        <div className="flex-1 overflow-y-auto min-h-0 px-4 py-3 space-y-5">
-          {/* Projects */}
-          <div>
-            <div className="text-[9px] font-label uppercase tracking-widest text-theme-subtle mb-2">Projects</div>
+          <div className="flex items-center gap-2">
+            {/* List/Board view toggle */}
+            <div className="flex items-center bg-app-muted rounded-md p-0.5">
+              <button
+                onClick={() => setViewMode('list')}
+                className={`flex items-center gap-1.5 px-2.5 py-1 rounded text-[12px] transition-colors ${
+                  viewMode === 'list' ? 'bg-app-card text-theme-primary shadow-sm font-medium' : 'text-theme-muted hover:text-theme-primary'
+                }`}
+                title="List view"
+              >
+                <ListIcon className="w-3.5 h-3.5" /> List
+              </button>
+              <button
+                onClick={() => setViewMode('board')}
+                className={`flex items-center gap-1.5 px-2.5 py-1 rounded text-[12px] transition-colors ${
+                  viewMode === 'board' ? 'bg-app-card text-theme-primary shadow-sm font-medium' : 'text-theme-muted hover:text-theme-primary'
+                }`}
+                title="Board view"
+              >
+                <LayoutGrid className="w-3.5 h-3.5" /> Board
+              </button>
+            </div>
             <button
-              onClick={() => setProjectFilter('')}
-              className={`w-full flex items-center justify-between px-2 py-1.5 rounded-md text-[11px] font-mono transition-colors ${
-                projectFilter === ''
-                  ? 'bg-accent-blue/10 text-accent-blue'
-                  : 'text-theme-secondary hover:bg-surface-200/40'
+              onClick={() => { void loadStatus(); void loadProjects(); void loadIssues(); }}
+              disabled={listLoading}
+              className="btn btn-secondary btn-sm"
+            >
+              {listLoading ? <Loader2 className="w-3 h-3 animate-spin" /> : <RefreshCw className="w-3 h-3" />}
+              Refresh
+            </button>
+          </div>
+        </div>
+
+        {/* Tab row */}
+        <div className="flex items-center gap-1 -mb-px">
+          {([
+            { id: 'all', label: 'All', count: issues.length },
+            { id: 'active', label: 'Active', count: activeCount },
+            { id: 'done', label: 'Done' },
+          ] as { id: TopTab; label: string; count?: number }[]).map(t => (
+            <button
+              key={t.id}
+              onClick={() => setTopTab(t.id)}
+              className={`px-2.5 py-1.5 text-[13px] -mb-px transition-colors flex items-center gap-1.5 border-b-2 ${
+                topTab === t.id
+                  ? 'text-theme-primary font-medium border-accent'
+                  : 'text-theme-muted hover:text-theme-primary border-transparent'
               }`}
             >
-              <span>★ All projects</span>
-              <span className="text-theme-subtle">{issues.length}</span>
+              {t.label}
+              {t.count != null && <span className="text-[11px] text-theme-muted font-mono">{t.count}</span>}
             </button>
-            {filteredProjects.map(p => (
-              <button
-                key={p.id}
-                onClick={() => setProjectFilter(p.id)}
-                className={`w-full flex items-center gap-2 px-2 py-1.5 rounded-md text-[11px] font-mono transition-colors ${
-                  projectFilter === p.id
-                    ? 'bg-accent-blue/10 text-accent-blue'
-                    : 'text-theme-secondary hover:bg-surface-200/40'
-                }`}
-                title={p.description || p.name}
-              >
-                <span
-                  className="w-2 h-2 rounded-full shrink-0"
-                  style={{ backgroundColor: p.color ?? '#888' }}
-                />
-                <span className="truncate flex-1 text-left">{p.name}</span>
-              </button>
-            ))}
-            {search.trim() && filteredProjects.length === 0 && (
-              <div className="text-[10px] text-theme-subtle italic font-body py-1.5">
-                No projects match "{search}".
-              </div>
-            )}
-            {!search.trim() && projects.length === 0 && (
-              <div className="text-[10px] text-theme-subtle italic font-body py-1.5">No projects.</div>
-            )}
-          </div>
+          ))}
+        </div>
+      </div>
 
-          {/* Status */}
-          <div>
-            <div className="text-[9px] font-label uppercase tracking-widest text-theme-subtle mb-2">Status</div>
-            {STATUS_GROUPS.map(g => (
-              <label
-                key={g.type}
-                className="flex items-center gap-2 px-2 py-1 rounded-md cursor-pointer text-[11px] font-mono text-theme-secondary hover:bg-surface-200/40"
-              >
+      {/* ── Filter row + main list ──────────────────────────────────────── */}
+      <div className="flex flex-1 min-h-0 overflow-hidden">
+        <div className="flex-1 overflow-y-auto min-h-0">
+          <div className="px-6 py-4 space-y-3">
+            {/* Filter row */}
+            <div className="flex items-center gap-3 text-[12px] text-theme-muted">
+              <div className="relative">
+                <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-theme-muted pointer-events-none" />
                 <input
-                  type="checkbox"
-                  checked={stateFilters.has(g.type)}
-                  onChange={() => toggleStateFilter(g.type)}
-                  className="accent-accent-blue"
-                />
-                <span className="flex-1">{g.label}</span>
-                <span className="text-theme-subtle">{grouped.get(g.type)?.length ?? 0}</span>
-              </label>
-            ))}
-          </div>
-
-          {/* Assignee */}
-          <div>
-            <div className="text-[9px] font-label uppercase tracking-widest text-theme-subtle mb-2">Agent assignee</div>
-            <div className="space-y-0.5">
-              <button
-                onClick={() => setAssigneeFilter('any')}
-                className={`w-full text-left px-2 py-1 rounded-md text-[11px] font-mono transition-colors ${
-                  assigneeFilter === 'any' ? 'bg-accent-blue/10 text-accent-blue' : 'text-theme-secondary hover:bg-surface-200/40'
-                }`}
-              >
-                Any
-              </button>
-              <button
-                onClick={() => setAssigneeFilter('unassigned')}
-                className={`w-full text-left px-2 py-1 rounded-md text-[11px] font-mono transition-colors ${
-                  assigneeFilter === 'unassigned' ? 'bg-accent-blue/10 text-accent-blue' : 'text-theme-secondary hover:bg-surface-200/40'
-                }`}
-              >
-                Unassigned
-              </button>
-              <div className="pt-1">
-                <AgentAssignDropdown
-                  value={assigneeFilter === 'any' || assigneeFilter === 'unassigned' ? null : assigneeFilter}
-                  onChange={(name) => setAssigneeFilter(name ?? 'any')}
-                  agents={agentOptions}
-                  teams={teamOptions}
-                  placeholder="Pick an agent…"
-                  size="input"
-                  allowClear={false}
+                  type="text"
+                  value={search}
+                  onChange={e => setSearch(e.target.value)}
+                  placeholder="Search issues…"
+                  className="input pl-8 pr-3 py-1.5 w-64 text-[12px]"
                 />
               </div>
+              <span>Project:</span>
+              <select
+                value={projectFilter}
+                onChange={e => setProjectFilter(e.target.value)}
+                className="input py-1.5 text-[12px] w-auto"
+              >
+                <option value="">All projects</option>
+                {projects.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+              </select>
+              <span>Assignee:</span>
+              <select
+                value={assigneeFilter}
+                onChange={e => setAssigneeFilter(e.target.value)}
+                className="input py-1.5 text-[12px] w-auto"
+              >
+                <option value="any">Any</option>
+                <option value="unassigned">Unassigned</option>
+                {linearAssignees.map(u => (
+                  <option key={u.id} value={u.id}>{u.name}</option>
+                ))}
+              </select>
+              <div className="flex-1" />
+              <span className="text-[11px] font-mono">{totalShown} of {issues.length}</span>
             </div>
-          </div>
 
-          <button
-            onClick={() => { setSearch(''); setProjectFilter(''); setAssigneeFilter('any'); setStateFilters(new Set(['backlog', 'unstarted', 'started', 'triage'])); }}
-            className="w-full text-[10px] font-mono text-theme-muted hover:text-theme-primary text-left"
-          >
-            Clear filters
-          </button>
-        </div>
-
-        <div className="p-3 border-t border-border/40">
-          <button
-            onClick={() => { void loadStatus(); void loadProjects(); void loadIssues(); }}
-            disabled={listLoading}
-            className="w-full inline-flex items-center justify-center gap-1.5 px-3 py-2 rounded-lg text-[11px] font-mono bg-accent-blue/10 text-accent-blue hover:bg-accent-blue/20 disabled:opacity-50"
-          >
-            {listLoading ? <Loader2 className="w-3 h-3 animate-spin" /> : <RefreshCw className="w-3 h-3" />}
-            Refresh from Linear
-          </button>
-        </div>
-      </aside>
-
-      {/* ── Main list ───────────────────────────────────────────────────── */}
-      <main className="flex-1 overflow-y-auto min-h-0">
-        <div className="p-6">
-          <div className="flex items-center justify-between mb-5">
-            <div>
-              <h2 className="font-heading text-lg font-bold text-theme-primary tracking-widest uppercase">
-                {projectFilter
-                  ? (projects.find(p => p.id === projectFilter)?.name ?? 'Project')
-                  : 'All Tickets'}
-              </h2>
-              <div className="text-[10px] font-mono text-theme-muted mt-0.5">
-                {totalShown} visible · grouped by status
+            {/* Issue groups — list view */}
+            {viewMode === 'list' && (
+              <div className="space-y-3">
+                {STATUS_GROUPS.map(g => {
+                  const list = grouped.get(g.type) ?? [];
+                  if (list.length === 0) return null;
+                  const collapsed = collapsedGroups.has(g.type);
+                  return (
+                    <div key={g.type} className="card overflow-hidden">
+                      <button
+                        onClick={() => toggleGroupCollapsed(g.type)}
+                        className="w-full flex items-center gap-2 px-3.5 py-2 text-left bg-app-muted hover:bg-app-muted/80 border-b border-app transition-colors"
+                      >
+                        {collapsed ? <ChevronRight className="w-3.5 h-3.5 text-theme-muted" /> : <ChevronDown className="w-3.5 h-3.5 text-theme-muted" />}
+                        <span className="text-[13px] font-medium text-theme-primary">{g.label}</span>
+                        <span className="text-[11px] font-mono text-theme-muted">{list.length} issue{list.length !== 1 ? 's' : ''}</span>
+                      </button>
+                      {!collapsed && (
+                        <div className="divide-y divide-border">
+                          {list.map(issue => (
+                            <TicketRow
+                              key={issue.id}
+                              issue={issue}
+                              active={issue.id === selectedId}
+                              onSelect={() => setSelectedId(issue.id)}
+                              onDispatch={() => setDispatchFor(issue)}
+                            />
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+                {!listLoading && filteredIssues.length === 0 && (
+                  <div className="rounded-xl border border-dashed border-app p-12 text-center text-[12px] text-theme-muted font-body italic">
+                    No tickets match the current filters.
+                  </div>
+                )}
+                {listLoading && issues.length === 0 && (
+                  <div className="flex items-center gap-2 text-[11px] font-mono text-theme-muted py-6 px-2">
+                    <Loader2 className="w-3 h-3 animate-spin" /> Loading from Linear…
+                  </div>
+                )}
               </div>
-            </div>
-          </div>
+            )}
 
-          {listLoading && issues.length === 0 ? (
-            <div className="flex items-center gap-2 text-[11px] font-mono text-theme-muted">
-              <Loader2 className="w-3 h-3 animate-spin" /> Loading from Linear…
-            </div>
-          ) : filteredIssues.length === 0 ? (
-            <div className="rounded-xl border border-dashed border-border/40 p-12 text-center text-[12px] text-theme-muted font-body italic">
-              No tickets match the current filters.
-            </div>
-          ) : (
-            <div className="space-y-5">
-              {STATUS_GROUPS.map(g => {
-                const list = grouped.get(g.type) ?? [];
-                if (list.length === 0) return null;
-                const collapsed = collapsedGroups.has(g.type);
-                return (
-                  <div key={g.type}>
-                    <button
-                      onClick={() => toggleGroupCollapsed(g.type)}
-                      className="w-full flex items-center gap-2 px-2 py-1.5 text-left hover:bg-surface-200/20 rounded-md transition-colors mb-1"
-                    >
-                      {collapsed ? <ChevronRight className="w-3.5 h-3.5 text-theme-muted" /> : <ChevronDown className="w-3.5 h-3.5 text-theme-muted" />}
-                      <span className="text-[11px] font-label uppercase tracking-widest text-theme-secondary font-semibold">{g.label}</span>
-                      <span className="text-[10px] font-mono text-theme-subtle">{list.length}</span>
-                    </button>
-                    {!collapsed && (
-                      <div className="rounded-lg border border-border/30 divide-y divide-border/20 overflow-hidden">
+            {/* Board view — Kanban columns by status */}
+            {viewMode === 'board' && (
+              <div className="flex gap-3 overflow-x-auto pb-3">
+                {STATUS_GROUPS.map(g => {
+                  const list = grouped.get(g.type) ?? [];
+                  return (
+                    <div key={g.type} className="w-[300px] shrink-0 flex flex-col card overflow-hidden">
+                      <div className="flex items-center gap-2 px-3 py-2 bg-app-muted border-b border-app shrink-0">
+                        <span className="text-[13px] font-medium text-theme-primary">{g.label}</span>
+                        <span className="text-[11px] font-mono text-theme-muted">{list.length}</span>
+                      </div>
+                      <div className="flex-1 overflow-y-auto p-2 space-y-2 min-h-[200px]">
+                        {list.length === 0 && (
+                          <div className="text-[11px] text-theme-subtle italic font-body py-4 text-center">
+                            No issues
+                          </div>
+                        )}
                         {list.map(issue => (
-                          <TicketRow
+                          <BoardCard
                             key={issue.id}
                             issue={issue}
                             active={issue.id === selectedId}
@@ -554,44 +619,51 @@ export default function TicketsPage() {
                           />
                         ))}
                       </div>
-                    )}
+                    </div>
+                  );
+                })}
+                {!listLoading && filteredIssues.length === 0 && (
+                  <div className="rounded-xl border border-dashed border-app p-12 text-center text-[12px] text-theme-muted font-body italic w-full">
+                    No tickets match the current filters.
                   </div>
-                );
-              })}
-            </div>
-          )}
+                )}
+              </div>
+            )}
+          </div>
         </div>
-      </main>
 
-      {/* ── Drawer ──────────────────────────────────────────────────────── */}
-      {selectedId && (
-        <div className="w-[32rem] shrink-0 border-l border-border/40 bg-surface-100/40 overflow-y-auto min-h-0 flex flex-col">
-          {detailLoading && !detail ? (
-            <div className="p-6 flex items-center gap-2 text-[11px] font-mono text-theme-muted">
-              <Loader2 className="w-3 h-3 animate-spin" /> Loading…
-            </div>
-          ) : detail ? (
-            <TicketDrawer
-              issue={detail}
-              onClose={() => { setSelectedId(null); setDetail(null); }}
-              onDispatch={() => setDispatchFor(detail)}
-              onClearAssignment={() => handleClearAssignment(detail.id)}
-              navigate={navigate}
-            />
-          ) : (
-            <div className="p-6 text-[12px] text-theme-muted">Not found.</div>
-          )}
-        </div>
-      )}
+        {/* Drawer */}
+        {selectedId && (
+          <div className="w-[32rem] shrink-0 border-l border-app bg-app-muted/50 overflow-y-auto min-h-0 flex flex-col">
+            {detailLoading && !detail ? (
+              <div className="p-6 flex items-center gap-2 text-[11px] font-mono text-theme-muted">
+                <Loader2 className="w-3 h-3 animate-spin" /> Loading…
+              </div>
+            ) : detail ? (
+              <TicketDrawer
+                issue={detail}
+                onClose={() => { setSelectedId(null); setDetail(null); }}
+                onDispatch={() => setDispatchFor(detail)}
+                onClearAssignment={() => handleClearAssignment(detail.id)}
+                navigate={navigate}
+              />
+            ) : (
+              <div className="p-6 text-[12px] text-theme-muted">Not found.</div>
+            )}
+          </div>
+        )}
+      </div>
 
       {/* Dispatch modal */}
       {dispatchFor && (
         <DispatchModal
           open={true}
-          issue={{ id: dispatchFor.id, identifier: dispatchFor.identifier, title: dispatchFor.title }}
+          issue={{ id: dispatchFor.id, identifier: dispatchFor.identifier, title: dispatchFor.title, description: dispatchFor.description ?? null }}
           currentAgent={dispatchFor.agentAssignee?.agentName ?? null}
           agents={agentOptions}
           teams={teamOptions}
+          workflows={workflowList}
+          workflowsLoading={workflowsLoading}
           repos={repos}
           reposLoading={reposLoading}
           onClose={() => setDispatchFor(null)}
@@ -602,6 +674,7 @@ export default function TicketsPage() {
   );
 }
 
+
 // ── Row component ───────────────────────────────────────────────────────────
 
 function AssignmentPill({ assignee, onClick }: { assignee: AgentAssignee | null; onClick: () => void }) {
@@ -609,7 +682,7 @@ function AssignmentPill({ assignee, onClick }: { assignee: AgentAssignee | null;
     return (
       <button
         onClick={onClick}
-        className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[10px] font-mono bg-surface-200/40 text-theme-muted hover:bg-accent-green/10 hover:text-accent-green border border-border/40 hover:border-accent-green/40 transition-colors"
+        className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[10px] font-mono bg-app-muted text-theme-muted hover:bg-accent-green/10 hover:text-accent-green border border-app hover:border-accent-green/40 transition-colors"
       >
         <Sparkles className="w-3 h-3" /> Dispatch
       </button>
@@ -620,7 +693,7 @@ function AssignmentPill({ assignee, onClick }: { assignee: AgentAssignee | null;
     status === 'running' ? 'bg-accent-green/10 text-accent-green border-accent-green/30'
     : status === 'pending' ? 'bg-accent-yellow/10 text-accent-yellow border-accent-yellow/30'
     : status === 'failed' ? 'bg-accent-red/10 text-accent-red border-accent-red/30'
-    : 'bg-accent-blue/10 text-accent-blue border-accent-blue/30';
+    : 'bg-accent-soft text-accent border-accent/30';
   const icon =
     status === 'running' ? <Play className="w-3 h-3" />
     : status === 'pending' ? <Loader2 className="w-3 h-3 animate-spin" />
@@ -653,7 +726,7 @@ function TicketRow({
   onDispatch: () => void;
 }) {
   return (
-    <div className={`flex items-center gap-3 px-3 py-2.5 transition-colors cursor-pointer ${active ? 'bg-accent-blue/8' : 'hover:bg-surface-200/25'}`}>
+    <div className={`flex items-center gap-3 px-3 py-2.5 transition-colors cursor-pointer ${active ? 'bg-accent-soft' : 'hover:bg-app-muted/50'}`}>
       <div className="shrink-0" title={issue.priorityLabel}>
         <PriorityIcon p={issue.priority} />
       </div>
@@ -685,6 +758,60 @@ function TicketRow({
   );
 }
 
+// ── Board card (Kanban) ─────────────────────────────────────────────────────
+
+function BoardCard({
+  issue, active, onSelect, onDispatch,
+}: {
+  issue: LinearIssue;
+  active: boolean;
+  onSelect: () => void;
+  onDispatch: () => void;
+}) {
+  return (
+    <div
+      onClick={onSelect}
+      className={`card-hover p-2.5 cursor-pointer flex flex-col gap-1.5 ${
+        active ? 'border-accent shadow-sm' : ''
+      }`}
+    >
+      <div className="flex items-center gap-1.5">
+        <PriorityIcon p={issue.priority} />
+        <span className="text-[10.5px] font-mono text-theme-muted">{issue.identifier}</span>
+        <span className="flex-1" />
+        {issue.project && (
+          <span className="text-[10px] font-mono text-theme-subtle truncate max-w-[100px]" title={issue.project.name}>
+            {issue.project.name}
+          </span>
+        )}
+      </div>
+      <div className="text-[12.5px] text-theme-primary leading-snug line-clamp-2 font-body">
+        {issue.title}
+      </div>
+      {issue.labels.length > 0 && (
+        <div className="flex items-center gap-1.5 flex-wrap">
+          {issue.labels.slice(0, 3).map(l => (
+            <span
+              key={l.id}
+              className="text-[9px] font-mono px-1.5 py-0.5 rounded border"
+              style={{ color: l.color, borderColor: l.color + '60', backgroundColor: l.color + '15' }}
+            >
+              {l.name}
+            </span>
+          ))}
+          {issue.labels.length > 3 && (
+            <span className="text-[9px] text-theme-subtle font-mono">+{issue.labels.length - 3}</span>
+          )}
+        </div>
+      )}
+      <div className="flex items-center justify-between gap-2 mt-0.5" onClick={e => e.stopPropagation()}>
+        <AssignmentPill assignee={issue.agentAssignee} onClick={onDispatch} />
+        <span className="text-[10px] font-mono text-theme-subtle">{relative(issue.updatedAt)}</span>
+      </div>
+    </div>
+  );
+}
+
 // ── Drawer component ────────────────────────────────────────────────────────
 
 function TicketDrawer({
@@ -703,7 +830,7 @@ function TicketDrawer({
     status === 'running' ? 'bg-accent-green/10 text-accent-green border-accent-green/30'
     : status === 'pending' ? 'bg-accent-yellow/10 text-accent-yellow border-accent-yellow/30'
     : status === 'failed' ? 'bg-accent-red/10 text-accent-red border-accent-red/30'
-    : 'bg-accent-blue/10 text-accent-blue border-accent-blue/30';
+    : 'bg-accent-soft text-accent border-accent/30';
 
   const statusLabel =
     status === 'running' ? 'Agent is working'
@@ -713,18 +840,18 @@ function TicketDrawer({
 
   return (
     <>
-      <div className="px-5 py-4 border-b border-border/40 flex items-center justify-between shrink-0">
+      <div className="px-5 py-4 border-b border-app flex items-center justify-between shrink-0">
         <div className="flex items-center gap-2">
           <span className="text-[11px] font-mono text-theme-subtle">{issue.identifier}</span>
           {issue.project && (
             <span className="text-[11px] font-mono text-theme-muted">· {issue.project.name}</span>
           )}
         </div>
-        <button onClick={onClose} className="p-1.5 rounded-md text-theme-muted hover:text-theme-primary hover:bg-surface-200/50">
+        <button onClick={onClose} className="p-1.5 rounded-md text-theme-muted hover:text-theme-primary hover:bg-app-muted">
           <X className="w-4 h-4" />
         </button>
       </div>
-      <div className="px-5 py-4 border-b border-border/40 shrink-0 space-y-3">
+      <div className="px-5 py-4 border-b border-app shrink-0 space-y-3">
         <h3 className="font-heading text-base font-bold text-theme-primary tracking-wide leading-snug">{issue.title}</h3>
         <div className="flex items-center gap-2 flex-wrap">
           <span
@@ -733,7 +860,7 @@ function TicketDrawer({
           >
             {issue.state.name}
           </span>
-          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-mono bg-surface-200/40 text-theme-muted border border-border/40">
+          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-mono bg-app-muted text-theme-muted border border-app">
             <PriorityIcon p={issue.priority} /> {issue.priorityLabel}
           </span>
           {issue.labels.map(l => (
@@ -748,9 +875,9 @@ function TicketDrawer({
         </div>
       </div>
 
-      <div className="px-5 py-4 border-b border-border/40 shrink-0 space-y-3">
+      <div className="px-5 py-4 border-b border-app shrink-0 space-y-3">
         <div>
-          <div className="text-[10px] font-label uppercase tracking-widest text-theme-subtle mb-1.5">Agent assignment</div>
+          <div className="overline mb-1.5">Agent assignment</div>
           {assignee ? (
             <div className={`rounded-lg border px-3 py-2 space-y-2 ${statusTone}`}>
               <div className="flex items-center justify-between gap-2">
@@ -809,14 +936,14 @@ function TicketDrawer({
         </div>
         {issue.linearAssignee && (
           <div>
-            <div className="text-[10px] font-label uppercase tracking-widest text-theme-subtle mb-1">Linear assignee</div>
+            <div className="overline mb-1">Linear assignee</div>
             <div className="text-[11px] font-mono text-theme-secondary">{issue.linearAssignee.name}{issue.linearAssignee.email ? ` · ${issue.linearAssignee.email}` : ''}</div>
           </div>
         )}
       </div>
 
       <div className="flex-1 overflow-y-auto min-h-0 px-5 py-4">
-        <div className="text-[10px] font-label uppercase tracking-widest text-theme-subtle mb-3">Description</div>
+        <div className="overline mb-3">Description</div>
         {issue.description ? (
           <div className="text-[13px] text-theme-secondary leading-relaxed prose-allen">
             {renderMarkdown(issue.description)}
@@ -825,7 +952,7 @@ function TicketDrawer({
           <div className="text-[11px] text-theme-muted italic">No description.</div>
         )}
 
-        <div className="mt-6 text-[10px] font-label uppercase tracking-widest text-theme-subtle mb-2">Metadata</div>
+        <div className="mt-6 overline mb-2">Metadata</div>
         <div className="space-y-1 text-[11px] font-mono text-theme-muted">
           <div>Team: <span className="text-theme-secondary">{issue.team.name}</span></div>
           {issue.project && <div>Project: <span className="text-theme-secondary">{issue.project.name}</span></div>}
@@ -835,12 +962,12 @@ function TicketDrawer({
         </div>
       </div>
 
-      <div className="px-5 py-4 border-t border-border/40 shrink-0 flex items-center gap-2">
+      <div className="px-5 py-4 border-t border-app shrink-0 flex items-center gap-2">
         <a
           href={issue.url}
           target="_blank"
           rel="noreferrer"
-          className="inline-flex items-center gap-1.5 px-3 py-2 rounded-full text-[11px] font-mono bg-surface-200/40 text-theme-muted hover:bg-surface-200/60 transition-colors"
+          className="inline-flex items-center gap-1.5 px-3 py-2 rounded-full text-[11px] font-mono bg-app-muted text-theme-muted hover:bg-app-muted transition-colors"
         >
           <ExternalLink className="w-3 h-3" /> Open in Linear
         </a>

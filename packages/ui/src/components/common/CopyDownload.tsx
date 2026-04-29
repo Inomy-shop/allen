@@ -13,7 +13,7 @@ export function CopyButton({ text, label = 'Copy' }: { text: string; label?: str
           setTimeout(() => setCopied(false), 1500);
         } catch { /* ignore */ }
       }}
-      className="px-1.5 py-1 rounded-md hover:bg-surface-200/60 text-theme-muted hover:text-accent-blue transition-colors flex items-center gap-1 text-[11px]"
+      className="px-1.5 py-1 rounded-md hover:bg-app-muted text-theme-muted hover:text-accent-blue transition-colors flex items-center gap-1 text-[11px]"
       title={label}
     >
       {copied ? <Check className="w-3 h-3 text-accent-green" /> : <Copy className="w-3 h-3" />}
@@ -47,7 +47,7 @@ export function DownloadButton({
         document.body.removeChild(a);
         setTimeout(() => URL.revokeObjectURL(url), 0);
       }}
-      className="px-1.5 py-1 rounded-md hover:bg-surface-200/60 text-theme-muted hover:text-accent-blue transition-colors flex items-center gap-1 text-[11px]"
+      className="px-1.5 py-1 rounded-md hover:bg-app-muted text-theme-muted hover:text-accent-blue transition-colors flex items-center gap-1 text-[11px]"
       title={label}
     >
       <Download className="w-3 h-3" />

@@ -71,16 +71,16 @@ function AddRepoDialog({ open, onClose, onCreated }: { open: boolean; onClose: (
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-md">
-      <div className="card w-full max-w-lg overflow-hidden shadow-glow-blue/20 animate-in fade-in zoom-in-95 duration-200">
+      <div className="card w-full max-w-lg overflow-hidden shadow-popover animate-in fade-in zoom-in-95 duration-200">
         {/* Header */}
-        <div className="px-6 py-5 border-b border-border/60">
+        <div className="px-6 py-5 border-b border-app">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-3">
-              <div className="w-10 h-10 rounded-sm bg-accent-blue/10 border border-accent-blue/30 flex items-center justify-center">
+              <div className="w-10 h-10 rounded-sm bg-accent-soft flex items-center justify-center">
                 <Plus className="w-5 h-5 text-accent-blue" />
               </div>
               <div>
-                <h2 className="font-heading text-sm font-bold text-theme-primary tracking-wider uppercase">Add Repository</h2>
+                <h2 className="text-[14px] font-semibold text-theme-primary tracking-tight">Add Repository</h2>
                 <p className="text-[11px] text-theme-muted font-mono">Clone from GitHub &middot; auto-detects language, framework</p>
               </div>
             </div>
@@ -129,7 +129,7 @@ function AddRepoDialog({ open, onClose, onCreated }: { open: boolean; onClose: (
         </div>
 
         {/* Footer */}
-        <div className="flex items-center gap-3 px-6 py-5 border-t border-border/60 bg-surface-50/50">
+        <div className="flex items-center gap-3 px-6 py-5 border-t border-app bg-app-card/50">
           <button onClick={onClose} className="flex-1 btn-ghost">Cancel</button>
           <button onClick={handleSubmit} disabled={saving} className="flex-1 btn-primary inline-flex items-center justify-center gap-2">
             {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : <FolderGit2 className="w-4 h-4" />}
@@ -193,15 +193,15 @@ function EditRepoDialog({ repo, open, onClose, onUpdated }: { repo: Repo | null;
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-md">
-      <div className="card w-full max-w-lg overflow-hidden shadow-glow-blue/20 animate-in fade-in zoom-in-95 duration-200">
-        <div className="px-6 py-5 border-b border-border/60">
+      <div className="card w-full max-w-lg overflow-hidden shadow-popover animate-in fade-in zoom-in-95 duration-200">
+        <div className="px-6 py-5 border-b border-app">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-3">
-              <div className="w-10 h-10 rounded-sm bg-accent-blue/10 border border-accent-blue/30 flex items-center justify-center">
+              <div className="w-10 h-10 rounded-sm bg-accent-soft flex items-center justify-center">
                 <Pencil className="w-5 h-5 text-accent-blue" />
               </div>
               <div>
-                <h2 className="font-heading text-sm font-bold text-theme-primary tracking-wider uppercase">Edit Repository</h2>
+                <h2 className="text-[14px] font-semibold text-theme-primary tracking-tight">Edit Repository</h2>
                 <p className="text-[11px] text-theme-muted font-mono">{repo.path}</p>
               </div>
             </div>
@@ -259,7 +259,7 @@ function EditRepoDialog({ repo, open, onClose, onUpdated }: { repo: Repo | null;
           </div>
         </div>
 
-        <div className="flex items-center gap-3 px-6 py-5 border-t border-border/60 bg-surface-50/50">
+        <div className="flex items-center gap-3 px-6 py-5 border-t border-app bg-app-card/50">
           <button onClick={onClose} className="flex-1 btn-ghost">Cancel</button>
           <button onClick={handleSubmit} disabled={saving} className="flex-1 btn-primary inline-flex items-center justify-center gap-2">
             {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Pencil className="w-4 h-4" />}
@@ -273,28 +273,16 @@ function EditRepoDialog({ repo, open, onClose, onUpdated }: { repo: Repo | null;
 
 /* ── Language / framework color helpers ──────────────────────────────────── */
 
-const langColors: Record<string, string> = {
-  typescript: 'bg-accent-blue/15 text-accent-blue border-accent-blue/30',
-  javascript: 'bg-accent-yellow/15 text-accent-yellow border-accent-yellow/30',
-  python: 'bg-accent-green/15 text-accent-green border-accent-green/30',
-  rust: 'bg-accent-orange/15 text-accent-orange border-accent-orange/30',
-  go: 'bg-accent-cyan/15 text-accent-cyan border-accent-cyan/30',
-  java: 'bg-accent-red/15 text-accent-red border-accent-red/30',
-};
-
-const fwColors: Record<string, string> = {
-  react: 'bg-accent-cyan/15 text-accent-cyan border-accent-cyan/30',
-  express: 'bg-accent-green/15 text-accent-green border-accent-green/30',
-  next: 'bg-surface-100/10 text-theme-primary border-border/30',
-  vite: 'bg-accent-purple/15 text-accent-purple border-accent-purple/30',
-  vue: 'bg-accent-green/15 text-accent-green border-accent-green/30',
-  tailwind: 'bg-accent-cyan/15 text-accent-cyan border-accent-cyan/30',
-};
+// v2 single-accent rule: language/framework chips render as monochrome
+// muted chips. Distinguishing color is reserved for run-state pills.
+const langColors: Record<string, string> = {};
+const fwColors: Record<string, string> = {};
 
 function Badge({ label, colorClass }: { label: string; colorClass?: string }) {
-  const cls = colorClass ?? 'bg-surface-200/60 text-theme-muted border-border/30';
+  // colorClass arg kept for callers but the v2 chip is always neutral.
+  void colorClass;
   return (
-    <span className={`text-[10px] px-1.5 py-0.5 rounded-sm font-mono uppercase border ${cls}`}>
+    <span className="text-[10.5px] px-1.5 py-0.5 rounded font-mono bg-app-muted text-theme-secondary">
       {label}
     </span>
   );
@@ -373,103 +361,135 @@ export default function RepoManagerPage() {
   };
 
   return (
-    <div className="p-6">
+    <div className="px-6 pt-5 pb-8">
+      {/* Breadcrumb */}
+      <div className="flex items-center gap-2 mb-2 text-[12px] text-theme-muted">
+        <span>Code</span>
+        <span className="text-theme-subtle">/</span>
+        <span>Repositories</span>
+      </div>
+
       {/* Header */}
-      <div className="flex items-center justify-between mb-6">
-        <div>
-          <h1 className="font-heading text-xl font-bold text-theme-primary tracking-widest uppercase">Repositories</h1>
-          <p className="text-xs text-theme-muted mt-1 font-body">{repoList.length} repo{repoList.length !== 1 ? 's' : ''} registered</p>
+      <div className="flex items-center justify-between mb-5">
+        <div className="flex items-center gap-3">
+          <h1 className="text-[20px] font-semibold text-theme-primary tracking-tight">Repositories</h1>
+          <span className="text-[12px] font-mono text-theme-muted">{repoList.length}</span>
         </div>
         <div className="flex items-center gap-2">
-          <button title="Refresh" onClick={refresh} className="btn-ghost text-xs"><RefreshCw className="w-3.5 h-3.5" /></button>
-          <button onClick={() => setAddOpen(true)} className="btn-primary text-xs inline-flex items-center gap-1.5">
-            <Plus className="w-3.5 h-3.5" /> Add Repo
+          <button title="Refresh" onClick={refresh} className="btn btn-secondary btn-sm">
+            <RefreshCw className="w-3.5 h-3.5" />
+          </button>
+          <button onClick={() => setAddOpen(true)} className="btn btn-primary btn-sm">
+            <Plus className="w-3.5 h-3.5" /> Add repo
           </button>
         </div>
       </div>
 
       {/* Loading */}
       {loading ? (
-        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
-          {Array.from({ length: 3 }).map((_, i) => (
-            <div key={i} className="card p-6 animate-pulse">
-              <div className="h-5 w-32 bg-surface-200 rounded-sm mb-3" />
-              <div className="h-3 w-48 bg-surface-200 rounded-sm mb-4" />
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+          {Array.from({ length: 4 }).map((_, i) => (
+            <div key={i} className="card p-4 animate-pulse">
+              <div className="h-5 w-32 bg-app-muted rounded mb-3" />
+              <div className="h-3 w-48 bg-app-muted rounded mb-4" />
               <div className="flex gap-2 mb-3">
-                <div className="h-4 w-16 bg-surface-200 rounded-sm" />
-                <div className="h-4 w-16 bg-surface-200 rounded-sm" />
+                <div className="h-4 w-16 bg-app-muted rounded" />
+                <div className="h-4 w-16 bg-app-muted rounded" />
               </div>
-              <div className="h-3 w-full bg-surface-200 rounded-sm" />
+              <div className="h-3 w-full bg-app-muted rounded" />
             </div>
           ))}
         </div>
       ) : repoList.length === 0 ? (
-        <div className="text-center py-12">
-          <FolderGit2 className="w-10 h-10 text-theme-subtle mx-auto mb-3" />
-          <p className="text-sm text-theme-muted font-body">No repositories yet. Add one to get started.</p>
+        <div className="text-center py-16">
+          <div className="w-14 h-14 rounded-xl bg-accent-soft flex items-center justify-center mx-auto mb-5">
+            <FolderGit2 className="w-6 h-6 text-accent" />
+          </div>
+          <p className="text-[14px] text-theme-primary font-body mb-1">No repositories yet</p>
+          <p className="text-[12px] text-theme-muted font-body mb-6">Add one to get started.</p>
+          <button onClick={() => setAddOpen(true)} className="btn btn-primary">
+            <Plus className="w-3.5 h-3.5" /> Add repository
+          </button>
         </div>
       ) : (
-        <div className="space-y-3">
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
           {repoList.map((repo) => {
             const isScanning = scanningId === repo._id;
             const isArchived = repo.status === 'archived';
             return (
-              <div key={repo._id} className={`p-4 rounded-lg border border-border/20 bg-surface-100/20 hover:bg-surface-100/40 transition-colors group ${isArchived ? 'opacity-50' : ''}`}>
-                <div className="flex items-center gap-3">
-                  <FolderGit2 className="w-5 h-5 text-blue-400 shrink-0" />
+              <div key={repo._id} className={`card-hover p-4 group flex flex-col gap-2 ${isArchived ? 'opacity-50' : ''}`}>
+                <div className="flex items-start gap-3">
+                  <div className="w-8 h-8 rounded-md bg-app-muted flex items-center justify-center shrink-0">
+                    <FolderGit2 className="w-4 h-4 text-accent" />
+                  </div>
                   <div className="flex-1 min-w-0">
-                    <div className="flex items-center gap-2">
-                      <span className="text-sm font-heading font-semibold text-theme-primary">{repo.name}</span>
-                      {isArchived && <span className="text-[10px] font-mono text-theme-subtle bg-surface-200/40 px-1.5 py-0.5 rounded border border-border/20">archived</span>}
-                      {/* Badges */}
-                      {repo.detected?.language?.filter(l => l !== 'unknown').map(lang => (
-                        <Badge key={lang} label={lang} colorClass={langColors[lang]} />
-                      ))}
-                      {repo.detected?.framework?.map(fw => (
-                        <Badge key={fw} label={fw} colorClass={fwColors[fw]} />
-                      ))}
+                    <div className="flex items-center gap-1.5 flex-wrap">
+                      <span className="text-[14px] font-medium text-theme-primary truncate">{repo.name}</span>
+                      {isArchived && <span className="badge badge-muted">archived</span>}
+                      {repo.executionCount > 0 && (
+                        <span className="text-[11px] font-mono text-theme-muted">· {repo.executionCount} runs</span>
+                      )}
                     </div>
-                    <div className="flex items-center gap-3 mt-1 text-[10px] text-theme-muted font-mono">
-                      <span className="truncate max-w-[300px]" title={repo.path}>{repo.path}</span>
-                      <span className="flex items-center gap-1"><GitBranch className="w-3 h-3" />{repo.detected?.defaultBranch ?? 'main'}</span>
-                      {repo.detected?.remoteUrl && (() => {
-                        const sshMatch = repo.detected.remoteUrl.match(/^git@([^:]+):(.+?)(?:\.git)?$/);
-                        const httpsUrl = sshMatch ? `https://${sshMatch[1]}/${sshMatch[2]}` : repo.detected.remoteUrl.replace(/\.git$/, '');
-                        const display = repo.detected.remoteUrl.replace(/^git@([^:]+):/, '$1/').replace(/^https?:\/\//, '').replace(/\.git$/, '');
-                        return (
-                          <a href={httpsUrl} target="_blank" rel="noopener noreferrer" onClick={e => e.stopPropagation()} className="flex items-center gap-1 truncate max-w-[200px] hover:text-blue-400 transition-colors">
-                            <ExternalLink className="w-3 h-3 shrink-0" />
-                            {display}
-                          </a>
-                        );
-                      })()}
-                      {repo.executionCount > 0 && <span><Package className="w-3 h-3 inline mr-0.5" />{repo.executionCount} runs</span>}
-                    </div>
-                    {repo.description && <p className="text-[11px] text-theme-subtle mt-1 truncate">{repo.description}</p>}
+                    {repo.description && (
+                      <p className="text-[12px] text-theme-muted mt-0.5 truncate">{repo.description}</p>
+                    )}
                   </div>
-                  <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                    <button onClick={(e) => { e.stopPropagation(); setContextRepo(repo); }} className="btn-ghost p-1.5 text-xs text-accent-blue" title="View Context">
-                      <FileText className="w-3.5 h-3.5" />
-                    </button>
-                    <button onClick={(e) => { e.stopPropagation(); setWsCreateRepo(repo); }} className="btn-ghost p-1.5 text-xs text-emerald-400" title="New Workspace">
-                      <Monitor className="w-3.5 h-3.5" />
-                    </button>
-                    <button onClick={(e) => handlePull(e, repo._id)} disabled={pullingId === repo._id} className="btn-ghost p-1.5 text-xs" title="Pull Latest">
-                      {pullingId === repo._id ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Download className="w-3.5 h-3.5" />}
-                    </button>
-                    <button onClick={(e) => handleScan(e, repo._id)} disabled={isScanning} className="btn-ghost p-1.5 text-xs" title="Scan">
-                      {isScanning ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <ScanSearch className="w-3.5 h-3.5" />}
-                    </button>
-                    <button onClick={(e) => { e.stopPropagation(); setConfigRepoId(repo._id); }} className="btn-ghost p-1.5 text-xs" title="Workspace Config">
-                      <Settings className="w-3.5 h-3.5" />
-                    </button>
-                    <button onClick={() => setEditRepo(repo)} className="btn-ghost p-1.5 text-xs" title="Edit">
-                      <Pencil className="w-3.5 h-3.5" />
-                    </button>
-                    <button onClick={(e) => { e.stopPropagation(); setDeletingRepo({ id: repo._id, name: repo.name }); }} className="btn-ghost p-1.5 text-xs text-red-400" title="Delete">
-                      <Trash2 className="w-3.5 h-3.5" />
-                    </button>
+                  <span className="dot dot-ok shrink-0 mt-1" />
+                </div>
+
+                {/* Tags row */}
+                {(repo.detected?.language?.length || repo.detected?.framework?.length) ? (
+                  <div className="flex items-center gap-1.5 flex-wrap pl-11">
+                    {repo.detected?.language?.filter(l => l !== 'unknown').map(lang => (
+                      <Badge key={lang} label={lang} colorClass={langColors[lang]} />
+                    ))}
+                    {repo.detected?.framework?.map(fw => (
+                      <Badge key={fw} label={fw} colorClass={fwColors[fw]} />
+                    ))}
                   </div>
+                ) : null}
+
+                {/* Meta row */}
+                <div className="flex items-center gap-3 text-[11px] text-theme-muted font-mono pl-11 flex-wrap">
+                  <span className="flex items-center gap-1">
+                    <GitBranch className="w-3 h-3" />{repo.detected?.defaultBranch ?? 'main'}
+                  </span>
+                  {repo.detected?.remoteUrl && (() => {
+                    const sshMatch = repo.detected.remoteUrl.match(/^git@([^:]+):(.+?)(?:\.git)?$/);
+                    const httpsUrl = sshMatch ? `https://${sshMatch[1]}/${sshMatch[2]}` : repo.detected.remoteUrl.replace(/\.git$/, '');
+                    const display = repo.detected.remoteUrl.replace(/^git@([^:]+):/, '$1/').replace(/^https?:\/\//, '').replace(/\.git$/, '');
+                    return (
+                      <a href={httpsUrl} target="_blank" rel="noopener noreferrer" onClick={e => e.stopPropagation()} className="flex items-center gap-1 truncate max-w-[260px] hover:text-accent transition-colors">
+                        <ExternalLink className="w-3 h-3 shrink-0" />
+                        {display}
+                      </a>
+                    );
+                  })()}
+                </div>
+
+                {/* Actions row — always visible, ghost icons */}
+                <div className="flex items-center gap-0.5 pl-11 -ml-1 mt-auto">
+                  <button onClick={(e) => { e.stopPropagation(); setContextRepo(repo); }} className="p-1.5 rounded text-theme-muted hover:text-accent hover:bg-app-muted transition-colors" title="View Context">
+                    <FileText className="w-3.5 h-3.5" />
+                  </button>
+                  <button onClick={(e) => { e.stopPropagation(); setWsCreateRepo(repo); }} className="p-1.5 rounded text-theme-muted hover:text-accent-green hover:bg-app-muted transition-colors" title="New Workspace">
+                    <Monitor className="w-3.5 h-3.5" />
+                  </button>
+                  <button onClick={(e) => handlePull(e, repo._id)} disabled={pullingId === repo._id} className="p-1.5 rounded text-theme-muted hover:text-theme-primary hover:bg-app-muted transition-colors" title="Pull Latest">
+                    {pullingId === repo._id ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Download className="w-3.5 h-3.5" />}
+                  </button>
+                  <button onClick={(e) => handleScan(e, repo._id)} disabled={isScanning} className="p-1.5 rounded text-theme-muted hover:text-theme-primary hover:bg-app-muted transition-colors" title="Scan">
+                    {isScanning ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <ScanSearch className="w-3.5 h-3.5" />}
+                  </button>
+                  <button onClick={(e) => { e.stopPropagation(); setConfigRepoId(repo._id); }} className="p-1.5 rounded text-theme-muted hover:text-theme-primary hover:bg-app-muted transition-colors" title="Workspace Config">
+                    <Settings className="w-3.5 h-3.5" />
+                  </button>
+                  <button onClick={() => setEditRepo(repo)} className="p-1.5 rounded text-theme-muted hover:text-theme-primary hover:bg-app-muted transition-colors" title="Edit">
+                    <Pencil className="w-3.5 h-3.5" />
+                  </button>
+                  <button onClick={(e) => { e.stopPropagation(); setDeletingRepo({ id: repo._id, name: repo.name }); }} className="p-1.5 rounded text-theme-muted hover:text-accent-red hover:bg-accent-red/10 transition-colors ml-auto" title="Delete">
+                    <Trash2 className="w-3.5 h-3.5" />
+                  </button>
                 </div>
               </div>
             );
@@ -526,13 +546,13 @@ function RepoContextViewer({ repoId, repoName, onClose }: { repoId: string; repo
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-md" onClick={onClose}>
-      <div className="card w-full max-w-4xl max-h-[90vh] overflow-hidden shadow-glow-blue/20 animate-in fade-in zoom-in-95 duration-200 flex flex-col" onClick={e => e.stopPropagation()}>
+      <div className="card w-full max-w-4xl max-h-[90vh] overflow-hidden shadow-popover animate-in fade-in zoom-in-95 duration-200 flex flex-col" onClick={e => e.stopPropagation()}>
         {/* Header */}
-        <div className="px-6 py-4 border-b border-border/60 shrink-0 flex items-center justify-between">
+        <div className="px-6 py-4 border-b border-app shrink-0 flex items-center justify-between">
           <div className="flex items-center gap-3">
             <FileText className="w-5 h-5 text-accent-blue" />
             <div>
-              <h2 className="font-heading text-sm font-bold text-theme-primary tracking-wider uppercase">Repo Context</h2>
+              <h2 className="text-[14px] font-semibold text-theme-primary tracking-tight">Repo Context</h2>
               <p className="text-[10px] text-theme-muted font-mono">{repoName} — agent-generated codebase analysis</p>
             </div>
           </div>
@@ -583,7 +603,7 @@ function RepoContextViewer({ repoId, repoName, onClose }: { repoId: string; repo
         </div>
 
         {/* Footer */}
-        <div className="px-6 py-3 border-t border-border/60 bg-surface-50/50 shrink-0">
+        <div className="px-6 py-3 border-t border-app bg-app-card/50 shrink-0">
           <button onClick={onClose} className="btn-ghost text-xs">Close</button>
         </div>
       </div>
@@ -620,25 +640,25 @@ function QuickWorkspaceDialog({ repo, onClose, onCreated }: { repo: Repo; onClos
 
   return (
     <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50" onClick={onClose}>
-      <div className="bg-surface-100 border border-border/30 rounded-lg w-[440px] p-4" onClick={e => e.stopPropagation()}>
+      <div className="bg-surface-100 border border-app rounded-lg w-[440px] p-4" onClick={e => e.stopPropagation()}>
         <div className="flex items-center gap-2 mb-4">
-          <Monitor className="w-4 h-4 text-emerald-400" />
+          <Monitor className="w-4 h-4 text-accent-green" />
           <span className="text-sm font-semibold text-theme-primary">New Workspace</span>
           <span className="text-[10px] font-mono text-theme-muted">{repo.name}</span>
         </div>
-        {error && <div className="text-xs text-red-400 bg-red-400/10 border border-red-400/20 rounded px-3 py-1.5 mb-3">{error}</div>}
+        {error && <div className="text-xs text-accent-red bg-accent-red/10 border border-accent-red/30 rounded px-3 py-1.5 mb-3">{error}</div>}
         <div className="space-y-3">
           <div>
-            <label className="text-[10px] font-label uppercase tracking-wider text-theme-muted block mb-1">Workspace Name</label>
+            <label className="overline block mb-1">Workspace Name</label>
             <input value={name} onChange={e => setName(e.target.value)} placeholder="feature/my-feature" className="input w-full text-xs" autoFocus />
           </div>
           <div className="grid grid-cols-2 gap-3">
             <div>
-              <label className="text-[10px] font-label uppercase tracking-wider text-theme-muted block mb-1">Branch</label>
+              <label className="overline block mb-1">Branch</label>
               <input value={branch} onChange={e => setBranch(e.target.value)} placeholder="feature/new-thing" className="input w-full text-xs" />
             </div>
             <div>
-              <label className="text-[10px] font-label uppercase tracking-wider text-theme-muted block mb-1">Base Branch</label>
+              <label className="overline block mb-1">Base Branch</label>
               <input value={baseBranch} onChange={e => setBaseBranch(e.target.value)} className="input w-full text-xs" />
             </div>
           </div>

@@ -88,13 +88,13 @@ export default function AgentSettingsForm({
     <div className="space-y-4">
       {/* ── Model ───────────────────────────────────────────────── */}
       <div>
-        <label className="block text-[10px] font-label uppercase tracking-[0.15em] text-theme-muted mb-1.5">
+        <label className="block overline mb-1.5">
           Model
         </label>
         <select
           value={modelValue}
           onChange={(e) => setField('model', e.target.value || null)}
-          className="w-full px-3 py-2 bg-surface-50 border border-border/60 rounded-sm text-sm text-theme-primary font-mono focus:outline-none focus:border-accent-blue"
+          className="w-full px-3 py-2 bg-surface-50 border border-app rounded-sm text-sm text-theme-primary font-mono focus:outline-none focus:border-accent-blue"
         >
           {isOverrideMode && (
             <option value="">Inherit — {modelInherited}</option>
@@ -109,14 +109,14 @@ export default function AgentSettingsForm({
 
       {/* ── Reasoning Effort ─────────────────────────────────────── */}
       <div>
-        <label className="flex items-center gap-1.5 text-[10px] font-label uppercase tracking-[0.15em] text-theme-muted mb-1.5">
+        <label className="flex items-center gap-1.5 overline mb-1.5">
           <Sparkles className="w-3 h-3" />
           Reasoning Effort
         </label>
         <select
           value={effortValue}
           onChange={(e) => setField('reasoningEffort', (e.target.value as ReasoningEffort) || null)}
-          className="w-full px-3 py-2 bg-surface-50 border border-border/60 rounded-sm text-sm text-theme-primary font-mono focus:outline-none focus:border-accent-blue"
+          className="w-full px-3 py-2 bg-surface-50 border border-app rounded-sm text-sm text-theme-primary font-mono focus:outline-none focus:border-accent-blue"
         >
           {isOverrideMode && (
             <option value="">Inherit — {effortInherited}</option>
@@ -137,7 +137,7 @@ export default function AgentSettingsForm({
       {/* ── Plan Mode (Claude only) ──────────────────────────────── */}
       {isClaudeProvider ? (
         <div>
-          <label className="flex items-center gap-1.5 text-[10px] font-label uppercase tracking-[0.15em] text-theme-muted mb-1.5">
+          <label className="flex items-center gap-1.5 overline mb-1.5">
             <ShieldCheck className="w-3 h-3" />
             Plan Mode
           </label>
@@ -148,7 +148,7 @@ export default function AgentSettingsForm({
               if (next === '') setField('planMode', null);
               else setField('planMode', next === 'on');
             }}
-            className="w-full px-3 py-2 bg-surface-50 border border-border/60 rounded-sm text-sm text-theme-primary font-mono focus:outline-none focus:border-accent-blue"
+            className="w-full px-3 py-2 bg-surface-50 border border-app rounded-sm text-sm text-theme-primary font-mono focus:outline-none focus:border-accent-blue"
           >
             {isOverrideMode && (
               <option value="">Inherit — {planInherited}</option>
@@ -163,11 +163,11 @@ export default function AgentSettingsForm({
         </div>
       ) : (
         <div>
-          <label className="flex items-center gap-1.5 text-[10px] font-label uppercase tracking-[0.15em] text-theme-muted mb-1.5">
+          <label className="flex items-center gap-1.5 overline mb-1.5">
             <ShieldCheck className="w-3 h-3" />
             Plan Mode
           </label>
-          <div className="px-3 py-2 bg-surface-50 border border-border/30 rounded-sm text-xs text-theme-subtle">
+          <div className="px-3 py-2 bg-surface-50 border border-app rounded-sm text-xs text-theme-subtle">
             Claude only. Not supported for Codex agents.
           </div>
         </div>

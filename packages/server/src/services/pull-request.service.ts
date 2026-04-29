@@ -170,6 +170,81 @@ export class PullRequestService {
     }
   }
 
+  /**
+   * Fetch all PR conversation: top-level comments, review comments
+   * (inline), and review submissions (approve/changes-requested) via
+   * `gh pr view`. Returns a flat chronological feed.
+   */
+  async getComments(repoPath: string, prNumber: number): Promise<{
+    comments: Array<{
+      id: string;
+      kind: 'comment' | 'review' | 'review-comment';
+      author: string;
+      authorAvatar?: string;
+      body: string;
+      url?: string;
+      createdAt: string;
+      path?: string;
+      line?: number;
+      reviewState?: string;
+    }>;
+  }> {
+    const ghEnv = await buildGhEnv(this.db);
+    try {
+      const { stdout } = await exec('gh', [
+        'pr', 'view', String(prNumber),
+        '--json', 'comments,reviews',
+      ], { cwd: repoPath, env: ghEnv });
+      const data = JSON.parse(stdout) as {
+        comments?: Array<{ id: string; author?: { login: string }; body: string; url?: string; createdAt: string }>;
+        reviews?: Array<{ id: string; author?: { login: string }; body: string; state: string; submittedAt: string; comments?: Array<{ id: string; author?: { login: string }; body: string; path?: string; line?: number; createdAt?: string }> }>;
+      };
+
+      const out: any[] = [];
+
+      for (const c of data.comments ?? []) {
+        out.push({
+          id: c.id,
+          kind: 'comment' as const,
+          author: c.author?.login ?? 'unknown',
+          body: c.body ?? '',
+          url: c.url,
+          createdAt: c.createdAt,
+        });
+      }
+
+      for (const r of data.reviews ?? []) {
+        if (r.body && r.body.trim()) {
+          out.push({
+            id: r.id,
+            kind: 'review' as const,
+            author: r.author?.login ?? 'unknown',
+            body: r.body,
+            createdAt: r.submittedAt,
+            reviewState: r.state,
+          });
+        }
+        for (const rc of r.comments ?? []) {
+          out.push({
+            id: rc.id,
+            kind: 'review-comment' as const,
+            author: rc.author?.login ?? 'unknown',
+            body: rc.body ?? '',
+            createdAt: rc.createdAt ?? r.submittedAt,
+            path: rc.path,
+            line: rc.line,
+            reviewState: r.state,
+          });
+        }
+      }
+
+      out.sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
+      return { comments: out };
+    } catch {
+      return { comments: [] };
+    }
+  }
+
   async createPR(
     repoPath: string,
     repoId: string,

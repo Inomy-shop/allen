@@ -44,10 +44,10 @@ export default function StateDiffModal({ titleLeft, titleRight, left, right, onC
       onClick={onClose}
     >
       <div
-        className="bg-surface-50 border border-border/40 rounded-lg w-full max-w-6xl max-h-[90vh] overflow-hidden flex flex-col shadow-2xl mt-[5vh]"
+        className="bg-surface-50 border border-app rounded-lg w-full max-w-6xl max-h-[90vh] overflow-hidden flex flex-col shadow-2xl mt-[5vh]"
         onClick={(e) => e.stopPropagation()}
       >
-        <div className="flex items-center justify-between px-5 py-3.5 border-b border-border/20">
+        <div className="flex items-center justify-between px-5 py-3.5 border-b border-app">
           <div>
             <h3 className="font-heading text-sm text-theme-primary tracking-wider">State diff</h3>
             <p className="text-[11px] text-theme-muted font-mono">
@@ -59,7 +59,7 @@ export default function StateDiffModal({ titleLeft, titleRight, left, right, onC
           </div>
           <button
             onClick={onClose}
-            className="p-1 rounded-md hover:bg-surface-200/60 text-theme-muted hover:text-theme-secondary transition-colors"
+            className="p-1 rounded-md hover:bg-app-muted text-theme-muted hover:text-theme-secondary transition-colors"
             title="Close diff"
           >
             <XIcon className="w-4 h-4" />
@@ -83,7 +83,7 @@ export default function StateDiffModal({ titleLeft, titleRight, left, right, onC
           )}
         </div>
 
-        <div className="flex items-center justify-end gap-2 px-5 py-3 border-t border-border/20 bg-surface-100/40">
+        <div className="flex items-center justify-end gap-2 px-5 py-3 border-t border-app bg-app-muted/50">
           <CopyButton text={JSON.stringify({ left, right }, null, 2)} label="Copy diff" />
           <DownloadButton
             content={JSON.stringify({ left, right, added, modified, removed }, null, 2)}
@@ -92,7 +92,7 @@ export default function StateDiffModal({ titleLeft, titleRight, left, right, onC
           />
           <button
             onClick={onClose}
-            className="px-3 py-1.5 rounded-md border border-border/40 text-theme-secondary hover:bg-surface-200/60 text-sm font-body transition-colors"
+            className="px-3 py-1.5 rounded-md border border-app text-theme-secondary hover:bg-app-muted text-sm font-body transition-colors"
           >
             Close
           </button>
@@ -108,8 +108,8 @@ export default function StateDiffModal({ titleLeft, titleRight, left, right, onC
 // lookup so every variant's classes appear as static strings.
 const VARIANT_STYLES = {
   added:    { bg: 'bg-accent-green/10', text: 'text-accent-green' },
-  modified: { bg: 'bg-amber-400/10',     text: 'text-amber-400'    },
-  removed:  { bg: 'bg-red-400/10',       text: 'text-red-400'      },
+  modified: { bg: 'bg-accent-yellow/10',     text: 'text-accent-yellow'    },
+  removed:  { bg: 'bg-accent-red/10',       text: 'text-accent-red'      },
 } as const;
 type DiffVariant = keyof typeof VARIANT_STYLES;
 
@@ -125,8 +125,8 @@ function DiffSection({
 }) {
   const styles = VARIANT_STYLES[variant];
   return (
-    <div className="border border-border/30 rounded-md overflow-hidden">
-      <div className={`px-3 py-1.5 ${styles.bg} border-b border-border/20`}>
+    <div className="border border-app rounded-md overflow-hidden">
+      <div className={`px-3 py-1.5 ${styles.bg} border-b border-app`}>
         <span className={`text-[11px] font-label uppercase tracking-[0.15em] ${styles.text}`}>
           {title} ({keys.length})
         </span>
@@ -136,7 +136,7 @@ function DiffSection({
           <div key={k} className="p-2">
             <div className="text-[11px] font-mono text-theme-primary mb-1">{k}</div>
             {(side === 'left' || side === 'both') && (
-              <pre className="text-[10px] font-mono text-red-400 bg-red-500/5 rounded p-1.5 whitespace-pre-wrap break-all mb-1">
+              <pre className="text-[10px] font-mono text-accent-red bg-red-500/5 rounded p-1.5 whitespace-pre-wrap break-all mb-1">
                 − {JSON.stringify(left[k], null, 2)}
               </pre>
             )}

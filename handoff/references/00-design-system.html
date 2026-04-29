@@ -1,0 +1,680 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<title>Allen · v2 Design System</title>
+<link rel="stylesheet" href="themes.css"/>
+<style>
+  *{box-sizing:border-box;margin:0;padding:0}
+  html,body{height:100%}
+  body{
+    font-family:'Inter Tight',system-ui,sans-serif;
+    background:#fbfbfa;color:#18181a;
+    -webkit-font-smoothing:antialiased;
+    letter-spacing:-0.005em;
+    font-size:13px;line-height:1.5;
+  }
+  .mono{font-family:'Geist Mono',monospace;font-feature-settings:'ss01'}
+  a{color:inherit;text-decoration:none}
+
+  /* shell */
+  .shell{display:grid;grid-template-columns:240px 1fr;min-height:100vh}
+  .nav{
+    border-right:1px solid #e8e7e4;
+    background:#ffffff;
+    padding:24px 16px;
+    position:sticky;top:0;height:100vh;
+    overflow-y:auto;
+  }
+  .nav-brand{display:flex;align-items:center;gap:9px;padding:0 8px;margin-bottom:24px}
+  .nav-mark{
+    width:26px;height:26px;border-radius:7px;
+    background:linear-gradient(135deg,#5e6ad2,#7c8ce0);
+    color:#fff;display:flex;align-items:center;justify-content:center;
+    font-weight:700;font-size:13px;letter-spacing:-0.04em;
+  }
+  .nav-name{font-weight:600;font-size:14px;letter-spacing:-0.015em}
+  .nav-sub{font-size:11px;color:#8a8a8f}
+  .nav-section{font-family:'Geist Mono',monospace;font-size:10.5px;color:#8a8a8f;text-transform:uppercase;letter-spacing:0.05em;padding:14px 8px 6px}
+  .nav-link{display:block;padding:6px 8px;font-size:13px;color:#4a4a4f;border-radius:5px;cursor:pointer}
+  .nav-link:hover{background:#f4f4f2;color:#18181a}
+  .nav-link.active{background:#eef0fb;color:#5e6ad2;font-weight:500}
+
+  /* main */
+  .main{padding:48px 56px 96px;max-width:1180px}
+  .hero{margin-bottom:48px;border-bottom:1px solid #e8e7e4;padding-bottom:36px}
+  .hero-eyebrow{font-family:'Geist Mono',monospace;font-size:11px;color:#5e6ad2;letter-spacing:0.06em;text-transform:uppercase;margin-bottom:10px}
+  .hero h1{font-size:44px;font-weight:700;letter-spacing:-0.035em;line-height:1.05;margin-bottom:14px}
+  .hero p{font-size:16px;color:#4a4a4f;max-width:640px;line-height:1.55;text-wrap:pretty}
+  .hero-meta{display:flex;gap:24px;margin-top:24px;font-family:'Geist Mono',monospace;font-size:11px;color:#8a8a8f}
+  .hero-meta strong{color:#18181a;font-weight:500}
+
+  section{margin-bottom:64px;scroll-margin-top:24px}
+  h2{font-size:24px;font-weight:600;letter-spacing:-0.025em;margin-bottom:6px}
+  h3{font-size:14px;font-weight:600;margin-bottom:14px;color:#18181a}
+  .section-desc{font-size:14px;color:#4a4a4f;max-width:580px;margin-bottom:24px;line-height:1.55}
+  .section-num{font-family:'Geist Mono',monospace;font-size:11px;color:#8a8a8f;letter-spacing:0.06em;margin-bottom:8px}
+
+  /* color */
+  .palette{display:grid;grid-template-columns:repeat(6,1fr);gap:8px}
+  .swatch{background:#fff;border:1px solid #e8e7e4;border-radius:8px;overflow:hidden}
+  .swatch-color{height:64px}
+  .swatch-meta{padding:8px 10px}
+  .swatch-name{font-size:12px;font-weight:500}
+  .swatch-hex{font-family:'Geist Mono',monospace;font-size:10.5px;color:#8a8a8f;margin-top:1px}
+
+  .scale{display:grid;grid-template-columns:repeat(11,1fr);gap:0;border-radius:8px;overflow:hidden;border:1px solid #e8e7e4}
+  .scale-step{aspect-ratio:1/1;display:flex;flex-direction:column;justify-content:flex-end;padding:6px;font-family:'Geist Mono',monospace;font-size:9.5px;color:rgba(0,0,0,0.55)}
+  .scale-step.dark{color:rgba(255,255,255,0.85)}
+  .scale-step b{font-weight:600;font-size:10.5px;line-height:1}
+
+  /* type */
+  .type-row{display:grid;grid-template-columns:160px 1fr 220px;gap:24px;padding:16px 0;border-bottom:1px solid #e8e7e4;align-items:baseline}
+  .type-row:last-child{border-bottom:none}
+  .type-meta{font-family:'Geist Mono',monospace;font-size:11px;color:#8a8a8f;line-height:1.7}
+  .type-meta b{color:#18181a;font-weight:500}
+  .type-sample{letter-spacing:-0.025em;color:#18181a}
+  .type-spec{font-family:'Geist Mono',monospace;font-size:10.5px;color:#8a8a8f;text-align:right;line-height:1.7}
+
+  /* spacing/radius/shadow */
+  .grid3{display:grid;grid-template-columns:repeat(3,1fr);gap:12px}
+  .grid4{display:grid;grid-template-columns:repeat(4,1fr);gap:12px}
+  .tile{background:#fff;border:1px solid #e8e7e4;border-radius:10px;padding:16px}
+  .tile-label{font-size:12px;color:#8a8a8f;font-family:'Geist Mono',monospace;margin-bottom:10px}
+  .tile-name{font-size:13px;font-weight:500;margin-bottom:2px}
+  .tile-val{font-family:'Geist Mono',monospace;font-size:11px;color:#8a8a8f}
+  .space-bar{background:#5e6ad2;height:8px;border-radius:2px;margin-bottom:10px}
+  .radius-demo{height:60px;background:#eef0fb;margin-bottom:10px;border:1px solid #d4d8f0}
+  .shadow-demo{height:60px;background:#fff;border-radius:8px;margin-bottom:10px}
+
+  /* components */
+  .demo{background:#fff;border:1px solid #e8e7e4;border-radius:10px;padding:24px}
+  .demo-head{display:flex;align-items:center;gap:10px;margin-bottom:14px}
+  .demo-title{font-size:13px;font-weight:500}
+  .demo-spec{font-family:'Geist Mono',monospace;font-size:11px;color:#8a8a8f;margin-left:auto}
+  .demo-row{display:flex;flex-wrap:wrap;gap:10px;align-items:center}
+  .demo-grid{display:grid;grid-template-columns:repeat(2,1fr);gap:14px}
+
+  /* buttons */
+  .btn{display:inline-flex;align-items:center;gap:6px;padding:6px 12px;border-radius:6px;font-size:13px;font-weight:500;cursor:pointer;border:1px solid transparent;font-family:inherit;letter-spacing:-0.005em}
+  .btn-primary{background:#5e6ad2;color:#fff;border-color:#5260c4}
+  .btn-primary:hover{background:#5260c4}
+  .btn-secondary{background:#fff;color:#18181a;border-color:#e8e7e4}
+  .btn-secondary:hover{background:#f4f4f2}
+  .btn-ghost{background:transparent;color:#4a4a4f}
+  .btn-ghost:hover{background:#f4f4f2;color:#18181a}
+  .btn-danger{background:#dc2626;color:#fff}
+  .btn-sm{padding:3px 8px;font-size:12px}
+  .btn-lg{padding:9px 16px;font-size:14px}
+
+  /* pills */
+  .pill{display:inline-flex;align-items:center;gap:5px;padding:2px 9px;border-radius:99px;font-size:11.5px;font-weight:500;font-family:'Geist Mono',monospace}
+  .pill-ok{background:#d1fae5;color:#047857}
+  .pill-warn{background:#fef3c7;color:#92400e}
+  .pill-err{background:#fee2e2;color:#b91c1c}
+  .pill-info{background:#dbeafe;color:#1e40af}
+  .pill-run{background:#e0f2fe;color:#0369a1}
+  .pill-queued{background:#f4f4f2;color:#71717a}
+
+  /* dots */
+  .dot{display:inline-block;width:7px;height:7px;border-radius:99px;margin-right:6px;vertical-align:middle}
+  .dot-ok{background:#059669}
+  .dot-run{background:#0284c7}
+  .dot-warn{background:#d97706}
+  .dot-err{background:#dc2626}
+  .dot-idle{background:#b8b8bc}
+
+  /* form */
+  .input{width:100%;padding:8px 12px;border:1px solid #e8e7e4;border-radius:6px;background:#fff;font-size:13px;font-family:inherit;color:#18181a}
+  .input:focus{outline:none;border-color:#5e6ad2;box-shadow:0 0 0 3px #eef0fb}
+  .label{font-size:12px;font-weight:500;margin-bottom:6px;display:block;color:#18181a}
+  .hint{font-size:11.5px;color:#8a8a8f;margin-top:5px}
+  .toggle{width:32px;height:18px;background:#5e6ad2;border-radius:99px;position:relative;display:inline-block;vertical-align:middle}
+  .toggle::after{content:'';position:absolute;right:2px;top:2px;width:14px;height:14px;border-radius:50%;background:#fff}
+  .toggle.off{background:#e8e7e4}
+  .toggle.off::after{left:2px;right:auto}
+  .check{width:16px;height:16px;border:1.5px solid #5e6ad2;background:#5e6ad2;border-radius:4px;display:inline-flex;align-items:center;justify-content:center;color:#fff;font-size:10px;vertical-align:middle}
+
+  /* card examples */
+  .ec{background:#fff;border:1px solid #e8e7e4;border-radius:10px;padding:14px;display:flex;flex-direction:column;gap:8px}
+  .ec-head{display:flex;align-items:center;gap:8px}
+  .ec-icon{width:28px;height:28px;border-radius:7px;background:#eef0fb;color:#5e6ad2;display:flex;align-items:center;justify-content:center;font-size:13px;flex-shrink:0}
+  .ec-title{font-weight:500;font-size:13px;flex:1;font-family:'Geist Mono',monospace}
+  .ec-desc{font-size:12px;color:#4a4a4f;line-height:1.45;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+  .ec-meta{display:flex;gap:8px;font-family:'Geist Mono',monospace;font-size:11px;color:#8a8a8f}
+
+  /* nav demo */
+  .nav-demo{background:#fff;border:1px solid #e8e7e4;border-radius:10px;display:flex;height:280px;overflow:hidden}
+  .nd-side{width:160px;background:#fbfbfa;border-right:1px solid #e8e7e4;padding:14px 10px}
+  .nd-brand{font-weight:600;font-size:13px;margin-bottom:14px;display:flex;align-items:center;gap:7px}
+  .nd-brand-mark{width:18px;height:18px;background:#5e6ad2;color:#fff;border-radius:5px;font-size:10px;display:flex;align-items:center;justify-content:center;font-weight:700}
+  .nd-link{padding:5px 8px;font-size:12px;color:#4a4a4f;border-radius:5px;display:flex;align-items:center;gap:7px;margin-bottom:1px}
+  .nd-link.active{background:#eef0fb;color:#5e6ad2;font-weight:500}
+  .nd-main{flex:1;display:flex;flex-direction:column}
+  .nd-top{padding:12px 16px;border-bottom:1px solid #e8e7e4;display:flex;align-items:center;gap:10px}
+  .nd-crumb{font-size:12px;color:#8a8a8f}
+  .nd-crumb b{color:#18181a;font-weight:500}
+  .nd-tabs{padding:0 16px;display:flex;gap:18px;border-bottom:1px solid #e8e7e4;font-size:12px}
+  .nd-tab{padding:10px 0;color:#8a8a8f;border-bottom:2px solid transparent}
+  .nd-tab.active{color:#18181a;border-bottom-color:#5e6ad2}
+  .nd-body{flex:1;padding:16px;color:#8a8a8f;font-size:12px}
+
+  /* layout principles */
+  .principles{display:grid;grid-template-columns:repeat(3,1fr);gap:14px}
+  .pri{background:#fff;border:1px solid #e8e7e4;border-radius:10px;padding:18px}
+  .pri-num{font-family:'Geist Mono',monospace;font-size:11px;color:#5e6ad2;letter-spacing:0.06em;margin-bottom:8px}
+  .pri-title{font-size:14px;font-weight:600;margin-bottom:6px}
+  .pri-desc{font-size:12.5px;color:#4a4a4f;line-height:1.5}
+
+  /* icons */
+  .icons-grid{display:grid;grid-template-columns:repeat(8,1fr);gap:8px}
+  .icon-cell{aspect-ratio:1;background:#fff;border:1px solid #e8e7e4;border-radius:8px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:6px;font-family:'Geist Mono',monospace;font-size:9.5px;color:#8a8a8f}
+  .icon-cell svg{color:#4a4a4f}
+
+  /* table */
+  table{width:100%;border-collapse:collapse;background:#fff;border:1px solid #e8e7e4;border-radius:10px;overflow:hidden;font-size:13px}
+  thead{background:#f4f4f2;border-bottom:1px solid #e8e7e4}
+  th{text-align:left;padding:10px 14px;font-size:11.5px;font-weight:500;color:#8a8a8f;letter-spacing:0.02em;text-transform:uppercase;font-family:'Geist Mono',monospace}
+  td{padding:10px 14px;border-bottom:1px solid #f0efed;font-size:12.5px}
+  tr:last-child td{border-bottom:none}
+
+  .footer{padding:32px 56px;border-top:1px solid #e8e7e4;font-size:12px;color:#8a8a8f;display:flex;gap:24px;align-items:center}
+  .footer .mono{font-family:'Geist Mono',monospace}
+
+  .anatomy{position:relative;background:#fff;border:1px solid #e8e7e4;border-radius:10px;padding:24px;display:grid;grid-template-columns:1fr 280px;gap:32px}
+  .anatomy-spec{font-family:'Geist Mono',monospace;font-size:11px;color:#4a4a4f;line-height:1.9}
+  .anatomy-spec span{display:flex;justify-content:space-between;border-bottom:1px dashed #e8e7e4;padding:5px 0}
+  .anatomy-spec span:last-child{border-bottom:none}
+  .anatomy-spec b{color:#18181a;font-weight:500}
+</style>
+</head>
+<body>
+
+<div class="shell">
+  <aside class="nav">
+    <div class="nav-brand">
+      <div class="nav-mark">A</div>
+      <div>
+        <div class="nav-name">Allen <span style="font-weight:400;color:#8a8a8f">/ v2</span></div>
+        <div class="nav-sub">Design System</div>
+      </div>
+    </div>
+    <a class="nav-link" href="#foundations">Overview</a>
+    <div class="nav-section">Foundations</div>
+    <a class="nav-link" href="#color">Color</a>
+    <a class="nav-link" href="#typography">Typography</a>
+    <a class="nav-link" href="#spacing">Spacing & layout</a>
+    <a class="nav-link" href="#radius">Radius & elevation</a>
+    <a class="nav-link" href="#icons">Icons</a>
+    <div class="nav-section">Components</div>
+    <a class="nav-link" href="#buttons">Buttons</a>
+    <a class="nav-link" href="#pills">Pills & badges</a>
+    <a class="nav-link" href="#forms">Forms</a>
+    <a class="nav-link" href="#cards">Cards</a>
+    <a class="nav-link" href="#tables">Tables</a>
+    <a class="nav-link" href="#navigation">Navigation</a>
+    <div class="nav-section">Patterns</div>
+    <a class="nav-link" href="#principles">Principles</a>
+    <a class="nav-link" href="#anatomy">Page anatomy</a>
+    <div class="nav-section">Reference</div>
+    <a class="nav-link" href="index.html">↩ Back to redesign</a>
+  </aside>
+
+  <main class="main">
+    <section class="hero" id="foundations">
+      <div class="hero-eyebrow">Direction 02 · Linear-clean</div>
+      <h1>The Allen design system.</h1>
+      <p>A calm, light, generous product surface. Designed for people who use Allen alongside their own work — not as a 24/7 mission console. Card-first layouts, soft borders, and a single focused accent color carry visual weight so density appears only where it earns its place.</p>
+      <div class="hero-meta">
+        <div><strong>Inter Tight</strong> · primary</div>
+        <div><strong>Geist Mono</strong> · code & metadata</div>
+        <div><strong>#5e6ad2</strong> · accent</div>
+        <div><strong>v0.1</strong> · 2026-04-28</div>
+      </div>
+    </section>
+
+    <!-- COLOR -->
+    <section id="color">
+      <div class="section-num">01 · FOUNDATIONS</div>
+      <h2>Color</h2>
+      <p class="section-desc">A near-neutral surface stack with a single violet accent. State colors are reserved for status — never decoration. Use them sparingly so a red ‘failed’ pill keeps real emphasis.</p>
+
+      <h3>Surface & ink</h3>
+      <div class="palette" style="margin-bottom:28px">
+        <div class="swatch"><div class="swatch-color" style="background:#fbfbfa;border-bottom:1px solid #e8e7e4"></div><div class="swatch-meta"><div class="swatch-name">bg</div><div class="swatch-hex">#FBFBFA</div></div></div>
+        <div class="swatch"><div class="swatch-color" style="background:#ffffff;border-bottom:1px solid #e8e7e4"></div><div class="swatch-meta"><div class="swatch-name">bg-1 / surface</div><div class="swatch-hex">#FFFFFF</div></div></div>
+        <div class="swatch"><div class="swatch-color" style="background:#f4f4f2"></div><div class="swatch-meta"><div class="swatch-name">bg-2 / muted</div><div class="swatch-hex">#F4F4F2</div></div></div>
+        <div class="swatch"><div class="swatch-color" style="background:#ededeb"></div><div class="swatch-meta"><div class="swatch-name">bg-3 / sunken</div><div class="swatch-hex">#EDEDEB</div></div></div>
+        <div class="swatch"><div class="swatch-color" style="background:#e8e7e4"></div><div class="swatch-meta"><div class="swatch-name">line</div><div class="swatch-hex">#E8E7E4</div></div></div>
+        <div class="swatch"><div class="swatch-color" style="background:#d8d6d2"></div><div class="swatch-meta"><div class="swatch-name">line-2</div><div class="swatch-hex">#D8D6D2</div></div></div>
+      </div>
+
+      <div class="palette" style="margin-bottom:36px">
+        <div class="swatch"><div class="swatch-color" style="background:#18181a"></div><div class="swatch-meta"><div class="swatch-name">ink</div><div class="swatch-hex">#18181A</div></div></div>
+        <div class="swatch"><div class="swatch-color" style="background:#4a4a4f"></div><div class="swatch-meta"><div class="swatch-name">ink-2</div><div class="swatch-hex">#4A4A4F</div></div></div>
+        <div class="swatch"><div class="swatch-color" style="background:#8a8a8f"></div><div class="swatch-meta"><div class="swatch-name">ink-3 / muted</div><div class="swatch-hex">#8A8A8F</div></div></div>
+        <div class="swatch"><div class="swatch-color" style="background:#b8b8bc"></div><div class="swatch-meta"><div class="swatch-name">ink-4 / disabled</div><div class="swatch-hex">#B8B8BC</div></div></div>
+        <div class="swatch"><div class="swatch-color" style="background:#5e6ad2"></div><div class="swatch-meta"><div class="swatch-name" style="color:#5e6ad2">accent</div><div class="swatch-hex">#5E6AD2</div></div></div>
+        <div class="swatch"><div class="swatch-color" style="background:#eef0fb"></div><div class="swatch-meta"><div class="swatch-name">accent-dim</div><div class="swatch-hex">#EEF0FB</div></div></div>
+      </div>
+
+      <h3>Accent scale · violet</h3>
+      <div class="scale" style="margin-bottom:24px">
+        <div class="scale-step" style="background:#f5f6fc"><b>50</b><div>F5F6FC</div></div>
+        <div class="scale-step" style="background:#eef0fb"><b>100</b><div>EEF0FB</div></div>
+        <div class="scale-step" style="background:#dde1f7"><b>200</b><div>DDE1F7</div></div>
+        <div class="scale-step" style="background:#bcc4ee"><b>300</b><div>BCC4EE</div></div>
+        <div class="scale-step" style="background:#929fe2"><b>400</b><div>929FE2</div></div>
+        <div class="scale-step dark" style="background:#5e6ad2"><b>500</b><div>5E6AD2</div></div>
+        <div class="scale-step dark" style="background:#4f5bc7"><b>600</b><div>4F5BC7</div></div>
+        <div class="scale-step dark" style="background:#3f48a3"><b>700</b><div>3F48A3</div></div>
+        <div class="scale-step dark" style="background:#333a82"><b>800</b><div>333A82</div></div>
+        <div class="scale-step dark" style="background:#262d61"><b>900</b><div>262D61</div></div>
+        <div class="scale-step dark" style="background:#161a3a"><b>950</b><div>161A3A</div></div>
+      </div>
+
+      <h3>Status colors</h3>
+      <div class="palette">
+        <div class="swatch"><div class="swatch-color" style="background:#059669"></div><div class="swatch-meta"><div class="swatch-name">ok</div><div class="swatch-hex">#059669</div></div></div>
+        <div class="swatch"><div class="swatch-color" style="background:#0284c7"></div><div class="swatch-meta"><div class="swatch-name">info / running</div><div class="swatch-hex">#0284C7</div></div></div>
+        <div class="swatch"><div class="swatch-color" style="background:#d97706"></div><div class="swatch-meta"><div class="swatch-name">warn</div><div class="swatch-hex">#D97706</div></div></div>
+        <div class="swatch"><div class="swatch-color" style="background:#dc2626"></div><div class="swatch-meta"><div class="swatch-name">err</div><div class="swatch-hex">#DC2626</div></div></div>
+        <div class="swatch"><div class="swatch-color" style="background:#71717a"></div><div class="swatch-meta"><div class="swatch-name">pending</div><div class="swatch-hex">#71717A</div></div></div>
+        <div class="swatch"><div class="swatch-color" style="background:#a855f7"></div><div class="swatch-meta"><div class="swatch-name">human</div><div class="swatch-hex">#A855F7</div></div></div>
+      </div>
+    </section>
+
+    <!-- TYPE -->
+    <section id="typography">
+      <div class="section-num">02 · FOUNDATIONS</div>
+      <h2>Typography</h2>
+      <p class="section-desc">Two faces only. Inter Tight does the talking — slightly tighter than vanilla Inter for product polish. Geist Mono carries every identifier, hash, code, timestamp, and metric. Type sizes step in clear ratios from 11px metadata up to 44px landing heroes.</p>
+
+      <div style="background:#fff;border:1px solid #e8e7e4;border-radius:10px;padding:28px 32px;margin-bottom:28px">
+        <div class="type-row">
+          <div class="type-meta"><b>Display</b><br>Inter Tight 700</div>
+          <div class="type-sample" style="font-size:44px;font-weight:700;line-height:1.05;letter-spacing:-0.035em">Build agents.</div>
+          <div class="type-spec">44 / 1.05 / -3.5%</div>
+        </div>
+        <div class="type-row">
+          <div class="type-meta"><b>H1 page title</b><br>Inter Tight 600</div>
+          <div class="type-sample" style="font-size:24px;font-weight:600;letter-spacing:-0.025em">Agent Workflows</div>
+          <div class="type-spec">24 / 1.25 / -2.5%</div>
+        </div>
+        <div class="type-row">
+          <div class="type-meta"><b>H2 section</b><br>Inter Tight 600</div>
+          <div class="type-sample" style="font-size:18px;font-weight:600;letter-spacing:-0.02em">Recent runs</div>
+          <div class="type-spec">18 / 1.3 / -2%</div>
+        </div>
+        <div class="type-row">
+          <div class="type-meta"><b>H3 card</b><br>Inter Tight 600</div>
+          <div class="type-sample" style="font-size:14px;font-weight:600">Feature plan and implement</div>
+          <div class="type-spec">14 / 1.4 / -1.5%</div>
+        </div>
+        <div class="type-row">
+          <div class="type-meta"><b>Body</b><br>Inter Tight 400</div>
+          <div class="type-sample" style="font-size:13px;color:#4a4a4f;line-height:1.55;font-weight:400;letter-spacing:0">End-to-end feature workflow: clarify the ask, produce PRD + HLA + TDD with per-doc panel audits, pause at one of N gates for human sign-off.</div>
+          <div class="type-spec">13 / 1.55 / 0%</div>
+        </div>
+        <div class="type-row">
+          <div class="type-meta"><b>Caption</b><br>Inter Tight 400</div>
+          <div class="type-sample" style="font-size:12px;color:#8a8a8f;font-weight:400">last run · 4m ago · 12 nodes · 4 successes</div>
+          <div class="type-spec">12 / 1.5</div>
+        </div>
+        <div class="type-row">
+          <div class="type-meta"><b>Code / mono</b><br>Geist Mono 500</div>
+          <div class="type-sample mono" style="font-size:13px;font-weight:500;color:#18181a">ba7c221d · feature-plan-and-implement</div>
+          <div class="type-spec">13 / 1.4</div>
+        </div>
+        <div class="type-row">
+          <div class="type-meta"><b>Label / overline</b><br>Geist Mono 500</div>
+          <div class="type-sample mono" style="font-size:11px;color:#8a8a8f;text-transform:uppercase;letter-spacing:0.05em;font-weight:500">RECENTLY ACTIVE · 12</div>
+          <div class="type-spec">11 / 1.5 / +5%</div>
+        </div>
+      </div>
+    </section>
+
+    <!-- SPACING -->
+    <section id="spacing">
+      <div class="section-num">03 · FOUNDATIONS</div>
+      <h2>Spacing & layout</h2>
+      <p class="section-desc">Built on a 4px grid. Use 4 / 8 / 12 / 16 inside components, 20 / 24 / 32 between components, and 48 / 64 between sections. Page gutters are 24–56px depending on viewport.</p>
+      <div class="grid4" style="margin-bottom:24px">
+        <div class="tile"><div class="space-bar" style="width:8px"></div><div class="tile-name">2</div><div class="tile-val">8px · gap</div></div>
+        <div class="tile"><div class="space-bar" style="width:12px"></div><div class="tile-name">3</div><div class="tile-val">12px · inset</div></div>
+        <div class="tile"><div class="space-bar" style="width:16px"></div><div class="tile-name">4</div><div class="tile-val">16px · stack</div></div>
+        <div class="tile"><div class="space-bar" style="width:24px"></div><div class="tile-name">6</div><div class="tile-val">24px · group</div></div>
+        <div class="tile"><div class="space-bar" style="width:32px"></div><div class="tile-name">8</div><div class="tile-val">32px · gutter</div></div>
+        <div class="tile"><div class="space-bar" style="width:48px"></div><div class="tile-name">12</div><div class="tile-val">48px · section</div></div>
+        <div class="tile"><div class="space-bar" style="width:64px"></div><div class="tile-name">16</div><div class="tile-val">64px · hero</div></div>
+        <div class="tile"><div class="space-bar" style="width:96px"></div><div class="tile-name">24</div><div class="tile-val">96px · landing</div></div>
+      </div>
+    </section>
+
+    <!-- RADIUS / SHADOW -->
+    <section id="radius">
+      <div class="section-num">04 · FOUNDATIONS</div>
+      <h2>Radius & elevation</h2>
+      <p class="section-desc">Soft, consistent radii — never round, never sharp. A single ambient shadow handles every popover and toast; cards stay flat on the page.</p>
+      <div class="grid4" style="margin-bottom:24px">
+        <div class="tile"><div class="radius-demo" style="border-radius:4px"></div><div class="tile-name">radius-sm</div><div class="tile-val">4px · pills, chips</div></div>
+        <div class="tile"><div class="radius-demo" style="border-radius:6px"></div><div class="tile-name">radius</div><div class="tile-val">6px · buttons, inputs</div></div>
+        <div class="tile"><div class="radius-demo" style="border-radius:10px"></div><div class="tile-name">radius-lg</div><div class="tile-val">10px · cards, panels</div></div>
+        <div class="tile"><div class="radius-demo" style="border-radius:14px"></div><div class="tile-name">radius-xl</div><div class="tile-val">14px · hero cards</div></div>
+      </div>
+      <div class="grid3">
+        <div class="tile"><div class="shadow-demo" style="box-shadow:none;border:1px solid #e8e7e4"></div><div class="tile-name">flat</div><div class="tile-val">no shadow · default</div></div>
+        <div class="tile"><div class="shadow-demo" style="box-shadow:0 1px 3px rgba(0,0,0,0.04),0 1px 2px rgba(0,0,0,0.06)"></div><div class="tile-name">shadow-sm</div><div class="tile-val">subtle hover</div></div>
+        <div class="tile"><div class="shadow-demo" style="box-shadow:0 8px 24px rgba(24,24,26,0.08),0 2px 6px rgba(24,24,26,0.06)"></div><div class="tile-name">shadow-popover</div><div class="tile-val">menus, toasts, dialogs</div></div>
+      </div>
+    </section>
+
+    <!-- ICONS -->
+    <section id="icons">
+      <div class="section-num">05 · FOUNDATIONS</div>
+      <h2>Icons</h2>
+      <p class="section-desc">1.5px stroke, 16px and 20px sizes. Geometric, calm, never decorative — every icon labels an action or category.</p>
+      <div class="icons-grid">
+        <div class="icon-cell"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M9 9l6 6M15 9l-6 6"/></svg>flow</div>
+        <div class="icon-cell"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><circle cx="9" cy="8" r="3"/><circle cx="17" cy="14" r="3"/><path d="M11.5 9.5L14.5 12.5"/></svg>agent</div>
+        <div class="icon-cell"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 9h18"/></svg>repo</div>
+        <div class="icon-cell"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/><path d="M12 7v5l3 2"/></svg>clock</div>
+        <div class="icon-cell"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><polygon points="6,4 20,12 6,20"/></svg>play</div>
+        <div class="icon-cell"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="M21 21l-5-5"/></svg>search</div>
+        <div class="icon-cell"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M3 6h18M3 12h18M3 18h18"/></svg>menu</div>
+        <div class="icon-cell"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>plus</div>
+        <div class="icon-cell"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M5 12h14M13 5l7 7-7 7"/></svg>arrow</div>
+        <div class="icon-cell"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M5 7l5 10 4-7 5 4"/></svg>chart</div>
+        <div class="icon-cell"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20,6 9,17 4,12"/></svg>check</div>
+        <div class="icon-cell"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="12" cy="12" r="9"/><path d="M12 8v4M12 16h0" stroke-linecap="round"/></svg>info</div>
+        <div class="icon-cell"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><circle cx="6" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="14" r="3"/><path d="M9 6h6a3 3 0 013 3v2"/><path d="M6 9v6"/></svg>merge</div>
+        <div class="icon-cell"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="12" cy="12" r="3"/><path d="M19 12a7 7 0 00-.4-2.3l2-1.5-2-3.5-2.4.9a7 7 0 00-2-1.1L13.7 2h-3.4l-.5 2.5a7 7 0 00-2 1.1L5.4 4.7l-2 3.5 2 1.5A7 7 0 005 12c0 .8.1 1.6.4 2.3l-2 1.5 2 3.5 2.4-.9c.6.5 1.3.9 2 1.1l.5 2.5h3.4l.5-2.5a7 7 0 002-1.1l2.4.9 2-3.5-2-1.5c.3-.7.4-1.5.4-2.3z" stroke-linejoin="round"/></svg>settings</div>
+        <div class="icon-cell"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M3 12a9 9 0 0115-6.7L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 01-15 6.7L3 16"/><path d="M3 21v-5h5"/></svg>refresh</div>
+        <div class="icon-cell"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M12 2l4 6h-3v8h-2V8H8z"/><path d="M5 20h14"/></svg>upload</div>
+      </div>
+    </section>
+
+    <!-- BUTTONS -->
+    <section id="buttons">
+      <div class="section-num">06 · COMPONENTS</div>
+      <h2>Buttons</h2>
+      <p class="section-desc">Primary for the single most-likely action per surface. Secondary for everything else; ghost in toolbars and tight rows. Buttons never wrap.</p>
+      <div class="demo">
+        <div class="demo-head"><div class="demo-title">Variants</div><div class="demo-spec">.btn-primary · .btn-secondary · .btn-ghost · .btn-danger</div></div>
+        <div class="demo-row" style="margin-bottom:18px">
+          <button class="btn btn-primary">+ New workflow</button>
+          <button class="btn btn-secondary">Cancel</button>
+          <button class="btn btn-ghost">View details</button>
+          <button class="btn btn-danger">Delete</button>
+          <button class="btn btn-secondary" disabled style="opacity:0.5;cursor:not-allowed">Disabled</button>
+        </div>
+        <div class="demo-head"><div class="demo-title">Sizes</div><div class="demo-spec">.btn-sm · default · .btn-lg</div></div>
+        <div class="demo-row" style="margin-bottom:18px">
+          <button class="btn btn-primary btn-sm">Run</button>
+          <button class="btn btn-primary">Run workflow</button>
+          <button class="btn btn-primary btn-lg">Run workflow now</button>
+        </div>
+        <div class="demo-head"><div class="demo-title">With icons</div></div>
+        <div class="demo-row">
+          <button class="btn btn-primary"><svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor"><polygon points="6,4 20,12 6,20"/></svg> Run</button>
+          <button class="btn btn-secondary"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg> Add agent</button>
+          <button class="btn btn-secondary"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M3 12a9 9 0 0115-6.7L21 8M21 3v5h-5"/></svg> Sync</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- PILLS -->
+    <section id="pills">
+      <div class="section-num">07 · COMPONENTS</div>
+      <h2>Pills, badges & dots</h2>
+      <p class="section-desc">Use pills for status that maps to one of six fixed values. Use dots for compact lists where saturated pills would crowd the row.</p>
+      <div class="demo">
+        <div class="demo-head"><div class="demo-title">Status pills</div></div>
+        <div class="demo-row" style="margin-bottom:20px">
+          <span class="pill pill-ok">● completed</span>
+          <span class="pill pill-run">◐ running</span>
+          <span class="pill pill-warn">◔ queued</span>
+          <span class="pill pill-err">✗ failed</span>
+          <span class="pill pill-info">PR #612</span>
+          <span class="pill pill-queued">draft</span>
+        </div>
+        <div class="demo-head"><div class="demo-title">Inline dots</div></div>
+        <div class="demo-row" style="margin-bottom:20px">
+          <span><span class="dot dot-ok"></span>connected</span>
+          <span><span class="dot dot-run"></span>running</span>
+          <span><span class="dot dot-warn"></span>warning</span>
+          <span><span class="dot dot-err"></span>failed</span>
+          <span><span class="dot dot-idle"></span>idle</span>
+        </div>
+        <div class="demo-head"><div class="demo-title">Tags & chips</div></div>
+        <div class="demo-row">
+          <span style="background:#f4f4f2;padding:2px 8px;border-radius:4px;font-family:'Geist Mono',monospace;font-size:11px;color:#4a4a4f">type:bug</span>
+          <span style="background:#f4f4f2;padding:2px 8px;border-radius:4px;font-family:'Geist Mono',monospace;font-size:11px;color:#4a4a4f">area:pipeline</span>
+          <span style="background:#fef3c7;padding:2px 8px;border-radius:4px;font-family:'Geist Mono',monospace;font-size:11px;color:#92400e">ws:interior-designer</span>
+          <span style="background:#dbeafe;padding:2px 8px;border-radius:4px;font-family:'Geist Mono',monospace;font-size:11px;color:#1e40af">Python</span>
+        </div>
+      </div>
+    </section>
+
+    <!-- FORMS -->
+    <section id="forms">
+      <div class="section-num">08 · COMPONENTS</div>
+      <h2>Form controls</h2>
+      <div class="demo">
+        <div class="demo-grid">
+          <div>
+            <label class="label">Workflow name</label>
+            <input class="input" value="feature-plan-and-implement"/>
+            <div class="hint">Lowercase kebab-case. Used in CLI and logs.</div>
+          </div>
+          <div>
+            <label class="label">Description</label>
+            <input class="input" placeholder="What does this workflow do?"/>
+            <div class="hint">Shown in the directory and detail rail.</div>
+          </div>
+          <div>
+            <label class="label">Default model</label>
+            <select class="input">
+              <option>claude-sonnet-4.5</option>
+              <option>claude-opus-4</option>
+              <option>claude-haiku-4.5</option>
+            </select>
+          </div>
+          <div>
+            <label class="label">Cron schedule</label>
+            <input class="input mono" value="*/30 * * * *" style="font-family:'Geist Mono',monospace"/>
+            <div class="hint">Every 30 minutes</div>
+          </div>
+          <div style="grid-column:1/-1">
+            <label class="label">Toggles & checkboxes</label>
+            <div class="demo-row" style="gap:24px">
+              <span><span class="toggle"></span> &nbsp;Enabled</span>
+              <span><span class="toggle off"></span> &nbsp;Auto-retry on failure</span>
+              <span><span class="check">✓</span> &nbsp;Send Slack notification</span>
+              <span><span class="check" style="background:transparent;color:transparent"></span> &nbsp;Pause for human review</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- CARDS -->
+    <section id="cards">
+      <div class="section-num">09 · COMPONENTS</div>
+      <h2>Cards</h2>
+      <p class="section-desc">The default container. White surface, 1px border, 10px radius, 14px padding. Always grouped — never alone on a page.</p>
+      <div style="display:grid;grid-template-columns:repeat(2,1fr);gap:12px">
+        <div class="ec">
+          <div class="ec-head">
+            <div class="ec-icon"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><path d="M9 9l6 6M15 9l-6 6"/></svg></div>
+            <span class="ec-title">feature-plan-and-implement</span>
+            <span class="pill pill-ok">v3</span>
+          </div>
+          <div class="ec-desc">End-to-end feature workflow: clarify the ask, produce PRD + HLA + TDD with per-doc panel audits.</div>
+          <div class="ec-meta">
+            <span style="color:#059669">● 4</span>
+            <span style="color:#dc2626">● 0</span>
+            <span style="color:#0284c7">● 1</span>
+            <span style="margin-left:auto">12 nodes · 4m ago</span>
+          </div>
+        </div>
+        <div class="ec">
+          <div class="ec-head">
+            <div class="ec-icon" style="background:#fef3c7;color:#d97706"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 9v4M12 17h0"/><path d="M10.3 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/></svg></div>
+            <span class="ec-title">bug-investigate-and-fix</span>
+            <span class="pill pill-warn">v2</span>
+          </div>
+          <div class="ec-desc">Lean bug-fix workflow: investigate the root cause, distinguish from feature-in-disguise, create a worktree, dispatch.</div>
+          <div class="ec-meta">
+            <span style="color:#059669">● 12</span>
+            <span style="color:#dc2626">● 1</span>
+            <span style="margin-left:auto">6 nodes · 1d ago</span>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- TABLES -->
+    <section id="tables">
+      <div class="section-num">10 · COMPONENTS</div>
+      <h2>Tables</h2>
+      <p class="section-desc">Used for execution logs, PR lists, and ticket queues. Header is uppercase mono on a muted band; body uses Inter Tight for readability and Geist Mono for IDs and durations.</p>
+      <table>
+        <thead><tr><th style="width:36px"></th><th>ID</th><th>WORKFLOW</th><th>STATUS</th><th>DURATION</th><th>COST</th><th>STARTED</th></tr></thead>
+        <tbody>
+          <tr><td><span class="dot dot-ok"></span></td><td class="mono" style="color:#5e6ad2">ba7c221d</td><td class="mono">chat:spawn_agent/frontend-developer</td><td><span class="pill pill-ok">completed</span></td><td class="mono">175.1s</td><td class="mono">$0.52</td><td style="color:#8a8a8f">28/04, 17:11</td></tr>
+          <tr><td><span class="dot dot-run"></span></td><td class="mono" style="color:#5e6ad2">98f364f2</td><td class="mono">chat:spawn_agent/classification-judge</td><td><span class="pill pill-run">running</span></td><td class="mono">12.3s</td><td class="mono">$0.00</td><td style="color:#8a8a8f">28/04, 18:00</td></tr>
+          <tr><td><span class="dot dot-err"></span></td><td class="mono" style="color:#5e6ad2">5f60fe67</td><td class="mono">chat:spawn_agent/classification-judge</td><td><span class="pill pill-err">failed</span></td><td class="mono">11.2s</td><td class="mono">$0.00</td><td style="color:#8a8a8f">28/04, 17:30</td></tr>
+          <tr><td><span class="dot dot-idle"></span></td><td class="mono" style="color:#5e6ad2">2d422acd</td><td class="mono">resolve-pr-reviews</td><td><span class="pill pill-queued">queued</span></td><td class="mono">—</td><td class="mono">$0.00</td><td style="color:#8a8a8f">28/04, 18:00</td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <!-- NAV -->
+    <section id="navigation">
+      <div class="section-num">11 · COMPONENTS</div>
+      <h2>Navigation</h2>
+      <p class="section-desc">Three layers: a sidebar for top-level destinations, a topbar for breadcrumbs and page actions, and tabs inside the page for filters or modes. Never nest tabs inside tabs.</p>
+      <div class="nav-demo">
+        <div class="nd-side">
+          <div class="nd-brand"><div class="nd-brand-mark">A</div> Allen</div>
+          <div class="nd-link">Dashboard</div>
+          <div class="nd-link">Chat</div>
+          <div class="nd-link active"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M9 9l6 6M15 9l-6 6"/></svg> Workflows</div>
+          <div class="nd-link">Agents</div>
+          <div class="nd-link">Repositories</div>
+          <div class="nd-link">Linear</div>
+        </div>
+        <div class="nd-main">
+          <div class="nd-top">
+            <span class="nd-crumb">Build / <b>Workflows</b></span>
+            <div style="margin-left:auto;display:flex;gap:8px">
+              <button class="btn btn-secondary btn-sm">Filter</button>
+              <button class="btn btn-primary btn-sm">+ New</button>
+            </div>
+          </div>
+          <div class="nd-tabs">
+            <div class="nd-tab active">All <span style="color:#8a8a8f;font-family:'Geist Mono',monospace">12</span></div>
+            <div class="nd-tab">Featured</div>
+            <div class="nd-tab">My drafts</div>
+            <div class="nd-tab">Archived <span style="color:#8a8a8f;font-family:'Geist Mono',monospace">4</span></div>
+          </div>
+          <div class="nd-body">page content area · 24px gutters · cards on a 2-column grid</div>
+        </div>
+      </div>
+    </section>
+
+    <!-- PRINCIPLES -->
+    <section id="principles">
+      <div class="section-num">12 · PATTERNS</div>
+      <h2>Design principles</h2>
+      <div class="principles">
+        <div class="pri">
+          <div class="pri-num">PRINCIPLE 01</div>
+          <div class="pri-title">Calm by default</div>
+          <div class="pri-desc">Most pages should look almost empty until you fill them. White space is the most underused tool — earn density by exception, not by habit.</div>
+        </div>
+        <div class="pri">
+          <div class="pri-num">PRINCIPLE 02</div>
+          <div class="pri-title">Mono for the machine</div>
+          <div class="pri-desc">Anything you'd copy-paste — IDs, hashes, file paths, durations, costs, cron — uses Geist Mono. Anything you read prose-style uses Inter Tight.</div>
+        </div>
+        <div class="pri">
+          <div class="pri-num">PRINCIPLE 03</div>
+          <div class="pri-title">One accent, used sparingly</div>
+          <div class="pri-desc">Violet #5E6AD2 only highlights the active state, the primary action, or a clickable identifier. If everything is violet, nothing is.</div>
+        </div>
+        <div class="pri">
+          <div class="pri-num">PRINCIPLE 04</div>
+          <div class="pri-title">Status earns saturation</div>
+          <div class="pri-desc">Saturated red, green, blue, and amber are reserved for run states. A red error pill should always mean an actual error — not a tag color.</div>
+        </div>
+        <div class="pri">
+          <div class="pri-num">PRINCIPLE 05</div>
+          <div class="pri-title">Group, then show</div>
+          <div class="pri-desc">Lists of more than 5 items get a header band with a count. Cards never sit naked on the page — always inside a labelled section or tab.</div>
+        </div>
+        <div class="pri">
+          <div class="pri-num">PRINCIPLE 06</div>
+          <div class="pri-title">Live, but not loud</div>
+          <div class="pri-desc">Pulses, spinners, and counters should be visible but never demand attention. Use animation to show ‘still working’ — never to celebrate.</div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ANATOMY -->
+    <section id="anatomy">
+      <div class="section-num">13 · PATTERNS</div>
+      <h2>Page anatomy</h2>
+      <p class="section-desc">Every Allen page in v2 reuses the same five regions. Building a new page is mostly a question of choosing which region needs the most weight.</p>
+      <div class="anatomy">
+        <div>
+          <div style="background:#fbfbfa;border:1px solid #e8e7e4;border-radius:10px;height:380px;display:flex">
+            <div style="width:130px;background:#fff;border-right:1px solid #e8e7e4;padding:14px 10px">
+              <div style="font-weight:600;font-size:11px;display:flex;align-items:center;gap:6px;margin-bottom:10px"><span style="width:14px;height:14px;background:#5e6ad2;border-radius:4px"></span>SIDEBAR</div>
+              <div style="height:8px;background:#ededeb;border-radius:3px;margin-bottom:5px"></div>
+              <div style="height:8px;background:#eef0fb;border-radius:3px;margin-bottom:5px"></div>
+              <div style="height:8px;background:#ededeb;border-radius:3px;margin-bottom:5px;width:80%"></div>
+              <div style="height:8px;background:#ededeb;border-radius:3px;margin-bottom:5px;width:65%"></div>
+            </div>
+            <div style="flex:1;display:flex;flex-direction:column">
+              <div style="padding:10px 14px;border-bottom:1px solid #e8e7e4;display:flex;align-items:center;gap:8px;font-size:11px">
+                <b>TOPBAR</b><span style="color:#8a8a8f">crumbs · actions</span>
+              </div>
+              <div style="padding:0 14px;border-bottom:1px solid #e8e7e4;display:flex;gap:14px;font-size:11px">
+                <div style="padding:8px 0;border-bottom:2px solid #5e6ad2;color:#5e6ad2;font-weight:500">TABS</div>
+                <div style="padding:8px 0;color:#8a8a8f">Tab</div>
+                <div style="padding:8px 0;color:#8a8a8f">Tab</div>
+              </div>
+              <div style="flex:1;padding:14px;display:grid;grid-template-columns:1fr 1fr;gap:8px">
+                <div style="background:#fff;border:1px solid #e8e7e4;border-radius:8px;padding:10px;font-size:10px"><b>CARD</b><br>content</div>
+                <div style="background:#fff;border:1px solid #e8e7e4;border-radius:8px;padding:10px;font-size:10px"><b>CARD</b></div>
+                <div style="background:#fff;border:1px solid #e8e7e4;border-radius:8px;padding:10px;font-size:10px"><b>CARD</b></div>
+                <div style="background:#fff;border:1px solid #e8e7e4;border-radius:8px;padding:10px;font-size:10px"><b>CARD</b></div>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="anatomy-spec">
+          <span><b>Sidebar</b><span>240px fixed</span></span>
+          <span><b>Topbar</b><span>56px tall</span></span>
+          <span><b>Tab strip</b><span>40px tall</span></span>
+          <span><b>Page gutter</b><span>24px / 56px landing</span></span>
+          <span><b>Card padding</b><span>14–18px</span></span>
+          <span><b>Card gap</b><span>10–12px</span></span>
+          <span><b>Section gap</b><span>32–48px</span></span>
+          <span><b>Max content</b><span>1180px</span></span>
+        </div>
+      </div>
+    </section>
+
+  </main>
+</div>
+
+<div class="footer">
+  <span class="mono">ALLEN · DESIGN SYSTEM v0.1 · DIRECTION 02 (LINEAR-CLEAN)</span>
+  <span style="margin-left:auto">Built for inomy · 2026</span>
+</div>
+
+</body>
+</html>

@@ -5,10 +5,11 @@ import ChatInput from '../components/chat/ChatInput';
 import ChatMessageList from '../components/chat/ChatMessageList';
 import CommandPalette from '../components/chat/CommandPalette';
 import ConversationLogs from '../components/chat/ConversationLogs';
+import ConversationsSidebar from '../components/chat/ConversationsSidebar';
 import { ToolCallLog } from '../components/common/ToolCallLog';
 import { CHAT_TITLE, CHAT_EMPTY_PROMPT } from '../lib/brand';
 import {
-  MessageSquare, Command, Server, ScrollText, Users,
+  Command, Server, ScrollText, Users,
   Sparkles, Zap, BarChart3, Terminal, FolderOpen, AlertTriangle, Bot, Wrench,
   FileText,
 } from 'lucide-react';
@@ -17,7 +18,7 @@ import ArtifactsDrawer from '../components/artifacts/ArtifactsDrawer';
 
 const PROVIDER_DISPLAY: Record<string, { label: string; color: string }> = {
   codex: { label: 'Codex', color: 'text-accent-green' },
-  'claude-cli': { label: 'Claude CLI', color: 'text-accent-blue' },
+  'claude-cli': { label: 'Claude CLI', color: 'text-accent' },
 };
 
 export default function ChatPage() {
@@ -49,6 +50,7 @@ export default function ChatPage() {
     spawnedAgents, pendingUserQuestion, answerUserQuestion,
     loadingSessions, loadingMessages,
     sendMessage, createSession, switchSession, cancelStream,
+    updateSessionTitle, refresh: refreshSessions,
   } = useChat();
 
   useEffect(() => {
@@ -169,6 +171,11 @@ export default function ChatPage() {
       );
       navigate(`/chat/${session._id}`, { replace: true });
       sendMessage(content, session._id, selectedAgent ?? undefined);
+      // Server auto-summarizes the title from the first message; pull
+      // a fresh sessions list shortly after so the sidebar shows the
+      // summarized title instead of the placeholder.
+      setTimeout(() => { void refreshSessions(); }, 1500);
+      setTimeout(() => { void refreshSessions(); }, 5000);
       return;
     }
     sendMessage(content, undefined, selectedAgent ?? undefined);
@@ -192,57 +199,115 @@ export default function ChatPage() {
     } catch {}
   }
 
+  const sessionTitle = activeSessionId ? activeSession?.title ?? 'Chat' : CHAT_TITLE;
+  const messageCount = activeSession?.messageCount ?? 0;
+
+  // Inline title edit. Persists via useChat.updateSessionTitle which
+  // does an optimistic local update so the sidebar reflects the new
+  // title immediately. Only enabled when there's an active session.
+  const [titleDraft, setTitleDraft] = useState<string | null>(null);
+  const [savingTitle, setSavingTitle] = useState(false);
+  async function commitTitle() {
+    const next = (titleDraft ?? '').trim();
+    setTitleDraft(null);
+    if (!activeSessionId || !next || next === sessionTitle) return;
+    setSavingTitle(true);
+    try {
+      // Optimistic — sidebar updates immediately via setSessions.
+      await updateSessionTitle(activeSessionId, next);
+    } finally {
+      setSavingTitle(false);
+    }
+  }
+
   return (
-    <div className="flex-1 flex flex-col h-full min-w-0">
-      {/* Header */}
-      <div className="px-4 py-2.5 border-b border-border/50 flex items-center justify-between bg-surface-50/50 shrink-0">
-        <div className="flex items-center gap-2">
-          <MessageSquare className="w-4 h-4 text-accent-blue" />
-          <span className="font-heading text-sm font-bold text-theme-primary tracking-wider">
-            {activeSessionId ? activeSession?.title ?? 'Chat' : CHAT_TITLE}
-          </span>
-          {activeSessionId && activeProvider && (
-            <span className={`text-[10px] font-mono px-1.5 py-0.5 rounded bg-surface-200/40 ${PROVIDER_DISPLAY[activeProvider]?.color ?? 'text-theme-muted'}`}>
-              {PROVIDER_DISPLAY[activeProvider]?.label}
-            </span>
+    <div className="flex-1 flex h-full min-w-0">
+      {/* Conversations sidebar (matches handoff/pages/chat.jsx ChatV2) */}
+      <ConversationsSidebar />
+
+      <div className="flex-1 flex flex-col h-full min-w-0">
+      {/* Header — matches handoff/pages/chat.jsx ChatV2 */}
+      <div className="px-6 pt-4 pb-3 border-b border-app shrink-0">
+        <div className="flex items-center gap-2 mb-2 text-[12px] text-theme-muted">
+          <span>Inbox</span>
+          {activeSessionId && (
+            <>
+              <span className="text-theme-subtle">/</span>
+              <span className="truncate max-w-[40rem]">{sessionTitle}</span>
+            </>
           )}
-          {selectedAgent && (() => {
-            const agentInfo = teamAgents.find((a: any) => a.name === selectedAgent);
-            return (
-              <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-accent-cyan/10 text-accent-cyan border border-accent-cyan/20">
-                @{agentInfo?.displayName ?? selectedAgent}
-              </span>
-            );
-          })()}
         </div>
-        <div className="flex items-center gap-2">
-          {mcpCount.enabled > 0 && (
-            <span className="text-[10px] font-mono flex items-center gap-1 text-theme-subtle" title={`${mcpCount.connected}/${mcpCount.enabled} MCP`}>
-              <Server className="w-3 h-3" />
-              <span className={mcpCount.connected > 0 ? 'text-accent-green' : ''}>{mcpCount.connected}/{mcpCount.enabled}</span>
-            </span>
-          )}
-          {activeSessionId && activeSession?.totalCostUsd != null && (
-            <span className="text-[10px] text-theme-subtle font-mono">${activeSession.totalCostUsd.toFixed(2)}</span>
-          )}
-          {activeSessionId && (
-            <button onClick={() => setLogsOpen(true)} className="p-1.5 rounded-md bg-surface-200/30 hover:bg-surface-200/60 text-theme-muted hover:text-theme-secondary transition-all" title="Logs">
-              <ScrollText className="w-3.5 h-3.5" />
+        <div className="flex items-center justify-between gap-3">
+          <div className="flex items-center gap-3 min-w-0">
+            {activeSessionId && titleDraft !== null ? (
+              <input
+                autoFocus
+                value={titleDraft}
+                onChange={(e) => setTitleDraft(e.target.value)}
+                onBlur={commitTitle}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') (e.target as HTMLInputElement).blur();
+                  if (e.key === 'Escape') setTitleDraft(null);
+                }}
+                className="text-[20px] font-semibold text-theme-primary tracking-tight bg-transparent border border-app rounded px-2 py-0.5 focus:outline-none focus:border-accent w-[40rem] max-w-full"
+                disabled={savingTitle}
+              />
+            ) : (
+              <h1
+                className={`text-[20px] font-semibold text-theme-primary tracking-tight truncate ${activeSessionId ? 'cursor-text hover:text-accent transition-colors' : ''}`}
+                onClick={() => activeSessionId && setTitleDraft(sessionTitle)}
+                title={activeSessionId ? 'Click to rename' : undefined}
+              >
+                {sessionTitle}
+              </h1>
+            )}
+            {activeSessionId && activeProvider && (
+              <span className={`badge badge-muted ${PROVIDER_DISPLAY[activeProvider]?.color ?? 'text-theme-muted'}`}>
+                {PROVIDER_DISPLAY[activeProvider]?.label}
+              </span>
+            )}
+            {selectedAgent && (() => {
+              const agentInfo = teamAgents.find((a: any) => a.name === selectedAgent);
+              return (
+                <span className="badge" style={{ background: 'rgb(var(--color-accent-soft))', color: 'rgb(var(--color-accent))' }}>
+                  @{agentInfo?.displayName ?? selectedAgent}
+                </span>
+              );
+            })()}
+          </div>
+          <div className="flex items-center gap-2 shrink-0">
+            {mcpCount.enabled > 0 && (
+              <span className="text-[11px] font-mono flex items-center gap-1 text-theme-muted" title={`${mcpCount.connected}/${mcpCount.enabled} MCP`}>
+                <Server className="w-3 h-3" />
+                <span className={mcpCount.connected > 0 ? 'text-accent-green' : ''}>{mcpCount.connected}/{mcpCount.enabled}</span>
+              </span>
+            )}
+            {activeSessionId && (
+              <span className="text-[11px] text-theme-muted font-mono">
+                {activeSession?.totalCostUsd != null && <>${activeSession.totalCostUsd.toFixed(2)}</>}
+                {activeSession?.totalCostUsd != null && messageCount > 0 && ' · '}
+                {messageCount > 0 && <>{messageCount} message{messageCount === 1 ? '' : 's'}</>}
+              </span>
+            )}
+            {activeSessionId && (
+              <button onClick={() => setLogsOpen(true)} className="p-1.5 rounded-md text-theme-muted hover:text-theme-primary hover:bg-app-muted transition-colors" title="Logs">
+                <ScrollText className="w-3.5 h-3.5" />
+              </button>
+            )}
+            {activeSessionId && (
+              <button onClick={() => setToolLogOpen(o => !o)} className="p-1.5 rounded-md text-theme-muted hover:text-theme-primary hover:bg-app-muted transition-colors" title="Tool Log">
+                <Wrench className="w-3.5 h-3.5" />
+              </button>
+            )}
+            {activeSessionId && (
+              <button onClick={() => setArtifactsOpen(true)} className="p-1.5 rounded-md text-theme-muted hover:text-theme-primary hover:bg-app-muted transition-colors" title="Artifacts saved in this chat">
+                <FileText className="w-3.5 h-3.5" />
+              </button>
+            )}
+            <button onClick={() => setCmdPaletteOpen(true)} className="p-1.5 rounded-md text-theme-muted hover:text-theme-primary hover:bg-app-muted transition-colors" title="Commands">
+              <Command className="w-3.5 h-3.5" />
             </button>
-          )}
-          {activeSessionId && (
-            <button onClick={() => setToolLogOpen(o => !o)} className="p-1.5 rounded-md bg-surface-200/30 hover:bg-surface-200/60 text-theme-muted hover:text-theme-secondary transition-all" title="Tool Log">
-              <Wrench className="w-3.5 h-3.5" />
-            </button>
-          )}
-          {activeSessionId && (
-            <button onClick={() => setArtifactsOpen(true)} className="p-1.5 rounded-md bg-surface-200/30 hover:bg-surface-200/60 text-theme-muted hover:text-theme-secondary transition-all" title="Artifacts saved in this chat">
-              <FileText className="w-3.5 h-3.5" />
-            </button>
-          )}
-          <button onClick={() => setCmdPaletteOpen(true)} className="p-1.5 rounded-md bg-surface-200/30 hover:bg-surface-200/60 text-theme-muted hover:text-theme-secondary transition-all" title="Commands">
-            <Command className="w-3.5 h-3.5" />
-          </button>
+          </div>
         </div>
       </div>
 
@@ -252,35 +317,35 @@ export default function ChatPage() {
       ) : messages.length === 0 && !activeSessionId && !streaming ? (
         <div className="flex-1 flex flex-col items-center justify-center text-center px-8">
           {/* Sparkle icon in rounded square */}
-          <div className="w-16 h-16 rounded-xl bg-surface-100 border border-border/40 flex items-center justify-center mb-6">
-            <Sparkles className="w-7 h-7 text-accent-blue" strokeWidth={1.5} />
+          <div className="w-14 h-14 rounded-xl bg-accent-soft flex items-center justify-center mb-5">
+            <Sparkles className="w-6 h-6 text-accent" strokeWidth={1.5} />
           </div>
 
           {/* Headline */}
-          <h2 className="font-heading text-xl text-theme-primary tracking-wide mb-2">
+          <h2 className="text-[20px] font-semibold text-theme-primary tracking-tight mb-2">
             {CHAT_EMPTY_PROMPT}
           </h2>
-          <p className="text-sm text-theme-muted font-body mb-10">
-            Use <span className="text-accent-blue font-mono">@mentions</span> to reference workflows, repos, and agents.
+          <p className="text-[13px] text-theme-muted font-body mb-8">
+            Use <span className="text-accent font-mono">@mentions</span> to reference workflows, repos, and agents.
           </p>
 
           {/* Quick-action grid (2 columns × 3 rows) */}
-          <div className="grid grid-cols-2 gap-3 w-full max-w-lg">
+          <div className="grid grid-cols-2 gap-2 w-full max-w-lg">
             {[
-              { icon: Zap, color: 'text-accent-blue', label: 'List workflows', prompt: 'List all workflows' },
-              { icon: BarChart3, color: 'text-accent-green', label: 'Dashboard stats', prompt: 'Show me the dashboard stats' },
-              { icon: Terminal, color: 'text-accent-cyan', label: 'Recent executions', prompt: 'Show me recent executions' },
-              { icon: FolderOpen, color: 'text-accent-yellow', label: 'List repos', prompt: 'List all registered repos' },
-              { icon: AlertTriangle, color: 'text-accent-red', label: 'Failed today', prompt: 'Show me executions that failed today' },
-              { icon: Bot, color: 'text-accent-purple', label: 'Available agents', prompt: 'List all available agents' },
-            ].map(({ icon: Icon, color, label, prompt }) => (
+              { icon: Zap, label: 'List workflows', prompt: 'List all workflows' },
+              { icon: BarChart3, label: 'Dashboard stats', prompt: 'Show me the dashboard stats' },
+              { icon: Terminal, label: 'Recent executions', prompt: 'Show me recent executions' },
+              { icon: FolderOpen, label: 'List repos', prompt: 'List all registered repos' },
+              { icon: AlertTriangle, label: 'Failed today', prompt: 'Show me executions that failed today' },
+              { icon: Bot, label: 'Available agents', prompt: 'List all available agents' },
+            ].map(({ icon: Icon, label, prompt }) => (
               <button
                 key={label}
                 onClick={() => handleSuggestionClick(prompt)}
-                className="flex items-center gap-3 px-4 py-3 rounded-md border border-border/40 bg-surface-50/40 hover:bg-surface-100/60 hover:border-border/70 transition-all text-left group"
+                className="card-hover flex items-center gap-2.5 px-3.5 py-2.5 text-left group cursor-pointer"
               >
-                <Icon className={`w-4 h-4 ${color} shrink-0`} strokeWidth={1.5} />
-                <span className="text-sm text-theme-secondary font-body group-hover:text-theme-primary transition-colors">
+                <Icon className="w-4 h-4 text-theme-muted group-hover:text-accent shrink-0 transition-colors" strokeWidth={1.5} />
+                <span className="text-[13px] text-theme-secondary group-hover:text-theme-primary transition-colors">
                   {label}
                 </span>
               </button>
@@ -297,13 +362,15 @@ export default function ChatPage() {
           // Agent is locked once the conversation has messages
           const agentLocked = !!activeSession?.activeAgent && (activeSession?.messageCount ?? 0) > 0;
           return (
-            <div className="px-3 pt-2 flex items-center gap-1.5 border-t border-border/30">
+            <div className="px-4 pt-2.5 pb-1 flex items-center gap-1.5 border-t border-app">
               <Users className="w-3 h-3 text-theme-subtle" />
               <button
                 onClick={() => !agentLocked && setSelectedAgent(null)}
                 disabled={agentLocked}
-                className={`text-[10px] font-mono px-2 py-0.5 rounded transition-colors ${
-                  !selectedAgent ? 'bg-accent-blue/10 text-accent-blue border border-accent-blue/20' : agentLocked ? 'text-theme-subtle cursor-not-allowed' : 'text-theme-subtle hover:text-theme-secondary'
+                className={`text-[11px] font-mono px-2 py-0.5 rounded transition-colors ${
+                  !selectedAgent
+                    ? 'bg-accent-soft text-accent'
+                    : agentLocked ? 'text-theme-subtle cursor-not-allowed' : 'text-theme-muted hover:text-theme-primary hover:bg-app-muted'
                 }`}
               >
                 Assistant
@@ -314,16 +381,16 @@ export default function ChatPage() {
                   onClick={() => !agentLocked && setSelectedAgent(selectedAgent === a.name ? null : a.name)}
                   disabled={agentLocked}
                   title={agentLocked ? `Agent locked for this conversation` : (a.displayName ?? a.name)}
-                  className={`text-[10px] font-mono px-2 py-0.5 rounded transition-colors ${
+                  className={`text-[11px] font-mono px-2 py-0.5 rounded transition-colors ${
                     selectedAgent === a.name
-                      ? 'bg-accent-cyan/10 text-accent-cyan border border-accent-cyan/20'
-                      : agentLocked ? 'text-theme-subtle cursor-not-allowed' : 'text-theme-subtle hover:text-theme-secondary'
+                      ? 'bg-accent-soft text-accent'
+                      : agentLocked ? 'text-theme-subtle cursor-not-allowed' : 'text-theme-muted hover:text-theme-primary hover:bg-app-muted'
                   }`}
                 >
                   {a.displayName ?? a.name}
                 </button>
               ))}
-              {agentLocked && <span className="text-[9px] text-theme-subtle font-mono ml-1">locked</span>}
+              {agentLocked && <span className="text-[10px] text-theme-subtle font-mono ml-1">locked</span>}
             </div>
           );
         })()}
@@ -357,10 +424,10 @@ export default function ChatPage() {
       )}
       {logsOpen && activeSessionId && <ConversationLogs sessionId={activeSessionId} onClose={() => setLogsOpen(false)} />}
       {toolLogOpen && activeSessionId && (
-        <div className="fixed inset-y-0 right-0 w-full max-w-xl border-l border-border/40 bg-surface-50 shadow-2xl flex flex-col z-40">
-          <div className="flex items-center justify-between px-4 py-3 border-b border-border/20">
-            <span className="text-xs font-label uppercase tracking-widest text-theme-secondary">Tool Log</span>
-            <button onClick={() => setToolLogOpen(false)} className="text-[11px] text-theme-muted hover:text-theme-secondary">Close</button>
+        <div className="fixed inset-y-0 right-0 w-full max-w-xl border-l border-app bg-app-card shadow-popover flex flex-col z-40">
+          <div className="flex items-center justify-between px-4 py-3 border-b border-app">
+            <span className="text-[14px] font-medium text-theme-primary">Tool Log</span>
+            <button onClick={() => setToolLogOpen(false)} className="text-[12px] text-theme-muted hover:text-theme-primary">Close</button>
           </div>
           <div className="flex-1 overflow-y-auto p-3">
             <ToolCallLog
@@ -370,6 +437,7 @@ export default function ChatPage() {
           </div>
         </div>
       )}
+      </div>
     </div>
   );
 }

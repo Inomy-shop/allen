@@ -97,7 +97,7 @@ export function TeamDialog({
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-md">
-      <div className="card w-full max-w-lg mx-4 overflow-hidden shadow-glow-blue/20 animate-in fade-in zoom-in-95 duration-200 max-h-[90vh] flex flex-col">
+      <div className="card w-full max-w-lg mx-4 overflow-hidden shadow-popover animate-in fade-in zoom-in-95 duration-200 max-h-[90vh] flex flex-col">
         <div className="p-6 space-y-5 overflow-y-auto">
           <div className="flex items-start justify-between">
             <div>
@@ -244,7 +244,7 @@ export function TeamDeleteConfirm({
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-md">
-      <div className="card w-full max-w-md mx-4 overflow-hidden shadow-glow-blue/20 animate-in fade-in zoom-in-95 duration-200">
+      <div className="card w-full max-w-md mx-4 overflow-hidden shadow-popover animate-in fade-in zoom-in-95 duration-200">
         <div className="p-6 space-y-4">
           <h3 className="font-heading text-lg text-theme-primary tracking-wide">Delete team?</h3>
 

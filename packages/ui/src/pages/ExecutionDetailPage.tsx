@@ -70,12 +70,12 @@ function LogRow({ log, toolCall }: { log: any; toolCall?: ToolCall }) {
     log.type === 'started' ? '▶' :
     log.type === 'completed' ? '✅' : '·';
   const iconColor =
-    log.type === 'tool_start' || log.type === 'tool_call' ? 'text-amber-400 shrink-0' :
-    log.type === 'tool_done' || log.type === 'tool_complete' ? 'text-emerald-400 shrink-0' :
-    log.type === 'thinking' ? 'text-purple-400 shrink-0' :
-    log.type === 'text' ? 'text-blue-400 shrink-0' :
-    log.type === 'started' ? 'text-blue-400 shrink-0' :
-    log.type === 'completed' ? 'text-emerald-400 shrink-0' :
+    log.type === 'tool_start' || log.type === 'tool_call' ? 'text-accent-yellow shrink-0' :
+    log.type === 'tool_done' || log.type === 'tool_complete' ? 'text-accent-green shrink-0' :
+    log.type === 'thinking' ? 'text-accent-purple shrink-0' :
+    log.type === 'text' ? 'text-accent shrink-0' :
+    log.type === 'started' ? 'text-accent shrink-0' :
+    log.type === 'completed' ? 'text-accent-green shrink-0' :
     'text-theme-muted shrink-0';
 
   // Build the one-line description to show next to the tool name.
@@ -89,9 +89,9 @@ function LogRow({ log, toolCall }: { log: any; toolCall?: ToolCall }) {
     ? rawDesc.slice(toolName.length).trimStart().replace(/^[:\-—]\s*/, '')
     : rawDesc;
   return (
-    <div className={`py-1 text-[11px] font-mono ${canExpand && open ? 'bg-surface-100/30 -mx-2 px-2 rounded-sm' : ''}`}>
+    <div className={`py-1 text-[11px] font-mono ${canExpand && open ? 'bg-app-muted/40 -mx-2 px-2 rounded-sm' : ''}`}>
       <div
-        className={`flex items-start gap-2 ${canExpand ? 'cursor-pointer hover:bg-surface-200/30 -mx-1 px-1 rounded-sm' : ''}`}
+        className={`flex items-start gap-2 ${canExpand ? 'cursor-pointer hover:bg-app-muted/50 -mx-1 px-1 rounded-sm' : ''}`}
         onClick={canExpand ? () => setOpen(o => !o) : undefined}
       >
         {canExpand ? (
@@ -110,7 +110,7 @@ function LogRow({ log, toolCall }: { log: any; toolCall?: ToolCall }) {
               ) : null}
             </>
           ) : log.type === 'thinking' ? (
-            <span className="text-purple-400/70">{log.content ?? 'thinking...'}</span>
+            <span className="text-accent-purple/70">{log.content ?? 'thinking...'}</span>
           ) : log.type === 'text' ? (
             <span className="text-theme-secondary line-clamp-2">{log.content}</span>
           ) : (
@@ -130,10 +130,10 @@ function LogRow({ log, toolCall }: { log: any; toolCall?: ToolCall }) {
             if (argsObj && Object.keys(argsObj).length > 0) {
               return (
                 <div>
-                  <div className="text-[9px] font-label uppercase tracking-wider text-theme-subtle mb-0.5">
+                  <div className="overline mb-0.5">
                     Input{toolCall?.truncated?.args && <span className="text-accent-yellow ml-1">(truncated)</span>}
                   </div>
-                  <pre className="text-[10px] font-mono text-theme-secondary whitespace-pre-wrap bg-surface-50/50 rounded-sm p-2 max-h-48 overflow-auto">
+                  <pre className="text-[10px] font-mono text-theme-secondary whitespace-pre-wrap bg-app-card/50 rounded-sm p-2 max-h-48 overflow-auto">
                     {JSON.stringify(argsObj, null, 2)}
                   </pre>
                 </div>
@@ -142,16 +142,16 @@ function LogRow({ log, toolCall }: { log: any; toolCall?: ToolCall }) {
             if (log.command) {
               return (
                 <div>
-                  <div className="text-[9px] font-label uppercase tracking-wider text-theme-subtle mb-0.5">Command</div>
-                  <pre className="text-[10px] font-mono text-theme-secondary whitespace-pre-wrap bg-surface-50/50 rounded-sm p-2 max-h-48 overflow-auto">$ {log.command}</pre>
+                  <div className="overline mb-0.5">Command</div>
+                  <pre className="text-[10px] font-mono text-theme-secondary whitespace-pre-wrap bg-app-card/50 rounded-sm p-2 max-h-48 overflow-auto">$ {log.command}</pre>
                 </div>
               );
             }
             if (log.content && log.type !== 'tool_done' && log.type !== 'tool_complete') {
               return (
                 <div>
-                  <div className="text-[9px] font-label uppercase tracking-wider text-theme-subtle mb-0.5">Input</div>
-                  <pre className="text-[10px] font-mono text-theme-secondary whitespace-pre-wrap bg-surface-50/50 rounded-sm p-2 max-h-48 overflow-auto">{log.content}</pre>
+                  <div className="overline mb-0.5">Input</div>
+                  <pre className="text-[10px] font-mono text-theme-secondary whitespace-pre-wrap bg-app-card/50 rounded-sm p-2 max-h-48 overflow-auto">{log.content}</pre>
                 </div>
               );
             }
@@ -170,10 +170,10 @@ function LogRow({ log, toolCall }: { log: any; toolCall?: ToolCall }) {
               const isError = toolCall.isError === true;
               return (
                 <div>
-                  <div className="text-[9px] font-label uppercase tracking-wider text-theme-subtle mb-0.5">
+                  <div className="overline mb-0.5">
                     {isError ? 'Error' : 'Output'}{toolCall.truncated?.result && <span className="text-accent-yellow ml-1">(truncated)</span>}
                   </div>
-                  <pre className={`text-[10px] font-mono whitespace-pre-wrap rounded-sm p-2 max-h-64 overflow-auto ${isError ? 'text-accent-red bg-accent-red/5' : 'text-theme-secondary bg-surface-50/50'}`}>
+                  <pre className={`text-[10px] font-mono whitespace-pre-wrap rounded-sm p-2 max-h-64 overflow-auto ${isError ? 'text-accent-red bg-accent-red/5' : 'text-theme-secondary bg-app-card/50'}`}>
                     {typeof recordResult === 'string' ? recordResult : JSON.stringify(recordResult, null, 2)}
                   </pre>
                 </div>
@@ -182,8 +182,8 @@ function LogRow({ log, toolCall }: { log: any; toolCall?: ToolCall }) {
             if (hasLog) {
               return (
                 <div>
-                  <div className="text-[9px] font-label uppercase tracking-wider text-theme-subtle mb-0.5">Output (preview)</div>
-                  <pre className="text-[10px] font-mono text-theme-secondary whitespace-pre-wrap bg-surface-50/50 rounded-sm p-2 max-h-48 overflow-auto">{logResult}</pre>
+                  <div className="overline mb-0.5">Output (preview)</div>
+                  <pre className="text-[10px] font-mono text-theme-secondary whitespace-pre-wrap bg-app-card/50 rounded-sm p-2 max-h-48 overflow-auto">{logResult}</pre>
                 </div>
               );
             }
@@ -380,53 +380,57 @@ function AgentExecutionView({ execution, agentName, traces, id, liveToolCalls, r
 
   return (
     <div className="flex flex-col h-full">
-      {/* Header */}
-      <header className="flex items-center justify-between px-6 py-3 border-b border-border/50 bg-surface-50 shrink-0">
-        <div className="flex items-center gap-3">
-          <Link to="/executions" className="text-theme-secondary hover:text-accent-blue transition-colors">
-            <ArrowLeft className="w-4 h-4" />
+      {/* Header — agent execution variant */}
+      <header className="px-6 pt-4 pb-3 border-b border-app shrink-0">
+        <div className="flex items-center gap-2 mb-2 text-[12px] text-theme-muted">
+          <Link to="/executions" className="hover:text-theme-primary transition-colors flex items-center gap-1">
+            <ArrowLeft className="w-3 h-3" /> Activity
           </Link>
-          <div className="w-9 h-9 rounded-lg bg-accent-purple/10 border border-accent-purple/20 flex items-center justify-center">
-            <Bot className="w-5 h-5 text-accent-purple" />
-          </div>
-          <div>
-            <h1 className="font-heading text-sm font-semibold text-theme-primary tracking-wider uppercase">{agentName}</h1>
-            <div className="flex items-center gap-2 mt-0.5">
-              <StatusBadge status={execution.status} />
-              <span className="text-xs text-theme-muted font-mono">{id?.slice(0, 8)}</span>
-              {meta.spawnedBy && <span className="text-[10px] text-theme-subtle font-mono">by {meta.spawnedBy}</span>}
-            </div>
-          </div>
+          <span className="text-theme-subtle">/</span>
+          <span className="font-mono">{id?.slice(0, 8)}</span>
         </div>
-        <div className="flex items-center gap-3">
-          {execution.status === 'running' && <span className="w-2 h-2 rounded-full bg-blue-400 animate-pulse" />}
-          {durationMs > 0 && (
-            <span className="flex items-center gap-1 text-xs text-theme-secondary font-mono">
-              <Clock className="w-3 h-3" /> {formatDuration(durationMs)}
-            </span>
-          )}
-          <CostDisplay cost={cost} />
-          <button
-            onClick={() => setAgentArtifactsOpen(true)}
-            className="btn-ghost text-xs inline-flex items-center gap-1"
-            title="View artifacts saved by this agent run"
-          >
-            <FileText className="w-3.5 h-3.5" />
-            <span>Artifacts</span>
-          </button>
-          {execution.status === 'running' && (
-            <button onClick={async () => { await api.cancel(id); window.location.reload(); }} className="flex items-center gap-1 text-xs text-red-400 hover:text-red-300 bg-red-400/10 hover:bg-red-400/20 border border-red-400/20 rounded px-2.5 py-1 font-mono transition-colors">
-              <XCircle className="w-3.5 h-3.5" /> Cancel
-            </button>
-          )}
-          {canResume && (
+        <div className="flex items-center justify-between gap-3">
+          <div className="flex items-center gap-3 min-w-0">
+            <div className="w-8 h-8 rounded-md bg-accent-purple/10 flex items-center justify-center shrink-0">
+              <Bot className="w-4 h-4 text-accent-purple" />
+            </div>
+            <h1 className="text-[20px] font-semibold text-theme-primary tracking-tight truncate">{agentName}</h1>
+            <StatusBadge status={execution.status} />
+            {meta.spawnedBy && <span className="text-[11px] text-theme-muted font-mono">by {meta.spawnedBy}</span>}
+            {execution.status === 'running' && <span className="w-2 h-2 rounded-full bg-accent animate-pulse" />}
+            {durationMs > 0 && (
+              <span className="flex items-center gap-1 text-[12px] text-theme-muted font-mono">
+                <Clock className="w-3 h-3" /> {formatDuration(durationMs)}
+              </span>
+            )}
+            <CostDisplay cost={cost} />
+          </div>
+          <div className="flex items-center gap-2">
             <button
-              onClick={() => setResumeOpen(v => !v)}
-              className="flex items-center gap-1 text-xs text-accent-blue hover:text-accent-blue/80 bg-accent-blue/10 hover:bg-accent-blue/20 border border-accent-blue/20 rounded px-2.5 py-1 font-mono transition-colors"
+              onClick={() => setAgentArtifactsOpen(true)}
+              className="btn btn-secondary btn-sm"
+              title="View artifacts saved by this agent run"
             >
-              <Play className="w-3.5 h-3.5" /> Resume
+              <FileText className="w-3.5 h-3.5" />
+              Artifacts
             </button>
-          )}
+            {execution.status === 'running' && (
+              <button
+                onClick={async () => { await api.cancel(id); window.location.reload(); }}
+                className="btn btn-danger btn-sm"
+              >
+                <XCircle className="w-3.5 h-3.5" /> Cancel
+              </button>
+            )}
+            {canResume && (
+              <button
+                onClick={() => setResumeOpen(v => !v)}
+                className="btn btn-primary btn-sm"
+              >
+                <Play className="w-3.5 h-3.5" /> Resume
+              </button>
+            )}
+          </div>
         </div>
       </header>
 
@@ -434,7 +438,7 @@ function AgentExecutionView({ execution, agentName, traces, id, liveToolCalls, r
           Sends a follow-up prompt to the same agent, resuming the prior
           claude-cli session so the agent has full context from this run. */}
       {resumeOpen && canResume && (
-        <div className="flex items-center gap-3 px-6 py-3 border-b border-accent-blue/30 bg-accent-blue/5 shrink-0">
+        <div className="flex items-center gap-3 px-6 py-3 border-b border-accent/30 bg-accent-soft shrink-0">
           <div className="flex-1 min-w-0">
             <textarea
               autoFocus
@@ -443,14 +447,14 @@ function AgentExecutionView({ execution, agentName, traces, id, liveToolCalls, r
               onKeyDown={e => { if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') handleResume(); }}
               rows={2}
               placeholder="Follow-up prompt — the agent will resume its prior session with full context from this run…"
-              className="w-full px-3 py-2 rounded-lg bg-surface-200/40 border border-border/50 text-sm text-theme-primary placeholder:text-theme-subtle focus:outline-none focus:border-accent-blue/50 font-mono resize-none"
+              className="w-full px-3 py-2 rounded-lg bg-app-muted border border-app text-sm text-theme-primary placeholder:text-theme-subtle focus:outline-none focus:border-accent font-mono resize-none"
             />
           </div>
           <div className="flex flex-col gap-1.5 shrink-0">
             <button
               onClick={handleResume}
               disabled={resumeBusy || !resumePrompt.trim()}
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[11px] font-mono bg-accent-blue text-white hover:opacity-90 disabled:opacity-40 disabled:cursor-not-allowed transition-opacity"
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[11px] font-mono btn btn-primary btn-sm disabled:opacity-40 disabled:cursor-not-allowed transition-opacity"
             >
               <Play className="w-3 h-3" />
               {resumeBusy ? 'Resuming…' : 'Send'}
@@ -470,32 +474,32 @@ function AgentExecutionView({ execution, agentName, traces, id, liveToolCalls, r
         {/* Metadata cards — 2 rows */}
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
           <div className="card p-3">
-            <span className="text-[10px] font-label uppercase tracking-widest text-theme-muted">Status</span>
+            <span className="overline">Status</span>
             <div className="mt-1"><StatusBadge status={execution.status} /></div>
           </div>
           <div className="card p-3">
-            <span className="text-[10px] font-label uppercase tracking-widest text-theme-muted">Duration</span>
+            <span className="overline">Duration</span>
             <div className="mt-1 text-sm text-theme-primary font-mono">{durationMs > 0 ? `${formatDuration(durationMs)}` : execution.status === 'running' ? '...' : '—'}</div>
           </div>
           <div className="card p-3">
-            <span className="text-[10px] font-label uppercase tracking-widest text-theme-muted">Cost</span>
+            <span className="overline">Cost</span>
             <div className="mt-1 text-sm text-theme-primary font-mono">${(cost.actual ?? cost.estimated ?? 0).toFixed(4)}</div>
           </div>
           <div className="card p-3">
-            <span className="text-[10px] font-label uppercase tracking-widest text-theme-muted">Model</span>
+            <span className="overline">Model</span>
             <div className="mt-1 text-sm text-theme-primary font-mono">{meta.model ?? cost.model ?? 'sonnet'}</div>
           </div>
           <div className="card p-3">
-            <span className="text-[10px] font-label uppercase tracking-widest text-theme-muted">Provider</span>
+            <span className="overline">Provider</span>
             <div className="mt-1 text-sm text-theme-primary font-mono">{meta.provider ?? 'claude'}</div>
           </div>
           <div className="card p-3">
-            <span className="text-[10px] font-label uppercase tracking-widest text-theme-muted">Spawned By</span>
+            <span className="overline">Spawned By</span>
             <div className="mt-1 text-sm text-theme-primary font-mono">{meta.spawnedBy ?? 'user'}</div>
           </div>
           <div className="card p-3 col-span-2">
-            <span className="text-[10px] font-label uppercase tracking-widest text-theme-muted">Working Directory</span>
-            <div className="mt-1 text-xs text-blue-400 font-mono truncate" title={meta.cwd ?? execution.input?.repo_path}>{meta.cwd ?? execution.input?.repo_path ?? '/tmp'}</div>
+            <span className="overline">Working Directory</span>
+            <div className="mt-1 text-xs text-accent font-mono truncate" title={meta.cwd ?? execution.input?.repo_path}>{meta.cwd ?? execution.input?.repo_path ?? '/tmp'}</div>
           </div>
         </div>
 
@@ -503,7 +507,7 @@ function AgentExecutionView({ execution, agentName, traces, id, liveToolCalls, r
             Each tab switches which trace (rawResponse / toolCalls / cost /
             duration) the rest of the page reflects. */}
         {sortedTraces.length > 1 && (
-          <div className="flex items-center gap-1 border-b border-border/30 -mx-1 px-1 overflow-x-auto">
+          <div className="flex items-center gap-1 border-b border-app -mx-1 px-1 overflow-x-auto">
             {sortedTraces.map(t => {
               const n = t.attempt ?? 1;
               const failed = t.status === 'failed';
@@ -512,7 +516,7 @@ function AgentExecutionView({ execution, agentName, traces, id, liveToolCalls, r
                 <button
                   key={n}
                   onClick={() => setSelectedAttempt(n)}
-                  className={`flex items-center gap-1.5 px-3 py-2 text-[11px] font-mono tracking-wider uppercase border-b-2 transition-colors shrink-0 ${
+                  className={`flex items-center gap-1.5 px-3 py-2 text-[12px] border-b-2 transition-colors shrink-0 ${
                     active
                       ? 'border-accent-blue text-theme-primary'
                       : 'border-transparent text-theme-muted hover:text-theme-secondary'
@@ -529,15 +533,15 @@ function AgentExecutionView({ execution, agentName, traces, id, liveToolCalls, r
 
         {/* Live Logs — shown by default for running, togglable for completed */}
         <div className="card overflow-hidden">
-          <button title="Toggle logs" onClick={() => setShowLogs(!showLogs)} className="w-full flex items-center gap-2 px-4 py-3 hover:bg-surface-200/30 transition-colors text-left">
+          <button title="Toggle logs" onClick={() => setShowLogs(!showLogs)} className="w-full flex items-center gap-2 px-4 py-3 hover:bg-app-muted/50 transition-colors text-left">
             {showLogs ? <ChevronDown className="w-4 h-4 text-theme-muted" /> : <ChevronRight className="w-4 h-4 text-theme-muted" />}
             <Terminal className="w-4 h-4 text-accent-cyan" />
-            <span className="text-xs font-label uppercase tracking-widest text-theme-secondary">Live Logs</span>
+            <span className="overline text-[12px]">Live Logs</span>
             <span className="text-[10px] text-theme-subtle font-mono ml-auto">{allLogs.length} entries</span>
             {execution.status === 'running' && <span className="w-1.5 h-1.5 rounded-full bg-blue-400 animate-pulse" />}
           </button>
           {showLogs && (
-            <div className="px-4 pb-4 border-t border-border/20 max-h-[50vh] overflow-y-auto bg-[rgb(var(--color-editor-background))] rounded-b">
+            <div className="px-4 pb-4 border-t border-app max-h-[50vh] overflow-y-auto bg-[rgb(var(--color-editor-background))] rounded-b">
               {allLogs.length === 0 && execution.status === 'running' && (
                 <div className="text-xs text-theme-subtle font-mono py-3 animate-pulse">Waiting for activity...</div>
               )}
@@ -583,14 +587,14 @@ function AgentExecutionView({ execution, agentName, traces, id, liveToolCalls, r
 
         {/* Prompt */}
         <div className="card overflow-hidden">
-          <button title="Toggle prompt" onClick={() => setShowPrompt(!showPrompt)} className="w-full flex items-center gap-2 px-4 py-3 hover:bg-surface-200/30 transition-colors text-left">
+          <button title="Toggle prompt" onClick={() => setShowPrompt(!showPrompt)} className="w-full flex items-center gap-2 px-4 py-3 hover:bg-app-muted/50 transition-colors text-left">
             {showPrompt ? <ChevronDown className="w-4 h-4 text-theme-muted" /> : <ChevronRight className="w-4 h-4 text-theme-muted" />}
             <Terminal className="w-4 h-4 text-accent-blue" />
-            <span className="text-xs font-label uppercase tracking-widest text-theme-secondary">Prompt</span>
+            <span className="overline text-[12px]">Prompt</span>
             <span className="text-[10px] text-theme-subtle font-mono ml-auto">{prompt.length} chars</span>
           </button>
           {showPrompt && (
-            <div className="px-4 pb-4 border-t border-border/20">
+            <div className="px-4 pb-4 border-t border-app">
               <pre className="text-xs text-theme-secondary font-mono whitespace-pre-wrap mt-2 max-h-[40vh] overflow-y-auto">{prompt}</pre>
             </div>
           )}
@@ -598,14 +602,14 @@ function AgentExecutionView({ execution, agentName, traces, id, liveToolCalls, r
 
         {/* Response */}
         <div className="card overflow-hidden">
-          <button title="Toggle response" onClick={() => setShowResponse(!showResponse)} className="w-full flex items-center gap-2 px-4 py-3 hover:bg-surface-200/30 transition-colors text-left">
+          <button title="Toggle response" onClick={() => setShowResponse(!showResponse)} className="w-full flex items-center gap-2 px-4 py-3 hover:bg-app-muted/50 transition-colors text-left">
             {showResponse ? <ChevronDown className="w-4 h-4 text-theme-muted" /> : <ChevronRight className="w-4 h-4 text-theme-muted" />}
             {execution.status === 'completed' ? <CheckCircle className="w-4 h-4 text-accent-green" /> : execution.status === 'running' ? <Brain className="w-4 h-4 text-accent-blue animate-pulse" /> : <AlertCircle className="w-4 h-4 text-accent-red" />}
-            <span className="text-xs font-label uppercase tracking-widest text-theme-secondary">Response</span>
+            <span className="overline text-[12px]">Response</span>
             <span className="text-[10px] text-theme-subtle font-mono ml-auto">{response.length} chars</span>
           </button>
           {showResponse && (
-            <div className="px-4 pb-4 border-t border-border/20">
+            <div className="px-4 pb-4 border-t border-app">
               <div className="text-sm text-theme-secondary font-body mt-2 leading-relaxed max-h-[60vh] overflow-y-auto prose-allen">
                 {response
                   ? renderMarkdown(response)
@@ -623,7 +627,7 @@ function AgentExecutionView({ execution, agentName, traces, id, liveToolCalls, r
         <div className="text-[10px] text-theme-subtle font-mono flex gap-4 flex-wrap">
           <span>Started: {execution.startedAt ? new Date(execution.startedAt).toLocaleString() : 'n/a'}</span>
           <span>Completed: {execution.completedAt ? new Date(execution.completedAt).toLocaleString() : 'n/a'}</span>
-          {meta.chatSessionId && <a href={`/chat/${meta.chatSessionId}`} className="text-blue-400 hover:underline">Open Chat →</a>}
+          {meta.chatSessionId && <a href={`/chat/${meta.chatSessionId}`} className="text-accent hover:underline">Open Chat →</a>}
         </div>
       </div>
 
@@ -943,41 +947,61 @@ export default function ExecutionDetailPage() {
 
   return (
     <div className="flex flex-col h-full">
-      {/* Top bar */}
-      <header className="flex items-center justify-between px-6 py-3 border-b border-border/50 bg-surface-50 shrink-0">
-        <div className="flex items-center gap-3">
-          <Link to="/executions" className="text-theme-secondary hover:text-accent-blue transition-colors">
-            <ArrowLeft className="w-4 h-4" />
+      {/* Top bar — matches handoff/pages/detail-views.jsx ExecutionDetailV2 */}
+      <header className="px-6 pt-4 pb-3 border-b border-app shrink-0">
+        <div className="flex items-center gap-2 mb-2 text-[12px] text-theme-muted">
+          <Link to="/executions" className="hover:text-theme-primary transition-colors flex items-center gap-1">
+            <ArrowLeft className="w-3 h-3" /> Activity
           </Link>
-          <div>
-            <h1 className="font-heading text-sm font-semibold text-theme-primary tracking-wider uppercase">{execution.workflowName}</h1>
-            <div className="flex items-center gap-2 mt-0.5">
-              <span className="text-xs text-theme-muted font-mono">{id?.slice(0, 8)}</span>
-              <StatusBadge status={execution.status} />
-              {isPaused && (
-                <span className="badge bg-accent-orange/10 text-accent-orange gap-1">
-                  <Pause className="w-3 h-3" /> paused
-                </span>
-              )}
-              {execution.status === 'waiting_for_input' && inputDialogDismissed && (
-                <button
-                  onClick={() => setInputDialogDismissed(false)}
-                  className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[11px] font-mono bg-accent-yellow/15 text-accent-yellow border border-accent-yellow/40 hover:bg-accent-yellow/25 transition-colors"
-                  title="Reopen the input dialog"
-                >
-                  <MessageSquare className="w-3 h-3" />
-                  Respond to input
-                  <span className="w-1.5 h-1.5 rounded-full bg-accent-yellow animate-pulse" />
-                </button>
-              )}
-              {isLive && (
-                connected
-                  ? <Wifi className="w-3 h-3 text-accent-green" />
-                  : <WifiOff className="w-3 h-3 text-accent-red" />
-              )}
-            </div>
-          </div>
+          <span className="text-theme-subtle">/</span>
+          <span className="font-mono">{id?.slice(0, 8)}</span>
         </div>
+
+        <div className="flex items-center justify-between gap-3">
+          <div className="flex items-center gap-3 min-w-0">
+            <h1 className="text-[20px] font-semibold text-theme-primary tracking-tight truncate">
+              {execution.workflowName}
+            </h1>
+            <StatusBadge status={execution.status} />
+            {isPaused && (
+              <span className="badge bg-accent-orange/10 text-accent-orange gap-1">
+                <Pause className="w-3 h-3" /> paused
+              </span>
+            )}
+            {execution.status === 'waiting_for_input' && inputDialogDismissed && (
+              <button
+                onClick={() => setInputDialogDismissed(false)}
+                className="badge badge-warn cursor-pointer"
+                title="Reopen the input dialog"
+              >
+                <MessageSquare className="w-3 h-3" />
+                Respond to input
+                <span className="w-1.5 h-1.5 rounded-full bg-accent-yellow animate-pulse" />
+              </button>
+            )}
+            {isLive && (
+              <span title={connected ? 'Live' : 'Disconnected'}>
+                {connected
+                  ? <Wifi className="w-3 h-3 text-accent-green" />
+                  : <WifiOff className="w-3 h-3 text-accent-red" />}
+              </span>
+            )}
+            {execution.durationMs != null && (
+              <span className="text-[12px] text-theme-muted font-mono">{formatDuration(execution.durationMs)}</span>
+            )}
+            <CostDisplay cost={liveCost} />
+            {(learningCounts.injected > 0 || learningCounts.extracted > 0) && (
+              <Link
+                to={`/learnings?search=${encodeURIComponent(id ?? '')}`}
+                className="flex items-center gap-1 text-[11px] font-mono text-accent-purple hover:opacity-80 transition-opacity"
+                title="Learnings"
+              >
+                <Brain className="w-3 h-3" />
+                {learningCounts.injected > 0 && <span>{learningCounts.injected} in</span>}
+                {learningCounts.extracted > 0 && <span>{learningCounts.extracted} out</span>}
+              </Link>
+            )}
+          </div>
 
         <div className="flex items-center gap-2">
           {execution.durationMs != null && (
@@ -987,7 +1011,7 @@ export default function ExecutionDetailPage() {
           {(learningCounts.injected > 0 || learningCounts.extracted > 0) && (
             <Link
               to={`/learnings?search=${encodeURIComponent(id ?? '')}`}
-              className="flex items-center gap-1 text-[10px] font-mono text-purple-400 hover:text-purple-300 transition-colors"
+              className="flex items-center gap-1 text-[10px] font-mono text-accent-purple hover:text-purple-300 transition-colors"
               title="Learnings"
             >
               <Brain className="w-3 h-3" />
@@ -1003,7 +1027,7 @@ export default function ExecutionDetailPage() {
             <BarChart2 className="w-3.5 h-3.5" />
             <span>Timeline</span>
             {traces && traces.length > 0 && (
-              <span className="ml-0.5 px-1 py-px rounded-sm bg-accent-blue/20 text-accent-blue text-[10px] font-mono tabular-nums">
+              <span className="ml-0.5 px-1 py-px rounded-sm bg-accent-soft text-accent text-[10px] font-mono tabular-nums">
                 {traces.length}
               </span>
             )}
@@ -1024,7 +1048,7 @@ export default function ExecutionDetailPage() {
             <Save className="w-3.5 h-3.5" />
             <span>Checkpoints</span>
             {checkpointCount != null && checkpointCount > 0 && (
-              <span className="ml-0.5 px-1 py-px rounded-sm bg-accent-blue/20 text-accent-blue text-[10px] font-mono tabular-nums">
+              <span className="ml-0.5 px-1 py-px rounded-sm bg-accent-soft text-accent text-[10px] font-mono tabular-nums">
                 {checkpointCount}
               </span>
             )}
@@ -1037,7 +1061,7 @@ export default function ExecutionDetailPage() {
             <FileText className="w-3.5 h-3.5" />
             <span>Artifacts</span>
             {artifactCount != null && artifactCount > 0 && (
-              <span className="ml-0.5 px-1 py-px rounded-sm bg-accent-blue/20 text-accent-blue text-[10px] font-mono tabular-nums">
+              <span className="ml-0.5 px-1 py-px rounded-sm bg-accent-soft text-accent text-[10px] font-mono tabular-nums">
                 {artifactCount}
               </span>
             )}
@@ -1073,6 +1097,7 @@ export default function ExecutionDetailPage() {
           <button onClick={refresh} className="btn-ghost text-xs" title="Refresh">
             <RefreshCw className="w-3.5 h-3.5" />
           </button>
+          </div>
         </div>
       </header>
 
@@ -1139,24 +1164,24 @@ export default function ExecutionDetailPage() {
                 <button
                   onClick={() => setResumePickerOpen(v => !v)}
                   disabled={resumeBusy}
-                  className="inline-flex items-center gap-1 px-2 py-1.5 rounded-full text-[11px] font-mono bg-surface-200/60 text-theme-primary hover:bg-surface-200 disabled:opacity-40 transition-colors"
+                  className="inline-flex items-center gap-1 px-2 py-1.5 rounded-full text-[11px] font-mono bg-app-muted text-theme-primary hover:bg-surface-200 disabled:opacity-40 transition-colors"
                   title="Resume from an earlier node"
                 >
                   Other node <ChevronDown className="w-3 h-3" />
                 </button>
                 {resumePickerOpen && (
                   <div
-                    className="absolute right-0 top-full mt-1 w-56 rounded-lg border border-border/60 bg-surface shadow-lg py-1 z-50"
+                    className="absolute right-0 top-full mt-1 w-56 rounded-lg border border-app bg-surface shadow-lg py-1 z-50"
                     onMouseLeave={() => setResumePickerOpen(false)}
                   >
-                    <div className="px-3 py-1.5 text-[9px] font-label uppercase tracking-widest text-theme-subtle border-b border-border/30">
+                    <div className="px-3 py-1.5 overline border-b border-app">
                       Rewind to before…
                     </div>
                     {[...execution.completedNodes].reverse().map((n: string) => (
                       <button
                         key={n}
                         onClick={() => handleRetryFrom(n)}
-                        className="w-full text-left px-3 py-1.5 text-[11px] font-mono text-theme-primary hover:bg-surface-200/60 transition-colors"
+                        className="w-full text-left px-3 py-1.5 text-[11px] font-mono text-theme-primary hover:bg-app-muted transition-colors"
                       >
                         {n}
                       </button>
@@ -1174,7 +1199,7 @@ export default function ExecutionDetailPage() {
           /interventions/:id page, not inline here. */}
       {pendingIntervention && (
         <div
-          className={`flex items-center gap-4 px-6 py-3 border-b border-border/50 ${
+          className={`flex items-center gap-4 px-6 py-3 border-b border-app ${
             pendingIntervention.severity === 'escalation'
               ? 'bg-accent-red/10 border-accent-red/30'
               : pendingIntervention.severity === 'approval'
@@ -1209,15 +1234,15 @@ export default function ExecutionDetailPage() {
           intervention fired on this run so the operator can see the
           decision history at a glance. */}
       {runInterventions.length > 0 && (
-        <div className="px-6 py-2 border-b border-border/30 bg-surface-50 flex items-center gap-3 overflow-x-auto">
-          <span className="text-[10px] font-label uppercase tracking-widest text-theme-subtle shrink-0">
+        <div className="px-6 py-2 border-b border-app bg-surface-50 flex items-center gap-3 overflow-x-auto">
+          <span className="overline shrink-0">
             Interventions ({runInterventions.length})
           </span>
           {runInterventions.map((i: any) => (
             <Link
               key={i.intervention_id}
               to={`/interventions/${i.intervention_id}`}
-              className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[9px] font-mono bg-surface-200/40 text-theme-muted hover:bg-surface-200/60 transition-colors shrink-0"
+              className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[9px] font-mono bg-app-muted text-theme-muted hover:bg-app-muted transition-colors shrink-0"
               title={`${i.title} — ${i.status}`}
             >
               <span>{i.severity === 'escalation' ? '🔴' : i.severity === 'approval' ? '🟢' : '🟡'}</span>
@@ -1250,7 +1275,7 @@ export default function ExecutionDetailPage() {
 
           {/* Right: Node detail + inline human input — resizable */}
           <div
-            className="overflow-hidden shrink-0 bg-surface border-l-2 border-border/50 hover:border-accent-blue/50 transition-colors relative"
+            className="overflow-hidden shrink-0 bg-surface border-l-2 border-app hover:border-accent-blue/50 transition-colors relative"
             style={{ width: `${rightWidth}%` }}
           >
             {/* Invisible resize grab zone on the left edge */}
@@ -1284,7 +1309,7 @@ export default function ExecutionDetailPage() {
 
         {/* Bottom: Timeline (horizontal) + Execution log table — resizable */}
         <div
-          className="shrink-0 bg-surface overflow-hidden flex flex-col border-t-2 border-border/50 group/bottom"
+          className="shrink-0 bg-surface overflow-hidden flex flex-col border-t-2 border-app group/bottom"
           style={{ minHeight: 120, height: bottomHeight, maxHeight: '60%' }}
         >
           {/* Resize grab zone — full width strip at top, overlapping border */}
@@ -1298,7 +1323,7 @@ export default function ExecutionDetailPage() {
           <div className="flex flex-1 overflow-hidden">
           {/* Logs — resizable */}
           <div
-            className="shrink-0 overflow-hidden border-r-2 border-border/50 hover:border-accent-blue/50 transition-colors relative"
+            className="shrink-0 overflow-hidden border-r-2 border-app hover:border-accent-blue/50 transition-colors relative"
             style={{ width: `${logsPct}%` }}
           >
             <div className="absolute top-0 right-0 bottom-0 w-2 cursor-col-resize z-10" onMouseDown={logsResizeStart} />
@@ -1315,7 +1340,7 @@ export default function ExecutionDetailPage() {
           <div className="flex-1 overflow-auto">
             <table className="w-full text-xs font-body">
               <thead className="sticky top-0 z-10">
-                <tr className="text-theme-muted bg-surface-50 font-label uppercase tracking-wider">
+                <tr className="bg-app-muted overline border-b border-app">
                   <th className="text-left px-4 py-1.5 font-medium">Node</th>
                   <th className="text-left px-4 py-1.5 font-medium">Status</th>
                   <th className="text-left px-4 py-1.5 font-medium">Attempt</th>
@@ -1352,7 +1377,7 @@ export default function ExecutionDetailPage() {
                       className={`cursor-pointer hover:bg-accent-blue/5 transition-colors
                         ${selectedNode === name ? 'bg-accent-blue/10' : ''}`}
                     >
-                      <td className="px-4 py-1.5 font-mono text-gray-200">{name}</td>
+                      <td className="px-4 py-1.5 font-mono text-theme-primary">{name}</td>
                       <td className="px-4 py-1.5"><StatusBadge status={state.status} /></td>
                       <td className="px-4 py-1.5 text-theme-secondary tabular-nums font-mono">{state.attempt}</td>
                       <td className="px-4 py-1.5 text-theme-secondary tabular-nums font-mono">

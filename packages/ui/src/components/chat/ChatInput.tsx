@@ -245,11 +245,11 @@ const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function ChatInput
   const currentProvider = providers?.find(p => p.provider === selectedProvider);
 
   return (
-    <div className="relative border-t border-border/50 bg-surface-50 p-3">
+    <div className="relative border-t border-app bg-surface-50 p-3">
       <MentionAutocomplete query={mentionQuery} visible={mentionVisible} onSelect={handleMentionSelect} onDismiss={() => setMentionVisible(false)} />
 
       {disabled && disabledReason && (
-        <div className="mb-2 px-3 py-2 rounded-md border border-border/30 bg-surface-100/50 text-[11px] font-mono text-theme-secondary">
+        <div className="mb-2 px-3 py-2 rounded-md border border-app bg-surface-100/50 text-[11px] font-mono text-theme-secondary">
           {disabledReason}
         </div>
       )}
@@ -261,10 +261,10 @@ const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function ChatInput
       {attachments.length > 0 && (
         <div className="flex flex-wrap gap-1.5 mb-2">
           {attachments.map((a, i) => (
-            <div key={i} className="flex items-center gap-1 bg-surface-200/50 border border-border/30 rounded px-2 py-0.5 text-[10px] font-mono text-theme-secondary">
+            <div key={i} className="flex items-center gap-1 bg-app-muted border border-app rounded px-2 py-0.5 text-[10px] font-mono text-theme-secondary">
               <Paperclip className="w-2.5 h-2.5 text-theme-muted" />
               <span className="truncate max-w-[150px]">{a.name}</span>
-              <button onClick={() => setAttachments(prev => prev.filter((_, j) => j !== i))} className="text-theme-subtle hover:text-red-400"><X className="w-2.5 h-2.5" /></button>
+              <button onClick={() => setAttachments(prev => prev.filter((_, j) => j !== i))} className="text-theme-subtle hover:text-accent-red"><X className="w-2.5 h-2.5" /></button>
             </div>
           ))}
         </div>
@@ -272,7 +272,7 @@ const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function ChatInput
 
       {/* Input container with model selector inside */}
       <div
-        className={`relative bg-surface-200/50 border rounded-lg focus-within:border-accent-blue/50 transition-colors ${dragOver ? 'border-accent-blue border-dashed bg-accent-blue/5' : 'border-border/30'}`}
+        className={`relative bg-app-muted border rounded-lg focus-within:border-accent-blue/50 transition-colors ${dragOver ? 'border-accent-blue border-dashed bg-accent-blue/5' : 'border-app'}`}
         onDragOver={e => { e.preventDefault(); setDragOver(true); }}
         onDragLeave={() => setDragOver(false)}
         onDrop={handleDrop}
@@ -324,17 +324,17 @@ const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function ChatInput
 
             {/* Model picker dropdown — opens upward */}
             {showModelPicker && !modelLocked && (
-              <div className="absolute bottom-full left-0 mb-1 z-30 bg-surface-100 border border-border/50 rounded-lg shadow-2xl overflow-hidden min-w-[220px]">
+              <div className="absolute bottom-full left-0 mb-1 z-30 bg-surface-100 border border-app rounded-lg shadow-2xl overflow-hidden min-w-[220px]">
                 {providers?.map(p => (
                   <div key={p.provider}>
-                    <div className="px-3 py-1 bg-surface-200/30 border-b border-border/20">
-                      <span className={`text-[10px] font-label uppercase tracking-widest ${PROVIDER_COLORS[p.provider] ?? 'text-theme-muted'}`}>{p.label}</span>
+                    <div className="px-3 py-1 bg-app-muted/50 border-b border-app">
+                      <span className={`overline ${PROVIDER_COLORS[p.provider] ?? 'text-theme-muted'}`}>{p.label}</span>
                     </div>
                     {p.models.map(m => (
                       <button
                         key={`${p.provider}-${m}`}
                         onClick={() => { onProviderChange?.(p.provider, m); setShowModelPicker(false); }}
-                        className={`w-full text-left px-3 py-1.5 text-xs font-mono hover:bg-surface-200/50 transition-colors ${
+                        className={`w-full text-left px-3 py-1.5 text-xs font-mono hover:bg-app-muted transition-colors ${
                           selectedProvider === p.provider && selectedModel === m ? 'text-accent-blue bg-accent-blue/5' : 'text-theme-secondary'
                         }`}
                       >
@@ -365,9 +365,9 @@ const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function ChatInput
             </button>
 
             {showEffortPicker && (
-              <div className="absolute bottom-full left-0 mb-1 z-30 bg-surface-100 border border-border/50 rounded-lg shadow-2xl overflow-hidden min-w-[220px]">
-                <div className="px-3 py-1 bg-surface-200/30 border-b border-border/20">
-                  <span className="text-[10px] font-label uppercase tracking-widest text-theme-muted">
+              <div className="absolute bottom-full left-0 mb-1 z-30 bg-surface-100 border border-app rounded-lg shadow-2xl overflow-hidden min-w-[220px]">
+                <div className="px-3 py-1 bg-app-muted/50 border-b border-app">
+                  <span className="overline">
                     Reasoning Effort
                   </span>
                 </div>
@@ -379,7 +379,7 @@ const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function ChatInput
                     <button
                       key={opt.value}
                       onClick={() => setEffort(opt.value)}
-                      className={`w-full text-left px-3 py-1.5 text-xs font-mono transition-colors hover:bg-surface-200/50 flex items-center justify-between gap-2 ${
+                      className={`w-full text-left px-3 py-1.5 text-xs font-mono transition-colors hover:bg-app-muted flex items-center justify-between gap-2 ${
                         isActive ? 'text-accent-blue bg-accent-blue/5' : 'text-theme-secondary'
                       }`}
                     >
@@ -423,7 +423,7 @@ const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function ChatInput
               {/* Slider track */}
               <span
                 className={`relative inline-block w-6 h-3 rounded-full transition-colors ${
-                  effectivePlanMode ? 'bg-accent-blue' : 'bg-surface-200/70 border border-border/60'
+                  effectivePlanMode ? 'bg-accent-blue' : 'bg-surface-200/70 border border-app'
                 }`}
               >
                 {/* Knob */}
@@ -451,7 +451,7 @@ const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function ChatInput
 
             {/* Send / Stop button */}
             {streaming ? (
-              <button onClick={onCancel} className="shrink-0 w-8 h-8 flex items-center justify-center rounded-md bg-red-500/20 text-red-400 hover:bg-red-500/30 transition-colors" title="Stop">
+              <button onClick={onCancel} className="shrink-0 w-8 h-8 flex items-center justify-center rounded-md bg-red-500/20 text-accent-red hover:bg-red-500/30 transition-colors" title="Stop">
                 <Square className="w-3.5 h-3.5" />
               </button>
             ) : (

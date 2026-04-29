@@ -102,11 +102,11 @@ export default function CommandPalette({ open, onClose, onSelect }: CommandPalet
     <div className="fixed inset-0 z-50 flex items-start justify-center pt-[15vh]" onClick={onClose}>
       <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" />
       <div
-        className="relative w-full max-w-lg bg-surface-100 border border-border/50 rounded-lg shadow-2xl overflow-hidden"
+        className="relative w-full max-w-lg bg-surface-100 border border-app rounded-lg shadow-2xl overflow-hidden"
         onClick={e => e.stopPropagation()}
       >
         {/* Search input */}
-        <div className="flex items-center gap-3 px-4 py-3 border-b border-border/40">
+        <div className="flex items-center gap-3 px-4 py-3 border-b border-app">
           <Search className="w-4 h-4 text-theme-muted shrink-0" />
           <input
             ref={inputRef}
@@ -116,7 +116,7 @@ export default function CommandPalette({ open, onClose, onSelect }: CommandPalet
             placeholder="Type a command..."
             className="flex-1 bg-transparent text-sm text-theme-primary placeholder-gray-600 outline-none font-body"
           />
-          <kbd className="text-[10px] text-theme-subtle font-mono bg-surface-200/60 px-1.5 py-0.5 rounded border border-border/30">ESC</kbd>
+          <kbd className="text-[10px] text-theme-subtle font-mono bg-app-muted px-1.5 py-0.5 rounded border border-app">ESC</kbd>
         </div>
 
         {/* Results */}
@@ -128,7 +128,7 @@ export default function CommandPalette({ open, onClose, onSelect }: CommandPalet
           {grouped.map(group => (
             <div key={group.category}>
               <div className="px-4 py-1.5">
-                <span className="text-[10px] font-label uppercase tracking-widest text-theme-subtle">
+                <span className="overline">
                   {CATEGORY_LABELS[group.category]}
                 </span>
               </div>
@@ -139,7 +139,7 @@ export default function CommandPalette({ open, onClose, onSelect }: CommandPalet
                   <button
                     key={item.id}
                     className={`w-full flex items-center gap-3 px-4 py-2 text-left transition-colors ${
-                      isSelected ? 'bg-accent-blue/10 text-theme-primary' : 'text-theme-secondary hover:bg-surface-200/50'
+                      isSelected ? 'bg-accent-blue/10 text-theme-primary' : 'text-theme-secondary hover:bg-app-muted'
                     }`}
                     onClick={() => {
                       const isPartial = item.prompt.endsWith(' ');
@@ -154,7 +154,7 @@ export default function CommandPalette({ open, onClose, onSelect }: CommandPalet
                       <div className="text-[11px] text-theme-subtle truncate">{item.description}</div>
                     </div>
                     {item.prompt.endsWith(' ') && (
-                      <span className="text-[10px] text-theme-subtle font-mono bg-surface-200/40 px-1.5 py-0.5 rounded">fill in →</span>
+                      <span className="text-[10px] text-theme-subtle font-mono bg-app-muted px-1.5 py-0.5 rounded">fill in →</span>
                     )}
                   </button>
                 );
@@ -164,15 +164,15 @@ export default function CommandPalette({ open, onClose, onSelect }: CommandPalet
         </div>
 
         {/* Footer */}
-        <div className="px-4 py-2 border-t border-border/30 flex items-center gap-4">
+        <div className="px-4 py-2 border-t border-app flex items-center gap-4">
           <span className="text-[10px] text-theme-subtle flex items-center gap-1">
-            <kbd className="font-mono bg-surface-200/60 px-1 py-0.5 rounded border border-border/30">↑↓</kbd> navigate
+            <kbd className="font-mono bg-app-muted px-1 py-0.5 rounded border border-app">↑↓</kbd> navigate
           </span>
           <span className="text-[10px] text-theme-subtle flex items-center gap-1">
-            <kbd className="font-mono bg-surface-200/60 px-1 py-0.5 rounded border border-border/30">↵</kbd> select
+            <kbd className="font-mono bg-app-muted px-1 py-0.5 rounded border border-app">↵</kbd> select
           </span>
           <span className="text-[10px] text-theme-subtle flex items-center gap-1">
-            <kbd className="font-mono bg-surface-200/60 px-1 py-0.5 rounded border border-border/30">esc</kbd> close
+            <kbd className="font-mono bg-app-muted px-1 py-0.5 rounded border border-app">esc</kbd> close
           </span>
         </div>
       </div>

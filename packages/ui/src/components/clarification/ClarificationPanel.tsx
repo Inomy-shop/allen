@@ -218,11 +218,11 @@ export default function ClarificationPanel({
 
       {/* Prompt / question text */}
       {prompt && (
-        <div className={`px-6 py-4 border-b border-border/15 ${severityTheme.bgSoft}`}>
+        <div className={`px-6 py-4 border-b border-app ${severityTheme.bgSoft}`}>
           <div className="flex items-start gap-3">
             <MessageSquareQuote className={`w-4 h-4 shrink-0 mt-0.5 ${severityTheme.iconClass}`} />
             <div className="flex-1 min-w-0">
-              <div className="text-[10px] font-label uppercase tracking-[0.15em] text-theme-subtle mb-1">
+              <div className="overline text-theme-subtle mb-1">
                 {severity === 'approval' ? 'Approval requested'
                   : severity === 'escalation' ? 'Escalated'
                   : severity === 'info' ? 'Notice'
@@ -239,7 +239,7 @@ export default function ClarificationPanel({
       {/* Locked banner */}
       {locked && (
         <div className="px-6 py-3 bg-amber-500/10 border-b border-amber-500/30 flex items-start gap-2.5">
-          <AlertTriangle className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
+          <AlertTriangle className="w-4 h-4 text-accent-yellow shrink-0 mt-0.5" />
           <div className="text-xs text-amber-200 font-body">
             <div className="font-semibold">This clarification is locked</div>
             <div className="text-amber-300/80 mt-0.5">{lockedReason ?? 'You cannot submit a response right now.'}</div>
@@ -256,7 +256,7 @@ export default function ClarificationPanel({
               href={d.url}
               target="_blank"
               rel="noreferrer"
-              className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-mono bg-surface-200/40 hover:bg-surface-200/70 text-theme-secondary hover:text-theme-primary border border-border/30 transition-colors"
+              className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-mono bg-app-muted hover:bg-surface-200/70 text-theme-secondary hover:text-theme-primary border border-app transition-colors"
             >
               <BookOpen className="w-3 h-3" />
               {d.label}
@@ -272,7 +272,7 @@ export default function ClarificationPanel({
       <div className={isTwoCol ? 'grid grid-cols-[minmax(0,1fr)_minmax(0,1fr)] divide-x divide-border/15' : ''}>
         {/* Review content */}
         {hasReview && (
-          <div className={`p-6 ${isTwoCol ? 'bg-surface-100/30' : ''}`}>
+          <div className={`p-6 ${isTwoCol ? 'bg-app-muted/40' : ''}`}>
             <SectionLabel icon={<FileText className="w-3 h-3" />} text={reviewLabel} />
             <ReviewContent
               content={reviewContent!}
@@ -327,7 +327,7 @@ export default function ClarificationPanel({
 
           {/* Scope picker + feedback when requesting changes */}
           {decision === 'request_changes' && (
-            <div className="space-y-4 pt-2 border-t border-border/15">
+            <div className="space-y-4 pt-2 border-t border-app">
               {scopeOptions && scopeOptions.length > 0 && (
                 <div>
                   <FieldLabel label="Which section needs changes?" required />
@@ -335,7 +335,7 @@ export default function ClarificationPanel({
                     value={scope}
                     onChange={e => setScope(e.target.value)}
                     disabled={locked || submitting}
-                    className="w-full px-3 py-2 rounded-md border border-border/40 bg-surface-100/60 text-theme-primary text-sm font-body focus:outline-none focus:border-accent-blue/60 focus:ring-1 focus:ring-accent-blue/30 transition-colors disabled:opacity-50"
+                    className="w-full px-3 py-2 rounded-md border border-app bg-app-card text-theme-primary text-sm font-body focus:outline-none focus:border-accent-blue/60 focus:ring-1 focus:ring-accent-blue/30 transition-colors disabled:opacity-50"
                   >
                     {scopeOptions.map(o => (
                       <option key={o.value} value={o.value}>{o.label}</option>
@@ -353,7 +353,7 @@ export default function ClarificationPanel({
                   rows={5}
                   disabled={locked || submitting}
                   autoFocus
-                  className="w-full px-3 py-2 rounded-md border border-border/40 bg-surface-100/60 text-theme-primary text-sm font-body leading-relaxed focus:outline-none focus:border-accent-blue/60 focus:ring-1 focus:ring-accent-blue/30 transition-colors resize-y disabled:opacity-50"
+                  className="w-full px-3 py-2 rounded-md border border-app bg-app-card text-theme-primary text-sm font-body leading-relaxed focus:outline-none focus:border-accent-blue/60 focus:ring-1 focus:ring-accent-blue/30 transition-colors resize-y disabled:opacity-50"
                 />
                 {errors.__feedback && (
                   <FieldError text={errors.__feedback} />
@@ -363,7 +363,7 @@ export default function ClarificationPanel({
           )}
 
           {/* Action bar */}
-          <div className="flex items-center justify-between gap-3 pt-4 mt-auto border-t border-border/15">
+          <div className="flex items-center justify-between gap-3 pt-4 mt-auto border-t border-app">
             {/* Left side: discreet Reject link for question mode — gives the
                 user a secondary abandon path without inflating the UI with
                 a decision card. For other modes, this slot stays empty. */}
@@ -389,7 +389,7 @@ export default function ClarificationPanel({
                   type="button"
                   onClick={onCancel}
                   disabled={submitting}
-                  className="px-3.5 py-2 rounded-md border border-border/40 text-theme-secondary hover:bg-surface-200/50 text-sm font-body transition-colors disabled:opacity-50"
+                  className="px-3.5 py-2 rounded-md border border-app text-theme-secondary hover:bg-app-muted text-sm font-body transition-colors disabled:opacity-50"
                 >
                   Cancel
                 </button>
@@ -425,7 +425,7 @@ function ClarificationHeader({
 }) {
   const Icon = theme.Icon;
   return (
-    <div className="px-6 pt-5 pb-4 border-b border-border/15 shrink-0">
+    <div className="px-6 pt-5 pb-4 border-b border-app shrink-0">
       <div className="flex items-start gap-3.5">
         {/* Icon tile with soft gradient ring — replaces the old emoji circle. */}
         <div className={`relative shrink-0 w-11 h-11 rounded-xl ${theme.iconTileBg} ${theme.iconTileBorder} border flex items-center justify-center shadow-sm`}>
@@ -439,7 +439,7 @@ function ClarificationHeader({
               {labelForSeverity(severity)}
             </span>
             {roundInfo && (
-              <span className="text-[10px] font-mono text-theme-muted bg-surface-200/40 px-2 py-0.5 rounded-full border border-border/20">
+              <span className="text-[10px] font-mono text-theme-muted bg-app-muted px-2 py-0.5 rounded-full border border-app">
                 Round {roundInfo.current} / {roundInfo.max}
               </span>
             )}
@@ -469,8 +469,8 @@ function ReviewContent({
 }) {
   if (type === 'markdown') {
     return (
-      <div className="rounded-lg border border-border/20 bg-surface-100/50 p-4 max-h-[70vh] overflow-auto">
-        <div className="prose prose-sm prose-invert max-w-none prose-pre:bg-surface-200/50 prose-code:text-accent-blue prose-headings:font-heading prose-headings:tracking-tight">
+      <div className="rounded-lg border border-app bg-surface-100/50 p-4 max-h-[70vh] overflow-auto">
+        <div className="prose prose-sm prose-invert max-w-none prose-pre:bg-app-muted prose-code:text-accent-blue prose-headings:font-heading prose-headings:tracking-tight">
           {renderMarkdown(content) as React.ReactNode}
         </div>
       </div>
@@ -479,8 +479,8 @@ function ReviewContent({
   if (type === 'json') {
     const formatted = tryFormatJSON(content);
     return (
-      <div className="rounded-lg border border-border/20 bg-surface-100/50 overflow-hidden">
-        <div className="flex items-center justify-between px-3 py-1.5 bg-surface-200/40 border-b border-border/20">
+      <div className="rounded-lg border border-app bg-surface-100/50 overflow-hidden">
+        <div className="flex items-center justify-between px-3 py-1.5 bg-app-muted border-b border-app">
           <span className="text-[10px] font-mono text-theme-muted uppercase tracking-wider flex items-center gap-1.5">
             <Code2 className="w-3 h-3" /> json
           </span>
@@ -494,8 +494,8 @@ function ReviewContent({
   }
   if (type === 'code') {
     return (
-      <div className="rounded-lg border border-border/20 bg-surface-100/50 overflow-hidden">
-        <div className="flex items-center justify-between px-3 py-1.5 bg-surface-200/40 border-b border-border/20">
+      <div className="rounded-lg border border-app bg-surface-100/50 overflow-hidden">
+        <div className="flex items-center justify-between px-3 py-1.5 bg-app-muted border-b border-app">
           <span className="text-[10px] font-mono text-theme-muted uppercase tracking-wider flex items-center gap-1.5">
             <Code2 className="w-3 h-3" /> {language || 'code'}
           </span>
@@ -508,7 +508,7 @@ function ReviewContent({
     );
   }
   return (
-    <div className="rounded-lg border border-border/20 bg-surface-100/50 p-4 max-h-[60vh] overflow-auto">
+    <div className="rounded-lg border border-app bg-surface-100/50 p-4 max-h-[60vh] overflow-auto">
       <pre className="text-[12px] font-body text-theme-secondary whitespace-pre-wrap break-words leading-relaxed">
         {content}
       </pre>
@@ -531,12 +531,12 @@ function FieldRenderer({
   const label = field.label ?? prettifyName(field.name);
 
   const inputBase =
-    'w-full px-3 py-2 rounded-md border bg-surface-100/60 text-theme-primary text-sm font-body transition-colors focus:outline-none focus:ring-1 focus:ring-accent-blue/30 disabled:opacity-50 '
-    + (error ? 'border-accent-red/60 focus:border-accent-red' : 'border-border/40 focus:border-accent-blue/60');
+    'w-full px-3 py-2 rounded-md border bg-app-card text-theme-primary text-sm font-body transition-colors focus:outline-none focus:ring-1 focus:ring-accent-blue/30 disabled:opacity-50 '
+    + (error ? 'border-accent-red/60 focus:border-accent-red' : 'border-app focus:border-accent-blue/60');
 
   const monoInputBase =
     'w-full px-3 py-2 rounded-md border bg-[rgb(var(--color-editor-background))] text-theme-primary text-[12px] font-mono transition-colors focus:outline-none focus:ring-1 focus:ring-accent-blue/30 disabled:opacity-50 resize-y '
-    + (error ? 'border-accent-red/60 focus:border-accent-red' : 'border-border/40 focus:border-accent-blue/60');
+    + (error ? 'border-accent-red/60 focus:border-accent-red' : 'border-app focus:border-accent-blue/60');
 
   return (
     <div>
@@ -704,7 +704,7 @@ function BooleanToggle({ checked, onChange, disabled }: { checked: boolean; onCh
       className={`relative inline-flex items-center gap-2.5 h-9 px-3 rounded-md border transition-all disabled:opacity-50 ${
         checked
           ? 'border-accent-green/40 bg-accent-green/10 text-accent-green'
-          : 'border-border/40 bg-surface-100/60 text-theme-secondary'
+          : 'border-app bg-app-card text-theme-secondary'
       }`}
     >
       <span className={`relative w-8 h-4 rounded-full transition-colors ${checked ? 'bg-accent-green' : 'bg-surface-200/80'}`}>
@@ -731,8 +731,8 @@ function SelectField({
         value={value}
         onChange={e => onChange(e.target.value)}
         disabled={disabled}
-        className={`w-full px-3 py-2 pr-9 rounded-md border bg-surface-100/60 text-theme-primary text-sm font-body focus:outline-none focus:ring-1 focus:ring-accent-blue/30 appearance-none disabled:opacity-50 ${
-          error ? 'border-accent-red/60 focus:border-accent-red' : 'border-border/40 focus:border-accent-blue/60'
+        className={`w-full px-3 py-2 pr-9 rounded-md border bg-app-card text-theme-primary text-sm font-body focus:outline-none focus:ring-1 focus:ring-accent-blue/30 appearance-none disabled:opacity-50 ${
+          error ? 'border-accent-red/60 focus:border-accent-red' : 'border-app focus:border-accent-blue/60'
         }`}
       >
         {placeholder && !value && <option value="">{placeholder}</option>}
@@ -764,7 +764,7 @@ function RadioGroup({
             className={`flex items-start gap-3 p-3 rounded-md border cursor-pointer transition-all ${
               selected
                 ? 'border-accent-blue/50 bg-accent-blue/5'
-                : 'border-border/30 bg-surface-100/40 hover:border-border/60'
+                : 'border-app bg-app-muted/50 hover:border-app'
             } ${disabled ? 'opacity-50 cursor-not-allowed' : ''}`}
           >
             <input
@@ -777,7 +777,7 @@ function RadioGroup({
               className="sr-only"
             />
             <span className={`mt-0.5 w-4 h-4 rounded-full border-2 shrink-0 flex items-center justify-center transition-colors ${
-              selected ? 'border-accent-blue' : 'border-border/50'
+              selected ? 'border-accent-blue' : 'border-app'
             }`}>
               {selected && <span className="w-2 h-2 rounded-full bg-accent-blue" />}
             </span>
@@ -816,7 +816,7 @@ function MultiSelect({
             className={`flex items-start gap-3 px-3 py-2 rounded-md border cursor-pointer transition-colors ${
               checked
                 ? 'border-accent-blue/50 bg-accent-blue/5'
-                : 'border-border/30 bg-surface-100/40 hover:border-border/60'
+                : 'border-app bg-app-muted/50 hover:border-app'
             } ${disabled ? 'opacity-50 cursor-not-allowed' : ''}`}
           >
             <input
@@ -894,7 +894,7 @@ function DecisionButtons({
 
 function SectionLabel({ icon, text }: { icon?: React.ReactNode; text: string }) {
   return (
-    <div className="flex items-center gap-1.5 mb-2.5 text-[10px] font-label uppercase tracking-[0.15em] text-theme-muted">
+    <div className="flex items-center gap-1.5 mb-2.5 overline">
       {icon}
       {text}
     </div>
@@ -999,10 +999,10 @@ function decisionButtonClass(tone: 'green' | 'yellow' | 'red' | 'blue', selected
     }
   }
   switch (tone) {
-    case 'green':  return 'border-border/40 bg-surface-100/40 text-theme-secondary hover:border-accent-green/40 hover:text-accent-green hover:bg-accent-green/5';
-    case 'yellow': return 'border-border/40 bg-surface-100/40 text-theme-secondary hover:border-accent-yellow/40 hover:text-accent-yellow hover:bg-accent-yellow/5';
-    case 'red':    return 'border-border/40 bg-surface-100/40 text-theme-secondary hover:border-accent-red/40 hover:text-accent-red hover:bg-accent-red/5';
-    case 'blue':   return 'border-border/40 bg-surface-100/40 text-theme-secondary hover:border-accent-blue/40 hover:text-accent-blue hover:bg-accent-blue/5';
+    case 'green':  return 'border-app bg-app-muted/50 text-theme-secondary hover:border-accent-green/40 hover:text-accent-green hover:bg-accent-green/5';
+    case 'yellow': return 'border-app bg-app-muted/50 text-theme-secondary hover:border-accent-yellow/40 hover:text-accent-yellow hover:bg-accent-yellow/5';
+    case 'red':    return 'border-app bg-app-muted/50 text-theme-secondary hover:border-accent-red/40 hover:text-accent-red hover:bg-accent-red/5';
+    case 'blue':   return 'border-app bg-app-muted/50 text-theme-secondary hover:border-accent-blue/40 hover:text-accent-blue hover:bg-accent-blue/5';
   }
 }
 

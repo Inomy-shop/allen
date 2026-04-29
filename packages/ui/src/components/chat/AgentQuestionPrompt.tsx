@@ -48,7 +48,7 @@ export function AgentQuestionPrompt({ question, fromAgent, agentInfo, onAnswer }
           autoFocus
           rows={3}
           disabled={submitting}
-          className="w-full bg-surface-200/50 border border-border/30 rounded-md px-3 py-2 text-sm text-theme-primary placeholder-gray-600 font-body resize-y focus:outline-none focus:border-accent-cyan/50 disabled:opacity-50"
+          className="w-full bg-app-muted border border-app rounded-md px-3 py-2 text-sm text-theme-primary placeholder-gray-600 font-body resize-y focus:outline-none focus:border-accent-cyan/50 disabled:opacity-50"
         />
         <div className="flex items-center justify-between">
           <span className="text-[10px] text-theme-subtle font-mono">shift+enter for new line</span>

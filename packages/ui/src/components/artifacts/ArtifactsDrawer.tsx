@@ -103,7 +103,7 @@ export default function ArtifactsDrawer({ rootType, rootId, open, onClose }: Pro
           The viewer is capped via min() so a user dragging the handle
           too far left can't push the drawer off the viewport's left. */}
       <aside
-        className="absolute top-0 right-0 h-full bg-surface-50 border-l border-border/40 shadow-2xl flex"
+        className="absolute top-0 right-0 h-full bg-surface-50 border-l border-app shadow-2xl flex"
         style={{
           width: selected
             ? `min(${listWidth + viewerWidth}px, calc(100vw - 40px))`
@@ -158,7 +158,7 @@ export default function ArtifactsDrawer({ rootType, rootId, open, onClose }: Pro
             drawer width — `flex: 1` so whatever's left after the fixed
             list-width gets used. */}
         {selected && (
-          <div className="h-full bg-surface-50 border-l border-border/40 flex flex-col flex-1 min-w-0">
+          <div className="h-full bg-surface-50 border-l border-app flex flex-col flex-1 min-w-0">
             <ArtifactViewer
               artifact={selected}
               onClose={() => setSelected(null)}

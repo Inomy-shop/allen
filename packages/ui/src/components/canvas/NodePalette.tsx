@@ -58,7 +58,7 @@ interface Props {
 
 export default function NodePalette({ onAdd }: Props) {
   return (
-    <div className="flex flex-col gap-1 bg-surface-100/90 backdrop-blur-sm border border-border/50 rounded-sm p-1.5 shadow-lg">
+    <div className="flex flex-col gap-1 bg-surface-100/90 backdrop-blur-sm border border-app rounded-sm p-1.5 shadow-lg">
       {paletteItems.map(item => {
         const Icon = item.icon;
         return (
@@ -69,7 +69,7 @@ export default function NodePalette({ onAdd }: Props) {
             title={`Add ${item.label} Node`}
           >
             <Icon className={`w-3.5 h-3.5 shrink-0 ${item.color}`} />
-            <span className="text-[10px] text-theme-secondary font-label uppercase tracking-wider">{item.label}</span>
+            <span className="overline">{item.label}</span>
           </button>
         );
       })}

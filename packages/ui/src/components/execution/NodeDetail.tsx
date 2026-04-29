@@ -50,7 +50,7 @@ function InlineEditor({
   const height = fill ? '100%' : Math.min(Math.max(lineCount * 19 + 16, 60), maxHeight);
 
   return (
-    <div className={`rounded-md overflow-hidden border border-border/30 ${fill ? 'h-full flex flex-col min-h-0' : ''}`}>
+    <div className={`rounded-md overflow-hidden border border-app ${fill ? 'h-full flex flex-col min-h-0' : ''}`}>
       <Editor
         height={height}
         language={language}
@@ -259,7 +259,7 @@ function InlineMarkdown({
 }) {
   return (
     <div
-      className={`rounded-md border border-border/30 bg-surface-100/50 p-3 overflow-auto prose-allen ${fill ? 'h-full min-h-0' : ''}`}
+      className={`rounded-md border border-app bg-surface-100/50 p-3 overflow-auto prose-allen ${fill ? 'h-full min-h-0' : ''}`}
       style={fill ? undefined : { maxHeight }}
     >
       <div className="text-xs text-theme-secondary leading-relaxed break-words">
@@ -299,7 +299,7 @@ function TabButton({
           ? 'border-accent-blue text-accent-blue'
           : disabled
             ? 'border-transparent text-theme-subtle cursor-not-allowed opacity-50'
-            : 'border-transparent text-theme-muted hover:text-theme-primary hover:border-border/60'
+            : 'border-transparent text-theme-muted hover:text-theme-primary hover:border-app'
         }
       `}
     >
@@ -322,7 +322,7 @@ function Section({ title, defaultOpen = true, expandContent, onExpand, children 
 }) {
   const [open, setOpen] = useState(defaultOpen);
   return (
-    <section className="border-b border-border/30">
+    <section className="border-b border-app">
       <div className="flex items-center gap-2 px-4 py-2 hover:bg-surface-200/10 cursor-pointer" onClick={() => setOpen(!open)}>
         {open ? <ChevronDown className="w-3 h-3 text-theme-subtle shrink-0" /> : <ChevronRight className="w-3 h-3 text-theme-subtle shrink-0" />}
         <h4 className="font-heading text-[10px] font-semibold text-theme-secondary uppercase tracking-widest flex-1">{title}</h4>
@@ -439,7 +439,7 @@ function SpawnedAgentRow({
   const isLive = row.status === 'running' || row.status === 'waiting_for_input';
   return (
     <div
-      className="flex items-stretch group/spawn-row rounded-md hover:bg-surface-200/50 transition-colors border border-transparent hover:border-border/40"
+      className="flex items-stretch group/spawn-row rounded-md hover:bg-app-muted transition-colors border border-transparent hover:border-app"
       style={{ marginLeft: indent * 16 }}
     >
       <a
@@ -578,9 +578,9 @@ function SpawnedAgentsPanel({
   const runningCount = visible.filter(r => r.status === 'running' || r.status === 'waiting_for_input').length;
 
   return (
-    <div className="rounded-md border border-border/30 bg-surface-100/50 p-2">
+    <div className="rounded-md border border-app bg-surface-100/50 p-2">
       {/* Header row with count + descendants toggle + total cost + cancel */}
-      <div className="flex items-center justify-between px-1 pb-2 mb-1 border-b border-border/20">
+      <div className="flex items-center justify-between px-1 pb-2 mb-1 border-b border-app">
         <span className="text-[10px] font-mono uppercase tracking-wider text-theme-subtle">
           {visible.length} {visible.length === 1 ? 'spawn' : 'spawns'}
           {runningCount > 0 && (
@@ -772,7 +772,7 @@ export default function NodeDetail({
   return (
     <div className="flex flex-col h-full overflow-hidden">
       {/* Header */}
-      <div className="flex items-center justify-between px-4 py-3 border-b border-border/50 shrink-0">
+      <div className="flex items-center justify-between px-4 py-3 border-b border-app shrink-0">
         <div>
           <h3 className="font-heading text-sm font-semibold text-theme-primary tracking-wider">{nodeName}</h3>
           <div className="flex items-center gap-3 mt-1">
@@ -804,8 +804,8 @@ export default function NodeDetail({
 
       {/* Attempt tabs + "Compare attempts" button when there are >1 */}
       {hasMultipleAttempts && (
-        <div className="flex items-center gap-1 px-4 py-2 border-b border-border/50 shrink-0 bg-surface-50/50">
-          <span className="text-[10px] font-label uppercase tracking-wider text-theme-muted mr-2">Attempt:</span>
+        <div className="flex items-center gap-1 px-4 py-2 border-b border-app shrink-0 bg-app-card/50">
+          <span className="overline mr-2">Attempt:</span>
           {dedupedTraces.map(t => (
             <button
               key={t.attempt}
@@ -824,7 +824,7 @@ export default function NodeDetail({
           {dedupedTraces.length >= 2 && (
             <button
               onClick={() => setCompareAttempts([dedupedTraces[0].attempt, dedupedTraces[dedupedTraces.length - 1].attempt])}
-              className="ml-auto text-[11px] font-mono px-2 py-0.5 rounded-sm border border-border/40 text-theme-secondary hover:bg-surface-200 transition-colors"
+              className="ml-auto text-[11px] font-mono px-2 py-0.5 rounded-sm border border-app text-theme-secondary hover:bg-surface-200 transition-colors"
               title="Compare first vs latest attempt's state"
             >
               Compare first ↔ latest
@@ -849,7 +849,7 @@ export default function NodeDetail({
             <div className="space-y-3">
               {waitingInput.fields.map(field => (
                 <div key={field.name}>
-                  <label className="block text-[11px] font-label uppercase tracking-wider text-theme-secondary mb-1">
+                  <label className="block overline mb-1">
                     {field.label ?? field.name}{field.required !== false && <span className="text-accent-red ml-0.5">*</span>}
                   </label>
                   {field.type === 'select' && field.options ? (
@@ -889,9 +889,9 @@ export default function NodeDetail({
             which is what Monaco needs to size its internal scroll
             container correctly via height="100%". */}
         {(tabHasInput || tabHasPrompt || tabHasResponse || tabHasOutputs) && (
-          <section className="flex-1 min-h-0 flex flex-col border-b border-border/30">
+          <section className="flex-1 min-h-0 flex flex-col border-b border-app">
             {/* Tab bar */}
-            <div className="shrink-0 flex items-center border-b border-border/20 bg-surface-50/50">
+            <div className="shrink-0 flex items-center border-b border-app bg-app-card/50">
               <TabButton
                 label="Input State"
                 active={resolvedTab === 'input'}

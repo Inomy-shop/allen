@@ -4,7 +4,7 @@ import { Workflow } from 'lucide-react';
 export default function WorkflowNode({ data, selected }: NodeProps) {
   return (
     <div className={`px-4 py-3 rounded-lg border-2 bg-surface-100/90 backdrop-blur-sm w-[280px] transition-all
-      ${selected ? 'border-accent-purple ring-2 ring-accent-purple/30 shadow-glow-purple' : 'border-accent-purple/30 hover:border-accent-purple/50'}
+      ${selected ? 'border-accent-purple ring-2 ring-accent-purple/30' : 'border-accent-purple/30 hover:border-accent-purple/50'}
     `}>
       <Handle type="target" position={Position.Top} id="top" className="!bg-accent-purple !w-2.5 !h-2.5 !border-surface" />
       <Handle type="target" position={Position.Right} id="right" className="!bg-accent-yellow !w-2 !h-2 !border-surface" />

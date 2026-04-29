@@ -63,6 +63,17 @@ export function pullRequestRoutes(db: Db): Router {
     } catch (err: unknown) { res.status(500).json({ error: (err as Error).message }); }
   });
 
+  // Get PR conversation — top-level comments, review submissions, and
+  // review comments (inline). Pulled live from GitHub via `gh pr view`.
+  router.get('/:id/comments', async (req: Request, res: Response) => {
+    try {
+      const pr = await prService.get(p(req, 'id'));
+      if (!pr) return res.status(404).json({ error: 'PR not found' });
+      const data = await prService.getComments(pr.repoPath, pr.number);
+      res.json(data);
+    } catch (err: unknown) { res.status(500).json({ error: (err as Error).message }); }
+  });
+
   // Create workspace from PR
   router.post('/:id/workspace', async (req: Request, res: Response) => {
     try {

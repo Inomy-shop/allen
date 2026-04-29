@@ -576,6 +576,24 @@ export function useChat() {
     }
   }, [activeSessionId]);
 
+  /**
+   * Optimistic rename — patches the session in local state immediately
+   * so the conversations sidebar updates without a roundtrip, then
+   * persists via PATCH.
+   */
+  const updateSessionTitle = useCallback(async (id: string, title: string) => {
+    const trimmed = title.trim();
+    if (!trimmed) return;
+    setSessions(prev => prev.map(s => s._id === id ? { ...s, title: trimmed } : s));
+    try {
+      await api.updateSession(id, { title: trimmed });
+    } catch (e) {
+      // Best-effort: refresh from the server so we don't show stale local edits.
+      void loadSessions();
+      throw e;
+    }
+  }, [loadSessions]);
+
   const switchSession = useCallback((id: string) => {
     // Detach from the current session's local SSE reader (if any). The server
     // keeps the query running independently in activeQueries — the agent
@@ -944,6 +962,7 @@ export function useChat() {
     sendMessage,
     createSession,
     deleteSession,
+    updateSessionTitle,
     switchSession,
     cancelStream,
     refresh: loadSessions,

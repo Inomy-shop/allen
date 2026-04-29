@@ -27,7 +27,7 @@ export function ExpandButton({ onClick, className }: { onClick: () => void; clas
   return (
     <button
       onClick={e => { e.stopPropagation(); onClick(); }}
-      className={`p-1 rounded hover:bg-surface-200/50 text-theme-muted hover:text-accent-blue transition-colors shrink-0 ${className ?? ''}`}
+      className={`p-1 rounded hover:bg-app-muted text-theme-muted hover:text-accent-blue transition-colors shrink-0 ${className ?? ''}`}
       title="Open in fullscreen viewer"
     >
       <Maximize2 className="w-3.5 h-3.5" />
@@ -84,17 +84,17 @@ export function ContentViewer({ title, content, defaultMode, onClose }: {
   return (
     <div className="fixed inset-0 z-[60] bg-surface-50 flex flex-col">
       {/* Header */}
-      <div className="flex items-center justify-between px-5 py-2.5 border-b border-border/30 bg-surface-100/80 backdrop-blur-sm shrink-0">
+      <div className="flex items-center justify-between px-5 py-2.5 border-b border-app bg-surface-100/80 backdrop-blur-sm shrink-0">
         <div className="flex items-center gap-3">
           <span className="text-sm font-heading font-semibold text-theme-primary tracking-wider uppercase">{title}</span>
-          <span className="text-[10px] font-mono text-theme-subtle bg-surface-200/50 px-2 py-0.5 rounded">{content.length.toLocaleString()} chars</span>
+          <span className="text-[10px] font-mono text-theme-subtle bg-app-muted px-2 py-0.5 rounded">{content.length.toLocaleString()} chars</span>
           {mode !== 'markdown' && (
-            <span className="text-[10px] font-mono text-theme-subtle bg-surface-200/50 px-2 py-0.5 rounded">{content.split('\n').length} lines</span>
+            <span className="text-[10px] font-mono text-theme-subtle bg-app-muted px-2 py-0.5 rounded">{content.split('\n').length} lines</span>
           )}
         </div>
         <div className="flex items-center gap-2">
           {/* Mode toggle */}
-          <div className="flex items-center rounded-lg bg-surface-200/40 border border-border/20 p-0.5">
+          <div className="flex items-center rounded-lg bg-app-muted border border-app p-0.5">
             {modes.map(({ key, icon: Icon, label }) => (
               <button
                 key={key}
@@ -114,7 +114,7 @@ export function ContentViewer({ title, content, defaultMode, onClose }: {
           {mode !== 'markdown' && editorRef.current && (
             <button
               onClick={() => { try { editorRef.current?.getAction('editor.foldAll')?.run(); } catch {} }}
-              className="px-2 py-1 rounded-md text-[10px] font-mono text-theme-muted hover:text-theme-secondary bg-surface-200/30 hover:bg-surface-200/50 transition-colors"
+              className="px-2 py-1 rounded-md text-[10px] font-mono text-theme-muted hover:text-theme-secondary bg-app-muted/50 hover:bg-app-muted transition-colors"
               title="Fold all"
             >
               Fold
@@ -123,16 +123,16 @@ export function ContentViewer({ title, content, defaultMode, onClose }: {
           {mode !== 'markdown' && editorRef.current && (
             <button
               onClick={() => { try { editorRef.current?.getAction('editor.unfoldAll')?.run(); } catch {} }}
-              className="px-2 py-1 rounded-md text-[10px] font-mono text-theme-muted hover:text-theme-secondary bg-surface-200/30 hover:bg-surface-200/50 transition-colors"
+              className="px-2 py-1 rounded-md text-[10px] font-mono text-theme-muted hover:text-theme-secondary bg-app-muted/50 hover:bg-app-muted transition-colors"
               title="Unfold all"
             >
               Unfold
             </button>
           )}
-          <button onClick={handleCopy} className="p-1.5 rounded-md hover:bg-surface-200/50 text-theme-muted hover:text-theme-secondary transition-colors" title="Copy to clipboard">
+          <button onClick={handleCopy} className="p-1.5 rounded-md hover:bg-app-muted text-theme-muted hover:text-theme-secondary transition-colors" title="Copy to clipboard">
             {copied ? <Check className="w-4 h-4 text-accent-green" /> : <Copy className="w-4 h-4" />}
           </button>
-          <button onClick={onClose} className="p-1.5 rounded-md hover:bg-surface-200/50 text-theme-muted hover:text-theme-secondary transition-colors" title="Close (Esc)">
+          <button onClick={onClose} className="p-1.5 rounded-md hover:bg-app-muted text-theme-muted hover:text-theme-secondary transition-colors" title="Close (Esc)">
             <X className="w-4 h-4" />
           </button>
         </div>

@@ -29,24 +29,24 @@ function RowSkeleton() {
   return (
     <div className="flex items-center gap-4 px-4 py-3 border-b border-border/10 animate-pulse">
       <div className="w-5" />
-      <div className="w-8 h-8 rounded-lg bg-surface-200/50" />
+      <div className="w-8 h-8 rounded-lg bg-app-muted" />
       <div className="w-48 space-y-1.5">
-        <div className="h-3.5 w-32 bg-surface-200/50 rounded" />
-        <div className="h-2.5 w-20 bg-surface-200/30 rounded" />
+        <div className="h-3.5 w-32 bg-app-muted rounded" />
+        <div className="h-2.5 w-20 bg-app-muted/50 rounded" />
       </div>
       <div className="flex-1">
-        <div className="h-3 w-40 bg-surface-200/30 rounded" />
+        <div className="h-3 w-40 bg-app-muted/50 rounded" />
       </div>
-      <div className="h-5 w-10 bg-surface-200/30 rounded-full" />
+      <div className="h-5 w-10 bg-app-muted/50 rounded-full" />
       <div className="flex gap-2">
         <div className="h-4 w-10 bg-surface-200/20 rounded" />
         <div className="h-4 w-10 bg-surface-200/20 rounded" />
         <div className="h-4 w-10 bg-surface-200/20 rounded" />
       </div>
       <div className="flex gap-1.5">
-        <div className="h-6 w-14 bg-surface-200/30 rounded-full" />
-        <div className="h-6 w-14 bg-surface-200/30 rounded-full" />
-        <div className="h-6 w-16 bg-surface-200/30 rounded-full" />
+        <div className="h-6 w-14 bg-app-muted/50 rounded-full" />
+        <div className="h-6 w-14 bg-app-muted/50 rounded-full" />
+        <div className="h-6 w-16 bg-app-muted/50 rounded-full" />
       </div>
     </div>
   );
@@ -113,9 +113,9 @@ export default function WorkflowListPage() {
   /* ── Loading skeleton ── */
   if (loading) {
     return (
-      <div className="p-6">
+      <div className="px-6 pt-5">
         <div className="mb-6">
-          <div className="h-7 w-48 bg-surface-200 rounded-sm animate-pulse" />
+          <div className="h-7 w-48 bg-app-muted rounded animate-pulse" />
         </div>
         <div>{Array.from({ length: 5 }).map((_, i) => <RowSkeleton key={i} />)}</div>
       </div>
@@ -123,32 +123,30 @@ export default function WorkflowListPage() {
   }
 
   return (
-    <div className="p-6">
+    <div className="px-6 pt-5 pb-8">
+      {/* ── Breadcrumb ── */}
+      <div className="flex items-center gap-2 mb-2 text-[12px] text-theme-muted">
+        <span>Build</span>
+        <span className="text-theme-subtle">/</span>
+        <span>Workflows</span>
+      </div>
+
       {/* ── Page header ── */}
       <div className="flex items-center justify-between mb-5">
-        <div className="flex items-center gap-4">
-          <h1 className="font-heading text-xl font-bold text-theme-primary tracking-widest uppercase">
-            Agent Workflows
-          </h1>
-          <div className="flex items-center gap-3">
-            <div className="flex items-center gap-1 text-[10px] font-mono text-theme-muted">
-              <GitBranch className="w-3 h-3 text-accent-blue" /> {workflows.length} workflows
-            </div>
-          </div>
+        <div className="flex items-center gap-3">
+          <h1 className="text-[20px] font-semibold text-theme-primary tracking-tight">Workflows</h1>
+          <span className="text-[12px] font-mono text-theme-muted">{workflows.length}</span>
         </div>
         <div className="flex items-center gap-2">
           <button
             title="Refresh"
             onClick={refresh}
-            className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[10px] font-mono bg-surface-200/30 text-theme-muted hover:bg-surface-200/50 transition-colors"
+            className="btn btn-secondary btn-sm"
           >
             <RefreshCw className="w-3 h-3" />
           </button>
-          <Link
-            to="/workflows/new"
-            className="inline-flex items-center gap-1 px-3 py-1.5 rounded-full text-[10px] font-mono bg-accent-blue/10 text-accent-blue hover:bg-accent-blue/20 transition-colors"
-          >
-            <Plus className="w-3 h-3" /> New Workflow
+          <Link to="/workflows/new" className="btn btn-primary btn-sm">
+            <Plus className="w-3 h-3" /> New workflow
           </Link>
         </div>
       </div>
@@ -156,34 +154,31 @@ export default function WorkflowListPage() {
       {/* ── Empty state ── */}
       {workflows.length === 0 ? (
         <div className="flex flex-col items-center justify-center py-24">
-          <div className="w-16 h-16 rounded-lg bg-accent-blue/10 flex items-center justify-center mb-6">
-            <Sparkles className="w-8 h-8 text-accent-blue/50" />
+          <div className="w-14 h-14 rounded-xl bg-accent-soft flex items-center justify-center mb-5">
+            <Sparkles className="w-6 h-6 text-accent" />
           </div>
-          <h2 className="font-heading text-lg font-semibold text-theme-primary mb-2 tracking-wider uppercase">
+          <h2 className="text-[20px] font-semibold text-theme-primary mb-2 tracking-tight">
             No workflows yet
           </h2>
-          <p className="text-sm text-theme-muted mb-8 max-w-sm text-center font-body">
+          <p className="text-[13px] text-theme-muted mb-8 max-w-sm text-center font-body">
             Create your first workflow to start orchestrating AI agents with visual pipelines.
           </p>
-          <Link
-            to="/workflows/new"
-            className="inline-flex items-center gap-1.5 px-4 py-2 rounded-full text-xs font-mono bg-accent-blue/10 text-accent-blue hover:bg-accent-blue/20 transition-colors"
-          >
-            <Plus className="w-3.5 h-3.5" /> Create Your First Workflow
+          <Link to="/workflows/new" className="btn btn-primary">
+            <Plus className="w-3.5 h-3.5" /> Create your first workflow
           </Link>
         </div>
       ) : (
         /* ── Workflow list ── */
-        <div>
+        <div className="card overflow-hidden">
           {/* Column headers */}
-          <div className="flex items-center gap-4 px-4 py-2 border-b border-border/20 text-[10px] font-label uppercase tracking-widest text-theme-subtle">
+          <div className="flex items-center gap-4 px-4 py-2 border-b border-app bg-app-muted">
             <span className="w-5" />
             <span className="w-8" />
-            <span className="w-48">Name</span>
-            <span className="flex-1">Description</span>
-            <span className="w-16 text-center">Nodes</span>
-            <span className="w-40 text-center">Run Stats</span>
-            <span className="w-48 text-right">Actions</span>
+            <span className="w-48 overline">Name</span>
+            <span className="flex-1 overline">Description</span>
+            <span className="w-16 text-center overline">Nodes</span>
+            <span className="w-40 text-center overline">Run stats</span>
+            <span className="w-48 text-right overline">Actions</span>
           </div>
 
           {workflows.map((wf: any) => {
@@ -195,10 +190,10 @@ export default function WorkflowListPage() {
             const inputKeys = wf.parsed?.input ? Object.keys(wf.parsed.input) : [];
 
             return (
-              <div key={wf._id}>
+              <div key={wf._id} className="border-b border-app last:border-b-0">
                 {/* ── Row ── */}
                 <div
-                  className="flex items-center gap-4 px-4 py-3 border-b border-border/10 hover:bg-surface-200/10 transition-colors cursor-pointer select-none"
+                  className="flex items-center gap-4 px-4 py-2.5 hover:bg-app-muted/50 transition-colors cursor-pointer select-none"
                   onClick={() => toggleExpand(wf._id)}
                 >
                   {/* Expand chevron */}
@@ -209,15 +204,15 @@ export default function WorkflowListPage() {
                     }
                   </span>
 
-                  {/* Workflow icon with colored bg */}
-                  <div className={`w-8 h-8 rounded-lg flex items-center justify-center shrink-0 ${isValid ? 'bg-accent-blue/10' : 'bg-accent-red/10'}`}>
-                    <GitBranch className={`w-4 h-4 ${isValid ? 'text-accent-blue' : 'text-accent-red'}`} />
+                  {/* Workflow icon */}
+                  <div className={`w-8 h-8 rounded-md flex items-center justify-center shrink-0 ${isValid ? 'bg-accent-soft' : 'bg-accent-red/10'}`}>
+                    <GitBranch className={`w-4 h-4 ${isValid ? 'text-accent' : 'text-accent-red'}`} />
                   </div>
 
                   {/* Name + validity */}
                   <div className="w-48 min-w-0 shrink-0">
                     <div className="flex items-center gap-1.5">
-                      <span className="text-[13px] font-heading font-semibold text-theme-primary truncate tracking-wider">
+                      <span className="text-[13px] font-medium text-theme-primary truncate">
                         {wf.name}
                       </span>
                       {isValid
@@ -230,37 +225,37 @@ export default function WorkflowListPage() {
 
                   {/* Description (truncated) */}
                   <div className="flex-1 min-w-0">
-                    <p className="text-[11px] text-theme-muted font-body truncate">
+                    <p className="text-[12px] text-theme-muted font-body truncate">
                       {wf.description || 'No description'}
                     </p>
                   </div>
 
-                  {/* Node count stat */}
+                  {/* Node count */}
                   <div className="w-16 flex justify-center">
-                    <div className="flex items-center gap-1 text-[10px] font-mono text-theme-muted">
-                      <Layers className="w-3 h-3 text-accent-blue" /> {wfStats.nodes}
+                    <div className="flex items-center gap-1 text-[11px] font-mono text-theme-muted">
+                      <Layers className="w-3 h-3" /> {wfStats.nodes}
                     </div>
                   </div>
 
-                  {/* Run stats — green check, red X, blue play */}
+                  {/* Run stats */}
                   <div className="w-40 flex items-center justify-center gap-3">
-                    <div className="flex items-center gap-1 text-[10px] font-mono text-theme-muted">
+                    <div className="flex items-center gap-1 text-[11px] font-mono text-theme-muted">
                       <CheckCircle className="w-3 h-3 text-accent-green" /> {es.completed}
                     </div>
-                    <div className="flex items-center gap-1 text-[10px] font-mono text-theme-muted">
+                    <div className="flex items-center gap-1 text-[11px] font-mono text-theme-muted">
                       <XCircle className="w-3 h-3 text-accent-red" /> {es.failed}
                     </div>
-                    <div className="flex items-center gap-1 text-[10px] font-mono text-theme-muted">
-                      <Play className="w-3 h-3 text-accent-blue" /> {es.total}
+                    <div className="flex items-center gap-1 text-[11px] font-mono text-theme-muted">
+                      <Play className="w-3 h-3" /> {es.total}
                     </div>
                   </div>
 
-                  {/* Actions — always visible */}
+                  {/* Actions */}
                   <div className="w-48 flex items-center justify-end gap-1.5 shrink-0" onClick={e => e.stopPropagation()}>
                     <button
                       onClick={() => openRunDialog(wf)}
                       disabled={isRunning || !isValid}
-                      className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[10px] font-mono bg-accent-green/10 text-accent-green hover:bg-accent-green/20 transition-colors disabled:opacity-30"
+                      className="btn btn-primary btn-sm"
                     >
                       {isRunning
                         ? <><Loader2 className="w-3 h-3 animate-spin" /> Starting</>
@@ -269,52 +264,48 @@ export default function WorkflowListPage() {
                     </button>
                     <Link
                       to={`/workflows/${wf._id}/edit`}
-                      className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[10px] font-mono bg-accent-yellow/10 text-accent-yellow hover:bg-accent-yellow/20 transition-colors"
+                      className="btn btn-secondary btn-sm"
                     >
                       <Pencil className="w-3 h-3" /> Edit
                     </Link>
                     <button
                       onClick={() => setDeletingWf({ id: wf._id, name: wf.name })}
-                      className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[10px] font-mono bg-accent-red/10 text-accent-red hover:bg-accent-red/20 transition-colors"
+                      className="btn btn-ghost btn-sm hover:text-accent-red"
                       title="Delete workflow"
                     >
-                      <Trash2 className="w-3 h-3" /> Delete
+                      <Trash2 className="w-3 h-3" />
                     </button>
                   </div>
                 </div>
 
                 {/* ── Expanded detail ── */}
                 {isExpanded && (
-                  <div className="bg-surface-200/5 border-b border-border/15 px-8 py-4 space-y-4">
+                  <div className="bg-app-muted/40 px-8 py-4 space-y-4">
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                       {/* Full description */}
                       <div>
-                        <p className="text-[10px] font-label uppercase tracking-widest text-theme-subtle mb-2">
-                          Description
-                        </p>
-                        <p className="text-sm text-theme-primary font-body leading-relaxed">
+                        <p className="overline mb-2">Description</p>
+                        <p className="text-[13px] text-theme-primary font-body leading-relaxed">
                           {wf.description || 'No description provided.'}
                         </p>
                       </div>
 
                       {/* Validation status */}
                       <div>
-                        <p className="text-[10px] font-label uppercase tracking-widest text-theme-subtle mb-2">
-                          Validation
-                        </p>
+                        <p className="overline mb-2">Validation</p>
                         <div className="flex items-center gap-2">
-                          <div className={`w-6 h-6 rounded-lg flex items-center justify-center ${isValid ? 'bg-accent-green/10' : 'bg-accent-red/10'}`}>
+                          <div className={`w-6 h-6 rounded-md flex items-center justify-center ${isValid ? 'bg-accent-green/10' : 'bg-accent-red/10'}`}>
                             <Shield className={`w-3.5 h-3.5 ${isValid ? 'text-accent-green' : 'text-accent-red'}`} />
                           </div>
-                          <span className={`text-sm font-body ${isValid ? 'text-accent-green' : 'text-accent-red'}`}>
+                          <span className={`text-[13px] font-body ${isValid ? 'text-accent-green' : 'text-accent-red'}`}>
                             {isValid ? 'Valid' : 'Invalid'}
                           </span>
-                          <span className="text-[10px] text-theme-muted font-mono ml-2">v{wf.version}</span>
+                          <span className="text-[11px] text-theme-muted font-mono ml-2">v{wf.version}</span>
                         </div>
                         {!isValid && wf.validation?.errors?.length > 0 && (
                           <ul className="mt-2 space-y-1">
                             {wf.validation.errors.map((err: string, i: number) => (
-                              <li key={i} className="text-xs text-accent-red font-mono">
+                              <li key={i} className="text-[11px] text-accent-red font-mono">
                                 {err}
                               </li>
                             ))}
@@ -326,40 +317,30 @@ export default function WorkflowListPage() {
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                       {/* Tags */}
                       <div>
-                        <p className="text-[10px] font-label uppercase tracking-widest text-theme-subtle mb-2">
-                          Tags
-                        </p>
+                        <p className="overline mb-2">Tags</p>
                         {wf.tags?.length > 0 ? (
                           <div className="flex flex-wrap gap-1.5">
                             {wf.tags.map((tag: string) => (
-                              <span
-                                key={tag}
-                                className="inline-flex items-center gap-1 text-[9px] px-2 py-0.5 rounded-full bg-accent-purple/10 text-accent-purple font-mono"
-                              >
+                              <span key={tag} className="badge badge-human">
                                 <Tag className="w-2.5 h-2.5" /> {tag}
                               </span>
                             ))}
                           </div>
                         ) : (
-                          <span className="text-xs text-theme-subtle font-body">No tags</span>
+                          <span className="text-[12px] text-theme-subtle font-body">No tags</span>
                         )}
                       </div>
 
                       {/* Input schema */}
                       <div>
-                        <p className="text-[10px] font-label uppercase tracking-widest text-theme-subtle mb-2">
-                          Input Schema
-                        </p>
+                        <p className="overline mb-2">Input schema</p>
                         {inputKeys.length > 0 ? (
                           <div className="flex flex-wrap gap-1.5">
                             {inputKeys.map((key: string) => {
                               const schema = wf.parsed.input[key];
                               const required = schema?.required !== false;
                               return (
-                                <span
-                                  key={key}
-                                  className="inline-flex items-center gap-1 text-[9px] px-2 py-0.5 rounded-full bg-accent-blue/10 text-accent-blue font-mono"
-                                >
+                                <span key={key} className="badge" style={{ background: 'rgb(var(--color-accent-soft))', color: 'rgb(var(--color-accent))' }}>
                                   <FileText className="w-2.5 h-2.5" />
                                   {key}
                                   {required && <span className="text-accent-red">*</span>}
@@ -368,7 +349,7 @@ export default function WorkflowListPage() {
                             })}
                           </div>
                         ) : (
-                          <span className="text-xs text-theme-subtle font-body">No inputs defined</span>
+                          <span className="text-[12px] text-theme-subtle font-body">No inputs defined</span>
                         )}
                       </div>
                     </div>
