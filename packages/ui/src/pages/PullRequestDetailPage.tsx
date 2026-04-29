@@ -5,10 +5,12 @@ import {
   GitPullRequest, ArrowLeft, GitMerge, XCircle, ExternalLink,
   FolderGit2, Loader2, Clock, FileDiff, Plus, Minus, ArrowRight,
   MessageSquare, FileCode, CheckCircle2, AlertCircle, MessagesSquare,
+  ChevronDown, ChevronRight, Folder, FolderOpen, File as FileIcon,
 } from 'lucide-react';
 import { DiffEditor } from '@monaco-editor/react';
 import { SetupProgressDialog } from '../components/workspace/SetupProgressDialog';
 import { renderMarkdown } from '../components/chat/ChatMessageList';
+import { setupMonaco, getMonacoTheme } from '../lib/monaco-theme';
 
 interface DiffFile {
   path: string;
@@ -191,23 +193,21 @@ export default function PullRequestDetailPage() {
 
       {tab === 'files' && (
         <div className="flex-1 flex overflow-hidden min-h-0">
-          <div className="w-64 border-r border-app bg-app-muted/30 overflow-y-auto shrink-0">
+          <div className="w-72 border-r border-app bg-app-muted/30 overflow-y-auto shrink-0">
             <div className="px-3 py-2 overline">Changed files ({diff.files.length})</div>
-            {diff.files.map(f => (
-              <button
-                key={f.path}
-                onClick={() => setSelectedFile(f.path)}
-                className={`w-full text-left px-3 py-1.5 text-[11px] font-mono truncate ${
-                  selectedFile === f.path
-                    ? 'bg-accent-soft text-accent'
-                    : 'text-theme-secondary hover:bg-app-muted/50'
-                }`}
-              >
-                {f.path}
-              </button>
-            ))}
-            {diff.files.length === 0 && (
+            {diff.files.length === 0 ? (
               <div className="px-3 py-4 text-xs text-theme-subtle">No diff available</div>
+            ) : (
+              <div className="py-1">
+                {buildPrFileTree(diff.files).map((n) => (
+                  <PrFileTreeNode
+                    key={n.path}
+                    {...n}
+                    selectedFile={selectedFile ?? undefined}
+                    onSelect={(p) => setSelectedFile(p)}
+                  />
+                ))}
+              </div>
             )}
           </div>
           <div className="flex-1 min-h-0 overflow-hidden">
@@ -217,7 +217,8 @@ export default function PullRequestDetailPage() {
                 language={detectLanguage(selectedFile)}
                 original={selectedDiff.originalContent ?? ''}
                 modified={selectedDiff.modifiedContent ?? ''}
-                theme="vs-dark"
+                theme={getMonacoTheme()}
+                beforeMount={setupMonaco}
                 options={{
                   readOnly: true,
                   fontSize: 12,
@@ -266,7 +267,7 @@ function ConversationTab({
 
   return (
     <div className="flex-1 overflow-y-auto min-h-0">
-      <div className="max-w-4xl mx-auto px-6 py-6 space-y-4">
+      <div className="px-6 py-6 space-y-4">
         {/* Description card */}
         <div className="card overflow-hidden">
           <div className="flex items-center gap-2 px-4 py-2.5 border-b border-app bg-app-muted/40">
@@ -376,5 +377,120 @@ function CommentCard({ c, timeAgo }: { c: Comment; timeAgo: (s: string) => strin
         )}
       </div>
     </div>
+  );
+}
+
+// ── File tree (Files changed tab) ─────────────────────────────────────────
+
+interface TreeNode {
+  name: string;
+  path: string;
+  isDir: boolean;
+  children?: TreeNode[];
+}
+
+function buildPrFileTree(files: { path: string }[]): TreeNode[] {
+  // Build a nested directory map then flatten chains of single-child
+  // directories so "src/components/chat" renders on one line instead
+  // of three (matches GitHub's PR file tree compaction).
+  const root: Record<string, any> = {};
+  for (const f of files) {
+    const parts = f.path.split('/');
+    let cur = root;
+    for (let i = 0; i < parts.length; i++) {
+      const part = parts[i];
+      const isLeaf = i === parts.length - 1;
+      if (isLeaf) {
+        cur[part] = { name: part, path: f.path, isDir: false };
+      } else {
+        if (!cur[part]) {
+          cur[part] = {
+            name: part,
+            path: parts.slice(0, i + 1).join('/'),
+            isDir: true,
+            _children: {},
+          };
+        }
+        cur = cur[part]._children;
+      }
+    }
+  }
+
+  function toArray(obj: Record<string, any>): TreeNode[] {
+    return Object.values(obj)
+      .map((item: any) => {
+        if (item.isDir && item._children) {
+          let node: TreeNode = { ...item, children: toArray(item._children) };
+          // Compact: while this dir has exactly one child and that child
+          // is also a dir, fuse the names with a slash.
+          while (node.children && node.children.length === 1 && node.children[0].isDir) {
+            const only = node.children[0];
+            node = {
+              name: `${node.name}/${only.name}`,
+              path: only.path,
+              isDir: true,
+              children: only.children,
+            };
+          }
+          return node;
+        }
+        return { name: item.name, path: item.path, isDir: false };
+      })
+      .sort((a, b) => (a.isDir === b.isDir ? a.name.localeCompare(b.name) : a.isDir ? -1 : 1));
+  }
+  return toArray(root);
+}
+
+function PrFileTreeNode({
+  name, path, isDir, children, selectedFile, onSelect, level = 0,
+}: TreeNode & {
+  selectedFile?: string;
+  onSelect: (p: string) => void;
+  level?: number;
+}) {
+  const [expanded, setExpanded] = useState(level < 2);
+  const isSelected = selectedFile === path;
+  const indent = `${level * 12 + 8}px`;
+
+  if (isDir) {
+    return (
+      <div>
+        <button
+          onClick={() => setExpanded(!expanded)}
+          className="w-full flex items-center gap-1.5 py-[3px] text-left hover:bg-app-muted text-[12px] font-mono text-theme-secondary"
+          style={{ paddingLeft: indent, paddingRight: 8 }}
+        >
+          {expanded
+            ? <ChevronDown className="w-3 h-3 shrink-0 text-theme-subtle" />
+            : <ChevronRight className="w-3 h-3 shrink-0 text-theme-subtle" />}
+          {expanded
+            ? <FolderOpen className="w-3.5 h-3.5 shrink-0 text-accent" />
+            : <Folder className="w-3.5 h-3.5 shrink-0 text-theme-muted" />}
+          <span className="truncate">{name}</span>
+        </button>
+        {expanded && children?.map((c) => (
+          <PrFileTreeNode
+            key={c.path}
+            {...c}
+            selectedFile={selectedFile}
+            onSelect={onSelect}
+            level={level + 1}
+          />
+        ))}
+      </div>
+    );
+  }
+
+  return (
+    <button
+      onClick={() => onSelect(path)}
+      className={`w-full flex items-center gap-1.5 py-[3px] text-left text-[12px] font-mono truncate ${
+        isSelected ? 'bg-accent-soft text-accent' : 'text-theme-secondary hover:bg-app-muted/70'
+      }`}
+      style={{ paddingLeft: `${level * 12 + 22}px`, paddingRight: 8 }}
+    >
+      <FileIcon className="w-3.5 h-3.5 shrink-0 text-theme-muted" />
+      <span className="truncate">{name}</span>
+    </button>
   );
 }

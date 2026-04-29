@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
-import { useParams, Link } from 'react-router-dom';
+import { useParams, Link, useNavigate } from 'react-router-dom';
 import { workspaces } from '../services/workspaceService';
 import {
   GitBranch, ArrowLeft, RefreshCw, Loader2, Terminal, FileCode,
@@ -12,6 +12,8 @@ import {
 import { XTerminal } from '../components/workspace/XTerminal';
 import { EmbeddedChat } from '../components/workspace/EmbeddedChat';
 import WorkspacesSidebar from '../components/workspace/WorkspacesSidebar';
+import { useSidebarCollapsed } from '../hooks/useSidebarCollapsed';
+import { setupMonaco, getMonacoTheme } from '../lib/monaco-theme';
 import Editor, { DiffEditor } from '@monaco-editor/react';
 import { renderMarkdown } from '../components/chat/ChatMessageList';
 
@@ -151,11 +153,39 @@ function useResizable(direction: 'horizontal' | 'vertical', initial: number, min
 
 // ── File Tree ──
 
-function FileTreeNode({ name, path, isDir, children, selectedFile, onSelect, onDelete, level = 0, changedStatus }: {
+// Icon-only header toggle button — soft accent fill when active.
+function ToolToggle({
+  active, onClick, title, children,
+}: {
+  active: boolean;
+  onClick: () => void;
+  title: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <button
+      onClick={onClick}
+      title={title}
+      className={`p-1.5 rounded-md transition-colors ${
+        active
+          ? 'bg-accent-soft text-accent'
+          : 'text-theme-muted hover:text-theme-primary hover:bg-app-muted'
+      }`}
+    >
+      {children}
+    </button>
+  );
+}
+
+function FileTreeNode({ name, path, isDir, children, selectedFile, onSelect, onDelete, level = 0, changedStatus, defaultExpanded = false }: {
   name: string; path: string; isDir: boolean; children?: any[]; selectedFile?: string;
   onSelect: (p: string) => void; onDelete: (p: string) => void; level?: number; changedStatus?: string;
+  /** Initial expanded state for directories. Diff view passes `true` so changed
+   *  folders show their files immediately; the file explorer keeps the default
+   *  collapsed-on-load behavior. */
+  defaultExpanded?: boolean;
 }) {
-  const [expanded, setExpanded] = useState(level < 1);
+  const [expanded, setExpanded] = useState(defaultExpanded);
   const [hovered, setHovered] = useState(false);
   const isSelected = selectedFile === path;
   const sc = changedStatus === 'added' ? 'text-accent-green' : changedStatus === 'deleted' ? 'text-accent-red' : changedStatus === 'modified' ? 'text-accent-yellow' : '';
@@ -164,13 +194,13 @@ function FileTreeNode({ name, path, isDir, children, selectedFile, onSelect, onD
     return (
       <div>
         <button onClick={() => setExpanded(!expanded)}
-          className={`w-full flex items-center gap-1.5 px-2 py-[3px] text-left hover:bg-white/5 rounded text-[11px] ${sc || 'text-theme-secondary'}`}
+          className={`w-full flex items-center gap-1.5 px-2 py-[3px] text-left hover:bg-app-muted rounded text-[11px] ${sc || 'text-theme-secondary'}`}
           style={{ paddingLeft: `${level * 14 + 8}px` }}>
           {expanded ? <ChevronDown className="w-3 h-3 shrink-0 text-theme-subtle" /> : <ChevronRight className="w-3 h-3 shrink-0 text-theme-subtle" />}
           <FolderIcon name={name} expanded={expanded} className="w-4 h-4" />
           <span className="truncate font-mono">{name}</span>
         </button>
-        {expanded && children?.map(c => <FileTreeNode key={c.path} {...c} selectedFile={selectedFile} onSelect={onSelect} onDelete={onDelete} level={level + 1} />)}
+        {expanded && children?.map(c => <FileTreeNode key={c.path} {...c} selectedFile={selectedFile} onSelect={onSelect} onDelete={onDelete} level={level + 1} defaultExpanded={defaultExpanded} />)}
       </div>
     );
   }
@@ -178,7 +208,7 @@ function FileTreeNode({ name, path, isDir, children, selectedFile, onSelect, onD
   return (
     <div className="relative" onMouseEnter={() => setHovered(true)} onMouseLeave={() => setHovered(false)}>
       <button onClick={() => onSelect(path)}
-        className={`w-full flex items-center gap-1.5 px-2 py-[3px] text-left rounded text-[11px] font-mono truncate ${isSelected ? 'bg-blue-500/15 text-accent' : `hover:bg-white/5 ${sc || 'text-theme-secondary'}`}`}
+        className={`w-full flex items-center gap-1.5 px-2 py-[3px] text-left rounded text-[11px] font-mono truncate ${isSelected ? 'bg-accent-soft text-accent' : `hover:bg-app-muted ${sc || 'text-theme-secondary'}`}`}
         style={{ paddingLeft: `${level * 14 + 8}px` }}>
         <FileIcon name={name} className="w-4 h-4" />
         <span className="truncate">{name}</span>
@@ -383,7 +413,7 @@ function ServicesPanel({ workspaceId, services, onRefresh }: {
         <p className="text-xs text-theme-subtle px-1">No services configured. Go to Repos to configure workspace services.</p>
       ) : services.map((svc: any) => {
         const isRunning = svc.status === 'ready' || svc.status === 'starting';
-        const statusColor = svc.status === 'ready' ? 'bg-emerald-400' : svc.status === 'starting' ? 'bg-amber-400 animate-pulse' : svc.status === 'failed' ? 'bg-red-400' : 'bg-surface-200';
+        const statusColor = svc.status === 'ready' ? 'bg-accent-green' : svc.status === 'starting' ? 'bg-accent-yellow animate-pulse' : svc.status === 'failed' ? 'bg-accent-red' : 'bg-app-muted';
         return (
           <div key={svc.name} className="flex items-center gap-2 px-2 py-1.5 rounded bg-app-muted/40 hover:bg-surface-100/50 transition-colors">
             <span className={`w-2 h-2 rounded-full ${statusColor} shrink-0`} />
@@ -411,7 +441,7 @@ function ServicesPanel({ workspaceId, services, onRefresh }: {
                 </>
               )}
               <button onClick={() => setLogService(svc.name)}
-                className="p-1 text-theme-muted hover:text-theme-secondary hover:bg-white/5 rounded" title="View Logs">
+                className="p-1 text-theme-muted hover:text-theme-secondary hover:bg-app-muted rounded" title="View Logs">
                 <ScrollText className="w-3 h-3" />
               </button>
               {svc.status === 'ready' && (
@@ -432,6 +462,8 @@ let termIdCounter = 1;
 
 export default function WorkspaceDetailPage() {
   const { id } = useParams<{ id: string }>();
+  const navigate = useNavigate();
+  const [sidebarCollapsed, toggleSidebar] = useSidebarCollapsed('workspaces', false);
   const [workspace, setWorkspace] = useState<any>(null);
   const [loading, setLoading] = useState(true);
   const [allFiles, setAllFiles] = useState<{ path: string; status?: string }[]>([]);
@@ -650,16 +682,20 @@ export default function WorkspaceDetailPage() {
 
   return (
     <div className="flex h-full overflow-hidden">
-      {/* In-page Sandboxes sidebar — fast switching between workspaces */}
-      <WorkspacesSidebar />
+      {/* In-page Workspaces sidebar — fast switching, collapsible */}
+      <WorkspacesSidebar
+        collapsed={sidebarCollapsed}
+        onToggle={toggleSidebar}
+        onNew={() => navigate('/workspaces')}
+      />
 
       <div className="flex-1 flex flex-col h-full overflow-hidden min-w-0">
       {/* Header — matches handoff/pages/detail-views.jsx WorkspaceDetailV2 */}
       <div className="px-4 py-2 border-b border-app shrink-0">
         <div className="flex items-center gap-3">
-          <Link to="/workspaces" className="text-theme-muted hover:text-theme-primary flex items-center gap-1 text-[12px]" title="Back to Sandboxes">
+          <Link to="/workspaces" className="text-theme-muted hover:text-theme-primary flex items-center gap-1 text-[12px]" title="Back to Workspaces">
             <ArrowLeft className="w-3.5 h-3.5" />
-            <span>Sandboxes</span>
+            <span>Workspaces</span>
           </Link>
           <span className="text-theme-subtle">/</span>
           <GitBranch className="w-3.5 h-3.5 text-accent" />
@@ -669,7 +705,7 @@ export default function WorkspaceDetailPage() {
 
           {workspace.services?.length > 0 && (
             <button onClick={() => setShowServices(v => !v)}
-              className={`flex items-center gap-1.5 text-[10px] font-mono px-2 py-0.5 rounded hover:bg-white/5 ${showServices ? 'text-accent' : 'text-theme-secondary'}`}
+              className={`flex items-center gap-1.5 text-[10px] font-mono px-2 py-0.5 rounded hover:bg-app-muted ${showServices ? 'text-accent' : 'text-theme-secondary'}`}
               title="Toggle Services Panel">
               <Server className="w-3 h-3" />
               {workspace.services.filter((s: any) => s.status === 'ready').length}/{workspace.services.length} running
@@ -677,36 +713,48 @@ export default function WorkspaceDetailPage() {
           )}
 
           <div className="flex items-center gap-1 border-l border-app pl-3 ml-2">
-            <button onClick={() => setShowCommitModal(true)} className="btn-ghost text-[11px] py-1 px-2 flex items-center gap-1" title="Commit">
-              <GitCommit className="w-3.5 h-3.5" />Commit
-              {changedCount > 0 && <span className="bg-amber-400/20 text-accent-yellow text-[9px] px-1 rounded-full">{changedCount}</span>}
+            <button onClick={() => setShowCommitModal(true)} className="btn btn-secondary btn-sm" title="Commit">
+              <GitCommit className="w-3.5 h-3.5" /> Commit
+              {changedCount > 0 && <span className="badge badge-warn !text-[9.5px] !px-1.5 !py-0">{changedCount}</span>}
             </button>
-            <button onClick={handlePush} disabled={pushing} className="btn-ghost text-[11px] py-1 px-2 flex items-center gap-1 disabled:opacity-50">
-              <Upload className="w-3.5 h-3.5" />{pushing ? '...' : 'Push'}
+            <button onClick={handlePush} disabled={pushing} className="btn btn-secondary btn-sm disabled:opacity-50">
+              <Upload className="w-3.5 h-3.5" /> {pushing ? '…' : 'Push'}
             </button>
-            <button onClick={() => setShowPrModal(true)} className="btn-ghost text-[11px] py-1 px-2 flex items-center gap-1 text-accent">
-              <GitPullRequest className="w-3.5 h-3.5" />PR
+            <button onClick={() => setShowPrModal(true)} className="btn btn-secondary btn-sm">
+              <GitPullRequest className="w-3.5 h-3.5" /> PR
             </button>
-            <button onClick={() => { if (showDiffView) { setShowDiffView(false); } else { openDiffView(); } }} className={`btn-ghost text-[11px] py-1 px-2 flex items-center gap-1 ${showDiffView ? 'text-accent-yellow' : ''}`} title="View Changes">
-              <GitCompareArrows className="w-3.5 h-3.5" />Changes
-              {changedCount > 0 && !showDiffView && <span className="bg-amber-400/20 text-accent-yellow text-[9px] px-1 rounded-full">{changedCount}</span>}
+            <button
+              onClick={() => { if (showDiffView) { setShowDiffView(false); } else { openDiffView(); } }}
+              className={`btn btn-sm ${showDiffView ? 'btn-primary' : 'btn-secondary'}`}
+              title="View Changes"
+            >
+              <GitCompareArrows className="w-3.5 h-3.5" /> Changes
+              {changedCount > 0 && !showDiffView && <span className="badge badge-warn !text-[9.5px] !px-1.5 !py-0">{changedCount}</span>}
             </button>
           </div>
-          {/* Preview toggle — only when a service is ready */}
+          {/* Tool toggles — icon-only ghost buttons */}
           {workspace.services?.some((s: any) => s.status === 'ready') && (
-            <button onClick={() => setShowPreview(v => !v)} className={`btn-ghost p-1 text-xs ${showPreview ? 'text-accent' : ''}`} title="Toggle Preview">
+            <ToolToggle active={showPreview} onClick={() => setShowPreview(v => !v)} title="Toggle Preview">
               <Eye className="w-3.5 h-3.5" />
-            </button>
+            </ToolToggle>
           )}
           {showPreview && (
-            <button onClick={() => setSplitPreview(v => !v)} className={`btn-ghost p-1 text-xs ${splitPreview ? 'text-accent' : ''}`} title="Split Preview">
+            <ToolToggle active={splitPreview} onClick={() => setSplitPreview(v => !v)} title="Split Preview">
               <PanelRightOpen className="w-3.5 h-3.5" />
-            </button>
+            </ToolToggle>
           )}
-          <button onClick={() => setShowChat(v => !v)} className={`btn-ghost p-1 text-xs ${showChat ? 'text-accent' : ''}`} title="Chat (⌘J)"><MessageSquare className="w-3.5 h-3.5" /></button>
-          <button onClick={() => setShowActivity(v => !v)} className={`btn-ghost p-1 text-xs ${showActivity ? 'text-accent' : ''}`} title="Activity"><History className="w-3.5 h-3.5" /></button>
-          <button onClick={() => setShowInfo(v => !v)} className={`btn-ghost p-1 text-xs ${showInfo ? 'text-accent' : ''}`} title="Workspace Info"><Settings className="w-3.5 h-3.5" /></button>
-          <button onClick={load} className="btn-ghost p-1 text-xs" title="Refresh"><RefreshCw className="w-3.5 h-3.5" /></button>
+          <ToolToggle active={showChat} onClick={() => setShowChat(v => !v)} title="Chat (⌘J)">
+            <MessageSquare className="w-3.5 h-3.5" />
+          </ToolToggle>
+          <ToolToggle active={showActivity} onClick={() => setShowActivity(v => !v)} title="Activity">
+            <History className="w-3.5 h-3.5" />
+          </ToolToggle>
+          <ToolToggle active={showInfo} onClick={() => setShowInfo(v => !v)} title="Workspace Info">
+            <Settings className="w-3.5 h-3.5" />
+          </ToolToggle>
+          <ToolToggle active={false} onClick={load} title="Refresh">
+            <RefreshCw className="w-3.5 h-3.5" />
+          </ToolToggle>
         </div>
       </div>
 
@@ -727,7 +775,7 @@ export default function WorkspaceDetailPage() {
                   <div className="px-3 py-4 text-xs text-theme-subtle">No changes</div>
                 ) : (() => {
                   const diffTree = buildFileTree(diffFiles.map(f => ({ path: f.path, status: f.status })));
-                  return diffTree.map(n => <FileTreeNode key={n.path} {...n} selectedFile={diffSelectedFile ?? undefined} onSelect={(p: string) => setDiffSelectedFile(p)} onDelete={() => {}} />);
+                  return diffTree.map(n => <FileTreeNode key={n.path} {...n} selectedFile={diffSelectedFile ?? undefined} onSelect={(p: string) => setDiffSelectedFile(p)} onDelete={() => {}} defaultExpanded />);
                 })()}
               </div>
             </>
@@ -757,7 +805,7 @@ export default function WorkspaceDetailPage() {
         </div>
 
         {/* Sidebar resize handle */}
-        <div onMouseDown={sidebar.onMouseDown} className="w-1 shrink-0 cursor-col-resize bg-transparent hover:bg-accent/30 active:bg-blue-500/50 transition-colors" />
+        <div onMouseDown={sidebar.onMouseDown} className="w-px shrink-0 cursor-col-resize bg-border hover:bg-accent active:bg-accent/70 transition-colors" />
 
         {/* Right: editor + terminal */}
         <div className="flex-1 flex flex-col min-w-0 min-h-0 overflow-hidden">
@@ -786,7 +834,8 @@ export default function WorkspaceDetailPage() {
                       language={langMap[ext] ?? 'plaintext'}
                       original={fileData.originalContent ?? ''}
                       modified={fileData.modifiedContent ?? ''}
-                      theme="vs-dark"
+                      theme={getMonacoTheme()}
+                      beforeMount={setupMonaco}
                       options={{
                         readOnly: true,
                         fontSize: 12,
@@ -811,7 +860,7 @@ export default function WorkspaceDetailPage() {
                 <div className="flex items-center gap-1 px-3 py-1 border-b border-app bg-app-muted/40 shrink-0">
                   <FileText className="w-3 h-3 text-theme-muted" />
                   <span className="text-[11px] font-mono text-theme-secondary truncate">{selectedFile}</span>
-                  {dirty && <span className="w-1.5 h-1.5 rounded-full bg-amber-400 shrink-0" />}
+                  {dirty && <span className="w-1.5 h-1.5 rounded-full bg-accent-yellow shrink-0" />}
                   <span className="flex-1" />
                   {dirty && !isImageFile && (
                     <button onClick={handleSave} disabled={saving} className="text-[10px] px-2 py-0.5 rounded bg-accent-soft text-accent hover:bg-accent/20 flex items-center gap-1 disabled:opacity-50">
@@ -854,7 +903,8 @@ export default function WorkspaceDetailPage() {
                         value={editedContent}
                         onChange={v => { const val = v ?? ''; setEditedContent(val); setDirty(val !== fileContent); }}
                         onMount={handleEditorMount}
-                        theme="vs-dark"
+                        theme={getMonacoTheme()}
+                      beforeMount={setupMonaco}
                         options={{
                           fontSize: 12,
                           fontFamily: "'JetBrains Mono', 'Fira Code', monospace",
@@ -964,7 +1014,7 @@ export default function WorkspaceDetailPage() {
           {/* Chat panel — full-featured embedded chat */}
           {showChat && (
             <>
-            <div onMouseDown={chatPanel.onMouseDown} className="w-1 shrink-0 cursor-col-resize bg-transparent hover:bg-accent/30 active:bg-blue-500/50 transition-colors" />
+            <div onMouseDown={chatPanel.onMouseDown} className="w-px shrink-0 cursor-col-resize bg-border hover:bg-accent active:bg-accent/70 transition-colors" />
             <div className="border-l border-app bg-app-muted/30 flex flex-col shrink-0" style={{ width: chatPanel.size }}>
               <EmbeddedChat
                 workspaceId={id!}
@@ -994,7 +1044,7 @@ export default function WorkspaceDetailPage() {
           })()}
 
           {/* Terminal resize handle */}
-          {terminalVisible && <div onMouseDown={termPanel.onMouseDown} className="h-1 shrink-0 cursor-row-resize bg-transparent hover:bg-accent/30 active:bg-blue-500/50 transition-colors border-t border-app" />}
+          {terminalVisible && <div onMouseDown={termPanel.onMouseDown} className="h-px shrink-0 cursor-row-resize bg-border hover:bg-accent active:bg-accent/70 transition-colors" />}
 
           {/* Terminal */}
           {terminalVisible && (
@@ -1141,7 +1191,7 @@ export default function WorkspaceDetailPage() {
       )}
 
       {workspace.setupProgress?.status === 'running' && (
-        <div className="px-4 py-1.5 border-t border-app bg-amber-400/5 shrink-0">
+        <div className="px-4 py-1.5 border-t border-app bg-accent-yellow/10 shrink-0">
           <div className="flex items-center gap-2 text-xs">
             <Loader2 className="w-3.5 h-3.5 animate-spin text-accent-yellow" />
             <span className="text-accent-yellow font-mono">Setting up ({workspace.setupProgress.currentStep}/{workspace.setupProgress.totalSteps})</span>

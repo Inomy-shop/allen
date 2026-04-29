@@ -38,7 +38,7 @@ const NAV_GROUPS = [
   ]},
   { label: 'Code', items: [
     { to: '/repos', icon: FolderGit2, label: 'Repositories' },
-    { to: '/workspaces', icon: FolderGit2, label: 'Sandboxes' },
+    { to: '/workspaces', icon: FolderGit2, label: 'Workspaces' },
     { to: '/pull-requests', icon: GitPullRequest, label: 'Pull requests' },
     { to: '/tickets', icon: Ticket, label: 'Linear' },
   ]},

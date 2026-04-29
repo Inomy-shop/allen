@@ -35,8 +35,8 @@ const mode = process.argv[2] || 'light';
 
   await page.goto(`${BASE}/workspaces`, { waitUntil: 'networkidle' });
   await page.waitForTimeout(800);
-  const firstLink = page.locator('a[href^="/workspaces/"]:not([href="/workspaces"])').first();
-  await firstLink.click();
+  const firstItem = page.locator('aside [role="button"]').first();
+  await firstItem.click();
   await page.waitForTimeout(1500);
   const file = join(OUT, `ws-detail-real-${mode}.png`);
   await page.screenshot({ path: file, fullPage: false });

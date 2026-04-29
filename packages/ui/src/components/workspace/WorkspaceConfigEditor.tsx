@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import { workspaces } from '../../services/workspaceService';
 import { Plus, Trash2, Save, Settings, Terminal, Play, FileText, Info, Copy, Check } from 'lucide-react';
 import Editor from '@monaco-editor/react';
+import { setupMonaco, getMonacoTheme } from '../../lib/monaco-theme';
 
 interface EnvFile { path: string; content: string; }
 interface ServiceConfig { name: string; command: string; portOffset: number; healthCheck?: string; }
@@ -139,7 +140,8 @@ export function WorkspaceConfigEditor({ repoId, onClose }: { repoId: string; onC
                   language="ini"
                   value={config.envFiles[activeEnvIdx].content}
                   onChange={v => updateEnvFile(activeEnvIdx, 'content', v ?? '')}
-                  theme="vs-dark"
+                  theme={getMonacoTheme()}
+                  beforeMount={setupMonaco}
                   options={{
                     fontSize: 12,
                     fontFamily: "'JetBrains Mono', monospace",
