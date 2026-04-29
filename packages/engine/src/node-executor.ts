@@ -636,22 +636,6 @@ ${context}
         mcpServers: mcpServers && Object.keys(mcpServers).length > 0 ? (mcpServers as Record<string, unknown>) : undefined,
         abortSignal: deps.abortSignal,
         stderr: (chunk) => emitLog(deps, nodeName, { level: 'debug', category: 'system', message: `[claude-cli stderr] ${chunk.slice(0, 4000)}` }),
-        // Persist the spawned claude PID on the executions row so the
-        // zombie reconciler can detect "running" rows whose owning
-        // process is gone (allen restart, OOM, etc.) and transition
-        // them to failed without waiting for the 6h age fallback.
-        // The 2026-04-30 audit on exec c0a41f99 (feature-plan-and-implement
-        // / produce_prd) showed this row had meta=null after an allen
-        // restart killed the agent — the reconciler had no PID to check
-        // so the row stayed "running" forever. Mirrors the chat-tools.ts
-        // claude-cli path's existing onPid handler.
-        onPid: (pid: number) => {
-          if (!deps.db || !deps.executionId) return;
-          deps.db.collection('executions').updateOne(
-            { id: deps.executionId },
-            { $set: { 'meta.pid': pid, 'meta.pidNode': nodeName, 'meta.pidRecordedAt': new Date() } },
-          ).catch(() => { /* non-fatal */ });
-        },
       });
     } else {
       conv = query({

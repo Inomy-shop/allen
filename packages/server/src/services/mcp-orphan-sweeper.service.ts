@@ -50,6 +50,11 @@ const SWEEP_INTERVAL_MS = 5 * 60_000;     // every 5 min
 const MIN_ORPHAN_AGE_MS = 10 * 60_000;    // only orphans alive >10 min
 const KILL_GRACE_MS = 5_000;              // SIGTERM → SIGKILL escalation
 const ALLEN_CGROUP_PROCS = '/sys/fs/cgroup/system.slice/allen.service/cgroup.procs';
+/** Hard cap on processes we'll kill in a single sweep tick. Prevents a
+ *  bad sweeper decision from killing a huge swath of processes at once
+ *  (e.g. if the cgroup file lists thousands of PIDs and the orphan rule
+ *  matches more than expected). */
+const MAX_KILLS_PER_TICK = 50;
 
 interface OrphanProc {
   pid: number;
@@ -178,6 +183,9 @@ function killGroup(pid: number, sig: NodeJS.Signals): void {
 }
 
 async function sweepOnce(): Promise<void> {
+  // Kill switch — set ALLEN_DISABLE_SWEEPER=1 to disable without redeploy.
+  if (process.env.ALLEN_DISABLE_SWEEPER === '1') return;
+
   let orphans: OrphanProc[];
   try {
     orphans = await findOrphanMcps();
@@ -186,6 +194,15 @@ async function sweepOnce(): Promise<void> {
     return;
   }
   if (orphans.length === 0) return;
+
+  // Hard cap so a bad rule can't cause mass-kills in one tick. If we'd
+  // exceed the cap, kill the OLDEST orphans first (most likely to be
+  // genuinely stuck) and leave the rest for the next tick.
+  if (orphans.length > MAX_KILLS_PER_TICK) {
+    console.warn(`[mcp-orphan-sweeper] capping kills at ${MAX_KILLS_PER_TICK} (found ${orphans.length}); oldest first`);
+    orphans.sort((a, b) => b.ageMs - a.ageMs);
+    orphans = orphans.slice(0, MAX_KILLS_PER_TICK);
+  }
 
   console.log(`[mcp-orphan-sweeper] found ${orphans.length} orphan MCP(s) to reap`);
   for (const o of orphans) {

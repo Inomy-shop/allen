@@ -36,7 +36,6 @@ import { setStreamDb } from './services/stream.service.js';
 import { SecretService } from './services/secret.service.js';
 import { McpService } from './services/mcp.service.js';
 import { startMcpHealthMonitor } from './services/mcp-health.service.js';
-import { startZombieReconciler } from './services/zombie-reconciler.service.js';
 import { startMcpOrphanSweeper } from './services/mcp-orphan-sweeper.service.js';
 import { OrgSeedService } from './services/org-seed.js';
 import { cleanupOrphanedSeedEntities } from './services/org-cleanup.js';
@@ -273,14 +272,11 @@ async function main(): Promise<void> {
   // Start the MCP server health monitor (5-min background loop, alerts on outages)
   startMcpHealthMonitor(db);
 
-  // Start the zombie execution reconciler (60s loop, transitions
-  // `running` rows to `failed` once their owning process is gone).
-  startZombieReconciler(db);
-
   // Start the MCP orphan sweeper (5-min loop, group-kills MCP server
   // processes that got reparented to systemd and have outlived any
   // plausible owning execution by >10 min). Backstop for the
-  // cli-runner.ts and chat-mcp-client.ts cleanup paths.
+  // cli-runner.ts and chat-mcp-client.ts cleanup paths. Does NOT
+  // touch execution status — it only kills leftover MCP processes.
   startMcpOrphanSweeper();
 
   // Start file watch WebSocket server on port 4025
