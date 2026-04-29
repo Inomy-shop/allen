@@ -14,7 +14,6 @@ import RepoManagerPage from './pages/RepoManagerPage';
 import SettingsPage from './pages/SettingsPage';
 import LearningsPage from './pages/LearningsPage';
 import ChatPage from './pages/ChatPage';
-import AnalyticsPage from './pages/AnalyticsPage';
 import WorkspaceListPage from './pages/WorkspaceListPage';
 import WorkspaceDetailPage from './pages/WorkspaceDetailPage';
 import PullRequestListPage from './pages/PullRequestListPage';
@@ -55,7 +54,6 @@ const router = createBrowserRouter([
           { path: 'workspaces/:id', element: <WorkspaceDetailPage /> },
           { path: 'pull-requests', element: <PullRequestListPage /> },
           { path: 'pull-requests/:id', element: <PullRequestDetailPage /> },
-          { path: 'analytics', element: <AnalyticsPage /> },
           { path: 'crons', element: <CronManagerPage /> },
           { path: 'tickets', element: <TicketsPage /> },
           { path: 'interventions', element: <InterventionsPage /> },

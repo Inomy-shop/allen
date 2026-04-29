@@ -218,12 +218,24 @@ export default function TicketsPage() {
       .finally(() => setDetailLoading(false));
   }, [selectedId, toast]);
 
-  // Filter by agent assignee locally
+  // Filter by Linear assignee (the human user assigned in Linear).
+  // assigneeFilter holds the linear user id ('any' / 'unassigned' / <id>).
   const filteredIssues = useMemo(() => {
     if (assigneeFilter === 'any') return issues;
-    if (assigneeFilter === 'unassigned') return issues.filter(i => !i.agentAssignee);
-    return issues.filter(i => i.agentAssignee?.agentName === assigneeFilter);
+    if (assigneeFilter === 'unassigned') return issues.filter(i => !i.linearAssignee);
+    return issues.filter(i => i.linearAssignee?.id === assigneeFilter);
   }, [issues, assigneeFilter]);
+
+  // Build the unique list of Linear assignees we've seen across the
+  // issue set. Sorted by name for a stable dropdown order.
+  const linearAssignees = useMemo(() => {
+    const seen = new Map<string, { id: string; name: string }>();
+    for (const i of issues) {
+      const a = i.linearAssignee;
+      if (a?.id && !seen.has(a.id)) seen.set(a.id, { id: a.id, name: a.name });
+    }
+    return Array.from(seen.values()).sort((x, y) => x.name.localeCompare(y.name));
+  }, [issues]);
 
   // Filter projects locally by the sidebar search — so "search projects and issues"
   // narrows both lists at once.
@@ -448,15 +460,17 @@ export default function TicketsPage() {
                 {projects.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
               </select>
               <span>Assignee:</span>
-              <AgentAssignDropdown
-                value={assigneeFilter === 'any' || assigneeFilter === 'unassigned' ? null : assigneeFilter}
-                onChange={(name) => setAssigneeFilter(name ?? 'any')}
-                agents={agentOptions}
-                teams={teamOptions}
-                placeholder="Any"
-                size="pill"
-                allowClear={true}
-              />
+              <select
+                value={assigneeFilter}
+                onChange={e => setAssigneeFilter(e.target.value)}
+                className="input py-1.5 text-[12px] w-auto"
+              >
+                <option value="any">Any</option>
+                <option value="unassigned">Unassigned</option>
+                {linearAssignees.map(u => (
+                  <option key={u.id} value={u.id}>{u.name}</option>
+                ))}
+              </select>
               <div className="flex-1" />
               <span className="text-[11px] font-mono">{totalShown} of {issues.length}</span>
             </div>

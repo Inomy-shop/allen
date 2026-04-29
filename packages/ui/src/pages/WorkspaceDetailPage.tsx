@@ -11,6 +11,7 @@ import {
 } from 'lucide-react';
 import { XTerminal } from '../components/workspace/XTerminal';
 import { EmbeddedChat } from '../components/workspace/EmbeddedChat';
+import WorkspacesSidebar from '../components/workspace/WorkspacesSidebar';
 import Editor, { DiffEditor } from '@monaco-editor/react';
 import { renderMarkdown } from '../components/chat/ChatMessageList';
 
@@ -648,7 +649,11 @@ export default function WorkspaceDetailPage() {
   const fileTree = buildFileTree(allFiles);
 
   return (
-    <div className="flex flex-col h-full overflow-hidden">
+    <div className="flex h-full overflow-hidden">
+      {/* In-page Sandboxes sidebar — fast switching between workspaces */}
+      <WorkspacesSidebar />
+
+      <div className="flex-1 flex flex-col h-full overflow-hidden min-w-0">
       {/* Header — matches handoff/pages/detail-views.jsx WorkspaceDetailV2 */}
       <div className="px-4 py-2 border-b border-app shrink-0">
         <div className="flex items-center gap-3">
@@ -1143,6 +1148,7 @@ export default function WorkspaceDetailPage() {
           </div>
         </div>
       )}
+      </div>
     </div>
   );
 }

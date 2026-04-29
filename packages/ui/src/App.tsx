@@ -4,7 +4,7 @@ import ErrorBoundary from './components/common/ErrorBoundary';
 import NotificationBell from './components/common/NotificationBell';
 import {
   LayoutDashboard, GitBranch, Play, Users, Settings,
-  FolderGit2, Brain, MessageSquare, BarChart3,
+  FolderGit2, Brain, MessageSquare,
   Server, User, ChevronDown, ChevronRight,
   GitPullRequest, Clock, HelpCircle, Ticket, Search, LogOut, ShieldCheck,
   Sun, Moon,
@@ -43,7 +43,6 @@ const NAV_GROUPS = [
     { to: '/tickets', icon: Ticket, label: 'Linear' },
   ]},
   { label: 'Insight', items: [
-    { to: '/analytics', icon: BarChart3, label: 'Analytics' },
     { to: '/learnings', icon: Brain, label: 'Learnings' },
   ]},
 ];
