@@ -70,5 +70,18 @@ export const pullRequests = {
       errorCount: number;
     }>('/pull-requests/sync-all', { method: 'POST' }),
   getDiff: (id: string) => request<any>(`/pull-requests/${id}/diff`),
+  getComments: (id: string) => request<{
+    comments: Array<{
+      id: string;
+      kind: 'comment' | 'review' | 'review-comment';
+      author: string;
+      body: string;
+      url?: string;
+      createdAt: string;
+      path?: string;
+      line?: number;
+      reviewState?: string;
+    }>;
+  }>(`/pull-requests/${id}/comments`),
   createWorkspace: (id: string) => request<any>(`/pull-requests/${id}/workspace`, { method: 'POST' }),
 };
