@@ -4,7 +4,7 @@ import ErrorBoundary from './components/common/ErrorBoundary';
 import NotificationBell from './components/common/NotificationBell';
 import {
   LayoutDashboard, GitBranch, Play, Users, Settings,
-  FolderGit2, Brain, MessageSquare, BarChart3, Plus, Trash2,
+  FolderGit2, Brain, MessageSquare, BarChart3,
   Server, User, ChevronDown, ChevronRight,
   GitPullRequest, Clock, HelpCircle, Ticket, Search, LogOut, ShieldCheck,
   Sun, Moon,
@@ -12,8 +12,6 @@ import {
 import { useSettingsStore } from './stores/settingsStore';
 import { resolveColorMode } from './lib/theme';
 import { useAuthStore } from './stores/authStore';
-import { useChat } from './hooks/useChat';
-import DeleteConfirmDialog from './components/common/DeleteConfirmDialog';
 import { BRAND_NAME } from './lib/brand';
 import { auth as authApi } from './services/api';
 
@@ -55,123 +53,6 @@ const SETTINGS_TABS: SettingsTab[] = [
   { id: 'users', label: 'Users', icon: ShieldCheck, adminOnly: true },
   { id: 'mcp', label: 'MCP Servers', icon: Server },
 ];
-
-// Provider display
-const PROV: Record<string, { label: string; color: string }> = {
-  codex: { label: 'Codex', color: 'text-accent-green' },
-  'claude-cli': { label: 'Claude', color: 'text-accent' },
-};
-
-function timeAgo(dateStr: string): string {
-  const diff = Date.now() - new Date(dateStr).getTime();
-  const mins = Math.floor(diff / 60000);
-  if (mins < 1) return 'now';
-  if (mins < 60) return `${mins}m`;
-  const hrs = Math.floor(mins / 60);
-  if (hrs < 24) return `${hrs}h`;
-  return `${Math.floor(hrs / 24)}d`;
-}
-
-// ── Chat Sidebar Section ──
-
-function ChatSidebarSection() {
-  const navigate = useNavigate();
-  const { sessions, activeSessionId, loadingSessions, switchSession, deleteSession } = useChat();
-  const [deleting, setDeleting] = useState<{ id: string; title: string } | null>(null);
-
-  function handleNew() {
-    switchSession('');
-    navigate('/chat', { replace: true });
-  }
-
-  async function handleDelete() {
-    if (!deleting) return;
-    await deleteSession(deleting.id);
-    setDeleting(null);
-    if (activeSessionId === deleting.id) navigate('/chat', { replace: true });
-  }
-
-  return (
-    <>
-      <div className="px-3 py-1.5 flex items-center justify-between">
-        <span className="overline">Conversations</span>
-        <button
-          onClick={handleNew}
-          className="w-6 h-6 flex items-center justify-center rounded text-theme-muted hover:text-accent hover:bg-app-card transition-colors"
-          title="New conversation"
-        >
-          <Plus className="w-3.5 h-3.5" />
-        </button>
-      </div>
-      <div className="flex-1 overflow-y-auto px-1.5 py-1 space-y-1">
-        {loadingSessions && sessions.length === 0 && (
-          <div className="px-3 py-4 text-center text-[12px] text-theme-subtle animate-pulse">Loading conversations…</div>
-        )}
-        {!loadingSessions && sessions.length === 0 && (
-          <div className="px-3 py-4 text-center text-[12px] text-theme-subtle">No conversations yet</div>
-        )}
-        {sessions.map(s => {
-          const isActive = s._id === activeSessionId;
-          const p = PROV[s.provider] ?? { label: s.provider, color: 'text-theme-muted' };
-          const dotBg = p.color.replace('text-', 'bg-');
-          return (
-            <div
-              key={s._id}
-              role="button"
-              tabIndex={0}
-              onClick={() => { switchSession(s._id); navigate(`/chat/${s._id}`, { replace: true }); }}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter' || e.key === ' ') {
-                  e.preventDefault();
-                  switchSession(s._id);
-                  navigate(`/chat/${s._id}`, { replace: true });
-                }
-              }}
-              className={`group relative flex items-start gap-2 px-2.5 py-2 rounded-md cursor-pointer transition-colors ${
-                isActive
-                  ? 'bg-app-card border border-border shadow-sm'
-                  : 'hover:bg-app-card border border-transparent'
-              }`}
-              title={s.title}
-            >
-              <span
-                className={`mt-[6px] w-1.5 h-1.5 rounded-full shrink-0 ${dotBg}`}
-                aria-hidden="true"
-              />
-              <div className="flex-1 min-w-0">
-                <div className={`text-[13px] truncate leading-snug ${
-                  isActive ? 'text-theme-primary font-medium' : 'text-theme-secondary group-hover:text-theme-primary'
-                }`}>
-                  {s.title}
-                </div>
-                <div className="flex items-center gap-1.5 mt-0.5 text-[11px] font-mono">
-                  <span className={p.color}>{p.label}</span>
-                  <span className="text-theme-subtle/60">·</span>
-                  <span className="text-theme-subtle">{timeAgo(s.lastMessageAt)}</span>
-                  {s.messageCount > 0 && (
-                    <>
-                      <span className="text-theme-subtle/60">·</span>
-                      <span className="text-theme-subtle">{s.messageCount} msg</span>
-                    </>
-                  )}
-                </div>
-              </div>
-              <button
-                onClick={e => { e.stopPropagation(); setDeleting({ id: s._id, title: s.title }); }}
-                className="opacity-0 group-hover:opacity-100 focus:opacity-100 shrink-0 w-6 h-6 -mr-0.5 flex items-center justify-center rounded text-theme-subtle hover:text-accent-red hover:bg-accent-red/10 transition-all"
-                title="Delete conversation"
-                aria-label="Delete conversation"
-              >
-                <Trash2 className="w-3 h-3" />
-              </button>
-            </div>
-          );
-        })}
-      </div>
-      <DeleteConfirmDialog open={!!deleting} resourceType="conversation" resourceName={deleting?.title ?? ''} onConfirm={handleDelete} onCancel={() => setDeleting(null)} />
-    </>
-  );
-}
 
 // ── Settings Sidebar Section ──
 
@@ -229,7 +110,6 @@ export default function App() {
 
   const location = useLocation();
   const navigate = useNavigate();
-  const isChat = location.pathname.startsWith('/chat');
   const isSettings = location.pathname.startsWith('/settings');
 
   const [settingsOpen, setSettingsOpen] = useState(isSettings);
@@ -318,13 +198,6 @@ export default function App() {
                       </>
                     )}
                   </NavLink>
-
-                  {/* Inline conversations list directly under the Chat link */}
-                  {item.to === '/chat' && isChat && (
-                    <div className="mt-1 mb-2 mx-1.5 flex flex-col max-h-[50vh] min-h-[120px] overflow-hidden rounded-md border border-app bg-app-card/50">
-                      <ChatSidebarSection />
-                    </div>
-                  )}
                 </div>
               ))}
             </div>

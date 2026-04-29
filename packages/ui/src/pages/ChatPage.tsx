@@ -5,6 +5,7 @@ import ChatInput from '../components/chat/ChatInput';
 import ChatMessageList from '../components/chat/ChatMessageList';
 import CommandPalette from '../components/chat/CommandPalette';
 import ConversationLogs from '../components/chat/ConversationLogs';
+import ConversationsSidebar from '../components/chat/ConversationsSidebar';
 import { ToolCallLog } from '../components/common/ToolCallLog';
 import { CHAT_TITLE, CHAT_EMPTY_PROMPT } from '../lib/brand';
 import {
@@ -196,7 +197,11 @@ export default function ChatPage() {
   const messageCount = activeSession?.messageCount ?? 0;
 
   return (
-    <div className="flex-1 flex flex-col h-full min-w-0">
+    <div className="flex-1 flex h-full min-w-0">
+      {/* Conversations sidebar (matches handoff/pages/chat.jsx ChatV2) */}
+      <ConversationsSidebar />
+
+      <div className="flex-1 flex flex-col h-full min-w-0">
       {/* Header — matches handoff/pages/chat.jsx ChatV2 */}
       <div className="px-6 pt-4 pb-3 border-b border-app shrink-0">
         <div className="flex items-center gap-2 mb-2 text-[12px] text-theme-muted">
@@ -389,6 +394,7 @@ export default function ChatPage() {
           </div>
         </div>
       )}
+      </div>
     </div>
   );
 }
