@@ -313,22 +313,22 @@ export default function TicketsPage() {
 
   async function handleDispatch(
     issue: LinearIssue,
-    args: { target: DispatchTarget; repoId: string; extraInstructions: string },
+    args: { target: DispatchTarget; repoId: string; extraInstructions: string; workflowInput?: Record<string, unknown> },
   ) {
     if (args.target.kind === 'workflow') {
-      // Run the workflow with the ticket as the `task` input. Extra
-      // instructions get appended to the task body so the workflow has
-      // the full context.
-      const taskBody = [
-        `[${issue.identifier}] ${issue.title}`,
-        issue.description || '',
-        args.extraInstructions ? `\nAdditional instructions:\n${args.extraInstructions}` : '',
-      ].filter(Boolean).join('\n\n');
-      const exec = await executionsApi.start(args.target.workflowId, {
-        task: taskBody,
+      // Schema-driven: the dialog already collected + cast inputs per
+      // the workflow's parsed.input. Fall back to the old auto-built
+      // task payload if the workflow has no schema.
+      const input = args.workflowInput ?? {
+        task: [
+          `[${issue.identifier}] ${issue.title}`,
+          issue.description || '',
+          args.extraInstructions ? `\nAdditional instructions:\n${args.extraInstructions}` : '',
+        ].filter(Boolean).join('\n\n'),
         ticket_id: issue.identifier,
         ticket_url: issue.url,
-      });
+      };
+      const exec = await executionsApi.start(args.target.workflowId, input);
       toast.success(`Started ${args.target.workflowName} on ${issue.identifier}`);
       setDispatchFor(null);
       navigate(`/executions/${exec.id}`);
