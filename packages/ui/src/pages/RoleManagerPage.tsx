@@ -894,10 +894,18 @@ function OverviewContent({
   onSelectTeam: (name: string) => void;
 }) {
   return (
-    <div className="p-6 space-y-6">
-      <div className="flex items-center gap-3">
-        <Home className="w-5 h-5 text-accent-blue" />
-        <h2 className="text-[18px] font-semibold text-theme-primary tracking-tight">Overview</h2>
+    <div className="px-6 pt-5 pb-6 space-y-5">
+      {/* Breadcrumb (matches handoff/pages/agents.jsx AgentsV2) */}
+      <div>
+        <div className="flex items-center gap-2 mb-2 text-[12px] text-theme-muted">
+          <span>Build</span>
+          <span className="text-theme-subtle">/</span>
+          <span>Agents</span>
+        </div>
+        <div className="flex items-center gap-3">
+          <h1 className="text-[20px] font-semibold text-theme-primary tracking-tight">Agents</h1>
+          <span className="text-[12px] font-mono text-theme-muted">{total} agents · {teamsCount} teams</span>
+        </div>
       </div>
 
       {/* Global stats grid */}
@@ -1034,18 +1042,27 @@ function TeamDetailContent({
 }) {
   const canAddAgent = team.name !== 'meta';
   return (
-    <div className="p-6 space-y-5">
+    <div className="px-6 pt-5 pb-6 space-y-5">
+      {/* Breadcrumb (matches handoff/pages/agents.jsx AgentsV2) */}
+      <div className="flex items-center gap-2 text-[12px] text-theme-muted">
+        <span>Build</span>
+        <span className="text-theme-subtle">/</span>
+        <span>Agents</span>
+        <span className="text-theme-subtle">/</span>
+        <span className="truncate">{team.displayName}</span>
+      </div>
+
       {/* Team header */}
       <div className="rounded-xl border border-app bg-app-muted/40 p-5">
         <div className="flex items-start gap-4">
-          <div className="w-12 h-12 rounded-lg bg-accent-blue/10 flex items-center justify-center shrink-0">
-            <Users className="w-6 h-6 text-accent-blue" />
+          <div className="w-12 h-12 rounded-lg bg-accent-soft flex items-center justify-center shrink-0">
+            <Users className="w-6 h-6 text-accent" />
           </div>
           <div className="flex-1 min-w-0">
             <div className="flex items-center gap-2 flex-wrap">
-              <h2 className="text-[18px] font-semibold text-theme-primary tracking-tight">{team.displayName}</h2>
+              <h2 className="text-[20px] font-semibold text-theme-primary tracking-tight">{team.displayName}</h2>
               {team.isBuiltIn && (
-                <span className="text-[9px] font-mono px-1.5 py-0.5 rounded-full bg-app-muted text-theme-muted">built-in</span>
+                <span className="badge badge-muted">built-in</span>
               )}
               <span className="text-[11px] font-mono text-theme-subtle">{team.name}</span>
             </div>
@@ -1082,22 +1099,22 @@ function TeamDetailContent({
             {canAddAgent && (
               <button
                 onClick={onAddAgentWithAi}
-                className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[10px] font-mono bg-accent-purple/10 text-accent-purple hover:bg-accent-purple/20 transition-colors"
+                className="btn btn-primary btn-sm"
               >
-                <Sparkles className="w-3 h-3" /> Add Agent
+                <Sparkles className="w-3 h-3" /> Add agent
               </button>
             )}
             {!team.isBuiltIn && (
               <>
                 <button
                   onClick={onEditTeam}
-                  className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[10px] font-mono bg-accent-yellow/10 text-accent-yellow hover:bg-accent-yellow/20 transition-colors"
+                  className="btn btn-secondary btn-sm"
                 >
                   <Pencil className="w-3 h-3" /> Edit
                 </button>
                 <button
                   onClick={onDeleteTeam}
-                  className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[10px] font-mono bg-accent-red/10 text-accent-red hover:bg-accent-red/20 transition-colors"
+                  className="btn btn-ghost btn-sm hover:text-accent-red"
                 >
                   <Trash2 className="w-3 h-3" /> Delete
                 </button>

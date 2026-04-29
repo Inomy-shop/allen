@@ -8,7 +8,7 @@ import ConversationLogs from '../components/chat/ConversationLogs';
 import { ToolCallLog } from '../components/common/ToolCallLog';
 import { CHAT_TITLE, CHAT_EMPTY_PROMPT } from '../lib/brand';
 import {
-  MessageSquare, Command, Server, ScrollText, Users,
+  Command, Server, ScrollText, Users,
   Sparkles, Zap, BarChart3, Terminal, FolderOpen, AlertTriangle, Bot, Wrench,
   FileText,
 } from 'lucide-react';
@@ -192,57 +192,74 @@ export default function ChatPage() {
     } catch {}
   }
 
+  const sessionTitle = activeSessionId ? activeSession?.title ?? 'Chat' : CHAT_TITLE;
+  const messageCount = activeSession?.messageCount ?? 0;
+
   return (
     <div className="flex-1 flex flex-col h-full min-w-0">
-      {/* Header */}
-      <div className="px-5 py-3 border-b border-app flex items-center justify-between shrink-0">
-        <div className="flex items-center gap-2 min-w-0">
-          <MessageSquare className="w-4 h-4 text-theme-muted shrink-0" />
-          <span className="text-[14px] font-medium text-theme-primary truncate">
-            {activeSessionId ? activeSession?.title ?? 'Chat' : CHAT_TITLE}
-          </span>
-          {activeSessionId && activeProvider && (
-            <span className={`badge badge-muted ${PROVIDER_DISPLAY[activeProvider]?.color ?? 'text-theme-muted'}`}>
-              {PROVIDER_DISPLAY[activeProvider]?.label}
-            </span>
+      {/* Header — matches handoff/pages/chat.jsx ChatV2 */}
+      <div className="px-6 pt-4 pb-3 border-b border-app shrink-0">
+        <div className="flex items-center gap-2 mb-2 text-[12px] text-theme-muted">
+          <span>Inbox</span>
+          {activeSessionId && (
+            <>
+              <span className="text-theme-subtle">/</span>
+              <span className="truncate max-w-[40rem]">{sessionTitle}</span>
+            </>
           )}
-          {selectedAgent && (() => {
-            const agentInfo = teamAgents.find((a: any) => a.name === selectedAgent);
-            return (
-              <span className="badge" style={{ background: 'rgb(var(--color-accent-soft))', color: 'rgb(var(--color-accent))' }}>
-                @{agentInfo?.displayName ?? selectedAgent}
-              </span>
-            );
-          })()}
         </div>
-        <div className="flex items-center gap-2">
-          {mcpCount.enabled > 0 && (
-            <span className="text-[11px] font-mono flex items-center gap-1 text-theme-muted" title={`${mcpCount.connected}/${mcpCount.enabled} MCP`}>
-              <Server className="w-3 h-3" />
-              <span className={mcpCount.connected > 0 ? 'text-accent-green' : ''}>{mcpCount.connected}/{mcpCount.enabled}</span>
-            </span>
-          )}
-          {activeSessionId && activeSession?.totalCostUsd != null && (
-            <span className="text-[11px] text-theme-muted font-mono">${activeSession.totalCostUsd.toFixed(2)}</span>
-          )}
-          {activeSessionId && (
-            <button onClick={() => setLogsOpen(true)} className="p-1.5 rounded-md text-theme-muted hover:text-theme-primary hover:bg-app-muted transition-colors" title="Logs">
-              <ScrollText className="w-3.5 h-3.5" />
+        <div className="flex items-center justify-between gap-3">
+          <div className="flex items-center gap-3 min-w-0">
+            <h1 className="text-[20px] font-semibold text-theme-primary tracking-tight truncate">
+              {sessionTitle}
+            </h1>
+            {activeSessionId && activeProvider && (
+              <span className={`badge badge-muted ${PROVIDER_DISPLAY[activeProvider]?.color ?? 'text-theme-muted'}`}>
+                {PROVIDER_DISPLAY[activeProvider]?.label}
+              </span>
+            )}
+            {selectedAgent && (() => {
+              const agentInfo = teamAgents.find((a: any) => a.name === selectedAgent);
+              return (
+                <span className="badge" style={{ background: 'rgb(var(--color-accent-soft))', color: 'rgb(var(--color-accent))' }}>
+                  @{agentInfo?.displayName ?? selectedAgent}
+                </span>
+              );
+            })()}
+          </div>
+          <div className="flex items-center gap-2 shrink-0">
+            {mcpCount.enabled > 0 && (
+              <span className="text-[11px] font-mono flex items-center gap-1 text-theme-muted" title={`${mcpCount.connected}/${mcpCount.enabled} MCP`}>
+                <Server className="w-3 h-3" />
+                <span className={mcpCount.connected > 0 ? 'text-accent-green' : ''}>{mcpCount.connected}/{mcpCount.enabled}</span>
+              </span>
+            )}
+            {activeSessionId && (
+              <span className="text-[11px] text-theme-muted font-mono">
+                {activeSession?.totalCostUsd != null && <>${activeSession.totalCostUsd.toFixed(2)}</>}
+                {activeSession?.totalCostUsd != null && messageCount > 0 && ' · '}
+                {messageCount > 0 && <>{messageCount} message{messageCount === 1 ? '' : 's'}</>}
+              </span>
+            )}
+            {activeSessionId && (
+              <button onClick={() => setLogsOpen(true)} className="p-1.5 rounded-md text-theme-muted hover:text-theme-primary hover:bg-app-muted transition-colors" title="Logs">
+                <ScrollText className="w-3.5 h-3.5" />
+              </button>
+            )}
+            {activeSessionId && (
+              <button onClick={() => setToolLogOpen(o => !o)} className="p-1.5 rounded-md text-theme-muted hover:text-theme-primary hover:bg-app-muted transition-colors" title="Tool Log">
+                <Wrench className="w-3.5 h-3.5" />
+              </button>
+            )}
+            {activeSessionId && (
+              <button onClick={() => setArtifactsOpen(true)} className="p-1.5 rounded-md text-theme-muted hover:text-theme-primary hover:bg-app-muted transition-colors" title="Artifacts saved in this chat">
+                <FileText className="w-3.5 h-3.5" />
+              </button>
+            )}
+            <button onClick={() => setCmdPaletteOpen(true)} className="p-1.5 rounded-md text-theme-muted hover:text-theme-primary hover:bg-app-muted transition-colors" title="Commands">
+              <Command className="w-3.5 h-3.5" />
             </button>
-          )}
-          {activeSessionId && (
-            <button onClick={() => setToolLogOpen(o => !o)} className="p-1.5 rounded-md text-theme-muted hover:text-theme-primary hover:bg-app-muted transition-colors" title="Tool Log">
-              <Wrench className="w-3.5 h-3.5" />
-            </button>
-          )}
-          {activeSessionId && (
-            <button onClick={() => setArtifactsOpen(true)} className="p-1.5 rounded-md text-theme-muted hover:text-theme-primary hover:bg-app-muted transition-colors" title="Artifacts saved in this chat">
-              <FileText className="w-3.5 h-3.5" />
-            </button>
-          )}
-          <button onClick={() => setCmdPaletteOpen(true)} className="p-1.5 rounded-md text-theme-muted hover:text-theme-primary hover:bg-app-muted transition-colors" title="Commands">
-            <Command className="w-3.5 h-3.5" />
-          </button>
+          </div>
         </div>
       </div>
 
