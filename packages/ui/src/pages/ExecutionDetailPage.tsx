@@ -22,6 +22,7 @@ import { artifacts as artifactsApi } from '../services/api';
 import TimelineDrawer from '../components/execution/TimelineDrawer';
 import StateChangesDrawer from '../components/execution/StateChangesDrawer';
 import HumanInputDialog from '../components/execution/HumanInputDialog';
+import WorkflowFeedbackDrawer from '../components/execution/WorkflowFeedbackDrawer';
 import { ToolCallLog, type ToolCall } from '../components/common/ToolCallLog';
 
 /**
@@ -674,11 +675,17 @@ export default function ExecutionDetailPage() {
   // shows the count so users know whether there's anything to look at
   // before clicking.
   const [checkpointsOpen, setCheckpointsOpen] = useState(false);
+  const [feedbackOpen, setFeedbackOpen] = useState(false);
   const [timelineOpen, setTimelineOpen] = useState(false);
   const [stateChangesOpen, setStateChangesOpen] = useState(false);
   const [checkpointCount, setCheckpointCount] = useState<number | null>(null);
   const [artifactsOpen, setArtifactsOpen] = useState(false);
   const [artifactCount, setArtifactCount] = useState<number | null>(null);
+  const [feedbackEntries, setFeedbackEntries] = useState<Array<{ id: string; content: string; targetNodes?: string[]; createdAt: string; createdBy?: string }>>([]);
+  const [feedbackText, setFeedbackText] = useState('');
+  const [feedbackTargetNodes, setFeedbackTargetNodes] = useState<string[]>([]);
+  const [feedbackBusy, setFeedbackBusy] = useState(false);
+  const [feedbackError, setFeedbackError] = useState<string | null>(null);
 
   // Input dialog is dismissible — user can close it to look at nodes/logs
   // and reopen via the header "Respond" button. The dismissed flag resets
@@ -696,6 +703,15 @@ export default function ExecutionDetailPage() {
       .catch(() => {});
     return () => { cancelled = true; };
   }, [id, execution?.status, execution?.completedNodes?.length]);
+
+  useEffect(() => {
+    if (!id) return;
+    let cancelled = false;
+    api.feedback.list(id)
+      .then((list) => { if (!cancelled) setFeedbackEntries(list ?? []); })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, [id, execution?.status]);
 
   const latestInputEvent = [...timeline].reverse().find((e: TimelineEvent) => e.event === 'input_required');
 
@@ -855,6 +871,27 @@ export default function ExecutionDetailPage() {
     }
   }, [id, refresh]);
 
+  const canAppendFeedback = ['completed', 'failed', 'cancelled'].includes(execution?.status);
+  const handleAppendFeedback = useCallback(async () => {
+    if (!id) return;
+    const trimmed = feedbackText.trim();
+    if (!trimmed) return;
+    setFeedbackBusy(true);
+    setFeedbackError(null);
+    try {
+      const targets = feedbackTargetNodes.length > 0 ? feedbackTargetNodes : undefined;
+      const entry = await api.feedback.create(id, trimmed, targets);
+      setFeedbackEntries((prev) => [...prev, entry]);
+      setFeedbackText('');
+      setFeedbackTargetNodes([]);
+      refresh();
+    } catch (err) {
+      setFeedbackError((err as Error).message);
+    } finally {
+      setFeedbackBusy(false);
+    }
+  }, [id, feedbackText, feedbackTargetNodes, refresh]);
+
   const handleExportTraces = useCallback(async () => {
     if (!id) return;
     const data = await api.traces(id);
@@ -944,6 +981,10 @@ export default function ExecutionDetailPage() {
     if (estimated > 0 || actual != null) return { estimated, actual };
     return execution.cost;
   })();
+
+  const agentNodeNames = Object.entries((workflow?.parsed?.nodes ?? workflow?.nodes ?? {}) as Record<string, any>)
+    .filter(([, nodeDef]) => ((nodeDef as any)?.type ?? 'agent') === 'agent')
+    .map(([name]) => name);
 
   return (
     <div className="flex flex-col h-full">
@@ -1050,6 +1091,19 @@ export default function ExecutionDetailPage() {
             {checkpointCount != null && checkpointCount > 0 && (
               <span className="ml-0.5 px-1 py-px rounded-sm bg-accent-soft text-accent text-[10px] font-mono tabular-nums">
                 {checkpointCount}
+              </span>
+            )}
+          </button>
+          <button
+            onClick={() => setFeedbackOpen(true)}
+            className="btn-ghost text-xs inline-flex items-center gap-1"
+            title="View and add workflow feedback"
+          >
+            <MessageSquare className="w-3.5 h-3.5" />
+            <span>Feedback</span>
+            {feedbackEntries.length > 0 && (
+              <span className="ml-0.5 px-1 py-px rounded-sm bg-accent-soft text-accent text-[10px] font-mono tabular-nums">
+                {feedbackEntries.length}
               </span>
             )}
           </button>
@@ -1411,6 +1465,20 @@ export default function ExecutionDetailPage() {
         executionStatus={execution.status}
         open={checkpointsOpen}
         onClose={() => setCheckpointsOpen(false)}
+      />
+      <WorkflowFeedbackDrawer
+        open={feedbackOpen}
+        onClose={() => setFeedbackOpen(false)}
+        entries={feedbackEntries}
+        canAppend={canAppendFeedback}
+        agentNodeNames={agentNodeNames}
+        feedbackText={feedbackText}
+        targetNodes={feedbackTargetNodes}
+        busy={feedbackBusy}
+        error={feedbackError}
+        onTextChange={setFeedbackText}
+        onTargetNodesChange={setFeedbackTargetNodes}
+        onSubmit={handleAppendFeedback}
       />
       <ArtifactsDrawer
         rootType="workflow"

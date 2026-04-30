@@ -55,6 +55,8 @@ export interface NodeExecutorDeps {
   runWorkflow: (workflow: WorkflowDef, input: Record<string, unknown>) => Promise<Record<string, unknown>>;
   executionId?: string;
   nodeContext?: string;
+  /** Accumulated post-run feedback for this workflow execution. */
+  feedbackContext?: string;
   db?: import('mongodb').Db;
   /** In-process service hooks exposed to built-ins (see EngineServices). */
   services?: import('./types.js').EngineServices;
@@ -168,6 +170,7 @@ export async function executeNode(
           deps.executionId ?? '',
           existingSession,
           deps.nodeContext,
+          deps.feedbackContext,
           deps.abortSignal,
         );
       }
@@ -429,6 +432,10 @@ out here.
 ${context}
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`;
     }
+  }
+
+  if (deps.feedbackContext) {
+    prompt += deps.feedbackContext;
   }
 
   deps.emitter.emit({

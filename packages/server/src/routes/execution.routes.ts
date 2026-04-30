@@ -76,6 +76,44 @@ export function executionRoutes(db: Db): Router {
     }
   });
 
+  // GET /api/executions/:id/feedback
+  router.get('/:id/feedback', async (req: Request, res: Response) => {
+    try {
+      const feedback = await service.listFeedback(param(req, 'id'));
+      res.json(feedback);
+    } catch (err: unknown) {
+      const status = (err as Error).message === 'Execution not found' ? 404 : 500;
+      res.status(status).json({ error: (err as Error).message });
+    }
+  });
+
+  // POST /api/executions/:id/feedback { content, targetNodes? }
+  router.post('/:id/feedback', async (req: Request, res: Response) => {
+    try {
+      const content = req.body?.content;
+      if (typeof content !== 'string') {
+        return res.status(400).json({ error: 'content is required' });
+      }
+      const targetNodes = req.body?.targetNodes;
+      if (targetNodes !== undefined && !Array.isArray(targetNodes)) {
+        return res.status(400).json({ error: 'targetNodes must be an array when provided' });
+      }
+      const userId = (req as unknown as { user?: { sub?: string; _id?: unknown } }).user?.sub
+        ?? String((req as unknown as { user?: { _id?: unknown } }).user?._id ?? '');
+      const entry = await service.appendFeedback(
+        param(req, 'id'),
+        content,
+        targetNodes,
+        userId || undefined,
+      );
+      res.status(201).json(entry);
+    } catch (err: unknown) {
+      const status = (err as { statusCode?: number }).statusCode
+        ?? ((err as Error).message === 'Execution not found' ? 404 : 500);
+      res.status(status).json({ error: (err as Error).message });
+    }
+  });
+
   // GET /api/executions/:id/failure-report
   // Returns the detailed failure report saved when an execution transitions
   // to `failed` (gate-specific diagnostic fields + final state snapshot).
@@ -302,8 +340,8 @@ export function executionRoutes(db: Db): Router {
   });
 
   // POST /api/executions/:id/checkpoints/:checkpointId/run — resume same
-  // execution id from this checkpoint. Only allowed when status is failed
-  // or cancelled.
+  // execution id from this checkpoint. Only allowed when status is
+  // completed, failed, or cancelled.
   router.post('/:id/checkpoints/:checkpointId/run', async (req: Request, res: Response) => {
     try {
       const result = await service.runFromCheckpoint(

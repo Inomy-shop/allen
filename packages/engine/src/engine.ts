@@ -14,6 +14,7 @@ import type {
   ExecutionLog,
   LogCategory,
   LogLevel,
+  WorkflowFeedbackEntry,
 } from './types.js';
 import { executeNode, type NodeExecutorDeps, type NodeResult } from './node-executor.js';
 import { evaluateCondition } from './condition-parser.js';
@@ -115,6 +116,7 @@ export class AllenEngine {
       state: { ...input },
       sessions: {},
       retryCounts: {},
+      feedbackEntries: [],
       currentNodes: [],
       completedNodes: [],
       nodeAttempts: {},
@@ -209,16 +211,19 @@ export class AllenEngine {
       throw new Error(`No checkpoint found for execution ${executionId}`);
     }
 
+    const existing = await this.stateManager.getExecution(executionId);
+    const latestSessions = await this.stateManager.getLatestSessions(executionId);
     const exec: ExecutionState = {
       id: executionId,
-      workflowId: '',
+      workflowId: existing?.workflowId ?? '',
       workflowName: workflow.name,
       workflowVersion: workflow.version ?? 1,
       status: 'running',
-      input: {},
+      input: existing?.input ?? {},
       state: { ...checkpoint.state } as Record<string, unknown>,
-      sessions: { ...checkpoint.sessions },
+      sessions: { ...checkpoint.sessions, ...latestSessions },
       retryCounts: { ...checkpoint.retryCounts },
+      feedbackEntries: [...((existing?.feedbackEntries as WorkflowFeedbackEntry[] | undefined) ?? [])],
       currentNodes: [],
       completedNodes: [...checkpoint.completedNodes],
       nodeAttempts: { ...(checkpoint.nodeAttempts ?? {}) },
@@ -232,6 +237,7 @@ export class AllenEngine {
       state: exec.state,
       sessions: exec.sessions,
       retryCounts: exec.retryCounts,
+      feedbackEntries: exec.feedbackEntries,
       completedNodes: exec.completedNodes,
     });
 
@@ -284,22 +290,36 @@ export class AllenEngine {
     executionId: string,
     nodeName: string,
   ): Promise<Record<string, unknown>> {
-    // Get all checkpoints and find one before the target node
+    // Get all checkpoints and find one before the target node. The start
+    // node has no "before" checkpoint, so retrying it falls back to the
+    // original execution input below.
     const checkpoint = await this.stateManager.getCheckpointBefore(executionId, nodeName);
-    if (!checkpoint) {
+    const existing = await this.stateManager.getExecution(executionId);
+    if (!existing) {
+      throw new Error(`Execution ${executionId} not found`);
+    }
+    const latestSessions = await this.stateManager.getLatestSessions(executionId);
+    const isStartNode = this.getStartNodes(workflow.edges).includes(nodeName);
+    if (!checkpoint && !isStartNode) {
       throw new Error(`No checkpoint found before node ${nodeName} for execution ${executionId}`);
     }
 
     // Remove the target node and everything after it from completedNodes
-    const nodeIdx = checkpoint.completedNodes.indexOf(nodeName);
+    const checkpointCompletedNodes = checkpoint?.completedNodes ?? [];
+    const nodeIdx = checkpointCompletedNodes.indexOf(nodeName);
     const completedNodes = nodeIdx >= 0
-      ? checkpoint.completedNodes.slice(0, nodeIdx)
-      : [...checkpoint.completedNodes];
+      ? checkpointCompletedNodes.slice(0, nodeIdx)
+      : [...checkpointCompletedNodes];
 
     // Carry `input` forward from the existing execution record so any node
     // that reads `${input.*}` templates still resolves correctly on retry.
     // The previous behavior reset to `{}` which silently broke such templates.
-    const existing = await this.stateManager.getExecution(executionId);
+    const state = checkpoint
+      ? ({ ...checkpoint.state } as Record<string, unknown>)
+      : { ...(existing.input ?? {}) };
+    if (!checkpoint && existing.state?.__contextTags) {
+      state.__contextTags = existing.state.__contextTags;
+    }
     const exec: ExecutionState = {
       id: executionId,
       workflowId: existing?.workflowId ?? '',
@@ -307,22 +327,31 @@ export class AllenEngine {
       workflowVersion: workflow.version ?? 1,
       status: 'running',
       input: existing?.input ?? {},
-      state: { ...checkpoint.state } as Record<string, unknown>,
-      sessions: { ...checkpoint.sessions },
-      retryCounts: { ...checkpoint.retryCounts },
+      state,
+      sessions: { ...(checkpoint?.sessions ?? {}), ...latestSessions },
+      retryCounts: { ...(checkpoint?.retryCounts ?? {}) },
+      feedbackEntries: [...((existing?.feedbackEntries as WorkflowFeedbackEntry[] | undefined) ?? [])],
       currentNodes: [],
       completedNodes,
-      nodeAttempts: { ...(checkpoint.nodeAttempts ?? {}) },
+      nodeAttempts: { ...(checkpoint?.nodeAttempts ?? {}) },
       cost: { actual: null, estimated: 0 },
       durationMs: 0,
       startedAt: new Date(),
     };
 
-    await this.stateManager.updateExecution(executionId, {
-      status: 'running',
-      state: exec.state,
-      completedNodes,
-    });
+    await this.stateManager.updateExecutionWithUnset(
+      executionId,
+      {
+        status: 'running',
+        state: exec.state,
+        sessions: exec.sessions,
+        retryCounts: exec.retryCounts,
+        feedbackEntries: exec.feedbackEntries,
+        completedNodes,
+        currentNodes: [],
+      },
+      ['errorMessage', 'failedNode'],
+    );
 
     this.emit({ event: 'execution_started', data: { executionId, workflowName: workflow.name } });
 
@@ -389,6 +418,7 @@ export class AllenEngine {
     }
 
     const existing = await this.stateManager.getExecution(executionId);
+    const latestSessions = await this.stateManager.getLatestSessions(executionId);
     const exec: ExecutionState = {
       id: executionId,
       workflowId: existing?.workflowId ?? '',
@@ -397,8 +427,9 @@ export class AllenEngine {
       status: 'running',
       input: existing?.input ?? {},
       state: { ...checkpoint.state } as Record<string, unknown>,
-      sessions: { ...checkpoint.sessions },
+      sessions: { ...checkpoint.sessions, ...latestSessions },
       retryCounts: { ...checkpoint.retryCounts },
+      feedbackEntries: [...((existing?.feedbackEntries as WorkflowFeedbackEntry[] | undefined) ?? [])],
       currentNodes: [],
       completedNodes: [...checkpoint.completedNodes],
       nodeAttempts: { ...(checkpoint.nodeAttempts ?? {}) },
@@ -414,6 +445,9 @@ export class AllenEngine {
       {
         status: 'running',
         state: exec.state,
+        sessions: exec.sessions,
+        retryCounts: exec.retryCounts,
+        feedbackEntries: exec.feedbackEntries,
         completedNodes: exec.completedNodes,
       },
       ['errorMessage', 'failedNode'],
@@ -479,6 +513,7 @@ export class AllenEngine {
       throw new Error(`Source execution ${sourceExecutionId} not found`);
     }
 
+    const latestSessions = await this.stateManager.getLatestSessions(sourceExecutionId);
     // Caller may preallocate the id (service layer does this so the HTTP
     // response can return the id without awaiting execution completion).
     const newExecutionId = options?.newExecutionId ?? randomUUID();
@@ -490,8 +525,9 @@ export class AllenEngine {
       status: 'running',
       input: source.input ?? {},
       state: { ...checkpoint.state } as Record<string, unknown>,
-      sessions: { ...checkpoint.sessions },
+      sessions: { ...checkpoint.sessions, ...latestSessions },
       retryCounts: { ...checkpoint.retryCounts },
+      feedbackEntries: [...((source.feedbackEntries as WorkflowFeedbackEntry[] | undefined) ?? [])],
       currentNodes: [],
       completedNodes: [...checkpoint.completedNodes],
       nodeAttempts: { ...(checkpoint.nodeAttempts ?? {}) },
@@ -607,6 +643,31 @@ export class AllenEngine {
 
   resumeExecution(executionId: string): void {
     this.pausedExecutions.delete(executionId);
+  }
+
+  private buildWorkflowFeedbackContext(nodeName: string, entries: WorkflowFeedbackEntry[]): string {
+    if (entries.length === 0) return '';
+    const applicableEntries = entries.filter((entry) => {
+      const targets = entry.targetNodes ?? [];
+      return targets.length === 0 || targets.includes(nodeName);
+    });
+    if (applicableEntries.length === 0) return '';
+
+    const lines = applicableEntries.map((entry, index) => {
+      const createdAt = entry.createdAt instanceof Date
+        ? entry.createdAt.toISOString()
+        : new Date(entry.createdAt).toISOString();
+      return `${index + 1}. [${createdAt}] ${entry.content.trim()}`;
+    });
+    return `
+
+WORKFLOW CORRECTIVE FEEDBACK
+The user submitted the following cumulative feedback after earlier workflow attempts.
+Treat it as authoritative corrective context for this execution. Apply all relevant
+items to your current node task, and keep downstream requirements in mind.
+
+${lines.join('\n')}
+`;
   }
 
   // ── Post-Execution Review ──────────────────────────────────────────────────
@@ -1052,6 +1113,25 @@ export class AllenEngine {
       });
     }
 
+    const feedbackEntries = (exec.feedbackEntries ?? []).filter(
+      (entry) => typeof entry.content === 'string' && entry.content.trim().length > 0,
+    );
+    const applicableFeedbackEntries = feedbackEntries.filter((entry) => {
+      const targets = entry.targetNodes ?? [];
+      return targets.length === 0 || targets.includes(nodeName);
+    });
+    const feedbackContext = nodeType === 'agent'
+      ? this.buildWorkflowFeedbackContext(nodeName, feedbackEntries)
+      : '';
+    if (feedbackContext) {
+      this.log(exec.id, {
+        category: 'system',
+        node: nodeName,
+        message: `[feedback] Injected ${applicableFeedbackEntries.length} workflow feedback entr${applicableFeedbackEntries.length === 1 ? 'y' : 'ies'}`,
+        data: { feedbackIds: applicableFeedbackEntries.map((entry) => entry.id) },
+      });
+    }
+
     // Create abort controller for this node — cancelled via cancelExecution()
     const ac = new AbortController();
     this.registerAbort(exec.id, ac);
@@ -1064,6 +1144,7 @@ export class AllenEngine {
       runWorkflow: (wf, input) => this.run(wf, input, nestingDepth + 1),
       executionId: exec.id,
       nodeContext,
+      feedbackContext,
       db: this.config.db,
       services: this.config.services,
       abortSignal: ac.signal,
@@ -1178,6 +1259,9 @@ export class AllenEngine {
         // Enrichments — any still-undefined fields are dropped by Mongo on $set.
         templateBindings: promptRender?.bindings,
         learningsInjected: learningsInjectedTrace.length > 0 ? learningsInjectedTrace : undefined,
+        feedbackInjected: applicableFeedbackEntries.length > 0
+          ? applicableFeedbackEntries.map((entry) => ({ id: entry.id, createdAt: entry.createdAt }))
+          : undefined,
         runtimeContext: resultExt.runtimeContext,
         agentOverrides: resultExt.agentOverrides,
         toolsAvailable: resultExt.toolsAvailable,

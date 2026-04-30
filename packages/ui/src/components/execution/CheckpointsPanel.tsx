@@ -54,7 +54,9 @@ export default function CheckpointsPanel({ executionId, executionStatus }: Props
   const [diffing, setDiffing] = useState<[CheckpointDoc, CheckpointDoc] | null>(null);
 
   const isActive = executionStatus === 'running' || executionStatus === 'waiting_for_input';
-  const canRunFromCheckpoint = executionStatus === 'failed' || executionStatus === 'cancelled';
+  const canRunFromCheckpoint = executionStatus === 'completed'
+    || executionStatus === 'failed'
+    || executionStatus === 'cancelled';
 
   async function refresh() {
     setLoading(true);
@@ -143,8 +145,8 @@ export default function CheckpointsPanel({ executionId, executionStatus }: Props
           the state editor, save your changes, then click{' '}
           <Play className="w-3 h-3 inline align-text-bottom text-accent-green" /> to resume
           the execution from that checkpoint with the edited state. Run is enabled only when
-          the execution is <span className="font-mono">failed</span> or{' '}
-          <span className="font-mono">cancelled</span>.
+          the execution is <span className="font-mono">completed</span>,{' '}
+          <span className="font-mono">failed</span>, or <span className="font-mono">cancelled</span>.
           {isActive && (
             <span className="block mt-1 text-accent-yellow">
               Editing and resuming are disabled while the execution is active.
@@ -245,7 +247,7 @@ export default function CheckpointsPanel({ executionId, executionStatus }: Props
                     className="p-1.5 rounded-md hover:bg-app-muted text-theme-muted hover:text-accent-green disabled:opacity-30 transition-colors"
                     title={canRunFromCheckpoint
                       ? 'Resume same execution from this checkpoint'
-                      : 'Only failed or cancelled executions can resume'}
+                      : 'Only completed, failed, or cancelled executions can resume'}
                   >
                     {busy[cp._id] === 'run'
                       ? <Loader2 className="w-3.5 h-3.5 animate-spin" />

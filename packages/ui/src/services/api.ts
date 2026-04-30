@@ -200,6 +200,17 @@ export const executions = {
     }),
   submitInput: (id: string, node: string, data: Record<string, unknown>) =>
     request<any>(`/executions/${id}/input`, { method: 'POST', body: JSON.stringify({ node, data }) }),
+  feedback: {
+    list: (id: string) =>
+      request<Array<{ id: string; content: string; targetNodes?: string[]; createdAt: string; createdBy?: string }>>(
+        `/executions/${id}/feedback`,
+      ),
+    create: (id: string, content: string, targetNodes?: string[]) =>
+      request<{ id: string; content: string; targetNodes?: string[]; createdAt: string; createdBy?: string }>(
+        `/executions/${id}/feedback`,
+        { method: 'POST', body: JSON.stringify({ content, targetNodes }) },
+      ),
+  },
   retryFrom: (id: string, node: string) =>
     request<any>(`/executions/${id}/retry-from/${node}`, { method: 'POST' }),
   /**

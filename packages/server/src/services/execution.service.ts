@@ -8,6 +8,7 @@ import {
   type WorkflowDef,
   type EngineConfig,
   type ExecutionState,
+  type WorkflowFeedbackEntry,
 } from '@allen/engine';
 import { createSSEEmitter } from './stream.service.js';
 import {
@@ -197,6 +198,7 @@ export class ExecutionService {
           state: { ...input },
           sessions: {},
           retryCounts: {},
+          feedbackEntries: [],
           currentNodes: [],
           completedNodes: [],
           nodeAttempts: {},
@@ -405,6 +407,73 @@ export class ExecutionService {
     return result as unknown as Record<string, unknown> | null;
   }
 
+  async listFeedback(executionId: string): Promise<WorkflowFeedbackEntry[]> {
+    const exec = await this.stateManager.getExecution(executionId);
+    if (!exec) throw new Error('Execution not found');
+    return this.stateManager.listFeedback(executionId);
+  }
+
+  async appendFeedback(
+    executionId: string,
+    content: string,
+    targetNodes?: string[],
+    createdBy?: string,
+  ): Promise<WorkflowFeedbackEntry> {
+    const exec = await this.stateManager.getExecution(executionId);
+    if (!exec) throw new Error('Execution not found');
+    if (!['completed', 'failed', 'cancelled'].includes(exec.status)) {
+      const err = new Error(`Can only add feedback after execution is completed, failed, or cancelled (was: ${exec.status})`);
+      (err as unknown as { statusCode: number }).statusCode = 409;
+      throw err;
+    }
+
+    const trimmed = content.trim();
+    if (!trimmed) {
+      const err = new Error('feedback content is required');
+      (err as unknown as { statusCode: number }).statusCode = 400;
+      throw err;
+    }
+
+    const normalizedTargetNodes = Array.isArray(targetNodes)
+      ? [...new Set(
+          targetNodes
+            .filter((node): node is string => typeof node === 'string')
+            .map((node) => node.trim())
+            .filter(Boolean),
+        )]
+      : [];
+    if (normalizedTargetNodes.length > 0) {
+      const workflowFromExecution = (exec as unknown as { workflowSnapshot?: WorkflowDef }).workflowSnapshot;
+      const workflowDoc = workflowFromExecution
+        ? null
+        : exec.workflowId
+          ? await this.db.collection('workflows').findOne({ _id: (await import('mongodb')).ObjectId.createFromHexString(exec.workflowId) })
+          : await this.db.collection('workflows').findOne({ name: exec.workflowName });
+      const workflow = workflowFromExecution ?? (workflowDoc?.parsed as WorkflowDef | undefined);
+      const agentNodes = new Set(
+        Object.entries(workflow?.nodes ?? {})
+          .filter(([, nodeDef]) => ((nodeDef as { type?: string }).type ?? 'agent') === 'agent')
+          .map(([nodeName]) => nodeName),
+      );
+      const invalidNodes = normalizedTargetNodes.filter((nodeName) => !agentNodes.has(nodeName));
+      if (invalidNodes.length > 0) {
+        const err = new Error(`feedback targetNodes must reference agent nodes only: ${invalidNodes.join(', ')}`);
+        (err as unknown as { statusCode: number }).statusCode = 400;
+        throw err;
+      }
+    }
+
+    const entry: WorkflowFeedbackEntry = {
+      id: randomUUID(),
+      content: trimmed,
+      targetNodes: normalizedTargetNodes.length > 0 ? normalizedTargetNodes : undefined,
+      createdAt: new Date(),
+      createdBy,
+    };
+    await this.stateManager.appendFeedback(executionId, entry);
+    return entry;
+  }
+
   async cancel(id: string): Promise<void> {
     // Kill workflow engine if running
     const engine = runningEngines.get(id);
@@ -530,8 +599,8 @@ export class ExecutionService {
   ): Promise<Record<string, unknown>> {
     const exec = await this.stateManager.getExecution(executionId);
     if (!exec) throw new Error('Execution not found');
-    if (exec.status !== 'failed' && exec.status !== 'cancelled') {
-      const err = new Error(`Can only run-from-checkpoint when status is failed or cancelled (was: ${exec.status})`);
+    if (exec.status !== 'failed' && exec.status !== 'cancelled' && exec.status !== 'completed') {
+      const err = new Error(`Can only run-from-checkpoint when status is completed, failed, or cancelled (was: ${exec.status})`);
       (err as unknown as { statusCode: number }).statusCode = 409;
       throw err;
     }

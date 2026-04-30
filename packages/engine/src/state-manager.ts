@@ -1,6 +1,6 @@
 import type { Collection, Db, Filter } from 'mongodb';
 import { ObjectId } from 'mongodb';
-import type { Checkpoint, ExecutionState } from './types.js';
+import type { Checkpoint, ExecutionState, WorkflowFeedbackEntry } from './types.js';
 
 export class StateManager {
   private executionsCol: Collection;
@@ -87,6 +87,22 @@ export class StateManager {
     await this.executionsCol.updateOne({ id }, { $set: update });
   }
 
+  async appendFeedback(executionId: string, entry: WorkflowFeedbackEntry): Promise<void> {
+    await this.executionsCol.updateOne(
+      { id: executionId },
+      { $push: { feedbackEntries: entry as never } },
+    );
+  }
+
+  async listFeedback(executionId: string): Promise<WorkflowFeedbackEntry[]> {
+    const doc = await this.executionsCol.findOne(
+      { id: executionId },
+      { projection: { feedbackEntries: 1 } },
+    );
+    const entries = (doc?.feedbackEntries as WorkflowFeedbackEntry[] | undefined) ?? [];
+    return entries;
+  }
+
   /**
    * Like updateExecution, but also supports clearing fields via `$unset`.
    * Used when re-running / resuming an execution to clear prior error fields
@@ -141,6 +157,28 @@ export class StateManager {
       .sort({ createdAt: -1 })
       .toArray();
     return docs as unknown as Array<Checkpoint & { _id: ObjectId }>;
+  }
+
+  /**
+   * Build the newest known session id per node from all checkpoints.
+   * This lets an older checkpoint rerun reuse sessions created after that
+   * checkpoint, while still preserving checkpoint state/output rewind.
+   */
+  async getLatestSessions(executionId: string): Promise<Record<string, string>> {
+    const docs = await this.checkpointsCol
+      .find({ executionId }, { projection: { sessions: 1, createdAt: 1 } })
+      .sort({ createdAt: -1 })
+      .toArray();
+
+    const sessions: Record<string, string> = {};
+    for (const doc of docs) {
+      const checkpointSessions = (doc.sessions as Record<string, string> | undefined) ?? {};
+      for (const [node, sessionId] of Object.entries(checkpointSessions)) {
+        if (sessions[node] || !sessionId) continue;
+        sessions[node] = sessionId;
+      }
+    }
+    return sessions;
   }
 
   /**

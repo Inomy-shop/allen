@@ -45,6 +45,7 @@ export async function executeCodexNode(
   executionId: string,
   sessionId?: string,
   nodeContext?: string,
+  feedbackContext?: string,
   abortSignal?: AbortSignal,
 ): Promise<CodexResult> {
   const start = Date.now();
@@ -75,6 +76,9 @@ export async function executeCodexNode(
   prompt += buildOutputInstruction(nodeDef.outputs, nodeDef.output_format);
   if (nodeContext) {
     prompt += nodeContext;
+  }
+  if (feedbackContext) {
+    prompt += feedbackContext;
   }
 
   emitter.emit({

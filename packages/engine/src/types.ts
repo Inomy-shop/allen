@@ -332,6 +332,12 @@ export interface NodeTrace {
     contextTags?: string[];
   }>;
 
+  /** Execution-level corrective feedback entries injected into this agent attempt. */
+  feedbackInjected?: Array<{
+    id: string;
+    createdAt: Date;
+  }>;
+
   /** Effective agent settings at spawn time + which layer set each. */
   agentOverrides?: {
     model?: string;
@@ -387,6 +393,15 @@ export interface Checkpoint {
   createdAt: Date;
 }
 
+export interface WorkflowFeedbackEntry {
+  id: string;
+  content: string;
+  /** Agent node names this feedback applies to. Missing/empty means all agent nodes. */
+  targetNodes?: string[];
+  createdAt: Date;
+  createdBy?: string;
+}
+
 // ── Execution State (runtime) ───────────────────────────────────────────────
 
 export interface ExecutionState {
@@ -399,6 +414,7 @@ export interface ExecutionState {
   state: Record<string, unknown>;
   sessions: Record<string, string>;
   retryCounts: Record<string, number>;
+  feedbackEntries?: WorkflowFeedbackEntry[];
   currentNodes: string[];
   completedNodes: string[];
   /** Per-node attempt counters, monotonically increasing across the whole
