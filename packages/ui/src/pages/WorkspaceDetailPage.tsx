@@ -481,6 +481,7 @@ export default function WorkspaceDetailPage() {
   const [commitMsg, setCommitMsg] = useState('');
   const [committing, setCommitting] = useState(false);
   const [pushing, setPushing] = useState(false);
+  const [archivingWorkspace, setArchivingWorkspace] = useState(false);
   const [showNewFile, setShowNewFile] = useState(false);
   const [newFilePath, setNewFilePath] = useState('');
   // Git diff view
@@ -626,6 +627,22 @@ export default function WorkspaceDetailPage() {
     try { await workspaces.deleteFile(id, path); if (selectedFile === path) { setSelectedFile(null); setDirty(false); setIsImageFile(false); setImageMimeType(''); } load(); } catch (err: any) { alert(err.message); }
   }
 
+  async function handleArchiveWorkspace() {
+    if (!id || !workspace) return;
+    const ok = confirm(
+      `Archive workspace "${workspace.name}"?\n\nThis stops services, runs cleanup, removes the worktree, and hides it from the active workspace list.`
+    );
+    if (!ok) return;
+    setArchivingWorkspace(true);
+    try {
+      await workspaces.archive(id);
+      navigate('/workspaces');
+    } catch (err: any) {
+      alert(err.message);
+      setArchivingWorkspace(false);
+    }
+  }
+
   async function handleCreatePR() {
     if (!id || !prTitle.trim()) return;
     setCreatingPr(true);
@@ -755,6 +772,14 @@ export default function WorkspaceDetailPage() {
           <ToolToggle active={false} onClick={load} title="Refresh">
             <RefreshCw className="w-3.5 h-3.5" />
           </ToolToggle>
+          <button
+            onClick={handleArchiveWorkspace}
+            disabled={archivingWorkspace}
+            className="p-1.5 rounded-md transition-colors text-theme-muted hover:text-accent-red hover:bg-red-500/10 disabled:opacity-50 disabled:cursor-not-allowed"
+            title="Archive workspace"
+          >
+            {archivingWorkspace ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Trash2 className="w-3.5 h-3.5" />}
+          </button>
         </div>
       </div>
 

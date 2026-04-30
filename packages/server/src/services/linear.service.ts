@@ -491,19 +491,44 @@ export class LinearService {
     const repo = await this.db.collection('repos').findOne({ _id: new ObjectId(repoId) });
     if (!repo) throw new Error('Repo not found');
 
-    // Kick off workspace creation
     const wsManager = new WorkspaceManager(this.db);
-    const slug = issue.identifier.toLowerCase().replace(/[^a-z0-9-]/g, '-');
-    const baseBranch = (repo.detected as any)?.defaultBranch ?? 'main';
-    const workspace = await wsManager.create({
-      repoId: String(repo._id),
-      repoName: repo.name as string,
-      repoPath: repo.path as string,
-      branch: `linear/${slug}`,
-      baseBranch,
-      name: `${issue.identifier} · ${issue.title}`.slice(0, 80),
-      source: 'new',
-    });
+    const repoObjectId = String(repo._id);
+
+    // Re-dispatch should continue in the ticket's existing workspace when
+    // possible. Creating another worktree with the deterministic
+    // linear/<ticket> branch fails while the first workspace has that branch
+    // checked out.
+    const previous = await this.assignmentSvc.get(linearIssueId);
+    let workspace = null as Awaited<ReturnType<WorkspaceManager['get']>> | null;
+    if (previous?.workspaceId) {
+      try {
+        const existing = await wsManager.get(previous.workspaceId);
+        if (
+          existing &&
+          existing.repoId === repoObjectId &&
+          existing.status !== 'archived' &&
+          existing.status !== 'failed'
+        ) {
+          workspace = existing;
+        }
+      } catch {
+        workspace = null;
+      }
+    }
+
+    if (!workspace) {
+      const slug = issue.identifier.toLowerCase().replace(/[^a-z0-9-]/g, '-');
+      const baseBranch = (repo.detected as any)?.defaultBranch ?? 'main';
+      workspace = await wsManager.create({
+        repoId: repoObjectId,
+        repoName: repo.name as string,
+        repoPath: repo.path as string,
+        branch: `linear/${slug}`,
+        baseBranch,
+        name: `${issue.identifier} · ${issue.title}`.slice(0, 80),
+        source: 'new',
+      });
+    }
 
     // Record initial dispatch state
     const initial: TicketAssignment = {
@@ -516,7 +541,7 @@ export class LinearService {
       status: 'pending',
       workspaceId: String(workspace._id),
       workspacePath: workspace.worktreePath,
-      repoId: String(repo._id),
+      repoId: repoObjectId,
       branch: workspace.branch,
     };
     await this.assignmentSvc.upsertDispatch(initial);
@@ -594,7 +619,7 @@ export class LinearService {
     while (Date.now() < deadline) {
       const ws = await wsManager.get(workspaceId);
       if (!ws) return null;
-      if (ws.status === 'active') return { worktreePath: ws.worktreePath };
+      if (ws.status === 'active' || ws.status === 'running') return { worktreePath: ws.worktreePath };
       if (ws.status === 'failed') return null;
       await new Promise(r => setTimeout(r, 1500));
     }
