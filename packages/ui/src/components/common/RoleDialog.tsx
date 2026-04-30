@@ -5,7 +5,7 @@ import RoleIcon from './RoleIcon';
 import { renderMarkdown } from '../chat/ChatMessageList';
 
 const CLAUDE_MODELS = ['sonnet', 'opus', 'haiku'];
-const CODEX_MODELS = ['gpt-5.3-codex', 'gpt-5.4', 'gpt-5.2-codex', 'gpt-5.1-codex-max', 'gpt-5.2', 'gpt-5.1-codex-mini'];
+const CODEX_MODELS = ['gpt-5.5', 'gpt-5.4', 'gpt-5.3-codex', 'gpt-5.2-codex', 'gpt-5.1-codex-max', 'gpt-5.2', 'gpt-5.1-codex-mini'];
 const PROVIDERS = ['claude', 'codex'];
 const TOOLS = ['filesystem', 'terminal', 'git', 'web-search', 'web-fetch', 'database'];
 const EFFORT_LEVELS = [

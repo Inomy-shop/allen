@@ -97,6 +97,49 @@ export function withArtifactsGuidance(systemPrompt: string | undefined): string 
   return s.includes(ARTIFACTS_GUIDANCE_SENTINEL) ? s : `${s}${ARTIFACTS_GUIDANCE}`;
 }
 
+/**
+ * Guidance appended to every NON-CHAT agent run (workflow node, direct agent
+ * call, repo scanner, materialized CLI subagent). These contexts have no live
+ * user reading the turn output and no delegation thread surface, so the
+ * interactive tools (ask_user / delegate_to_agent + their wait/ask/answer
+ * companions) cannot resolve and would block or no-op. The agent's authored
+ * system prompt and the runtime-injected org chart may both encourage
+ * delegation; this block goes LAST so the model takes it as the active rule.
+ *
+ * In chat (chat.service.ts) this guidance is intentionally NOT applied — that
+ * path keeps delegate_to_agent / ask_user available because the user is
+ * actively reading.
+ */
+export const NON_INTERACTIVE_GUIDANCE = `
+
+# Non-interactive execution — DO NOT use chat-only tools
+
+You are running in a non-interactive context (workflow node, direct agent call, or scan). There is no live user reading your output and no chat thread to surface a delegation through. The following tools WILL NOT WORK here and you MUST NOT call them — they will block, hang, or be silently dropped:
+
+- \`ask_user\` (and any \`*ask_user*\` alias)
+- \`delegate_to_agent\`, \`wait_for_delegation\`, \`ask_delegator\`, \`answer_delegator\`
+
+If you need information you don't have: include the gap in your final structured output (e.g. \`"missing": "<what you need>"\`) and finish the turn — the workflow / caller will handle it.
+
+If you need work done by another agent: use \`spawn_agent(agent_name, task)\` (one-shot, returns when the spawned agent finishes). Do NOT call \`delegate_to_agent\`.
+
+This rule overrides any earlier instruction in this prompt that tells you to delegate or ask the user.
+`;
+
+/** Sentinel for idempotent injection of NON_INTERACTIVE_GUIDANCE. */
+const NON_INTERACTIVE_GUIDANCE_SENTINEL = 'Non-interactive execution — DO NOT use chat-only tools';
+
+/**
+ * Append NON_INTERACTIVE_GUIDANCE idempotently. Use at every non-chat agent
+ * call site (node-executor for Claude SDK + CLI, codex-executor, repo
+ * scanner, renderAgentFile). Chat (chat.service.ts) intentionally does NOT
+ * call this — the user is live there and delegation/ask_user are valid.
+ */
+export function withNonInteractiveGuidance(systemPrompt: string | undefined): string {
+  const s = systemPrompt ?? '';
+  return s.includes(NON_INTERACTIVE_GUIDANCE_SENTINEL) ? s : `${s}${NON_INTERACTIVE_GUIDANCE}`;
+}
+
 export type MaterializedAgent = {
   /** e.g. "allen-brand-strategist" — pass this to `claude --agent <name>`. */
   subagentName: string;
@@ -144,8 +187,10 @@ export function renderAgentFile(agent: AgentSpec): { subagentName: string; body:
   // Inject the artifact guidance idempotently. Some callers (chat-tools.ts
   // SDK/Codex paths, node-executor) already concatenate it before handing
   // us the system body; the sentinel check inside withArtifactsGuidance
-  // skips a duplicate append in that case.
-  const sourceSystem = withArtifactsGuidance(agent.system);
+  // skips a duplicate append in that case. Same for the non-interactive
+  // guidance — materialized CLI subagents are spawned outside chat (workflow
+  // / direct agent CLI), so ask_user / delegate_to_agent must be off-limits.
+  const sourceSystem = withNonInteractiveGuidance(withArtifactsGuidance(agent.system));
 
   // A line of three+ dashes in the body would prematurely terminate the YAML
   // frontmatter we're about to emit. Swap it for `***`, an equivalent markdown

@@ -62,8 +62,8 @@ export const PROVIDERS: ProviderConfig[] = [
   {
     provider: 'codex',
     label: 'Codex (CLI)',
-    models: ['gpt-5.4', 'o3', 'o4-mini', 'codex-mini'],
-    defaultModel: 'gpt-5.4',
+    models: ['gpt-5.5', 'gpt-5.4', 'o3', 'o4-mini', 'codex-mini'],
+    defaultModel: 'gpt-5.5',
     requiresKey: null,
     supportsMcp: true,
     supportsStreaming: false,

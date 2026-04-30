@@ -61,7 +61,7 @@ describe('Codex resume command construction', () => {
       mockDb,
       'test system prompt',
       [{ role: 'user' as const, content: dashPrompt }],
-      'gpt-5.4',
+      'gpt-5.5',
       mockCallbacks,
       sessionId, // This triggers resume mode
     );
@@ -131,7 +131,7 @@ describe('Codex resume command construction', () => {
       mockDb,
       'test system prompt',
       [{ role: 'user' as const, content: dashPrompt }],
-      'gpt-5.4',
+      'gpt-5.5',
       mockCallbacks,
       undefined, // No resume session ID
     );

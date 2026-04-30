@@ -405,9 +405,9 @@ export default function ChatPage() {
           onProviderChange={(p, m) => { setSelectedProvider(p); setSelectedModel(m); }}
           agentOverrides={effectiveOverrides}
           // When no team agent is selected, the chat talks to the raw
-          // assistant. Its default effort is 'medium' — see chat.service.ts
-          // for the matching server-side fallback.
-          inheritedEffort={selectedAgentDoc?.reasoningEffort ?? 'medium'}
+          // assistant. Codex defaults to 'high', other providers to 'medium' —
+          // see chat.service.ts for the matching server-side fallback.
+          inheritedEffort={selectedAgentDoc?.reasoningEffort ?? (activeProvider === 'codex' ? 'high' : 'medium')}
           inheritedPlanMode={selectedAgentDoc?.planMode ?? null}
           onAgentOverridesChanged={handleOverridesChange}
         />

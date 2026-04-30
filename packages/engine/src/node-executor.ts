@@ -14,7 +14,7 @@ import { evaluateCondition } from './condition-parser.js';
 import { executeCodexNode } from './codex-executor.js';
 import { buildToolCallRecord, type ToolCallRecord } from './tool-call.js';
 import { normalizeModelAlias } from './model-alias.js';
-import { withArtifactsGuidance } from './agent-file-writer.js';
+import { withArtifactsGuidance, withNonInteractiveGuidance } from './agent-file-writer.js';
 import { statSync, mkdirSync } from 'node:fs';
 
 /** Agent-safe fallback cwd. Kept in sync with chat-providers.ts's
@@ -516,6 +516,11 @@ ${context}
   // CLI, Codex below) gets the instruction to save deliverables via
   // allen_save_artifact. Idempotent: skipped if already present.
   if (effectiveSystem !== undefined) effectiveSystem = withArtifactsGuidance(effectiveSystem);
+  // Non-interactive guidance — workflow node runs have no live user and no
+  // delegation thread surface, so ask_user / delegate_to_agent must be
+  // disabled. Goes last so it overrides any "use delegate_to_agent" line
+  // that came in via role.system or the org-chart block above.
+  if (effectiveSystem !== undefined) effectiveSystem = withNonInteractiveGuidance(effectiveSystem);
 
   // Captured across all callAgent invocations for this node. First-seen
   // init message's `tools` array — the agent's full tool allowlist. Used

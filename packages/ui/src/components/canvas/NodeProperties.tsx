@@ -294,7 +294,7 @@ interface AgentOverridesValue {
 // by provider, so you can cross-override a Claude agent to run on Codex (or
 // vice versa) on just this workflow node.
 const CLAUDE_MODELS = ['sonnet', 'opus', 'haiku'];
-const CODEX_MODELS = ['default', 'gpt-5.3-codex', 'gpt-5.4', 'gpt-5.2-codex'];
+const CODEX_MODELS = ['default', 'gpt-5.5', 'gpt-5.4', 'gpt-5.3-codex', 'gpt-5.2-codex'];
 
 // Compound value in the <select>. Encodes both provider and model so a single
 // dropdown can span two providers without a separate provider picker.

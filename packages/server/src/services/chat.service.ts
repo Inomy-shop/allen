@@ -689,14 +689,15 @@ Assistant: ${assistantResponse.slice(0, 400)}`;
       // ephemeral per-session state.
       //
       // When no team agent is selected, the chat talks to the raw assistant;
-      // that pseudo-agent defaults to reasoningEffort='medium' so it matches
-      // the UI label shown in the ChatInput effort picker.
+      // that pseudo-agent defaults to reasoningEffort='high' on codex (which
+      // has its own reasoning budget) and 'medium' elsewhere, matching the UI
+      // label shown in the ChatInput effort picker.
       let resolvedSettings: ResolvedSettings | undefined;
       try {
         const agentDoc = effectiveAgent
           ? (await this.db.collection('agents').findOne({ name: effectiveAgent }))
           : null;
-        const assistantDefaultEffort = 'medium';
+        const assistantDefaultEffort = provider === 'codex' ? 'high' : 'medium';
         const agentLike: AgentLike = {
           name: effectiveAgent ?? 'default',
           provider,

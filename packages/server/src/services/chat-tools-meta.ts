@@ -334,7 +334,7 @@ const createAgentTool: ChatTool = {
       teamRole: { type: 'string', enum: ['lead', 'member'], description: 'Role within the team' },
       system: { type: 'string', description: 'Full system prompt for the agent' },
       provider: { type: 'string', enum: ['claude-cli', 'codex'], description: 'Which CLI provider to use' },
-      model: { type: 'string', description: 'Model name (e.g. "sonnet", "gpt-5.4")' },
+      model: { type: 'string', description: 'Model name (e.g. "sonnet", "gpt-5.5")' },
       tools: { type: 'array', items: { type: 'string' }, description: 'Array of tool names this agent can use' },
       capabilities: { type: 'array', items: { type: 'string' }, description: 'Array of capability tags' },
       canDelegateTo: { type: 'array', items: { type: 'string' }, description: 'Names of agents this agent can delegate to' },

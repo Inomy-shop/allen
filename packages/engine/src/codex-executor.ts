@@ -4,7 +4,7 @@ import type { NodeDef, AgentDef, EngineEventEmitter } from './types.js';
 import { renderTemplate } from './template.js';
 import { extractOutputs, buildOutputInstruction } from './output-extractor.js';
 import { buildToolCallRecord, type ToolCallRecord } from './tool-call.js';
-import { withArtifactsGuidance } from './agent-file-writer.js';
+import { withArtifactsGuidance, withNonInteractiveGuidance } from './agent-file-writer.js';
 
 /** Scratch dir when no worktree/repo is in scope. Never fall back to
  * process.cwd() — that's the engine's own source tree. */
@@ -67,8 +67,10 @@ export async function executeCodexNode(
     // Only prepend system prompt on first run — resume already has context.
     // Append artifact guidance idempotently so Codex agents are told to save
     // generated deliverables via allen_save_artifact (the MCP tool is reachable
-    // via the synced Codex config).
-    prompt = `${withArtifactsGuidance(role.system)}\n\n${prompt}`;
+    // via the synced Codex config). Non-interactive guidance is layered on top
+    // so codex workflow runs can't call ask_user / delegate_to_agent (no chat
+    // surface to resolve them on).
+    prompt = `${withNonInteractiveGuidance(withArtifactsGuidance(role.system))}\n\n${prompt}`;
   }
   prompt += buildOutputInstruction(nodeDef.outputs, nodeDef.output_format);
   if (nodeContext) {
