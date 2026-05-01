@@ -29,6 +29,7 @@ const STARTUP_DELAY_MS = 30 * 1000; // wait 30s after boot before first check
 const HANDSHAKE_TIMEOUT_MS = 15 * 1000; // each RPC waits at most 15s
 const SPAWN_TIMEOUT_MS = 30 * 1000; // total per-server budget incl. process startup
 const SSE_HTTP_TIMEOUT_MS = 10 * 1000;
+const KILL_GRACE_MS = 3_000; // SIGTERM → SIGKILL grace period during teardown
 
 // ── Result type ──
 
@@ -73,6 +74,9 @@ async function checkStdioServer(server: McpServerRecord, db: Db): Promise<Health
   const env = (spawnCfg.env as Record<string, string>) ?? {};
   const cwd = spawnCfg.cwd as string | undefined;
 
+  // Log the spawn command for diagnostics — NEVER log env values (may contain secrets)
+  console.log(`[mcp-health] stdio check: server="${server.name}" cmd="${command}" args=[${args.map(a => JSON.stringify(a)).join(', ')}]`);
+
   return new Promise<HealthCheckResult>((resolve) => {
     let proc: ReturnType<typeof spawn> | null = null;
     let buffer = '';
@@ -82,7 +86,42 @@ async function checkStdioServer(server: McpServerRecord, db: Db): Promise<Health
     const finish = (result: PartialResult) => {
       if (settled) return;
       settled = true;
-      try { proc?.kill('SIGKILL'); } catch { /* ignore */ }
+
+      if (proc != null) {
+        const pid = proc.pid;
+        // Destroy stdin so the MCP server sees EOF (clean shutdown signal)
+        try { proc.stdin?.destroy(); } catch { /* ignore */ }
+        // Resume stdout/stderr to drain buffered data and unblock the pipe
+        try { proc.stdout?.resume(); } catch { /* ignore */ }
+        try { proc.stderr?.resume(); } catch { /* ignore */ }
+
+        if (pid != null) {
+          // Group-kill: negative PID sends signal to every process in the group.
+          // With detached:true, PGID === child PID, so this catches the full
+          // npx → sh → node mcp-mongo-server chain in one call.
+          // On EPERM (rare setsid() race), fall back to per-process kill rather
+          // than silently dropping — same pattern as chat-mcp-client.ts.
+          const killGroup = (sig: NodeJS.Signals): void => {
+            try {
+              process.kill(-pid, sig);
+            } catch (err) {
+              const code = (err as NodeJS.ErrnoException).code;
+              if (code !== 'ESRCH') {
+                // EPERM or unexpected error — fall back to per-process kill
+                try { proc!.kill(sig); } catch { /* ignore */ }
+              }
+              // ESRCH = process already gone, nothing to do
+            }
+          };
+          killGroup('SIGTERM');
+          // Escalate to SIGKILL after grace period
+          setTimeout(() => killGroup('SIGKILL'), KILL_GRACE_MS).unref();
+        } else {
+          // No PID (spawn failed early) — fallback to direct kill
+          try { proc.kill('SIGKILL'); } catch { /* ignore */ }
+        }
+      }
+
       resolve({ ...result, durationMs: Date.now() - startMs });
     };
 
@@ -95,6 +134,7 @@ async function checkStdioServer(server: McpServerRecord, db: Db): Promise<Health
         cwd,
         env: { ...process.env, ...env },
         stdio: ['pipe', 'pipe', 'pipe'],
+        detached: true,   // child gets its own process group → group-kill works
       });
     } catch (err) {
       clearTimeout(overallTimeout);
