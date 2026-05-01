@@ -28,3 +28,20 @@ export async function disconnectDB(): Promise<void> {
     db = null;
   }
 }
+
+// Graceful shutdown: close Allen's own MongoDB connection when the process
+// exits. Without this, the MongoClient's background heartbeat timer keeps
+// a live DocumentDB socket open until the OS forcibly closes it after death.
+let _shutdownStarted = false;
+async function _shutdown(signal: string): Promise<void> {
+  if (_shutdownStarted) return;
+  _shutdownStarted = true;
+  console.log(`[mongo] ${signal} received — closing MongoDB client`);
+  await disconnectDB().catch((err) => {
+    console.warn('[mongo] disconnectDB during shutdown:', (err as Error).message);
+  });
+  process.exit(0);
+}
+
+process.once('SIGTERM', () => void _shutdown('SIGTERM'));
+process.once('SIGINT',  () => void _shutdown('SIGINT'));
