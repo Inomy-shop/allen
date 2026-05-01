@@ -446,6 +446,8 @@ export const chat = {
   isStreaming: (id: string) => request<{ streaming: boolean }>(`/chat/sessions/${id}/streaming`),
   updateSession: (id: string, body: any) =>
     request<any>(`/chat/sessions/${id}`, { method: 'PATCH', body: JSON.stringify(body) }),
+  generateTitle: (id: string) =>
+    request<{ title: string }>(`/chat/sessions/${id}/generate-title`, { method: 'POST' }),
   deleteSession: (id: string) =>
     request<void>(`/chat/sessions/${id}`, { method: 'DELETE' }),
   getThreads: (id: string) =>

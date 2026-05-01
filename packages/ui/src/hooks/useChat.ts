@@ -594,6 +594,12 @@ export function useChat() {
     }
   }, [loadSessions]);
 
+  const generateSessionTitle = useCallback(async (id: string): Promise<string> => {
+    const { title } = await api.generateTitle(id);
+    setSessions(prev => prev.map(s => s._id === id ? { ...s, title } : s));
+    return title;
+  }, []);
+
   const switchSession = useCallback((id: string) => {
     // Detach from the current session's local SSE reader (if any). The server
     // keeps the query running independently in activeQueries — the agent
@@ -963,6 +969,7 @@ export function useChat() {
     createSession,
     deleteSession,
     updateSessionTitle,
+    generateSessionTitle,
     switchSession,
     cancelStream,
     refresh: loadSessions,
