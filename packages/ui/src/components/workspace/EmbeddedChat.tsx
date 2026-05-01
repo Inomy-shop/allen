@@ -8,9 +8,10 @@ import { useEffect, useState, useRef, useCallback } from 'react';
 import { useChat } from '../../hooks/useChat';
 import ChatInput from '../chat/ChatInput';
 import ChatMessageList from '../chat/ChatMessageList';
+import AgentChatDropdown from '../chat/AgentChatDropdown';
 import { workspaces as wsApi } from '../../services/workspaceService';
 import { chat as chatApi, agents as agentsApi } from '../../services/api';
-import { MessageSquare, Users, X, ExternalLink, Plus } from 'lucide-react';
+import { MessageSquare, X, ExternalLink, Plus } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 
 interface EmbeddedChatProps {
@@ -32,7 +33,9 @@ export function EmbeddedChat({ workspaceId, workspaceName, worktreePath, linkedS
   } = useChat();
 
   const [selectedAgent, setSelectedAgent] = useState<string | null>(null);
-  const [teamAgents, setTeamAgents] = useState<any[]>([]);
+  const [selectedAgentCwd, setSelectedAgentCwd] = useState<string | null>(null);
+  const [allAgents, setAllAgents] = useState<any[]>([]);
+  const [agentsLoading, setAgentsLoading] = useState(true);
   const [providers, setProviders] = useState<any[]>([]);
   const [selectedProvider, setSelectedProvider] = useState('codex');
   const [selectedModel, setSelectedModel] = useState('');
@@ -42,7 +45,7 @@ export function EmbeddedChat({ workspaceId, workspaceName, worktreePath, linkedS
 
   // Load agents and providers
   useEffect(() => {
-    agentsApi.list().then(all => setTeamAgents(all.filter((a: any) => a.type === 'team'))).catch(() => {});
+    agentsApi.list().then(all => { setAllAgents(all); setAgentsLoading(false); }).catch(() => { setAgentsLoading(false); });
     chatApi.providers().then(p => {
       setProviders(p);
       if (p.length > 0) { setSelectedProvider(p[0].provider); setSelectedModel(p[0].defaultModel); }
@@ -76,15 +79,16 @@ export function EmbeddedChat({ workspaceId, workspaceName, worktreePath, linkedS
   const handleSend = useCallback(async (content: string) => {
     if (!activeSessionId) {
       const sid = await createAndLink();
-      sendMessage(content, sid, selectedAgent ?? undefined);
+      sendMessage(content, sid, selectedAgent ?? undefined, selectedAgentCwd ?? undefined);
       return;
     }
-    sendMessage(content, undefined, selectedAgent ?? undefined);
-  }, [activeSessionId, selectedAgent, createAndLink]);
+    sendMessage(content, undefined, selectedAgent ?? undefined, selectedAgentCwd ?? undefined);
+  }, [activeSessionId, selectedAgent, selectedAgentCwd, createAndLink]);
 
   function handleNewChat() {
     switchSession('');
     setSelectedAgent(null);
+    setSelectedAgentCwd(null);
     setInitialized(false);
     setForcedNew(true);
   }
@@ -140,21 +144,20 @@ export function EmbeddedChat({ workspaceId, workspaceName, worktreePath, linkedS
 
       {/* Agent selector + Input */}
       <div className="shrink-0">
-        {teamAgents.length > 0 && (
-          <div className="px-2 pt-1.5 flex items-center gap-1 flex-wrap border-t border-app">
-            <Users className="w-3 h-3 text-theme-subtle shrink-0" />
-            <button onClick={() => !agentLocked && setSelectedAgent(null)} disabled={agentLocked}
-              className={`text-[9px] font-mono px-1.5 py-0.5 rounded ${!selectedAgent ? 'bg-accent-soft text-accent' : agentLocked ? 'text-theme-subtle' : 'text-theme-subtle hover:text-theme-secondary'}`}>
-              Assistant
-            </button>
-            {teamAgents.map((a: any) => (
-              <button key={a.name} onClick={() => !agentLocked && setSelectedAgent(selectedAgent === a.name ? null : a.name)} disabled={agentLocked}
-                className={`text-[9px] font-mono px-1.5 py-0.5 rounded ${selectedAgent === a.name ? 'bg-accent-cyan/10 text-accent' : agentLocked ? 'text-theme-subtle' : 'text-theme-subtle hover:text-theme-secondary'}`}>
-                {a.displayName ?? a.name}
-              </button>
-            ))}
-          </div>
-        )}
+        {/* Agent selector */}
+        <div className="px-2 pt-1.5 pb-0.5 flex items-center gap-1.5 border-t border-app">
+          <AgentChatDropdown
+            value={selectedAgent}
+            onChange={(name, cwd) => {
+              setSelectedAgent(name);
+              setSelectedAgentCwd(cwd);
+            }}
+            agents={allAgents}
+            disabled={agentLocked}
+            loading={agentsLoading}
+          />
+          {agentLocked && <span className="text-[9px] text-theme-subtle font-mono">locked</span>}
+        </div>
         <ChatInput
           ref={chatInputRef}
           onSend={handleSend}

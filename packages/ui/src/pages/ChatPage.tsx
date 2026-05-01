@@ -6,10 +6,11 @@ import ChatMessageList from '../components/chat/ChatMessageList';
 import CommandPalette from '../components/chat/CommandPalette';
 import ConversationLogs from '../components/chat/ConversationLogs';
 import ConversationsSidebar from '../components/chat/ConversationsSidebar';
+import AgentChatDropdown from '../components/chat/AgentChatDropdown';
 import { ToolCallLog } from '../components/common/ToolCallLog';
 import { CHAT_TITLE, CHAT_EMPTY_PROMPT } from '../lib/brand';
 import {
-  Command, Server, ScrollText, Users,
+  Command, Server, ScrollText,
   Sparkles, Zap, BarChart3, Terminal, FolderOpen, AlertTriangle, Bot, Wrench,
   FileText,
 } from 'lucide-react';
@@ -34,8 +35,9 @@ export default function ChatPage() {
   const [selectedProvider, setSelectedProvider] = useState('codex');
   const [selectedModel, setSelectedModel] = useState('');
   const [selectedAgent, setSelectedAgent] = useState<string | null>(null);
-  const [teamAgents, setTeamAgents] = useState<any[]>([]);
+  const [selectedAgentCwd, setSelectedAgentCwd] = useState<string | null>(null);
   const [allAgents, setAllAgents] = useState<any[]>([]);
+  const [agentsLoading, setAgentsLoading] = useState(true);
   // Pending override state for chats that don't have a session yet. Once the
   // first message creates the session, this is merged into createSession().
   const [pendingOverrides, setPendingOverrides] = useState<{
@@ -63,8 +65,8 @@ export default function ChatPage() {
     }).catch(() => {});
     agentsApi.list().then(all => {
       setAllAgents(all);
-      setTeamAgents(all.filter((a: any) => a.type === 'team'));
-    }).catch(() => {});
+      setAgentsLoading(false);
+    }).catch(() => { setAgentsLoading(false); });
   }, []);
 
   const activeSession = sessions.find(s => s._id === activeSessionId);
@@ -108,6 +110,7 @@ export default function ChatPage() {
       setSelectedAgent(activeSession.activeAgent);
     } else if (activeSessionId && activeSession) {
       setSelectedAgent(null);
+      setSelectedAgentCwd(null);
     }
   }, [activeSessionId, activeSession?.activeAgent]);
 
@@ -170,7 +173,7 @@ export default function ChatPage() {
         Object.keys(overrides).length > 0 ? overrides : undefined,
       );
       navigate(`/chat/${session._id}`, { replace: true });
-      sendMessage(content, session._id, selectedAgent ?? undefined);
+      sendMessage(content, session._id, selectedAgent ?? undefined, selectedAgentCwd ?? undefined);
       // Server auto-summarizes the title from the first message; pull
       // a fresh sessions list shortly after so the sidebar shows the
       // summarized title instead of the placeholder.
@@ -178,7 +181,7 @@ export default function ChatPage() {
       setTimeout(() => { void refreshSessions(); }, 5000);
       return;
     }
-    sendMessage(content, undefined, selectedAgent ?? undefined);
+    sendMessage(content, undefined, selectedAgent ?? undefined, selectedAgentCwd ?? undefined);
   }
 
   function handleSuggestionClick(prompt: string) { handleSend(prompt); }
@@ -267,7 +270,7 @@ export default function ChatPage() {
               </span>
             )}
             {selectedAgent && (() => {
-              const agentInfo = teamAgents.find((a: any) => a.name === selectedAgent);
+              const agentInfo = allAgents.find((a: any) => a.name === selectedAgent);
               return (
                 <span className="badge" style={{ background: 'rgb(var(--color-accent-soft))', color: 'rgb(var(--color-accent))' }}>
                   @{agentInfo?.displayName ?? selectedAgent}
@@ -358,39 +361,22 @@ export default function ChatPage() {
 
       {/* Agent selector + Input */}
       <div>
-        {teamAgents.length > 0 && (() => {
-          // Agent is locked once the conversation has messages
+        {/* Agent selector */}
+        {(() => {
           const agentLocked = !!activeSession?.activeAgent && (activeSession?.messageCount ?? 0) > 0;
           return (
-            <div className="px-4 pt-2.5 pb-1 flex items-center gap-1.5 border-t border-app">
-              <Users className="w-3 h-3 text-theme-subtle" />
-              <button
-                onClick={() => !agentLocked && setSelectedAgent(null)}
+            <div className="px-4 pt-2.5 pb-1 flex items-center gap-2 border-t border-app">
+              <AgentChatDropdown
+                value={selectedAgent}
+                onChange={(name, cwd) => {
+                  setSelectedAgent(name);
+                  setSelectedAgentCwd(cwd);
+                }}
+                agents={allAgents}
                 disabled={agentLocked}
-                className={`text-[11px] font-mono px-2 py-0.5 rounded transition-colors ${
-                  !selectedAgent
-                    ? 'bg-accent-soft text-accent'
-                    : agentLocked ? 'text-theme-subtle cursor-not-allowed' : 'text-theme-muted hover:text-theme-primary hover:bg-app-muted'
-                }`}
-              >
-                Assistant
-              </button>
-              {teamAgents.map((a: any) => (
-                <button
-                  key={a.name}
-                  onClick={() => !agentLocked && setSelectedAgent(selectedAgent === a.name ? null : a.name)}
-                  disabled={agentLocked}
-                  title={agentLocked ? `Agent locked for this conversation` : (a.displayName ?? a.name)}
-                  className={`text-[11px] font-mono px-2 py-0.5 rounded transition-colors ${
-                    selectedAgent === a.name
-                      ? 'bg-accent-soft text-accent'
-                      : agentLocked ? 'text-theme-subtle cursor-not-allowed' : 'text-theme-muted hover:text-theme-primary hover:bg-app-muted'
-                  }`}
-                >
-                  {a.displayName ?? a.name}
-                </button>
-              ))}
-              {agentLocked && <span className="text-[10px] text-theme-subtle font-mono ml-1">locked</span>}
+                loading={agentsLoading}
+              />
+              {agentLocked && <span className="text-[10px] text-theme-subtle font-mono">locked</span>}
             </div>
           );
         })()}
