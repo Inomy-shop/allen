@@ -27,6 +27,10 @@ if ! command -v node &>/dev/null || [[ "$(node -v)" < "v20" ]]; then
   curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
   sudo apt-get install -y -qq nodejs
 fi
+if ! command -v jq &>/dev/null; then
+  sudo apt-get update -qq
+  sudo apt-get install -y -qq jq
+fi
 echo "  node: $(node -v)  npm: $(npm -v)  nginx: $(nginx -v 2>&1)"
 
 # ── 2. Clone or pull repo ──────────────────────────────────────────────────
@@ -184,8 +188,11 @@ if ! command -v amazon-cloudwatch-agent-ctl &>/dev/null; then
 else
   echo "  already installed"
 fi
-sudo tee /opt/aws/amazon-cloudwatch-agent/etc/config.json >/dev/null <<'CWCFG'
-{
+# Derive CloudWatch log group name from ENV (matches the group created by Terraform)
+CLOUDWATCH_LOG_GROUP="/allen/${ENV:-dev}/server"
+
+# Build the CloudWatch agent base config (metrics always enabled)
+CW_METRICS_CONFIG='{
   "agent": { "metrics_collection_interval": 60, "run_as_user": "root" },
   "metrics": {
     "namespace": "CWAgent",
@@ -196,10 +203,33 @@ sudo tee /opt/aws/amazon-cloudwatch-agent/etc/config.json >/dev/null <<'CWCFG'
       "disk": { "measurement": ["used_percent"], "resources": ["/"], "metrics_collection_interval": 300 }
     }
   }
-}
-CWCFG
+}'
+
+if [ "${ENABLE_CLOUDWATCH_LOGS:-false}" = "true" ]; then
+  CW_LOGS_CONFIG="{
+    \"logs\": {
+      \"logs_collected\": {
+        \"files\": {
+          \"collect_list\": [{
+            \"file_path\": \"/var/log/allen/server.log\",
+            \"log_group_name\": \"${CLOUDWATCH_LOG_GROUP}\",
+            \"log_stream_name\": \"{instance_id}\",
+            \"timezone\": \"UTC\",
+            \"auto_removal\": false
+          }]
+        }
+      }
+    }
+  }"
+  # Merge metrics + logs using jq
+  FINAL_CONFIG=$(echo "$CW_METRICS_CONFIG" "$CW_LOGS_CONFIG" | jq -s '.[0] * .[1]')
+else
+  FINAL_CONFIG="$CW_METRICS_CONFIG"
+fi
+
+echo "$FINAL_CONFIG" | sudo tee /opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.json > /dev/null
 sudo amazon-cloudwatch-agent-ctl -a fetch-config -m ec2 -s \
-  -c file:/opt/aws/amazon-cloudwatch-agent/etc/config.json >/dev/null
+  -c file:/opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.json >/dev/null
 echo "  cloudwatch agent: config applied + running"
 
 # ── 5. iptables — restrict workspace ports 15000-20000 to localhost ────────
@@ -253,6 +283,26 @@ echo "=== [8/9] Start services ==="
 sudo nginx -t 2>&1
 sudo systemctl reload nginx
 echo "  nginx: reloaded"
+
+# Create Allen log directory (systemd StandardOutput=append writes here)
+sudo mkdir -p /var/log/allen
+sudo chown ubuntu:ubuntu /var/log/allen
+sudo chmod 750 /var/log/allen
+
+# Logrotate config for Allen server logs
+sudo tee /etc/logrotate.d/allen > /dev/null << 'LREOF'
+/var/log/allen/server.log {
+    daily
+    rotate 5
+    size 100M
+    compress
+    delaycompress
+    missingok
+    notifempty
+    copytruncate
+    su ubuntu ubuntu
+}
+LREOF
 
 sudo systemctl restart allen
 echo "  allen: restarted"

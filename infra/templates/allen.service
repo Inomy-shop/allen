@@ -14,6 +14,8 @@ EnvironmentFile=/home/ubuntu/allen/.env.production
 Environment=NODE_OPTIONS=--max-old-space-size=10240
 
 ExecStart=/usr/bin/node dist/app.js
+StandardOutput=append:/var/log/allen/server.log
+StandardError=append:/var/log/allen/server.log
 
 # cgroup v2 memory limits — confines OOM to this service tree so the
 # kernel's global OOM killer never touches sshd / SSM / network stack

@@ -1,6 +1,7 @@
 import type { Response } from 'express';
 import type { SSEEvent, EngineEventEmitter } from '@allen/engine';
 import type { Db } from 'mongodb';
+import { logger } from '../logger.js';
 
 type SSEClient = {
   res: Response;
@@ -98,14 +99,12 @@ export function createSSEEmitter(executionId: string): EngineEventEmitter {
     emit(event: SSEEvent): void {
       event.data.executionId = executionId;
 
-      // Console log for server-side visibility
-      const ts = new Date().toISOString().slice(11, 19);
       if (event.event === 'node_started') {
-        console.log(`[${ts}] ● ${event.data.node}`);
+        logger.debug(`● ${event.data.node}`, { executionId });
       } else if (event.event === 'node_completed') {
-        console.log(`[${ts}] ✓ ${event.data.node} (${event.data.durationMs}ms)`);
+        logger.debug(`✓ ${event.data.node}`, { executionId, durationMs: event.data.durationMs as number | undefined });
       } else if (event.event === 'node_failed') {
-        console.log(`[${ts}] ✗ ${event.data.node}: ${event.data.error}`);
+        logger.debug(`✗ ${event.data.node}`, { executionId, error: event.data.error as string | undefined });
       }
 
       broadcastToExecution(executionId, event);

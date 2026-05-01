@@ -60,6 +60,13 @@ resource "aws_ssm_parameter" "env_production" {
     # Agent execution mode + Claude binary path
     allen_agent_execution_mode         = var.allen_agent_execution_mode
     claude_bin                         = var.claude_bin
+
+    # Logging
+    log_level                     = var.log_level
+    log_format                    = var.log_format
+    enable_cloudwatch_logs        = var.enable_cloudwatch_logs
+    cloudwatch_log_retention_days = var.cloudwatch_log_retention_days
+    environment                   = var.environment
   })
   tags = local.tags
 }
@@ -103,7 +110,7 @@ resource "null_resource" "deploy_app" {
           "if [ ! -d /home/ubuntu/allen/.git ]; then sudo mkdir -p /home/ubuntu/allen && sudo chown ubuntu:ubuntu /home/ubuntu/allen && sudo -u ubuntu git clone ${var.repo_url} /home/ubuntu/allen; fi",
           "cd /home/ubuntu/allen && sudo -u ubuntu git fetch origin && sudo -u ubuntu git checkout ${var.repo_branch} && sudo -u ubuntu git reset --hard origin/${var.repo_branch}",
           "echo === Running bootstrap ===",
-          "cd /home/ubuntu/allen && export REPO_URL=${var.repo_url} BRANCH=${var.repo_branch} ENV=${var.environment} && sudo -u ubuntu -E bash infra/templates/bootstrap.sh 2>&1 | tee /tmp/allen-deploy.log"
+          "cd /home/ubuntu/allen && export REPO_URL=${var.repo_url} BRANCH=${var.repo_branch} ENV=${var.environment} ENABLE_CLOUDWATCH_LOGS=${var.enable_cloudwatch_logs} CLOUDWATCH_LOG_RETENTION_DAYS=${var.cloudwatch_log_retention_days} && sudo -u ubuntu -E bash infra/templates/bootstrap.sh 2>&1 | tee /tmp/allen-deploy.log"
         ]' \
         --query 'Command.CommandId' --output text)
 

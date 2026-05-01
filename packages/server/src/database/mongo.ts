@@ -1,5 +1,6 @@
 import { MongoClient, type Db } from 'mongodb';
 import { DB_NAME_DEFAULT } from '@allen/engine';
+import { logger } from '../logger.js';
 
 let client: MongoClient | null = null;
 let db: Db | null = null;
@@ -12,7 +13,8 @@ export async function connectDB(uri?: string): Promise<Db> {
   await client.connect();
   db = client.db();
 
-  console.log(`Connected to MongoDB: ${mongoUri}`);
+  const safeUri = mongoUri.replace(/\/\/([^@]+)@/, '//***@');
+  logger.info('Connected to MongoDB', { component: 'mongo', uri: safeUri });
   return db;
 }
 
@@ -36,9 +38,9 @@ let _shutdownStarted = false;
 async function _shutdown(signal: string): Promise<void> {
   if (_shutdownStarted) return;
   _shutdownStarted = true;
-  console.log(`[mongo] ${signal} received — closing MongoDB client`);
+  logger.info('closing MongoDB client', { component: 'mongo', signal });
   await disconnectDB().catch((err) => {
-    console.warn('[mongo] disconnectDB during shutdown:', (err as Error).message);
+    logger.warn('disconnectDB during shutdown', { component: 'mongo', error: (err as Error).message });
   });
   process.exit(0);
 }
