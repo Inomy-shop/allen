@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { executions as api, workflows as wfApi, type SpawnedChild } from '../services/api';
 import { useSSE, type SSEEvent } from './useSSE';
+import { applyCurrentNodesBackfill } from '../utils/executionState';
 
 export interface TimelineEvent {
   id: string;
@@ -111,21 +112,10 @@ export function useExecution(id: string | undefined) {
         // replay, so events emitted before the subscriber connects are lost,
         // and the auto-select logic never finds a running-status entry to
         // pin the right pane to.
-        if (Array.isArray(exec.currentNodes)) {
-          for (const name of exec.currentNodes) {
-            if (name === 'END' || map.has(name)) continue;
-            // Attempt counter mirrors engine.ts:617-618 — count of prior
-            // completed attempts + 1, so retries show the right number.
-            const priorAttempts = (exec.completedNodes ?? []).filter((n: string) => n === name).length;
-            map.set(name, {
-              name,
-              status: 'running',
-              attempt: priorAttempts + 1,
-              streamText: '',
-              activity: [],
-            });
-          }
-        }
+        // Guard uses status === 'completed' (not map.has) so a node with a
+        // prior failed trace is correctly promoted to 'running' when it
+        // reappears in currentNodes on rerun.
+        applyCurrentNodesBackfill(map, exec.currentNodes, exec.completedNodes);
         setNodeStates(map);
 
         // If waiting for input, synthesize the input_required event from execution state + workflow
@@ -619,6 +609,11 @@ export function useExecution(id: string | undefined) {
         activity: t.activity ?? [],
       });
     }
+    // Backfill currently-running nodes from exec.currentNodes. This fixes
+    // the case where retryFrom() is followed immediately by refresh() before
+    // the SSE node_started event fires — without this the rerun node stays
+    // 'failed' in nodeStates because no running trace exists yet.
+    applyCurrentNodesBackfill(map, exec.currentNodes, exec.completedNodes);
     // Merge: keep SSE-provided running states, but fill in any missing nodes from traces
     setNodeStates(prev => {
       const merged = new Map(map);

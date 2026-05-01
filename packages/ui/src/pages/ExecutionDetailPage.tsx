@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect, useRef } from 'react';
+import { useState, useCallback, useEffect, useRef, useMemo } from 'react';
 import { useParams, Link, useNavigate, useSearchParams } from 'react-router-dom';
 import {
   ArrowLeft, XCircle, Pause, Play, RefreshCw, Wifi, WifiOff,
@@ -24,6 +24,7 @@ import StateChangesDrawer from '../components/execution/StateChangesDrawer';
 import HumanInputDialog from '../components/execution/HumanInputDialog';
 import WorkflowFeedbackDrawer from '../components/execution/WorkflowFeedbackDrawer';
 import { ToolCallLog, type ToolCall } from '../components/common/ToolCallLog';
+import { buildTracesForTimeline } from '../utils/executionState';
 
 /**
  * Human-friendly duration format:
@@ -990,6 +991,14 @@ export default function ExecutionDetailPage() {
     return execution.cost;
   })();
 
+  // Augment traces with synthetic 'running' entries for nodes currently
+  // executing. Traces are only persisted after completion, so without this
+  // running rerun nodes are invisible in the Gantt timeline.
+  const tracesForTimeline = useMemo(
+    () => buildTracesForTimeline(traces ?? [], nodeStates),
+    [traces, nodeStates],
+  );
+
   const agentNodeNames = Object.entries((workflow?.parsed?.nodes ?? workflow?.nodes ?? {}) as Record<string, any>)
     .filter(([, nodeDef]) => ((nodeDef as any)?.type ?? 'agent') === 'agent')
     .map(([name]) => name);
@@ -1495,7 +1504,7 @@ export default function ExecutionDetailPage() {
         onClose={() => setArtifactsOpen(false)}
       />
       <TimelineDrawer
-        traces={(traces ?? []) as any}
+        traces={tracesForTimeline as any}
         open={timelineOpen}
         onClose={() => setTimelineOpen(false)}
         onNodeClick={(n) => setSelectedNode(n)}
