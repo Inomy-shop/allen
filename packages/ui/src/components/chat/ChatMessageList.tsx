@@ -800,7 +800,7 @@ export default function ChatMessageList({ messages, streamText, thinkingText, st
                     <span className="overline">You</span>
                     {msg.createdAt && <span className="text-[10px] font-mono text-theme-subtle flex items-center gap-1"><Clock className="w-2.5 h-2.5" />{formatTime(msg.createdAt)}</span>}
                   </div>
-                  <div className="inline-block px-4 py-2.5 rounded-2xl rounded-br-sm bg-accent-blue/15 border border-accent-blue/10 text-sm font-body text-theme-secondary leading-relaxed whitespace-pre-wrap break-words">
+                  <div className="inline-block px-4 py-2.5 rounded-2xl rounded-br-sm bg-accent-blue/15 border border-accent-blue/10 text-sm font-body text-theme-secondary leading-relaxed whitespace-pre-wrap break-words text-left">
                     {renderUserContent(msg.content)}
                   </div>
                 </>
