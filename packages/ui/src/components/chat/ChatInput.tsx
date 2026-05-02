@@ -6,6 +6,8 @@ import { CHAT_PLACEHOLDER } from '../../lib/brand';
 
 export type ReasoningEffortValue = 'off' | 'low' | 'medium' | 'high' | 'max';
 
+export interface RepoOption { _id: string; name: string; path: string; }
+
 interface SessionOverrides {
   reasoningEffort?: ReasoningEffortValue | null;
   planMode?: boolean | null;
@@ -42,6 +44,10 @@ interface ChatInputProps {
   inheritedPlanMode?: boolean | null;
   /** Parent decides whether to persist via PATCH or keep in local state. */
   onAgentOverridesChanged?: (next: SessionOverrides) => void;
+  repos?: RepoOption[];
+  selectedRepoName?: string | null;
+  repoLocked?: boolean;
+  onRepoChange?: (repo: RepoOption | null) => void;
 }
 
 const PROVIDER_COLORS: Record<string, string> = {
@@ -92,6 +98,10 @@ const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function ChatInput
     inheritedEffort,
     inheritedPlanMode,
     onAgentOverridesChanged,
+    repos,
+    selectedRepoName,
+    repoLocked,
+    onRepoChange,
   },
   ref,
 ) {
@@ -100,7 +110,9 @@ const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function ChatInput
   const [mentionQuery, setMentionQuery] = useState('');
   const [showModelPicker, setShowModelPicker] = useState(false);
   const [showEffortPicker, setShowEffortPicker] = useState(false);
+  const [showRepoPicker, setShowRepoPicker] = useState(false);
   const effortPickerRef = useRef<HTMLDivElement>(null);
+  const repoPickerRef = useRef<HTMLDivElement>(null);
 
   // Effective values: override wins, else inherited agent default
   const effectiveEffort = (agentOverrides?.reasoningEffort ?? inheritedEffort) ?? null;
@@ -116,6 +128,17 @@ const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function ChatInput
     document.addEventListener('mousedown', onDoc);
     return () => document.removeEventListener('mousedown', onDoc);
   }, [showEffortPicker]);
+
+  // Close the repo picker when clicking outside
+  useEffect(() => {
+    function handleClickOutside(e: MouseEvent) {
+      if (repoPickerRef.current && !repoPickerRef.current.contains(e.target as Node)) {
+        setShowRepoPicker(false);
+      }
+    }
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
 
   function setEffort(v: ReasoningEffortValue): void {
     onAgentOverridesChanged?.({ ...agentOverrides, reasoningEffort: v });
@@ -300,6 +323,62 @@ const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function ChatInput
         <div className="absolute bottom-0 left-0 right-0 flex items-center justify-between px-2 py-1.5">
           {/* ── Left cluster: model, effort, plan, attach ── */}
           <div className="flex items-center gap-1">
+
+          {/* Repo selector — left of model picker */}
+          {(repos && repos.length > 0) && (
+            <div className="relative" ref={repoPickerRef}>
+              <button
+                type="button"
+                disabled={repoLocked}
+                onClick={() => !repoLocked && setShowRepoPicker(v => !v)}
+                className={[
+                  'flex items-center gap-1 px-2 py-1 rounded text-xs font-medium transition-colors',
+                  repoLocked
+                    ? 'opacity-60 cursor-not-allowed text-gray-400'
+                    : 'hover:bg-gray-700 text-gray-300 cursor-pointer',
+                ].join(' ')}
+                title={repoLocked ? `Repo: ${selectedRepoName ?? 'none'}` : 'Select repository'}
+              >
+                {/* Folder icon */}
+                <svg className="w-3 h-3 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                  <path strokeLinecap="round" strokeLinejoin="round"
+                    d="M3 7a2 2 0 012-2h4l2 2h8a2 2 0 012 2v9a2 2 0 01-2 2H5a2 2 0 01-2-2V7z" />
+                </svg>
+                <span className="max-w-[120px] truncate">
+                  {selectedRepoName ?? 'Repo'}
+                </span>
+                {!repoLocked && (
+                  <ChevronDown className="w-3 h-3 opacity-60 flex-shrink-0" />
+                )}
+              </button>
+
+              {showRepoPicker && !repoLocked && (
+                <div className="absolute bottom-full left-0 mb-1 bg-gray-800 border border-gray-600
+                                rounded-lg shadow-xl z-50 min-w-[200px] max-h-[240px] overflow-y-auto py-1">
+                  <button
+                    className="w-full text-left px-3 py-1.5 text-xs text-gray-400 hover:bg-gray-700"
+                    onClick={() => { onRepoChange?.(null); setShowRepoPicker(false); }}
+                  >
+                    No repository
+                  </button>
+                  <div className="h-px bg-gray-700 my-1" />
+                  {repos.map(repo => (
+                    <button
+                      key={repo._id}
+                      className={[
+                        'w-full text-left px-3 py-1.5 text-xs hover:bg-gray-700',
+                        selectedRepoName === repo.name ? 'text-blue-400 font-medium' : 'text-gray-200',
+                      ].join(' ')}
+                      onClick={() => { onRepoChange?.(repo); setShowRepoPicker(false); }}
+                    >
+                      {repo.name}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+
           {/* Model selector */}
           <div className="relative" ref={pickerRef}>
             {providers && providers.length > 0 && (

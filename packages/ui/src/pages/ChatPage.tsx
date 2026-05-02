@@ -1,7 +1,7 @@
 import { useEffect, useState, useRef } from 'react';
 import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
 import { useChat } from '../hooks/useChat';
-import ChatInput from '../components/chat/ChatInput';
+import ChatInput, { RepoOption } from '../components/chat/ChatInput';
 import ChatMessageList from '../components/chat/ChatMessageList';
 import CommandPalette from '../components/chat/CommandPalette';
 import ConversationLogs from '../components/chat/ConversationLogs';
@@ -14,7 +14,7 @@ import {
   Sparkles, Zap, BarChart3, Terminal, FolderOpen, AlertTriangle, Bot, Wrench,
   FileText,
 } from 'lucide-react';
-import { chat as chatApi, mcp as mcpApi, learnings as learningsApi, agents as agentsApi } from '../services/api';
+import { chat as chatApi, mcp as mcpApi, learnings as learningsApi, agents as agentsApi, repos as reposApi } from '../services/api';
 import ArtifactsDrawer from '../components/artifacts/ArtifactsDrawer';
 
 const PROVIDER_DISPLAY: Record<string, { label: string; color: string }> = {
@@ -38,6 +38,8 @@ export default function ChatPage() {
   const [selectedAgentCwd, setSelectedAgentCwd] = useState<string | null>(null);
   const [allAgents, setAllAgents] = useState<any[]>([]);
   const [agentsLoading, setAgentsLoading] = useState(true);
+  const [selectedRepo, setSelectedRepo] = useState<RepoOption | null>(null);
+  const [repos, setRepos] = useState<RepoOption[]>([]);
   // Pending override state for chats that don't have a session yet. Once the
   // first message creates the session, this is merged into createSession().
   const [pendingOverrides, setPendingOverrides] = useState<{
@@ -69,13 +71,21 @@ export default function ChatPage() {
     }).catch(() => { setAgentsLoading(false); });
   }, []);
 
+  useEffect(() => {
+    reposApi.list()
+      .then((list: RepoOption[]) => setRepos(list ?? []))
+      .catch(() => {});
+  }, []);
+
   const activeSession = sessions.find(s => s._id === activeSessionId);
   const activeProvider = activeSession?.provider ?? selectedProvider;
 
-  // Reset pending overrides whenever the user switches to a different
-  // conversation — they only apply to a new chat that hasn't been created yet.
+  // Reset pending overrides and repo selection whenever the user switches to a
+  // different conversation — they only apply to a new chat that hasn't been
+  // created yet.
   useEffect(() => {
     setPendingOverrides({});
+    setSelectedRepo(null);
   }, [activeSessionId]);
 
   // The agent doc whose defaults we display as the fallback in the popover.
@@ -171,6 +181,7 @@ export default function ChatPage() {
         selectedProvider,
         selectedModel || undefined,
         Object.keys(overrides).length > 0 ? overrides : undefined,
+        selectedRepo?._id || undefined,
       );
       navigate(`/chat/${session._id}`, { replace: true });
       sendMessage(content, session._id, selectedAgent ?? undefined, selectedAgentCwd ?? undefined);
@@ -389,6 +400,12 @@ export default function ChatPage() {
           selectedModel={activeSession?.model ?? selectedModel}
           modelLocked={!!activeSessionId}
           onProviderChange={(p, m) => { setSelectedProvider(p); setSelectedModel(m); }}
+          repos={repos}
+          selectedRepoName={activeSession?.repoName ?? selectedRepo?.name ?? null}
+          repoLocked={!!activeSessionId}
+          onRepoChange={(repo: RepoOption | null) => {
+            if (!activeSessionId) setSelectedRepo(repo);
+          }}
           agentOverrides={effectiveOverrides}
           // When no team agent is selected, the chat talks to the raw
           // assistant. Codex defaults to 'high', other providers to 'medium' —

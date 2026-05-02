@@ -37,6 +37,9 @@ export interface ChatSession {
   llmSessionId?: string;
   source?: 'ui' | 'slack';
   slackContext?: SlackContext;
+  repoId?: string;     // ObjectId string referencing repos collection
+  repoPath?: string;   // Snapshot of repo.path at session creation time
+  repoName?: string;   // Snapshot of repo.name for UI display
   createdAt: Date;
   updatedAt: Date;
 }
@@ -349,13 +352,28 @@ export class ChatService {
     source: 'ui' | 'slack' = 'ui',
     slackContext?: SlackContext,
     agentOverrides?: Record<string, unknown>,
+    repoId?: string,
   ): Promise<ChatSession> {
     const now = new Date();
+    let repoPath: string | undefined;
+    let repoName: string | undefined;
+    if (repoId) {
+      try {
+        const repo = await this.db.collection('repos').findOne({ _id: new ObjectId(repoId) });
+        if (repo) {
+          repoPath = repo.path as string;
+          repoName = repo.name as string;
+        }
+      } catch (e) {
+        // invalid ObjectId or missing repo — proceed without repo binding
+      }
+    }
     const doc: ChatSession = {
       title: 'New Conversation', titleSource: 'default', status: 'active', messageCount: 0,
       lastMessageAt: now, totalCostUsd: 0, provider, model,
       source,
       ...(slackContext ? { slackContext } : {}),
+      ...(repoId && repoPath ? { repoId, repoPath, repoName } : {}),
       ...(agentOverrides ? { agentOverrides } : {}),
       createdAt: now, updatedAt: now,
     };
@@ -653,6 +671,11 @@ User: ${userMessage.slice(0, 500)}`;
           resolvedCwd = linkedWs.worktreePath as string;
         }
       } catch {}
+
+      // Step 2 — session-level repo (only when no linked workspace)
+      if (!resolvedCwd && session?.repoPath) {
+        resolvedCwd = session.repoPath as string;
+      }
 
       // If no workspace linked, use @repo mention path as cwd
       if (!resolvedCwd && mentionRepoPath) {

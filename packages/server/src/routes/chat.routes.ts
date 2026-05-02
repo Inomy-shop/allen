@@ -176,7 +176,8 @@ export function chatRoutes(db: Db): Router {
   router.post('/sessions', async (req: Request, res: Response) => {
     try {
       const { provider, model, agentOverrides } = req.body ?? {};
-      const session = await chatService.createSession(provider, model, 'ui', undefined, agentOverrides);
+      const repoId = typeof req.body?.repoId === 'string' ? req.body.repoId : undefined;
+      const session = await chatService.createSession(provider, model, 'ui', undefined, agentOverrides, repoId);
       res.status(201).json(session);
     } catch (err: unknown) {
       res.status(500).json({ error: (err as Error).message });
