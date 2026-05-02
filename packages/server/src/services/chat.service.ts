@@ -14,6 +14,7 @@ import { AlertService } from './alert.service.js';
 import { registerActiveSession, unregisterActiveSession, waitForBackgroundTasks } from './chat-tools.js';
 import { searchSimilar, backfillEmbeddings } from './embedding.service.js';
 import { buildOrgContextBlock } from './org-context.js';
+import { MonitoringService } from './self-healing-monitor.service.js';
 // Note: embedding.service.ts re-exports from @allen/engine — single implementation shared by engine + server
 
 // ── Types ──
@@ -116,7 +117,48 @@ const API_PORT = process.env.PORT ?? '4023';
  * - claude-cli: uses <tool_call> protocol (appended by chat-llm.ts)
  * - codex: uses bash + curl against local API
  */
-async function getSystemPrompt(provider: ChatProvider, db: Db, userMessage?: string): Promise<string> {
+async function writeMemoryAudit(db: Db, input: {
+  rootType: 'chat' | 'workflow_execution' | 'agent_execution';
+  rootId: string;
+  agentName?: string;
+  query?: string;
+  retrievedLearningIds?: string[];
+  retrievalScores?: number[];
+  injectedLearningIds?: string[];
+  injectedTokenCount?: number;
+  promptContextHash?: string;
+  error?: string;
+}): Promise<void> {
+  try {
+    await db.collection('memory_injection_audits').insertOne({
+      ...input,
+      retrievedLearningIds: input.retrievedLearningIds ?? [],
+      retrievalScores: input.retrievalScores ?? [],
+      injectedLearningIds: input.injectedLearningIds ?? [],
+      injectedTokenCount: input.injectedTokenCount ?? 0,
+      createdAt: new Date(),
+    });
+  } catch {
+    // Monitoring data must never block prompt construction.
+  }
+}
+
+function learningId(value: unknown): string | null {
+  const id = (value as { _id?: unknown; id?: unknown })?._id ?? (value as { id?: unknown })?.id;
+  return id ? String(id) : null;
+}
+
+function hasToolError(resultData: unknown): boolean {
+  const text = typeof resultData === 'string' ? resultData : JSON.stringify(resultData ?? {});
+  return /\b(error|failed|exception|timeout|timed out|invalid|missing|denied|not found)\b/i.test(text);
+}
+
+async function getSystemPrompt(
+  provider: ChatProvider,
+  db: Db,
+  userMessage?: string,
+  auditContext?: { rootType: 'chat'; rootId: string; agentName?: string },
+): Promise<string> {
   // Load relevant learnings using embedding similarity search
   let learningsBlock = '';
   try {
@@ -130,6 +172,19 @@ async function getSystemPrompt(provider: ChatProvider, db: Db, userMessage?: str
         const items = results.map(l => `- [${l.type}] (relevance: ${(l.score * 100).toFixed(0)}%) ${l.content}`).join('\n');
         learningsBlock = `\n\n## Memory from previous conversations\nApply these learned preferences and facts:\n${items}`;
       }
+      if (auditContext?.rootId) {
+        await writeMemoryAudit(db, {
+          rootType: auditContext.rootType,
+          rootId: auditContext.rootId,
+          agentName: auditContext.agentName ?? 'assistant',
+          query: userMessage,
+          retrievedLearningIds: results.map(learningId).filter((id): id is string => Boolean(id)),
+          retrievalScores: results.map((l) => l.score),
+          injectedLearningIds: results.map(learningId).filter((id): id is string => Boolean(id)),
+          injectedTokenCount: Math.ceil(results.map((l) => l.content).join(' ').split(/\s+/).length * 1.3),
+          promptContextHash: Buffer.from(userMessage).toString('base64').slice(0, 64),
+        });
+      }
     } else {
       // No message context — load top preferences
       const prefs = await db.collection('learnings')
@@ -141,9 +196,28 @@ async function getSystemPrompt(provider: ChatProvider, db: Db, userMessage?: str
         const items = prefs.map(l => `- [${l.type}] ${l.content}`).join('\n');
         learningsBlock = `\n\n## Memory from previous conversations\nApply these learned preferences and facts:\n${items}`;
       }
+      if (auditContext?.rootId) {
+        await writeMemoryAudit(db, {
+          rootType: auditContext.rootType,
+          rootId: auditContext.rootId,
+          agentName: auditContext.agentName ?? 'assistant',
+          retrievedLearningIds: prefs.map(learningId).filter((id): id is string => Boolean(id)),
+          injectedLearningIds: prefs.map(learningId).filter((id): id is string => Boolean(id)),
+          injectedTokenCount: Math.ceil(prefs.map((l) => String(l.content ?? '')).join(' ').split(/\s+/).length * 1.3),
+        });
+      }
     }
   } catch (err) {
     console.error('\x1b[35m[embedding]\x1b[0m Failed to load learnings:', (err as Error).message);
+    if (auditContext?.rootId) {
+      await writeMemoryAudit(db, {
+        rootType: auditContext.rootType,
+        rootId: auditContext.rootId,
+        agentName: auditContext.agentName ?? 'assistant',
+        query: userMessage,
+        error: (err as Error).message,
+      });
+    }
   }
 
   const base = `You are Allen Assistant — the intelligent command center for the Allen workflow orchestration platform.
@@ -670,9 +744,9 @@ Assistant: ${assistantResponse.slice(0, 400)}`;
       // Build system prompt: team agent prompt if selected, else default assistant
       let systemPrompt: string;
       if (effectiveAgent) {
-        systemPrompt = await this.buildAgentSystemPrompt(effectiveAgent, provider, content);
+        systemPrompt = await this.buildAgentSystemPrompt(effectiveAgent, provider, content, sessionId);
       } else {
-        systemPrompt = await getSystemPrompt(provider, this.db, content);
+        systemPrompt = await getSystemPrompt(provider, this.db, content, { rootType: 'chat', rootId: sessionId, agentName: 'assistant' });
       }
 
       // Inject workspace path constraint into system prompt
@@ -740,6 +814,19 @@ Assistant: ${assistantResponse.slice(0, 400)}`;
           const record: ToolCallRecord = { tool, args: {}, result: resultData, durationMs, timestamp: new Date() };
           entry.toolCalls.push(record);
           broadcastToListeners(entry, 'tool_result', { tool, result: resultData, tool_use_id: toolUseId, durationMs });
+          if (hasToolError(resultData)) {
+            new MonitoringService(this.db).handleEvent({
+              sourceType: 'tool_call',
+              sourceId: toolUseId ?? `${sessionId}:${tool}`,
+              title: `Chat tool call issue: ${tool}`,
+              error: typeof resultData === 'string' ? resultData : JSON.stringify(resultData).slice(0, 1000),
+              rootCauseArea: 'tool_integration',
+              severity: 'medium',
+              confidence: 0.72,
+              failureMode: 'chat_tool_result_error',
+              relatedIds: { chatSessionId: sessionId, chatMessageId: assistantMsgId, tool },
+            }).catch(() => {});
+          }
         },
         onSessionId: (sid) => {
           // Save session ID to DB immediately so auto-retry can resume even if the process times out
@@ -856,8 +943,8 @@ Assistant: ${assistantResponse.slice(0, 400)}`;
             provider,
             model,
             systemPrompt: effectiveAgent
-              ? await this.buildAgentSystemPrompt(effectiveAgent, provider, 'continue')
-              : await getSystemPrompt(provider, this.db, 'continue'),
+              ? await this.buildAgentSystemPrompt(effectiveAgent, provider, 'continue', sessionId)
+              : await getSystemPrompt(provider, this.db, 'continue', { rootType: 'chat', rootId: sessionId, agentName: 'assistant' }),
             messages: [{ role: 'user', content: 'Continue from where you left off. Complete the delegation and provide the final response.' }],
             resumeSessionId: savedSessionId,
             // Same artifact-root context as the primary call above so a
@@ -869,6 +956,19 @@ Assistant: ${assistantResponse.slice(0, 400)}`;
             onToolResult: (tool, resultData, toolUseId, durationMs) => {
               entry.toolCalls.push({ tool, args: {}, result: resultData, durationMs, timestamp: new Date() });
               broadcastToListeners(entry, 'tool_result', { tool, result: resultData, tool_use_id: toolUseId, durationMs });
+              if (hasToolError(resultData)) {
+                new MonitoringService(this.db).handleEvent({
+                  sourceType: 'tool_call',
+                  sourceId: toolUseId ?? `${sessionId}:${tool}:retry`,
+                  title: `Chat retry tool call issue: ${tool}`,
+                  error: typeof resultData === 'string' ? resultData : JSON.stringify(resultData).slice(0, 1000),
+                  rootCauseArea: 'tool_integration',
+                  severity: 'medium',
+                  confidence: 0.72,
+                  failureMode: 'chat_retry_tool_result_error',
+                  relatedIds: { chatSessionId: sessionId, chatMessageId: assistantMsgId, tool },
+                }).catch(() => {});
+              }
             },
             onSessionId: (sid) => {
               this.sessions.updateOne({ _id: new ObjectId(sessionId) }, { $set: { llmSessionId: sid } }).catch(() => {});
@@ -902,6 +1002,17 @@ Assistant: ${assistantResponse.slice(0, 400)}`;
         error: errorMsg, toolCalls: entry.toolCalls, status: 'failed',
         durationMs: Date.now() - startMs, timestamp: new Date(),
       }).catch(() => {});
+      new MonitoringService(this.db).handleEvent({
+        sourceType: 'chat',
+        sourceId: assistantMsgId,
+        title: 'Chat LLM error',
+        error: errorMsg,
+        rootCauseArea: isResumeFailed ? 'allen_repo' : 'unknown',
+        severity: isTimeout ? 'medium' : 'high',
+        confidence: isResumeFailed || isTimeout ? 0.78 : 0.68,
+        failureMode: isTimeout ? 'chat_timeout' : 'chat_llm_error',
+        relatedIds: { chatSessionId: sessionId, chatMessageId: assistantMsgId, agent: effectiveAgent },
+      }).catch(() => {});
 
       broadcastToListeners(entry, 'error', { error: errorMsg, messageId: assistantMsgId });
       new AlertService(this.db).onChatError(sessionId, errorMsg).catch(() => {});
@@ -920,7 +1031,7 @@ Assistant: ${assistantResponse.slice(0, 400)}`;
    * Build a system prompt for a team agent (PM, Engineer, QA, etc.).
    * Uses the agent's own system prompt + delegation capabilities.
    */
-  private async buildAgentSystemPrompt(agentName: string, provider: string, userMessage: string): Promise<string> {
+  private async buildAgentSystemPrompt(agentName: string, provider: string, userMessage: string, sessionId?: string): Promise<string> {
     const agentDoc = await this.db.collection('agents').findOne({ name: agentName });
     if (!agentDoc) {
       // Fallback to default if agent not found
@@ -1010,6 +1121,25 @@ RULES:
 
       if (allLearnings.length > 0) {
         parts.push(`\n## Memory from past conversations\n${allLearnings.join('\n')}`);
+      }
+      if (sessionId) {
+        await writeMemoryAudit(this.db, {
+          rootType: 'chat',
+          rootId: sessionId,
+          agentName,
+          query: userMessage,
+          retrievedLearningIds: [
+            ...agentLearnings.map(learningId).filter((id): id is string => Boolean(id)),
+            ...globalLearnings.map(learningId).filter((id): id is string => Boolean(id)),
+          ],
+          retrievalScores: globalLearnings.map((l) => l.score),
+          injectedLearningIds: [
+            ...agentLearnings.map(learningId).filter((id): id is string => Boolean(id)),
+            ...globalLearnings.map(learningId).filter((id): id is string => Boolean(id)),
+          ],
+          injectedTokenCount: Math.ceil(allLearnings.join(' ').split(/\s+/).length * 1.3),
+          promptContextHash: Buffer.from(`${agentName}:${userMessage}`).toString('base64').slice(0, 64),
+        });
       }
     } catch {}
 

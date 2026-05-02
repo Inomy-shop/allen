@@ -691,6 +691,26 @@ export const linear = {
     }),
 };
 
+// ── Self-Healing Monitoring ───────────────────────────────────────────────
+export const monitoring = {
+  incidents: (filters: { status?: string; limit?: number } = {}) => {
+    const qs = new URLSearchParams();
+    if (filters.status) qs.set('status', filters.status);
+    if (filters.limit) qs.set('limit', String(filters.limit));
+    const query = qs.toString();
+    return request<{ incidents: any[] }>(`/monitoring/incidents${query ? `?${query}` : ''}`);
+  },
+  incident: (id: string) => request<{ incident: any }>(`/monitoring/incidents/${id}`),
+  scan: (body: Record<string, unknown> = {}) =>
+    request<any>('/monitoring/scan', { method: 'POST', body: JSON.stringify(body) }),
+  ticket: (id: string) =>
+    request<{ incident: any }>(`/monitoring/incidents/${id}/ticket`, { method: 'POST' }),
+  dispatch: (id: string) =>
+    request<{ incident: any }>(`/monitoring/incidents/${id}/dispatch`, { method: 'POST' }),
+  mark: (id: string, status: 'ignored' | 'suppressed' | 'resolved') =>
+    request<{ incident: any }>(`/monitoring/incidents/${id}/${status}`, { method: 'POST' }),
+};
+
 // ── Users (admin-only) ───────────────────────────────────────────────────
 export const users = {
   list: () => request<AuthUser[]>('/users'),

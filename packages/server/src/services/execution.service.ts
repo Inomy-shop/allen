@@ -20,6 +20,7 @@ import {
 import type { AgentDef } from '@allen/engine';
 import { WorkspaceManager } from './workspace.service.js';
 import { ArtifactService } from './artifact.service.js';
+import { MonitoringService } from './self-healing-monitor.service.js';
 
 /**
  * Build the in-process service hook bundle the engine passes to built-ins.
@@ -269,6 +270,17 @@ export class ExecutionService {
           return tools.map(t => t.fullName);
         } catch (err) {
           console.warn('[engine] MCP tool discovery failed for workflow run:', (err as Error).message);
+          new MonitoringService(this.db).handleEvent({
+            sourceType: 'mcp',
+            sourceId: executionId,
+            title: 'Workflow MCP tool discovery failed',
+            error: (err as Error).message,
+            rootCauseArea: 'tool_integration',
+            severity: 'medium',
+            confidence: 0.75,
+            failureMode: 'workflow_mcp_discovery_failed',
+            relatedIds: { executionId, workflowName: workflow.name },
+          }).catch(() => {});
           return [];
         }
       },
@@ -847,6 +859,25 @@ export class ExecutionService {
           baseEmitter.emit(event);
         } catch (err) {
           console.error('[execution.emitter] base emitter threw:', err);
+        }
+
+        if (event.event === 'execution_failed' || event.event === 'node_failed') {
+          new MonitoringService(db).handleEvent({
+            sourceType: 'workflow_execution',
+            sourceId: executionId,
+            title: event.event === 'node_failed' ? `Workflow node failed: ${String(event.data.node ?? 'unknown')}` : `Workflow failed: ${workflow.name}`,
+            error: String((event.data as Record<string, unknown>).error ?? 'Workflow execution failed'),
+            rootCauseArea: event.event === 'node_failed' ? 'workflow_definition' : 'allen_repo',
+            severity: 'high',
+            confidence: 0.82,
+            failureMode: event.event,
+            relatedIds: {
+              executionId,
+              workflowName: workflow.name,
+              node: (event.data as Record<string, unknown>).node,
+              failedNode: (event.data as Record<string, unknown>).failedNode,
+            },
+          }).catch(() => {});
         }
 
         if (event.event !== 'input_required') return;

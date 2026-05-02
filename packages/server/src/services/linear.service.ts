@@ -77,6 +77,18 @@ export interface ListIssuesFilters {
   limit?: number;
 }
 
+export interface LinearCreateIssueInput {
+  title: string;
+  description: string;
+  teamKey?: string;
+  teamId?: string;
+  projectName?: string;
+  projectId?: string;
+  assigneeEmail?: string;
+  assigneeId?: string;
+  priority?: number;
+}
+
 const PRIORITY_LABELS: Record<number, string> = {
   0: 'No priority',
   1: 'Urgent',
@@ -397,12 +409,122 @@ export class LinearService {
     return result.data as T;
   }
 
+  async findUserByEmail(email: string): Promise<{ id: string; name: string; email: string | null } | null> {
+    const resp = await this.rawRequest<{ users: { nodes: Array<{ id: string; name: string; email: string | null }> } }>(`
+      query LinearUserByEmail($email: String!) {
+        users(first: 1, filter: { email: { eq: $email } }) {
+          nodes { id name email }
+        }
+      }
+    `, { email });
+    return resp.users.nodes[0] ?? null;
+  }
+
+  async findTeamByKey(key: string): Promise<{ id: string; name: string; key: string } | null> {
+    const resp = await this.rawRequest<{ teams: { nodes: Array<{ id: string; name: string; key: string }> } }>(`
+      query LinearTeamByKey($key: String!) {
+        teams(first: 1, filter: { key: { eq: $key } }) {
+          nodes { id name key }
+        }
+      }
+    `, { key });
+    return resp.teams.nodes[0] ?? null;
+  }
+
+  async findProjectByName(name: string): Promise<{ id: string; name: string } | null> {
+    const resp = await this.rawRequest<{ projects: { nodes: Array<{ id: string; name: string }> } }>(`
+      query LinearProjectByName($name: String!) {
+        projects(first: 1, filter: { name: { eq: $name } }) {
+          nodes { id name }
+        }
+      }
+    `, { name });
+    return resp.projects.nodes[0] ?? null;
+  }
+
+  async createIssue(input: LinearCreateIssueInput): Promise<LinearIssueSummary> {
+    const teamId = input.teamId ?? (input.teamKey ? (await this.findTeamByKey(input.teamKey))?.id : undefined);
+    if (!teamId) throw new Error(`Linear team not found: ${input.teamKey ?? 'missing teamId'}`);
+
+    const projectId = input.projectId ?? (input.projectName ? (await this.findProjectByName(input.projectName))?.id : undefined);
+    const assigneeId = input.assigneeId ?? (input.assigneeEmail ? (await this.findUserByEmail(input.assigneeEmail))?.id : undefined);
+
+    const issueInput: Record<string, unknown> = {
+      teamId,
+      title: input.title,
+      description: input.description,
+      priority: input.priority ?? 3,
+    };
+    if (projectId) issueInput.projectId = projectId;
+    if (assigneeId) issueInput.assigneeId = assigneeId;
+
+    const resp = await this.rawRequest<{ issueCreate: { success: boolean; issue: IssueNode | null } }>(`
+      mutation LinearIssueCreate($input: IssueCreateInput!) {
+        issueCreate(input: $input) {
+          success
+          issue {
+            id identifier title description priority createdAt updatedAt url
+            state { id name type color }
+            team { id name key }
+            project { id name }
+            assignee { id name email }
+            labels(first: 10) { nodes { id name color } }
+          }
+        }
+      }
+    `, { input: issueInput });
+
+    const issue = resp.issueCreate.issue;
+    if (!resp.issueCreate.success || !issue) throw new Error('Linear issueCreate did not return an issue');
+    LinearService.invalidateCaches();
+    return this.toIssueSummary(issue, null);
+  }
+
+  async createComment(issueId: string, body: string): Promise<void> {
+    const resp = await this.rawRequest<{ commentCreate: { success: boolean } }>(`
+      mutation LinearCommentCreate($input: CommentCreateInput!) {
+        commentCreate(input: $input) {
+          success
+          comment { id }
+        }
+      }
+    `, { input: { issueId, body } });
+    if (!resp.commentCreate.success) throw new Error('Linear commentCreate failed');
+    LinearService.invalidateCaches();
+  }
+
   async assignAgent(linearIssueId: string, agentName: string | null, assignedBy: string): Promise<TicketAssignment | null> {
     if (!agentName) {
       await this.assignmentSvc.clear(linearIssueId);
       return null;
     }
     return this.assignmentSvc.set(linearIssueId, agentName, assignedBy);
+  }
+
+  private toIssueSummary(issue: IssueNode, agentAssignee: TicketAssignment | null): LinearIssueSummary {
+    return {
+      id: issue.id,
+      identifier: issue.identifier,
+      title: issue.title,
+      description: issue.description ?? null,
+      priority: issue.priority,
+      priorityLabel: PRIORITY_LABELS[issue.priority] ?? 'No priority',
+      state: issue.state
+        ? { id: issue.state.id, name: issue.state.name, type: issue.state.type as LinearStateType, color: issue.state.color }
+        : { id: '', name: 'Unknown', type: 'backlog', color: '#999' },
+      team: issue.team
+        ? { id: issue.team.id, name: issue.team.name, key: issue.team.key }
+        : { id: '', name: 'Unknown', key: '' },
+      project: issue.project ? { id: issue.project.id, name: issue.project.name } : null,
+      linearAssignee: issue.assignee
+        ? { id: issue.assignee.id, name: issue.assignee.name, email: issue.assignee.email ?? null }
+        : null,
+      agentAssignee,
+      labels: (issue.labels?.nodes ?? []).map(l => ({ id: l.id, name: l.name, color: l.color })),
+      createdAt: issue.createdAt,
+      updatedAt: issue.updatedAt,
+      url: issue.url,
+    };
   }
 
   async dispatchWorkflow(params: {
@@ -574,6 +696,22 @@ export class LinearService {
           status: 'failed',
           error: 'Workspace did not become active within 2 minutes',
         });
+        await this.db.collection('monitoring_events').insertOne({
+          sourceType: 'linear_dispatch',
+          sourceId: initial.linearIssueId,
+          title: 'Linear dispatch workspace did not become active',
+          error: 'Workspace did not become active within 2 minutes',
+          rootCauseArea: 'allen_repo',
+          severity: 'medium',
+          confidence: 0.76,
+          failureMode: 'linear_dispatch_workspace_timeout',
+          relatedIds: {
+            linearIssueId: initial.linearIssueId,
+            workspaceId: initial.workspaceId,
+            agentName: initial.agentName,
+          },
+          createdAt: new Date(),
+        }).catch(() => {});
         LinearService.issuesCache.clear();
         return;
       }
@@ -602,10 +740,28 @@ export class LinearService {
       });
       LinearService.issuesCache.clear();
     } catch (err: unknown) {
+      const error = err instanceof Error ? err.message : String(err);
       await this.assignmentSvc.patch(initial.linearIssueId, {
         status: 'failed',
-        error: err instanceof Error ? err.message : String(err),
+        error,
       });
+      await this.db.collection('monitoring_events').insertOne({
+        sourceType: 'linear_dispatch',
+        sourceId: initial.linearIssueId,
+        title: 'Linear dispatch failed',
+        error,
+        rootCauseArea: 'allen_repo',
+        severity: 'medium',
+        confidence: 0.76,
+        failureMode: 'linear_dispatch_failed',
+        relatedIds: {
+          linearIssueId: initial.linearIssueId,
+          workspaceId: initial.workspaceId,
+          agentName: initial.agentName,
+          executionId: initial.executionId,
+        },
+        createdAt: new Date(),
+      }).catch(() => {});
       LinearService.issuesCache.clear();
     }
   }

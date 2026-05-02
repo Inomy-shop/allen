@@ -45,11 +45,13 @@ import { createRepoScanIfChangedAction } from './services/repo-context-scanner.s
 import { createRepoPullAllAction } from './services/repo.service.js';
 import { createPrSyncAllAction } from './services/pull-request.service.js';
 import { createMcpBundleCleanupAction } from './services/mcp-bundle.service.js';
+import { createSelfHealingMonitorScanAction } from './services/self-healing-monitor.service.js';
 import { runTrustBootstrap } from './services/trust-bootstrap.service.js';
 import { cronRoutes } from './routes/cron.routes.js';
 import { designDocRoutes } from './routes/design-doc.routes.js';
 import { interventionRoutes } from './routes/intervention.routes.js';
 import { linearRoutes } from './routes/linear.routes.js';
+import { monitoringRoutes } from './routes/monitoring.routes.js';
 import { authRoutes } from './routes/auth.routes.js';
 import { userRoutes } from './routes/users.routes.js';
 import { bootstrapAdmin } from './services/adminBootstrap.js';
@@ -129,6 +131,13 @@ async function main(): Promise<void> {
       'test-chat-loop',
       'test-create-workspace',
       'test-artifacts',
+      'allen-self-healing-monitor-hourly',
+      'self-healing-incident-triage',
+      'self-healing-repair-allen',
+      'self-healing-memory-repair',
+      'self-healing-tooling-repair',
+      'self-healing-workflow-repair',
+      'self-healing-prompt-instruction-repair',
     ],
   );
   await seedCronJobs(db);
@@ -140,6 +149,7 @@ async function main(): Promise<void> {
   cronService.registerSystemAction(createRepoPullAllAction(db));
   cronService.registerSystemAction(createPrSyncAllAction(db));
   cronService.registerSystemAction(createMcpBundleCleanupAction(db));
+  cronService.registerSystemAction(createSelfHealingMonitorScanAction(db));
   const { createCodeRabbitSweepAction } = await import('./services/coderabbit-sweep.service.js');
   cronService.registerSystemAction(createCodeRabbitSweepAction(db));
   await cronService.start();
@@ -246,6 +256,7 @@ async function main(): Promise<void> {
   app.use('/api/design-docs', designDocRoutes(db));
   app.use('/api/interventions', interventionRoutes(db));
   app.use('/api/linear', linearRoutes(db));
+  app.use('/api/monitoring', monitoringRoutes(db));
   app.use('/api/files', fileRoutes());
   app.use('/api/artifacts', artifactRoutes(db));
 

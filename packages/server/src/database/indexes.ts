@@ -116,6 +116,20 @@ export async function ensureIndexes(db: Db): Promise<void> {
   await db.collection('learnings').createIndex({ status: 1, lastUsedAt: 1 });
   await db.collection('learnings').createIndex({ 'source.executionId': 1 });
 
+  // Self-healing monitoring
+  await db.collection('monitoring_incidents').createIndex({ fingerprint: 1 }, { unique: true });
+  await db.collection('monitoring_incidents').createIndex({ status: 1, lastSeenAt: -1 });
+  await db.collection('monitoring_incidents').createIndex({ sourceType: 1, lastSeenAt: -1 });
+  await db.collection('monitoring_incidents').createIndex({ linearIssueId: 1 });
+  await db.collection('monitoring_incidents').createIndex({ dispatchExecutionId: 1 });
+  await db.collection('monitoring_scan_state').createIndex({ name: 1 }, { unique: true });
+  await db.collection('monitoring_events').createIndex({ createdAt: -1 });
+  await db.collection('monitoring_evidence_bundles').createIndex({ createdAt: -1 });
+  await db.collection('monitoring_evidence_bundles').createIndex({ createdByExecutionId: 1, createdAt: -1 });
+  await db.collection('memory_injection_audits').createIndex({ rootType: 1, rootId: 1 });
+  await db.collection('memory_injection_audits').createIndex({ agentName: 1, createdAt: -1 });
+  await db.collection('memory_injection_audits').createIndex({ createdAt: -1 });
+
   // Chat Sessions
   await db.collection('chat_sessions').createIndex({ status: 1, lastMessageAt: -1 });
   await db.collection('chat_sessions').createIndex({ llmSessionId: 1 });

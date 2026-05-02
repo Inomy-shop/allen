@@ -12,8 +12,10 @@ import { embedAndSave, invalidateCache } from './embedding.service.js';
 import { AgentConversationService } from './agent-conversation.service.js';
 import { AgentActivityService } from './agent-activity.service.js';
 import { metaChatTools, META_DESTRUCTIVE_TOOLS } from './chat-tools-meta.js';
+import { monitoringAgentTools } from './monitoring-agent-tools.js';
 import { buildRepoContextBlock } from './repo-context-builder.js';
 import { AGENT_FALLBACK_CWD } from './chat-providers.js';
+import { MonitoringService } from './self-healing-monitor.service.js';
 import { MCP_SERVER_NAME, normalizeModelAlias, ARTIFACTS_GUIDANCE, NON_INTERACTIVE_GUIDANCE } from '@allen/engine';
 
 /**
@@ -285,6 +287,10 @@ export const DESTRUCTIVE_TOOLS = new Set([
   'mcp__linear__linear_create_issue', 'mcp__linear__linear_edit_issue',
   'mcp__linear__linear_delete_issue', 'mcp__linear__linear_create_comment',
   'mcp__linear__linear_bulk_update_issues',
+  'allen_monitoring_update_scan_cursor',
+  'allen_monitoring_create_evidence_bundle',
+  'allen_monitoring_upsert_incident',
+  'allen_monitoring_update_incident',
   // Meta team tools (phase 4 — team-builder / agent-builder)
   ...META_DESTRUCTIVE_TOOLS,
 ]);
@@ -2306,6 +2312,22 @@ async function runDelegationInBackground(
     const durationMs = Date.now() - startMs;
     const errorMsg = (err as Error).message;
     await conversationService.fail(convId, errorMsg);
+    new MonitoringService(db).handleEvent({
+      sourceType: 'delegation',
+      sourceId: convId,
+      title: `Delegation failed: ${fromAgent} -> ${targetName}`,
+      error: errorMsg,
+      rootCauseArea: 'agent_prompt',
+      severity: 'high',
+      confidence: 0.80,
+      failureMode: 'delegation_failed',
+      relatedIds: {
+        conversationId: convId,
+        chatSessionId: activeCtx?.chatSessionId,
+        fromAgent,
+        toAgent: targetName,
+      },
+    }).catch(() => {});
     if (onEvent) onEvent('thread_completed', { conversationId: convId, fromAgent, toAgent: targetName, summary: `Failed: ${errorMsg}`, costUsd: 0, durationMs, error: true });
   } finally {
     if (activeCtx) activeCtx.pendingBackgroundTasks--;
@@ -3191,6 +3213,8 @@ export const chatTools: ChatTool[] = [
   createPullRequest,
   // Meta team tools (phase 4 — team-builder / agent-builder)
   ...metaChatTools,
+  // Self-healing monitoring tools used by Allen's built-in monitoring agents.
+  ...monitoringAgentTools,
 ];
 
 /**

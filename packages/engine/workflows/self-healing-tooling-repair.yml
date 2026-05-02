@@ -1,0 +1,86 @@
+name: self-healing-tooling-repair
+description: Built-in repair workflow for Allen MCP, tool schema, env propagation, workspace/artifact context, and Linear dispatch issues.
+version: 1
+context:
+  requires: [repo]
+  tools: [filesystem, git, terminal]
+  concurrency: 2
+input:
+  incident_id: { type: string, required: false, widget: text }
+  incident_fingerprint: { type: string, required: true, widget: text }
+  linear_identifier: { type: string, required: false, widget: text }
+  linear_url: { type: string, required: false, widget: text }
+  repo_path: { type: string, required: true, widget: repo_picker }
+  source_type: { type: string, required: true, widget: text }
+  root_cause_area: { type: string, required: true, widget: text }
+  incident_summary: { type: string, required: true, widget: textarea }
+  evidence: { type: object, required: false }
+nodes:
+  diagnose:
+    agent: allen-tooling-diagnostician
+    prompt: |
+      Diagnose this Allen tooling incident.
+      INCIDENT: {{incident_fingerprint}}
+      LINEAR: {{linear_identifier}} {{linear_url}}
+      SUMMARY: {{incident_summary}}
+      REPO PATH: {{repo_path}}
+      EVIDENCE: {{evidence}}
+      Focus on MCP discovery, tool schema, tool allowlists, env propagation, chat/workspace/artifact context, and Linear dispatch.
+      End with JSON: root_cause, files_to_touch[], fix_description, regression_strategy.
+    outputs:
+      root_cause: "Root cause."
+      files_to_touch: "Files to touch."
+      fix_description: "Fix description."
+      regression_strategy: "Regression strategy."
+  create_workspace:
+    type: code
+    function: create-workspace
+    config: { wait_for_setup: true, timeout_sec: 600 }
+    outputs:
+      workspace_id: "Workspace id."
+      worktree_path: "Worktree path."
+      branch_name: "Branch name."
+      repo_path: "Alias of worktree path."
+  implement:
+    agent: engineering-lead
+    prompt: |
+      Implement the Allen tooling repair in {{worktree_path}}. Do not create a new workspace.
+      ROOT CAUSE: {{root_cause}}
+      FIX: {{fix_description}}
+      FILES: {{files_to_touch}}
+      REGRESSION STRATEGY: {{regression_strategy}}
+      Spawn specialists with repo_path={{worktree_path}}.
+      End with JSON: files_changed, specialists_used, any_failures, failure_details.
+    outputs:
+      files_changed: "Files changed."
+      any_failures: "Boolean."
+  qa:
+    agent: qa-lead
+    prompt: |
+      Validate the tooling repair in {{worktree_path}}. Run build/lint/tests and verify tool/MCP regression coverage.
+      End with JSON: qa_verdict, build, lint, unit_tests, regression_tests, test_files, summary, failure_details.
+    outputs:
+      qa_verdict: "pass | fail | escalate"
+  open_pr:
+    agent: pr-creator
+    prompt: |
+      Create a PR for this tooling repair.
+      WORKTREE PATH: {{worktree_path}}
+      BRANCH NAME: {{branch_name}}
+      LINEAR: {{linear_identifier}} {{linear_url}}
+      INCIDENT: {{incident_fingerprint}}
+      ROOT CAUSE: {{root_cause}}
+      FIX: {{fix_description}}
+      FILES CHANGED: {{files_changed}}
+      End with JSON: pr_url, commit_hash, status, error.
+    outputs:
+      pr_url: "PR URL."
+      status: "created | reused_existing | failed"
+edges:
+  - { from: START, to: diagnose }
+  - { from: diagnose, to: create_workspace }
+  - { from: create_workspace, to: implement }
+  - { from: implement, to: qa }
+  - { from: qa, to: open_pr }
+  - { from: open_pr, to: END }
+

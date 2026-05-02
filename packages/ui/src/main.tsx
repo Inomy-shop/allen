@@ -21,6 +21,7 @@ import PullRequestDetailPage from './pages/PullRequestDetailPage';
 import CronManagerPage from './pages/CronManagerPage';
 import InterventionsPage from './pages/InterventionsPage';
 import TicketsPage from './pages/TicketsPage';
+import MonitoringPage from './pages/MonitoringPage';
 import LoginPage from './pages/LoginPage';
 import ResetPasswordPage from './pages/ResetPasswordPage';
 import ForbiddenPage from './pages/ForbiddenPage';
@@ -56,6 +57,7 @@ const router = createBrowserRouter([
           { path: 'pull-requests/:id', element: <PullRequestDetailPage /> },
           { path: 'crons', element: <CronManagerPage /> },
           { path: 'tickets', element: <TicketsPage /> },
+          { path: 'monitoring', element: <MonitoringPage /> },
           { path: 'interventions', element: <InterventionsPage /> },
           { path: 'interventions/:id', element: <InterventionsPage /> },
           { path: 'settings', element: <SettingsPage /> },

@@ -7,7 +7,7 @@ import {
   FolderGit2, Brain, MessageSquare,
   Server, User, ChevronDown, ChevronRight,
   GitPullRequest, Clock, HelpCircle, Ticket, LogOut, ShieldCheck,
-  Sun, Moon,
+  Sun, Moon, ShieldAlert,
 } from 'lucide-react';
 import { useSettingsStore } from './stores/settingsStore';
 import { resolveColorMode } from './lib/theme';
@@ -43,6 +43,7 @@ const NAV_GROUPS = [
     { to: '/tickets', icon: Ticket, label: 'Linear' },
   ]},
   { label: 'Insight', items: [
+    { to: '/monitoring', icon: ShieldAlert, label: 'Monitoring' },
     { to: '/learnings', icon: Brain, label: 'Learnings' },
   ]},
 ];

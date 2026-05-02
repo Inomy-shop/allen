@@ -1096,6 +1096,19 @@ ${lines.join('\n')}
           }));
           const totalTokens = learnings.reduce((sum, l) => sum + l.tokenCount, 0);
           const previews = learnings.map(l => `"${l.content.slice(0, 50)}..."`).join(', ');
+          this.config.db.collection('memory_injection_audits').insertOne({
+            rootType: 'agent_execution',
+            rootId: exec.id,
+            agentName: nodeDef.agent ?? nodeName,
+            nodeName,
+            query: `${exec.workflowName}:${nodeName}`,
+            retrievedLearningIds: injectedLearningIds.map(String),
+            retrievalScores: [],
+            injectedLearningIds: injectedLearningIds.map(String),
+            injectedTokenCount: totalTokens,
+            promptContextHash: `${exec.id}:${nodeName}:${attempt}`,
+            createdAt: new Date(),
+          }).catch(() => {});
           this.log(exec.id, {
             category: 'system',
             node: nodeName,
