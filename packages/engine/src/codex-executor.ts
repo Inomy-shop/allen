@@ -5,6 +5,7 @@ import { renderTemplate } from './template.js';
 import { extractOutputs, buildOutputInstruction } from './output-extractor.js';
 import { buildToolCallRecord, type ToolCallRecord } from './tool-call.js';
 import { withArtifactsGuidance, withNonInteractiveGuidance } from './agent-file-writer.js';
+import { MCP_SERVER_NAME } from './brand.js';
 
 /** Scratch dir when no worktree/repo is in scope. Never fall back to
  * process.cwd() — that's the engine's own source tree. */
@@ -101,12 +102,41 @@ export async function executeCodexNode(
   const cwd = (state.worktree_path as string) ?? (state.repo_path as string) ?? AGENT_FALLBACK_CWD;
   mkdirSync(cwd, { recursive: true });
 
+  // Per-call MCP env overrides for the Allen MCP. Codex stores its MCP
+  // entries with only the env vars passed at registration time and does
+  // NOT forward its own runtime env to MCP children, so inheriting via
+  // process.env is not enough. Without these `-c` overrides, the agent's
+  // allen_save_artifact call returns "...artifact root is unknown..."
+  // and no artifacts are created. Mirrors the chat-tools.ts spawn_agent
+  // path (search: mcp_servers.${MCP_SERVER_NAME}.env).
+  const escape = (v: string) => v.replace(/"/g, '\\"');
+  const set = (k: string, v: string) =>
+    ['-c', `mcp_servers.${MCP_SERVER_NAME}.env.${k}="${escape(v)}"`];
+  const rootExecutionId = process.env.ALLEN_ROOT_EXECUTION_ID || executionId;
+  const mcpEnvOverrides: string[] = [
+    ...set('ALLEN_ARTIFACT_ROOT_TYPE', process.env.ALLEN_ARTIFACT_ROOT_TYPE || 'workflow'),
+    ...set('ALLEN_ARTIFACT_ROOT_ID', process.env.ALLEN_ARTIFACT_ROOT_ID || rootExecutionId),
+    ...set('ALLEN_ARTIFACT_NODE_NAME', nodeName),
+    ...set('ALLEN_ARTIFACT_AGENT_NAME', nodeDef.agent ?? ''),
+    ...set('ALLEN_ARTIFACT_AGENT_EXECUTION_ID', executionId),
+    ...set('ALLEN_ARTIFACT_PARENT_ID', executionId),
+    ...set('ALLEN_PARENT_EXECUTION_ID', executionId),
+    ...set('ALLEN_ROOT_EXECUTION_ID', rootExecutionId),
+    // Re-state the registration-time vars: in some Codex versions the -c
+    // override replaces the env dict wholesale, so omitting these would
+    // strip out ALLEN_API_URL / JWT_ACCESS_SECRET and break MCP auth.
+    ...set('ALLEN_API_URL', `http://localhost:${process.env.PORT ?? '4023'}`),
+    ...set('JWT_ACCESS_SECRET', process.env.JWT_ACCESS_SECRET ?? ''),
+  ];
+
   return new Promise<CodexResult>((resolve, reject) => {
     const args: string[] = ['exec'];
 
     if (isResume) {
       // Resume previous session
-      args.push('resume', '--json', '--dangerously-bypass-approvals-and-sandbox', sessionId!, prompt);
+      args.push('resume', '--json', '--dangerously-bypass-approvals-and-sandbox');
+      args.push(...mcpEnvOverrides);
+      args.push(sessionId!, prompt);
     } else {
       // Fresh session — bypass approvals so MCP tools work
       args.push('--json', '--dangerously-bypass-approvals-and-sandbox');
@@ -116,6 +146,7 @@ export async function executeCodexNode(
       if (codexEffort) {
         args.push('-c', `model_reasoning_effort="${codexEffort}"`);
       }
+      args.push(...mcpEnvOverrides);
       args.push(prompt);
     }
 
@@ -159,18 +190,26 @@ export async function executeCodexNode(
           // Check for error events
           if (event.type === 'error' || event.type === 'turn.failed') {
             const errMsg = event.message ?? event.error?.message ?? JSON.stringify(event);
+            // Codex emits transient self-recovery events (MCP child-process
+            // reconnects) as `event.type === 'error'` even though it then
+            // succeeds. Logging those at level=error makes the UI flag
+            // healthy runs as failed and pollutes rawResponse with
+            // ERROR: lines that confuse downstream JSON extraction.
+            const isTransient = /Reconnecting|timeout waiting for child process/i.test(errMsg);
             emitter.emit({
               event: 'execution_log',
               data: {
                 executionId,
                 timestamp: new Date(),
-                level: 'error',
+                level: isTransient ? 'warn' : 'error',
                 category: 'agent',
                 node: nodeName,
-                message: `Codex error: ${errMsg}`,
+                message: `${isTransient ? 'Codex transient' : 'Codex error'}: ${errMsg}`,
               },
             });
-            rawResponse += `ERROR: ${errMsg}\n`;
+            if (!isTransient) {
+              rawResponse += `ERROR: ${errMsg}\n`;
+            }
           }
 
           handleCodexEvent(event, nodeName, emitter, executionId, (text) => {
