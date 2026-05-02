@@ -10,3 +10,4 @@ mcp-servers/
 test-reports/
 test-results/
 e2e/.auth/
+infra/
