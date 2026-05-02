@@ -237,9 +237,9 @@ Do not create a ticket when evidence indicates:
 
 ## 8. Linear Ticket Requirements
 
-Tickets must be created under the Linear Engineering team and Allen project,
-assigned to `shreemant@inomy.shop` by default unless routing selects a more
-specific owner.
+Tickets must be created under the Linear team/project/assignee configured in
+required env vars. There are no code defaults. If any destination env var is
+missing, the monitor must not run.
 
 Each ticket must include:
 
@@ -455,9 +455,9 @@ inventing a separate execution system. It should:
 Required:
 
 - Linear API token configured via existing `ALLEN_LINEAR_ACCESS_TOKEN` secret.
-- Linear Engineering team ID.
-- Linear Allen project ID.
-- Default assignee email: `shreemant@inomy.shop`.
+- `ALLEN_SELF_HEALING_LINEAR_TEAM_KEY`.
+- `ALLEN_SELF_HEALING_LINEAR_PROJECT_NAME`.
+- `ALLEN_SELF_HEALING_ASSIGNEE_EMAIL`.
 - Allen repo ID/path.
 
 Optional:
@@ -549,8 +549,7 @@ Track:
   context, arguments summary, result summary, and suspected Allen module.
 - Duplicate failures update the existing issue or incident record instead of
   creating repeated Linear issues.
-- Created issues are assigned to `shreemant@inomy.shop` by default and linked to
-  the Allen project.
+- Created issues use the required Linear team, project, and assignee env vars.
 - Auto-routing can dispatch at least one created issue to an Allen repair agent
   or bug-fix workflow and persist the dispatch execution ID.
 - Monitoring failures do not break the original chat, agent, or workflow run.

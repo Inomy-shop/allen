@@ -11,6 +11,9 @@
 import type { Db } from 'mongodb';
 import { computeNextRun } from './cron.service.js';
 import type { CronJob } from './cron.types.js';
+import { getSelfHealingLinearConfig } from './self-healing-env.js';
+
+const selfHealingLinearConfig = getSelfHealingLinearConfig();
 
 const SEED_JOBS: Omit<CronJob, '_id' | 'nextRunAt' | 'lastRunAt' | 'lastRunStatus' | 'lastRunError' | 'lastRunExecutionId' | 'runCount' | 'runStatus' | 'createdAt' | 'updatedAt'>[] = [
   {
@@ -107,6 +110,9 @@ const SEED_JOBS: Omit<CronJob, '_id' | 'nextRunAt' | 'lastRunAt' | 'lastRunStatu
         max_records_per_surface: 100,
         maxTicketsPerRun: 20,
         auto_dispatch: true,
+        linear_team_key: selfHealingLinearConfig?.teamKey ?? null,
+        linear_project_name: selfHealingLinearConfig?.projectName ?? null,
+        linear_assignee_email: selfHealingLinearConfig?.assigneeEmail ?? null,
         statuses: ['completed', 'failed', 'cancelled', 'canceled', 'interrupted', 'running', 'waiting_for_input'],
         scan_surfaces: [
           'chat_sessions',

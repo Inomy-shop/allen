@@ -58,6 +58,18 @@ input:
     type: boolean
     required: false
     widget: checkbox
+  linear_team_key:
+    type: string
+    required: true
+    widget: text
+  linear_project_name:
+    type: string
+    required: true
+    widget: text
+  linear_assignee_email:
+    type: string
+    required: true
+    widget: text
   stuck_thresholds:
     type: object
     required: false
@@ -79,6 +91,9 @@ nodes:
       STATUSES: {{statuses}}
       SURFACES: {{scan_surfaces}}
       MAX RECORDS PER SURFACE: {{max_records_per_surface}}
+      LINEAR TEAM KEY: {{linear_team_key}}
+      LINEAR PROJECT NAME: {{linear_project_name}}
+      LINEAR ASSIGNEE EMAIL: {{linear_assignee_email}}
       STUCK THRESHOLDS: {{stuck_thresholds}}
 
       Use Allen MCP tools. Do not use backend heuristics as conclusions.
@@ -179,6 +194,9 @@ nodes:
       INCIDENTS: {{incidents}}
       ISSUE CANDIDATES: {{issue_candidates}}
       MAX TICKETS THIS RUN: {{maxTicketsPerRun}}
+      LINEAR TEAM KEY: {{linear_team_key}}
+      LINEAR PROJECT NAME: {{linear_project_name}}
+      LINEAR ASSIGNEE EMAIL: {{linear_assignee_email}}
 
       For every Allen-owned incident:
       1. Call mcp__allen__allen_monitoring_search_incidents to find duplicates.
@@ -191,6 +209,10 @@ nodes:
          - mcp__linear__linear_edit_issue when needed
       5. Write Linear id/identifier/url/status back using
          mcp__allen__allen_monitoring_update_incident.
+
+      New Linear issues must use the provided team, project, and assignee. If
+      any of those values are blank, stop and mark the run failed; do not create
+      a ticket with guessed defaults.
 
       Ticket content must include evidence reviewed, affected links/ids,
       suspected root cause, whether code/prompt/instruction/workflow/memory

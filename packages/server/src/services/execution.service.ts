@@ -21,6 +21,7 @@ import type { AgentDef } from '@allen/engine';
 import { WorkspaceManager } from './workspace.service.js';
 import { ArtifactService } from './artifact.service.js';
 import { MonitoringService } from './self-healing-monitor.service.js';
+import { assertSelfHealingLinearConfig, isSelfHealingWorkflowName } from './self-healing-env.js';
 
 /**
  * Build the in-process service hook bundle the engine passes to built-ins.
@@ -182,6 +183,15 @@ export class ExecutionService {
     if (!workflowDoc) throw new Error('Workflow not found');
 
     const workflow = workflowDoc.parsed as WorkflowDef;
+    if (isSelfHealingWorkflowName(workflow.name)) {
+      const config = assertSelfHealingLinearConfig();
+      input = {
+        ...input,
+        linear_team_key: config.teamKey,
+        linear_project_name: config.projectName,
+        linear_assignee_email: config.assigneeEmail,
+      };
+    }
     const executionId = randomUUID();
 
     // Check concurrency limits — queue if exceeded

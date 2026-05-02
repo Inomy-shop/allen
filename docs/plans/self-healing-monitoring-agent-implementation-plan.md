@@ -277,11 +277,12 @@ Backend `LinearService` must not be the self-healing ticket creator. The backend
 only exposes Allen state tools and workflow execution; agents decide and perform
 Linear actions.
 
-Ticket defaults:
+Required Linear ticket destination env vars. There are no code defaults, and
+the monitor must not run unless all are set:
 
-- team: Engineering
-- project: Allen
-- assignee: `shreemant@inomy.shop`
+- `ALLEN_SELF_HEALING_LINEAR_TEAM_KEY`
+- `ALLEN_SELF_HEALING_LINEAR_PROJECT_NAME`
+- `ALLEN_SELF_HEALING_ASSIGNEE_EMAIL`
 - labels: `monitoring`, `auto-created`, `self-healing`, source type
 
 ### 3.7 Repair Router
@@ -494,8 +495,8 @@ Docs:
 - Prompt and instruction defects in Allen built-in agents, workflow node prompts,
   system guidance, memory guidance, and tool-use guidance can be detected,
   ticketed, routed, fixed, tested, and shipped through the same loop.
-- Actionable Allen-owned incidents create or update Linear issues in the Allen
-  project assigned to `shreemant@inomy.shop`.
+- Actionable Allen-owned incidents create or update Linear issues using the
+  Linear team, project, and assignee configured in required env vars.
 - Auto-dispatch can start the correct built-in repair workflow or built-in
   routing agent.
 - Monitoring failures never break the original user-facing chat/agent/workflow.

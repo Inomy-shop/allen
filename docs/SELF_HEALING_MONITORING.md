@@ -126,18 +126,18 @@ Auto-created tickets include:
 - redacted evidence
 - routing recommendation
 
-The default Linear destination is:
-
-- team: `ENG`
-- project: `Allen`
-- assignee: `shreemant@inomy.shop`
-
-These can be overridden with environment variables:
+The Linear destination has no code defaults. The monitor will not start unless
+all required destination variables are present:
 
 ```text
 ALLEN_SELF_HEALING_LINEAR_TEAM_KEY
 ALLEN_SELF_HEALING_LINEAR_PROJECT_NAME
 ALLEN_SELF_HEALING_ASSIGNEE_EMAIL
+```
+
+Optional:
+
+```text
 ALLEN_SELF_HEALING_REPO_PATH
 ```
 

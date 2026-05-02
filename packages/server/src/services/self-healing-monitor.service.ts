@@ -1,6 +1,7 @@
 import type { Collection, Db } from 'mongodb';
 import type { SystemAction } from './cron.types.js';
 import { ExecutionService } from './execution.service.js';
+import { assertSelfHealingLinearConfig } from './self-healing-env.js';
 
 export type MonitoringSourceType =
   | 'chat'
@@ -130,6 +131,7 @@ export class MonitoringService {
   }
 
   async scan(args: MonitoringScanArgs = {}): Promise<MonitoringScanResult> {
+    const linearConfig = assertSelfHealingLinearConfig();
     const merged = this.mergeArgs(args);
     const cursorTo = new Date();
     const cursorFrom = await this.computeCursorFrom(merged.lookbackHours);
@@ -157,6 +159,9 @@ export class MonitoringService {
       maxTicketsPerRun: merged.maxTicketsPerRun,
       auto_dispatch: merged.autoDispatch,
       stuck_thresholds: merged.stuckThresholds,
+      linear_team_key: linearConfig.teamKey,
+      linear_project_name: linearConfig.projectName,
+      linear_assignee_email: linearConfig.assigneeEmail,
     });
 
     return {
@@ -240,6 +245,7 @@ export class MonitoringService {
   }
 
   private async launchAgentLedWorkflow(mode: string, input: Record<string, unknown>): Promise<Record<string, unknown>> {
+    const linearConfig = assertSelfHealingLinearConfig();
     const workflow = await this.db.collection('workflows').findOne({
       $or: [
         { name: 'allen-self-healing-monitor-hourly' },
@@ -251,6 +257,9 @@ export class MonitoringService {
     return new ExecutionService(this.db).start(String(workflow._id), {
       mode,
       ...input,
+      linear_team_key: linearConfig.teamKey,
+      linear_project_name: linearConfig.projectName,
+      linear_assignee_email: linearConfig.assigneeEmail,
     });
   }
 
