@@ -1,6 +1,6 @@
 import { useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Plus, Trash2, Search, Pencil } from 'lucide-react';
+import { Plus, Trash2, Search, Pencil, Sparkles, LoaderCircle } from 'lucide-react';
 import { useChat } from '../../hooks/useChat';
 import DeleteConfirmDialog from '../common/DeleteConfirmDialog';
 
@@ -27,10 +27,11 @@ function timeAgo(dateStr: string): string {
  */
 export default function ConversationsSidebar() {
   const navigate = useNavigate();
-  const { sessions, activeSessionId, loadingSessions, switchSession, deleteSession, updateSessionTitle } = useChat();
+  const { sessions, activeSessionId, loadingSessions, switchSession, deleteSession, updateSessionTitle, generateSessionTitle } = useChat();
   const [deleting, setDeleting] = useState<{ id: string; title: string } | null>(null);
   const [renaming, setRenaming] = useState<{ id: string; draft: string } | null>(null);
   const [query, setQuery] = useState('');
+  const [pendingTitle, setPendingTitle] = useState<string | null>(null);
   // useRef available for future focus management if needed
   const _renameRef = useRef<HTMLInputElement | null>(null);
 
@@ -168,6 +169,23 @@ export default function ConversationsSidebar() {
               >
                 <Pencil className="w-3 h-3" />
               </button>
+              {s.title === 'New Conversation' && (s.messageCount ?? 0) > 0 && (
+                <button
+                  onClick={async (e) => {
+                    e.stopPropagation();
+                    setPendingTitle(s._id);
+                    try { await generateSessionTitle(s._id); } catch {} finally { setPendingTitle(null); }
+                  }}
+                  disabled={pendingTitle === s._id}
+                  className="opacity-0 group-hover:opacity-100 focus:opacity-100 shrink-0 w-6 h-6 flex items-center justify-center rounded text-theme-subtle hover:text-accent hover:bg-accent/10 transition-all"
+                  title="Generate title"
+                  aria-label="Generate title"
+                >
+                  {pendingTitle === s._id
+                    ? <LoaderCircle className="w-3 h-3 animate-spin" />
+                    : <Sparkles className="w-3 h-3" />}
+                </button>
+              )}
               <button
                 onClick={(e) => {
                   e.stopPropagation();

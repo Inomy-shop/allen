@@ -27,6 +27,7 @@ export interface SlackContext {
 export interface ChatSession {
   _id?: ObjectId;
   title: string;
+  titleSource?: 'default' | 'auto' | 'user';
   status: 'active' | 'archived';
   messageCount: number;
   lastMessageAt: Date;
@@ -351,7 +352,7 @@ export class ChatService {
   ): Promise<ChatSession> {
     const now = new Date();
     const doc: ChatSession = {
-      title: 'New Conversation', status: 'active', messageCount: 0,
+      title: 'New Conversation', titleSource: 'default', status: 'active', messageCount: 0,
       lastMessageAt: now, totalCostUsd: 0, provider, model,
       source,
       ...(slackContext ? { slackContext } : {}),
@@ -522,16 +523,16 @@ export class ChatService {
       ),
     ]);
 
-    if (!userMsg || !assistantMsg) return null;
+    if (!userMsg) return null;
 
     const title = await this.generateTitleWithLLM(
       userMsg.content as string,
-      assistantMsg.content as string,
+      assistantMsg?.content as string | undefined,
     );
 
     await this.sessions.updateOne(
       { _id: new ObjectId(sessionId) },
-      { $set: { title, updatedAt: new Date() } },
+      { $set: { title, titleSource: 'auto', updatedAt: new Date() } },
     );
 
     this.broadcastToSession(sessionId, 'session_update', { title });
@@ -542,13 +543,45 @@ export class ChatService {
   /**
    * Generate a concise, meaningful title for a conversation using the LLM.
    * Uses claude-haiku with no tools (fast, cheap). Falls back to string truncation.
+   * assistantResponse is optional — omit it when titling from a user message only
+   * (e.g. the first turn was aborted before the LLM responded).
    */
-  private async generateTitleWithLLM(userMessage: string, assistantResponse: string): Promise<string> {
-    const prompt = `Based on this conversation, generate a short, descriptive title of 3-7 words. The title should capture the main topic or task. Return ONLY the title text — no quotes, no punctuation at the end, no explanation.
+  private async generateTitleWithLLM(userMessage: string, assistantResponse?: string): Promise<string> {
+    const prompt = assistantResponse
+      ? `Generate a concise, descriptive title (4–8 words) for this conversation.
 
-User: ${userMessage.slice(0, 400)}
+Rules:
+- Start with an action verb when possible (Fix, Build, Debug, Review, Find, Add, Improve, Analyse, etc.)
+- Name the specific resource, feature, or system involved (repo name, component, API, etc.)
+- Be concrete — avoid generic labels like "Chat about X" or "Help with Y"
+- Return ONLY the title — no quotes, no trailing punctuation, no explanation
 
-Assistant: ${assistantResponse.slice(0, 400)}`;
+Good examples:
+- Fix visual search failure in image embeddings
+- Review Allen chat productivity gaps
+- Find extraction and transformation prompts
+- Add authentication to the dashboard API
+- Debug slow query in product search
+
+User: ${userMessage.slice(0, 500)}
+
+Assistant: ${assistantResponse.slice(0, 500)}`
+      : `Generate a concise, descriptive title (4–8 words) for a conversation that starts with the following message.
+
+Rules:
+- Start with an action verb when possible (Fix, Build, Debug, Review, Find, Add, Improve, Analyse, etc.)
+- Name the specific resource, feature, or system involved (repo name, component, API, etc.)
+- Be concrete — avoid generic labels like "Chat about X" or "Help with Y"
+- Return ONLY the title — no quotes, no trailing punctuation, no explanation
+
+Good examples:
+- Fix visual search failure in image embeddings
+- Review Allen chat productivity gaps
+- Find extraction and transformation prompts
+- Add authentication to the dashboard API
+- Debug slow query in product search
+
+User: ${userMessage.slice(0, 500)}`;
 
     try {
       const result = await runChatLLM(this.db, {
@@ -562,16 +595,15 @@ Assistant: ${assistantResponse.slice(0, 400)}`;
         onToolResult: () => {},
       });
       const raw = result.text.trim();
-      if (raw.length > 0 && raw.length <= 120) {
-        return raw.replace(/^["']|["']$/g, '').replace(/[.!?]+$/, '').trim();
+      if (raw.length > 0) {
+        const title = raw.replace(/^["']|["']$/g, '');
+        return title.length > 0 ? title : userMessage.slice(0, 60);
       }
     } catch (err) {
       console.error('LLM title generation failed:', err instanceof Error ? err.message : err);
     }
-    // Fallback: string truncation
-    let title = userMessage.slice(0, 50).trim();
-    title = title.charAt(0).toUpperCase() + title.slice(1);
-    return title.replace(/[?.!,;:]+$/, '').trim();
+
+    return userMessage.slice(0, 60);
   }
 
   /**
@@ -788,21 +820,24 @@ Assistant: ${assistantResponse.slice(0, 400)}`;
         messageId: assistantMsgId, text: result.text, costUsd, durationMs, toolCalls: entry.toolCalls,
       });
 
-      // Auto-title on first response — use LLM to generate a meaningful title
-      const currentSession = await this.sessions.findOne({ _id: new ObjectId(sessionId) });
-      if (currentSession && (currentSession.title as string) === 'New Conversation') {
-        try {
-          const title = await this.generateTitleWithLLM(content, result.text ?? '');
-          if (title && title.length > 0) {
-            await this.sessions.updateOne(
-              { _id: new ObjectId(sessionId) },
-              { $set: { title, updatedAt: new Date() } },
-            );
-            broadcastToListeners(entry, 'session_update', { title });
-          }
-        } catch (err) {
-          console.error('Title generation failed:', err instanceof Error ? err.message : err);
-        }
+      // Auto-generate title for the session after first response (or when aborted)
+      // Guard: only retitle when source is 'default' or 'auto', and within the first 2 turns.
+      // Do NOT retitle after the user has explicitly set a title ('user' source).
+      const shouldAutoTitle =
+        (session?.titleSource === 'default' || session?.titleSource === 'auto' || !session?.titleSource) &&
+        ((session?.messageCount as number) ?? 0) <= 4;
+
+      if (shouldAutoTitle) {
+        // assistantContent may be empty if the user aborted — that's fine, we pass undefined
+        const responseText = result.text.trim() || undefined;
+        this.generateTitleWithLLM(content, responseText)
+          .then(async (generatedTitle) => {
+            if (generatedTitle) {
+              await this.updateSessionTitle(sessionId, generatedTitle, 'auto');
+              broadcastToListeners(entry, 'session_update', { title: generatedTitle });
+            }
+          })
+          .catch((err) => console.error('Failed to generate session title', err.message));
       }
     } catch (error) {
       clearInterval(saveInterval);
@@ -814,6 +849,20 @@ Assistant: ${assistantResponse.slice(0, 400)}`;
       // Do NOT overwrite the status to 'failed' or log it as an error.
       if (entry.aborted) {
         console.log(`[chat] Turn cancelled by user — skipping error handler`);
+        // Auto-title even on abort — use whatever partial text exists (or just the user message).
+        const shouldAutoTitleOnAbort =
+          (session?.titleSource === 'default' || session?.titleSource === 'auto' || !session?.titleSource) &&
+          ((session?.messageCount as number) ?? 0) <= 4;
+        if (shouldAutoTitleOnAbort) {
+          this.generateTitleWithLLM(content, entry.currentText.trim() || undefined)
+            .then(async (generatedTitle) => {
+              if (generatedTitle) {
+                await this.updateSessionTitle(sessionId, generatedTitle, 'auto');
+                broadcastToListeners(entry, 'session_update', { title: generatedTitle });
+              }
+            })
+            .catch(() => {});
+        }
         return;
       }
 
@@ -1016,6 +1065,13 @@ RULES:
     return parts.join('\n');
   }
 
+  async updateSessionTitle(sessionId: string, title: string, titleSource: 'default' | 'auto' | 'user' = 'user'): Promise<void> {
+    await this.sessions.updateOne(
+      { _id: new ObjectId(sessionId) },
+      { $set: { title, titleSource, updatedAt: new Date() } }
+    );
+  }
+
   async updateSession(
     id: string,
     update: {
@@ -1028,7 +1084,7 @@ RULES:
   ): Promise<ChatSession | null> {
     // Only whitelist known fields so clients can't smuggle arbitrary keys in.
     const set: Record<string, unknown> = { updatedAt: new Date() };
-    if (update.title !== undefined) set.title = update.title;
+    if (update.title !== undefined) { set.title = update.title; set.titleSource = 'user'; }
     if (update.status !== undefined) set.status = update.status;
     if (update.provider !== undefined) set.provider = update.provider;
     if (update.model !== undefined) set.model = update.model;
