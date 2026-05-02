@@ -273,3 +273,44 @@ variable "claude_bin" {
   type        = string
   default     = ""
 }
+
+# ── Logging ───────────────────────────────────────────────────────────────
+
+variable "enable_cloudwatch_logs" {
+  description = "Enable shipping Allen service logs to CloudWatch Logs. When false, logs remain local only."
+  type        = bool
+  default     = false
+}
+
+variable "cloudwatch_log_retention_days" {
+  description = "Number of days to retain Allen service logs in CloudWatch. Only used when enable_cloudwatch_logs=true."
+  type        = number
+  default     = 14
+
+  validation {
+    condition     = contains([1, 3, 5, 7, 14, 30, 60, 90, 120, 150, 180, 365, 400, 545, 731, 1827, 3653], var.cloudwatch_log_retention_days)
+    error_message = "cloudwatch_log_retention_days must be a value supported by AWS CloudWatch (e.g. 1, 3, 5, 7, 14, 30, 60, 90, etc.)."
+  }
+}
+
+variable "log_level" {
+  description = "Allen server log level. One of: debug, info, warn, error."
+  type        = string
+  default     = "info"
+
+  validation {
+    condition     = contains(["debug", "info", "warn", "error"], var.log_level)
+    error_message = "log_level must be one of: debug, info, warn, error."
+  }
+}
+
+variable "log_format" {
+  description = "Allen server log format. 'json' for production/CloudWatch, 'pretty' for local development."
+  type        = string
+  default     = "json"
+
+  validation {
+    condition     = contains(["json", "pretty"], var.log_format)
+    error_message = "log_format must be one of: json, pretty."
+  }
+}

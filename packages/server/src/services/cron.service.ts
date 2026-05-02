@@ -15,6 +15,7 @@
 
 import type { Collection, Db } from 'mongodb';
 import cron from 'node-cron';
+import { logger } from '../logger.js';
 import { CronExpressionParser } from 'cron-parser';
 import { signAccessToken } from '../auth/jwt.js';
 import type { CronJob, CronRun, CronRunStatus, SystemAction } from './cron.types.js';
@@ -67,7 +68,7 @@ export class CronService {
       await this.jobs.updateOne({ _id: job._id }, { $set: { nextRunAt: next } });
     }
 
-    console.log(`[cron] scheduler started, ${enabledJobs.length} job(s) registered`);
+    logger.info('cron scheduler started', { component: 'cron', jobCount: enabledJobs.length });
   }
 
   /** Stop all cron tasks (graceful shutdown). */
@@ -87,7 +88,7 @@ export class CronService {
 
     if (!job.enabled) return;
     if (!cron.validate(job.schedule)) {
-      console.warn(`[cron] invalid schedule for "${job.name}": ${job.schedule}`);
+      logger.warn('invalid cron schedule', { component: 'cron', jobName: job.name, schedule: job.schedule });
       return;
     }
 
@@ -97,8 +98,12 @@ export class CronService {
         // Refresh the job from DB (schedule/target may have changed)
         this.jobs.findOne({ _id: job._id }).then((freshJob) => {
           if (!freshJob || !freshJob.enabled) return;
-          this.executeJob(freshJob, 'schedule').catch(console.error);
-        }).catch(console.error);
+          this.executeJob(freshJob, 'schedule').catch((err) => {
+            logger.error('cron job execution error', { component: 'cron', jobName: job.name, error: (err as Error).message });
+          });
+        }).catch((err) => {
+          logger.error('cron findOne error', { component: 'cron', jobName: job.name, error: (err as Error).message });
+        });
       },
       { timezone: job.timezone || 'UTC' },
     );
@@ -119,7 +124,7 @@ export class CronService {
 
   registerSystemAction(action: SystemAction): void {
     this.systemActions.set(action.name, action);
-    console.log(`[cron] registered system action: ${action.name}`);
+    logger.info('registered cron system action', { component: 'cron', action: action.name });
   }
 
   getSystemActions(): SystemAction[] {
@@ -137,7 +142,7 @@ export class CronService {
 
     // Skip if already in-flight (prevents overlap if a job runs longer than its interval)
     if (this.inFlight.has(jobId)) {
-      console.log(`[cron] skipping "${job.name}" — previous run still in progress`);
+      logger.info('skipping cron job - previous run in progress', { component: 'cron', jobName: job.name });
       return;
     }
 
@@ -312,7 +317,7 @@ export class CronService {
       { $set: { runStatus: 'idle', lastRunStatus: 'failed', lastRunError: 'Interrupted by server restart' } },
     );
     if (updated.modifiedCount > 0) {
-      console.log(`[cron] recovered ${updated.modifiedCount} stale running job(s) from prior crash`);
+      logger.warn('recovered stale cron jobs from crash', { component: 'cron', count: updated.modifiedCount });
     }
     await this.runs.updateMany(
       { status: 'running' },

@@ -6,6 +6,7 @@
 
 import type { Db, ObjectId } from 'mongodb';
 import { mkdirSync } from 'node:fs';
+import { logger } from '../logger.js';
 import { ExecutionService } from './execution.service.js';
 import { InterventionService } from './intervention.service.js';
 import { embedAndSave, invalidateCache } from './embedding.service.js';
@@ -150,7 +151,7 @@ export function getActiveSession(sessionId: string): ActiveSessionContext | unde
 export function getAnyActiveSession(): ActiveSessionContext | undefined {
   if (activeSessions.size > 1) {
     const keys = Array.from(activeSessions.keys()).map(k => k.slice(0, 8)).join(', ');
-    console.warn(`[chat-tools] getAnyActiveSession() called while ${activeSessions.size} sessions are active (${keys}) — result is the Map's first entry and may be wrong. Caller should pass an explicit ChatToolContext so we can resolve by chatSessionId instead.`);
+    logger.warn('[chat-tools] getAnyActiveSession() called with multiple active sessions', { component: 'chat-tools', activeSessions: activeSessions.size, keys });
   }
   for (const ctx of activeSessions.values()) return ctx;
   return undefined;
@@ -967,7 +968,7 @@ async function runSpawnInBackground(
         liveLog({ type: 'started', content: `Injected repo context (${repoContextBlock.length} chars)` });
       }
     } catch (err) {
-      console.error('[spawn] failed to build repo context block:', err);
+      logger.error('[spawn] failed to build repo context block', { executionId, agentName, error: (err as Error).message });
     }
   }
 
@@ -984,7 +985,7 @@ async function runSpawnInBackground(
 
     // On retry, update prompt to "continue"
     if (attempt > 0) {
-      console.log(`[spawn] Auto-retry #${attempt} for ${agentName} (session ${currentResumeSession?.slice(0, 12)}...)`);
+      logger.info('[spawn] Auto-retry', { executionId, agentName, attempt, session: currentResumeSession?.slice(0, 12) });
       prompt = 'Continue from where you left off. Complete your task and provide the final response.';
     }
 
@@ -1070,7 +1071,7 @@ async function runSpawnInBackground(
           try { proc.kill('SIGTERM'); } catch {}
           if (killTimer) clearTimeout(killTimer);
           killTimer = setTimeout(() => {
-            console.error(`[codex] sigkill exec=${executionId} agent=${agentName} pid=${proc.pid ?? '?'} reason=${reason} (SIGTERM ignored after ${CODEX_KILL_GRACE_MS / 1000}s)`);
+            logger.error('[codex] sigkill', { executionId, agentName, pid: proc.pid ?? '?', reason });
             try { proc.kill('SIGKILL'); } catch {}
           }, CODEX_KILL_GRACE_MS);
         };
@@ -1078,14 +1079,14 @@ async function runSpawnInBackground(
         const resetIdleTimer = () => {
           if (idleTimer) clearTimeout(idleTimer);
           idleTimer = setTimeout(() => {
-            console.error(`[codex] timeout-idle exec=${executionId} agent=${agentName} pid=${proc.pid ?? '?'} after=${CODEX_STREAM_IDLE_MS / 1000}s thread=${threadId?.slice(0, 12) ?? 'none'} stderr-tail=${stderrTail.slice(-512)}`);
+            logger.error('[codex] timeout-idle', { executionId, agentName, pid: proc.pid ?? '?', idleSec: CODEX_STREAM_IDLE_MS / 1000, thread: threadId?.slice(0, 12) ?? 'none' });
             escalateKill('idle');
             settle(() => rejectP(new Error(`codex stream idle for ${CODEX_STREAM_IDLE_MS / 1000}s (timeout)${stderrTail ? `; stderr tail: ${stderrTail.slice(-512)}` : ''}`)));
           }, CODEX_STREAM_IDLE_MS);
         };
 
         proc.on('error', (err) => {
-          console.error(`[codex] error exec=${executionId} agent=${agentName} pid=${proc.pid ?? '?'} ${err.message}`);
+          logger.error('[codex] spawn error', { executionId, agentName, pid: proc.pid ?? '?', error: err.message });
           settle(() => rejectP(new Error(`Failed to spawn codex: ${err.message}. Is codex CLI installed?`)));
         });
         proc.stdin.end();
@@ -1094,10 +1095,10 @@ async function runSpawnInBackground(
           registerExecutionProcess(executionId, proc.pid, () => { try { proc.kill('SIGTERM'); } catch {} });
           db.collection('executions').updateOne({ id: executionId }, { $set: { 'meta.pid': proc.pid } }).catch(() => {});
         }
-        console.log(`[codex] start exec=${executionId} agent=${agentName} pid=${proc.pid ?? '?'} resume=${currentResumeSession ? currentResumeSession.slice(0, 12) : 'new'}`);
+        logger.info('[codex] start', { executionId, agentName, pid: proc.pid ?? '?', resume: currentResumeSession ? currentResumeSession.slice(0, 12) : 'new' });
 
         totalTimer = setTimeout(() => {
-          console.error(`[codex] timeout-total exec=${executionId} agent=${agentName} pid=${proc.pid ?? '?'} after=${CODEX_TOTAL_TIMEOUT_MS / 1000}s thread=${threadId?.slice(0, 12) ?? 'none'} stderr-tail=${stderrTail.slice(-512)}`);
+          logger.error('[codex] timeout-total', { executionId, agentName, pid: proc.pid ?? '?', totalSec: CODEX_TOTAL_TIMEOUT_MS / 1000, thread: threadId?.slice(0, 12) ?? 'none' });
           escalateKill('total-timeout');
           settle(() => rejectP(new Error(`codex exceeded ${CODEX_TOTAL_TIMEOUT_MS / 1000}s total timeout${stderrTail ? `; stderr tail: ${stderrTail.slice(-512)}` : ''}`)));
         }, CODEX_TOTAL_TIMEOUT_MS);
@@ -1125,7 +1126,7 @@ async function runSpawnInBackground(
                 // resume — waiting for Promise resolution loses threadId if
                 // the spawn is killed by a watchdog.
                 currentResumeSession = evt.thread_id;
-                console.log(`[codex] thread.started exec=${executionId} agent=${agentName} pid=${proc.pid ?? '?'} thread=${String(evt.thread_id).slice(0, 12)}`);
+                logger.info('[codex] thread.started', { executionId, agentName, pid: proc.pid ?? '?', thread: String(evt.thread_id).slice(0, 12) });
               }
               if (evt.type === 'item.completed' && evt.item?.type === 'agent_message') {
                 const t = evt.item.text ?? evt.item.content?.filter((c: any) => c.type === 'output_text').map((c: any) => c.text).join('') ?? '';
@@ -1198,11 +1199,11 @@ async function runSpawnInBackground(
         proc.on('close', (code, signal) => {
           const durationMs = Date.now() - spawnStartMs;
           if (code != null && code !== 0) {
-            console.error(`[codex] non-zero-exit exec=${executionId} agent=${agentName} pid=${proc.pid ?? '?'} code=${code} signal=${signal ?? 'null'} duration=${durationMs}ms text=${text.length}b stderr-tail=${stderrTail.slice(-512)}`);
+            logger.error('[codex] non-zero-exit', { executionId, agentName, pid: proc.pid ?? '?', code, signal: signal ?? 'null', durationMs, textBytes: text.length });
             settle(() => rejectP(new Error(`codex exited code=${code} signal=${signal ?? 'null'}${stderrTail ? `; stderr tail: ${stderrTail.slice(-512)}` : ''}`)));
             return;
           }
-          console.log(`[codex] close exec=${executionId} agent=${agentName} pid=${proc.pid ?? '?'} code=${code ?? 'null'} signal=${signal ?? 'null'} duration=${durationMs}ms text=${text.length}b thread=${threadId?.slice(0, 12) ?? 'none'}`);
+          logger.info('[codex] close', { executionId, agentName, pid: proc.pid ?? '?', code: code ?? 'null', signal: signal ?? 'null', durationMs, textBytes: text.length, thread: threadId?.slice(0, 12) ?? 'none' });
           settle(() => resolveP({ text, threadId }));
         });
       });
@@ -1296,7 +1297,7 @@ async function runSpawnInBackground(
           const { loadMcpTools } = await import('./chat-mcp-client.js');
           discoveredMcpTools = (await loadMcpTools(db)).map(t => t.fullName);
         } catch (err) {
-          console.warn(`[spawn:${agentName}] MCP tool discovery failed (allowlist will lack mcp__* entries):`, (err as Error).message);
+          logger.warn('[spawn] MCP tool discovery failed (allowlist will lack mcp__* entries)', { executionId, agentName, error: (err as Error).message });
         }
         msgStream = queryViaCli({
           agent: {
@@ -1369,7 +1370,7 @@ async function runSpawnInBackground(
         if (raced.kind === 'timeout') {
           const reason = toolSearchSeen ? 'post-ToolSearch' : 'general';
           const warn = `[spawn:${agentName}] claude-cli stream idle >${currentIdleMs / 1000}s (${reason}) — aborting`;
-          console.warn(warn);
+          logger.warn('[spawn] claude-cli stream idle', { executionId, agentName, idleSec: currentIdleMs / 1000, reason });
           if (onEvent) onEvent('spawn_activity', { executionId, agent: agentName, type: 'warn', content: warn });
           abortController.abort(new Error('Stream idle (client-side watchdog)'));
           throw new Error(`claude-cli stream idle timeout (${currentIdleMs / 1000}s, ${reason})`);
@@ -1403,7 +1404,7 @@ async function runSpawnInBackground(
               // re-runs with CLAUDE_SPAWN_NOTICE in force.
               if (block.name === 'ToolSearch' && !toolSearchSeen) {
                 const warn = `[spawn:${agentName}] model emitted ToolSearch — will abort in ${STREAM_IDLE_AFTER_TOOLSEARCH_MS / 1000}s if stream stays idle`;
-                console.warn(warn);
+                logger.warn('[spawn] model emitted ToolSearch', { executionId, agentName, abortInSec: STREAM_IDLE_AFTER_TOOLSEARCH_MS / 1000 });
                 if (onEvent) onEvent('spawn_activity', { executionId, agent: agentName, type: 'warn', content: warn });
                 toolSearchSeen = true;
               }
@@ -1483,7 +1484,7 @@ async function runSpawnInBackground(
 
     // If timeout and we have a session to resume, retry
     if (isTimeout && currentResumeSession && attempt < MAX_SPAWN_RETRIES) {
-      console.log(`[spawn] ${agentName} timed out (attempt ${attempt + 1}), will retry...`);
+      logger.info('[spawn] timed out, will retry', { executionId, agentName, attempt: attempt + 1, session: currentResumeSession.slice(0, 12) });
       continue; // next iteration
     }
 
@@ -2293,7 +2294,7 @@ async function runDelegationInBackground(
   const startMs = Date.now();
   try {
     const result = await runAgentTurn(db, targetAgent, prompt, convId, resumeSessionId, conversationService, onEvent, activeCtx, currentDepth, cwd);
-    console.log(`[delegation] ${targetName} completed: ${result.responseText.length}ch, ${result.toolCalls.length} toolCalls`);
+    logger.info('[delegation] completed', { convId, targetName, responseLen: result.responseText.length, toolCalls: result.toolCalls.length });
     await conversationService.addMessage(convId, { agent: targetName, type: 'message', content: result.responseText, toolCalls: result.toolCalls, timestamp: new Date() });
     await conversationService.addCost(convId, result.costUsd);
     if (result.sessionId) await conversationService.saveSessionId(convId, targetName, result.sessionId);
@@ -2591,7 +2592,7 @@ async function runAgentTurn(
     const allowed: ReadonlyArray<'text' | 'thinking' | 'tool_call' | 'tool_result'> =
       ['text', 'thinking', 'tool_call', 'tool_result'];
     if (!allowed.includes(type as (typeof allowed)[number])) {
-      console.log('[delegation:emit] skip (not persisted):', type, 'conv', convId.slice(0,8));
+      logger.debug('[delegation:emit] skip (not persisted)', { type, conv: convId.slice(0, 8) });
       return;
     }
     const activityType = type as 'text' | 'thinking' | 'tool_call' | 'tool_result';
@@ -2599,13 +2600,13 @@ async function runAgentTurn(
     const content = typeof data.content === 'string' ? (data.content as string) : undefined;
     if (activityType === 'text') {
       if (!content || content === lastPersistedText) {
-        console.log('[delegation:emit] skip text (dedupe):', convId.slice(0,8));
+        logger.debug('[delegation:emit] skip text (dedupe)', { conv: convId.slice(0, 8) });
         return;
       }
       lastPersistedText = content;
     }
 
-    console.log('[delegation:emit] persist', activityType, 'tool=', data.tool ?? '-', 'conv', convId.slice(0,8), 'contentLen=', content?.length ?? 0);
+    logger.debug('[delegation:emit] persist', { activityType, tool: data.tool ?? '-', conv: convId.slice(0, 8), contentLen: content?.length ?? 0 });
     void activityService.record({
       scope: 'delegation',
       refId: convId,
@@ -2642,7 +2643,7 @@ async function runAgentTurn(
         }
       }
     } catch (err) {
-      console.error('[delegation] failed to build repo context block:', err);
+      logger.error('[delegation] failed to build repo context block', { targetName, convId, error: (err as Error).message });
     }
   }
 
@@ -2670,7 +2671,7 @@ async function runAgentTurn(
   for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
     if (attempt > 0) {
       // This is a retry — resume the session with "continue" prompt.
-      console.log(`[delegation] Auto-retry #${attempt} for ${targetName} (session ${sessionId?.slice(0, 12)}...)`);
+      logger.info('[delegation] Auto-retry', { targetName, convId, attempt, session: sessionId?.slice(0, 12) });
       emit('text', { content: `Reconnecting to ${targetName} (retry ${attempt}/${MAX_RETRIES})...` });
       prompt = 'Continue from where you left off. Complete your task and provide the final response.';
     }
@@ -2766,7 +2767,7 @@ async function runAgentTurn(
           try { proc.kill('SIGTERM'); } catch {}
           if (killTimer) clearTimeout(killTimer);
           killTimer = setTimeout(() => {
-            console.error(`[codex-delegation] sigkill conv=${convId} target=${targetName} pid=${proc.pid ?? '?'} reason=${reason} (SIGTERM ignored after ${CODEX_KILL_GRACE_MS / 1000}s)`);
+            logger.error('[codex-delegation] sigkill', { convId, targetName, pid: proc.pid ?? '?', reason });
             try { proc.kill('SIGKILL'); } catch {}
           }, CODEX_KILL_GRACE_MS);
         };
@@ -2774,23 +2775,23 @@ async function runAgentTurn(
         const resetIdleTimer = () => {
           if (idleTimer) clearTimeout(idleTimer);
           idleTimer = setTimeout(() => {
-            console.error(`[codex-delegation] timeout-idle conv=${convId} target=${targetName} pid=${proc.pid ?? '?'} after=${CODEX_STREAM_IDLE_MS / 1000}s thread=${threadId?.slice(0, 12) ?? 'none'} stderr-tail=${stderrTail.slice(-512)}`);
+            logger.error('[codex-delegation] timeout-idle', { convId, targetName, pid: proc.pid ?? '?', idleSec: CODEX_STREAM_IDLE_MS / 1000, thread: threadId?.slice(0, 12) ?? 'none' });
             escalateKill('idle');
             settle(() => rejectP(new Error(`codex stream idle for ${CODEX_STREAM_IDLE_MS / 1000}s (timeout)${stderrTail ? `; stderr tail: ${stderrTail.slice(-512)}` : ''}`)));
           }, CODEX_STREAM_IDLE_MS);
         };
 
         proc.on('error', (err) => {
-          console.error(`[codex-delegation] error conv=${convId} target=${targetName} pid=${proc.pid ?? '?'} ${err.message}`);
+          logger.error('[codex-delegation] spawn error', { convId, targetName, pid: proc.pid ?? '?', error: err.message });
           settle(() => rejectP(new Error(`Failed to spawn codex: ${err.message}. Is codex CLI installed?`)));
         });
         proc.stdin.end();
         // Register PID for cancel — use convId as key for delegations
         if (proc.pid) registerExecutionProcess(convId, proc.pid, () => { try { proc.kill('SIGTERM'); } catch {} });
-        console.log(`[codex-delegation] start conv=${convId} target=${targetName} pid=${proc.pid ?? '?'} resume=${resumeSessionId ? resumeSessionId.slice(0, 12) : 'new'}`);
+        logger.info('[codex-delegation] start', { convId, targetName, pid: proc.pid ?? '?', resume: resumeSessionId ? resumeSessionId.slice(0, 12) : 'new' });
 
         totalTimer = setTimeout(() => {
-          console.error(`[codex-delegation] timeout-total conv=${convId} target=${targetName} pid=${proc.pid ?? '?'} after=${CODEX_TOTAL_TIMEOUT_MS / 1000}s thread=${threadId?.slice(0, 12) ?? 'none'} stderr-tail=${stderrTail.slice(-512)}`);
+          logger.error('[codex-delegation] timeout-total', { convId, targetName, pid: proc.pid ?? '?', totalSec: CODEX_TOTAL_TIMEOUT_MS / 1000, thread: threadId?.slice(0, 12) ?? 'none' });
           escalateKill('total-timeout');
           settle(() => rejectP(new Error(`codex exceeded ${CODEX_TOTAL_TIMEOUT_MS / 1000}s total timeout${stderrTail ? `; stderr tail: ${stderrTail.slice(-512)}` : ''}`)));
         }, CODEX_TOTAL_TIMEOUT_MS);
@@ -2817,7 +2818,7 @@ async function runAgentTurn(
                 // Persist to outer-scope sessionId so retry-on-timeout can
                 // resume even when this spawn is killed by a watchdog.
                 sessionId = evt.thread_id;
-                console.log(`[codex-delegation] thread.started conv=${convId} target=${targetName} pid=${proc.pid ?? '?'} thread=${String(evt.thread_id).slice(0, 12)}`);
+                logger.info('[codex-delegation] thread.started', { convId, targetName, pid: proc.pid ?? '?', thread: String(evt.thread_id).slice(0, 12) });
               }
               // Text output
               if (evt.type === 'item.completed' && evt.item?.type === 'agent_message') {
@@ -2865,11 +2866,11 @@ async function runAgentTurn(
         proc.on('close', (code, signal) => {
           const durationMs = Date.now() - spawnStartMs;
           if (code != null && code !== 0) {
-            console.error(`[codex-delegation] non-zero-exit conv=${convId} target=${targetName} pid=${proc.pid ?? '?'} code=${code} signal=${signal ?? 'null'} duration=${durationMs}ms text=${text.length}b stderr-tail=${stderrTail.slice(-512)}`);
+            logger.error('[codex-delegation] non-zero-exit', { convId, targetName, pid: proc.pid ?? '?', code, signal: signal ?? 'null', durationMs, textBytes: text.length });
             settle(() => rejectP(new Error(`codex exited code=${code} signal=${signal ?? 'null'}${stderrTail ? `; stderr tail: ${stderrTail.slice(-512)}` : ''}`)));
             return;
           }
-          console.log(`[codex-delegation] close conv=${convId} target=${targetName} pid=${proc.pid ?? '?'} code=${code ?? 'null'} signal=${signal ?? 'null'} duration=${durationMs}ms text=${text.length}b thread=${threadId?.slice(0, 12) ?? 'none'}`);
+          logger.info('[codex-delegation] close', { convId, targetName, pid: proc.pid ?? '?', code: code ?? 'null', signal: signal ?? 'null', durationMs, textBytes: text.length, thread: threadId?.slice(0, 12) ?? 'none' });
           settle(() => resolveP({ text, threadId, costUsd: 0 }));
         });
       });
@@ -2959,7 +2960,7 @@ async function runAgentTurn(
 
     // If timeout and we have a session to resume, retry
     if (isTimeout && sessionId && attempt < MAX_RETRIES) {
-      console.log(`[delegation] ${targetName} timed out (attempt ${attempt + 1}), will retry with session ${sessionId.slice(0, 12)}...`);
+      logger.info('[delegation] timed out, will retry', { convId, targetName, attempt: attempt + 1, session: sessionId.slice(0, 12) });
       continue; // next iteration of retry loop
     }
 
