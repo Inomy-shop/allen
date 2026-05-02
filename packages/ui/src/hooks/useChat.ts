@@ -626,7 +626,7 @@ export function useChat() {
     setStreaming(false);
   }, []);
 
-  const sendMessage = useCallback(async (content: string, overrideSessionId?: string, agent?: string) => {
+  const sendMessage = useCallback(async (content: string, overrideSessionId?: string, agent?: string, cwd?: string) => {
     const sessionId = overrideSessionId || activeSessionId;
     if (!sessionId || streaming) return;
 
@@ -655,7 +655,7 @@ export function useChat() {
       const response = await fetch(api.sendMessageUrl(sessionId), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', ...authHeaders() },
-        body: JSON.stringify({ content, agent }),
+        body: JSON.stringify({ content, agent, ...(cwd ? { cwd } : {}) }),
         signal: abortController.signal,
       });
 

@@ -388,7 +388,7 @@ export class ChatService {
     return { data, hasMore };
   }
 
-  async sendMessage(sessionId: string, content: string, res: Response, agent?: string): Promise<void> {
+  async sendMessage(sessionId: string, content: string, res: Response, agent?: string, cwd?: string): Promise<void> {
     const session = await this.sessions.findOne({ _id: new ObjectId(sessionId) });
     if (!session) { res.status(404).json({ error: 'Session not found' }); return; }
 
@@ -412,7 +412,7 @@ export class ChatService {
     activeQueries.set(sessionId, entry);
     res.on('close', () => { entry.listeners.delete(res); });
 
-    this.runLLM(sessionId, assistantMsgId, content, entry, agent).catch(() => {});
+    this.runLLM(sessionId, assistantMsgId, content, entry, agent, 0, cwd).catch(() => {});
   }
 
   /**
@@ -609,7 +609,7 @@ User: ${userMessage.slice(0, 500)}`;
   /**
    * Run LLM via Anthropic Messages API with native tool calling.
    */
-  private async runLLM(sessionId: string, assistantMsgId: string, content: string, entry: ActiveQuery, agent?: string, retryCount = 0): Promise<void> {
+  private async runLLM(sessionId: string, assistantMsgId: string, content: string, entry: ActiveQuery, agent?: string, retryCount = 0, cwd?: string): Promise<void> {
     const saveInterval = setInterval(() => {
       if (entry.currentText) {
         this.messages.updateOne(
@@ -657,6 +657,11 @@ User: ${userMessage.slice(0, 500)}`;
       // If no workspace linked, use @repo mention path as cwd
       if (!resolvedCwd && mentionRepoPath) {
         resolvedCwd = mentionRepoPath;
+      }
+
+      // Final fallback: use agent-provided cwd (for non-builtin agents with sourceRepoPath)
+      if (!resolvedCwd && cwd) {
+        resolvedCwd = cwd;
       }
 
       // Register active session with resolved cwd — ALL tools in the chain read this
@@ -885,7 +890,7 @@ User: ${userMessage.slice(0, 500)}`;
           { $unset: { llmSessionId: '' } },
         ).catch(() => {});
         // Retry the same message — runLLM will see no resumeSessionId and start fresh
-        return this.runLLM(sessionId, assistantMsgId, content, entry, agent, retryCount + 1);
+        return this.runLLM(sessionId, assistantMsgId, content, entry, agent, retryCount + 1, cwd);
       }
 
       // Auto-retry on timeout: resume the session with "continue" prompt
