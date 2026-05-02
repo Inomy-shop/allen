@@ -986,6 +986,8 @@ export default function ExecutionDetailPage() {
     .filter(([, nodeDef]) => ((nodeDef as any)?.type ?? 'agent') === 'agent')
     .map(([name]) => name);
 
+  const firstNode = agentNodeNames[0] ?? execution.completedNodes?.[0] ?? undefined;
+
   return (
     <div className="flex flex-col h-full">
       {/* Top bar — matches handoff/pages/detail-views.jsx ExecutionDetailV2 */}
@@ -1479,6 +1481,11 @@ export default function ExecutionDetailPage() {
         onTextChange={setFeedbackText}
         onTargetNodesChange={setFeedbackTargetNodes}
         onSubmit={handleAppendFeedback}
+        canRun={execution.status === 'failed'}
+        runBusy={resumeBusy}
+        firstNode={firstNode}
+        completedNodes={execution.completedNodes ?? []}
+        onRunFromNode={handleRetryFrom}
       />
       <ArtifactsDrawer
         rootType="workflow"

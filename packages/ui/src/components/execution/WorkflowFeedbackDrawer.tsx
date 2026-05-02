@@ -1,6 +1,6 @@
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { MessageSquare, X as XIcon } from 'lucide-react';
+import { MessageSquare, X as XIcon, RotateCcw, ChevronDown } from 'lucide-react';
 import { useResizable } from '../../hooks/useResizable';
 
 export interface WorkflowFeedbackEntry {
@@ -24,6 +24,11 @@ interface Props {
   onTextChange: (value: string) => void;
   onTargetNodesChange: (value: string[]) => void;
   onSubmit: () => void;
+  canRun?: boolean;
+  runBusy?: boolean;
+  firstNode?: string;
+  completedNodes?: string[];
+  onRunFromNode?: (node: string) => void;
 }
 
 export default function WorkflowFeedbackDrawer({
@@ -39,6 +44,11 @@ export default function WorkflowFeedbackDrawer({
   onTextChange,
   onTargetNodesChange,
   onSubmit,
+  canRun,
+  runBusy,
+  firstNode,
+  completedNodes,
+  onRunFromNode,
 }: Props) {
   const { size: drawerWidth, handleMouseDown: drawerResizeStart } = useResizable({
     direction: 'horizontal',
@@ -47,6 +57,8 @@ export default function WorkflowFeedbackDrawer({
     maxSize: 1200,
     side: 'end',
   });
+
+  const [runPickerOpen, setRunPickerOpen] = useState(false);
 
   useEffect(() => {
     if (!open) return;
@@ -159,6 +171,61 @@ export default function WorkflowFeedbackDrawer({
                   <MessageSquare className="w-3.5 h-3.5" />
                   {busy ? 'Adding...' : 'Add Feedback'}
                 </button>
+              </div>
+            </div>
+          )}
+
+          {canRun && onRunFromNode && (
+            <div className="border border-app bg-app-card rounded-lg p-3 space-y-3">
+              <div className="text-[11px] font-mono text-theme-subtle">
+                Resume execution from a node
+              </div>
+              <div className="flex items-center gap-2">
+                {firstNode && (
+                  <button
+                    onClick={() => onRunFromNode(firstNode)}
+                    disabled={runBusy}
+                    className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-[11px] font-mono bg-accent-blue text-white hover:opacity-90 disabled:opacity-40 disabled:cursor-not-allowed transition-opacity"
+                    title={`Resume execution from ${firstNode}`}
+                  >
+                    <RotateCcw className="w-3 h-3" />
+                    {runBusy ? 'Resuming…' : `Run from ${firstNode}`}
+                  </button>
+                )}
+                {completedNodes && completedNodes.length > 0 && (
+                  <div className="relative">
+                    <button
+                      onClick={() => setRunPickerOpen((v) => !v)}
+                      disabled={runBusy}
+                      className="inline-flex items-center gap-1 px-2 py-1.5 rounded-full text-[11px] font-mono bg-app-muted text-theme-primary hover:bg-surface-200 disabled:opacity-40 transition-colors"
+                      title="Resume from another node"
+                    >
+                      Other node <ChevronDown className="w-3 h-3" />
+                    </button>
+                    {runPickerOpen && (
+                      <div
+                        className="absolute left-0 top-full mt-1 w-56 rounded-lg border border-app bg-surface shadow-lg py-1 z-50"
+                        onMouseLeave={() => setRunPickerOpen(false)}
+                      >
+                        <div className="px-3 py-1.5 overline border-b border-app">
+                          Rewind to before…
+                        </div>
+                        {[...completedNodes].reverse().map((n: string) => (
+                          <button
+                            key={n}
+                            onClick={() => {
+                              setRunPickerOpen(false);
+                              onRunFromNode(n);
+                            }}
+                            className="w-full text-left px-3 py-1.5 text-[11px] font-mono text-theme-primary hover:bg-app-muted transition-colors"
+                          >
+                            {n}
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                )}
               </div>
             </div>
           )}
