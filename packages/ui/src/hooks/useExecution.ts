@@ -111,18 +111,27 @@ export function useExecution(id: string | undefined) {
         // replay, so events emitted before the subscriber connects are lost,
         // and the auto-select logic never finds a running-status entry to
         // pin the right pane to.
+        //
+        // IMPORTANT: currentNodes takes priority over trace-derived status.
+        // On retry, a node already has a completed trace from its first run,
+        // but if it's in currentNodes, it's about to run again — override
+        // the trace status with 'running'.
         if (Array.isArray(exec.currentNodes)) {
           for (const name of exec.currentNodes) {
-            if (name === 'END' || map.has(name)) continue;
+            if (name === 'END') continue;
             // Attempt counter mirrors engine.ts:617-618 — count of prior
             // completed attempts + 1, so retries show the right number.
             const priorAttempts = (exec.completedNodes ?? []).filter((n: string) => n === name).length;
+            const existing = map.get(name);
             map.set(name, {
               name,
               status: 'running',
               attempt: priorAttempts + 1,
-              streamText: '',
-              activity: [],
+              streamText: existing?.streamText ?? '',
+              activity: existing?.activity ?? [],
+              output: existing?.output,
+              cost: existing?.cost,
+              durationMs: existing?.durationMs,
             });
           }
         }
@@ -452,19 +461,20 @@ export function useExecution(id: string | undefined) {
         case 'node_retrying': {
           if (!node) break;
           const existing = next.get(node);
-          if (existing) {
-            next.set(node, {
-              ...existing,
-              status: 'running',
-              attempt: e.data.attempt ?? (existing.attempt + 1),
-              streamText: '',
-              activity: [],
-              // Clear prompt/inputState — a new node_started event will
-              // arrive shortly with the fresh retry prompt.
-              renderedPrompt: undefined,
-              inputState: undefined,
-            });
-          }
+          next.set(node, {
+            name: node,
+            status: 'running',
+            attempt: e.data.attempt ?? (existing?.attempt ?? 0) + 1,
+            streamText: '',
+            activity: [],
+            output: existing?.output,
+            cost: existing?.cost,
+            durationMs: existing?.durationMs,
+            // Clear prompt/inputState — the engine will send fresh context
+            // when the node re-enters executeSingleNode.
+            renderedPrompt: undefined,
+            inputState: undefined,
+          });
           break;
         }
 
