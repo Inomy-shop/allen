@@ -294,7 +294,7 @@ export default function ExecutionListPage() {
                         </button>
                       )}
                       {/* Retry from failed node */}
-                      {exec.status === 'failed' && exec.failedNode && (
+                      {exec.status === 'failed' && exec.resumable && exec.failedNode && (
                         <button
                           onClick={async () => {
                             await api.retryFrom(exec.id, exec.failedNode);
@@ -306,6 +306,20 @@ export default function ExecutionListPage() {
                           <RotateCcw className="w-3.5 h-3.5" />
                         </button>
                       )}
+                      {/* Resume a cancelled execution from its last checkpoint */}
+                      {exec.status === 'cancelled' && exec.resumable && (
+                          <button
+                            onClick={async () => {
+                              const lastNode = exec.completedNodes[exec.completedNodes.length - 1];
+                              await api.retryFrom(exec.id, lastNode);
+                              refresh();
+                            }}
+                            className="p-1.5 rounded text-accent-yellow hover:bg-accent-yellow/10 transition-colors"
+                            title="Resume from last checkpoint"
+                          >
+                            <RotateCcw className="w-3.5 h-3.5" />
+                          </button>
+                        )}
                       {/* Export traces */}
                       <button
                         onClick={() => handleExport(exec.id)}
