@@ -431,10 +431,15 @@ export const dashboard = {
 export const chat = {
   listSessions: () => request<any[]>('/chat/sessions'),
   providers: () => request<any[]>('/chat/providers'),
-  createSession: (provider?: string, model?: string, agentOverrides?: Record<string, unknown>) =>
+  createSession: (provider?: string, model?: string, agentOverrides?: Record<string, unknown>, repoId?: string) =>
     request<any>('/chat/sessions', {
       method: 'POST',
-      body: JSON.stringify({ provider, model, ...(agentOverrides ? { agentOverrides } : {}) }),
+      body: JSON.stringify({
+        provider,
+        model,
+        ...(agentOverrides ? { agentOverrides } : {}),
+        ...(repoId ? { repoId } : {}),
+      }),
     }),
   getSession: (id: string) => request<any>(`/chat/sessions/${id}`),
   getMessages: (id: string, params?: Record<string, string>) => {

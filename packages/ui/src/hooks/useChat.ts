@@ -19,6 +19,10 @@ export interface ChatSession {
     reasoningEffort?: 'off' | 'low' | 'medium' | 'high' | 'max' | null;
     planMode?: boolean | null;
   };
+  /** Repo associated with this session (set at creation time, immutable). */
+  repoId?: string;
+  repoPath?: string;
+  repoName?: string;
   /** Where the session was created from. Slack-sourced sessions are read-only in the UI. */
   source?: 'ui' | 'slack';
   /** Slack thread metadata for sessions sourced from Slack. */
@@ -557,8 +561,8 @@ export function useChat() {
   }, [streamText]);
 
   const createSession = useCallback(
-    async (provider?: string, model?: string, agentOverrides?: Record<string, unknown>) => {
-      const session = await api.createSession(provider, model, agentOverrides);
+    async (provider?: string, model?: string, agentOverrides?: Record<string, unknown>, repoId?: string) => {
+      const session = await api.createSession(provider, model, agentOverrides, repoId);
       setSessions(prev => [session, ...prev]);
       setActiveSessionId(session._id);
       setMessages([]);
