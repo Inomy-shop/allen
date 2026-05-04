@@ -255,7 +255,15 @@ function AgentExecutionView({ execution, agentName, traces, id, liveToolCalls, r
     execution.sessions?.[agentName]
     ?? trace?.output?.session_id
     ?? undefined;
-  const canResume = !!sessionId && (execution.status === 'completed' || execution.status === 'failed');
+  // Resume gating:
+  //   - completed: requires sessionId (continuing a successful run only makes
+  //     sense if we have the session to thread the new prompt onto).
+  //   - failed / cancelled: always resumable. If sessionId is missing
+  //     (e.g. SIGTERM before the SDK emitted its session marker), the
+  //     backend silently starts a fresh session re-run.
+  const canResume =
+    (execution.status === 'failed' || execution.status === 'cancelled')
+    || (!!sessionId && execution.status === 'completed');
 
   const handleResume = async () => {
     const trimmed = resumePrompt.trim();

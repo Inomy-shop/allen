@@ -1378,7 +1378,10 @@ async function runSpawnInBackground(
         if (raced.result.done) break;
         const msg = raced.result.value;
 
-        if ('session_id' in msg && msg.session_id) sessionId = msg.session_id as string;
+        if ('session_id' in msg && msg.session_id) {
+          sessionId = msg.session_id as string;
+          currentResumeSession = sessionId;
+        }
 
         if (msg.type === 'assistant') {
           const blocks = (msg as any).message?.content as Array<{ type: string; text?: string; name?: string; input?: unknown; id?: string }> ?? [];
@@ -1489,14 +1492,21 @@ async function runSpawnInBackground(
     }
 
     const durationMs = Date.now() - startMs;
+    // Persist sessionId on failure too — without this, an agent that emitted
+    // its session marker but later crashed/timed out / got SIGTERM'd loses
+    // its session id and becomes un-resumable.
+    const failedSessionId = currentResumeSession;
     await db.collection('executions').updateOne(
       { id: executionId },
-      { $set: { status: 'failed', errorMessage: errorMsg, durationMs, completedAt: new Date() } },
+      { $set: {
+        status: 'failed', errorMessage: errorMsg, durationMs, completedAt: new Date(),
+        ...(failedSessionId ? { [`sessions.${agentName}`]: failedSessionId } : {}),
+      } },
     );
     await db.collection('execution_traces').insertOne({
       executionId, node: agentName, attempt: baseAttempt + attempt, status: 'failed', type: 'agent', agent: agentName,
       inputState: { prompt }, renderedPrompt: prompt, rawResponse: '',
-      output: { error: errorMsg },
+      output: { error: errorMsg, session_id: failedSessionId },
       activity: activity.map(a => ({ ...a, type: a.type as any, content: a.tool ?? '' })),
       cost: { actual: 0, estimated: 0, model, method: 'sdk_reported' as const },
       durationMs, startedAt: new Date(startMs), completedAt: new Date(),
@@ -1525,17 +1535,25 @@ export async function resumeAgentExecution(
   const exec = await db.collection('executions').findOne({ id: executionId });
   if (!exec) return { error: `Execution ${executionId} not found` };
 
-  // Agent name is the sole currentNode/completedNode for a spawn_agent execution.
+  // Agent name resolution. The SIGTERM-before-session case can leave both
+  // currentNodes and completedNodes empty, so fall back to the original
+  // input or the workflowName slug ('chat:spawn_agent/<name>').
+  const wfName = (exec.workflowName as string | undefined) ?? '';
   const agentName =
     (exec.completedNodes as string[] | undefined)?.[0] ??
-    (exec.currentNodes as string[] | undefined)?.[0];
+    (exec.currentNodes as string[] | undefined)?.[0] ??
+    ((exec.input as Record<string, unknown> | undefined)?.agent_name as string | undefined) ??
+    (wfName.includes(':spawn_agent/') ? wfName.split(':spawn_agent/')[1] : undefined);
   if (!agentName) return { error: 'Cannot resolve agent name for this execution' };
 
   const role = await db.collection('agents').findOne({ name: agentName });
   if (!role) return { error: `Agent "${agentName}" not found` };
 
+  // Session id may be absent if the agent process was killed before the SDK
+  // emitted its session marker (e.g. exit 143 / SIGTERM). In that case we
+  // start a fresh session: the user gets a new attempt that re-runs from
+  // scratch with their new prompt instead of being stuck on a dead execution.
   const sessionId = (exec.sessions as Record<string, string> | undefined)?.[agentName];
-  if (!sessionId) return { error: 'No session id on this execution — agent cannot resume' };
 
   // Next attempt = max(existing attempts) + 1.
   const lastTrace = await db.collection('execution_traces')
