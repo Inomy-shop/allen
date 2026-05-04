@@ -167,40 +167,6 @@ function decorateChildRow(
   };
 }
 
-/**
- * Pure function — never throws. Computes resume eligibility from any execution record.
- * Exported for unit testing.
- */
-export function computeResumability(exec: Record<string, unknown>): {
-  resumable: boolean;
-  resumeBlockedReason?: string;
-} {
-  const status = exec.status as string | undefined;
-  if (status === 'failed') {
-    return exec.failedNode
-      ? { resumable: true }
-      : {
-          resumable: false,
-          resumeBlockedReason:
-            'No failed node was recorded; the resume point cannot be determined.',
-        };
-  }
-  if (status === 'cancelled') {
-    const completedNodes = (exec.completedNodes as string[] | undefined) ?? [];
-    return completedNodes.length > 0
-      ? { resumable: true }
-      : {
-          resumable: false,
-          resumeBlockedReason:
-            'Execution was cancelled before any nodes completed. No resume point is available.',
-        };
-  }
-  return {
-    resumable: false,
-    resumeBlockedReason: `Execution is in '${status ?? 'unknown'}' state and cannot be resumed.`,
-  };
-}
-
 export class ExecutionService {
   private db: Db;
   private stateManager: StateManager;
@@ -379,10 +345,7 @@ export class ExecutionService {
     if (filter.workflowName) query.workflowName = filter.workflowName;
 
     const results = await this.stateManager.listExecutions(query);
-    return (results as unknown as Record<string, unknown>[]).map(r => ({
-      ...r,
-      ...computeResumability(r),
-    }));
+    return results as unknown as Record<string, unknown>[];
   }
 
   /**
@@ -437,20 +400,12 @@ export class ExecutionService {
       skip: opts.skip,
       limit: opts.limit,
     });
-    return {
-      items: (items as unknown as Record<string, unknown>[]).map(r => ({
-        ...r,
-        ...computeResumability(r),
-      })),
-      total,
-    };
+    return { items: items as unknown as Record<string, unknown>[], total };
   }
 
   async getById(id: string): Promise<Record<string, unknown> | null> {
     const result = await this.stateManager.getExecution(id);
-    if (!result) return null;
-    const res = result as unknown as Record<string, unknown>;
-    return { ...res, ...computeResumability(res) };
+    return result as unknown as Record<string, unknown> | null;
   }
 
   async listFeedback(executionId: string): Promise<WorkflowFeedbackEntry[]> {

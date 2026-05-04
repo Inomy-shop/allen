@@ -255,7 +255,15 @@ function AgentExecutionView({ execution, agentName, traces, id, liveToolCalls, r
     execution.sessions?.[agentName]
     ?? trace?.output?.session_id
     ?? undefined;
-  const canResume = !!sessionId && (execution.status === 'completed' || execution.status === 'failed' || execution.status === 'cancelled');
+  // Resume gating:
+  //   - completed: requires sessionId (continuing a successful run only makes
+  //     sense if we have the session to thread the new prompt onto).
+  //   - failed / cancelled: always resumable. If sessionId is missing
+  //     (e.g. SIGTERM before the SDK emitted its session marker), the
+  //     backend silently starts a fresh session re-run.
+  const canResume =
+    (execution.status === 'failed' || execution.status === 'cancelled')
+    || (!!sessionId && execution.status === 'completed');
 
   const handleResume = async () => {
     const trimmed = resumePrompt.trim();
@@ -986,23 +994,6 @@ export default function ExecutionDetailPage() {
     .filter(([, nodeDef]) => ((nodeDef as any)?.type ?? 'agent') === 'agent')
     .map(([name]) => name);
 
-  // For cancelled executions: find the node that was interrupted so we can
-  // surface it in the cancelled banner and the header Retry button.
-  // Priority: (1) first trace whose status is not completed/skipped — that's
-  // the node that was running when the execution was cancelled; (2) last entry
-  // in completedNodes — re-running it re-enters the graph from a known-good
-  // checkpoint even though it re-does that node's work.
-  const cancelledAtNode: string | undefined = execution.status === 'cancelled'
-    ? (() => {
-        const interrupted = (traces ?? []).find(
-          (t: any) => t.status !== 'completed' && t.status !== 'skipped',
-        );
-        if (interrupted) return interrupted.node as string;
-        const completed = execution.completedNodes as string[] | undefined;
-        return (completed && completed.length > 0) ? completed[completed.length - 1] : undefined;
-      })()
-    : undefined;
-
   return (
     <div className="flex flex-col h-full">
       {/* Top bar — matches handoff/pages/detail-views.jsx ExecutionDetailV2 */}
@@ -1140,18 +1131,13 @@ export default function ExecutionDetailPage() {
           <button onClick={handleExportTraces} className="btn-ghost text-xs" title="Export traces">
             <Download className="w-3.5 h-3.5" />
           </button>
-          {((execution.status === 'failed' && execution.failedNode) ||
-            (execution.status === 'cancelled' && execution.resumable && cancelledAtNode)) && (
+          {execution.status === 'failed' && execution.failedNode && (
             <button
-              onClick={() => handleRetryFrom(
-                execution.status === 'cancelled' ? cancelledAtNode! : execution.failedNode,
-              )}
-              disabled={resumeBusy}
+              onClick={() => handleRetryFrom(execution.failedNode)}
               className="btn-ghost text-xs text-accent-yellow"
-              title={execution.status === 'cancelled' ? 'Resume from last checkpoint' : 'Retry from failed node'}
+              title="Retry from failed node"
             >
-              <RotateCcw className="w-3.5 h-3.5 mr-1" />
-              {execution.status === 'cancelled' ? 'Resume' : 'Retry'}
+              <RotateCcw className="w-3.5 h-3.5 mr-1" /> Retry
             </button>
           )}
           {isLive && (
@@ -1267,85 +1253,6 @@ export default function ExecutionDetailPage() {
               </>
             )}
           </div>
-        </div>
-      )}
-
-      {/* Cancelled banner — similar to the failure banner but amber-tinted.
-          Shown when the execution was cancelled and there is a viable node
-          to resume from (either the interrupted node found in traces, or the
-          last completed node as a fallback). */}
-      {execution.status === 'cancelled' && cancelledAtNode && (
-        <div className="flex items-start gap-4 px-6 py-3 border-b border-accent-yellow/30 bg-accent-yellow/10">
-          <XCircle className="w-5 h-5 text-accent-yellow shrink-0 mt-0.5" />
-          <div className="flex-1 min-w-0">
-            <div className="text-xs font-heading font-semibold text-theme-primary">
-              CANCELLED AT <span className="font-mono text-accent-yellow">{cancelledAtNode}</span>
-              <button
-                onClick={() => { setSelectedNode(cancelledAtNode); }}
-                className="ml-3 text-[10px] font-mono underline text-theme-muted hover:text-theme-primary"
-                title="Jump to cancelled node in the graph"
-              >
-                Inspect →
-              </button>
-            </div>
-            <div className="text-[10px] font-mono text-theme-subtle mt-1">
-              Resume rewinds state to the checkpoint taken before the selected node and re-enters the graph from there. Upstream outputs and agent sessions are preserved.
-            </div>
-          </div>
-          <div className="flex items-center gap-2 shrink-0 relative">
-            <button
-              onClick={() => handleRetryFrom(cancelledAtNode)}
-              disabled={resumeBusy}
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-[11px] font-mono bg-accent-yellow text-surface-900 hover:opacity-90 disabled:opacity-40 disabled:cursor-not-allowed transition-opacity"
-              title={`Resume execution from ${cancelledAtNode}`}
-            >
-              <RotateCcw className="w-3 h-3" />
-              {resumeBusy ? 'Resuming…' : `Continue from ${cancelledAtNode}`}
-            </button>
-            {execution.completedNodes && execution.completedNodes.length > 0 && (
-              <>
-                <button
-                  onClick={() => setResumePickerOpen(v => !v)}
-                  disabled={resumeBusy}
-                  className="inline-flex items-center gap-1 px-2 py-1.5 rounded-full text-[11px] font-mono bg-app-muted text-theme-primary hover:bg-surface-200 disabled:opacity-40 transition-colors"
-                  title="Resume from an earlier node"
-                >
-                  Other node <ChevronDown className="w-3 h-3" />
-                </button>
-                {resumePickerOpen && (
-                  <div
-                    className="absolute right-0 top-full mt-1 w-56 rounded-lg border border-app bg-surface shadow-lg py-1 z-50"
-                    onMouseLeave={() => setResumePickerOpen(false)}
-                  >
-                    <div className="px-3 py-1.5 overline border-b border-app">
-                      Rewind to before…
-                    </div>
-                    {[...execution.completedNodes].reverse().map((n: string) => (
-                      <button
-                        key={n}
-                        onClick={() => handleRetryFrom(n)}
-                        className="w-full text-left px-3 py-1.5 text-[11px] font-mono text-theme-primary hover:bg-app-muted transition-colors"
-                      >
-                        {n}
-                      </button>
-                    ))}
-                  </div>
-                )}
-              </>
-            )}
-          </div>
-        </div>
-      )}
-
-      {execution.status === 'cancelled' && !execution.resumable && (
-        <div className="rounded-lg border border-border bg-muted/40 p-4">
-          <h3 className="text-sm font-semibold text-muted-foreground uppercase tracking-wide">
-            Cannot Resume
-          </h3>
-          <p className="mt-1 text-sm text-muted-foreground">
-            {(execution.resumeBlockedReason as string | undefined) ??
-              'This execution cannot be resumed.'}
-          </p>
         </div>
       )}
 
