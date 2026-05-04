@@ -913,6 +913,16 @@ export default function ExecutionDetailPage() {
     URL.revokeObjectURL(url);
   }, [id]);
 
+  // Augment traces with synthetic 'running' entries for nodes currently
+  // executing. Traces are only persisted after completion, so without this
+  // running rerun nodes are invisible in the Gantt timeline.
+  // Must be declared BEFORE any early-return below to keep hook order stable
+  // across renders (loading → loaded transitions otherwise change hook count).
+  const tracesForTimeline = useMemo(
+    () => buildTracesForTimeline(traces ?? [], nodeStates),
+    [traces, nodeStates],
+  );
+
   if (loading) {
     return <div className="flex items-center justify-center h-full text-theme-muted font-mono text-sm">LOADING...</div>;
   }
@@ -990,14 +1000,6 @@ export default function ExecutionDetailPage() {
     if (estimated > 0 || actual != null) return { estimated, actual };
     return execution.cost;
   })();
-
-  // Augment traces with synthetic 'running' entries for nodes currently
-  // executing. Traces are only persisted after completion, so without this
-  // running rerun nodes are invisible in the Gantt timeline.
-  const tracesForTimeline = useMemo(
-    () => buildTracesForTimeline(traces ?? [], nodeStates),
-    [traces, nodeStates],
-  );
 
   const agentNodeNames = Object.entries((workflow?.parsed?.nodes ?? workflow?.nodes ?? {}) as Record<string, any>)
     .filter(([, nodeDef]) => ((nodeDef as any)?.type ?? 'agent') === 'agent')
