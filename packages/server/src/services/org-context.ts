@@ -1,0 +1,104 @@
+/**
+ * Org Context — builds a live, description-rich org chart block for
+ * injection into agent system prompts at runtime.
+ *
+ * Why this exists:
+ *   Hand-writing each lead's delegation targets into `org-seed.ts` means every
+ *   org change (add/rename/remove an agent) requires editing every mention of
+ *   that agent across every lead prompt. Instead, we keep `canDelegateTo` as
+ *   the allowlist in the DB and render the human-readable description block
+ *   from the current agents/teams rows at prompt-build time.
+ *
+ * Used by:
+ *   - chat.service.ts buildAgentSystemPrompt (when a lead/agent is selected)
+ *   - chat.service.ts getSystemPrompt (Allen Assistant default)
+ *   - engine/node-executor.ts (workflow-mode agent calls)
+ */
+
+import type { Db } from 'mongodb';
+
+export interface OrgContextOptions {
+  /** Render a per-agent "direct delegation targets" section for this agent. */
+  forAgent?: string;
+  /** Render the full org chart (all teams + members). Default: true. */
+  includeFullChart?: boolean;
+  /** Include the meta team in the chart. Default: true. */
+  includeMeta?: boolean;
+}
+
+/**
+ * Build a flat, description-rich org chart block for runtime prompt injection.
+ * Returns an empty string if both includeFullChart is false and there are no
+ * delegation targets to render.
+ */
+export async function buildOrgContextBlock(
+  db: Db,
+  options: OrgContextOptions = {},
+): Promise<string> {
+  try {
+    const [teams, agents] = await Promise.all([
+      db.collection('teams').find({}).toArray(),
+      db.collection('agents').find({}).toArray(),
+    ]);
+
+    const agentByName = new Map<string, any>(agents.map((a: any) => [a.name, a]));
+    const includeMeta = options.includeMeta !== false;
+    const includeChart = options.includeFullChart !== false;
+    const visibleTeams = teams.filter((t: any) => includeMeta || t.name !== 'meta');
+
+    const lines: string[] = [];
+
+    // ── Flat org chart ──
+    if (includeChart) {
+      lines.push('## Organisation');
+      lines.push('');
+      for (const team of visibleTeams) {
+        const members = agents
+          .filter((a: any) => a.teamName === team.name)
+          .sort((a: any, b: any) => {
+            if (a.teamRole === 'lead' && b.teamRole !== 'lead') return -1;
+            if (b.teamRole === 'lead' && a.teamRole !== 'lead') return 1;
+            return (a.name as string).localeCompare(b.name as string);
+          });
+        if (members.length === 0) continue;
+
+        const teamLabel = team.displayName ?? team.name;
+        const teamDesc = team.description ? ` — ${team.description}` : '';
+        lines.push(`**${teamLabel} team**${teamDesc}`);
+
+        for (const m of members) {
+          const role = m.teamRole === 'lead' ? ' (lead)' : '';
+          const desc = (m.description as string) ?? (m.displayName as string) ?? m.name;
+          lines.push(`- ${m.name}${role} — ${desc}`);
+        }
+        lines.push('');
+      }
+    }
+
+    // ── Per-agent delegation targets ──
+    if (options.forAgent) {
+      const self = agentByName.get(options.forAgent);
+      const targets = ((self?.canDelegateTo as string[] | undefined) ?? []).filter(Boolean);
+      if (targets.length > 0) {
+        lines.push('## Your delegation targets');
+        lines.push('');
+        lines.push('Call `delegate_to_agent(agent_name, task)` with one of:');
+        lines.push('');
+        for (const t of targets) {
+          const ag = agentByName.get(t);
+          if (!ag) continue;
+          const team = ag.teamName ? ` [${ag.teamName}]` : '';
+          const desc = (ag.description as string) ?? (ag.displayName as string) ?? ag.name;
+          lines.push(`- ${ag.name}${team} — ${desc}`);
+        }
+        lines.push('');
+        lines.push('Pick the most specific target. Do NOT do the work yourself if a specialist exists.');
+      }
+    }
+
+    return lines.join('\n').trim();
+  } catch (err) {
+    console.error('[org-context] Failed to build org context block:', (err as Error).message);
+    return '';
+  }
+}

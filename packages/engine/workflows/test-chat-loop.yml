@@ -1,0 +1,105 @@
+name: test-chat-loop
+description: >
+  Real-LLM smoke test for the Human Intervention Protocol. Exercises the
+  full round-trip: user asks a question → LLM agent answers → workflow
+  pauses at a 🟢 approval-severity human node asking "another question?"
+  → loop back if yes, end if no.
+
+  Unlike test-human-intervention.yml (which is pure human nodes with no
+  agent calls), this workflow actually spawns a real Claude-CLI agent
+  (test-chat-helper on haiku, so it's cheap), so you can verify:
+
+    1. Human intervention appears → user answers.
+    2. The answered intervention's data flows into the next agent node
+       via state (the user_question field becomes {{user_question}} in
+       the prompt).
+    3. The agent's response lands in state and is shown to the user in
+       the next intervention card.
+    4. A loop-back creates a fresh intervention each iteration (the
+       previous one moves to history).
+    5. The intervention sidebar on the execution page accumulates one
+       entry per iteration.
+
+  Run it any time you want to verify the HIP stays working end-to-end.
+  Each full loop costs ~$0.001 on haiku.
+
+version: 1
+
+context:
+  tools: []
+  concurrency: 5
+
+nodes:
+  ask_question:
+    type: human
+    fields:
+      - name: user_question
+        label: "Your question"
+        type: textarea
+        required: true
+    outputs:
+      user_question: "The question the user typed in this iteration."
+    prompt: |
+      🟡 Ask the agent a question.
+
+      This is a simple chat loop test. Type any question — the agent
+      (test-chat-helper on haiku) will answer it, then the workflow
+      will pause again and ask if you have another question. The
+      loop runs up to 10 iterations before ending.
+
+  answer_question:
+    agent: test-chat-helper
+    # Each loop iteration is a FRESH session — questions in this test
+    # workflow are independent ("what's X?" then "what's Y?"), not a
+    # continuing conversation. Explicitly opt out of session resume so
+    # the behavior is deterministic regardless of whether a previous
+    # iteration's session ID was captured in state.sessions.
+    #
+    # If you want to test the continuing-conversation pattern instead
+    # (agent remembers prior turns), set resume_on_retry: true AND
+    # verify that test-chat-helper's Claude-CLI spawn populates
+    # state.sessions[answer_question] on completion.
+    resume_on_retry: false
+    prompt: |
+      The user asked:
+
+      "{{user_question}}"
+
+      Answer clearly and concisely in plain prose. 2–4 sentences unless
+      the question genuinely needs more depth. No JSON, no code fences
+      unless the user asked for code, no delegation. Just answer.
+
+      Treat this as a standalone question — you don't have memory of
+      prior questions in this workflow run. Each iteration is fresh.
+    outputs:
+      agent_response: "The agent's conversational answer to the user's question."
+
+  confirm_continue:
+    type: human
+    fields:
+      - name: should_continue
+        label: "Another question?"
+        type: select
+        options: [yes, no]
+        required: true
+    outputs:
+      should_continue: "yes to loop back to ask_question, no to end the workflow."
+    prompt: |
+      🟢 The agent answered your question.
+
+      YOUR QUESTION:
+      {{user_question}}
+
+      AGENT'S ANSWER:
+      {{agent_response}}
+
+      Would you like to ask another question?
+        • yes → loops back to ask another question
+        • no  → ends the workflow
+
+edges:
+  - { from: START, to: ask_question }
+  - { from: ask_question, to: answer_question }
+  - { from: answer_question, to: confirm_continue }
+  - { from: confirm_continue, to: ask_question, condition: "should_continue == 'yes'", max_retries: 10 }
+  - { from: confirm_continue, to: END, condition: "should_continue == 'no'" }

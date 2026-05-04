@@ -1,0 +1,20 @@
+rules:
+  - match: [code, fix, build, implement, refactor, add, feature, bug]
+    has_input: [repo_path]
+    workflow: coding-agent
+
+  - match: [write, post, linkedin, twitter, blog, content, article]
+    workflow: research-and-write
+
+  - match: [analyze, report, how many, what percentage, distribution]
+    workflow: data-analysis
+
+  - match: [investigate, debug, why, root cause, failing, broken]
+    has_input: [repo_path]
+    workflow: investigate
+
+  - match: [review, audit, check]
+    has_input: [repo_path]
+    workflow: review-only
+
+fallback: ask-user

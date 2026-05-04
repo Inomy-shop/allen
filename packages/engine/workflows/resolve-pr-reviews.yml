@@ -1,0 +1,123 @@
+name: resolve-pr-reviews
+description: >
+  Resolves unresolved CodeRabbit (and other review-bot) comments on a
+  GitHub pull request. Two nodes, both agents, both MCP-first:
+    1. pr-workspace-resolver — finds the existing workspace (Flow A) or
+       creates a fresh one from the PR branch (Flow B, manual trigger).
+    2. pr-review-bot — fetches comments, applies fixes (optionally
+       delegating to specialists), runs tests, commits+pushes, posts a
+       summary comment, resolves threads, and persists sync state.
+
+  Human touches per run (steady state): 0 when tests pass. 1 when tests
+  fail (push_anyway or abort).
+
+version: 1
+
+context:
+  requires: [repo]
+  tools: [filesystem, git, terminal]
+  concurrency: 1
+
+input:
+  pr_url:
+    type: string
+    required: true
+    widget: text
+    label: PR URL
+    description: Full GitHub PR URL. https://github.com/<owner>/<repo>/pull/<number>
+    placeholder: "https://github.com/Kalpai-poc/allen/pull/42"
+  review_bot_logins:
+    type: string
+    required: false
+    widget: text
+    label: Review-bot logins (comma-separated)
+    description: GitHub logins whose comments should be resolved. Default covers CodeRabbit.
+    default: "coderabbitai,coderabbitai[bot]"
+  already_processed_comment_ids:
+    type: string
+    required: false
+    widget: textarea
+    label: Processed comment IDs (JSON array)
+    description: Auto-populated by the sweep. Manual runs leave this blank to replay all comments.
+    default: "[]"
+  chat_session_id:
+    type: string
+    required: false
+    widget: text
+    description: Originating chat session ID (auto-populated from chat).
+  started_by_user_id:
+    type: string
+    required: false
+    widget: text
+    description: User ID who started the run (for Slack DM routing of interventions).
+
+nodes:
+
+  # ── 1. Resolve (Flow A) or create (Flow B) the workspace ─────────
+  resolve_workspace:
+    agent: pr-workspace-resolver
+    prompt: |
+      Resolve or create the workspace for this PR.
+
+      pr_url: {{pr_url}}
+
+      Follow your contract. End with the JSON block exactly.
+    outputs:
+      flow: "workflow_owned | external | unsupported"
+      resolver_status: "ok | failed"
+      pr_id: "pull_requests _id"
+      workspace_id: "workspaces _id"
+      worktree_path: "absolute path to the git worktree"
+      pr_branch: "PR head branch"
+      pr_base_branch: "PR base branch"
+      pr_head_sha: "PR head commit SHA"
+      repo_id: "repos _id"
+      repo_path: "on-disk path of the main repo clone"
+      originating_execution_id: "for Flow A only"
+      workflow_context: "for Flow A only"
+      resolver_error: "empty on ok"
+
+  # ── 2. Fetch + apply + test + commit + push + reply + persist ──
+  resolve_reviews:
+    agent: pr-review-bot
+    resume_on_retry: true
+    retries: 1
+    prompt: |
+      Resolve all unresolved CodeRabbit comments for this PR, end to end.
+
+      pr_url:                       {{pr_url}}
+      pr_id:                        {{pr_id}}
+      flow:                         {{flow}}
+      worktree_path:                {{worktree_path}}
+      pr_branch:                    {{pr_branch}}
+      pr_base_branch:               {{pr_base_branch}}
+      pr_head_sha:                  {{pr_head_sha}}
+      review_bot_logins:            {{review_bot_logins}}
+      already_processed_comment_ids: {{already_processed_comment_ids}}
+
+      WORKFLOW CONTEXT (empty for external PRs):
+      {{workflow_context}}
+
+      Follow all 7 phases of your contract. Use MCP tools (github/linear/
+      aws/pipeline/allen) first — fall back to CLI only if the matching
+      MCP tool is absent. End with the required JSON block.
+    outputs:
+      overall_status: "resolved | no_comments | aborted_after_tests_failed | failed"
+      commit_sha: "SHA of the new commit (null if nothing was committed)"
+      comment_count: "Total unresolved CodeRabbit comments found"
+      applied: "Number of comments applied"
+      disagreed: "Number of comments the agent disagreed with"
+      skipped: "Number of comments skipped (needs human)"
+      threads_resolved: "Number of GitHub threads resolved"
+      test_status: "passed | failed | skipped | not_run"
+      resolutions: "Per-comment outcome array"
+      summary: "One-line summary"
+
+edges:
+  - { from: START, to: resolve_workspace }
+
+  # Resolver either routes forward or short-circuits on failure.
+  - { from: resolve_workspace, to: resolve_reviews, condition: "resolver_status == 'ok'" }
+  - { from: resolve_workspace, to: END, condition: "resolver_status == 'failed'" }
+
+  - { from: resolve_reviews, to: END }

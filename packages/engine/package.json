@@ -1,0 +1,28 @@
+{
+  "name": "@allen/engine",
+  "version": "0.1.0",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch",
+    "lint": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "dependencies": {
+    "@anthropic-ai/claude-code": "^1.0.0",
+    "@xenova/transformers": "^2.17.2",
+    "dotenv": "^17.4.0",
+    "filtrex": "^3.0.0",
+    "handlebars": "^4.7.8",
+    "js-yaml": "^4.1.0",
+    "mongodb": "^6.12.0"
+  },
+  "devDependencies": {
+    "@types/js-yaml": "^4.0.9",
+    "@types/node": "^22.0.0",
+    "vitest": "^2.1.8"
+  }
+}

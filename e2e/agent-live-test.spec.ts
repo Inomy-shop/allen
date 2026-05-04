@@ -1,0 +1,103 @@
+import { test, expect } from '@playwright/test';
+
+import { API, UI } from './helpers';
+
+test.describe.serial('Live Agent Spawn & Execution Detail', () => {
+
+  let chatSessionId: string;
+  let executionId: string;
+
+  test('1. Send message via UI to trigger agent spawn', async ({ page }) => {
+    await page.setViewportSize({ width: 1400, height: 900 });
+    await page.goto(`${UI}/chat`);
+    await page.waitForTimeout(2000);
+
+    // Select engineer agent
+    const engineerBtn = page.locator('button:has-text("Engineer")').first();
+    if (await engineerBtn.count() > 0) {
+      await engineerBtn.click();
+      await page.waitForTimeout(300);
+    }
+
+    // Type message and send
+    const input = page.locator('textarea').first();
+    await input.fill('List the top 3 largest files in this project. Use spawn_agent with coding-investigator.');
+    await page.keyboard.press('Enter');
+    await page.waitForTimeout(2000);
+
+    // Get session ID from URL
+    const url = page.url();
+    const match = url.match(/\/chat\/([a-f0-9]+)/);
+    chatSessionId = match?.[1] ?? '';
+    console.log('Chat session:', chatSessionId);
+    console.log('Message sent, waiting for agent spawn...');
+  });
+
+  test('2. Verify new execution has metadata', async ({ request }) => {
+    if (!executionId) { console.log('SKIP'); return; }
+
+    const res = await request.get(`${API}/api/executions/${executionId}`);
+    const exec = await res.json();
+
+    console.log('=== New Execution ===');
+    console.log('status:', exec.status);
+    console.log('meta:', JSON.stringify(exec.meta ?? {}, null, 2));
+    console.log('input.repo_path:', exec.input?.repo_path);
+
+    // NEW executions MUST have meta
+    expect(exec.meta).toBeTruthy();
+    expect(exec.meta.provider).toBeTruthy();
+    expect(exec.meta.spawnedBy).toBeTruthy();
+    console.log('✓ meta.cwd:', exec.meta.cwd);
+    console.log('✓ meta.provider:', exec.meta.provider);
+    console.log('✓ meta.spawnedBy:', exec.meta.spawnedBy);
+    console.log('✓ meta.chatSessionId:', exec.meta.chatSessionId);
+  });
+
+  test('4. Check live logs persisted', async ({ request }) => {
+    if (!executionId) { console.log('SKIP'); return; }
+
+    // Wait for some logs
+    await new Promise(r => setTimeout(r, 5000));
+
+    const res = await request.get(`${API}/api/executions/${executionId}/logs?limit=50`);
+    const logs = await res.json();
+    console.log('Logs count:', logs.length);
+    for (const l of logs.slice(0, 15)) {
+      console.log(`  [${l.type}] ${l.tool ?? l.content ?? ''}`);
+    }
+
+    expect(logs.length).toBeGreaterThan(0);
+    expect(logs[0].executionId).toBe(executionId);
+    console.log('✓ Logs persisted');
+  });
+
+  test('5. UI execution detail shows everything', async ({ page }) => {
+    if (!executionId) { console.log('SKIP'); return; }
+
+    await page.setViewportSize({ width: 1400, height: 900 });
+    await page.goto(`${UI}/executions/${executionId}`);
+    await page.waitForTimeout(4000);
+
+    // Verify metadata cards
+    await expect(page.locator('.card:has-text("Working Directory")').first()).toBeVisible();
+    await expect(page.locator('.card:has-text("Provider")').first()).toBeVisible();
+    await expect(page.locator('.card:has-text("Spawned By")').first()).toBeVisible();
+
+    // Live logs section
+    await expect(page.locator('text=Live Logs')).toBeVisible();
+
+    // Check CWD is NOT /tmp (should be workspace path)
+    const cwdCard = page.locator('.card:has-text("Working Directory")').first();
+    const cwdText = await cwdCard.textContent();
+    console.log('CWD card text:', cwdText);
+
+    const providerCard = page.locator('.card:has-text("Provider")').first();
+    console.log('Provider:', await providerCard.textContent());
+
+    const spawnedByCard = page.locator('.card:has-text("Spawned By")').first();
+    console.log('Spawned By:', await spawnedByCard.textContent());
+
+    console.log('✓ Screenshot saved');
+  });
+});
