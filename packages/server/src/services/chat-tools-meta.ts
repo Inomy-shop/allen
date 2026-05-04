@@ -1,23 +1,21 @@
 /**
  * Meta team chat tools — phase 4 of the teams architecture.
  *
- * These tools let the team-builder-agent and agent-builder-agent extend the
- * Allen org chart by creating teams and agents. They are gated by a
- * per-agent allow-list (see `assertCallerIsBuilder` below) — only the two
- * builder agents can call them. Every other agent gets a permission error.
+ * These tools let any agent extend the Allen org chart by creating teams,
+ * agents, and workflows. Normal validation and destructive-action safeguards
+ * are preserved; caller-agent allowlist checks have been removed.
  *
  * Tool catalog:
- *   read-only (any meta team agent can call):
+ *   read-only (any agent can call):
  *     - list_teams
  *     - list_team_members
  *     - get_team_blueprint
  *
- *   create_agent / update_agent / delete_agent — both builders may call
+ *   create_agent / update_agent / delete_agent — any agent may call
  *
- *   create_team / update_team / delete_team — only team-builder-agent may call
+ *   create_team / update_team / delete_team — any agent may call
  *
- * The "active session caller" is read from the active session registry, same
- * as how delegate_to_agent identifies who's calling it.
+ *   create_workflow / update_workflow — any agent may call
  */
 
 import type { Db } from 'mongodb';
@@ -41,77 +39,7 @@ function isConfirmed(value: unknown): boolean {
   return false;
 }
 
-// ── Permission gating ────────────────────────────────────────────────────────
-
-/** Tools that ONLY team-builder-agent can call (creates/destroys whole teams) */
-const TEAM_BUILDER_ONLY = new Set([
-  'create_team',
-  'update_team',
-  'delete_team',
-]);
-
-/** Tools that team-builder-agent OR agent-builder-agent can call (mutates agents) */
-const ANY_BUILDER = new Set([
-  'create_agent',
-  'update_agent',
-  'delete_agent',
-]);
-
-/** Tools that ONLY workflow-builder-agent can call (creates/updates workflows) */
-const WORKFLOW_BUILDER_ONLY = new Set([
-  'create_workflow',
-  'update_workflow',
-]);
-
-/**
- * Walk up the active-session registry to find which agent invoked this tool.
- * Returns the calling agent's name. Falls back to "assistant" if no agent
- * context (i.e., the user is calling it from a normal chat, not from inside
- * a delegated agent's turn).
- */
-function getCallerAgent(): string {
-  const ctx = getAnyActiveSession();
-  return ctx?.currentAgent ?? 'assistant';
-}
-
-/**
- * Throw a permission error if the current caller isn't allowed to invoke this tool.
- * Returns the caller agent name on success for downstream use.
- */
-function assertCallerCanCall(toolName: string): { ok: true; caller: string } | { ok: false; error: string } {
-  const caller = getCallerAgent();
-
-  if (TEAM_BUILDER_ONLY.has(toolName)) {
-    if (caller !== 'team-builder-agent') {
-      return {
-        ok: false,
-        error: `Permission denied: only team-builder-agent can call ${toolName}. Caller: "${caller}".`,
-      };
-    }
-  }
-
-  if (ANY_BUILDER.has(toolName)) {
-    if (caller !== 'team-builder-agent' && caller !== 'agent-builder-agent') {
-      return {
-        ok: false,
-        error: `Permission denied: only team-builder-agent or agent-builder-agent can call ${toolName}. Caller: "${caller}".`,
-      };
-    }
-  }
-
-  if (WORKFLOW_BUILDER_ONLY.has(toolName)) {
-    if (caller !== 'workflow-builder-agent') {
-      return {
-        ok: false,
-        error: `Permission denied: only workflow-builder-agent can call ${toolName}. Caller: "${caller}".`,
-      };
-    }
-  }
-
-  return { ok: true, caller };
-}
-
-// ── Read-only tools (no permission gating beyond meta-team membership at runtime) ──
+// ── Read-only tools ──────────────────────────────────────────────────────────
 
 const listTeamsTool: ChatTool = {
   name: 'list_teams',
@@ -186,11 +114,11 @@ const getTeamBlueprintTool: ChatTool = {
   },
 };
 
-// ── Team management tools (team-builder only) ─────────────────────────────────
+// ── Team management tools ─────────────────────────────────────────────────────
 
 const createTeamTool: ChatTool = {
   name: 'create_team',
-  description: 'Create a new team in the org chart. Only team-builder-agent can call this. The lead agent must already exist (call create_agent for the lead first, then create_team).',
+  description: 'Create a new team in the org chart. The lead agent must already exist (call create_agent for the lead first, then create_team).',
   destructive: true,
   inputSchema: {
     type: 'object',
@@ -205,9 +133,6 @@ const createTeamTool: ChatTool = {
     required: ['name', 'displayName', 'leadAgentName'],
   },
   async execute(args, db) {
-    const guard = assertCallerCanCall('create_team');
-    if (!guard.ok) return { error: guard.error };
-
     const name = args.name as string;
     const teamService = new TeamService(db);
 
@@ -256,7 +181,7 @@ const createTeamTool: ChatTool = {
 
 const updateTeamTool: ChatTool = {
   name: 'update_team',
-  description: 'Update a team\'s description, mission, or parent. The team slug and lead cannot be changed. Only team-builder-agent can call this. Built-in teams cannot be updated.',
+  description: 'Update a team\'s description, mission, or parent. The team slug and lead cannot be changed. Built-in teams cannot be updated.',
   destructive: true,
   inputSchema: {
     type: 'object',
@@ -270,9 +195,6 @@ const updateTeamTool: ChatTool = {
     required: ['name'],
   },
   async execute(args, db) {
-    const guard = assertCallerCanCall('update_team');
-    if (!guard.ok) return { error: guard.error };
-
     const name = args.name as string;
     const updates: Record<string, unknown> = {};
     if (args.displayName !== undefined) updates.displayName = args.displayName;
@@ -292,7 +214,7 @@ const updateTeamTool: ChatTool = {
 
 const deleteTeamTool: ChatTool = {
   name: 'delete_team',
-  description: 'Delete a team from the org chart. Refuses if the team has any members (delete or move them first). Refuses to delete built-in teams. Only team-builder-agent can call this. Requires confirm=true to actually run.',
+  description: 'Delete a team from the org chart. Refuses if the team has any members (delete or move them first). Refuses to delete built-in teams. Requires confirm=true to actually run.',
   destructive: true,
   inputSchema: {
     type: 'object',
@@ -303,9 +225,6 @@ const deleteTeamTool: ChatTool = {
     required: ['name', 'confirm'],
   },
   async execute(args, db) {
-    const guard = assertCallerCanCall('delete_team');
-    if (!guard.ok) return { error: guard.error };
-
     if (!isConfirmed(args.confirm)) {
       return { error: 'delete_team requires confirm=true (boolean). This is a safety check — confirm with the user first.' };
     }
@@ -319,11 +238,11 @@ const deleteTeamTool: ChatTool = {
   },
 };
 
-// ── Agent management tools (either builder) ──────────────────────────────────
+// ── Agent management tools ────────────────────────────────────────────────────
 
 const createAgentTool: ChatTool = {
   name: 'create_agent',
-  description: 'Create a new agent in an existing team. team-builder-agent and agent-builder-agent can call this. The team must already exist. The agent slug must be unique system-wide. The new agent\'s teamName and teamRole are set from the args.',
+  description: 'Create a new agent in an existing team. The team must already exist. The agent slug must be unique system-wide. The new agent\'s teamName and teamRole are set from the args.',
   destructive: true,
   inputSchema: {
     type: 'object',
@@ -345,9 +264,6 @@ const createAgentTool: ChatTool = {
     required: ['name', 'displayName', 'teamName', 'teamRole', 'system', 'provider'],
   },
   async execute(args, db) {
-    const guard = assertCallerCanCall('create_agent');
-    if (!guard.ok) return { error: guard.error };
-
     const name = args.name as string;
     const teamName = args.teamName as string;
     const teamRole = args.teamRole as 'lead' | 'member' | undefined;
@@ -399,7 +315,7 @@ const createAgentTool: ChatTool = {
         icon: args.icon ?? 'bot',
         color: args.color ?? '#3b82f6',
         isBuiltIn: false,
-        createdBy: guard.caller === 'team-builder-agent' ? 'team-builder' : 'agent-builder',
+        createdBy: 'agent-builder',
         createdAt: new Date(),
         updatedAt: new Date(),
       });
@@ -416,12 +332,7 @@ const createAgentTool: ChatTool = {
 
 const updateAgentTool: ChatTool = {
   name: 'update_agent',
-  description: `Update an existing agent. Both builders can call this, but with constraints:
-
-- team-builder-agent: can update any field on any non-built-in agent.
-- agent-builder-agent: can ONLY update canDelegateTo on existing agents (this is needed when adding a new team member to make them reachable).
-
-Built-in agents cannot be updated.`,
+  description: 'Update an existing agent. Any caller can update fields on non-built-in agents. Built-in agents cannot be updated.',
   destructive: true,
   inputSchema: {
     type: 'object',
@@ -439,9 +350,6 @@ Built-in agents cannot be updated.`,
     required: ['name'],
   },
   async execute(args, db) {
-    const guard = assertCallerCanCall('update_agent');
-    if (!guard.ok) return { error: guard.error };
-
     const name = args.name as string;
     const target = await db.collection('agents').findOne({ name });
     if (!target) return { error: `Agent "${name}" not found` };
@@ -454,16 +362,6 @@ Built-in agents cannot be updated.`,
     const updates: Record<string, unknown> = {};
     for (const key of allowedKeys) {
       if (args[key] !== undefined) updates[key] = args[key];
-    }
-
-    // agent-builder-agent constraint: can ONLY touch canDelegateTo
-    if (guard.caller === 'agent-builder-agent') {
-      const violatingKeys = Object.keys(updates).filter((k) => k !== 'canDelegateTo');
-      if (violatingKeys.length > 0) {
-        return {
-          error: `agent-builder-agent can only update canDelegateTo. Refused fields: ${violatingKeys.join(', ')}. Use team-builder-agent for broader changes.`,
-        };
-      }
     }
 
     if (Object.keys(updates).length === 0) {
@@ -479,7 +377,7 @@ Built-in agents cannot be updated.`,
 
 const deleteAgentTool: ChatTool = {
   name: 'delete_agent',
-  description: 'Delete an agent. Both builders can call this. Refuses to delete built-in agents. Requires confirm=true. If the agent is a team lead, the team becomes leaderless and must have a new lead assigned (or the team should be deleted).',
+  description: 'Delete an agent. Refuses to delete built-in agents. Requires confirm=true. If the agent is a team lead, the team becomes leaderless and must have a new lead assigned (or the team should be deleted).',
   destructive: true,
   inputSchema: {
     type: 'object',
@@ -490,9 +388,6 @@ const deleteAgentTool: ChatTool = {
     required: ['name', 'confirm'],
   },
   async execute(args, db) {
-    const guard = assertCallerCanCall('delete_agent');
-    if (!guard.ok) return { error: guard.error };
-
     if (!isConfirmed(args.confirm)) {
       return { error: 'delete_agent requires confirm=true (boolean). Confirm with the user first.' };
     }
@@ -524,12 +419,12 @@ const deleteAgentTool: ChatTool = {
   },
 };
 
-// ── Workflow management tools (workflow-builder-agent only) ──────────────────
+// ── Workflow management tools ─────────────────────────────────────────────────
 //
-// These let the workflow-builder-agent persist agent-designed workflows
-// directly to the database. The DB is the source of truth for both the
-// editor and the executor — workflows created here are usable immediately
-// without a restart and without writing a YAML seed file.
+// These tools persist agent-designed workflows directly to the database.
+// The DB is the source of truth for both the editor and the executor —
+// workflows created here are usable immediately without a restart and
+// without writing a YAML seed file.
 //
 // Workflows are created with createdBy="workflow-builder" so the YAML
 // seed loop never overwrites them.
@@ -582,7 +477,7 @@ const validateWorkflowTool: ChatTool = {
 
 const createWorkflowTool: ChatTool = {
   name: 'create_workflow',
-  description: 'Persist a new workflow to the database. ONLY workflow-builder-agent can call this. Validates first; returns the validation result inline so the caller can read errors and retry. Created workflows are usable immediately by the editor and executor — no restart needed. Stored with createdBy="workflow-builder" so the YAML seed loop will not touch them.',
+  description: 'Persist a new workflow to the database. Validates first; returns the validation result inline so the caller can read errors and retry. Created workflows are usable immediately by the editor and executor — no restart needed. Stored with createdBy="workflow-builder" so the YAML seed loop will not touch them.',
   destructive: true,
   inputSchema: {
     type: 'object',
@@ -593,9 +488,6 @@ const createWorkflowTool: ChatTool = {
     },
   },
   async execute(args, db) {
-    const guard = assertCallerCanCall('create_workflow');
-    if (!guard.ok) return { error: guard.error };
-
     const input = parseWorkflowInput(args);
     if (input.error) return { error: input.error };
 
@@ -623,7 +515,7 @@ const createWorkflowTool: ChatTool = {
 
 const updateWorkflowTool: ChatTool = {
   name: 'update_workflow',
-  description: 'Update an existing workflow by id (or by name if id is omitted). ONLY workflow-builder-agent can call this. Bumps version. Refuses to touch workflows with createdBy="system" — those are managed by the YAML seed loop.',
+  description: 'Update an existing workflow by id (or by name if id is omitted). Bumps version. Refuses to touch workflows with createdBy="system" — those are managed by the YAML seed loop.',
   destructive: true,
   inputSchema: {
     type: 'object',
@@ -635,9 +527,6 @@ const updateWorkflowTool: ChatTool = {
     },
   },
   async execute(args, db) {
-    const guard = assertCallerCanCall('update_workflow');
-    if (!guard.ok) return { error: guard.error };
-
     const input = parseWorkflowInput(args);
     if (input.error) return { error: input.error };
 
@@ -798,15 +687,15 @@ export const metaChatTools: ChatTool[] = [
   // Self-introspection (any agent)
   getMySessionHistory,
   getMyDelegationThread,
-  // Team management (team-builder only)
+  // Team management
   createTeamTool,
   updateTeamTool,
   deleteTeamTool,
-  // Agent management (either builder)
+  // Agent management
   createAgentTool,
   updateAgentTool,
   deleteAgentTool,
-  // Workflow management (workflow-builder only)
+  // Workflow management
   validateWorkflowTool,
   createWorkflowTool,
   updateWorkflowTool,
