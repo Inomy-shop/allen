@@ -13,7 +13,6 @@
 
 import type { Db } from 'mongodb';
 import { ChatService } from './chat.service.js';
-import { SecretService } from './secret.service.js';
 
 // ── Types ──
 
@@ -62,28 +61,25 @@ const SLACK_API = 'https://slack.com/api';
 export class SlackService {
   private db: Db;
   private chatService: ChatService;
-  private secrets: SecretService;
 
   constructor(db: Db) {
     this.db = db;
     this.chatService = new ChatService(db);
-    this.secrets = new SecretService(db);
   }
 
   /**
-   * Look up a Slack credential. Prefers the secrets collection (managed via UI),
-   * falls back to environment variables for local dev.
+   * Look up Slack credentials. Read from `.env`. The unprefixed
+   * `SLACK_BOT_TOKEN` / `SLACK_SIGNING_SECRET` names are still honored as
+   * fallbacks for backward compatibility.
    */
   async getBotToken(): Promise<string | null> {
-    return (await this.secrets.get('ALLEN_SLACK_BOT_TOKEN'))
-      ?? (await this.secrets.get('SLACK_BOT_TOKEN'))
+    return process.env.ALLEN_SLACK_BOT_TOKEN
       ?? process.env.SLACK_BOT_TOKEN
       ?? null;
   }
 
   async getSigningSecret(): Promise<string | null> {
-    return (await this.secrets.get('ALLEN_SLACK_SIGNING_SECRET'))
-      ?? (await this.secrets.get('SLACK_SIGNING_SECRET'))
+    return process.env.ALLEN_SLACK_SIGNING_SECRET
       ?? process.env.SLACK_SIGNING_SECRET
       ?? null;
   }

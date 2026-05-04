@@ -15,12 +15,11 @@
  * This module is separate from `slack.service.ts` so the event-
  * handling path (Slack → Allen) and the notification path
  * (Allen → Slack) can evolve independently. They share the same
- * bot token, resolved via the SecretService.
+ * bot token, read from `.env`.
  */
 
 import type { Db } from 'mongodb';
 import { BRAND_NAME } from '@allen/engine';
-import { SecretService } from './secret.service.js';
 
 const SLACK_API = 'https://slack.com/api';
 
@@ -51,11 +50,9 @@ export interface NotifierDeliveryResult {
 }
 
 export class SlackNotifier {
-  private secrets: SecretService;
-
-  constructor(db: Db) {
-    this.secrets = new SecretService(db);
-  }
+  // db kept in the constructor for parity with other services that may need
+  // it later; intentionally unused for now since credentials live in .env.
+  constructor(_db: Db) {}
 
   /**
    * Deliver a HIP card to Slack per the DM + channel policy.
@@ -115,23 +112,18 @@ export class SlackNotifier {
     return result;
   }
 
-  // ── Secret lookups ─────────────────────────────────────────────────────
+  // ── Credential lookups ─────────────────────────────────────────────────
 
   private async getBotToken(): Promise<string | null> {
     return (
-      (await this.secrets.get('ALLEN_SLACK_BOT_TOKEN')) ??
-      (await this.secrets.get('SLACK_BOT_TOKEN')) ??
+      process.env.ALLEN_SLACK_BOT_TOKEN ??
       process.env.SLACK_BOT_TOKEN ??
       null
     );
   }
 
   private async getChannel(): Promise<string | null> {
-    return (
-      (await this.secrets.get('ALLEN_SLACK_INTERVENTIONS_CHANNEL')) ??
-      process.env.ALLEN_SLACK_INTERVENTIONS_CHANNEL ??
-      null
-    );
+    return process.env.ALLEN_SLACK_INTERVENTIONS_CHANNEL ?? null;
   }
 
   // ── Slack Web API helpers ──────────────────────────────────────────────

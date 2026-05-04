@@ -14,7 +14,6 @@ import { executionRoutes } from './routes/execution.routes.js';
 import { agentRoutes } from './routes/agent.routes.js';
 import { teamRoutes } from './routes/team.routes.js';
 import { streamRoutes } from './routes/stream.routes.js';
-import { secretRoutes } from './routes/secret.routes.js';
 import { dashboardRoutes } from './routes/dashboard.routes.js';
 import { repoRoutes } from './routes/repo.routes.js';
 import { learningRoutes, executionLearningsRoute } from './routes/learning.routes.js';
@@ -33,7 +32,6 @@ import { startFileWatchServer } from './services/workspace-watcher.js';
 import { WorkspaceManager } from './services/workspace.service.js';
 import { seedDefaultWorkflows } from './seed.js';
 import { setStreamDb } from './services/stream.service.js';
-import { SecretService } from './services/secret.service.js';
 import { McpService } from './services/mcp.service.js';
 import { startMcpHealthMonitor } from './services/mcp-health.service.js';
 import { startMcpOrphanSweeper } from './services/mcp-orphan-sweeper.service.js';
@@ -86,9 +84,8 @@ async function main(): Promise<void> {
   await ensureIndexes(db);
   await new ArtifactService(db).ensureIndexes();
   await bootstrapAdmin(db);
-  // Secrets + @secret:KEY migrations removed. MCP env now comes straight
-  // from Allen's root .env via the ALLEN_ prefix convention — see
-  // packages/engine/src/mcp-loader.ts.
+  // MCP env comes straight from Allen's root .env via the ALLEN_ prefix
+  // convention — see packages/engine/src/mcp-loader.ts.
 
   // Sync MCP servers into Codex CLI's global config ONCE on boot.
   // Per-chat sync is disabled to avoid races between parallel sessions
@@ -232,7 +229,6 @@ async function main(): Promise<void> {
   app.use('/api/executions', executionRoutes(db));
   app.use('/api/agents', agentRoutes(db));
   app.use('/api/teams', teamRoutes(db));
-  app.use('/api/secrets', secretRoutes(db));
   app.use('/api/dashboard', dashboardRoutes(db));
   app.use('/api/repos', repoRoutes(db));
   app.use('/api/learnings', learningRoutes(db));
@@ -282,7 +278,8 @@ async function main(): Promise<void> {
   // touch execution status — it only kills leftover MCP processes.
   startMcpOrphanSweeper();
 
-  // Start file watch WebSocket server on port 4025
+  // File-watch clients share the terminal WebSocket on port 4024 at
+  // /ws/workspaces/:id/watch — see services/workspace-watcher.ts.
   startFileWatchServer();
 
   // Clean up stale service PIDs from a previous server run

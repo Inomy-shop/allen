@@ -13,7 +13,7 @@ import { type AgentOption, type TeamOption } from '../components/agents/AgentAss
 import DispatchModal, { type DispatchTarget, type WorkflowOption } from '../components/linear/DispatchModal';
 import {
   AlertCircle, ChevronDown, ChevronRight, Circle, Clock, ExternalLink,
-  FolderGit2, KeyRound, Loader2, MinusCircle, Play, RefreshCw, Search, Settings, X, Sparkles, CheckCircle,
+  FolderGit2, KeyRound, Loader2, MinusCircle, Play, RefreshCw, Search, X, Sparkles, CheckCircle,
   List as ListIcon, LayoutGrid,
 } from 'lucide-react';
 
@@ -439,19 +439,16 @@ export default function TicketsPage() {
           <div>
             <h2 className="font-heading text-lg font-bold text-theme-primary tracking-wide">Linear not connected</h2>
             <p className="text-[12px] text-theme-muted font-body mt-2">
-              Add a Linear API token to Allen Secrets under the key:
+              Add a Linear API token to Allen's <code className="font-mono">.env</code> under the key:
             </p>
           </div>
           <div className="inline-flex items-center gap-2 px-3 py-2 rounded-md bg-app-muted border border-app text-[11px] font-mono text-accent">
             <KeyRound className="w-3.5 h-3.5" /> ALLEN_LINEAR_ACCESS_TOKEN
           </div>
+          <p className="text-[11px] text-theme-muted font-body">
+            Then restart the Allen server.
+          </p>
           <div className="flex items-center justify-center gap-2 pt-2">
-            <button
-              onClick={() => navigate('/settings/secrets')}
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-[11px] font-mono bg-accent-soft text-accent hover:bg-accent/20 transition-colors"
-            >
-              <Settings className="w-3 h-3" /> Open Settings · Secrets
-            </button>
             <button
               onClick={loadStatus}
               className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-[11px] font-mono bg-app-muted text-theme-muted hover:bg-app-muted transition-colors"

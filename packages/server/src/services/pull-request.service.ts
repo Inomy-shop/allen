@@ -91,7 +91,7 @@ export class PullRequestService {
 
   async syncFromGitHub(repoPath: string, repoId: string, repoName: string): Promise<{ synced: number; total: number }> {
     // Use gh CLI to list PRs (auth via stored secret if present, else local gh auth)
-    const ghEnv = await buildGhEnv(this.db);
+    const ghEnv = await buildGhEnv();
     let prList: any[];
     try {
       const { stdout } = await exec('gh', [
@@ -189,7 +189,7 @@ export class PullRequestService {
       reviewState?: string;
     }>;
   }> {
-    const ghEnv = await buildGhEnv(this.db);
+    const ghEnv = await buildGhEnv();
     try {
       const { stdout } = await exec('gh', [
         'pr', 'view', String(prNumber),
@@ -258,7 +258,7 @@ export class PullRequestService {
     await exec('git', ['push', '-u', 'origin', branch], { cwd: repoPath });
 
     // Create via gh CLI (auth via stored secret if present, else local gh auth)
-    const ghEnv = await buildGhEnv(this.db);
+    const ghEnv = await buildGhEnv();
     const { stdout: createOut } = await exec('gh', [
       'pr', 'create',
       '--title', title,
