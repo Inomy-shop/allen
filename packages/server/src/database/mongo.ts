@@ -1,5 +1,6 @@
 import { MongoClient, type Db } from 'mongodb';
 import { DB_NAME_DEFAULT } from '@allen/engine';
+import { logger } from '../logger.js';
 
 let client: MongoClient | null = null;
 let db: Db | null = null;
@@ -12,7 +13,8 @@ export async function connectDB(uri?: string): Promise<Db> {
   await client.connect();
   db = client.db();
 
-  console.log(`Connected to MongoDB: ${mongoUri}`);
+  const safeUri = mongoUri.replace(/\/\/([^@]+)@/, '//***@');
+  logger.info('Connected to MongoDB', { component: 'mongo', uri: safeUri });
   return db;
 }
 
@@ -28,3 +30,20 @@ export async function disconnectDB(): Promise<void> {
     db = null;
   }
 }
+
+// Graceful shutdown: close Allen's own MongoDB connection when the process
+// exits. Without this, the MongoClient's background heartbeat timer keeps
+// a live DocumentDB socket open until the OS forcibly closes it after death.
+let _shutdownStarted = false;
+async function _shutdown(signal: string): Promise<void> {
+  if (_shutdownStarted) return;
+  _shutdownStarted = true;
+  logger.info('closing MongoDB client', { component: 'mongo', signal });
+  await disconnectDB().catch((err) => {
+    logger.warn('disconnectDB during shutdown', { component: 'mongo', error: (err as Error).message });
+  });
+  process.exit(0);
+}
+
+process.once('SIGTERM', () => void _shutdown('SIGTERM'));
+process.once('SIGINT',  () => void _shutdown('SIGINT'));

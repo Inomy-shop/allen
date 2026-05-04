@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import type { Db } from 'mongodb';
+import { logger } from '../logger.js';
 import {
   AllenEngine,
   StateManager,
@@ -279,18 +280,7 @@ export class ExecutionService {
           const tools = await loadMcpTools(this.db);
           return tools.map(t => t.fullName);
         } catch (err) {
-          console.warn('[engine] MCP tool discovery failed for workflow run:', (err as Error).message);
-          new MonitoringService(this.db).handleEvent({
-            sourceType: 'mcp',
-            sourceId: executionId,
-            title: 'Workflow MCP tool discovery failed',
-            error: (err as Error).message,
-            rootCauseArea: 'tool_integration',
-            severity: 'medium',
-            confidence: 0.75,
-            failureMode: 'workflow_mcp_discovery_failed',
-            relatedIds: { executionId, workflowName: workflow.name },
-          }).catch(() => {});
+          logger.warn('MCP tool discovery failed for workflow run', { component: 'engine', error: (err as Error).message });
           return [];
         }
       },
@@ -505,7 +495,7 @@ export class ExecutionService {
     // Kill spawned agent process (CLI subprocess or abort SDK)
     const { killExecutionProcess } = await import('./chat-tools.js');
     const killed = killExecutionProcess(id);
-    if (killed) console.log(`[cancel] Killed process for execution ${id}`);
+    if (killed) logger.warn('killing execution process', { executionId: id });
 
     // Clear currentNodes so the UI stops rendering the aborted nodes as
     // "running". The engine writes cancelled/failed trace rows for the
@@ -657,7 +647,7 @@ export class ExecutionService {
           const tools = await loadMcpTools(this.db);
           return tools.map(t => t.fullName);
         } catch (err) {
-          console.warn('[engine] MCP tool discovery failed for workflow run:', (err as Error).message);
+          logger.warn('MCP tool discovery failed for workflow run', { component: 'engine', error: (err as Error).message });
           return [];
         }
       },
@@ -721,7 +711,7 @@ export class ExecutionService {
           const tools = await loadMcpTools(this.db);
           return tools.map(t => t.fullName);
         } catch (err) {
-          console.warn('[engine] MCP tool discovery failed for workflow run:', (err as Error).message);
+          logger.warn('MCP tool discovery failed for workflow run', { component: 'engine', error: (err as Error).message });
           return [];
         }
       },
@@ -774,7 +764,7 @@ export class ExecutionService {
           const tools = await loadMcpTools(this.db);
           return tools.map(t => t.fullName);
         } catch (err) {
-          console.warn('[engine] MCP tool discovery failed for workflow run:', (err as Error).message);
+          logger.warn('MCP tool discovery failed for workflow run', { component: 'engine', error: (err as Error).message });
           return [];
         }
       },
@@ -868,7 +858,7 @@ export class ExecutionService {
         try {
           baseEmitter.emit(event);
         } catch (err) {
-          console.error('[execution.emitter] base emitter threw:', err);
+          logger.error('[execution.emitter] base emitter threw', { executionId, error: (err as Error).message });
         }
 
         if (event.event === 'execution_failed' || event.event === 'node_failed') {
@@ -1043,7 +1033,7 @@ export class ExecutionService {
                 ?? (input.task as string | undefined),
             });
           } catch (err) {
-            console.error(`[execution.emitter] intervention create failed for ${executionId}/${nodeName}:`, err);
+            logger.error('[execution.emitter] intervention create failed', { executionId, node: nodeName, error: (err as Error).message });
           }
         })().catch(() => {});
       },

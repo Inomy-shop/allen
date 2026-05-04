@@ -19,6 +19,10 @@ export interface ChatSession {
     reasoningEffort?: 'off' | 'low' | 'medium' | 'high' | 'max' | null;
     planMode?: boolean | null;
   };
+  /** Repo associated with this session (set at creation time, immutable). */
+  repoId?: string;
+  repoPath?: string;
+  repoName?: string;
   /** Where the session was created from. Slack-sourced sessions are read-only in the UI. */
   source?: 'ui' | 'slack';
   /** Slack thread metadata for sessions sourced from Slack. */
@@ -557,8 +561,8 @@ export function useChat() {
   }, [streamText]);
 
   const createSession = useCallback(
-    async (provider?: string, model?: string, agentOverrides?: Record<string, unknown>) => {
-      const session = await api.createSession(provider, model, agentOverrides);
+    async (provider?: string, model?: string, agentOverrides?: Record<string, unknown>, repoId?: string) => {
+      const session = await api.createSession(provider, model, agentOverrides, repoId);
       setSessions(prev => [session, ...prev]);
       setActiveSessionId(session._id);
       setMessages([]);
@@ -594,6 +598,12 @@ export function useChat() {
     }
   }, [loadSessions]);
 
+  const generateSessionTitle = useCallback(async (id: string): Promise<string> => {
+    const { title } = await api.generateTitle(id);
+    setSessions(prev => prev.map(s => s._id === id ? { ...s, title } : s));
+    return title;
+  }, []);
+
   const switchSession = useCallback((id: string) => {
     // Detach from the current session's local SSE reader (if any). The server
     // keeps the query running independently in activeQueries — the agent
@@ -620,7 +630,7 @@ export function useChat() {
     setStreaming(false);
   }, []);
 
-  const sendMessage = useCallback(async (content: string, overrideSessionId?: string, agent?: string) => {
+  const sendMessage = useCallback(async (content: string, overrideSessionId?: string, agent?: string, cwd?: string) => {
     const sessionId = overrideSessionId || activeSessionId;
     if (!sessionId || streaming) return;
 
@@ -649,7 +659,7 @@ export function useChat() {
       const response = await fetch(api.sendMessageUrl(sessionId), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', ...authHeaders() },
-        body: JSON.stringify({ content, agent }),
+        body: JSON.stringify({ content, agent, ...(cwd ? { cwd } : {}) }),
         signal: abortController.signal,
       });
 
@@ -963,6 +973,7 @@ export function useChat() {
     createSession,
     deleteSession,
     updateSessionTitle,
+    generateSessionTitle,
     switchSession,
     cancelStream,
     refresh: loadSessions,

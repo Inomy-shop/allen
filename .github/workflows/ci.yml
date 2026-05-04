@@ -1,0 +1,48 @@
+name: Allen CI
+
+"on":
+  pull_request:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+# Run JavaScript-based actions (actions/checkout, actions/setup-node, etc.)
+# under Node.js 24 instead of the deprecated Node.js 20 runtime. See
+# https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+concurrency:
+  group: allen-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-lint-test:
+    name: Build, lint, and test Allen
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Check out Allen
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js for Allen
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install Allen dependencies
+        run: npm ci
+
+      - name: Build engine, server, and UI
+        run: npm run build
+
+      - name: Typecheck engine, server, and UI
+        run: npm run lint
+
+      - name: Run Vitest suites
+        run: npm test

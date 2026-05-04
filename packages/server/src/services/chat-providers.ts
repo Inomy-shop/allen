@@ -81,6 +81,32 @@ export const PROVIDERS: ProviderConfig[] = [
   },
 ];
 
+/**
+ * Resolve the default chat provider. Reads `ALLEN_DEFAULT_CHAT_PROVIDER` from
+ * `.env` and validates it against the registered providers; falls back to
+ * `'codex'` when unset or unrecognized.
+ */
+export function getDefaultChatProvider(): ChatProvider {
+  const raw = process.env.ALLEN_DEFAULT_CHAT_PROVIDER?.trim();
+  if (raw && PROVIDERS.some((p) => p.provider === raw)) {
+    return raw as ChatProvider;
+  }
+  return 'codex';
+}
+
+/**
+ * Return the registered providers with the env-configured default first, so
+ * UI consumers that pick the head of the list naturally honor the setting.
+ */
+export function getProvidersInDefaultOrder(): ProviderConfig[] {
+  const def = getDefaultChatProvider();
+  return [...PROVIDERS].sort((a, b) => {
+    if (a.provider === def && b.provider !== def) return -1;
+    if (b.provider === def && a.provider !== def) return 1;
+    return 0;
+  });
+}
+
 // ── Logger ──
 
 const LOG = '\x1b[36m[chat]\x1b[0m';

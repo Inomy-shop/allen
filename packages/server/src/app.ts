@@ -14,7 +14,6 @@ import { executionRoutes } from './routes/execution.routes.js';
 import { agentRoutes } from './routes/agent.routes.js';
 import { teamRoutes } from './routes/team.routes.js';
 import { streamRoutes } from './routes/stream.routes.js';
-import { secretRoutes } from './routes/secret.routes.js';
 import { dashboardRoutes } from './routes/dashboard.routes.js';
 import { repoRoutes } from './routes/repo.routes.js';
 import { learningRoutes, executionLearningsRoute } from './routes/learning.routes.js';
@@ -33,7 +32,6 @@ import { startFileWatchServer } from './services/workspace-watcher.js';
 import { WorkspaceManager } from './services/workspace.service.js';
 import { seedDefaultWorkflows } from './seed.js';
 import { setStreamDb } from './services/stream.service.js';
-import { SecretService } from './services/secret.service.js';
 import { McpService } from './services/mcp.service.js';
 import { startMcpHealthMonitor } from './services/mcp-health.service.js';
 import { startMcpOrphanSweeper } from './services/mcp-orphan-sweeper.service.js';
@@ -57,34 +55,30 @@ import { userRoutes } from './routes/users.routes.js';
 import { bootstrapAdmin } from './services/adminBootstrap.js';
 import { requireAuth } from './middleware/requireAuth.js';
 import { blockIfMustReset } from './middleware/blockIfMustReset.js';
+import { logger } from './logger.js';
+import { requestLogger, errorLogger } from './middleware/request-logger.js';
 
 const PORT = parseInt(process.env.PORT ?? '4000', 10);
 
 // ── Global error handlers ─────────────────────────────────────────────
-//
-// Native modules (node-pty, sharp, better-sqlite3, etc.) can throw
-// errors that propagate up through async boundaries and bypass normal
-// try/catch blocks in Express handlers. Without these top-level
-// handlers, a single pty spawn failure or an awaited Promise rejection
-// takes down the entire Allen server process — killing every chat
-// session, every running workflow, and every MCP health check.
-//
-// Log loudly and KEEP GOING. Individual request handlers are still
-// responsible for their own try/catch (we're not using this as a
-// substitute for proper error handling), but this is the safety net
-// that prevents a single bug from nuking the whole dev server.
-process.on('uncaughtException', (err: Error, origin: string) => {
-  console.error(`\n━━━ UNCAUGHT EXCEPTION [${origin}] ━━━`);
-  console.error(err.stack ?? err.message ?? err);
-  console.error(`━━━ Server is continuing — fix the root cause, this is a safety net, not a pattern ━━━\n`);
+
+process.on('uncaughtException', (err: Error) => {
+  try {
+    logger.error('uncaughtException', { error: err.message, stack: err.stack });
+  } catch {
+    console.error('uncaughtException', err);
+  }
+  process.exit(1);
 });
 
-process.on('unhandledRejection', (reason: unknown, promise: Promise<unknown>) => {
-  console.error(`\n━━━ UNHANDLED PROMISE REJECTION ━━━`);
-  const r = reason instanceof Error ? (reason.stack ?? reason.message) : String(reason);
-  console.error(r);
-  console.error(`Promise:`, promise);
-  console.error(`━━━ Server is continuing — fix the root cause ━━━\n`);
+process.on('unhandledRejection', (reason: unknown) => {
+  const err = reason instanceof Error ? reason : new Error(String(reason));
+  try {
+    logger.error('unhandledRejection', { error: err.message, stack: err.stack });
+  } catch {
+    console.error('unhandledRejection', reason);
+  }
+  process.exit(1);
 });
 
 async function main(): Promise<void> {
@@ -92,9 +86,8 @@ async function main(): Promise<void> {
   await ensureIndexes(db);
   await new ArtifactService(db).ensureIndexes();
   await bootstrapAdmin(db);
-  // Secrets + @secret:KEY migrations removed. MCP env now comes straight
-  // from Allen's root .env via the ALLEN_ prefix convention — see
-  // packages/engine/src/mcp-loader.ts.
+  // MCP env comes straight from Allen's root .env via the ALLEN_ prefix
+  // convention — see packages/engine/src/mcp-loader.ts.
 
   // Sync MCP servers into Codex CLI's global config ONCE on boot.
   // Per-chat sync is disabled to avoid races between parallel sessions
@@ -102,9 +95,9 @@ async function main(): Promise<void> {
   try {
     const { syncMcpToCodex } = await import('./services/chat-providers.js');
     await syncMcpToCodex(db);
-    console.log('[mcp] Initial Codex sync complete');
+    logger.info('[mcp] Initial Codex sync complete', { component: 'mcp' });
   } catch (err) {
-    console.error('[mcp] Initial Codex sync failed:', (err as Error).message);
+    logger.error('[mcp] Initial Codex sync failed', { component: 'mcp', error: (err as Error).message });
   }
   // Build the full 10-team org chart. Runs BEFORE legacy seeds to avoid
   // duplicate key conflicts on the teamName_lead_unique index.
@@ -160,7 +153,7 @@ async function main(): Promise<void> {
   // first workflow spawn in a fresh install hangs on the interactive
   // trust dialog until manually answered.
   runTrustBootstrap().catch((err) => {
-    console.warn('[trust-bootstrap] bootstrap crashed:', (err as Error).message);
+    logger.warn('[trust-bootstrap] bootstrap crashed', { component: 'trust-bootstrap', error: (err as Error).message });
   });
 
   const app = express();
@@ -180,7 +173,7 @@ async function main(): Promise<void> {
 
     const [, serviceName, wsId] = match;
     if (req.url.startsWith('/api/') || req.url.startsWith('/ws/')) {
-      console.log(`[subdomain-proxy] ${req.method} ${host}${req.url} → service=${serviceName} wsId=${wsId}`);
+      logger.debug('[subdomain-proxy] routing request', { component: 'subdomain-proxy', method: req.method, host, url: req.url, service: serviceName, wsId });
     }
     (req.query as Record<string, string>).service = serviceName;
     req.params = { ...req.params, id: wsId };
@@ -192,6 +185,10 @@ async function main(): Promise<void> {
   app.use('/api/slack', express.raw({ type: 'application/json', limit: '5mb' }), slackRoutes(db));
 
   app.use(express.json({ limit: '10mb' }));
+
+  // Structured request/response logging — registered after body-parser,
+  // before route registrations so every API call is captured.
+  app.use(requestLogger());
 
   // Health check (public)
   app.get('/api/health', (_req, res) => {
@@ -242,7 +239,6 @@ async function main(): Promise<void> {
   app.use('/api/executions', executionRoutes(db));
   app.use('/api/agents', agentRoutes(db));
   app.use('/api/teams', teamRoutes(db));
-  app.use('/api/secrets', secretRoutes(db));
   app.use('/api/dashboard', dashboardRoutes(db));
   app.use('/api/repos', repoRoutes(db));
   app.use('/api/learnings', learningRoutes(db));
@@ -260,8 +256,11 @@ async function main(): Promise<void> {
   app.use('/api/files', fileRoutes());
   app.use('/api/artifacts', artifactRoutes(db));
 
+  // Structured error logging — after all routes, before listen
+  app.use(errorLogger());
+
   const httpServer = app.listen(PORT, () => {
-    console.log(`Allen server running on http://localhost:${PORT}`);
+    logger.info('Allen server started', { port: PORT, env: process.env.NODE_ENV, pid: process.pid });
   });
 
   // Forward WebSocket upgrades for workspace subdomains so Vite HMR (and
@@ -290,12 +289,13 @@ async function main(): Promise<void> {
   // touch execution status — it only kills leftover MCP processes.
   startMcpOrphanSweeper();
 
-  // Start file watch WebSocket server on port 4025
+  // File-watch clients share the terminal WebSocket on port 4024 at
+  // /ws/workspaces/:id/watch — see services/workspace-watcher.ts.
   startFileWatchServer();
 
   // Clean up stale service PIDs from a previous server run
   const wsManager = new WorkspaceManager(db);
-  wsManager.cleanupStalePids().catch(err => console.error('[workspace] stale PID cleanup failed:', err));
+  wsManager.cleanupStalePids().catch(err => logger.error('[workspace] stale PID cleanup failed', { component: 'workspace', error: (err as Error).message }));
 
   // Start dedicated WebSocket terminal server on port 4024
   startTerminalWebSocketServer(async (workspaceId: string) => {
@@ -305,7 +305,7 @@ async function main(): Promise<void> {
 }
 
 main().catch(err => {
-  console.error('Failed to start server:', err);
+  logger.error('Failed to start server', { error: (err as Error).message, stack: (err as Error).stack });
   process.exit(1);
 });
 // reload trigger 1775250852

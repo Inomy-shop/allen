@@ -176,7 +176,8 @@ export function chatRoutes(db: Db): Router {
   router.post('/sessions', async (req: Request, res: Response) => {
     try {
       const { provider, model, agentOverrides } = req.body ?? {};
-      const session = await chatService.createSession(provider, model, 'ui', undefined, agentOverrides);
+      const repoId = typeof req.body?.repoId === 'string' ? req.body.repoId : undefined;
+      const session = await chatService.createSession(provider, model, 'ui', undefined, agentOverrides, repoId);
       res.status(201).json(session);
     } catch (err: unknown) {
       res.status(500).json({ error: (err as Error).message });
@@ -215,11 +216,12 @@ export function chatRoutes(db: Db): Router {
     try {
       const sessionId = param(req, 'id');
       const { content, agent } = req.body;
+      const cwd = typeof req.body.cwd === 'string' ? req.body.cwd : undefined;
       if (!content || typeof content !== 'string') {
         return res.status(400).json({ error: 'content is required' });
       }
       // sendMessage handles SSE headers and streaming
-      await chatService.sendMessage(sessionId, content, res, agent);
+      await chatService.sendMessage(sessionId, content, res, agent, cwd);
     } catch (err: unknown) {
       if (!res.headersSent) {
         res.status(500).json({ error: (err as Error).message });

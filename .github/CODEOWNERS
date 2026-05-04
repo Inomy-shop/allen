@@ -1,0 +1,30 @@
+# Repository-wide review.
+* @shreemantkumar
+
+# Agent execution and workflow engine.
+/packages/engine/agents.yml @shreemantkumar
+/packages/engine/router.yml @shreemantkumar
+/packages/engine/workflows/ @shreemantkumar
+/packages/engine/src/codex-executor.ts @shreemantkumar
+/packages/engine/src/node-executor.ts @shreemantkumar
+/packages/engine/src/engine.ts @shreemantkumar
+/packages/engine/src/mcp-loader.ts @shreemantkumar
+/packages/engine/src/mcp-install.ts @shreemantkumar
+
+# Auth, integrations, and workspace execution.
+/packages/server/src/auth/ @shreemantkumar
+/packages/server/src/middleware/requireAuth.ts @shreemantkumar
+/packages/server/src/middleware/requireAdmin.ts @shreemantkumar
+/packages/server/src/services/workspace.service.ts @shreemantkumar
+/packages/server/src/services/workspace-terminal.ts @shreemantkumar
+/packages/server/src/services/workspace-proxy.ts @shreemantkumar
+/packages/server/src/services/github-auth.ts @shreemantkumar
+/packages/server/src/services/linear.service.ts @shreemantkumar
+/packages/server/src/services/slack.service.ts @shreemantkumar
+/packages/server/src/services/slack-notifier.ts @shreemantkumar
+
+# Project setup and repository policy.
+/.github/ @shreemantkumar
+/docker-compose.yml @shreemantkumar
+/.env.example @shreemantkumar
+/SECURITY.md @shreemantkumar

@@ -703,9 +703,9 @@ export class WorkspaceManager {
 
     // Strip all Allen app env vars so the workspace's own .env takes
     // full control via dotenv.config(). Prevents main server's DB URI,
-    // master key, tokens, ports, etc. from leaking into workspace services.
+    // tokens, ports, etc. from leaking into workspace services.
     const STRIP = [
-      'PORT', 'MONGODB_URI', 'ALLEN_MASTER_KEY', 'ALLEN_API_URL',
+      'PORT', 'MONGODB_URI', 'ALLEN_API_URL',
       'TERMINAL_WS_PORT', 'WORKSPACE_BASE_DIR',
       'SLACK_BOT_TOKEN', 'SLACK_SIGNING_SECRET',
       'GH_TOKEN', 'GITHUB_TOKEN', 'GITHUB_PERSONAL_ACCESS_TOKEN',

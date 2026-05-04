@@ -4,75 +4,23 @@
  * format expected by Claude Code SDK's mcpServers option. Also builds the
  * Allen built-in MCP server config.
  *
- * Source-based records (added Apr 2026):
+ * Source-based records:
  *   source.kind === 'preset' → look up hardcoded preset, build env from envKeys
  *   source.kind === 'repo'   → resolve entry file under registered repo,
  *                              run `npm install` gate, spawn with narrow env
  *
- * Legacy records (bundleId / @secret:KEY refs) still spawn via the old
- * decryption path for backward compatibility.
+ * Bare bundle records (no `source`) spawn with the env/args verbatim. There is
+ * no encrypted-secret-store resolution: all credentials come from `.env` via
+ * the ALLEN_-prefix allowlist below.
  */
 
 import type { Db, ObjectId } from 'mongodb';
 import { resolve, join, dirname, extname, isAbsolute } from 'node:path';
-import { existsSync, readFileSync } from 'node:fs';
-import { homedir } from 'node:os';
-import crypto from 'node:crypto';
+import { existsSync } from 'node:fs';
 
 import { ensureInstalled } from './mcp-install.js';
 
-// ── Legacy: inline AES-256-GCM decryption (matches server/encryption.ts) ──
-// Only touched when we encounter a pre-refactor bundle/secret record.
-const ENC_PREFIX = 'enc:v1:';
-let cachedMasterKey: Buffer | null = null;
-
-function loadMasterKey(): Buffer {
-  if (cachedMasterKey) return cachedMasterKey;
-  const envKey = process.env.ALLEN_MASTER_KEY;
-  if (envKey) {
-    const buf = Buffer.from(envKey, 'base64');
-    if (buf.length === 32) { cachedMasterKey = buf; return buf; }
-  }
-  const file = join(homedir(), '.allen', 'master.key');
-  if (existsSync(file)) {
-    const buf = readFileSync(file);
-    if (buf.length === 32) { cachedMasterKey = buf; return buf; }
-  }
-  throw new Error('Master key not found — set ALLEN_MASTER_KEY or create ~/.allen/master.key');
-}
-
-function decryptValue(value: string): string {
-  if (!value.startsWith(ENC_PREFIX)) return value;
-  const parts = value.slice(ENC_PREFIX.length).split(':');
-  if (parts.length !== 3) return value;
-  const [ivB64, tagB64, ctB64] = parts;
-  const key = loadMasterKey();
-  const decipher = crypto.createDecipheriv('aes-256-gcm', key, Buffer.from(ivB64, 'base64'));
-  decipher.setAuthTag(Buffer.from(tagB64, 'base64'));
-  const plaintext = Buffer.concat([
-    decipher.update(Buffer.from(ctB64, 'base64')),
-    decipher.final(),
-  ]);
-  return plaintext.toString('utf8');
-}
-
-async function resolveSecretRef(value: string, db: Db): Promise<string> {
-  if (typeof value !== 'string' || !value.startsWith('@secret:')) return value;
-  const key = value.slice('@secret:'.length);
-  const doc = await db.collection('secrets').findOne({ key });
-  if (!doc || typeof doc.value !== 'string') {
-    console.warn(`[mcp-loader] Secret "${key}" referenced but not found`);
-    return '';
-  }
-  try {
-    return decryptValue(doc.value);
-  } catch (err) {
-    console.error(`[mcp-loader] Failed to decrypt secret "${key}":`, (err as Error).message);
-    return '';
-  }
-}
-
-// ── New path: env allowlist from process.env (ALLEN_<key> → <key>) ─────────
+// ── env allowlist from process.env (ALLEN_<key> → <key>) ───────────────────
 
 const BASE_ENV_KEYS = ['PATH', 'HOME', 'USER', 'SHELL'] as const;
 
@@ -81,8 +29,8 @@ const BASE_ENV_KEYS = ['PATH', 'HOME', 'USER', 'SHELL'] as const;
  * `envKeys`, reads `process.env.ALLEN_X` and sets `env[X]` to that value.
  * Missing keys are warned but not fatal (the MCP server decides how to
  * handle its own missing config). Only baseline OS vars + allowlisted keys
- * are forwarded — the subprocess never sees ALLEN_MASTER_KEY, JWT secrets,
- * or other unrelated .env contents.
+ * are forwarded — the subprocess never sees JWT secrets or other unrelated
+ * `.env` contents.
  */
 function buildEnvFromAllowlist(
   envKeys: string[] | undefined,
@@ -270,11 +218,11 @@ export async function loadMcpServers(
 }
 
 /**
- * Resolve a single MCP server record (new source-based or legacy bundle-based)
- * into the stdio config Claude Code and Codex both expect. Used by
- * loadMcpServers and by mcp-health.service's connection check so both paths
- * go through the same resolution logic. Returns null when the record can't
- * be resolved (missing repo, bad entryPath, etc).
+ * Resolve a single MCP server record (source-based or bare bundle) into the
+ * stdio config Claude Code and Codex both expect. Used by loadMcpServers and
+ * by mcp-health.service's connection check so both paths go through the same
+ * resolution logic. Returns null when the record can't be resolved (missing
+ * repo, bad entryPath, etc).
  */
 export async function buildSingleServerConfig(
   s: Record<string, unknown>,
@@ -286,20 +234,17 @@ export async function buildSingleServerConfig(
     return resolveSourcedStdio(s, db, extraEnv);
   }
 
-  // Legacy path: bundle / @secret:KEY refs. Decryption, cwd from bundlePath.
-  const resolvedEnv: Record<string, string> = { DOTENV_CONFIG_QUIET: 'true' };
-  for (const [k, v] of Object.entries((s.env ?? {}) as Record<string, string>)) {
-    resolvedEnv[k] = await resolveSecretRef(v, db);
-  }
+  // Bare bundle path: env/args used verbatim. Credentials are expected to
+  // be present on `process.env` already (Allen never resolves @secret refs).
+  const resolvedEnv: Record<string, string> = {
+    DOTENV_CONFIG_QUIET: 'true',
+    ...(s.env ?? {}) as Record<string, string>,
+  };
   if (extraEnv) Object.assign(resolvedEnv, extraEnv);
-  const resolvedArgs: string[] = [];
-  for (const a of ((s.args ?? []) as string[])) {
-    resolvedArgs.push(await resolveSecretRef(a, db));
-  }
   const stdioConfig: Record<string, unknown> = {
     type: 'stdio',
     command: s.command,
-    args: resolvedArgs,
+    args: ((s.args ?? []) as string[]).slice(),
     env: resolvedEnv,
   };
   if (s.bundlePath) stdioConfig.cwd = s.bundlePath;

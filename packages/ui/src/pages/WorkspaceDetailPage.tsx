@@ -3,7 +3,7 @@ import { useParams, Link, useNavigate } from 'react-router-dom';
 import { workspaces } from '../services/workspaceService';
 import {
   GitBranch, ArrowLeft, RefreshCw, Loader2, Terminal, FileCode,
-  Play, Square, ChevronRight, ChevronDown,
+  Play, Square, ChevronRight, ChevronDown, ChevronLeft,
   Upload, GitCommit, X, GitPullRequest, FileText,
   Trash2, Save, FilePlus, Plus, SplitSquareHorizontal,
   Settings, ExternalLink, Eye, History, PanelRightOpen, MessageSquare, GitCompareArrows,
@@ -13,6 +13,7 @@ import { XTerminal } from '../components/workspace/XTerminal';
 import { EmbeddedChat } from '../components/workspace/EmbeddedChat';
 import WorkspacesSidebar from '../components/workspace/WorkspacesSidebar';
 import { useSidebarCollapsed } from '../hooks/useSidebarCollapsed';
+import { usePanelLayout } from '../hooks/usePanelLayout';
 import { setupMonaco, getMonacoTheme } from '../lib/monaco-theme';
 import Editor, { DiffEditor } from '@monaco-editor/react';
 import { renderMarkdown } from '../components/chat/ChatMessageList';
@@ -120,35 +121,6 @@ function FolderIcon({ name, expanded, className = 'w-4 h-4' }: { name: string; e
     return <I cls={className} color={color} d="M20 6h-8l-2-2H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2zm0 12H4V8h16v10z" />;
   }
   return <I cls={className} color={color} d="M10 4H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2h-8l-2-2z" />;
-}
-
-// ── Resize Hook ──
-
-function useResizable(direction: 'horizontal' | 'vertical', initial: number, min: number, max: number, invert = false) {
-  const [size, setSize] = useState(initial);
-  const dragging = useRef(false);
-  const startPos = useRef(0);
-  const startSize = useRef(0);
-
-  const onMouseDown = useCallback((e: React.MouseEvent) => {
-    e.preventDefault();
-    dragging.current = true;
-    startPos.current = direction === 'horizontal' ? e.clientX : e.clientY;
-    startSize.current = size;
-    const onMouseMove = (ev: MouseEvent) => {
-      if (!dragging.current) return;
-      const raw = direction === 'horizontal'
-        ? ev.clientX - startPos.current
-        : startPos.current - ev.clientY; // inverted for bottom panel
-      const delta = invert ? -raw : raw;
-      setSize(Math.min(max, Math.max(min, startSize.current + delta)));
-    };
-    const onMouseUp = () => { dragging.current = false; document.removeEventListener('mousemove', onMouseMove); document.removeEventListener('mouseup', onMouseUp); };
-    document.addEventListener('mousemove', onMouseMove);
-    document.addEventListener('mouseup', onMouseUp);
-  }, [size, direction, min, max]);
-
-  return { size, onMouseDown };
 }
 
 // ── File Tree ──
@@ -515,11 +487,14 @@ export default function WorkspaceDetailPage() {
   const [activeTerminal, setActiveTerminal] = useState('default');
   const [terminalVisible, setTerminalVisible] = useState(true);
 
-  // Resizable panels
-  const sidebar = useResizable('horizontal', 240, 160, 400);
-  const chatPanel = useResizable('horizontal', 384, 280, 600, true);
+  // Resizable + collapsible panels (persisted to localStorage)
+  const sidebarPanel    = usePanelLayout({ storageKey: 'ws-explorer',  direction: 'horizontal', defaultSize: 240, minSize: 160, maxSize: 400 });
+  const chatPanelLayout = usePanelLayout({ storageKey: 'ws-chat',      direction: 'horizontal', defaultSize: 384, minSize: 280, maxSize: 600, invertDelta: true });
   const monacoRef = useRef<any>(null);
-  const termPanel = useResizable('vertical', 220, 100, 500);
+  const termPanelLayout    = usePanelLayout({ storageKey: 'ws-terminal',  direction: 'vertical',   defaultSize: 220, minSize: 100, maxSize: 500, invertDelta: true });
+  const servicesPanelLayout = usePanelLayout({ storageKey: 'ws-services', direction: 'horizontal', defaultSize: 288, minSize: 200, maxSize: 480, invertDelta: true });
+  const activityPanelLayout = usePanelLayout({ storageKey: 'ws-activity', direction: 'horizontal', defaultSize: 256, minSize: 180, maxSize: 400, invertDelta: true });
+  const previewPanelLayout  = usePanelLayout({ storageKey: 'ws-preview',  direction: 'vertical',   defaultSize: 300, minSize: 150, maxSize: 600, invertDelta: true });
 
   const load = useCallback(async () => {
     if (!id) return;
@@ -556,13 +531,13 @@ export default function WorkspaceDetailPage() {
       // Ctrl/Cmd + J → toggle chat
       if ((e.metaKey || e.ctrlKey) && e.key === 'j') { e.preventDefault(); setShowChat(v => !v); }
       // Ctrl/Cmd + B → toggle sidebar
-      if ((e.metaKey || e.ctrlKey) && e.key === 'b') { e.preventDefault(); sidebar.size > 0 ? sidebar.onMouseDown({ preventDefault: () => {}, clientX: 0, clientY: 0 } as any) : null; }
+      if ((e.metaKey || e.ctrlKey) && e.key === 'b') { e.preventDefault(); sidebarPanel.toggle(); }
       // Ctrl/Cmd + P → toggle preview
       if ((e.metaKey || e.ctrlKey) && e.shiftKey && e.key === 'p') { e.preventDefault(); setShowPreview(v => !v); }
     }
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, []);
+  }, [sidebarPanel.toggle]);
 
   async function selectFile(path: string) {
     if (!id) return;
@@ -785,52 +760,75 @@ export default function WorkspaceDetailPage() {
 
       {/* Body — fixed, no scroll */}
       <div className="flex-1 flex overflow-hidden min-h-0">
-        {/* Sidebar — Explorer or Changed Files */}
-        <div className="shrink-0 overflow-y-auto bg-app-muted/30 flex flex-col" style={{ width: sidebar.size }}>
-          {showDiffView ? (
-            <>
-              <div className="px-3 py-1.5 overline flex items-center justify-between shrink-0">
-                <span className="text-accent-yellow">Changes</span>
-                <span className="text-theme-subtle text-[9px]">{diffFiles.length}</span>
-              </div>
-              <div className="flex-1 overflow-y-auto min-h-0">
-                {diffLoading ? (
-                  <div className="flex items-center justify-center py-8"><Loader2 className="w-4 h-4 animate-spin text-theme-muted" /></div>
-                ) : diffFiles.length === 0 ? (
-                  <div className="px-3 py-4 text-xs text-theme-subtle">No changes</div>
-                ) : (() => {
-                  const diffTree = buildFileTree(diffFiles.map(f => ({ path: f.path, status: f.status })));
-                  return diffTree.map(n => <FileTreeNode key={n.path} {...n} selectedFile={diffSelectedFile ?? undefined} onSelect={(p: string) => setDiffSelectedFile(p)} onDelete={() => {}} defaultExpanded />);
-                })()}
-              </div>
-            </>
-          ) : (
-            <>
-              <div className="px-3 py-1.5 overline flex items-center justify-between shrink-0">
-                <span>Explorer</span>
-                <div className="flex items-center gap-1">
-                  <button onClick={() => setShowNewFile(true)} className="text-theme-subtle hover:text-theme-secondary p-0.5" title="New File"><FilePlus className="w-3.5 h-3.5" /></button>
-                  <span className="text-theme-subtle text-[9px]">{allFiles.length}</span>
+        {/* Sidebar — Explorer or Changed Files (collapsible + resizable) */}
+        {sidebarPanel.collapsed ? (
+          <div className="w-8 shrink-0 border-r border-app bg-app-muted/30 flex flex-col items-center pt-2">
+            <button
+              onClick={sidebarPanel.toggle}
+              className="p-1 rounded text-theme-muted hover:text-theme-secondary hover:bg-app-card transition-colors"
+              title="Expand Explorer (⌘B)"
+              aria-label="Expand Explorer (⌘B)"
+            >
+              <ChevronRight className="w-4 h-4" />
+            </button>
+          </div>
+        ) : (
+          <div className="shrink-0 overflow-y-auto bg-app-muted/30 flex flex-col" style={{ width: sidebarPanel.size }}>
+            {showDiffView ? (
+              <>
+                <div className="px-3 py-1.5 overline flex items-center justify-between shrink-0">
+                  <span className="text-accent-yellow">Changes</span>
+                  <div className="flex items-center gap-1">
+                    <span className="text-theme-subtle text-[9px]">{diffFiles.length}</span>
+                    <button onClick={sidebarPanel.toggle} className="text-theme-subtle hover:text-theme-secondary p-0.5" title="Collapse (⌘B)" aria-label="Collapse Explorer (⌘B)">
+                      <ChevronLeft className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
                 </div>
-              </div>
-              {showNewFile && (
-                <div className="px-2 pb-1 shrink-0">
-                  <input value={newFilePath} onChange={e => setNewFilePath(e.target.value)}
-                    onKeyDown={e => { if (e.key === 'Enter') handleNewFile(); if (e.key === 'Escape') setShowNewFile(false); }}
-                    placeholder="path/to/file.ts" autoFocus
-                    className="w-full bg-surface-100 border border-app rounded px-2 py-0.5 text-[10px] font-mono text-theme-secondary placeholder:text-theme-subtle focus:outline-none focus:border-accent" />
+                <div className="flex-1 overflow-y-auto min-h-0">
+                  {diffLoading ? (
+                    <div className="flex items-center justify-center py-8"><Loader2 className="w-4 h-4 animate-spin text-theme-muted" /></div>
+                  ) : diffFiles.length === 0 ? (
+                    <div className="px-3 py-4 text-xs text-theme-subtle">No changes</div>
+                  ) : (() => {
+                    const diffTree = buildFileTree(diffFiles.map(f => ({ path: f.path, status: f.status })));
+                    return diffTree.map(n => <FileTreeNode key={n.path} {...n} selectedFile={diffSelectedFile ?? undefined} onSelect={(p: string) => setDiffSelectedFile(p)} onDelete={() => {}} defaultExpanded />);
+                  })()}
                 </div>
-              )}
-              <div className="flex-1 overflow-y-auto min-h-0">
-                {fileTree.length === 0 ? <div className="px-3 py-4 text-xs text-theme-subtle">No files</div> :
-                  fileTree.map(n => <FileTreeNode key={n.path} {...n} selectedFile={selectedFile ?? undefined} onSelect={selectFile} onDelete={handleDeleteFile} />)}
-              </div>
-            </>
-          )}
-        </div>
+              </>
+            ) : (
+              <>
+                <div className="px-3 py-1.5 overline flex items-center justify-between shrink-0">
+                  <span>Explorer</span>
+                  <div className="flex items-center gap-1">
+                    <button onClick={() => setShowNewFile(true)} className="text-theme-subtle hover:text-theme-secondary p-0.5" title="New File"><FilePlus className="w-3.5 h-3.5" /></button>
+                    <span className="text-theme-subtle text-[9px]">{allFiles.length}</span>
+                    <button onClick={sidebarPanel.toggle} className="text-theme-subtle hover:text-theme-secondary p-0.5" title="Collapse (⌘B)" aria-label="Collapse Explorer (⌘B)">
+                      <ChevronLeft className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+                </div>
+                {showNewFile && (
+                  <div className="px-2 pb-1 shrink-0">
+                    <input value={newFilePath} onChange={e => setNewFilePath(e.target.value)}
+                      onKeyDown={e => { if (e.key === 'Enter') handleNewFile(); if (e.key === 'Escape') setShowNewFile(false); }}
+                      placeholder="path/to/file.ts" autoFocus
+                      className="w-full bg-surface-100 border border-app rounded px-2 py-0.5 text-[10px] font-mono text-theme-secondary placeholder:text-theme-subtle focus:outline-none focus:border-accent" />
+                  </div>
+                )}
+                <div className="flex-1 overflow-y-auto min-h-0">
+                  {fileTree.length === 0 ? <div className="px-3 py-4 text-xs text-theme-subtle">No files</div> :
+                    fileTree.map(n => <FileTreeNode key={n.path} {...n} selectedFile={selectedFile ?? undefined} onSelect={selectFile} onDelete={handleDeleteFile} />)}
+                </div>
+              </>
+            )}
+          </div>
+        )}
 
-        {/* Sidebar resize handle */}
-        <div onMouseDown={sidebar.onMouseDown} className="w-px shrink-0 cursor-col-resize bg-border hover:bg-accent active:bg-accent/70 transition-colors" />
+        {/* Sidebar resize handle — hidden when collapsed */}
+        {!sidebarPanel.collapsed && (
+          <div onMouseDown={sidebarPanel.onMouseDown} className="w-px shrink-0 cursor-col-resize bg-border hover:bg-accent active:bg-accent/70 transition-colors" />
+        )}
 
         {/* Right: editor + terminal */}
         <div className="flex-1 flex flex-col min-w-0 min-h-0 overflow-hidden">
@@ -1007,40 +1005,46 @@ export default function WorkspaceDetailPage() {
           {/* Activity panel — side panel */}
           {/* Services panel — right side panel */}
           {showServices && !showChat && (
-            <div className="w-72 border-l border-app bg-app-muted/30 overflow-hidden flex flex-col shrink-0">
-              <div className="flex items-center gap-2 px-3 py-1.5 border-b border-app shrink-0">
-                <Server className="w-3 h-3 text-theme-muted" />
-                <span className="overline">Services</span>
-                <span className="flex-1" />
-                <button onClick={() => setShowServices(false)} className="text-theme-subtle hover:text-theme-secondary p-0.5"><X className="w-3 h-3" /></button>
+            <>
+              <div onMouseDown={servicesPanelLayout.onMouseDown} className="w-px shrink-0 cursor-col-resize bg-border hover:bg-accent active:bg-accent/70 transition-colors" />
+              <div className="border-l border-app bg-app-muted/30 overflow-hidden flex flex-col shrink-0" style={{ width: servicesPanelLayout.size }}>
+                <div className="flex items-center gap-2 px-3 py-1.5 border-b border-app shrink-0">
+                  <Server className="w-3 h-3 text-theme-muted" />
+                  <span className="overline">Services</span>
+                  <span className="flex-1" />
+                  <button onClick={() => setShowServices(false)} className="text-theme-subtle hover:text-theme-secondary p-0.5" aria-label="Close services panel"><X className="w-3 h-3" /></button>
+                </div>
+                <div className="flex-1 overflow-y-auto min-h-0">
+                  <ServicesPanel
+                    workspaceId={id!}
+                    services={workspace.services ?? []}
+                    onRefresh={refreshWorkspace}
+                  />
+                </div>
               </div>
-              <div className="flex-1 overflow-y-auto min-h-0">
-                <ServicesPanel
-                  workspaceId={id!}
-                  services={workspace.services ?? []}
-                  onRefresh={refreshWorkspace}
-                />
-              </div>
-            </div>
+            </>
           )}
 
           {showActivity && !showChat && !showServices && (
-            <div className="w-64 border-l border-app bg-app-muted/30 overflow-y-auto flex flex-col shrink-0">
-              <div className="flex items-center gap-2 px-3 py-1.5 border-b border-app shrink-0">
-                <History className="w-3 h-3 text-theme-muted" />
-                <span className="overline">Activity</span>
-                <span className="flex-1" />
-                <button onClick={() => setShowActivity(false)} className="text-theme-subtle hover:text-theme-secondary p-0.5"><X className="w-3 h-3" /></button>
+            <>
+              <div onMouseDown={activityPanelLayout.onMouseDown} className="w-px shrink-0 cursor-col-resize bg-border hover:bg-accent active:bg-accent/70 transition-colors" />
+              <div className="border-l border-app bg-app-muted/30 overflow-y-auto flex flex-col shrink-0" style={{ width: activityPanelLayout.size }}>
+                <div className="flex items-center gap-2 px-3 py-1.5 border-b border-app shrink-0">
+                  <History className="w-3 h-3 text-theme-muted" />
+                  <span className="overline">Activity</span>
+                  <span className="flex-1" />
+                  <button onClick={() => setShowActivity(false)} className="text-theme-subtle hover:text-theme-secondary p-0.5" aria-label="Close activity panel"><X className="w-3 h-3" /></button>
+                </div>
+                <ActivityTimeline activity={activity} />
               </div>
-              <ActivityTimeline activity={activity} />
-            </div>
+            </>
           )}
 
           {/* Chat panel — full-featured embedded chat */}
           {showChat && (
             <>
-            <div onMouseDown={chatPanel.onMouseDown} className="w-px shrink-0 cursor-col-resize bg-border hover:bg-accent active:bg-accent/70 transition-colors" />
-            <div className="border-l border-app bg-app-muted/30 flex flex-col shrink-0" style={{ width: chatPanel.size }}>
+            <div onMouseDown={chatPanelLayout.onMouseDown} className="w-px shrink-0 cursor-col-resize bg-border hover:bg-accent active:bg-accent/70 transition-colors" />
+            <div className="border-l border-app bg-app-muted/30 flex flex-col shrink-0" style={{ width: chatPanelLayout.size }}>
               <EmbeddedChat
                 workspaceId={id!}
                 workspaceName={workspace.name}
@@ -1059,21 +1063,24 @@ export default function WorkspaceDetailPage() {
             const active = ready.find((s: any) => s.name === previewService) ?? ready[0];
             const url = previewUrlFor(active, id!);
             return (
-              <div className="shrink-0 border-t border-app flex flex-col" style={{ height: 300 }}>
-                <PreviewBar id={id!} previewService={previewService} setPreviewService={setPreviewService} services={workspace.services} onClose={() => setShowPreview(false)} />
-                {url
-                  ? <iframe src={url} className="flex-1 w-full bg-surface-100 border-none" title="Preview" />
-                  : <div className="flex-1 flex items-center justify-center text-xs text-theme-subtle">No service ready</div>}
-              </div>
+              <>
+                <div onMouseDown={previewPanelLayout.onMouseDown} className="h-px shrink-0 cursor-row-resize bg-border hover:bg-accent active:bg-accent/70 transition-colors" />
+                <div className="shrink-0 border-t border-app flex flex-col" style={{ height: previewPanelLayout.size }}>
+                  <PreviewBar id={id!} previewService={previewService} setPreviewService={setPreviewService} services={workspace.services} onClose={() => setShowPreview(false)} />
+                  {url
+                    ? <iframe src={url} className="flex-1 w-full bg-surface-100 border-none" title="Preview" />
+                    : <div className="flex-1 flex items-center justify-center text-xs text-theme-subtle">No service ready</div>}
+                </div>
+              </>
             );
           })()}
 
           {/* Terminal resize handle */}
-          {terminalVisible && <div onMouseDown={termPanel.onMouseDown} className="h-px shrink-0 cursor-row-resize bg-border hover:bg-accent active:bg-accent/70 transition-colors" />}
+          {terminalVisible && <div onMouseDown={termPanelLayout.onMouseDown} className="h-px shrink-0 cursor-row-resize bg-border hover:bg-accent active:bg-accent/70 transition-colors" />}
 
           {/* Terminal */}
           {terminalVisible && (
-            <div className="shrink-0 flex flex-col overflow-hidden" style={{ height: termPanel.size }}>
+            <div className="shrink-0 flex flex-col overflow-hidden" style={{ height: termPanelLayout.size }}>
               <div className="flex items-center gap-0 bg-app-muted/40 border-b border-app shrink-0 px-1">
                 {terminals.map(t => (
                   <div key={t.id} onClick={() => setActiveTerminal(t.id)}
