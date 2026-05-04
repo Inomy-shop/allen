@@ -36,24 +36,24 @@ esac
 have() { command -v "$1" >/dev/null 2>&1; }
 
 # ---------------------------------------------------------------------------
-# Node.js 20+
+# Node.js 22+
 # ---------------------------------------------------------------------------
-step "Checking Node.js (need 20+)"
+step "Checking Node.js (need 22+)"
 if have node; then
   NODE_MAJOR="$(node -p 'process.versions.node.split(".")[0]')"
-  if [ "$NODE_MAJOR" -ge 20 ]; then
+  if [ "$NODE_MAJOR" -ge 22 ]; then
     ok "Node $(node -v)"
   else
-    err "Node $(node -v) found; Allen needs 20+."
-    warn "Install Node 20+ via nvm (https://github.com/nvm-sh/nvm), fnm, or your OS package manager, then re-run."
+    err "Node $(node -v) found; Allen needs 22+."
+    warn "Install Node 22+ via nvm (https://github.com/nvm-sh/nvm), fnm, or your OS package manager, then re-run."
     exit 1
   fi
 else
   err "Node.js not found."
   if [ "$PLATFORM" = "macos" ] && have brew; then
-    warn "Install with: brew install node@20  (then add it to PATH per brew's instructions)"
+    warn "Install with: brew install node@22  (then add it to PATH per brew's instructions)"
   else
-    warn "Install Node 20+ from https://nodejs.org/ or via nvm/fnm, then re-run."
+    warn "Install Node 22+ from https://nodejs.org/ or via nvm/fnm, then re-run."
   fi
   exit 1
 fi

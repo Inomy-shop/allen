@@ -6,7 +6,7 @@ Use a disposable or non-critical repository for the first run. Allen can spawn a
 
 ## Prerequisites
 
-- Node.js 20+ (the setup script verifies this)
+- Node.js 22+ (the setup script verifies this)
 - A local git repository you are comfortable letting Allen inspect — or a GitHub repo URL you can clone via SSH
 - An Anthropic account for Claude Code
 - An OpenAI account for Codex (Allen's chat defaults to Codex)
@@ -28,7 +28,7 @@ npm run setup
 
 This:
 
-- Checks Node.js 20+ and npm 10+.
+- Checks Node.js 22+ and npm 10+.
 - Installs MongoDB 7 (macOS via Homebrew) or prints install instructions for your OS, then starts it.
 - Installs the Claude Code CLI globally if missing (`npm install -g @anthropic-ai/claude-code`).
 - Runs `npm install`.

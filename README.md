@@ -19,9 +19,9 @@ Allen helps engineering teams run multiple coding agents against real repositori
 
 ### Requirements
 
-You only need Node.js 20+ on your machine to begin. The setup script will check for and (where possible) install the rest:
+You only need Node.js 22+ on your machine to begin. The setup script will check for and (where possible) install the rest:
 
-- Node.js 20+ and npm 10+
+- Node.js 22+ and npm 10+
 - MongoDB 7 (auto-installed on macOS via Homebrew; instructions printed elsewhere)
 - Claude Code CLI (auto-installed via `npm install -g @anthropic-ai/claude-code`)
 - Codex CLI (auto-installed via `npm install -g @openai/codex`) — Allen's chat defaults to Codex
@@ -42,7 +42,7 @@ npm run setup
 
 The setup script:
 
-- Verifies Node.js 20+ and npm 10+.
+- Verifies Node.js 22+ and npm 10+.
 - Installs MongoDB 7 (macOS via Homebrew) or prints install instructions for your OS, then starts it.
 - Installs the Claude Code CLI globally if it is missing.
 - Runs `npm install` for all workspace packages.

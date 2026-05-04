@@ -22,7 +22,7 @@ claude            # one-time Claude Code authentication
 npm start
 ```
 
-`npm run setup` checks for Node 20+, installs MongoDB 7 (Homebrew on macOS) and the Claude Code CLI if missing, runs `npm install`, creates `.env` from `.env.example`, and generates `JWT_ACCESS_SECRET` and `JWT_REFRESH_SECRET`. Adjust `ADMIN_EMAIL` and `ADMIN_PASSWORD` in `.env` if you do not want the defaults.
+`npm run setup` checks for Node 22+, installs MongoDB 7 (Homebrew on macOS) and the Claude Code CLI if missing, runs `npm install`, creates `.env` from `.env.example`, and generates `JWT_ACCESS_SECRET` and `JWT_REFRESH_SECRET`. Adjust `ADMIN_EMAIL` and `ADMIN_PASSWORD` in `.env` if you do not want the defaults.
 
 ## Before You Change Code
 

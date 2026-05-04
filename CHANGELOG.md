@@ -8,7 +8,7 @@ Allen is currently pre-release, so behavior can change between commits. Versione
 
 ### Added
 
-- `npm run setup` script that verifies Node 20+, installs MongoDB 7 (Homebrew on macOS), the Claude Code CLI, and the Codex CLI when missing, runs `npm install`, and creates `.env` with freshly generated JWT secrets.
+- `npm run setup` script that verifies Node 22+, installs MongoDB 7 (Homebrew on macOS), the Claude Code CLI, and the Codex CLI when missing, runs `npm install`, and creates `.env` with freshly generated JWT secrets.
 - `npm start` as the canonical command to run the full Allen stack locally.
 - Documentation for the two repo registration flows (local path and clone-via-SSH), the Linear ticket dispatch flow, and the workflow creation paths (visual builder vs. seed YAML).
 - Troubleshooting entry for "Codex CLI Not Found".

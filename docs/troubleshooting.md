@@ -8,7 +8,7 @@ The setup script verifies Node.js, installs MongoDB, the Claude Code CLI, and th
 
 Common failure modes:
 
-- **Node version too old.** Install Node.js 20+ via nvm, fnm, or your OS package manager, then re-run.
+- **Node version too old.** Install Node.js 22+ via nvm, fnm, or your OS package manager, then re-run.
 - **`brew` not installed on macOS.** Install Homebrew from https://brew.sh and re-run, or install MongoDB manually from https://www.mongodb.com/try/download/community.
 - **Linux MongoDB install needs sudo.** The script does not install MongoDB on Linux automatically; follow https://www.mongodb.com/docs/manual/administration/install-on-linux/, then re-run.
 - **`npm install -g @anthropic-ai/claude-code` or `@openai/codex` permission denied.** Configure an npm prefix you own (e.g. `npm config set prefix ~/.npm-global` and add `~/.npm-global/bin` to `PATH`), or install with sudo, then re-run.
@@ -24,7 +24,7 @@ npm --version
 
 Expected:
 
-- Node.js 20+
+- Node.js 22+
 - npm 10+
 
 Then retry:
