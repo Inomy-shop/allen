@@ -9,6 +9,12 @@ name: Allen CI
 permissions:
   contents: read
 
+# Run JavaScript-based actions (actions/checkout, actions/setup-node, etc.)
+# under Node.js 24 instead of the deprecated Node.js 20 runtime. See
+# https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
 concurrency:
   group: allen-ci-${{ github.ref }}
   cancel-in-progress: true
