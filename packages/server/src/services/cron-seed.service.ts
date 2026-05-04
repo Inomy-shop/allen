@@ -11,6 +11,9 @@
 import type { Db } from 'mongodb';
 import { computeNextRun } from './cron.service.js';
 import type { CronJob } from './cron.types.js';
+import { getSelfHealingLinearConfig } from './self-healing-env.js';
+
+const selfHealingLinearConfig = getSelfHealingLinearConfig();
 
 const SEED_JOBS: Omit<CronJob, '_id' | 'nextRunAt' | 'lastRunAt' | 'lastRunStatus' | 'lastRunError' | 'lastRunExecutionId' | 'runCount' | 'runStatus' | 'createdAt' | 'updatedAt'>[] = [
   {
@@ -84,6 +87,55 @@ const SEED_JOBS: Omit<CronJob, '_id' | 'nextRunAt' | 'lastRunAt' | 'lastRunStatu
     target: {
       type: 'system',
       systemAction: 'coderabbit-sweep',
+    },
+    isBuiltIn: true,
+    createdBy: 'seed',
+  },
+  {
+    name: 'allen-self-healing-monitor-hourly',
+    displayName: 'Allen Self-Healing Monitor',
+    description:
+      'Every hour, starts the agent-led self-healing workflow. Allen monitoring agents collect evidence through Allen MCP tools, create/update Linear issues through Linear MCP, and dispatch selected built-in repair workflows.',
+    enabled: true,
+    schedule: '17 * * * *',
+    timezone: 'UTC',
+    target: {
+      type: 'workflow',
+      workflowName: 'allen-self-healing-monitor-hourly',
+      workflowInput: {
+        mode: 'hourly_scan',
+        scan_window_hours: 1,
+        overlap_hours: 24,
+        lookbackHours: 24,
+        max_records_per_surface: 100,
+        maxTicketsPerRun: 20,
+        auto_dispatch: true,
+        linear_team_key: selfHealingLinearConfig?.teamKey ?? null,
+        linear_project_name: selfHealingLinearConfig?.projectName ?? null,
+        linear_assignee_email: selfHealingLinearConfig?.assigneeEmail ?? null,
+        statuses: ['completed', 'failed', 'cancelled', 'canceled', 'interrupted', 'running', 'waiting_for_input'],
+        scan_surfaces: [
+          'chat_sessions',
+          'chat_messages',
+          'chat_logs',
+          'agent_conversations',
+          'agent_activity',
+          'executions',
+          'execution_logs',
+          'execution_traces',
+          'memory_injection_audits',
+          'learnings',
+          'ticket_assignments',
+          'monitoring_events',
+        ],
+        stuck_thresholds: {
+          chatStreamingMinutes: 10,
+          agentRunningMinutes: 45,
+          delegationActiveMinutes: 45,
+          workflowRunningMinutes: 90,
+          workflowWaitingForInputMinutes: 1440,
+        },
+      },
     },
     isBuiltIn: true,
     createdBy: 'seed',

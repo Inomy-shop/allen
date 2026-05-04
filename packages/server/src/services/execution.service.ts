@@ -21,6 +21,8 @@ import {
 import type { AgentDef } from '@allen/engine';
 import { WorkspaceManager } from './workspace.service.js';
 import { ArtifactService } from './artifact.service.js';
+import { MonitoringService } from './self-healing-monitor.service.js';
+import { assertSelfHealingLinearConfig, isSelfHealingWorkflowName } from './self-healing-env.js';
 
 /**
  * Build the in-process service hook bundle the engine passes to built-ins.
@@ -182,6 +184,15 @@ export class ExecutionService {
     if (!workflowDoc) throw new Error('Workflow not found');
 
     const workflow = workflowDoc.parsed as WorkflowDef;
+    if (isSelfHealingWorkflowName(workflow.name)) {
+      const config = assertSelfHealingLinearConfig();
+      input = {
+        ...input,
+        linear_team_key: config.teamKey,
+        linear_project_name: config.projectName,
+        linear_assignee_email: config.assigneeEmail,
+      };
+    }
     const executionId = randomUUID();
 
     // Check concurrency limits — queue if exceeded
@@ -848,6 +859,25 @@ export class ExecutionService {
           baseEmitter.emit(event);
         } catch (err) {
           logger.error('[execution.emitter] base emitter threw', { executionId, error: (err as Error).message });
+        }
+
+        if (event.event === 'execution_failed' || event.event === 'node_failed') {
+          new MonitoringService(db).handleEvent({
+            sourceType: 'workflow_execution',
+            sourceId: executionId,
+            title: event.event === 'node_failed' ? `Workflow node failed: ${String(event.data.node ?? 'unknown')}` : `Workflow failed: ${workflow.name}`,
+            error: String((event.data as Record<string, unknown>).error ?? 'Workflow execution failed'),
+            rootCauseArea: event.event === 'node_failed' ? 'workflow_definition' : 'allen_repo',
+            severity: 'high',
+            confidence: 0.82,
+            failureMode: event.event,
+            relatedIds: {
+              executionId,
+              workflowName: workflow.name,
+              node: (event.data as Record<string, unknown>).node,
+              failedNode: (event.data as Record<string, unknown>).failedNode,
+            },
+          }).catch(() => {});
         }
 
         if (event.event !== 'input_required') return;

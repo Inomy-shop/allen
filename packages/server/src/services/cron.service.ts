@@ -19,6 +19,7 @@ import { logger } from '../logger.js';
 import { CronExpressionParser } from 'cron-parser';
 import { signAccessToken } from '../auth/jwt.js';
 import type { CronJob, CronRun, CronRunStatus, SystemAction } from './cron.types.js';
+import { isSelfHealingWorkflowName, missingSelfHealingLinearEnv } from './self-healing-env.js';
 
 const PORT = parseInt(process.env.PORT ?? '4000', 10);
 
@@ -275,6 +276,16 @@ export class CronService {
     target: Extract<CronJob['target'], { type: 'workflow' }>,
     jobName: string,
   ): Promise<{ executionId?: string; notes?: string; status: CronRunStatus }> {
+    if (isSelfHealingWorkflowName(target.workflowName)) {
+      const missing = missingSelfHealingLinearEnv();
+      if (missing.length > 0) {
+        return {
+          status: 'skipped',
+          notes: `Skipped self-healing monitor; missing required env vars: ${missing.join(', ')}`,
+        };
+      }
+    }
+
     const wfDoc = await this.db.collection('workflows').findOne({ 'parsed.name': target.workflowName });
     if (!wfDoc) throw new Error(`Workflow "${target.workflowName}" not found`);
 
