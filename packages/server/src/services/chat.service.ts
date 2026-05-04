@@ -8,7 +8,8 @@
 import type { Db } from 'mongodb';
 import { ObjectId } from 'mongodb';
 import type { Response } from 'express';
-import { runChatLLM, type ChatLLMMessage, type ChatProvider, PROVIDERS } from './chat-llm.js';
+import { runChatLLM, type ChatLLMMessage, type ChatProvider } from './chat-llm.js';
+import { getDefaultChatProvider, getProvidersInDefaultOrder } from './chat-providers.js';
 import { resolveAgentSettings, type AgentLike, type AgentOverrides, type ResolvedSettings } from './agent-settings.js';
 import { AlertService } from './alert.service.js';
 import { registerActiveSession, unregisterActiveSession, waitForBackgroundTasks } from './chat-tools.js';
@@ -341,10 +342,10 @@ export class ChatService {
   private get sessions() { return this.db.collection('chat_sessions'); }
   private get messages() { return this.db.collection('chat_messages'); }
 
-  getProviders() { return PROVIDERS; }
+  getProviders() { return getProvidersInDefaultOrder(); }
 
   async createSession(
-    provider: ChatProvider = 'codex',
+    provider: ChatProvider = getDefaultChatProvider(),
     model?: string,
     source: 'ui' | 'slack' = 'ui',
     slackContext?: SlackContext,
@@ -623,7 +624,7 @@ User: ${userMessage.slice(0, 500)}`;
 
     // Load session state BEFORE try block so catch can access these
     const session = await this.sessions.findOne({ _id: new ObjectId(sessionId) });
-    const provider = (session?.provider as ChatProvider) ?? 'codex';
+    const provider = (session?.provider as ChatProvider) ?? getDefaultChatProvider();
     const model = session?.model as string | undefined;
     const previousAgent = (session?.activeAgent as string | undefined) ?? undefined;
     // Agent is LOCKED to the session after first message — ignore agent param on subsequent messages

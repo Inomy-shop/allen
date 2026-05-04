@@ -11,3 +11,5 @@ test-reports/
 test-results/
 e2e/.auth/
 infra/
+.DS_Store
+**/.DS_Store

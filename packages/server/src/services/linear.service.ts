@@ -1,8 +1,8 @@
 /**
  * Linear integration service.
  *
- * Reads the user's Linear API key from Allen Secrets (ALLEN_LINEAR_ACCESS_TOKEN)
- * and wraps the @linear/sdk client for read-only access to projects and issues.
+ * Reads the user's Linear API key from `.env` (ALLEN_LINEAR_ACCESS_TOKEN) and
+ * wraps the @linear/sdk client for read-only access to projects and issues.
  * Agent assignments are stored locally by TicketAssignmentService; this file
  * deliberately never writes to Linear.
  */
@@ -10,7 +10,6 @@
 import { LinearClient } from '@linear/sdk';
 import type { Db } from 'mongodb';
 import { ObjectId } from 'mongodb';
-import { SecretService } from './secret.service.js';
 import { TicketAssignmentService, type TicketAssignment } from './ticket-assignment.service.js';
 import { WorkspaceManager } from './workspace.service.js';
 import { executeChatTool } from './chat-tools.js';
@@ -25,7 +24,7 @@ const PROJECTS_TTL_MS = 60_000;
 const ISSUES_TTL_MS = 30_000;
 const STATUS_TTL_MS = 300_000;
 
-export const LINEAR_TOKEN_SECRET_KEY = 'ALLEN_LINEAR_ACCESS_TOKEN';
+export const LINEAR_TOKEN_ENV_KEY = 'ALLEN_LINEAR_ACCESS_TOKEN';
 
 export type LinearStateType = 'backlog' | 'unstarted' | 'started' | 'completed' | 'canceled' | 'triage';
 
@@ -103,7 +102,6 @@ function resolveAgentDispatchPrompt(
 
 export class LinearService {
   private db: Db;
-  private secretSvc: SecretService;
   private assignmentSvc: TicketAssignmentService;
   private cachedClient: { token: string; client: LinearClient } | null = null;
 
@@ -114,7 +112,6 @@ export class LinearService {
 
   constructor(db: Db) {
     this.db = db;
-    this.secretSvc = new SecretService(db);
     this.assignmentSvc = new TicketAssignmentService(db);
   }
 
@@ -198,7 +195,7 @@ export class LinearService {
   }
 
   private async getToken(): Promise<string | null> {
-    return this.secretSvc.get(LINEAR_TOKEN_SECRET_KEY);
+    return process.env[LINEAR_TOKEN_ENV_KEY] ?? null;
   }
 
   private async getClient(): Promise<LinearClient | null> {

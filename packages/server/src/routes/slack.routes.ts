@@ -22,7 +22,7 @@ export function slackRoutes(db: Db): Router {
     ]);
 
     if (!signingSecret || !botToken) {
-      console.warn('[slack] SLACK_SIGNING_SECRET or SLACK_BOT_TOKEN not configured (set via /api/secrets or .env)');
+      console.warn('[slack] ALLEN_SLACK_SIGNING_SECRET or ALLEN_SLACK_BOT_TOKEN not configured in .env');
       return res.status(503).json({ error: 'Slack integration not configured' });
     }
 

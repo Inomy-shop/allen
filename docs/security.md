@@ -1,0 +1,160 @@
+# Security and Sandboxing
+
+Allen is not just a web app. It runs agents that can inspect repositories, use tools, run terminal commands, create artifacts, and interact with external services. Treat it as developer infrastructure with repo-write capability.
+
+## Core Security Model
+
+Allen assumes the operator controls:
+
+- The machine or server running Allen.
+- The repositories registered in Allen.
+- The credentials provided to Allen.
+- The workflow YAML and agent definitions being run.
+
+Allen does not currently provide a hardened sandbox for hostile code or untrusted workflows.
+
+## Workspaces
+
+Agents should work inside dedicated workspaces, not arbitrary filesystem paths.
+
+Workspace protections currently include:
+
+- Workspace-specific worktree paths.
+- Workspace context injected into agent prompts.
+- Server-side workspace metadata.
+- Port allocation per workspace.
+- Terminal and preview flows tied to workspace IDs.
+- Cleanup of stale workspace service PIDs on server boot.
+
+Important limitation: prompt constraints are not a kernel sandbox. If a tool has host filesystem access, the operator must still treat it as powerful.
+
+Recommended practice:
+
+- Use `WORKSPACE_BASE_DIR` to keep workspaces in one dedicated directory.
+- Do not register repos with committed secrets.
+- Do not run unfamiliar workflows against important repositories.
+- Review generated diffs before merging.
+
+## Agent Execution
+
+Agent execution can happen through Claude Code CLI or SDK.
+
+Relevant settings:
+
+- `ALLEN_AGENT_EXECUTION_MODE=cli|sdk`
+- `CLAUDE_BIN=/absolute/path/to/claude`
+- `ALLEN_SYSTEM_PROMPT_MODE=append|custom`
+- `ALLEN_AGENT_SKIP_LEARNINGS=true|false`
+
+CLI mode can use local developer auth and tools. SDK mode uses the SDK path for contexts where CLI repo execution is not appropriate.
+
+Review these before changing execution behavior:
+
+- `packages/engine/src/node-executor.ts`
+- `packages/engine/src/codex-executor.ts`
+- `packages/engine/src/cli-runner.ts`
+- `packages/server/src/services/chat-tools.ts`
+- `packages/server/src/services/chat-providers.ts`
+
+## Credentials
+
+All credentials Allen needs are read from `.env`.
+
+Required for boot:
+
+- `JWT_ACCESS_SECRET`
+- `JWT_REFRESH_SECRET`
+- `ADMIN_EMAIL`
+- `ADMIN_PASSWORD`
+
+Optional — set only the integrations you use:
+
+- `ALLEN_GITHUB_PERSONAL_ACCESS_TOKEN` for GitHub CLI calls and PR review workflows.
+- `ALLEN_LINEAR_ACCESS_TOKEN` for Linear ticket workflows.
+- `ALLEN_SLACK_BOT_TOKEN`, `ALLEN_SLACK_SIGNING_SECRET`, `ALLEN_SLACK_TEAM_ID` for Slack.
+- MCP credentials such as `ALLEN_POSTGRES_CONNECTION_STRING`, `ALLEN_MONGODB_CONNECTION_STRING`. The MCP loader strips the `ALLEN_` prefix when it forwards values to the MCP subprocess.
+
+Do not commit `.env`, tokens, API keys, customer data, private prompts, or copied repo contents.
+
+## MCP Servers
+
+MCP servers extend what agents can do. Allen intentionally does not forward the entire host environment to MCP subprocesses.
+
+The MCP loader maps configured keys like:
+
+```text
+GITHUB_PERSONAL_ACCESS_TOKEN -> process.env.ALLEN_GITHUB_PERSONAL_ACCESS_TOKEN
+```
+
+The subprocess receives the unprefixed variable only when the MCP definition explicitly requests it.
+
+Before enabling an MCP server:
+
+- Check what tools it exposes.
+- Check what environment variables it needs.
+- Use least-privilege credentials.
+- Avoid connecting production databases unless the workflow requires it and the risk is understood.
+
+## Public Capability URLs
+
+Some Allen URLs are intentionally public because browsers, Slack, email, iframes, and EventSource cannot always attach Authorization headers.
+
+Public routes include:
+
+- Uploaded file downloads.
+- Artifact content links.
+- Execution SSE stream by unguessable execution ID.
+- Workspace log SSE by workspace ID.
+- Workspace preview proxy.
+
+These follow a capability URL pattern: possession of the unguessable URL grants access.
+
+Operational implications:
+
+- Do not put secrets in artifacts or uploaded files.
+- Treat shared artifact/file URLs as sensitive.
+- Be careful before posting execution or workspace links into public channels.
+- Review route changes in `packages/server/src/app.ts`, `file.routes.ts`, `artifact.routes.ts`, and workspace routes.
+
+## Authentication and Users
+
+Allen is invite/admin controlled. There is no public signup.
+
+On first boot:
+
+1. Server reads `ADMIN_EMAIL` and `ADMIN_PASSWORD`.
+2. It creates the bootstrap admin if no admin exists.
+3. The admin must reset password on first login.
+
+JWT settings:
+
+- `JWT_ACCESS_SECRET`
+- `JWT_REFRESH_SECRET`
+- Optional `ACCESS_TOKEN_TTL`
+- Optional `REFRESH_TOKEN_TTL`
+
+Rotate JWT secrets if they are exposed.
+
+## Integrations
+
+Use least-privilege credentials for:
+
+- GitHub
+- Linear
+- Slack
+- Model providers
+- Databases exposed through MCP
+
+Allen can create PRs, post Slack messages, read Linear tickets, and run tools depending on configuration. The integration token controls the blast radius.
+
+## Security Checklist Before Public Use
+
+- Replace default admin credentials.
+- Generate strong JWT secrets (`npm run setup` does this on first run).
+- Keep `.env` out of git.
+- Run secret scanning before publishing the repository.
+- Use a dedicated workspace directory.
+- Test with a disposable repo first.
+- Review workflow YAML and agent definitions.
+- Review public artifact/file sharing behavior.
+- Enable GitHub secret scanning and Dependabot alerts for the public repo.
