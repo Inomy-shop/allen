@@ -268,6 +268,7 @@ export function getAllenMcpConfig(
 
   const env: Record<string, string> = {
     ALLEN_API_URL: apiUrl,
+    ...(process.env.ALLEN_PUBLIC_URL ? { ALLEN_PUBLIC_URL: process.env.ALLEN_PUBLIC_URL } : {}),
     PATH: process.env.PATH ?? '',
     HOME: process.env.HOME ?? '',
     ...(process.env.JWT_ACCESS_SECRET ? { JWT_ACCESS_SECRET: process.env.JWT_ACCESS_SECRET } : {}),
