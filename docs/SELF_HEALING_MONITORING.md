@@ -160,22 +160,18 @@ The following workflows are seeded from `packages/engine/workflows/`:
 
 - `self-healing-incident-triage`
 - `allen-self-healing-monitor-hourly`
-- `self-healing-repair-allen`
-- `self-healing-memory-repair`
-- `self-healing-tooling-repair`
-- `self-healing-workflow-repair`
-- `self-healing-prompt-instruction-repair`
+- `self-healing-repair`
 
 Routing defaults:
 
 | Root Cause Area | Repair Target |
 |---|---|
-| `memory_system` | `self-healing-memory-repair` |
-| `tool_integration` | `self-healing-tooling-repair` |
-| `workflow_definition` | `self-healing-workflow-repair` |
-| `agent_prompt` | `self-healing-prompt-instruction-repair` |
-| `instruction_bug` | `self-healing-prompt-instruction-repair` |
-| `allen_repo` | `self-healing-repair-allen` |
+| `memory_system` | `self-healing-repair` with `repair_area=memory_system` |
+| `tool_integration` | `self-healing-repair` with `repair_area=tool_integration` |
+| `workflow_definition` | `self-healing-repair` with `repair_area=workflow_definition` |
+| `agent_prompt` | `self-healing-repair` with `repair_area=prompt_instruction` |
+| `instruction_bug` | `self-healing-repair` with `repair_area=prompt_instruction` |
+| `allen_repo` | `self-healing-repair` with `repair_area=allen_repo` |
 | `unknown` | `allen-incident-router` |
 
 ## API

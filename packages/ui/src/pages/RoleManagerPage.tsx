@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAgents } from '../hooks/useAgents';
+import { useWorkflows } from '../hooks/useWorkflows';
 import { agents as agentsApi, teams as teamsApi, repos as reposApi, executions as executionsApi } from '../services/api';
 import RoleIcon from '../components/common/RoleIcon';
 import RoleDialog from '../components/common/RoleDialog';
@@ -10,9 +11,11 @@ import { renderMarkdown } from '../components/chat/ChatMessageList';
 import {
   RefreshCw, Sparkles, Users, Crown, Search, Play, ArrowRight,
   X, FolderGit2, Plus, Pencil, Trash2, LayoutGrid, Info, Home,
-  ChevronRight,
+  ChevronRight, GitBranch, CheckCircle, XCircle, ExternalLink, UserRound,
+  Layers, Tag, FileText, Monitor, Download, ScanSearch, Settings,
 } from 'lucide-react';
 import { DelegationGraph } from '../components/agents/DelegationGraph';
+import McpServerManager from '../components/settings/McpServerManager';
 import {
   ImportAgentsFromRepoDialog,
   AssignToTeamDialog,
@@ -28,6 +31,8 @@ import { AgentCard } from '../components/agents/AgentCard';
 
 type Agent = Record<string, unknown>;
 type Selection = { kind: 'overview' } | { kind: 'team'; name: string } | { kind: 'unassigned' };
+type LibrarySection = 'workflows' | 'teams-agents' | 'repos' | 'integrations' | 'members';
+type WorkflowExecStats = { total: number; completed: number; failed: number; running: number; queued: number };
 
 // ── Agent detail panel (markdown viewer) ──────────────────────────────────
 
@@ -63,7 +68,7 @@ function AgentDetailPanel({
           <div className="flex items-start gap-4 min-w-0">
             <div
               className="w-14 h-14 rounded-xl flex items-center justify-center shrink-0"
-              style={{ backgroundColor: ((agent.color as string) ?? '#5e6ad2') + '20' }}
+              style={{ backgroundColor: ((agent.color as string) ?? '#2a76e2') + '20' }}
             >
               <RoleIcon icon={agent.icon as string} color={agent.color as string} size={30} />
             </div>
@@ -406,10 +411,15 @@ function RunAgentDialog({
 export default function RoleManagerPage() {
   const navigate = useNavigate();
   const { agents: allAgents, loading, refresh } = useAgents();
+  const { workflows, loading: workflowsLoading, refresh: refreshWorkflows } = useWorkflows();
   const toast = useToast();
 
   // Team data
   const [allTeams, setAllTeams] = useState<Team[]>([]);
+  const [repoList, setRepoList] = useState<any[]>([]);
+  const [repoLoading, setRepoLoading] = useState(true);
+  const [librarySection, setLibrarySection] = useState<LibrarySection>('teams-agents');
+  const [workflowExecStats, setWorkflowExecStats] = useState<Record<string, WorkflowExecStats>>({});
   // Selection + search
   const [selection, setSelection] = useState<Selection>({ kind: 'overview' });
   const [sidebarSearch, setSidebarSearch] = useState('');
@@ -445,6 +455,42 @@ export default function RoleManagerPage() {
     }
   }, []);
   useEffect(() => { void reloadActivity(); }, [reloadActivity]);
+
+  const reloadRepos = useCallback(async () => {
+    setRepoLoading(true);
+    try {
+      const list = await reposApi.list();
+      setRepoList((list ?? []).slice().sort((a: any, b: any) =>
+        String(a.name ?? '').localeCompare(String(b.name ?? '')),
+      ));
+    } catch {
+      setRepoList([]);
+    } finally {
+      setRepoLoading(false);
+    }
+  }, []);
+  useEffect(() => { void reloadRepos(); }, [reloadRepos]);
+
+  const reloadWorkflowExecStats = useCallback(async () => {
+    try {
+      const execs = await executionsApi.list();
+      const map: Record<string, WorkflowExecStats> = {};
+      for (const exec of execs as any[]) {
+        const name = exec.workflowName;
+        if (!name) continue;
+        if (!map[name]) map[name] = { total: 0, completed: 0, failed: 0, running: 0, queued: 0 };
+        map[name].total += 1;
+        if (exec.status === 'completed') map[name].completed += 1;
+        else if (exec.status === 'failed') map[name].failed += 1;
+        else if (exec.status === 'running') map[name].running += 1;
+        else if (exec.status === 'queued') map[name].queued += 1;
+      }
+      setWorkflowExecStats(map);
+    } catch {
+      setWorkflowExecStats({});
+    }
+  }, []);
+  useEffect(() => { void reloadWorkflowExecStats(); }, [reloadWorkflowExecStats, workflows.length]);
 
   // Agent CRUD dialog state
   const [dialogOpen, setDialogOpen] = useState(false);
@@ -674,121 +720,115 @@ export default function RoleManagerPage() {
 
   if (loading) {
     return (
-      <div className="p-6">
-        <h1 className="text-[20px] font-semibold text-theme-primary tracking-tight mb-6">Agents</h1>
-        <div className="grid grid-cols-[18rem_1fr] gap-4">
-          <div className="space-y-2">
-            {Array.from({ length: 6 }).map((_, i) => (
-              <div key={i} className="h-12 rounded-md bg-app-muted animate-pulse" />
+      <div className="lib-shell">
+        <aside className="lib-rail">
+          <div className="lib-rail-head">
+            <div className="h-5 w-20 rounded bg-app-muted animate-pulse" />
+            <div className="mt-2 h-8 w-full rounded bg-app-muted animate-pulse" />
+          </div>
+          <div className="lib-rail-list">
+            {Array.from({ length: 5 }).map((_, i) => (
+              <div key={i} className="h-14 rounded-lg bg-app-muted animate-pulse" />
             ))}
           </div>
-          <div className="space-y-3">
-            {Array.from({ length: 4 }).map((_, i) => (
-              <div key={i} className="h-24 rounded-lg bg-app-muted animate-pulse" />
-            ))}
-          </div>
+        </aside>
+        <div className="lib-pane p-6">
+          {Array.from({ length: 4 }).map((_, i) => (
+            <div key={i} className="mb-3 h-20 rounded-lg bg-app-muted animate-pulse" />
+          ))}
         </div>
       </div>
     );
   }
 
-  return (
-    <div className="flex h-full min-h-0">
+  const librarySections: Array<{ k: LibrarySection; label: string; desc: string; count: number | string }> = [
+    { k: 'workflows', label: 'workflows', desc: 'how work flows through agents', count: workflows.length },
+    { k: 'teams-agents', label: 'teams & agents', desc: 'departments and the agents that live there', count: allTeams.length },
+    { k: 'repos', label: 'repos', desc: 'connected source repositories', count: repoList.length },
+    { k: 'integrations', label: 'integrations', desc: 'linear · github · slack · ...', count: 3 },
+    { k: 'members', label: 'members', desc: 'people in this org', count: '—' },
+  ];
 
-      {/* ── Right pane ───────────────────────────────────────────────────── */}
-      <main className="flex-1 overflow-y-auto min-h-0">
-        {/* Bulk selection bar */}
+  return (
+    <div className="lib-shell" data-screen-label="library">
+      <aside className="lib-rail scroll-hide">
+        <div className="lib-rail-head">
+          <h1 className="lib-rail-title">library</h1>
+          <p className="lib-rail-sub">workflows, agents, and integrations the org uses</p>
+        </div>
+        <nav className="lib-rail-list">
+          {librarySections.map(section => (
+            <button
+              key={section.k}
+              className={`lib-rail-item ${librarySection === section.k ? 'active' : ''}`}
+              onClick={() => setLibrarySection(section.k)}
+            >
+              <span className="lib-ri-label">{section.label}</span>
+              <span className="lib-ri-count">{section.count}</span>
+              <span className="lib-ri-desc">{section.desc}</span>
+            </button>
+          ))}
+        </nav>
+      </aside>
+
+      <main className="lib-pane scroll-hide">
         {selectedAgents.size > 0 && (
-          <div className="sticky top-0 z-10 flex items-center justify-between gap-3 px-6 py-3 bg-accent-blue/10 border-b border-accent-blue/30">
-            <span className="text-[11px] font-mono text-accent-blue">
-              {selectedAgents.size} selected
-            </span>
-            <div className="flex items-center gap-2">
-              <button
-                onClick={() => setAssignOpen(true)}
-                className="inline-flex items-center gap-1 px-3 py-1 rounded-full text-[10px] font-mono bg-accent-blue/10 text-accent-blue hover:bg-accent-blue/20"
-              >
-                <ArrowRight className="w-3 h-3" /> Assign to team
-              </button>
-              <button
-                onClick={() => setCreateTeamOpen(true)}
-                className="inline-flex items-center gap-1 px-3 py-1 rounded-full text-[10px] font-mono bg-accent-green/10 text-accent-green hover:bg-accent-green/20"
-              >
-                <Plus className="w-3 h-3" /> Create team with these
-              </button>
-              <button
-                onClick={clearSelection}
-                className="inline-flex items-center gap-1 px-3 py-1 rounded-full text-[10px] font-mono bg-app-muted/50 text-theme-muted hover:bg-app-muted"
-              >
-                <X className="w-3 h-3" /> Clear
-              </button>
-            </div>
+          <div className="lib-selection-bar">
+            <span>{selectedAgents.size} selected</span>
+            <button onClick={() => setAssignOpen(true)}><ArrowRight className="w-3 h-3" /> assign to team</button>
+            <button onClick={() => setCreateTeamOpen(true)}><Plus className="w-3 h-3" /> create team</button>
+            <button onClick={clearSelection}><X className="w-3 h-3" /> clear</button>
           </div>
         )}
 
-        {selection.kind === 'overview' && (
-          <DirectoryShell
-            total={total}
-            teamsCount={allTeams.length}
-            assignedCount={assignedCount}
-            unassignedCount={unassigned.length}
-            providers={globalProviders}
-            models={globalModels}
-            topTeams={topTeams}
-            allTeams={allTeams}
-            allAgents={allAgents}
+        {librarySection === 'workflows' && (
+          <LibraryWorkflowsPane
+            workflows={workflows}
+            loading={workflowsLoading}
+            execStats={workflowExecStats}
+            onRefresh={refreshWorkflows}
+            onNew={() => navigate('/workflows/new')}
+            onOpen={(id) => navigate(`/workflows/${id}/edit`)}
+            onAll={() => navigate('/workflows')}
+          />
+        )}
+        {librarySection === 'teams-agents' && (
+          <LibraryTeamsAgentsPane
+            teams={allTeams}
+            agents={allAgents as any[]}
             agentsByTeam={agentsByTeam}
             activityByAgent={activityByAgent}
-            activeTab={activeTab}
-            onTabChange={setActiveTab}
-            search={sidebarSearch}
-            onSearchChange={setSidebarSearch}
-            onSelectTeam={(name) => { setSelection({ kind: 'team', name }); setMemberSearch(''); }}
+            selectedAgents={selectedAgents}
+            onToggleSelect={toggleAgentSelection}
             onViewAgent={setViewingAgent}
-            onCreateAgent={handleCreate}
+            onEditAgent={handleEdit}
+            onDeleteAgent={setDeletingRole}
+            onRunAgent={handleRun}
             onCreateTeam={() => setCreateTeamOpen(true)}
+            onBuildTeamWithAi={handleBuildTeamWithAi}
+            onCreateAgent={handleCreate}
+            onImportAgents={() => setImportOpen(true)}
+            onEditTeam={(team) => setTeamDialog({ type: 'edit', team })}
+            onDeleteTeam={setDeletingTeam}
+            onAddAgentToTeam={handleAddAgentToTeamWithAi}
             onRefresh={() => { refresh(); void reloadTeams(); void reloadActivity(); }}
           />
         )}
-
-        {selection.kind === 'team' && activeTeam && (
-          <TeamDetailContent
-            team={activeTeam}
-            members={activeMembers}
-            filteredMembers={filteredActiveMembers}
-            lead={activeLead}
-            providers={activeTeamProviders}
-            models={activeTeamModels}
-            memberSearch={memberSearch}
-            onMemberSearch={setMemberSearch}
-            selectedAgents={selectedAgents}
-            onToggleSelect={toggleAgentSelection}
-            onView={setViewingAgent}
-            onEdit={handleEdit}
-            onDelete={setDeletingRole}
-            onRun={handleRun}
-            onEditTeam={() => setTeamDialog({ type: 'edit', team: activeTeam })}
-            onDeleteTeam={() => setDeletingTeam(activeTeam)}
-            onAddAgentWithAi={() => handleAddAgentToTeamWithAi(activeTeam)}
-            onBackToOverview={() => setSelection({ kind: 'overview' })}
+        {librarySection === 'repos' && (
+          <LibraryReposPane
+            repos={repoList}
+            loading={repoLoading}
+            onRefresh={reloadRepos}
+            onAdd={() => navigate('/repos')}
+            onOpen={() => navigate('/repos')}
           />
         )}
-
-        {selection.kind === 'team' && !activeTeam && (
-          <div className="p-8 text-center text-theme-muted text-sm">
-            Team not found. <button className="text-accent-blue underline" onClick={() => setSelection({ kind: 'overview' })}>Back to overview</button>
-          </div>
-        )}
-
-        {selection.kind === 'unassigned' && (
-          <UnassignedContent
-            agents={unassigned}
-            selectedAgents={selectedAgents}
-            onToggleSelect={toggleAgentSelection}
-            onView={setViewingAgent}
-            onEdit={handleEdit}
-            onDelete={setDeletingRole}
-            onRun={handleRun}
+        {librarySection === 'integrations' && <LibraryIntegrationsPane />}
+        {librarySection === 'members' && (
+          <LibraryMembersPane
+            teams={allTeams}
+            agents={allAgents as any[]}
+            unassigned={unassigned as any[]}
           />
         )}
       </main>
@@ -855,6 +895,414 @@ export default function RoleManagerPage() {
   );
 }
 
+function countWorkflowNodes(wf: any): number {
+  if (wf.parsed?.nodes && !Array.isArray(wf.parsed.nodes)) return Object.keys(wf.parsed.nodes).length;
+  if (Array.isArray(wf.parsed?.nodes)) return wf.parsed.nodes.length;
+  if (Array.isArray(wf.parsed?.workflow?.nodes)) return wf.parsed.workflow.nodes.length;
+  return 0;
+}
+
+function countWorkflowEdges(wf: any): number {
+  if (Array.isArray(wf.parsed?.edges)) return wf.parsed.edges.length;
+  if (Array.isArray(wf.parsed?.workflow?.edges)) return wf.parsed.workflow.edges.length;
+  return 0;
+}
+
+function workflowInputKeys(wf: any): string[] {
+  if (!wf.parsed?.input || typeof wf.parsed.input !== 'object') return [];
+  return Object.keys(wf.parsed.input);
+}
+
+function LibraryWorkflowsPane({
+  workflows, loading, onRefresh, onNew, onOpen, onAll,
+  execStats,
+}: {
+  workflows: any[];
+  loading: boolean;
+  execStats: Record<string, WorkflowExecStats>;
+  onRefresh: () => void;
+  onNew: () => void;
+  onOpen: (id: string) => void;
+  onAll: () => void;
+}) {
+  return (
+    <div className="lib-section">
+      <div className="lib-page-head">
+        <div>
+          <h2>workflows</h2>
+          <p>{workflows.length} workflows · reusable, version-controlled</p>
+        </div>
+        <div className="lib-actions">
+          <button className="btn btn-secondary btn-sm" onClick={onRefresh}><RefreshCw className="w-3 h-3" /></button>
+          <button className="btn btn-secondary btn-sm" onClick={onAll}>all workflows</button>
+          <button className="btn btn-primary btn-sm" onClick={onNew}><Plus className="w-3 h-3" /> new workflow</button>
+        </div>
+      </div>
+
+      <div className="lib-card overflow-hidden">
+        {loading ? (
+          Array.from({ length: 5 }).map((_, i) => <div key={i} className="lib-row-skel" />)
+        ) : workflows.length === 0 ? (
+          <div className="lib-empty">no workflows yet</div>
+        ) : workflows.map((wf) => {
+          const nodeCount = countWorkflowNodes(wf);
+          const edgeCount = countWorkflowEdges(wf);
+          const inputKeys = workflowInputKeys(wf);
+          const stats = execStats[wf.name] ?? { total: 0, completed: 0, failed: 0, running: 0, queued: 0 };
+          const isValid = Boolean(wf.validation?.valid);
+          return (
+            <button key={wf._id} className="lib-workflow-row" onClick={() => onOpen(wf._id)}>
+              <GitBranch className="h-4 w-4 text-accent" />
+              <span className="lib-row-main">
+                <span className="lib-row-title mono">{wf.name}</span>
+                <span className="lib-row-sub">{wf.description || 'No description'}</span>
+                <span className="lib-workflow-meta">
+                  <span>v{wf.version ?? 1}</span>
+                  <span>{edgeCount} edges</span>
+                  <span>{inputKeys.length > 0 ? `${inputKeys.length} inputs` : 'no inputs'}</span>
+                  {(wf.tags ?? []).slice(0, 2).map((tag: string) => <span key={tag}>{tag}</span>)}
+                </span>
+              </span>
+              <span className="lib-chip"><Layers className="h-3 w-3" /> {nodeCount} nodes</span>
+              <span className="lib-run-stats" title={`${stats.total} total runs`}>
+                <span className="ok"><CheckCircle className="h-3 w-3" /> {stats.completed}</span>
+                <span className="err"><XCircle className="h-3 w-3" /> {stats.failed}</span>
+                <span><Play className="h-3 w-3" /> {stats.running + stats.queued}</span>
+                <span>{stats.total} total</span>
+              </span>
+              <span className={`lib-chip ${isValid ? 'ok' : 'err'}`}>
+                {isValid ? <CheckCircle className="h-3 w-3" /> : <XCircle className="h-3 w-3" />}
+                {isValid ? 'valid' : 'invalid'}
+              </span>
+              <span className="lib-row-actions">
+                edit <ExternalLink className="h-3 w-3" />
+              </span>
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+function LibraryTeamsAgentsPane({
+  teams, agents, agentsByTeam, activityByAgent, selectedAgents,
+  onToggleSelect, onViewAgent, onEditAgent, onDeleteAgent, onRunAgent,
+  onCreateTeam, onBuildTeamWithAi, onCreateAgent, onImportAgents, onEditTeam, onDeleteTeam,
+  onAddAgentToTeam, onRefresh,
+}: {
+  teams: Team[];
+  agents: any[];
+  agentsByTeam: Map<string, any[]>;
+  activityByAgent: Map<string, number>;
+  selectedAgents: Set<string>;
+  onToggleSelect: (name: string) => void;
+  onViewAgent: (agent: Agent) => void;
+  onEditAgent: (agent: Agent) => void;
+  onDeleteAgent: (name: string) => void;
+  onRunAgent: (agent: Agent) => void;
+  onCreateTeam: () => void;
+  onBuildTeamWithAi: () => void;
+  onCreateAgent: () => void;
+  onImportAgents: () => void;
+  onEditTeam: (team: Team) => void;
+  onDeleteTeam: (team: Team) => void;
+  onAddAgentToTeam: (team: Team) => void;
+  onRefresh: () => void;
+}) {
+  const [activeName, setActiveName] = useState('');
+  const [teamQuery, setTeamQuery] = useState('');
+  const [agentQuery, setAgentQuery] = useState('');
+
+  useEffect(() => {
+    if (teams.length === 0) {
+      setActiveName('');
+      return;
+    }
+    if (!activeName || !teams.some(t => t.name === activeName)) setActiveName(teams[0].name);
+  }, [activeName, teams]);
+
+  const totalAgents = agents.length;
+  const q = teamQuery.trim().toLowerCase();
+  const filteredTeams = teams.filter(team =>
+    !q
+    || team.name.toLowerCase().includes(q)
+    || team.displayName.toLowerCase().includes(q)
+    || (team.leadAgentName ?? '').toLowerCase().includes(q)
+    || (team.mission ?? '').toLowerCase().includes(q),
+  );
+  const activeTeam = teams.find(t => t.name === activeName) ?? teams[0] ?? null;
+  const activeMembers = activeTeam ? (agentsByTeam.get(activeTeam.name) ?? []) : [];
+  const activeLead = activeMembers.find(member => member.teamRole === 'lead');
+  const memberQ = agentQuery.trim().toLowerCase();
+  const filteredMembers = !memberQ
+    ? activeMembers
+    : activeMembers.filter(member =>
+      String(member.name ?? '').toLowerCase().includes(memberQ)
+      || String(member.displayName ?? '').toLowerCase().includes(memberQ)
+      || ((member.capabilities as string[] | undefined) ?? []).some(cap => cap.toLowerCase().includes(memberQ)),
+    );
+
+  return (
+    <div className="lib-team-shell">
+      <aside className="lib-team-list scroll-hide">
+        <div className="lib-team-head">
+          <div className="lib-team-meta">
+            <span>teams</span>
+            <em>{teams.length} · {totalAgents} agents</em>
+          </div>
+          <div className="lib-search">
+            <Search className="h-3 w-3" />
+            <input placeholder="search teams or leads..." value={teamQuery} onChange={e => setTeamQuery(e.target.value)} />
+          </div>
+        </div>
+        <div className="lib-team-body">
+          {filteredTeams.length === 0 && <div className="lib-empty">no teams match "{teamQuery}"</div>}
+          {filteredTeams.map(team => (
+            <button
+              key={team.name}
+              className={`lib-team-row ${activeTeam?.name === team.name ? 'active' : ''}`}
+              onClick={() => setActiveName(team.name)}
+            >
+              <span className="lib-team-row-head">
+                <span>{team.displayName}</span>
+                <em>{agentsByTeam.get(team.name)?.length ?? 0}</em>
+              </span>
+              <span className="lib-team-row-sub">{team.leadAgentName || 'no lead assigned'}</span>
+            </button>
+          ))}
+        </div>
+        <div className="lib-team-foot">
+          <button className="btn btn-secondary btn-sm" onClick={onImportAgents}><FolderGit2 className="w-3 h-3" /> import</button>
+          <button className="btn btn-secondary btn-sm" onClick={onCreateTeam}><Plus className="w-3 h-3" /> new team</button>
+        </div>
+      </aside>
+
+      <section className="lib-team-detail scroll-hide">
+        {activeTeam ? (
+          <>
+            <header className="lib-team-detail-head">
+              <div>
+                <h2>{activeTeam.displayName}</h2>
+                <p>{activeTeam.mission || activeTeam.description || 'No mission defined.'}</p>
+              </div>
+              <div className="lib-actions">
+                <button className="btn btn-secondary btn-sm" onClick={onRefresh}><RefreshCw className="w-3 h-3" /></button>
+                <button className="btn btn-secondary btn-sm" onClick={onImportAgents}><FolderGit2 className="w-3 h-3" /> import from repo</button>
+                <button className="btn btn-secondary btn-sm" onClick={() => onEditTeam(activeTeam)}><Pencil className="w-3 h-3" /> edit</button>
+                <button className="btn btn-primary btn-sm" onClick={() => onAddAgentToTeam(activeTeam)}><Plus className="w-3 h-3" /> add agent</button>
+              </div>
+            </header>
+
+            <div className="lib-team-stats">
+              <div><span>lead</span><strong>{activeLead?.displayName ?? activeLead?.name ?? activeTeam.leadAgentName ?? 'none'}</strong></div>
+              <div><span>agents</span><strong className="mono">{activeMembers.length}</strong></div>
+              <div><span>id</span><strong className="mono">{activeTeam.name}</strong></div>
+            </div>
+
+            <div className="lib-team-section-head">
+              <h3>agents <span>{filteredMembers.length}</span></h3>
+              <div className="lib-actions">
+                <input className="lib-mini-search" placeholder="filter..." value={agentQuery} onChange={e => setAgentQuery(e.target.value)} />
+                <button className="btn btn-ghost btn-sm" onClick={onRefresh}><RefreshCw className="w-3 h-3" /></button>
+              </div>
+            </div>
+
+            <div className="lib-agent-list">
+              {filteredMembers.length === 0 ? (
+                <div className="lib-empty">no agents in this team</div>
+              ) : filteredMembers.map(agent => (
+                <LibraryAgentListRow
+                  key={agent.name}
+                  agent={agent}
+                  runs7d={activityByAgent.get(agent.name as string) ?? 0}
+                  selected={selectedAgents.has(agent.name)}
+                  onToggle={() => onToggleSelect(agent.name)}
+                  onView={() => onViewAgent(agent)}
+                  onEdit={() => onEditAgent(agent)}
+                  onDelete={() => onDeleteAgent(agent.name)}
+                  onRun={() => onRunAgent(agent)}
+                />
+              ))}
+            </div>
+
+            {!activeTeam.isBuiltIn && (
+              <div className="lib-danger-row">
+                <span>team management</span>
+                <button className="btn btn-ghost btn-sm hover:text-accent-red" onClick={() => onDeleteTeam(activeTeam)}>
+                  <Trash2 className="w-3 h-3" /> delete team
+                </button>
+              </div>
+            )}
+          </>
+        ) : (
+          <div className="lib-empty">
+            no teams yet
+            <div className="mt-3 flex justify-center gap-2">
+              <button className="btn btn-secondary btn-sm" onClick={onBuildTeamWithAi}>build with AI</button>
+              <button className="btn btn-secondary btn-sm" onClick={onImportAgents}>import from repo</button>
+              <button className="btn btn-primary btn-sm" onClick={onCreateAgent}>new agent</button>
+            </div>
+          </div>
+        )}
+      </section>
+    </div>
+  );
+}
+
+function LibraryAgentListRow({
+  agent, runs7d, selected, onToggle, onView, onEdit, onDelete, onRun,
+}: {
+  agent: any;
+  runs7d: number;
+  selected: boolean;
+  onToggle: () => void;
+  onView: () => void;
+  onEdit: () => void;
+  onDelete: () => void;
+  onRun: () => void;
+}) {
+  return (
+    <div className="lib-agent-row">
+      <input type="checkbox" checked={selected} onChange={onToggle} aria-label={`Select ${agent.displayName ?? agent.name}`} />
+      <button className="lib-agent-main" onClick={onView}>
+        <div className="lib-agent-icon"><Users className="h-3 w-3" /></div>
+        <span>
+          <strong>{agent.displayName ?? agent.name}</strong>
+          <em className="mono">{agent.model ?? 'sonnet'} · {runs7d} runs · {agent.teamRole === 'lead' ? 'lead' : 'member'}</em>
+        </span>
+      </button>
+      <span className={`lib-pill ${runs7d > 0 ? 'ok' : 'waiting'}`}>{runs7d > 0 ? 'active' : 'idle'}</span>
+      <button className="btn btn-ghost btn-sm" onClick={onRun}><Play className="w-3 h-3" /></button>
+      <button className="btn btn-ghost btn-sm" onClick={onEdit}><Pencil className="w-3 h-3" /></button>
+      <button className="btn btn-ghost btn-sm hover:text-accent-red" onClick={onDelete}><Trash2 className="w-3 h-3" /></button>
+    </div>
+  );
+}
+
+function LibraryReposPane({
+  repos, loading, onRefresh, onAdd, onOpen,
+}: {
+  repos: any[];
+  loading: boolean;
+  onRefresh: () => void;
+  onAdd: () => void;
+  onOpen: (id: string) => void;
+}) {
+  return (
+    <div className="lib-section">
+      <div className="lib-page-head">
+        <div>
+          <h2>repositories</h2>
+          <p>{repos.length} repos registered</p>
+        </div>
+        <div className="lib-actions">
+          <button className="btn btn-secondary btn-sm" onClick={onRefresh}><RefreshCw className="w-3 h-3" /></button>
+          <button className="btn btn-primary btn-sm" onClick={onAdd}><Plus className="w-3 h-3" /> add repo</button>
+        </div>
+      </div>
+      <div className="lib-repo-grid">
+        {loading ? Array.from({ length: 4 }).map((_, i) => <div key={i} className="lib-repo-skel" />)
+          : repos.length === 0 ? <div className="lib-empty">no repositories registered</div>
+          : repos.map(repo => (
+            <button key={repo._id ?? repo.name} className={`lib-repo-current-card ${repo.status === 'archived' ? 'opacity-50' : ''}`} onClick={() => onOpen(String(repo._id ?? repo.name))}>
+              <div className="lib-repo-top">
+                <div className="lib-repo-icon"><FolderGit2 className="h-4 w-4" /></div>
+                <div className="min-w-0 flex-1">
+                  <div className="lib-repo-title-row">
+                    <span>{repo.name}</span>
+                    {repo.status === 'archived' && <span className="badge badge-muted">archived</span>}
+                    {repo.executionCount > 0 && <em>· {repo.executionCount} runs</em>}
+                  </div>
+                  {repo.description && <p>{repo.description}</p>}
+                </div>
+                <span className="dot dot-ok mt-1 shrink-0" />
+              </div>
+
+              {(repo.detected?.language?.length || repo.detected?.framework?.length || repo.tags?.length) ? (
+                <div className="lib-repo-tags">
+                  {(repo.detected?.language ?? []).filter((lang: string) => lang !== 'unknown').map((lang: string) => (
+                    <span key={lang}>{lang}</span>
+                  ))}
+                  {(repo.detected?.framework ?? []).map((fw: string) => <span key={fw}>{fw}</span>)}
+                  {(repo.tags ?? []).slice(0, 3).map((tag: string) => (
+                    <span key={tag}><Tag className="h-2.5 w-2.5" /> {tag}</span>
+                  ))}
+                </div>
+              ) : null}
+
+              <div className="lib-repo-meta">
+                <span><GitBranch className="h-3 w-3" />{repo.detected?.defaultBranch ?? repo.branch ?? 'main'}</span>
+                {(repo.detected?.remoteUrl || repo.remoteUrl) && (() => {
+                  const remote = repo.detected?.remoteUrl ?? repo.remoteUrl;
+                  const sshMatch = remote.match(/^git@([^:]+):(.+?)(?:\.git)?$/);
+                  const display = remote.replace(/^git@([^:]+):/, '$1/').replace(/^https?:\/\//, '').replace(/\.git$/, '');
+                  return <span className="truncate"><ExternalLink className="h-3 w-3" />{display || sshMatch?.[2]}</span>;
+                })()}
+                {repo.detected?.packageManager && <span>{repo.detected.packageManager}</span>}
+              </div>
+
+              <div className="lib-repo-actions">
+                <span title="View context"><FileText className="h-3.5 w-3.5" /></span>
+                <span title="New workspace"><Monitor className="h-3.5 w-3.5" /></span>
+                <span title="Pull latest"><Download className="h-3.5 w-3.5" /></span>
+                <span title="Scan"><ScanSearch className="h-3.5 w-3.5" /></span>
+                <span title="Workspace config"><Settings className="h-3.5 w-3.5" /></span>
+                <span title="Edit"><Pencil className="h-3.5 w-3.5" /></span>
+                <span className="ml-auto" title="Delete"><Trash2 className="h-3.5 w-3.5" /></span>
+              </div>
+            </button>
+          ))}
+      </div>
+    </div>
+  );
+}
+
+function LibraryIntegrationsPane() {
+  return (
+    <div className="lib-section">
+      <div className="lib-page-head">
+        <div>
+          <h2>integrations</h2>
+          <p>MCP servers and external tools available to Allen</p>
+        </div>
+      </div>
+      <McpServerManager />
+    </div>
+  );
+}
+
+function LibraryMembersPane({ teams, agents, unassigned }: { teams: Team[]; agents: any[]; unassigned: any[] }) {
+  const leads = agents.filter(agent => agent.teamRole === 'lead');
+  return (
+    <div className="lib-section">
+      <div className="lib-page-head">
+        <div>
+          <h2>members</h2>
+          <p>{agents.length} agent owners across {teams.length} teams</p>
+        </div>
+      </div>
+      <div className="lib-team-stats mb-5">
+        <div><span>team leads</span><strong className="mono">{leads.length}</strong></div>
+        <div><span>assigned agents</span><strong className="mono">{agents.length - unassigned.length}</strong></div>
+        <div><span>unassigned</span><strong className="mono">{unassigned.length}</strong></div>
+      </div>
+      <div className="lib-pref-list">
+        {leads.slice(0, 12).map(agent => (
+          <div key={agent.name} className="lib-pref-row">
+            <span>
+              <strong>{agent.displayName ?? agent.name}</strong>
+              <em>{agent.teamName ?? 'no team'} · {agent.model ?? 'sonnet'}</em>
+            </span>
+            <span className="lib-pill ok"><UserRound className="h-3 w-3" /> lead</span>
+          </div>
+        ))}
+        {leads.length === 0 && <div className="lib-empty">no team leads found</div>}
+      </div>
+    </div>
+  );
+}
+
 // ── Directory shell — tabbed view that drives the Overview pane ──────────
 // Matches handoff/pages/agents.jsx AgentsV2:
 //   • Breadcrumb + Agents h1 + tab row (Directory / Teams / Graph / Models)
@@ -903,18 +1351,18 @@ function DirectoryShell({
     return s;
   }, [activityByAgent]);
   return (
-    <div className="px-6 pt-5 pb-6">
+    <div className="page-shell">
       {/* Breadcrumb */}
-      <div className="flex items-center gap-2 mb-2 text-[12px] text-theme-muted">
-        <span>Build</span>
+      <div className="page-crumb">
+        <span>Org</span>
         <span className="text-theme-subtle">/</span>
-        <span>Agents</span>
+        <span>Library</span>
       </div>
 
       {/* Title + actions */}
-      <div className="flex items-center justify-between mb-3 gap-3">
+      <div className="page-head mb-3">
         <div className="flex items-center gap-3 min-w-0">
-          <h1 className="text-[20px] font-semibold text-theme-primary tracking-tight">Agents</h1>
+          <h1 className="page-title">Library</h1>
           <span className="text-[12px] font-mono text-theme-muted">
             {total} agents · {teamsCount} teams
           </span>
@@ -1148,7 +1596,7 @@ function AgentRow({ agent, runs7d, onClick }: { agent: any; runs7d: number; onCl
       <div
         className="w-8 h-8 rounded-md flex items-center justify-center text-white text-[11px] font-mono font-semibold shrink-0"
         style={{
-          background: `linear-gradient(135deg, ${(agent.color as string) ?? '#5e6ad2'}, #8b5cf6)`,
+          background: `linear-gradient(135deg, ${(agent.color as string) ?? '#2a76e2'}, #9763cc)`,
         }}
       >
         {initials || '?'}
@@ -1436,12 +1884,12 @@ function TeamDetailContent({
 }) {
   const canAddAgent = team.name !== 'meta';
   return (
-    <div className="px-6 pt-5 pb-6 space-y-5">
+    <div className="page-shell space-y-5">
       {/* Breadcrumb (matches handoff/pages/agents.jsx AgentsV2) */}
-      <div className="flex items-center gap-2 text-[12px] text-theme-muted">
-        <button onClick={onBackToOverview} className="hover:text-theme-primary transition-colors">Build</button>
+      <div className="page-crumb">
+        <button onClick={onBackToOverview} className="hover:text-theme-primary transition-colors">Org</button>
         <span className="text-theme-subtle">/</span>
-        <button onClick={onBackToOverview} className="hover:text-theme-primary transition-colors">Agents</button>
+        <button onClick={onBackToOverview} className="hover:text-theme-primary transition-colors">Library</button>
         <span className="text-theme-subtle">/</span>
         <span className="truncate text-theme-secondary">{team.displayName}</span>
       </div>

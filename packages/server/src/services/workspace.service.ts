@@ -8,7 +8,7 @@ import { promisify } from 'node:util';
 import { existsSync, mkdirSync, rmSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { spawn, type ChildProcess } from 'node:child_process';
-import type { Db, ObjectId } from 'mongodb';
+import { ObjectId, type Db } from 'mongodb';
 import { resolveWorkspacesDir } from '@allen/engine';
 import { watchWorkspace, unwatchWorkspace } from './workspace-watcher.js';
 
@@ -82,6 +82,7 @@ export interface Workspace {
   behind: number;
   lastCommit?: { hash: string; message: string; date: Date };
   chatSessionId?: string;
+  chatSessionIds?: string[];
   createdAt: Date;
   updatedAt: Date;
 }
@@ -865,6 +866,20 @@ export class WorkspaceManager {
     return this.db.collection('workspace_activity').find({ workspaceId }).sort({ timestamp: -1 }).limit(limit).toArray();
   }
 
+  async listChats(workspaceId: string): Promise<any[]> {
+    const ws = await this.get(workspaceId);
+    if (!ws) throw new Error('Workspace not found');
+    const ids = Array.from(new Set([
+      ...(ws.chatSessionIds ?? []),
+      ...(ws.chatSessionId ? [ws.chatSessionId] : []),
+    ].filter(Boolean)));
+    if (ids.length === 0) return [];
+    return this.db.collection('chat_sessions')
+      .find({ _id: { $in: ids.map(id => new ObjectId(id)) } })
+      .sort({ lastMessageAt: -1 })
+      .toArray();
+  }
+
   // ── Bulk Operations ──
 
   async bulkArchive(ids: string[]): Promise<{ archived: number }> {
@@ -877,6 +892,16 @@ export class WorkspaceManager {
 
   async linkChat(id: string, chatSessionId: string): Promise<void> {
     const { ObjectId } = await import('mongodb');
-    await this.col.updateOne({ _id: new ObjectId(id) }, { $set: { chatSessionId, updatedAt: new Date() } });
+    await this.col.updateOne(
+      { _id: new ObjectId(id) },
+      {
+        $set: { chatSessionId, updatedAt: new Date() },
+        $addToSet: { chatSessionIds: chatSessionId },
+      },
+    );
+    await this.db.collection('chat_sessions').updateOne(
+      { _id: new ObjectId(chatSessionId) },
+      { $set: { workspaceId: id, updatedAt: new Date() } },
+    );
   }
 }

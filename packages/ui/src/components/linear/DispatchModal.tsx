@@ -42,7 +42,7 @@ export interface DispatchModalProps {
   reposLoading: boolean;
   onClose: () => void;
   onSubmit: (args: {
-    target: DispatchTarget;
+    target: DispatchTarget | null;
     repoId: string;
     extraInstructions: string;
     promptTemplate?: string;
@@ -271,7 +271,7 @@ export default function DispatchModal({
   if (!open) return null;
 
   const selectedRepo = repos.find(r => String(r._id) === repoId);
-  const targetKind = targetKey.split(':')[0];
+  const targetKind = targetKey ? targetKey.split(':')[0] : 'auto';
 
   function decodeTarget(): DispatchTarget | null {
     if (!targetKey) return null;
@@ -290,15 +290,12 @@ export default function DispatchModal({
   }
 
   const selectedTarget = decodeTarget();
-  const promptPreview = selectedTarget && selectedTarget.kind !== 'workflow'
-    ? promptTemplate
-    : '';
+  const promptPreview = selectedTarget && selectedTarget.kind !== 'workflow' ? promptTemplate : '';
 
   async function submit() {
     setError(null);
     const target = decodeTarget();
-    if (!target) { setError('Pick an agent, team lead, or workflow'); return; }
-    if (target.kind !== 'workflow' && !repoId) {
+    if (target?.kind !== 'workflow' && !repoId) {
       setError('Pick a repository — the agent needs a workspace to work in');
       return;
     }
@@ -306,7 +303,7 @@ export default function DispatchModal({
     // Type-cast workflow inputs per the parsed.input schema. Required
     // fields without a value short-circuit with a helpful error.
     let castInput: Record<string, unknown> | undefined;
-    if (target.kind === 'workflow' && fullWorkflow?.parsed?.input) {
+    if (target?.kind === 'workflow' && fullWorkflow?.parsed?.input) {
       const schemaByKey = fullWorkflow.parsed.input as Record<string, any>;
       castInput = {};
       for (const [k, schema] of Object.entries(schemaByKey)) {
@@ -342,7 +339,7 @@ export default function DispatchModal({
         target,
         repoId,
         extraInstructions: extra.trim(),
-        promptTemplate: target.kind === 'workflow' ? undefined : promptTemplate,
+        promptTemplate: target && target.kind !== 'workflow' && promptCustomized ? promptTemplate : undefined,
         workflowInput: castInput,
       });
     } catch (err) {
@@ -352,10 +349,8 @@ export default function DispatchModal({
   }
 
   const ctaLabel = submitting
-    ? 'Dispatching…'
-    : targetKind === 'workflow'
-      ? 'Run workflow'
-      : 'Dispatch';
+    ? 'Opening chat...'
+    : 'Continue in chat';
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-md" onClick={onClose}>
@@ -400,42 +395,42 @@ export default function DispatchModal({
             />
           ) : (
             <div className="space-y-4">
-              <div>
-                <label className="overline mb-1.5 block">
-                  Prompt template
-                </label>
-                <div className="mb-1.5 flex items-center justify-between gap-3">
-                  <div className="text-[10px] font-mono text-theme-subtle">
-                    {selectedTarget?.kind === 'team-lead'
-                      ? `Editable prompt that will be sent to the selected team lead (${selectedTarget.agentName}).`
-                      : selectedTarget?.kind === 'agent'
-                        ? `Editable prompt that will be sent to the selected agent (${selectedTarget.name}).`
-                        : 'Pick an agent or team lead to edit the prompt.'}
+              {selectedTarget && selectedTarget.kind !== 'workflow' && (
+                <div>
+                  <label className="overline mb-1.5 block">
+                    Prompt template
+                  </label>
+                  <div className="mb-1.5 flex items-center justify-between gap-3">
+                    <div className="text-[10px] font-mono text-theme-subtle">
+                      {selectedTarget.kind === 'team-lead'
+                        ? `Editable prompt that will be sent to the selected team lead (${selectedTarget.agentName}).`
+                        : `Editable prompt that will be sent to the selected agent (${selectedTarget.name}).`}
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setPromptTemplate(buildAgentDispatchPromptTemplate(issue, extra));
+                        setPromptCustomized(false);
+                      }}
+                      className="text-[10px] font-mono text-accent hover:underline shrink-0"
+                    >
+                      Reset from ticket
+                    </button>
                   </div>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setPromptTemplate(buildAgentDispatchPromptTemplate(issue, extra));
-                      setPromptCustomized(false);
+                  <textarea
+                    value={promptPreview}
+                    onChange={(e) => {
+                      setPromptTemplate(e.target.value);
+                      setPromptCustomized(true);
                     }}
-                    className="text-[10px] font-mono text-accent hover:underline shrink-0"
-                  >
-                    Reset from ticket
-                  </button>
+                    rows={14}
+                    className="input py-2 text-[12px] font-mono resize-y w-full"
+                  />
+                  <div className="mt-1.5 text-[10px] font-mono text-theme-subtle">
+                    Placeholders: <span className="text-theme-muted">{'{{worktreePath}}'}</span> and <span className="text-theme-muted">{'{{repoPath}}'}</span> are replaced after workspace creation.
+                  </div>
                 </div>
-                <textarea
-                  value={promptPreview}
-                  onChange={(e) => {
-                    setPromptTemplate(e.target.value);
-                    setPromptCustomized(true);
-                  }}
-                  rows={14}
-                  className="input py-2 text-[12px] font-mono resize-y w-full"
-                />
-                <div className="mt-1.5 text-[10px] font-mono text-theme-subtle">
-                  Placeholders: <span className="text-theme-muted">{'{{worktreePath}}'}</span> and <span className="text-theme-muted">{'{{repoPath}}'}</span> are replaced after workspace creation.
-                </div>
-              </div>
+              )}
 
               <div>
                 <label className="overline mb-1.5 block">
@@ -495,14 +490,16 @@ export default function DispatchModal({
         <div className="px-5 py-3.5 border-t border-app bg-app-muted/40 flex items-center justify-between shrink-0">
           <div className="text-[10px] font-mono text-theme-subtle">
             {targetKind === 'workflow'
-              ? 'Workflow runs as a normal execution. Results show up in Activity.'
-              : 'Workspace creates first, then the agent starts working in it.'}
+              ? 'Chat will review this workflow preference before starting work.'
+              : targetKind === 'auto'
+                ? 'Chat will choose the right workflow, lead, or specialist agent.'
+                : 'Chat will update Linear, route the task, and create a workspace first if code changes are needed.'}
           </div>
           <div className="flex items-center gap-2">
             <button onClick={onClose} disabled={submitting} className="btn btn-ghost btn-sm">Cancel</button>
             <button
               onClick={submit}
-              disabled={submitting || !targetKey || (targetKind !== 'workflow' && !repoId)}
+              disabled={submitting || (targetKind !== 'workflow' && !repoId)}
               className="btn btn-primary btn-sm"
             >
               {submitting ? <Loader2 className="w-3 h-3 animate-spin" /> : <Play className="w-3 h-3" />}

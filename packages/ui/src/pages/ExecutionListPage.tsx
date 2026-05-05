@@ -1,19 +1,32 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
-import { Link, useNavigate, useSearchParams } from 'react-router-dom';
-import {
-  Play, RefreshCw, RotateCcw, Download, ChevronUp, ChevronDown,
-  Search, ChevronLeft, ChevronRight,
-} from 'lucide-react';
+import { Link, useSearchParams } from 'react-router-dom';
+import { Play, RefreshCw, Search } from 'lucide-react';
 import { executions as api } from '../services/api';
 import StatusBadge from '../components/common/StatusBadge';
-import CostDisplay from '../components/common/CostDisplay';
-import { TableSkeleton } from '../components/common/Skeleton';
 
-type SortKey = 'status' | 'workflowName' | 'durationMs' | 'startedAt';
-type SortDir = 'asc' | 'desc';
 type TypeFilter = '' | 'agent' | 'workflow';
 
 const PAGE_SIZE = 50;
+
+function shortDuration(ms: number | null | undefined): string {
+  if (ms == null) return '-';
+  const s = ms / 1000;
+  if (s < 60) return `${s.toFixed(1)}s`;
+  const m = Math.floor(s / 60);
+  return `${m}m ${Math.floor(s % 60)}s`;
+}
+
+function progressFor(status: string): number {
+  switch (status) {
+    case 'completed': return 100;
+    case 'failed': return 60;
+    case 'cancelled': return 20;
+    case 'waiting_for_input': return 35;
+    case 'running': return 58;
+    case 'queued': return 12;
+    default: return 25;
+  }
+}
 
 export default function ExecutionListPage() {
   const [data, setData] = useState<any[]>([]);
@@ -36,7 +49,6 @@ export default function ExecutionListPage() {
 
   const setFilter = (s: string) => updateParams({ status: s || null, page: null });
   const setTypeFilter = (t: string) => updateParams({ type: t || null, page: null });
-  const setPage = (p: number) => updateParams({ page: p > 0 ? String(p) : null });
 
   // Local search input state — debounced into the URL so list refreshes
   // don't fire on every keystroke.
@@ -50,10 +62,6 @@ export default function ExecutionListPage() {
       updateParams({ q: v || null, page: null });
     }, 300);
   };
-
-  const [sortKey, setSortKey] = useState<SortKey>('startedAt');
-  const [sortDir, setSortDir] = useState<SortDir>('desc');
-  const navigate = useNavigate();
 
   const refresh = useCallback(async () => {
     setLoading(true);
@@ -81,82 +89,103 @@ export default function ExecutionListPage() {
     return () => clearInterval(interval);
   }, [data, refresh]);
 
-  // Sorted data
   const sorted = useMemo(() => {
     const copy = [...data];
     copy.sort((a, b) => {
-      let aVal = a[sortKey];
-      let bVal = b[sortKey];
-      if (sortKey === 'startedAt') {
-        aVal = new Date(aVal ?? 0).getTime();
-        bVal = new Date(bVal ?? 0).getTime();
-      }
-      if (sortKey === 'durationMs') {
-        aVal = aVal ?? 0;
-        bVal = bVal ?? 0;
-      }
-      if (aVal < bVal) return sortDir === 'asc' ? -1 : 1;
-      if (aVal > bVal) return sortDir === 'asc' ? 1 : -1;
-      return 0;
+      const aVal = new Date(a.startedAt ?? 0).getTime();
+      const bVal = new Date(b.startedAt ?? 0).getTime();
+      return bVal - aVal;
     });
     return copy;
-  }, [data, sortKey, sortDir]);
-
-  const toggleSort = (key: SortKey) => {
-    if (sortKey === key) {
-      setSortDir(d => d === 'asc' ? 'desc' : 'asc');
-    } else {
-      setSortKey(key);
-      setSortDir('desc');
-    }
-  };
-
-  const SortIcon = ({ col }: { col: SortKey }) => {
-    if (sortKey !== col) return null;
-    return sortDir === 'asc'
-      ? <ChevronUp className="w-3 h-3 inline ml-0.5" />
-      : <ChevronDown className="w-3 h-3 inline ml-0.5" />;
-  };
-
-  const handleRerun = useCallback(async (exec: any) => {
-    try {
-      const result = await api.start(exec.workflowId, exec.input ?? {});
-      navigate(`/executions/${result.id}`);
-    } catch (e: any) {
-      alert(e.message);
-    }
-  }, [navigate]);
-
-  const handleExport = useCallback(async (execId: string) => {
-    const traces = await api.traces(execId);
-    const blob = new Blob([JSON.stringify(traces, null, 2)], { type: 'application/json' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `execution-${execId}-traces.json`;
-    a.click();
-    URL.revokeObjectURL(url);
-  }, []);
+  }, [data]);
 
   const statuses = ['', 'running', 'completed', 'failed', 'cancelled', 'queued', 'waiting_for_input'];
-  const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
-  const fromIdx = total === 0 ? 0 : page * PAGE_SIZE + 1;
-  const toIdx = Math.min(total, (page + 1) * PAGE_SIZE);
+  const runningNow = sorted.filter(exec => exec.status === 'running' || exec.status === 'queued' || exec.status === 'waiting_for_input');
+  const recentExecs = sorted.slice(0, 12);
 
   return (
-    <div className="px-6 pt-5 pb-8">
-      {/* Breadcrumb */}
-      <div className="flex items-center gap-2 mb-2 text-[12px] text-theme-muted">
-        <span>Workspace</span>
-        <span className="text-theme-subtle">/</span>
-        <span>Activity</span>
+    <div className="content scroll-hide" data-screen-label="activity">
+      <div className="page-head">
+        <div className="ph-row">
+          <div>
+            <h1>activity</h1>
+            <p className="sub">what's running, queued, and just finished across the org</p>
+          </div>
+          <button title="Refresh executions" onClick={refresh} className="btn btn-secondary btn-sm" type="button">
+            <RefreshCw className={`w-3.5 h-3.5 ${loading ? 'animate-spin' : ''}`} />
+          </button>
+        </div>
       </div>
 
-      <div className="flex items-center justify-between mb-5 gap-3 flex-wrap">
-        <div className="flex items-center gap-3">
-          <h1 className="text-[20px] font-semibold text-theme-primary tracking-tight">Activity</h1>
-          <span className="text-[12px] font-mono text-theme-muted">{total}</span>
-        </div>
+      <div className="an-body">
+        <section className="an-section">
+          <header className="an-h">
+            <h3><Play className="h-3 w-3" /> running now <span className="an-h-ct">{runningNow.length}</span></h3>
+            <button className="an-h-link" onClick={() => setFilter('running')} type="button">view all <span>→</span></button>
+          </header>
+          {runningNow.length === 0 ? (
+            <div className="an-empty">no executions running.</div>
+          ) : (
+            <div className="an-runlist">
+              {runningNow.map((exec: any) => (
+                <Link key={exec.id ?? exec._id} className="an-run" to={`/executions/${exec.id}`}>
+                  <span className="mono an-run-id">{exec.id?.slice(0, 8) ?? 'N/A'}</span>
+                  <span className="an-run-wf">{exec.workflowName}</span>
+                  <StatusBadge status={exec.status} />
+                  <span className="mono">{shortDuration(exec.durationMs)}</span>
+                </Link>
+              ))}
+            </div>
+          )}
+        </section>
+
+        <section className="an-section">
+          <header className="an-h">
+            <h3><Play className="h-3 w-3" /> recent executions</h3>
+            <span className="an-h-ct">{total} total</span>
+          </header>
+          <div className="an-runlist">
+            {recentExecs.length === 0 ? (
+              <div className="an-empty">no executions yet.</div>
+            ) : recentExecs.map((exec: any) => (
+              <Link key={exec.id ?? exec._id} className="an-run" to={`/executions/${exec.id}`}>
+                <span className="mono an-run-id">{exec.id?.slice(0, 8) ?? 'N/A'}</span>
+                <span className="an-run-wf">{exec.workflowName}</span>
+                <StatusBadge status={exec.status} />
+                <span className="mono">{shortDuration(exec.durationMs)}</span>
+              </Link>
+            ))}
+          </div>
+        </section>
+
+        <section className="an-section">
+          <header className="an-h">
+            <h3><Play className="h-3 w-3" /> tasks in motion</h3>
+          </header>
+          {runningNow.length === 0 ? (
+            <div className="an-empty">no tasks in motion.</div>
+          ) : (
+            <div className="th-list p-0">
+              {runningNow.map((exec: any) => (
+                <Link key={exec.id ?? exec._id} className="th-row" to={`/executions/${exec.id}`}>
+                  <div className="r-refs">
+                    <span className="r-ref linear">{exec.type ?? 'run'}</span>
+                    <span className="r-ref gh">{exec.id?.slice(0, 8) ?? 'N/A'}</span>
+                  </div>
+                  <div className="th-body">
+                    <div className="th-title">{exec.workflowName}</div>
+                    <div className="th-sub">{exec.status}</div>
+                  </div>
+                  <div className="bar th-prog"><span style={{ width: `${progressFor(exec.status)}%` }} /></div>
+                  <StatusBadge status={exec.status} />
+                </Link>
+              ))}
+            </div>
+          )}
+        </section>
+      </div>
+
+      <div className="activity-filterbar">
         <div className="flex items-center gap-2 flex-wrap">
           <div className="relative">
             <Search className="w-3.5 h-3.5 absolute left-2.5 top-1/2 -translate-y-1/2 text-theme-muted pointer-events-none" />
@@ -192,162 +221,6 @@ export default function ExecutionListPage() {
           </button>
         </div>
       </div>
-
-      {loading && data.length === 0 ? (
-        <div className="card overflow-hidden">
-          <table className="w-full text-sm">
-            <thead>
-              <tr className="bg-app-muted overline border-b border-app">
-                <th className="text-left px-4 py-2">ID</th>
-                <th className="text-left px-4 py-2">Workflow</th>
-                <th className="text-left px-4 py-2">Status</th>
-                <th className="text-left px-4 py-2">Duration</th>
-                <th className="text-left px-4 py-2">Cost</th>
-                <th className="text-left px-4 py-2">Started</th>
-                <th className="text-left px-4 py-2">Actions</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-border/40">
-              <TableSkeleton rows={5} cols={7} />
-            </tbody>
-          </table>
-        </div>
-      ) : data.length === 0 ? (
-        <div className="card p-8 text-center">
-          <Play className="w-8 h-8 text-theme-subtle mx-auto mb-3" />
-          {(search || filter || typeFilter) ? (
-            <>
-              <p className="text-theme-secondary text-sm font-body">No executions match your filters</p>
-              <p className="text-theme-subtle text-xs mt-1 font-mono">CLEAR SEARCH OR FILTERS TO SEE MORE</p>
-            </>
-          ) : (
-            <>
-              <p className="text-theme-secondary text-sm font-body">No executions yet</p>
-              <p className="text-theme-subtle text-xs mt-1 font-mono">START A WORKFLOW TO SEE EXECUTIONS HERE</p>
-            </>
-          )}
-        </div>
-      ) : (
-        <div className="card overflow-hidden">
-          <table className="w-full text-sm font-body">
-            <thead>
-              <tr className="bg-app-muted overline border-b border-app">
-                <th className="text-left px-4 py-2">ID</th>
-                <th
-                  className="text-left px-4 py-2 cursor-pointer hover:text-theme-primary transition-colors"
-                  onClick={() => toggleSort('workflowName')}
-                >
-                  Workflow <SortIcon col="workflowName" />
-                </th>
-                <th
-                  className="text-left px-4 py-2 cursor-pointer hover:text-theme-primary transition-colors"
-                  onClick={() => toggleSort('status')}
-                >
-                  Status <SortIcon col="status" />
-                </th>
-                <th
-                  className="text-left px-4 py-2 cursor-pointer hover:text-theme-primary transition-colors"
-                  onClick={() => toggleSort('durationMs')}
-                >
-                  Duration <SortIcon col="durationMs" />
-                </th>
-                <th className="text-left px-4 py-3 font-medium">Cost</th>
-                <th
-                  className="text-left px-4 py-2 cursor-pointer hover:text-theme-primary transition-colors"
-                  onClick={() => toggleSort('startedAt')}
-                >
-                  Started <SortIcon col="startedAt" />
-                </th>
-                <th className="text-left px-4 py-3 font-medium">Actions</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-border/40">
-              {sorted.map((exec: any) => (
-                <tr key={exec.id ?? exec._id} className="hover:bg-app-muted/50 transition-colors">
-                  <td className="px-4 py-2.5">
-                    <Link
-                      to={`/executions/${exec.id}`}
-                      className="text-accent hover:text-accent-hover font-mono text-[12px]"
-                    >
-                      {exec.id?.slice(0, 8) ?? 'N/A'}
-                    </Link>
-                  </td>
-                  <td className="px-4 py-2.5 text-[13px] text-theme-primary">{exec.workflowName}</td>
-                  <td className="px-4 py-2.5"><StatusBadge status={exec.status} /></td>
-                  <td className="px-4 py-2.5 text-theme-secondary text-[12px] tabular-nums font-mono">
-                    {exec.durationMs != null ? `${(exec.durationMs / 1000).toFixed(1)}s` : '-'}
-                  </td>
-                  <td className="px-4 py-2.5"><CostDisplay cost={exec.cost} /></td>
-                  <td className="px-4 py-2.5 text-theme-secondary text-[12px] font-mono">
-                    {exec.startedAt ? new Date(exec.startedAt).toLocaleString() : '-'}
-                  </td>
-                  <td className="px-4 py-2.5">
-                    <div className="flex items-center gap-0.5">
-                      {/* Re-run */}
-                      {exec.workflowId && (
-                        <button
-                          onClick={() => handleRerun(exec)}
-                          className="p-1.5 rounded text-theme-muted hover:text-accent hover:bg-app-muted transition-colors"
-                          title="Re-run workflow"
-                        >
-                          <Play className="w-3.5 h-3.5" />
-                        </button>
-                      )}
-                      {/* Retry from failed node */}
-                      {exec.status === 'failed' && exec.failedNode && (
-                        <button
-                          onClick={async () => {
-                            await api.retryFrom(exec.id, exec.failedNode);
-                            refresh();
-                          }}
-                          className="p-1.5 rounded text-accent-yellow hover:bg-accent-yellow/10 transition-colors"
-                          title={`Retry from ${exec.failedNode}`}
-                        >
-                          <RotateCcw className="w-3.5 h-3.5" />
-                        </button>
-                      )}
-                      {/* Export traces */}
-                      <button
-                        onClick={() => handleExport(exec.id)}
-                        className="p-1.5 rounded text-theme-muted hover:text-theme-primary hover:bg-app-muted transition-colors"
-                        title="Export traces as JSON"
-                      >
-                        <Download className="w-3.5 h-3.5" />
-                      </button>
-                    </div>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-          <div className="flex items-center justify-between px-4 py-2.5 border-t border-app text-[12px] text-theme-muted font-mono">
-            <span>
-              {fromIdx}–{toIdx} of {total}
-            </span>
-            <div className="flex items-center gap-2">
-              <button
-                onClick={() => setPage(page - 1)}
-                disabled={page === 0 || loading}
-                className="p-1.5 rounded text-theme-muted hover:text-theme-primary hover:bg-app-muted transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
-                title="Previous page"
-              >
-                <ChevronLeft className="w-3.5 h-3.5" />
-              </button>
-              <span>
-                Page {page + 1} of {totalPages}
-              </span>
-              <button
-                onClick={() => setPage(page + 1)}
-                disabled={page + 1 >= totalPages || loading}
-                className="p-1.5 rounded text-theme-muted hover:text-theme-primary hover:bg-app-muted transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
-                title="Next page"
-              >
-                <ChevronRight className="w-3.5 h-3.5" />
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
     </div>
   );
 }

@@ -16,6 +16,7 @@ import { registerActiveSession, unregisterActiveSession, waitForBackgroundTasks 
 import { searchSimilar, backfillEmbeddings } from './embedding.service.js';
 import { buildOrgContextBlock } from './org-context.js';
 import { MonitoringService } from './self-healing-monitor.service.js';
+import { ExecutionService } from './execution.service.js';
 // Note: embedding.service.ts re-exports from @allen/engine — single implementation shared by engine + server
 
 // ── Types ──
@@ -52,6 +53,10 @@ export interface ChatMessage {
   role: 'user' | 'assistant';
   content: string;
   status: 'completed' | 'streaming' | 'failed' | 'interrupted';
+  senderUserId?: string;
+  senderName?: string;
+  senderEmail?: string;
+  senderSource?: 'ui' | 'slack' | 'system';
   costUsd?: number;
   durationMs?: number;
   numTurns?: number;
@@ -67,6 +72,23 @@ export interface ToolCallRecord {
   result: Record<string, unknown>;
   durationMs: number;
   timestamp: Date;
+}
+
+export interface ChatMessageSender {
+  userId?: string;
+  name?: string;
+  email?: string;
+  source?: 'ui' | 'slack' | 'system';
+}
+
+function senderFields(sender?: ChatMessageSender): Pick<ChatMessage, 'senderUserId' | 'senderName' | 'senderEmail' | 'senderSource'> {
+  if (!sender) return {};
+  return {
+    ...(sender.userId ? { senderUserId: sender.userId } : {}),
+    ...(sender.name ? { senderName: sender.name } : {}),
+    ...(sender.email ? { senderEmail: sender.email } : {}),
+    ...(sender.source ? { senderSource: sender.source } : {}),
+  };
 }
 
 // ── SSE Helper ──
@@ -158,6 +180,19 @@ function hasToolError(resultData: unknown): boolean {
   return /\b(error|failed|exception|timeout|timed out|invalid|missing|denied|not found)\b/i.test(text);
 }
 
+function isReportToUserTool(tool: string): boolean {
+  return tool === 'report_to_user' || tool.endsWith('__report_to_user');
+}
+
+function reportToUserPayload(resultData: unknown): { message: string; status: string } | null {
+  if (!resultData || typeof resultData !== 'object') return null;
+  const result = resultData as Record<string, unknown>;
+  const message = typeof result.message === 'string' ? result.message.trim() : '';
+  if (!message) return null;
+  const status = typeof result.status === 'string' ? result.status : 'in_progress';
+  return { message, status };
+}
+
 async function getSystemPrompt(
   provider: ChatProvider,
   db: Db,
@@ -244,14 +279,22 @@ If a tool call returned an object but no URL is visible to you, ASK the tool res
 Listing multiple resources? Render as a bulleted list of links, one per line, so the user can scan and click directly. Never hide a link behind prose like "I've opened a PR for this" with no link attached.
 
 IMPORTANT RULES:
-1. Before executing any destructive action (running workflows, cancelling executions, creating/editing/deleting tickets, spawning agents), tell the user what you're about to do and ask for confirmation. Read-only actions execute immediately.
+1. You are the routing brain. Decide from the user's intent whether to answer directly, inspect data with tools, run a workflow, spawn a single specialist, or involve a lead/team agent. Do not rely on a backend heuristic router.
 2. When the user corrects you or states a preference ("no, use staging DB", "always run tests first", "I prefer TypeScript"), silently call save_learning to remember it. Write it as a generalized rule. Don't tell the user you're saving — just do it.
-3. When the user asks to use a specific @agent — use spawn_agent (not run_workflow). spawn_agent runs a single agent with that agent's system prompt. run_workflow runs a full multi-node workflow.
-4. After starting a workflow (run_workflow) or spawning an agent (spawn_agent), monitor it to completion. Keep calling wait_for_execution in a loop (with a few seconds between calls) until status is "completed" or "failed". Then present the final output. Do NOT stop after seeing "running" — wait for it to finish.
-5. When the user selects a team agent (PM, Engineer, QA, etc.), that agent can use delegate_to_agent to involve other team members. The delegation creates a visible thread showing agent-to-agent collaboration.
-6. Use report_to_user for progress updates during long delegations so the user knows what's happening.
-7. Only ask "Which repo?" if the task clearly requires working with code (e.g. review, fix, investigate, build) AND the user hasn't specified one via @repo-name AND no workspace context is provided. For general questions, planning, brainstorming — just answer directly.
-8. Always surface resource links per the "Resource Links" rule above — this is non-negotiable for PRs, tickets, uploads, and deployments.
+3. Normal conversation stays normal. If the user says "hi", asks a general question, brainstorms, or asks for an explanation, answer directly unless live Allen data is needed.
+4. When the user asks to assign, run, work on, fix, implement, review, investigate, create, update, revamp, redesign, or otherwise execute a task, route it yourself:
+   - First use list_workflows/list_agents/list_teams/list_repos as needed to understand available capabilities.
+   - If an available workflow clearly matches the request, use run_workflow.
+   - If no workflow clearly fits and the work needs coordination across specialties, spawn the relevant team lead.
+   - If the task is narrow and one specialist is clearly best, spawn that specialist directly.
+   - When the user asks for a specific @agent, use spawn_agent for that agent, not run_workflow.
+5. Workspace-first rule for code work: if the task may change code, create or reuse an Allen workspace before run_workflow/spawn_agent. Use create_workspace with the selected repo, then pass the returned worktree_path/repo_path into the workflow input or spawn_agent. If there is no repo/workspace context, ask which repo to use before starting execution.
+6. After starting a workflow (run_workflow) or spawning an agent (spawn_agent), monitor it to completion or until it is clearly still running. Keep calling wait_for_execution while useful. Present progress, human-input pauses, workspace links, PR links, artifacts, and final output with clickable links.
+7. When the user selects a team agent (PM, Engineer, QA, etc.), that agent can use delegate_to_agent to involve other team members. The delegation creates a visible thread showing agent-to-agent collaboration.
+8. Use report_to_user for progress updates during long-running work so the user knows what is happening. When wait_for_execution or wait_for_delegation returns status="waiting" with progress_message or activity_summary, call report_to_user with a short human-readable update before waiting again. Pass activity_cursor back as activity_since on the next wait call so updates move forward instead of repeating old activity.
+9. Ask confirmation only when the user's intent to perform a destructive action is ambiguous. If the user explicitly says to assign/run/work on/fix/implement/review a task, treat that as permission to start the appropriate workflow/agent after satisfying workspace-first requirements.
+10. Interrupted reruns: if this chat has interrupted/cancelled tasks and the user asks to rerun, retry, continue, or restart that work, do NOT automatically start work. Ask whether they want a fresh start or to resume the cancelled execution. If they choose resume, use resume_execution. If they choose fresh start, run_workflow/spawn_agent again with the current request.
+11. Always surface resource links per the "Resource Links" rule above — this is non-negotiable for PRs, tickets, uploads, and deployments.
 
 ═══ TEAM BUILDER ROUTING ═══
 Allen has a "meta team" of builder agents that can extend the org chart on demand. You SHOULD route the user to them when they ask to grow the system itself:
@@ -325,10 +368,12 @@ Examples:
 - "What happened in my last run?" → list_executions then get_execution_logs / get_node_trace
 - "Show me dashboard stats" → get_dashboard_stats
 - "Find failed executions today" → search_executions
-- "Review code in @my-repo" → spawn_agent with the correct repo_path from the @mention
+- "Hi" → answer directly; do not run a workflow or spawn an agent
+- "Review code in @my-repo" → create_workspace for @my-repo, then spawn_agent with the returned worktree_path
+- "Work on LIN-123" → inspect the ticket via Linear if available, decide workflow vs lead vs specialist, create a workspace if code changes are needed, then start execution
 - If an execution is waiting for input → present the fields, then submit_execution_input
 
-For code tasks (review, investigate, plan): use spawn_agent or run_workflow with the correct repo_path from @mentions. Remind any sub-agent you spawn to save its deliverables via allen_save_artifact so they appear in this chat's Artifacts panel.${orgBlock}${reposBlock}`;
+For code tasks: create or reuse an Allen workspace before any code-changing workflow/agent. For read-only planning or explanation, answer directly or use read-only tools. Remind any sub-agent you spawn to save its deliverables via allen_save_artifact so they appear in this chat's Artifacts panel.${orgBlock}${reposBlock}`;
 }
 
 // ── Active Query Tracking ──
@@ -348,6 +393,111 @@ interface ActiveQuery {
 }
 
 const activeQueries = new Map<string, ActiveQuery>();
+const ACTIVE_EXECUTION_STATUSES = ['running', 'queued', 'waiting_for_input'];
+
+interface CancelledExecutionInfo {
+  id: string;
+  workflowName?: string;
+  status?: string;
+}
+
+export interface ChatCancelResult {
+  cancelled: boolean;
+  sessionId: string;
+  cancelledExecutions: CancelledExecutionInfo[];
+}
+
+function executionRequestTitle(exec: Record<string, unknown>): string {
+  const meta = ((exec.meta ?? {}) as Record<string, unknown>) ?? {};
+  const input = ((exec.input ?? {}) as Record<string, unknown>) ?? {};
+  return String(
+    meta.requestText
+      ?? meta.linearTitle
+      ?? input.task
+      ?? input.prompt
+      ?? input.request
+      ?? exec.workflowName
+      ?? exec.id
+      ?? 'task',
+  );
+}
+
+async function cancelLinkedChatExecutions(sessionId: string, db: Db): Promise<CancelledExecutionInfo[]> {
+  const linkedRows = await db.collection('executions')
+    .find(
+      { 'meta.chatSessionId': sessionId },
+      { projection: { id: 1, workflowName: 1 } },
+    )
+    .toArray();
+  const linkedIds = linkedRows.map((row) => row.id as string).filter(Boolean);
+
+  const activeRows = await db.collection('executions')
+    .find(
+      {
+        status: { $in: ACTIVE_EXECUTION_STATUSES },
+        $or: [
+          { 'meta.chatSessionId': sessionId },
+          ...(linkedIds.length > 0 ? [
+            { rootExecutionId: { $in: linkedIds } },
+            { parentExecutionId: { $in: linkedIds } },
+          ] : []),
+        ],
+      },
+      { projection: { id: 1, workflowName: 1, status: 1 } },
+    )
+    .toArray();
+
+  const service = new ExecutionService(db);
+  const seen = new Set<string>();
+  const cancelled: CancelledExecutionInfo[] = [];
+
+  for (const row of activeRows) {
+    const id = row.id as string | undefined;
+    if (!id || seen.has(id)) continue;
+    seen.add(id);
+    try {
+      await service.cancel(id);
+      await db.collection('execution_logs').insertOne({
+        executionId: id,
+        level: 'warn',
+        category: 'system',
+        message: 'Cancelled because the owning chat thread was interrupted.',
+        timestamp: new Date(),
+      }).catch(() => {});
+      cancelled.push({
+        id,
+        workflowName: row.workflowName as string | undefined,
+        status: 'cancelled',
+      });
+    } catch {
+      // Best-effort: do not block chat interrupt cleanup.
+    }
+  }
+
+  return cancelled;
+}
+
+async function interruptedTaskContext(db: Db, sessionId: string): Promise<string> {
+  const rows = await db.collection('executions')
+    .find(
+      { 'meta.chatSessionId': sessionId, status: 'cancelled' },
+      {
+        projection: { id: 1, workflowName: 1, status: 1, input: 1, meta: 1, completedAt: 1, sessions: 1 },
+        sort: { completedAt: -1, startedAt: -1 },
+        limit: 5,
+      },
+    )
+    .toArray()
+    .catch(() => []);
+  if (rows.length === 0) return '';
+  const lines = rows.map((row) => {
+    const id = row.id as string;
+    const kind = String(row.workflowName ?? '').includes(':spawn_agent/') ? 'agent/lead' : 'workflow';
+    const hasSession = row.sessions && Object.keys(row.sessions as Record<string, unknown>).length > 0;
+    return `- ${id} (${kind}): ${executionRequestTitle(row)}${hasSession ? ' — resumable agent session available' : ''}`;
+  });
+  return `\n[INTERRUPTED TASKS IN THIS THREAD]\n${lines.join('\n')}\nIf the user asks to rerun/continue/retry one of these, ask whether they want a fresh start or resume. Use resume_execution only after they choose resume.`;
+}
 
 /**
  * Cancel a running chat session's LLM subprocess. Called from the
@@ -364,40 +514,52 @@ const activeQueries = new Map<string, ActiveQuery>();
  *
  * After cancel, the user can immediately send a new message.
  */
-export async function cancelChatSession(sessionId: string, db?: Db): Promise<boolean> {
+export async function cancelChatSession(sessionId: string, db?: Db): Promise<ChatCancelResult> {
   const entry = activeQueries.get(sessionId);
-  if (!entry) return false;
+  let cancelledExecutions: CancelledExecutionInfo[] = [];
 
   // 1. Kill the subprocess for THIS turn only
-  entry.aborted = true;
-  entry.abortController.abort();
+  if (entry) {
+    entry.aborted = true;
+    entry.abortController.abort();
+  }
 
-  // 2. DO NOT touch llmSessionId — the thread still exists on the
+  // 2. Cancel linked workflow/agent executions spawned from this chat.
+  if (db) {
+    cancelledExecutions = await cancelLinkedChatExecutions(sessionId, db);
+  }
+
+  // 3. DO NOT touch llmSessionId — the thread still exists on the
   //    provider's side. We just killed our local subprocess. The next
   //    message resumes the same thread with full prior context.
 
-  // 3. Mark the in-flight assistant message as cancelled
-  if (db) {
+  // 4. Mark the in-flight assistant message as cancelled
+  if (entry && db) {
     const { ObjectId } = await import('mongodb');
     if (entry.messageId) {
+      const executionNote = cancelledExecutions.length > 0
+        ? `Interrupted by user. Cancelled linked tasks: ${cancelledExecutions.map((exec) => exec.id).join(', ')}. If you want to rerun, choose fresh start or resume.`
+        : 'Interrupted by user.';
       await db.collection('chat_messages').updateOne(
         { _id: new ObjectId(entry.messageId) },
         { $set: {
           status: 'cancelled',
-          content: entry.currentText || '(cancelled by user)',
+          content: entry.currentText ? `${entry.currentText}\n\n${executionNote}` : executionNote,
           completedAt: new Date(),
         } },
       ).catch(() => {});
     }
   }
 
-  // 4. Broadcast cancel event so UI updates immediately
-  broadcastToListeners(entry, 'cancelled', { messageId: entry.messageId });
+  // 5. Broadcast cancel event so UI updates immediately
+  if (entry) {
+    broadcastToListeners(entry, 'cancelled', { messageId: entry.messageId, cancelledExecutions });
+  }
 
-  // 5. Remove from active queries so the user can send the next message
-  activeQueries.delete(sessionId);
+  // 6. Remove from active queries so the user can send the next message
+  if (entry) activeQueries.delete(sessionId);
 
-  return true;
+  return { cancelled: Boolean(entry), sessionId, cancelledExecutions };
 }
 
 function broadcastToListeners(entry: ActiveQuery, event: string, data: unknown): void {
@@ -481,7 +643,7 @@ export class ChatService {
     return { data, hasMore };
   }
 
-  async sendMessage(sessionId: string, content: string, res: Response, agent?: string, cwd?: string): Promise<void> {
+  async sendMessage(sessionId: string, content: string, res: Response, agent?: string, cwd?: string, sender?: ChatMessageSender): Promise<void> {
     const session = await this.sessions.findOne({ _id: new ObjectId(sessionId) });
     if (!session) { res.status(404).json({ error: 'Session not found' }); return; }
 
@@ -490,7 +652,11 @@ export class ChatService {
     }
 
     const now = new Date();
-    await this.messages.insertOne({ sessionId, role: 'user', content, status: 'completed', createdAt: now, completedAt: now });
+    await this.messages.insertOne({
+      sessionId, role: 'user', content, status: 'completed',
+      ...senderFields(sender),
+      createdAt: now, completedAt: now,
+    });
     const assistantResult = await this.messages.insertOne({ sessionId, role: 'assistant', content: '', status: 'streaming', createdAt: new Date() });
     const assistantMsgId = assistantResult.insertedId.toString();
 
@@ -518,6 +684,7 @@ export class ChatService {
     sessionId: string,
     content: string,
     agent?: string,
+    sender?: ChatMessageSender,
   ): Promise<{ text: string; costUsd: number; durationMs: number }> {
     const session = await this.sessions.findOne({ _id: new ObjectId(sessionId) });
     if (!session) throw new Error('Session not found');
@@ -525,7 +692,9 @@ export class ChatService {
 
     const now = new Date();
     await this.messages.insertOne({
-      sessionId, role: 'user', content, status: 'completed', createdAt: now, completedAt: now,
+      sessionId, role: 'user', content, status: 'completed',
+      ...senderFields(sender),
+      createdAt: now, completedAt: now,
     });
     const assistantResult = await this.messages.insertOne({
       sessionId, role: 'assistant', content: '', status: 'streaming', createdAt: new Date(),
@@ -773,7 +942,8 @@ User: ${userMessage.slice(0, 500)}`;
         resolvedCwd,
       });
 
-      const allContext = [mentionContext, workspaceContext].filter(Boolean).join('\n');
+      const interruptedContext = await interruptedTaskContext(this.db, sessionId);
+      const allContext = [mentionContext, workspaceContext, interruptedContext].filter(Boolean).join('\n');
       const enrichedContent = allContext
         ? `CONTEXT:\n${allContext}\n\nUSER MESSAGE:\n${content}`
         : content;
@@ -875,6 +1045,15 @@ User: ${userMessage.slice(0, 500)}`;
           const record: ToolCallRecord = { tool, args: {}, result: resultData, durationMs, timestamp: new Date() };
           entry.toolCalls.push(record);
           broadcastToListeners(entry, 'tool_result', { tool, result: resultData, tool_use_id: toolUseId, durationMs });
+          const userReport = isReportToUserTool(tool) ? reportToUserPayload(resultData) : null;
+          if (userReport) {
+            broadcastToListeners(entry, 'agent_report', {
+              agent: effectiveAgent ?? 'assistant',
+              message: userReport.message,
+              status: userReport.status,
+              timestamp: new Date().toISOString(),
+            });
+          }
           if (hasToolError(resultData)) {
             new MonitoringService(this.db).handleEvent({
               sourceType: 'tool_call',
@@ -1034,6 +1213,15 @@ User: ${userMessage.slice(0, 500)}`;
             onToolResult: (tool, resultData, toolUseId, durationMs) => {
               entry.toolCalls.push({ tool, args: {}, result: resultData, durationMs, timestamp: new Date() });
               broadcastToListeners(entry, 'tool_result', { tool, result: resultData, tool_use_id: toolUseId, durationMs });
+              const userReport = isReportToUserTool(tool) ? reportToUserPayload(resultData) : null;
+              if (userReport) {
+                broadcastToListeners(entry, 'agent_report', {
+                  agent: effectiveAgent ?? 'assistant',
+                  message: userReport.message,
+                  status: userReport.status,
+                  timestamp: new Date().toISOString(),
+                });
+              }
               if (hasToolError(resultData)) {
                 new MonitoringService(this.db).handleEvent({
                   sourceType: 'tool_call',
@@ -1158,17 +1346,20 @@ ASKING THE USER:
 - Only use ask_user when NO agent can answer.
 
 RULES:
-1. Before destructive actions, confirm with the user.
+1. You are an LLM routing agent. Decide from the user's intent whether to answer directly, delegate, spawn a specialist, or run an allowed workflow. Do not rely on a backend heuristic router.
 2. When the user corrects you, silently call save_learning.
 3. Delegate to agents — don't do everything yourself.
 4. When wait_for_delegation returns "question", ANSWER IT via answer_delegator. Don't ignore your team's questions.
 5. If you don't know the answer to an agent's question, call ask_user to ask the user.
 6. NEVER respond to the user before ALL delegations are complete.
-7. Use report_to_user for progress updates.
+7. Use report_to_user for progress updates. When wait_for_execution or wait_for_delegation returns status="waiting" with progress_message or activity_summary, call report_to_user with a short human-readable update before waiting again. Pass activity_cursor back as activity_since on the next wait call so updates move forward instead of repeating old activity.
 8. Be concise. Respond in markdown.
-9. Only ask "Which repo?" if the task clearly requires working with code AND the user hasn't specified one via @repo-name AND no workspace context is provided. For general questions, planning, brainstorming — just answer directly.
-10. RESOURCE LINKS — every PR, ticket, issue, commit, uploaded file, workflow run, or deploy you mention MUST be rendered as a clickable markdown link. Use html_url / permalink / publicUrl from the tool response verbatim. Never just name a resource without linking it. For lists, one link per bullet so the user can scan and click directly. If a link is genuinely unavailable, say so rather than pasting a raw ID silently.
-11. ARTIFACTS — when you or a spawned agent produces a standalone document (plan, design, investigation notes, CSV results, JSON config, scratch output), save it via allen_save_artifact. Files are filed under this chat session and appear in the Artifacts panel. Prefer allen_save_artifact over upload_file for in-conversation deliverables — it renders inline (markdown/JSON/CSV) and is scoped to the chat. When spawning sub-agents, tell them to save their own work the same way.`);
+9. Normal conversation stays normal. If the user greets you, asks an explanation, brainstorms, or asks a read-only question, answer directly unless live Allen data is needed.
+10. For code-changing tasks, create or reuse an Allen workspace before delegating, spawning, or running a workflow. Use create_workspace with the selected repo and pass the returned worktree_path/repo_path to downstream agents/workflows. Ask "Which repo?" only when code work is required and no repo/workspace context is available.
+11. Ask confirmation only when the user's intent to perform a destructive action is ambiguous. If the user explicitly asks to assign/run/work on/fix/implement/review a task, treat that as permission after workspace-first requirements are satisfied.
+12. RESOURCE LINKS — every PR, ticket, issue, commit, uploaded file, workflow run, or deploy you mention MUST be rendered as a clickable markdown link. Use html_url / permalink / publicUrl from the tool response verbatim. Never just name a resource without linking it. For lists, one link per bullet so the user can scan and click directly. If a link is genuinely unavailable, say so rather than pasting a raw ID silently.
+13. INTERRUPTED RERUNS — if this chat has interrupted/cancelled tasks and the user asks to rerun, retry, continue, or restart that work, ask whether to start fresh or resume the cancelled execution. Use resume_execution only after the user chooses resume.
+14. ARTIFACTS — when you or a spawned agent produces a standalone document (plan, design, investigation notes, CSV results, JSON config, scratch output), save it via allen_save_artifact. Files are filed under this chat session and appear in the Artifacts panel. Prefer allen_save_artifact over upload_file for in-conversation deliverables — it renders inline (markdown/JSON/CSV) and is scoped to the chat. When spawning sub-agents, tell them to save their own work the same way.`);
 
     // Inject available repos so agent knows what exists
     try {

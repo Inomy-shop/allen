@@ -88,6 +88,7 @@ describe('cleanupOrphanedSeedEntities', () => {
       ],
       workflows: [
         { name: 'coding-workflow', createdBy: 'system' },
+        { name: 'bug-investigate-and-fix', createdBy: 'system' },
         { name: 'feature-development', createdBy: 'system' }, // orphan
         { name: 'quick-bugfix', createdBy: 'system' }, // orphan
         { name: 'my-custom-workflow', createdBy: 'user' }, // must NOT be deleted
@@ -100,7 +101,7 @@ describe('cleanupOrphanedSeedEntities', () => {
       db,
       ['meta', 'executive', 'engineering'],
       ['team-builder-agent', 'agent-builder-agent', 'research-agent', 'ceo', 'engineering-lead'],
-      ['coding-workflow'],
+      ['bug-investigate-and-fix'],
     );
     expect(result.agentsDeleted).toBe(3); // backend-lead, frontend-lead, security-lead
     expect(result.deletedAgentNames).toEqual(
@@ -118,7 +119,7 @@ describe('cleanupOrphanedSeedEntities', () => {
       db,
       ['executive', 'engineering'], // NO 'meta'
       ['ceo', 'engineering-lead'],   // NO meta agents
-      ['coding-workflow'],
+      ['bug-investigate-and-fix'],
     );
     const remaining = db.__data.agents.map((a: any) => a.name);
     expect(remaining).toContain('team-builder-agent');
@@ -133,7 +134,7 @@ describe('cleanupOrphanedSeedEntities', () => {
       db,
       ['executive', 'engineering'], // NO 'meta'
       ['ceo', 'engineering-lead', 'team-builder-agent', 'agent-builder-agent', 'research-agent'],
-      ['coding-workflow'],
+      ['bug-investigate-and-fix'],
     );
     const remainingTeams = db.__data.teams.map((t: any) => t.name);
     expect(remainingTeams).toContain('meta');
@@ -144,7 +145,7 @@ describe('cleanupOrphanedSeedEntities', () => {
       db,
       ['meta', 'executive', 'engineering'],
       ['team-builder-agent', 'agent-builder-agent', 'research-agent', 'ceo', 'engineering-lead'],
-      ['coding-workflow'],
+      ['bug-investigate-and-fix'],
     );
     expect(result.teamsDeleted).toBe(3); // backend, frontend, security
     expect(result.deletedTeamNames).toEqual(
@@ -157,7 +158,7 @@ describe('cleanupOrphanedSeedEntities', () => {
       db,
       ['meta', 'executive', 'engineering'],
       ['team-builder-agent', 'agent-builder-agent', 'research-agent', 'ceo', 'engineering-lead'],
-      ['coding-workflow'],
+      ['bug-investigate-and-fix'],
     );
     const remaining = db.__data.agents.map((a: any) => a.name);
     expect(remaining).toContain('custom-helper');
@@ -168,7 +169,7 @@ describe('cleanupOrphanedSeedEntities', () => {
       db,
       ['meta', 'executive', 'engineering'],
       ['team-builder-agent', 'agent-builder-agent', 'research-agent', 'ceo', 'engineering-lead'],
-      ['coding-workflow'],
+      ['bug-investigate-and-fix'],
     );
     const remainingTeams = db.__data.teams.map((t: any) => t.name);
     expect(remainingTeams).toContain('my-custom-team');
@@ -179,12 +180,13 @@ describe('cleanupOrphanedSeedEntities', () => {
       db,
       ['meta', 'executive', 'engineering'],
       ['team-builder-agent', 'agent-builder-agent', 'research-agent', 'ceo', 'engineering-lead'],
-      ['coding-workflow'],
+      ['bug-investigate-and-fix'],
     );
-    expect(result.workflowsDeleted).toBe(2); // feature-development, quick-bugfix
+    expect(result.workflowsDeleted).toBe(3); // coding-workflow, feature-development, quick-bugfix
     const remaining = db.__data.workflows.map((w: any) => w.name);
-    expect(remaining).toContain('coding-workflow');
+    expect(remaining).toContain('bug-investigate-and-fix');
     expect(remaining).toContain('my-custom-workflow');
+    expect(remaining).not.toContain('coding-workflow');
     expect(remaining).not.toContain('feature-development');
     expect(remaining).not.toContain('quick-bugfix');
   });
@@ -200,13 +202,13 @@ describe('cleanupOrphanedSeedEntities', () => {
         { name: 'meta', isBuiltIn: true },
         { name: 'executive', isBuiltIn: true },
       ],
-      workflows: [{ name: 'coding-workflow', createdBy: 'system' }],
+      workflows: [{ name: 'bug-investigate-and-fix', createdBy: 'system' }],
     });
     const result = await cleanupOrphanedSeedEntities(
       cleanDb,
       ['meta', 'executive'],
       ['team-builder-agent', 'ceo'],
-      ['coding-workflow'],
+      ['bug-investigate-and-fix'],
     );
     expect(result.agentsDeleted).toBe(0);
     expect(result.teamsDeleted).toBe(0);

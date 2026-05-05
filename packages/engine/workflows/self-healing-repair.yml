@@ -1,8 +1,8 @@
-name: self-healing-repair-allen
+name: self-healing-repair
 description: >
-  Built-in self-healing repair workflow for Allen-owned repo/runtime defects.
-  Creates an isolated worktree, dispatches engineering-lead to fix the issue,
-  runs QA and review, and opens a PR.
+  Built-in self-healing repair workflow for Allen-owned defects. Handles Allen
+  repo/runtime, tooling, workflow-engine, memory, prompt, and instruction
+  incidents through one repair pipeline selected by repair_area/root_cause_area.
 
 version: 1
 
@@ -40,6 +40,16 @@ input:
     type: string
     required: true
     widget: text
+  repair_area:
+    type: string
+    required: false
+    widget: select
+    options:
+      - allen_repo
+      - memory_system
+      - tool_integration
+      - workflow_definition
+      - prompt_instruction
   incident_summary:
     type: string
     required: true
@@ -59,21 +69,37 @@ nodes:
       INCIDENT: {{incident_fingerprint}}
       SOURCE TYPE: {{source_type}}
       ROOT CAUSE AREA: {{root_cause_area}}
+      REPAIR AREA: {{repair_area}}
       SUMMARY: {{incident_summary}}
       REPO PATH: {{repo_path}}
 
       EVIDENCE:
       {{evidence}}
 
-      Find the root cause in Allen code/config/prompts/workflows. Include
+      Use this focus map. If REPAIR AREA is empty, use ROOT CAUSE AREA.
+      - memory_system: memory extraction, embeddings, retrieval, memory audits,
+        and context injection.
+      - tool_integration: MCP discovery, tool schemas, tool allowlists, env
+        propagation, workspace/artifact context, and Linear dispatch.
+      - workflow_definition: workflow YAML, engine code, node prompts,
+        conditions, retries, traces, and stuck workflow states.
+      - prompt_instruction: built-in agent prompts, workflow node prompts,
+        delegation guidance, memory guidance, system instructions, and tool-use
+        instructions.
+      - allen_repo: general Allen app/backend/frontend/runtime defects.
+
+      Find the exact root cause in Allen code/config/prompts/workflows. Include
       completed-but-wrong behavior if the evidence shows it.
 
       End with JSON: root_cause, files_to_touch[], confidence,
-      fix_description, reproduction_steps, affected_components.
+      fix_description, reproduction_steps, affected_components,
+      regression_strategy, normalized_repair_area.
     outputs:
       root_cause: "Root cause."
       files_to_touch: "Files to change."
       fix_description: "Fix description."
+      regression_strategy: "Regression strategy."
+      normalized_repair_area: "Repair area chosen by the diagnostician."
 
   create_workspace:
     type: code
@@ -97,9 +123,11 @@ nodes:
 
       LINEAR: {{linear_identifier}} {{linear_url}}
       INCIDENT: {{incident_fingerprint}}
+      REPAIR AREA: {{normalized_repair_area}}
       ROOT CAUSE: {{root_cause}}
       FIX DESCRIPTION: {{fix_description}}
       FILES TO TOUCH: {{files_to_touch}}
+      REGRESSION STRATEGY: {{regression_strategy}}
       WORKTREE PATH: {{worktree_path}}
       BRANCH: {{branch_name}}
 
@@ -109,12 +137,16 @@ nodes:
       - Prompt/instruction changes are valid if the root cause is bad Allen
         guidance, agent prompt text, workflow node prompt, memory guidance, or
         tool-use instruction.
-      - Add or update tests where feasible.
+      - Add or update tests where feasible. For workflow repairs, validate YAML
+        or engine behavior where possible. For memory/tooling/prompt repairs,
+        add focused regression coverage or a clear validation artifact if
+        automated coverage is not practical.
 
       End with JSON: files_changed, specialists_used, any_failures,
       failure_details.
     outputs:
       files_changed: "Files changed."
+      specialists_used: "Specialists used."
       any_failures: "Boolean."
       failure_details: "Failure details."
 
@@ -126,17 +158,20 @@ nodes:
       Validate the self-healing repair.
 
       INCIDENT: {{incident_fingerprint}}
+      REPAIR AREA: {{normalized_repair_area}}
       ROOT CAUSE: {{root_cause}}
       FIX DESCRIPTION: {{fix_description}}
       FILES CHANGED: {{files_changed}}
       WORKTREE PATH: {{worktree_path}}
 
-      Run build, lint, and relevant tests inside {{worktree_path}}. If prompt or
-      instruction text changed, ensure there is regression coverage or a clear
-      validation artifact explaining why automated coverage is not practical.
+      Run build, lint, unit tests, and focused integration tests where relevant
+      inside {{worktree_path}}. Validate the repair against the root cause and
+      regression strategy. If prompt/instruction text changed, ensure there is
+      regression coverage or a clear validation artifact explaining why
+      automated coverage is not practical.
 
-      End with JSON: qa_verdict, build, lint, unit_tests, regression_tests,
-      test_files, summary, failure_details.
+      End with JSON: qa_verdict, build, lint, unit_tests, integration_tests,
+      regression_tests, test_files, summary, failure_details.
     outputs:
       qa_verdict: "pass | fail | escalate"
       test_files: "Test files."
@@ -152,12 +187,13 @@ nodes:
       WORKTREE PATH: {{worktree_path}}
       BRANCH: {{branch_name}}
       INCIDENT: {{incident_fingerprint}}
+      REPAIR AREA: {{normalized_repair_area}}
       ROOT CAUSE: {{root_cause}}
       FILES CHANGED: {{files_changed}}
       QA VERDICT: {{qa_verdict}}
 
       Check correctness, maintainability, regression risk, security, and whether
-      the fix actually addresses the monitor evidence.
+      the fix actually addresses the monitor evidence and selected repair area.
 
       End with JSON: review_verdict, review_feedback, security_findings.
     outputs:
@@ -175,6 +211,7 @@ nodes:
       BRANCH NAME: {{branch_name}}
       LINEAR: {{linear_identifier}} {{linear_url}}
       INCIDENT: {{incident_fingerprint}}
+      REPAIR AREA: {{normalized_repair_area}}
       ROOT CAUSE: {{root_cause}}
       FIX DESCRIPTION: {{fix_description}}
       FILES CHANGED: {{files_changed}}
@@ -199,4 +236,3 @@ edges:
   - { from: qa, to: code_review }
   - { from: code_review, to: open_pr }
   - { from: open_pr, to: END }
-

@@ -86,8 +86,10 @@ export const createWorkspace: BuiltInFunction = async (config, state, ctx) => {
   // Each workflow names it differently — task, bug, feature, target, incident, etc.
   const taskSource =
     (state.task as string | undefined) ??
+    (state.bug_report as string | undefined) ??
     (state.bug as string | undefined) ??
     (state.feature as string | undefined) ??
+    (state.user_request as string | undefined) ??
     (state.target as string | undefined) ??
     (state.incident as string | undefined) ??
     'feature';

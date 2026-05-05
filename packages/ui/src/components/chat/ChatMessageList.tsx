@@ -1,9 +1,10 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Bot, User, AlertCircle, Copy, Check, Clock, Wrench, CheckCircle, ExternalLink, Loader2, Brain,
+import { Bot, AlertCircle, AlertTriangle, Copy, Check, Clock, Wrench, CheckCircle, ExternalLink, Loader2, Brain,
   Sparkles, Zap, Cpu, Atom, Terminal, Code, Rocket, Shield, Hexagon, Flame,
-  ChevronDown, ChevronRight,
+  ChevronDown, ChevronRight, GitPullRequest, FolderGit2, FileText, PlayCircle, StopCircle, Timer,
+  Send, BarChart3, FolderOpen,
 } from 'lucide-react';
-import type { ChatMessage, ToolCallRecord, ActiveToolCall, AgentThread as AgentThreadType, AgentReport } from '../../hooks/useChat';
+import type { ChatMessage, ToolCallRecord, ActiveToolCall, AgentThread as AgentThreadType, AgentReport, SpawnedAgent, WorkflowInterventionAnswer } from '../../hooks/useChat';
 import { AgentThread } from './AgentThread';
 import { AgentQuestionPrompt } from './AgentQuestionPrompt';
 import RoleIcon from '../common/RoleIcon';
@@ -31,11 +32,35 @@ interface ChatMessageListProps {
   onAnswerUserQuestion?: (answer: string) => void;
   /** Active agent name (for labeling assistant messages) */
   activeAgent?: string | null;
-  /** Spawned agent executions — live tracking */
-  spawnedAgents?: { executionId: string; agent: string; prompt: string; status: string; activity: { type: string; tool?: string; command?: string; timestamp: number }[]; durationMs?: number; toolCount?: number; response?: string }[];
+  /** Routed workflow/agent executions — live tracking */
+  spawnedAgents?: SpawnedAgent[];
+  onAnswerWorkflowIntervention?: (input: WorkflowInterventionAnswer) => Promise<void> | void;
   onSuggestionClick?: (text: string) => void;
   onSaveToLearnings?: (content: string) => void;
 }
+
+type WorkflowInterventionField = {
+  name: string;
+  label?: string;
+  type?: string;
+  required?: boolean;
+  options?: Array<string | { label?: string; value?: string }>;
+  placeholder?: string;
+};
+
+type WorkflowIntervention = {
+  intervention_id?: string;
+  status?: string;
+  stage?: string;
+  severity?: string;
+  title?: string;
+  question?: string;
+  context_summary?: string;
+  fields?: WorkflowInterventionField[];
+  options?: Array<{ label?: string; value?: string; primary?: boolean; destructive?: boolean }>;
+};
+
+type WorkflowInterventionOption = { label?: string; value: string; primary?: boolean; destructive?: boolean };
 
 /* ── Copy button for code blocks ─────────────────────────────────────────── */
 function CopyButton({ text }: { text: string }) {
@@ -111,6 +136,38 @@ function formatTime(dateStr?: string): string {
   if (!dateStr) return '';
   const d = new Date(dateStr);
   return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+}
+
+function formatClock(dateStr?: string | null): string {
+  if (!dateStr) return '—';
+  const d = new Date(dateStr);
+  if (Number.isNaN(d.getTime())) return '—';
+  return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+}
+
+function formatDuration(ms?: number | null): string {
+  if (ms == null || ms <= 0) return '—';
+  if (ms < 1000) return `${Math.round(ms)}ms`;
+  const sec = ms / 1000;
+  if (sec < 60) return `${sec.toFixed(sec < 10 ? 1 : 0)}s`;
+  const min = Math.floor(sec / 60);
+  const rem = Math.round(sec % 60);
+  return rem ? `${min}m ${rem}s` : `${min}m`;
+}
+
+function userDisplayName(msg: ChatMessage): string {
+  return msg.senderName?.trim()
+    || msg.senderEmail?.split('@')[0]
+    || (msg.senderSource === 'slack' ? 'Slack user' : 'User');
+}
+
+function initialsForName(name: string): string {
+  return name
+    .split(/\s+/)
+    .filter(Boolean)
+    .slice(0, 2)
+    .map((part) => part[0]?.toUpperCase())
+    .join('') || 'U';
 }
 
 /* ── Markdown rendering pipeline ─────────────────────────────────────────── */
@@ -679,7 +736,6 @@ const QUICK_ACTIONS = [
   { label: 'Available agents', icon: 'bot', prompt: 'What agents are available?' },
 ] as const;
 
-import { BarChart3, FolderOpen, AlertTriangle } from 'lucide-react';
 const QUICK_ICONS: Record<string, React.ReactNode> = {
   zap: <Zap className="w-3.5 h-3.5 text-accent-blue" />,
   chart: <BarChart3 className="w-3.5 h-3.5 text-accent-green" />,
@@ -710,9 +766,545 @@ function buildThreadTree(threads: AgentThreadType[]): AgentThreadType[] {
   return roots;
 }
 
-export default function ChatMessageList({ messages, streamText, thinkingText, streaming, activeToolCalls = [], agentThreads = [], agentReports = [], threadsByMessage = {}, pendingUserQuestion, onAnswerUserQuestion, activeAgent, spawnedAgents = [], onSuggestionClick, onSaveToLearnings }: ChatMessageListProps) {
+function statusTone(status: string): string {
+  if (status === 'completed') return 'border-accent-green/35 bg-accent-green/5';
+  if (status === 'failed' || status === 'cancelled') return 'border-accent-red/35 bg-accent-red/5';
+  if (status === 'waiting_for_input') return 'border-accent-yellow/45 bg-accent-yellow/5';
+  return 'border-accent/40 bg-accent/5';
+}
+
+function StatusIcon({ status }: { status: string }) {
+  if (status === 'completed') return <CheckCircle className="w-3.5 h-3.5 text-accent-green" />;
+  if (status === 'failed' || status === 'cancelled') return <AlertCircle className="w-3.5 h-3.5 text-accent-red" />;
+  if (status === 'waiting_for_input') return <AlertTriangle className="w-3.5 h-3.5 text-accent-yellow" />;
+  return <Loader2 className="w-3.5 h-3.5 text-accent animate-spin" />;
+}
+
+function humanLabel(value: string): string {
+  return value.replace(/_/g, ' ');
+}
+
+function timeAgo(dateStr?: string | null): string {
+  if (!dateStr) return 'recently';
+  const ms = Date.now() - new Date(dateStr).getTime();
+  const min = Math.floor(ms / 60_000);
+  if (min < 1) return 'just now';
+  if (min < 60) return `${min}m ago`;
+  const hr = Math.floor(min / 60);
+  if (hr < 24) return `${hr}h ago`;
+  return `${Math.floor(hr / 24)}d ago`;
+}
+
+function prLabel(pr: NonNullable<SpawnedAgent['runContext']>['pullRequest']): string {
+  if (!pr) return 'PR';
+  const status = pr.status ? humanLabel(pr.status) : 'open';
+  const age = timeAgo(pr.mergedAt ?? pr.updatedAt ?? pr.createdAt);
+  return `PR ${pr.number ? `#${pr.number}` : status} · ${status} · ${age}`;
+}
+
+function artifactsForRun(run: SpawnedAgent) {
+  return (run.runContext?.artifacts ?? []).filter((artifact) => {
+    if (!artifact.url) return false;
+    if (artifact.rootId === run.executionId) return true;
+    if (artifact.spawnContext?.agentExecutionId === run.executionId) return true;
+    if (artifact.spawnContext?.parentId === run.executionId) return true;
+    return false;
+  });
+}
+
+function nodeStatusTone(status: string): string {
+  if (status === 'completed' || status === 'skipped') return 'border-accent-green/35 bg-accent-green/5';
+  if (status === 'failed' || status === 'cancelled') return 'border-accent-red/35 bg-accent-red/5';
+  if (status === 'waiting_for_input') return 'border-accent-yellow/45 bg-accent-yellow/5';
+  if (status === 'running') return 'border-accent/40 bg-accent/5';
+  return 'border-app bg-app-card';
+}
+
+function NodeStatusIcon({ status }: { status: string }) {
+  if (status === 'completed' || status === 'skipped') return <CheckCircle className="w-3.5 h-3.5 text-accent-green" />;
+  if (status === 'failed' || status === 'cancelled') return <AlertCircle className="w-3.5 h-3.5 text-accent-red" />;
+  if (status === 'waiting_for_input') return <AlertTriangle className="w-3.5 h-3.5 text-accent-yellow" />;
+  if (status === 'running') return <Loader2 className="w-3.5 h-3.5 text-accent animate-spin" />;
+  return <Clock className="w-3.5 h-3.5 text-theme-subtle" />;
+}
+
+function WorkflowStepCard({ step, run }: { step: NonNullable<SpawnedAgent['runContext']>['workflowSteps'][number]; run: SpawnedAgent }) {
+  const attempts = Math.max(0, step.attempts ?? 0);
+  const status = step.status || 'pending';
+  return (
+    <div className={`border rounded-lg p-3 ${nodeStatusTone(status)}`}>
+      <div className="flex items-start gap-2">
+        <NodeStatusIcon status={status} />
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center gap-2 min-w-0">
+            <span className="text-[9px] uppercase text-theme-subtle font-mono shrink-0">{step.type ?? 'node'}</span>
+            <span className="text-[11px] font-mono font-bold text-theme-secondary truncate">{humanLabel(step.name)}</span>
+            {step.agent && <span className="text-[9px] text-theme-subtle font-mono shrink-0">{step.agent}</span>}
+          </div>
+          <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-[10px] text-theme-muted">
+            <span className="font-mono capitalize">{humanLabel(status)}</span>
+            <span className="font-mono">{attempts > 1 ? `${attempts} attempts` : attempts === 1 ? '1 attempt' : 'pending'}</span>
+            {step.model && <span className="truncate max-w-[220px]">{String(step.model).replace(/^claude-/, '')}</span>}
+          </div>
+          <div className="mt-2 grid grid-cols-1 gap-1 font-mono text-[10px] text-theme-subtle sm:grid-cols-3">
+            <span className="flex min-w-0 items-center gap-1 truncate" title="Started at">
+              <PlayCircle className="h-3 w-3 shrink-0 text-accent-green" />
+              <span className="truncate">{formatClock(step.startedAt)}</span>
+            </span>
+            <span className="flex min-w-0 items-center gap-1 truncate" title="Ended at">
+              <StopCircle className="h-3 w-3 shrink-0 text-accent-red" />
+              <span className="truncate">{formatClock(step.completedAt)}</span>
+            </span>
+            <span className="flex min-w-0 items-center gap-1 truncate" title="Duration">
+              <Timer className="h-3 w-3 shrink-0 text-accent" />
+              <span className="truncate">{formatDuration(step.durationMs)}</span>
+            </span>
+          </div>
+        </div>
+        <a href={`/executions/${run.executionId}`} target="_blank" rel="noopener noreferrer" className="shrink-0 p-1 rounded-sm text-accent hover:bg-app-muted" title="Open execution">
+          <ExternalLink className="w-3.5 h-3.5" />
+        </a>
+      </div>
+      {(attempts > 1 || Boolean(step.retryReasons?.length)) && (
+        <div className="mt-2 inline-flex rounded bg-accent-yellow/10 px-2 py-1 font-mono text-[10px] text-accent-yellow">
+          retry {attempts}x{step.retryReasons?.[0] ? ` · ${humanLabel(step.retryReasons[0])}` : ''}
+        </div>
+      )}
+      {step.error && (
+        <div className="mt-2 rounded-md border border-accent-red/20 bg-accent-red/10 px-2 py-1 text-[10px] text-accent-red">
+          {step.error}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function RunProgressCard({ run }: { run: SpawnedAgent }) {
+  const context = run.runContext;
+  const status = context?.status ?? run.status;
+  const title = context?.title || run.agent;
+  const phase = context?.progress.phase ?? status;
+  const percent = context?.progress.percent ?? (status === 'completed' ? 100 : 0);
+  const currentStep = context?.progress.currentStep;
+  const activity = context?.recentActivity?.slice(-3) ?? [];
+  const childAgents = context?.childAgents ?? [];
+  const artifacts = artifactsForRun(run);
+
+  return (
+    <div className={`border rounded-lg p-3 ${statusTone(status)}`}>
+      <div className="flex items-start gap-2">
+        <StatusIcon status={status} />
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center gap-2 min-w-0">
+            <span className="text-[9px] uppercase text-theme-subtle font-mono shrink-0">{context?.runType ?? run.kind ?? 'run'}</span>
+            <span className="text-[11px] font-mono font-bold text-theme-secondary truncate">{title}</span>
+            <span className="text-[9px] text-theme-subtle font-mono shrink-0">{run.executionId.slice(0, 8)}</span>
+          </div>
+          <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-[10px] text-theme-muted">
+            <span className="font-mono capitalize">{humanLabel(status)}</span>
+            <span className="font-mono capitalize">{humanLabel(phase)}</span>
+            {currentStep && <span className="truncate max-w-[220px]">Step: {currentStep}</span>}
+          </div>
+        </div>
+        <a href={`/executions/${run.executionId}`} target="_blank" rel="noopener noreferrer" className="shrink-0 p-1 rounded-sm text-accent hover:bg-app-muted" title="Open execution">
+          <ExternalLink className="w-3.5 h-3.5" />
+        </a>
+      </div>
+
+      <div className="mt-2 h-1.5 rounded-full bg-app-muted overflow-hidden">
+        <div className="h-full bg-accent transition-all" style={{ width: `${Math.max(0, Math.min(100, percent))}%` }} />
+      </div>
+      <div className="mt-1 flex items-center justify-between text-[9px] font-mono text-theme-subtle">
+        <span>{context?.progress.label ?? 'starting'}</span>
+        <span>{percent}%</span>
+      </div>
+
+      {context?.humanInput?.required && (
+        <div className="mt-2 flex items-center gap-1.5 rounded-md border border-accent-yellow/35 bg-yellow-500/10 px-2 py-1 text-[10px] text-accent-yellow">
+          <AlertTriangle className="w-3 h-3 shrink-0" />
+          <span className="truncate">{context.humanInput.title ?? 'Waiting for human input'}</span>
+        </div>
+      )}
+
+      <div className="mt-2 grid grid-cols-1 sm:grid-cols-2 gap-1.5 text-[10px]">
+        {context?.workspace?.id && (
+          <a href={`/workspaces/${context.workspace.id}`} className="flex items-center gap-1.5 text-theme-muted hover:text-accent min-w-0">
+            <FolderGit2 className="w-3 h-3 shrink-0" />
+            <span className="truncate">{context.workspace.repoName ?? context.workspace.name ?? 'Workspace'} · {context.workspace.branch ?? 'branch'}</span>
+          </a>
+        )}
+        {context?.pullRequest?.url && (
+          <a href={context.pullRequest.url} target="_blank" rel="noopener noreferrer" className="flex items-center gap-1.5 text-theme-muted hover:text-accent min-w-0">
+            <GitPullRequest className="w-3 h-3 shrink-0" />
+            <span className="truncate">{prLabel(context.pullRequest)}</span>
+          </a>
+        )}
+        {context?.linear?.url && (
+          <a href={context.linear.url} target="_blank" rel="noopener noreferrer" className="flex items-center gap-1.5 text-theme-muted hover:text-accent min-w-0">
+            <ExternalLink className="w-3 h-3 shrink-0" />
+            <span className="truncate">{context.linear.identifier ?? context.linear.title ?? 'Linear ticket'}</span>
+          </a>
+        )}
+        {artifacts.slice(0, 2).map(artifact => (
+          <a key={artifact.artifactId} href={artifact.url ?? '#'} target="_blank" rel="noopener noreferrer" className="flex items-center gap-1.5 text-theme-muted hover:text-accent min-w-0">
+            <FileText className="w-3 h-3 shrink-0" />
+            <span className="truncate">{artifact.filename ?? 'Artifact'}</span>
+          </a>
+        ))}
+      </div>
+
+      {childAgents.length > 0 && (
+        <div className="mt-2 flex flex-wrap gap-1">
+          {childAgents.slice(0, 4).map(child => (
+            <a key={child.executionId} href={`/executions/${child.executionId}`} className="rounded-sm bg-app-muted px-1.5 py-0.5 text-[9px] font-mono text-theme-muted hover:text-accent">
+              {child.agentName}: {humanLabel(child.status)}
+            </a>
+          ))}
+        </div>
+      )}
+
+      {activity.length > 0 && (
+        <div className="mt-2 space-y-0.5">
+          {activity.map((item, idx) => (
+            <div key={`${item.at ?? idx}-${idx}`} className="flex items-center gap-1.5 text-[10px] font-mono text-theme-subtle min-w-0">
+              <Clock className="w-2.5 h-2.5 shrink-0" />
+              <span className="truncate">{item.agent ? `${item.agent}: ` : ''}{item.label}</span>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {!context && run.activity.length > 0 && (
+        <div className="mt-2 space-y-0.5 max-h-24 overflow-y-auto">
+          {run.activity.slice(-4).map((a, i) => (
+            <div key={i} className="flex items-center gap-1.5 text-[10px] font-mono text-theme-subtle">
+              <Wrench className="w-2.5 h-2.5 shrink-0" />
+              <span className="truncate">{humanLabel(a.type)}{a.tool ? ` · ${a.tool}` : ''}{a.command ? ` · ${a.command}` : ''}</span>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function RunProgressTimeline({ runs }: { runs: SpawnedAgent[] }) {
+  if (runs.length === 1 && runs[0].runContext?.runType === 'workflow' && (runs[0].runContext.workflowSteps?.length ?? 0) > 0) {
+    const run = runs[0];
+    const steps = run.runContext!.workflowSteps;
+    return (
+      <div className="max-w-[820px]">
+        <div className="space-y-0">
+          {steps.map((step, index) => {
+            const isLast = index === steps.length - 1;
+            return (
+              <div key={`${run.executionId}-${step.id}`} className="relative grid grid-cols-[26px_1fr] gap-3 pb-3">
+                {!isLast && <span className="absolute bottom-[-14px] left-[11px] top-[24px] w-[2px] rounded-full bg-[rgb(var(--color-border))]" />}
+                <div className={`relative z-[1] flex h-6 w-6 items-center justify-center rounded-full border bg-app-card ${nodeStatusTone(step.status)}`}>
+                  <NodeStatusIcon status={step.status} />
+                </div>
+                <div className="min-w-0">
+                  <div className="mb-1 flex items-center gap-2 font-mono text-[10px] uppercase tracking-[0.08em] text-theme-muted">
+                    <span>Step {index + 1}</span>
+                    <span className="h-px flex-1 bg-app-strong" />
+                  </div>
+                  <WorkflowStepCard step={step} run={run} />
+                </div>
+              </div>
+            );
+          })}
+        </div>
+        <RunProgressFeed runs={runs} />
+      </div>
+    );
+  }
+
+  return (
+    <div className="max-w-[820px]">
+      <div className="space-y-0">
+        {runs.map((run, index) => {
+          const status = run.runContext?.status ?? run.status;
+          const isLast = index === runs.length - 1;
+          return (
+            <div key={run.executionId} className="relative grid grid-cols-[26px_1fr] gap-3 pb-3">
+              {!isLast && <span className="absolute bottom-[-14px] left-[11px] top-[24px] w-[2px] rounded-full bg-[rgb(var(--color-border))]" />}
+              <div className={`relative z-[1] flex h-6 w-6 items-center justify-center rounded-full border bg-app-card ${statusTone(status)}`}>
+                <StatusIcon status={status} />
+              </div>
+              <div className="min-w-0">
+                <div className="mb-1 flex items-center gap-2 font-mono text-[10px] uppercase tracking-[0.08em] text-theme-muted">
+                  <span>Step {index + 1}</span>
+                  <span className="h-px flex-1 bg-app-strong" />
+                </div>
+                <RunProgressCard run={run} />
+              </div>
+            </div>
+          );
+        })}
+      </div>
+      <RunProgressFeed runs={runs} />
+    </div>
+  );
+}
+
+const TERMINAL_RUN_STATUSES = new Set(['completed', 'failed', 'cancelled']);
+
+function activityLine(run: SpawnedAgent, item: any): { key: string; text: string; at: string | number } | null {
+  const at = item.at ?? item.timestamp ?? Date.now();
+  const agent = item.agent ?? run.agent ?? 'agent';
+  const type = String(item.type ?? '');
+  const tool = item.tool ? String(item.tool) : '';
+  const content = item.label ?? item.content ?? item.command ?? '';
+  const cleanContent = typeof content === 'string' ? content.replace(/\s+/g, ' ').trim() : '';
+  let text = '';
+  if (type === 'tool_call' || type === 'tool_start') {
+    text = `${agent} started ${tool || 'a tool'}${cleanContent ? `: ${cleanContent}` : ''}`;
+  } else if (type === 'tool_result' || type === 'tool_done') {
+    text = `${agent} finished ${tool || 'a tool'}${cleanContent ? `: ${cleanContent}` : ''}`;
+  } else if (type === 'thinking') {
+    text = cleanContent ? `${agent} is thinking: ${cleanContent}` : `${agent} is thinking`;
+  } else {
+    text = cleanContent ? `${agent}: ${cleanContent}` : `${agent}: ${humanLabel(type || 'activity')}`;
+  }
+  return { key: `${run.executionId}-${at}-${type}-${tool}-${text}`, text, at };
+}
+
+function RunProgressFeed({ runs }: { runs: SpawnedAgent[] }) {
+  const rows = runs
+    .filter(run => !TERMINAL_RUN_STATUSES.has(run.runContext?.status ?? run.status))
+    .flatMap(run => {
+      const contextRows = (run.runContext?.recentActivity ?? []).slice(-6).map(item => activityLine(run, item));
+      const liveRows = run.activity.slice(-6).map(item => activityLine(run, item));
+      return [...contextRows, ...liveRows].filter((row): row is { key: string; text: string; at: string | number } => Boolean(row));
+    })
+    .sort((a, b) => new Date(a.at).getTime() - new Date(b.at).getTime())
+    .slice(-8);
+
+  if (rows.length === 0) return null;
+
+  const seen = new Set<string>();
+  const uniqueRows = rows.filter(row => {
+    const normalized = row.text.toLowerCase();
+    if (seen.has(normalized)) return false;
+    seen.add(normalized);
+    return true;
+  });
+
+  return (
+    <div className="ml-6 max-w-[760px] space-y-1.5 border-l-[3px] border-accent/35 pl-3">
+      <div className="flex items-center gap-2 font-mono text-[10px] text-theme-subtle">
+        <Loader2 className="h-3 w-3 animate-spin text-accent" />
+        live progress
+      </div>
+      {uniqueRows.map(row => (
+        <div key={row.key} className="rounded-md border border-app bg-app-card px-3 py-2 text-[12px] text-theme-secondary shadow-sm">
+          <span className="font-mono text-theme-muted">{formatTime(typeof row.at === 'string' ? row.at : new Date(row.at).toISOString())}</span>
+          <span className="ml-2">{row.text}</span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function workflowInterventionFromRuns(runs: SpawnedAgent[]): { run: SpawnedAgent; intervention: WorkflowIntervention } | null {
+  for (const run of runs) {
+    const context = run.runContext;
+    if (!context?.humanInput?.required) continue;
+    const interventions = (context.interventions ?? []) as WorkflowIntervention[];
+    const pending =
+      interventions.find(item => item.status === 'pending' && item.intervention_id === context.humanInput.interventionId)
+      ?? interventions.find(item => item.status === 'pending');
+    if (pending?.intervention_id) return { run, intervention: pending };
+    if (context.humanInput.interventionId) {
+      return {
+        run,
+        intervention: {
+          intervention_id: context.humanInput.interventionId,
+          status: 'pending',
+          stage: context.humanInput.stage,
+          severity: context.humanInput.severity,
+          title: context.humanInput.title ?? 'Workflow input needed',
+        },
+      };
+    }
+  }
+  return null;
+}
+
+function optionValue(option: string | { label?: string; value?: string }): string {
+  return typeof option === 'string' ? option : option.value ?? option.label ?? '';
+}
+
+function optionLabel(option: string | { label?: string; value?: string }): string {
+  return typeof option === 'string' ? humanLabel(option) : option.label ?? humanLabel(option.value ?? '');
+}
+
+function WorkflowInterventionPrompt({
+  run,
+  intervention,
+  onAnswer,
+}: {
+  run: SpawnedAgent;
+  intervention: WorkflowIntervention;
+  onAnswer: (input: WorkflowInterventionAnswer) => Promise<void> | void;
+}) {
+  const fields = intervention.fields ?? [];
+  const selectField = fields.find(field => field.type === 'select' || (field.options?.length ?? 0) > 0);
+  const optionRows: WorkflowInterventionOption[] = intervention.options?.length
+    ? intervention.options.map(option => ({ value: option.value ?? option.label ?? '', label: option.label, primary: option.primary, destructive: option.destructive }))
+    : (selectField?.options ?? []).map(option => ({ value: optionValue(option), label: optionLabel(option) }));
+  const initialOption = optionRows.find(option => option.primary)?.value ?? optionRows[0]?.value ?? '';
+  const isApproval = intervention.severity === 'approval' || optionRows.some(option => ['approve', 'request_changes', 'reject'].includes(option.value ?? ''));
+  const [selected, setSelected] = useState(initialOption || (isApproval ? 'approve' : 'answer'));
+  const [fieldValues, setFieldValues] = useState<Record<string, string>>({});
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const textFields = fields.filter(field => field !== selectField);
+  const primaryTextField = textFields[0];
+  const answerText = primaryTextField ? fieldValues[primaryTextField.name] : fieldValues.answer;
+  const feedbackValue =
+    textFields.map(field => fieldValues[field.name]).find(Boolean)
+    ?? fieldValues.feedback
+    ?? '';
+  const decision = (isApproval ? selected : 'answer') as WorkflowInterventionAnswer['decision'];
+  const needsFeedback = decision === 'request_changes';
+  const submitDisabled = submitting
+    || (!isApproval && !answerText?.trim())
+    || (decision === 'approve' && textFields.some(field => field.required !== false && !fieldValues[field.name]?.trim()))
+    || (needsFeedback && !feedbackValue.trim());
+
+  async function submit() {
+    if (submitDisabled || !intervention.intervention_id) return;
+    setSubmitting(true);
+    setError(null);
+    try {
+      const values: Record<string, unknown> = { ...fieldValues };
+      if (selectField?.name && selected) values[selectField.name] = selected;
+      await onAnswer({
+        executionId: run.executionId,
+        interventionId: intervention.intervention_id,
+        decision,
+        fieldValues: values,
+        feedback: needsFeedback ? feedbackValue : undefined,
+        answer: !isApproval ? answerText : undefined,
+        humanNodeName: intervention.stage,
+      });
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to submit response');
+      setSubmitting(false);
+    }
+  }
+
+  return (
+    <div className="mx-4 mb-4 max-w-[820px] overflow-hidden rounded-lg border border-accent-yellow/40 bg-accent-yellow/5 shadow-sm">
+      <div className="flex items-center gap-2.5 border-b border-accent-yellow/15 px-4 py-3">
+        <div className="flex h-7 w-7 items-center justify-center rounded-md border border-accent-yellow/30 bg-accent-yellow/10 text-accent-yellow">
+          <AlertTriangle className="h-4 w-4" />
+        </div>
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center gap-2">
+            <span className="rounded bg-accent-yellow/15 px-1.5 py-0.5 font-mono text-[9px] uppercase tracking-[0.08em] text-accent-yellow">Needs You</span>
+            <span className="truncate font-mono text-[10px] text-theme-subtle">{run.executionId.slice(0, 8)}</span>
+          </div>
+          <div className="mt-0.5 truncate text-[13px] font-heading font-semibold text-theme-primary">
+            {intervention.title ?? run.runContext?.humanInput?.title ?? 'Workflow input needed'}
+          </div>
+        </div>
+        <a href={`/executions/${run.executionId}`} target="_blank" rel="noopener noreferrer" className="rounded p-1 text-accent hover:bg-app-muted" title="Open execution">
+          <ExternalLink className="h-3.5 w-3.5" />
+        </a>
+      </div>
+
+      <div className="space-y-3 px-4 py-3">
+        {(intervention.question || intervention.context_summary) && (
+          <div className="rounded-md border border-app bg-app-card px-3 py-2 text-[13px] leading-relaxed text-theme-secondary">
+            {renderMarkdown(intervention.question ?? intervention.context_summary ?? '')}
+          </div>
+        )}
+
+        {optionRows.length > 0 && (
+          <div className="flex flex-wrap gap-2">
+            {optionRows.map(option => {
+              const value = option.value ?? '';
+              const active = selected === value;
+              const destructive = option.destructive || value === 'reject';
+              return (
+                <button
+                  key={value}
+                  type="button"
+                  onClick={() => setSelected(value)}
+                  disabled={submitting}
+                  className={`rounded-md border px-3 py-1.5 font-mono text-[11px] capitalize transition-colors disabled:opacity-50 ${
+                    active
+                      ? destructive
+                        ? 'border-accent-red/40 bg-accent-red/10 text-accent-red'
+                        : 'border-accent-blue/45 bg-accent-blue/10 text-accent-blue'
+                      : 'border-app bg-app-card text-theme-muted hover:border-accent-blue/25 hover:text-theme-secondary'
+                  }`}
+                >
+                  {option.label ?? humanLabel(value)}
+                </button>
+              );
+            })}
+          </div>
+        )}
+
+        {textFields.length > 0 ? textFields.map(field => (
+          <div key={field.name} className="space-y-1.5">
+            <label className="text-[10px] font-mono uppercase tracking-[0.08em] text-theme-muted">
+              {field.label ?? humanLabel(field.name)}
+              {field.required !== false && <span className="ml-1 text-accent-yellow">*</span>}
+            </label>
+            <textarea
+              value={fieldValues[field.name] ?? ''}
+              onChange={event => setFieldValues(prev => ({ ...prev, [field.name]: event.target.value }))}
+              placeholder={field.placeholder ?? (needsFeedback ? 'Tell the workflow what should change...' : 'Type your response...')}
+              rows={3}
+              disabled={submitting}
+              className="max-h-[110px] min-h-[84px] w-full resize-none overflow-y-auto rounded-md border border-app bg-app-muted px-3 py-2 text-sm text-theme-primary placeholder:text-theme-subtle focus:border-accent-yellow/50 focus:outline-none disabled:opacity-50"
+            />
+          </div>
+        )) : (
+          !isApproval && (
+            <textarea
+              value={fieldValues.answer ?? ''}
+              onChange={event => setFieldValues(prev => ({ ...prev, answer: event.target.value }))}
+              placeholder="Type your response..."
+              rows={3}
+              disabled={submitting}
+              className="max-h-[110px] min-h-[84px] w-full resize-none overflow-y-auto rounded-md border border-app bg-app-muted px-3 py-2 text-sm text-theme-primary placeholder:text-theme-subtle focus:border-accent-yellow/50 focus:outline-none disabled:opacity-50"
+            />
+          )
+        )}
+
+        {error && (
+          <div className="rounded-md border border-accent-red/25 bg-accent-red/10 px-3 py-2 text-[12px] text-accent-red">{error}</div>
+        )}
+
+        <div className="flex items-center justify-between gap-3">
+          <span className="truncate font-mono text-[10px] text-theme-subtle">
+            {humanLabel(intervention.stage ?? run.runContext?.progress.currentStep ?? 'workflow pause')}
+          </span>
+          <button
+            type="button"
+            onClick={submit}
+            disabled={submitDisabled}
+            className="inline-flex items-center gap-1.5 rounded-md bg-accent-blue/15 px-4 py-1.5 font-mono text-[12px] text-accent-blue transition-colors hover:bg-accent-blue/25 disabled:cursor-not-allowed disabled:opacity-40"
+          >
+            <Send className="h-3.5 w-3.5" />
+            Submit
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+export default function ChatMessageList({ messages, streamText, thinkingText, streaming, activeToolCalls = [], agentThreads = [], agentReports = [], threadsByMessage = {}, pendingUserQuestion, onAnswerUserQuestion, activeAgent, spawnedAgents = [], onAnswerWorkflowIntervention, onSuggestionClick, onSaveToLearnings }: ChatMessageListProps) {
   const agentIconName = useSettingsStore((s) => s.agentIcon);
   const [agentMap, setAgentMap] = useState<Record<string, { displayName?: string; icon?: string; color?: string }>>({});
+  const pendingWorkflowIntervention = onAnswerWorkflowIntervention ? workflowInterventionFromRuns(spawnedAgents) : null;
 
   // Load agent info for labels, avatars, and thread display
   useEffect(() => {
@@ -742,7 +1334,7 @@ export default function ChatMessageList({ messages, streamText, thinkingText, st
     if (autoScrollRef.current) {
       bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
     }
-  }, [messages, streamText]);
+  }, [messages, streamText, pendingWorkflowIntervention?.intervention.intervention_id]);
 
   return (
     <div ref={containerRef} className="flex-1 overflow-y-auto px-4 py-6 space-y-5">
@@ -779,6 +1371,8 @@ export default function ChatMessageList({ messages, streamText, thinkingText, st
       {/* Messages */}
       {messages.map((msg, i) => {
         const msgThreads = msg._id ? threadsByMessage[msg._id] : undefined;
+        const senderLabel = msg.role === 'user' ? userDisplayName(msg) : '';
+        const senderInitials = msg.role === 'user' ? initialsForName(senderLabel) : '';
         return (<React.Fragment key={msg._id || i}>
         <div
           className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'} al-msg-enter`}
@@ -787,7 +1381,7 @@ export default function ChatMessageList({ messages, streamText, thinkingText, st
             {/* Avatar — only for user messages */}
             {msg.role === 'user' && (
               <div className="shrink-0 w-8 h-8 rounded-lg flex items-center justify-center mt-0.5 bg-accent-blue/10 border border-accent-blue/20 text-accent-blue">
-                <User className="w-4 h-4" />
+                <span className="text-[11px] font-heading font-semibold">{senderInitials}</span>
               </div>
             )}
 
@@ -797,7 +1391,7 @@ export default function ChatMessageList({ messages, streamText, thinkingText, st
               {msg.role === 'user' ? (
                 <>
                   <div className="flex items-center gap-2 mb-1.5 justify-end">
-                    <span className="overline">You</span>
+                    <span className="overline">{senderLabel}</span>
                     {msg.createdAt && <span className="text-[10px] font-mono text-theme-subtle flex items-center gap-1"><Clock className="w-2.5 h-2.5" />{formatTime(msg.createdAt)}</span>}
                   </div>
                   <div className="inline-block px-4 py-2.5 rounded-2xl rounded-br-sm bg-accent-blue/15 border border-accent-blue/10 text-sm font-body text-theme-secondary leading-relaxed whitespace-pre-wrap break-words text-left">
@@ -982,41 +1576,20 @@ export default function ChatMessageList({ messages, streamText, thinkingText, st
         />
       )}
 
-      {/* Spawned agent executions — live cards */}
-      {spawnedAgents.length > 0 && (
-        <div className="px-4 space-y-2 my-3">
-          {spawnedAgents.map(s => (
-            <div key={s.executionId} className={`border rounded-lg p-3 ${s.status === 'running' ? 'border-accent/40 bg-blue-500/5' : s.status === 'completed' ? 'border-accent-green/30 bg-emerald-500/5' : 'border-accent-red/30 bg-red-500/5'}`}>
-              <div className="flex items-center gap-2 mb-1.5">
-                {s.status === 'running' && <span className="w-2 h-2 rounded-full bg-blue-400 animate-pulse" />}
-                {s.status === 'completed' && <span className="w-2 h-2 rounded-full bg-emerald-400" />}
-                {s.status === 'failed' && <span className="w-2 h-2 rounded-full bg-red-400" />}
-                <span className="text-[11px] font-mono font-bold text-theme-secondary">{s.agent}</span>
-                <span className="text-[9px] text-theme-subtle font-mono">{s.executionId.slice(0, 8)}</span>
-                <a href={`/executions/${s.executionId}`} target="_blank" rel="noopener noreferrer" className="text-[9px] text-accent hover:underline ml-auto">View Execution →</a>
-              </div>
-              <p className="text-[10px] text-theme-muted mb-1.5 truncate">{s.prompt}</p>
-              {/* Live activity feed */}
-              {s.activity.length > 0 && (
-                <div className="space-y-0.5 max-h-32 overflow-y-auto">
-                  {s.activity.map((a, i) => (
-                    <div key={i} className="flex items-center gap-1.5 text-[10px] font-mono">
-                      {a.type === 'thinking' && <span className="text-accent-purple">💭 thinking...</span>}
-                      {a.type === 'tool_start' && <span className="text-accent-yellow">⚡ {a.tool}</span>}
-                      {a.type === 'tool_done' && <span className="text-theme-muted">✓ {a.tool}{a.command ? ` (${a.command})` : ''}</span>}
-                    </div>
-                  ))}
-                </div>
-              )}
-              {s.status === 'running' && s.activity.length === 0 && (
-                <span className="text-[10px] text-accent animate-pulse">Starting agent...</span>
-              )}
-              {s.status === 'completed' && s.durationMs && (
-                <div className="text-[9px] text-theme-subtle mt-1">{s.toolCount} tools · {(s.durationMs / 1000).toFixed(1)}s</div>
-              )}
-            </div>
-          ))}
+      {/* Routed workflow/agent executions — chat shows only live logs; sidebar owns step details */}
+      {spawnedAgents.some(run => !TERMINAL_RUN_STATUSES.has(run.runContext?.status ?? run.status)) && (
+        <div className="px-4 my-3">
+          <RunProgressFeed runs={spawnedAgents} />
         </div>
+      )}
+
+      {/* Workflow human intervention prompt — final required action */}
+      {pendingWorkflowIntervention && onAnswerWorkflowIntervention && (
+        <WorkflowInterventionPrompt
+          run={pendingWorkflowIntervention.run}
+          intervention={pendingWorkflowIntervention.intervention}
+          onAnswer={onAnswerWorkflowIntervention}
+        />
       )}
 
       <div ref={bottomRef} />

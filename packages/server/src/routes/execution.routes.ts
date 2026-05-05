@@ -15,6 +15,22 @@ export function executionRoutes(db: Db): Router {
       const { workflowId, input } = req.body;
       if (!workflowId) return res.status(400).json({ error: 'workflowId is required' });
       const execution = await service.start(workflowId, input ?? {});
+      const chatSessionId = req.header('x-allen-chat-session-id');
+      if (chatSessionId) {
+        const chatMeta: Record<string, unknown> = {
+          'meta.origin': 'chat',
+          'meta.chatSessionId': chatSessionId,
+        };
+        if (typeof input?.task === 'string') chatMeta['meta.requestText'] = input.task;
+        else if (typeof input?.request === 'string') chatMeta['meta.requestText'] = input.request;
+        if (typeof input?.workspace_id === 'string') chatMeta['meta.workspaceId'] = input.workspace_id;
+        if (typeof input?.repo_path === 'string') chatMeta['meta.workspacePath'] = input.repo_path;
+        if (typeof input?.worktree_path === 'string') chatMeta['meta.workspacePath'] = input.worktree_path;
+        await db.collection('executions').updateOne(
+          { id: execution.id },
+          { $set: chatMeta },
+        ).catch(() => {});
+      }
       res.status(201).json(execution);
     } catch (err: unknown) {
       const msg = (err as Error).message;
@@ -62,6 +78,19 @@ export function executionRoutes(db: Db): Router {
       res.json(executions);
     } catch (err: unknown) {
       res.status(500).json({ error: (err as Error).message });
+    }
+  });
+
+  // GET /api/executions/:id/context
+  // Aggregated context for status cards: progress, human gates,
+  // linked workspace, Linear ticket, PR, artifacts, and child agents.
+  router.get('/:id/context', async (req: Request, res: Response) => {
+    try {
+      const context = await service.getContext(param(req, 'id'));
+      res.json(context);
+    } catch (err: unknown) {
+      const status = (err as Error).message === 'Execution not found' ? 404 : 500;
+      res.status(status).json({ error: (err as Error).message });
     }
   });
 

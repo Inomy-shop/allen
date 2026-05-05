@@ -18,6 +18,7 @@ interface AgentChatDropdownProps {
   agents: AgentChatOption[];
   disabled?: boolean;
   loading?: boolean;
+  variant?: 'default' | 'composer';
 }
 
 export default function AgentChatDropdown({
@@ -26,6 +27,7 @@ export default function AgentChatDropdown({
   agents,
   disabled = false,
   loading = false,
+  variant = 'default',
 }: AgentChatDropdownProps) {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState('');
@@ -85,13 +87,14 @@ export default function AgentChatDropdown({
   const displayLabel = selectedAgent
     ? (selectedAgent.displayName ?? selectedAgent.name)
     : 'Assistant';
+  const isComposer = variant === 'composer';
 
   const handleOpen = () => {
     if (disabled) return;
     if (!open && triggerRef.current) {
       const rect = triggerRef.current.getBoundingClientRect();
       const spaceBelow = window.innerHeight - rect.bottom;
-      const dropUp = spaceBelow < 340;
+      const dropUp = spaceBelow < 340 && rect.top > spaceBelow;
       setPos({
         top: dropUp ? rect.top : rect.bottom + 4,
         left: rect.left,
@@ -152,18 +155,25 @@ export default function AgentChatDropdown({
         type="button"
         disabled={disabled}
         onClick={handleOpen}
-        className={`flex items-center gap-1.5 px-2.5 py-1 rounded-md text-sm border border-app bg-app-card text-theme-primary hover:bg-app-hover transition-colors ${
-          disabled ? 'opacity-50 cursor-not-allowed pointer-events-none' : ''
-        }`}
+        className={isComposer
+          ? `flex items-center gap-1 px-2 py-0.5 rounded-md text-[11px] font-mono transition-all ${
+              value
+                ? 'text-accent-blue hover:bg-accent-blue/10'
+                : 'text-theme-muted hover:text-theme-secondary hover:bg-surface-100/50'
+            } ${disabled ? 'opacity-50 cursor-not-allowed pointer-events-none' : ''}`
+          : `flex items-center gap-1.5 px-2.5 py-1 rounded-md text-sm border border-app bg-app-card text-theme-primary hover:bg-app-hover transition-colors ${
+              disabled ? 'opacity-50 cursor-not-allowed pointer-events-none' : ''
+            }`
+        }
       >
         {value === null ? (
-          <User className="w-3.5 h-3.5 text-theme-muted shrink-0" />
+          <User className={`${isComposer ? 'w-3 h-3' : 'w-3.5 h-3.5'} text-theme-muted shrink-0`} />
         ) : (
-          <Bot className="w-3.5 h-3.5 text-theme-muted shrink-0" />
+          <Bot className={`${isComposer ? 'w-3 h-3' : 'w-3.5 h-3.5'} text-theme-muted shrink-0`} />
         )}
         <span className="truncate max-w-[140px]">{displayLabel}</span>
         <ChevronDown
-          className={`w-3.5 h-3.5 shrink-0 transition-transform text-theme-muted ${open ? 'rotate-180' : ''}`}
+          className={`${isComposer ? 'w-2.5 h-2.5' : 'w-3.5 h-3.5'} shrink-0 transition-transform text-theme-subtle ${open ? 'rotate-180' : ''}`}
         />
       </button>
 
@@ -171,7 +181,7 @@ export default function AgentChatDropdown({
         createPortal(
           <div
             ref={dropdownRef}
-            className="fixed z-[9999] bg-app-card border border-app rounded-lg shadow-lg min-w-[220px] max-w-[300px] flex flex-col overflow-hidden"
+            className="fixed z-[9999] bg-surface-100 border border-app rounded-lg shadow-2xl min-w-[240px] max-w-[320px] flex flex-col overflow-hidden"
             style={{
               top: pos.dropUp ? undefined : pos.top,
               bottom: pos.dropUp ? window.innerHeight - pos.top + 4 : undefined,
@@ -182,14 +192,14 @@ export default function AgentChatDropdown({
             {/* Search */}
             <div className="p-2 border-b border-app shrink-0">
               <div className="relative">
-                <Search className="absolute left-2 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-theme-muted pointer-events-none" />
+                <Search className="absolute left-2 top-1/2 -translate-y-1/2 w-3 h-3 text-theme-muted pointer-events-none" />
                 <input
                   ref={searchRef}
                   type="text"
                   value={query}
                   onChange={e => setQuery(e.target.value)}
                   placeholder="Search agents…"
-                  className="w-full pl-7 pr-2 py-1.5 text-sm bg-app-muted rounded-md border border-app text-theme-primary placeholder:text-theme-muted focus:outline-none"
+                  className="w-full pl-7 pr-2 py-1.5 text-xs font-mono bg-app-muted rounded-md border border-app text-theme-primary placeholder:text-theme-muted focus:outline-none"
                 />
               </div>
             </div>
@@ -213,12 +223,12 @@ export default function AgentChatDropdown({
                     <button
                       type="button"
                       onClick={() => pick(null, null)}
-                      className="flex items-center gap-2 px-3 py-1.5 text-sm cursor-pointer hover:bg-app-hover text-theme-primary w-full text-left"
+                      className="flex items-center gap-2 px-3 py-1.5 text-xs font-mono cursor-pointer hover:bg-app-muted text-theme-secondary w-full text-left"
                     >
                       <User className="w-3.5 h-3.5 text-theme-muted shrink-0" />
                       <span className="flex-1">Assistant</span>
                       {value === null && (
-                        <Check className="w-3.5 h-3.5 text-accent-amber shrink-0" />
+                        <Check className="w-3.5 h-3.5 text-accent-blue shrink-0" />
                       )}
                     </button>
                   )}
@@ -227,7 +237,7 @@ export default function AgentChatDropdown({
                   {grouped.map(group => (
                     <div key={group.key}>
                       {(grouped.length > 1 || group.key !== '__ungrouped__') && (
-                        <div className="px-3 pt-2 pb-1 text-[10px] font-semibold uppercase tracking-wider text-theme-muted">
+                        <div className="px-3 pt-2 pb-1 text-[10px] font-mono font-medium uppercase tracking-wider text-theme-muted">
                           {group.title}
                         </div>
                       )}
@@ -236,7 +246,9 @@ export default function AgentChatDropdown({
                           key={agent.name}
                           type="button"
                           onClick={() => pick(agent.name, agent.sourceRepoPath ?? null)}
-                          className="flex items-center gap-2 px-3 py-1.5 text-sm cursor-pointer hover:bg-app-hover text-theme-primary w-full text-left"
+                          className={`flex items-center gap-2 px-3 py-1.5 text-xs font-mono cursor-pointer hover:bg-app-muted w-full text-left ${
+                            value === agent.name ? 'text-accent-blue bg-accent-blue/5' : 'text-theme-secondary'
+                          }`}
                         >
                           {agent.isBuiltIn ? (
                             <Crown className="w-3.5 h-3.5 text-accent-amber shrink-0" />
@@ -247,7 +259,7 @@ export default function AgentChatDropdown({
                             {agent.displayName ?? agent.name}
                           </span>
                           {value === agent.name && (
-                            <Check className="w-3.5 h-3.5 text-accent-amber shrink-0" />
+                            <Check className="w-3.5 h-3.5 text-accent-blue shrink-0" />
                           )}
                         </button>
                       ))}

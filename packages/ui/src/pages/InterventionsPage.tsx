@@ -13,11 +13,13 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useParams, useNavigate, Link } from 'react-router-dom';
 import { interventions as interventionsApi } from '../services/api';
+import { useRunContext } from '../hooks/useRunContext';
 import { useToast } from '../components/common/Toast';
 import ClarificationPanel, {
   type ClarificationField,
   type ClarificationSeverity,
 } from '../components/clarification/ClarificationPanel';
+import RunStatusCard from '../components/executions/RunStatusCard';
 import {
   ArrowRight, Check, AlertTriangle, CheckCircle2, HelpCircle,
   Clock, RefreshCw, Search, Inbox,
@@ -248,18 +250,13 @@ function InterventionRow({ item, emphasized }: { item: Intervention; emphasized:
 function InterventionsListView() {
   const [items, setItems] = useState<Intervention[]>([]);
   const [loading, setLoading] = useState(true);
-  const [statusFilter, setStatusFilter] = useState<'all' | 'pending' | 'answered'>('all');
-  const [severityFilter, setSeverityFilter] = useState<'all' | Intervention['severity']>('all');
+  const [filter, setFilter] = useState<'all' | 'gate' | 'review' | 'question' | 'blocked' | 'mention'>('all');
   const [search, setSearch] = useState('');
 
   async function load() {
     setLoading(true);
     try {
-      const data = await interventionsApi.list({
-        status: statusFilter === 'all' ? undefined : statusFilter,
-        severity: severityFilter === 'all' ? undefined : severityFilter,
-        limit: 500,
-      });
+      const data = await interventionsApi.list({ limit: 500 });
       setItems(data ?? []);
     } finally {
       setLoading(false);
@@ -267,8 +264,8 @@ function InterventionsListView() {
   }
 
   useEffect(() => {
-    load();
-  }, [statusFilter, severityFilter]);
+    void load();
+  }, []);
 
   const pendingCount = useMemo(() => items.filter(i => i.status === 'pending').length, [items]);
   const answeredCount = useMemo(() => items.filter(i => i.status === 'answered').length, [items]);
@@ -277,148 +274,90 @@ function InterventionsListView() {
     if (pendingCount === 0) return;
     const t = setInterval(load, 15_000);
     return () => clearInterval(t);
-  }, [pendingCount, statusFilter, severityFilter]);
+  }, [pendingCount]);
+
+  function kindFor(item: Intervention): 'gate' | 'review' | 'question' | 'blocked' | 'mention' {
+    const haystack = `${item.title} ${item.context_summary} ${item.question} ${item.user_request ?? ''}`.toLowerCase();
+    if (filter === 'mention' && haystack.includes('@')) return 'mention';
+    if (item.severity === 'escalation') return 'blocked';
+    if (item.severity === 'approval') return item.stage?.toLowerCase().includes('gate') ? 'gate' : 'review';
+    return 'question';
+  }
 
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
-    if (!q) return items;
-    return items.filter(i =>
-      i.title.toLowerCase().includes(q)
-      || i.context_summary.toLowerCase().includes(q)
-      || i.workflow_name.toLowerCase().includes(q)
-      || i.stage.toLowerCase().includes(q)
-      || (i.user_request ?? '').toLowerCase().includes(q),
-    );
-  }, [items, search]);
+    return items.filter(i => {
+      const matchesSearch = !q
+        || i.title.toLowerCase().includes(q)
+        || i.context_summary.toLowerCase().includes(q)
+        || i.workflow_name.toLowerCase().includes(q)
+        || i.stage.toLowerCase().includes(q)
+        || (i.user_request ?? '').toLowerCase().includes(q);
+      if (!matchesSearch) return false;
+      if (filter === 'all') return true;
+      return kindFor(i) === filter;
+    });
+  }, [filter, items, search]);
 
   const pending = filtered.filter(i => i.status === 'pending');
-  const history = filtered.filter(i => i.status !== 'pending');
+  const groups = {
+    urgent: pending.filter(i => i.severity === 'escalation'),
+    today: pending.filter(i => i.severity !== 'escalation'),
+    fyi: filtered.filter(i => i.status !== 'pending'),
+  };
 
   return (
-    <div className="flex flex-col h-full">
-      <div className="sticky top-0 z-10 bg-app border-b border-app">
-        <div className="px-6 pt-5 pb-4">
-          <div className="flex items-center gap-2 mb-2 text-[12px] text-theme-muted">
-            <span>Workspace</span>
-            <span className="text-theme-subtle">/</span>
-            <span>Needs review</span>
+    <div className="content scroll-hide" data-screen-label="inbox">
+      <div className="page-head">
+        <div className="ph-row">
+          <div>
+            <h1>inbox</h1>
+            <p className="sub">
+              {pendingCount} things waiting on you · {answeredCount} answered · {items.length} total
+            </p>
           </div>
-          <div className="flex items-center justify-between mb-4">
-            <div>
-              <div className="flex items-center gap-2 mb-1">
-                <h1 className="text-[20px] font-semibold text-theme-primary tracking-tight">
-                  Needs review
-                </h1>
-              </div>
-              <div className="flex items-center gap-3 mt-1 text-[10px] font-mono text-theme-muted">
-                <span className="flex items-center gap-1">
-                  <Clock className="w-3 h-3 text-accent-yellow" />
-                  <span className="text-theme-primary font-semibold">{pendingCount}</span> pending
-                </span>
-                <span className="flex items-center gap-1">
-                  <CheckCircle2 className="w-3 h-3 text-accent-green" />
-                  <span className="text-theme-primary font-semibold">{answeredCount}</span> answered
-                </span>
-                <span>· {items.length} total</span>
-                {pendingCount > 0 && (
-                  <span className="ml-2 flex items-center gap-1 text-accent-blue">
-                    <RefreshCw className="w-3 h-3 animate-spin" />
-                    auto-refresh on
-                  </span>
-                )}
-              </div>
-            </div>
-            <button
-              onClick={load}
-              disabled={loading}
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-[10px] font-mono bg-app-muted/50 text-theme-muted hover:bg-app-muted disabled:opacity-50"
-            >
-              <RefreshCw className={`w-3 h-3 ${loading ? 'animate-spin' : ''}`} />
-              Refresh
-            </button>
-          </div>
-
-          <div className="flex items-center gap-2">
-            <div className="relative flex-1">
-              <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-theme-subtle pointer-events-none" />
-              <input
-                type="text"
-                value={search}
-                onChange={e => setSearch(e.target.value)}
-                placeholder="Search title, workflow, stage, user request…"
-                className="input text-xs pl-8 pr-3 py-1.5 w-full"
-              />
-            </div>
-            <select
-              value={statusFilter}
-              onChange={e => setStatusFilter(e.target.value as 'all' | 'pending' | 'answered')}
-              className="input text-xs px-2 py-1.5"
-            >
-              <option value="all">All statuses</option>
-              <option value="pending">Pending only</option>
-              <option value="answered">Answered only</option>
-            </select>
-            <select
-              value={severityFilter}
-              onChange={e => setSeverityFilter(e.target.value as 'all' | Intervention['severity'])}
-              className="input text-xs px-2 py-1.5"
-            >
-              <option value="all">Any severity</option>
-              <option value="question">Question</option>
-              <option value="approval">Approval</option>
-              <option value="escalation">Escalation</option>
-            </select>
-          </div>
+          <button onClick={load} disabled={loading} className="btn btn-secondary btn-sm" type="button">
+            <RefreshCw className={`w-3.5 h-3.5 ${loading ? 'animate-spin' : ''}`} />
+          </button>
         </div>
       </div>
 
-      <div className="flex-1 overflow-y-auto">
-        {loading && items.length === 0 && (
-          <div className="flex items-center justify-center py-16 text-xs text-theme-muted">
-            <RefreshCw className="w-4 h-4 mr-2 animate-spin" />
-            Loading interventions…
-          </div>
-        )}
-
-        {!loading && filtered.length === 0 && (
-          <EmptyState hasFilters={statusFilter !== 'all' || severityFilter !== 'all' || search.trim() !== ''} />
-        )}
-
-        {filtered.length > 0 && (
-          <div className="pb-8">
-            {pending.length > 0 && (
-              <section>
-                <SectionHeader
-                  icon={<Inbox className="w-3.5 h-3.5 text-accent-yellow" />}
-                  label="Pending"
-                  count={pending.length}
-                  emphasized
-                />
-                <div className="border-y border-app bg-surface-100">
-                  {pending.map(i => (
-                    <InterventionRow key={i.intervention_id} item={i} emphasized />
-                  ))}
-                </div>
-              </section>
-            )}
-            {history.length > 0 && (
-              <section className="mt-6">
-                <SectionHeader
-                  icon={<Archive className="w-3.5 h-3.5 text-theme-muted" />}
-                  label="History"
-                  count={history.length}
-                  emphasized={false}
-                />
-                <div className="border-y border-app bg-surface-50">
-                  {history.map(i => (
-                    <InterventionRow key={i.intervention_id} item={i} emphasized={false} />
-                  ))}
-                </div>
-              </section>
-            )}
-          </div>
-        )}
+      <div className="filter-row">
+        {(['all', 'gate', 'review', 'question', 'blocked', 'mention'] as const).map((key) => (
+          <button key={key} className={`fchip ${filter === key ? 'active' : ''}`} onClick={() => setFilter(key)} type="button">
+            {key}
+          </button>
+        ))}
+        <div className="th-search min-w-[240px] flex-1 p-0">
+          <input
+            value={search}
+            onChange={e => setSearch(e.target.value)}
+            placeholder="search inbox..."
+          />
+        </div>
       </div>
+
+      {loading && items.length === 0 && <div className="task-empty">loading interventions...</div>}
+      {!loading && filtered.length === 0 && <EmptyState hasFilters={filter !== 'all' || search.trim() !== ''} />}
+
+      {Object.entries(groups).filter(([, arr]) => arr.length > 0).map(([group, arr]) => (
+        <section key={group} className="ib-grp">
+          <h4 className="grp-h">{group} <span className="ct">{arr.length}</span></h4>
+          <div className="ib-list">
+            {arr.map((item) => (
+              <Link key={item.intervention_id} className="ib-row" to={`/interventions/${item.intervention_id}`}>
+                <span className={`ib-kind ${kindFor(item)}`}>{kindFor(item)}</span>
+                <div className="ib-body">
+                  <div className="ib-title">{item.title}</div>
+                  <div className="ib-sub">{item.context_summary || `${item.workflow_name} · ${humaniseStage(item.stage)}`}</div>
+                </div>
+                <span className="ib-age">{relativeTime(item.created_at)}</span>
+                <span className="btn btn-secondary btn-sm">open</span>
+              </Link>
+            ))}
+          </div>
+        </section>
+      ))}
     </div>
   );
 }
@@ -470,7 +409,7 @@ function EmptyState({ hasFilters }: { hasFilters: boolean }) {
           </h3>
           <p className="text-xs text-theme-muted font-body max-w-md">
             When a workflow pauses for human input — a clarification, plan approval, or escalation —
-            it shows up here. Try running <span className="font-mono text-theme-primary">test-human-intervention</span>.
+            it shows up here.
           </p>
         </>
       )}
@@ -487,6 +426,7 @@ function InterventionDetailView() {
   const [item, setItem] = useState<Intervention | null>(null);
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
+  const { runContext, loading: runContextLoading, error: runContextError } = useRunContext(item?.workflow_run_id);
 
   async function load() {
     if (!id) return;
@@ -669,6 +609,15 @@ function InterventionDetailView() {
           {item.context_summary}
         </div>
       )}
+
+      <div className="mb-5">
+        <RunStatusCard
+          context={runContext}
+          loading={runContextLoading}
+          error={runContextError}
+          title={isPending ? 'Paused execution' : 'Execution status'}
+        />
+      </div>
 
       {/* Action panel (pending) — shared ClarificationPanel.
           Note: we pass no `title` so the panel skips its own header and

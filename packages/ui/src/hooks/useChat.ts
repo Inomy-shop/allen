@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
-import { chat as api, authHeaders } from '../services/api';
+import { chat as api, executions as executionsApi, interventions as interventionsApi, authHeaders, type RunStatus } from '../services/api';
+import { useAuthStore, type AuthUser } from '../stores/authStore';
 
 export interface ChatSession {
   _id: string;
@@ -47,11 +48,25 @@ export interface ChatMessage {
   role: 'user' | 'assistant';
   content: string;
   status: 'completed' | 'streaming' | 'failed';
+  senderUserId?: string;
+  senderName?: string;
+  senderEmail?: string;
+  senderSource?: 'ui' | 'slack' | 'system';
   costUsd?: number;
   durationMs?: number;
   error?: string;
   toolCalls?: ToolCallRecord[];
   createdAt: string;
+}
+
+function currentSenderFields(user: AuthUser | null): Pick<ChatMessage, 'senderUserId' | 'senderName' | 'senderEmail' | 'senderSource'> {
+  if (!user) return {};
+  return {
+    senderUserId: user.id,
+    senderName: user.name?.trim() || user.email.split('@')[0],
+    senderEmail: user.email,
+    senderSource: 'ui',
+  };
 }
 
 /** Active tool call being streamed */
@@ -103,11 +118,23 @@ export interface SpawnedAgent {
   executionId: string;
   agent: string;
   prompt: string;
-  status: 'running' | 'completed' | 'failed';
-  activity: { type: string; tool?: string; command?: string; timestamp: number }[];
+  status: 'queued' | 'running' | 'waiting_for_input' | 'completed' | 'failed' | 'cancelled';
+  activity: { type: string; tool?: string; command?: string; content?: string; timestamp: number }[];
+  kind?: 'agent' | 'lead' | 'workflow';
   durationMs?: number;
   toolCount?: number;
   response?: string;
+  runContext?: RunStatus;
+}
+
+export interface WorkflowInterventionAnswer {
+  executionId: string;
+  interventionId: string;
+  decision: 'approve' | 'request_changes' | 'reject' | 'answer';
+  fieldValues?: Record<string, unknown>;
+  feedback?: string;
+  answer?: string;
+  humanNodeName?: string;
 }
 
 /** Progress report from an agent */
@@ -153,6 +180,88 @@ function mapThreadInGroups(
   return changed ? next : groups;
 }
 
+function upsertSpawnedRun(prev: SpawnedAgent[], run: Omit<Partial<SpawnedAgent>, 'executionId'> & { executionId: string }): SpawnedAgent[] {
+  const existing = prev.find(s => s.executionId === run.executionId);
+  if (!existing) {
+    return [...prev, {
+      executionId: run.executionId,
+      agent: run.agent ?? 'Routed run',
+      prompt: run.prompt ?? '',
+      status: run.status ?? 'running',
+      activity: run.activity ?? [],
+      kind: run.kind,
+      durationMs: run.durationMs,
+      toolCount: run.toolCount,
+      response: run.response,
+      runContext: run.runContext,
+    }];
+  }
+  return prev.map(s =>
+    s.executionId === run.executionId
+      ? { ...s, ...run, activity: run.activity ?? s.activity }
+      : s,
+  );
+}
+
+function toolRunFromResult(tool: string, result: Record<string, unknown> | undefined): SpawnedAgent | null {
+  if (!result) return null;
+  const executionId = typeof result.execution_id === 'string'
+    ? result.execution_id
+    : typeof result.id === 'string' && /run_workflow|spawn_agent|workflow/i.test(tool)
+      ? result.id
+      : undefined;
+  if (!executionId) return null;
+
+  const normalizedTool = tool.split('__').pop() ?? tool;
+  const isWorkflow = /run_workflow/i.test(normalizedTool)
+    || typeof result.workflow_name === 'string'
+    || typeof result.workflowName === 'string';
+  const label =
+    (typeof result.workflow_name === 'string' && result.workflow_name)
+    || (typeof result.workflowName === 'string' && result.workflowName)
+    || (typeof result.agent_name === 'string' && result.agent_name)
+    || (typeof result.agent === 'string' && result.agent)
+    || (isWorkflow ? 'Workflow run' : 'Agent run');
+
+  return {
+    executionId,
+    agent: label,
+    prompt: typeof result.message === 'string' ? result.message : normalizedTool,
+    status: (typeof result.status === 'string' ? result.status : 'running') as SpawnedAgent['status'],
+    activity: [],
+    kind: isWorkflow ? 'workflow' : 'agent',
+  };
+}
+
+function runsFromMessages(messages: ChatMessage[]): SpawnedAgent[] {
+  const seen = new Set<string>();
+  const runs: SpawnedAgent[] = [];
+  for (const message of messages) {
+    if (message.role !== 'assistant') continue;
+    for (const call of message.toolCalls ?? []) {
+      const run = toolRunFromResult(call.tool, call.result);
+      if (!run || seen.has(run.executionId)) continue;
+      seen.add(run.executionId);
+      runs.push(run);
+    }
+    if (!message.content) continue;
+    const matches = message.content.matchAll(/\/executions\/([A-Za-z0-9_-]+)/g);
+    for (const match of matches) {
+      const executionId = match[1];
+      if (!executionId || seen.has(executionId)) continue;
+      seen.add(executionId);
+      runs.push({
+        executionId,
+        agent: 'Routed run',
+        prompt: message.content.split('\n').find(Boolean) ?? '',
+        status: 'running',
+        activity: [],
+      });
+    }
+  }
+  return runs;
+}
+
 export function useChat() {
   const [sessions, setSessions] = useState<ChatSession[]>([]);
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
@@ -171,6 +280,50 @@ export function useChat() {
   const [loadingSessions, setLoadingSessions] = useState(true);
   const [loadingMessages, setLoadingMessages] = useState(false);
   const abortRef = useRef<AbortController | null>(null);
+
+  const spawnedRunSignature = spawnedAgents
+    .map(s => `${s.executionId}:${s.status}:${s.runContext?.progress?.phase ?? ''}:${s.runContext?.progress?.percent ?? ''}`)
+    .join('|');
+
+  useEffect(() => {
+    if (spawnedAgents.length === 0) return;
+    let cancelled = false;
+    const terminal = new Set(['completed', 'failed', 'cancelled']);
+    const refreshContexts = async () => {
+      const ids = [...new Set(spawnedAgents.map(s => s.executionId).filter(Boolean))];
+      const updates = await Promise.all(ids.map(async (id) => {
+        try {
+          return { id, context: await executionsApi.context(id) };
+        } catch {
+          return null;
+        }
+      }));
+      if (cancelled) return;
+      setSpawnedAgents(prev => {
+        let changed = false;
+        const next = prev.map(run => {
+          const update = updates.find(u => u?.id === run.executionId);
+          if (!update?.context) return run;
+          changed = true;
+          return {
+            ...run,
+            status: update.context.status as SpawnedAgent['status'],
+            runContext: update.context,
+          };
+        });
+        return changed ? next : prev;
+      });
+    };
+
+    refreshContexts();
+    const hasActive = spawnedAgents.some(s => !terminal.has(s.runContext?.status ?? s.status));
+    if (!hasActive) return () => { cancelled = true; };
+    const timer = window.setInterval(refreshContexts, 3000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [spawnedRunSignature]);
 
   // Load sessions on mount
   const loadSessions = useCallback(async () => {
@@ -210,7 +363,9 @@ export function useChat() {
           api.getThreads(activeSessionId).catch(() => []),
         ]);
         if (cancelled) return;
-        setMessages(session.messages || []);
+        const loadedMessages = (session.messages || []) as ChatMessage[];
+        setMessages(loadedMessages);
+        setSpawnedAgents(runsFromMessages(loadedMessages));
 
         // Re-surface a pending ask_user question on refresh. The tool
         // persists the question on chat_sessions.pendingUserQuestion while
@@ -367,6 +522,10 @@ export function useChat() {
               : tc,
           ),
         );
+        {
+          const run = toolRunFromResult(data.tool, data.result);
+          if (run) setSpawnedAgents(prev => upsertSpawnedRun(prev, run));
+        }
         break;
 
       case 'message_complete':
@@ -511,19 +670,31 @@ export function useChat() {
         break;
 
       case 'spawn_started':
-        setSpawnedAgents(prev => [...prev, {
+        setSpawnedAgents(prev => upsertSpawnedRun(prev, {
           executionId: data.executionId as string,
           agent: data.agent as string,
           prompt: (data.prompt as string) ?? '',
           status: 'running',
           activity: [],
-        }]);
+          kind: 'agent',
+        }));
+        break;
+
+      case 'routed_run_started':
+        setSpawnedAgents(prev => upsertSpawnedRun(prev, {
+          executionId: data.executionId as string,
+          agent: (data.name as string) ?? (data.agent as string) ?? (data.workflowName as string) ?? 'Routed run',
+          prompt: (data.reason as string) ?? '',
+          status: 'running',
+          activity: [],
+          kind: (data.kind as SpawnedAgent['kind']) ?? 'agent',
+        }));
         break;
 
       case 'spawn_activity':
         setSpawnedAgents(prev => prev.map(s =>
           s.executionId === data.executionId
-            ? { ...s, activity: [...s.activity, { type: data.type as string, tool: data.tool as string | undefined, command: data.command as string | undefined, timestamp: Date.now() }] }
+            ? { ...s, activity: [...s.activity, { type: data.type as string, tool: data.tool as string | undefined, command: data.command as string | undefined, content: data.content as string | undefined, timestamp: Date.now() }] }
             : s,
         ));
         break;
@@ -648,6 +819,7 @@ export function useChat() {
       role: 'user',
       content,
       status: 'completed',
+      ...currentSenderFields(useAuthStore.getState().user),
       createdAt: new Date().toISOString(),
     };
     setMessages(prev => [...prev, userMsg]);
@@ -721,9 +893,11 @@ export function useChat() {
                     prev.map(tc =>
                       tc.tool === data.tool && tc.status === 'running'
                         ? { ...tc, status: 'completed' as const, result: data.result, durationMs: data.durationMs }
-                        : tc,
+                      : tc,
                     ),
                   );
+                  const run = toolRunFromResult(data.tool, data.result);
+                  if (run) setSpawnedAgents(prev => upsertSpawnedRun(prev, run));
                   break;
                 }
 
@@ -881,6 +1055,44 @@ export function useChat() {
                   }]);
                   break;
 
+                case 'spawn_started':
+                  setSpawnedAgents(prev => upsertSpawnedRun(prev, {
+                    executionId: data.executionId as string,
+                    agent: data.agent as string,
+                    prompt: (data.prompt as string) ?? '',
+                    status: 'running',
+                    activity: [],
+                    kind: 'agent',
+                  }));
+                  break;
+
+                case 'routed_run_started':
+                  setSpawnedAgents(prev => upsertSpawnedRun(prev, {
+                    executionId: data.executionId as string,
+                    agent: (data.name as string) ?? (data.agent as string) ?? (data.workflowName as string) ?? 'Routed run',
+                    prompt: (data.reason as string) ?? '',
+                    status: 'running',
+                    activity: [],
+                    kind: (data.kind as SpawnedAgent['kind']) ?? 'agent',
+                  }));
+                  break;
+
+                case 'spawn_activity':
+                  setSpawnedAgents(prev => prev.map(s =>
+                    s.executionId === data.executionId
+                      ? { ...s, activity: [...s.activity, { type: data.type as string, tool: data.tool as string | undefined, command: data.command as string | undefined, content: data.content as string | undefined, timestamp: Date.now() }] }
+                      : s,
+                  ));
+                  break;
+
+                case 'spawn_completed':
+                  setSpawnedAgents(prev => prev.map(s =>
+                    s.executionId === data.executionId
+                      ? { ...s, status: 'completed', durationMs: data.durationMs as number, toolCount: data.toolCount as number, response: data.response as string }
+                      : s,
+                  ));
+                  break;
+
                 case 'error':
                   setMessages(prev => [
                     ...prev,
@@ -949,6 +1161,61 @@ export function useChat() {
     setActiveToolCalls([]);
   }, [activeSessionId]);
 
+  const answerWorkflowIntervention = useCallback(async (input: WorkflowInterventionAnswer) => {
+    if (!activeSessionId) return;
+
+    await interventionsApi.respond(input.interventionId, {
+      decision: input.decision,
+      field_values: input.decision === 'approve' || input.decision === 'answer' ? input.fieldValues : undefined,
+      feedback: input.feedback,
+      answer: input.answer,
+      answered_by_user_id: useAuthStore.getState().user?.id,
+      human_node_name: input.humanNodeName,
+      source: 'chat',
+    });
+
+    setPendingUserQuestion(null);
+    setSpawnedAgents(prev => prev.map(run =>
+      run.executionId === input.executionId
+        ? {
+            ...run,
+            status: input.decision === 'reject' ? 'cancelled' : 'running',
+            runContext: run.runContext
+              ? {
+                  ...run.runContext,
+                  status: input.decision === 'reject' ? 'cancelled' : 'running',
+                  humanInput: { ...run.runContext.humanInput, required: false },
+                }
+              : run.runContext,
+          }
+        : run,
+    ));
+
+    try {
+      const context = await executionsApi.context(input.executionId);
+      setSpawnedAgents(prev => prev.map(run =>
+        run.executionId === input.executionId
+          ? { ...run, status: context.status as SpawnedAgent['status'], runContext: context }
+          : run,
+      ));
+    } catch {
+      // Best-effort refresh; the polling loop will pick up the next context.
+    }
+
+    if (!streaming) {
+      const summary =
+        input.decision === 'request_changes'
+          ? 'I requested changes on the workflow intervention.'
+          : input.decision === 'reject'
+            ? 'I rejected the workflow intervention.'
+            : 'I answered the workflow intervention.';
+      await sendMessage(
+        `${summary} Continue execution ${input.executionId} from the latest workflow state and keep me updated in this chat.`,
+        activeSessionId,
+      );
+    }
+  }, [activeSessionId, sendMessage, streaming]);
+
   return {
     sessions,
     activeSessionId,
@@ -964,9 +1231,16 @@ export function useChat() {
     pendingUserQuestion,
     answerUserQuestion: async (answer: string) => {
       if (!activeSessionId) return;
-      await api.answerAgentQuestion(activeSessionId, answer);
+      const result = await api.answerAgentQuestion(activeSessionId, answer);
       setPendingUserQuestion(null);
+      if (result?.workflowInput?.forwarded && !streaming) {
+        await sendMessage(
+          `I answered the workflow input. Continue execution ${result.workflowInput.execution_id} from the latest workflow state and keep me updated in this chat.`,
+          activeSessionId,
+        );
+      }
     },
+    answerWorkflowIntervention,
     loadingSessions,
     loadingMessages,
     sendMessage,

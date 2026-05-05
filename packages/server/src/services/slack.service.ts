@@ -12,7 +12,7 @@
  */
 
 import type { Db } from 'mongodb';
-import { ChatService } from './chat.service.js';
+import { ChatService, type ChatMessageSender } from './chat.service.js';
 
 // ── Types ──
 
@@ -194,7 +194,7 @@ export class SlackService {
       lastActivityAt: new Date(),
     });
 
-    await this.processAndReply(sessionId, combinedMessage, channelId, threadTs, event.ts);
+    await this.processAndReply(sessionId, combinedMessage, channelId, threadTs, event.ts, this.senderFromSlackEvent(event));
   }
 
   // ── Follow-up mention in same thread ──
@@ -212,10 +212,18 @@ export class SlackService {
       { $set: { lastActivityAt: new Date() } },
     );
 
-    await this.processAndReply(sessionId, cleanedText, channelId, threadTs, event.ts);
+    await this.processAndReply(sessionId, cleanedText, channelId, threadTs, event.ts, this.senderFromSlackEvent(event));
   }
 
   // ── Run agent and post reply ──
+
+  private senderFromSlackEvent(event: SlackEvent): ChatMessageSender {
+    return {
+      userId: event.user,
+      name: event.user,
+      source: 'slack',
+    };
+  }
 
   private async processAndReply(
     sessionId: string,
@@ -223,12 +231,13 @@ export class SlackService {
     channelId: string,
     threadTs: string,
     reactionTs: string,
+    sender?: ChatMessageSender,
   ): Promise<void> {
     // Acknowledge with hourglass reaction
     await this.addReaction(channelId, reactionTs, 'hourglass_flowing_sand').catch(() => {});
 
     try {
-      const result = await this.chatService.sendMessageForSlack(sessionId, content);
+      const result = await this.chatService.sendMessageForSlack(sessionId, content, undefined, sender);
 
       await this.removeReaction(channelId, reactionTs, 'hourglass_flowing_sand').catch(() => {});
       await this.addReaction(channelId, reactionTs, 'white_check_mark').catch(() => {});

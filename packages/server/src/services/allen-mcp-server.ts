@@ -141,10 +141,11 @@ const TOOLS = [
   { name: 'update_workflow', description: 'Update an existing workflow by name or id. ONLY workflow-builder-agent. Bumps version.', params: { id: 'string — MongoDB ObjectId', name: 'string — workflow name (used when id omitted)', yaml: 'string — new YAML source', parsed: 'object — new parsed workflow object' } },
 
   // ── Executions ──
-  { name: 'wait_for_execution', description: 'Poll an execution until it completes. Blocks up to 90s. Returns response when done. If status="waiting", call again.', params: { execution_id: 'string (required)' } },
+  { name: 'wait_for_execution', description: 'Poll an execution until it completes. Blocks up to 90s. Returns response when done. If status="waiting", call again. Returns recent_activity, activity_summary, progress_message, top_logs, and activity_cursor so callers can report useful progress while work is still running.', params: { execution_id: 'string (required)', activity_since: 'string — ISO timestamp cursor from prior activity_cursor' } },
   { name: 'list_executions', description: 'List recent executions. Filter by status or workflow name.', params: { status: 'string', workflow_name: 'string', limit: 'number' } },
   { name: 'search_executions', description: 'Search executions with filters: date range, cost, failed nodes.', params: { workflow_name: 'string', status: 'string', since_hours: 'number', min_cost: 'number', has_failed_node: 'boolean', limit: 'number' } },
   { name: 'cancel_execution', description: 'Cancel a running execution.', params: { execution_id: 'string (required)' } },
+  { name: 'resume_execution', description: 'Resume a cancelled/failed/completed execution after the user explicitly chooses resume. Agents/team leads resume their prior session when possible; workflows resume from a checkpoint.', params: { execution_id: 'string (required)', prompt: 'string — follow-up prompt for agent resumes', checkpoint_id: 'string — workflow checkpoint id, latest used if omitted' } },
   { name: 'submit_execution_input', description: 'Submit input to a paused workflow execution (e.g. answer a human node).', params: { execution_id: 'string (required)', node: 'string (required)', data: 'object (required)' } },
   { name: 'get_node_trace', description: 'Get detailed trace of a specific node execution: prompt, response, outputs, cost, duration.', params: { execution_id: 'string (required)', node_name: 'string (required)' } },
   { name: 'get_execution_logs', description: 'Get execution logs filtered by node, level, or category.', params: { execution_id: 'string (required)', node: 'string', level: 'string', category: 'string', limit: 'number' } },
@@ -258,6 +259,88 @@ async function callAPI(endpoint: string, method = 'GET', body?: unknown): Promis
   return res.json();
 }
 
+function trimText(value: unknown, max: number): string | undefined {
+  if (typeof value !== 'string') return undefined;
+  const cleaned = value.replace(/\s+/g, ' ').trim();
+  if (!cleaned) return undefined;
+  return cleaned.length > max ? `${cleaned.slice(0, max)}...` : cleaned;
+}
+
+function formatProgressActivity(row: Record<string, unknown>): string | undefined {
+  const agent = trimText(row.agent, 80) ?? 'agent';
+  const tool = trimText(row.tool, 80);
+  const content = trimText(row.content ?? row.label, 180);
+  const type = String(row.type ?? '');
+  if (type === 'tool_call') return `${agent} started ${tool ?? 'a tool'}${content ? `: ${content}` : ''}`;
+  if (type === 'tool_result') return `${agent} received ${tool ?? 'tool'} result${content ? `: ${content}` : ''}`;
+  if (type === 'thinking') return content ? `${agent} is thinking: ${content}` : `${agent} is thinking`;
+  if (type === 'text') return content ? `${agent}: ${content}` : undefined;
+  return content ? `${agent}: ${content}` : undefined;
+}
+
+function formatProgressLog(row: Record<string, unknown>): string | undefined {
+  const message = trimText(row.message ?? row.content ?? row.command ?? row.tool ?? row.type, 220);
+  if (!message) return undefined;
+  const node = trimText(row.node, 60);
+  const category = trimText(row.category, 40);
+  const prefix = node ? `[${node}]` : category ? `[${category}]` : '';
+  return prefix ? `${prefix} ${message}` : message;
+}
+
+async function readExecutionProgress(executionId: unknown, sinceRaw?: unknown): Promise<Record<string, unknown>> {
+  if (!executionId) return {};
+  const execId = String(executionId);
+  const since = typeof sinceRaw === 'string' && sinceRaw ? new Date(sinceRaw) : undefined;
+  const activityQs = new URLSearchParams({ limit: '12' });
+  if (since && !Number.isNaN(since.getTime())) activityQs.set('since', since.toISOString());
+
+  const [activityRes, logsRes] = await Promise.all([
+    callAPI(`/api/executions/${execId}/activity?${activityQs.toString()}`).catch(() => ({ events: [] })),
+    callAPI(`/api/executions/${execId}/logs?include_descendants=true&limit=12`).catch(() => []),
+  ]);
+
+  const recentActivity = Array.isArray((activityRes as Record<string, unknown>)?.events)
+    ? ((activityRes as Record<string, unknown>).events as Record<string, unknown>[])
+    : [];
+  const rawLogs = Array.isArray(logsRes) ? (logsRes as Record<string, unknown>[]) : [];
+  const logs = since && !Number.isNaN(since.getTime())
+    ? rawLogs.filter((log) => {
+        const at = new Date(String(log.timestamp ?? log.createdAt ?? ''));
+        return !Number.isNaN(at.getTime()) && at > since;
+      })
+    : rawLogs;
+
+  const topLogs = logs.slice(-8).map((log) => ({
+    timestamp: log.timestamp ?? log.createdAt,
+    level: log.level,
+    category: log.category ?? log.type,
+    node: log.node ?? null,
+    message: trimText(log.message ?? log.content ?? log.command ?? log.tool ?? log.type, 300) ?? '',
+  }));
+  const activitySummary = [
+    ...recentActivity.map(formatProgressActivity),
+    ...logs.slice(-5).map(formatProgressLog),
+  ].filter((line): line is string => Boolean(line)).slice(-10);
+
+  const cursorCandidates = [
+    ...recentActivity.map(row => row.at),
+    ...logs.map(log => log.timestamp ?? log.createdAt),
+    since?.toISOString(),
+  ]
+    .filter(Boolean)
+    .map(value => new Date(String(value)))
+    .filter(date => !Number.isNaN(date.getTime()))
+    .sort((a, b) => b.getTime() - a.getTime());
+
+  return {
+    recent_activity: recentActivity,
+    top_logs: topLogs,
+    activity_summary: activitySummary,
+    progress_message: activitySummary[activitySummary.length - 1],
+    activity_cursor: cursorCandidates[0]?.toISOString(),
+  };
+}
+
 // ── Tool Execution via API ──
 
 async function executeTool(name: string, args: Record<string, unknown>): Promise<unknown> {
@@ -273,6 +356,7 @@ async function executeTool(name: string, args: Record<string, unknown>): Promise
     case 'wait_for_execution': {
       // Chunked long-poll: wait up to 90s for completion, then return
       const execId = args.execution_id;
+      const activitySince = args.activity_since;
       let eWait = 5000;
       const eMaxWait = 30_000;
       const eDeadline = Date.now() + 90_000;
@@ -291,13 +375,18 @@ async function executeTool(name: string, args: Record<string, unknown>): Promise
               data.session_id = output?.session_id ?? undefined;
             }
           } catch {}
-          return data;
+          return { ...data, ...(await readExecutionProgress(execId, activitySince)) };
         }
         process.stderr.write(`[mcp] waiting for execution ${execId} (${Math.round(eWait / 1000)}s interval)\n`);
         await new Promise(r => setTimeout(r, eWait));
         eWait = Math.min(eWait * 1.3, eMaxWait);
       }
-      return { id: execId, status: 'waiting', message: 'Execution still running. Call wait_for_execution again.' };
+      return {
+        id: execId,
+        status: 'waiting',
+        message: 'Execution still running. Call wait_for_execution again.',
+        ...(await readExecutionProgress(execId, activitySince)),
+      };
     }
     case 'cancel_execution': {
       const url = `${API_BASE}/api/executions/${args.execution_id}/cancel`;
@@ -386,12 +475,16 @@ async function executeTool(name: string, args: Record<string, unknown>): Promise
       while (Date.now() < deadline) {
         const cur = await callAPI(`/api/workspaces/${encodeURIComponent(wsId)}`) as any;
         if (cur?.status === 'active' || cur?.status === 'running') {
+          if (SPAWN_CHAT_SESSION_ID) {
+            await callAPI(`/api/workspaces/${encodeURIComponent(wsId)}/link-chat`, 'POST', { sessionId: SPAWN_CHAT_SESSION_ID }).catch(() => {});
+          }
           return {
             workspace_id: wsId,
             worktree_path: cur.worktreePath,
             branch: cur.branch,
             base_branch: cur.baseBranch,
             status: cur.status,
+            chat_session_id: SPAWN_CHAT_SESSION_ID,
           };
         }
         if (cur?.status === 'failed') return { error: 'workspace setup failed' };
@@ -453,12 +546,16 @@ async function executeTool(name: string, args: Record<string, unknown>): Promise
       while (Date.now() < deadline) {
         const cur = await callAPI(`/api/workspaces/${encodeURIComponent(wsId)}`) as any;
         if (cur?.status === 'active' || cur?.status === 'running') {
+          if (SPAWN_CHAT_SESSION_ID) {
+            await callAPI(`/api/workspaces/${encodeURIComponent(wsId)}/link-chat`, 'POST', { sessionId: SPAWN_CHAT_SESSION_ID }).catch(() => {});
+          }
           return {
             workspace_id: wsId,
             worktree_path: cur.worktreePath,
             branch: cur.branch,
             base_branch: cur.baseBranch,
             status: cur.status,
+            chat_session_id: SPAWN_CHAT_SESSION_ID,
           };
         }
         if (cur?.status === 'failed') return { error: 'workspace setup failed' };

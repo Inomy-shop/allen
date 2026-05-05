@@ -5,11 +5,11 @@ import {
   Download, RotateCcw, Brain, Bot, Clock, DollarSign, Terminal,
   CheckCircle, AlertCircle, Wrench, ChevronDown, ChevronRight,
   ArrowRight, AlertTriangle, Save, BarChart2, Activity,
-  MessageSquare, FileText,
+  MessageSquare, FileText, FolderGit2, GitPullRequest, ExternalLink,
 } from 'lucide-react';
-import { useExecution, type TimelineEvent } from '../hooks/useExecution';
+import { useExecution, type TimelineEvent, type NodeState } from '../hooks/useExecution';
 import { useResizable } from '../hooks/useResizable';
-import { executions as api, authHeaders, interventions as interventionsApi } from '../services/api';
+import { executions as api, authHeaders, interventions as interventionsApi, type RunStatus } from '../services/api';
 import StatusBadge from '../components/common/StatusBadge';
 import CostDisplay from '../components/common/CostDisplay';
 import { renderMarkdown } from '../components/chat/ChatMessageList';
@@ -197,10 +197,211 @@ function LogRow({ log, toolCall }: { log: any; toolCall?: ToolCall }) {
   );
 }
 
+function phaseLabel(value: string | undefined): string {
+  return (value ?? 'running').replace(/_/g, ' ');
+}
+
+function statusIcon(status: string | undefined) {
+  if (status === 'completed') return <CheckCircle className="w-3.5 h-3.5 text-accent-green" />;
+  if (status === 'failed') return <AlertCircle className="w-3.5 h-3.5 text-accent-red" />;
+  if (status === 'waiting_for_input') return <AlertTriangle className="w-3.5 h-3.5 text-accent-yellow" />;
+  if (status === 'running') return <RefreshCw className="w-3.5 h-3.5 text-accent animate-spin" />;
+  return <span className="w-2 h-2 rounded-full bg-theme-subtle" />;
+}
+
+function TraceRail({
+  workflowNodes,
+  nodeStates,
+  selectedNode,
+  onSelectNode,
+  children,
+}: {
+  workflowNodes: string[];
+  nodeStates: Map<string, NodeState>;
+  selectedNode: string | null;
+  onSelectNode: (node: string | null) => void;
+  children: any[];
+}) {
+  const names = workflowNodes.length > 0
+    ? workflowNodes
+    : Array.from(nodeStates.keys());
+  return (
+    <aside className="w-[280px] shrink-0 border-r border-app bg-surface overflow-y-auto">
+      <div className="px-4 py-3 border-b border-app flex items-center justify-between">
+        <div>
+          <div className="text-[13px] font-semibold text-theme-primary">Trace</div>
+          <div className="text-[10px] text-theme-subtle font-mono">{names.length} nodes · {children.length} child agents</div>
+        </div>
+      </div>
+      <div className="p-3">
+        {names.map((name, index) => {
+          const state = nodeStates.get(name);
+          const status = state?.status ?? 'pending';
+          const active = selectedNode === name;
+          const spawnCount = children.filter(c => c.parentCaller === name).length;
+          return (
+            <div key={name}>
+              <button
+                onClick={() => onSelectNode(name)}
+                className={`w-full text-left rounded-md border px-3 py-2 transition-colors ${
+                  active
+                    ? 'border-accent bg-accent-soft'
+                    : 'border-transparent hover:border-app hover:bg-app-muted/50'
+                }`}
+              >
+                <div className="flex items-center gap-2 min-w-0">
+                  {statusIcon(status)}
+                  <div className="min-w-0 flex-1">
+                    <div className="text-[12px] font-mono text-theme-primary truncate">{name}</div>
+                    <div className="mt-0.5 flex items-center gap-2 text-[10px] text-theme-subtle font-mono">
+                      <span>{status}</span>
+                      {state?.durationMs != null && <span>{formatDuration(state.durationMs)}</span>}
+                      {spawnCount > 0 && <span>{spawnCount} agents</span>}
+                    </div>
+                  </div>
+                </div>
+              </button>
+              {index < names.length - 1 && <div className="ml-[18px] h-3 border-l border-app" />}
+            </div>
+          );
+        })}
+      </div>
+    </aside>
+  );
+}
+
+function ContextRow({
+  icon,
+  label,
+  value,
+  href,
+  external,
+}: {
+  icon: React.ReactNode;
+  label: string;
+  value: React.ReactNode;
+  href?: string;
+  external?: boolean;
+}) {
+  const content = (
+    <div className="flex items-center gap-2 min-w-0 rounded-md px-2 py-1.5 hover:bg-app-muted/60 transition-colors">
+      <span className="text-theme-muted shrink-0">{icon}</span>
+      <div className="min-w-0 flex-1">
+        <div className="text-[9px] uppercase tracking-wide text-theme-subtle font-mono">{label}</div>
+        <div className="text-[11px] text-theme-primary truncate">{value}</div>
+      </div>
+      {href && <ExternalLink className="w-3 h-3 text-theme-subtle shrink-0" />}
+    </div>
+  );
+  if (!href) return content;
+  return (
+    <a href={href} target={external ? '_blank' : undefined} rel={external ? 'noopener noreferrer' : undefined}>
+      {content}
+    </a>
+  );
+}
+
+function RunContextPanel({
+  runContext,
+  execution,
+  pendingIntervention,
+  artifactCount,
+}: {
+  runContext: RunStatus | null;
+  execution: any;
+  pendingIntervention?: any;
+  artifactCount: number | null;
+}) {
+  const percent = runContext?.progress.percent ?? 0;
+  const phase = runContext?.progress.phase ?? execution.status;
+  return (
+    <section className="border-b border-app bg-surface">
+      <div className="px-4 py-3 border-b border-app flex items-center justify-between gap-3">
+        <div>
+          <div className="text-[13px] font-semibold text-theme-primary">Context</div>
+          <div className="text-[10px] text-theme-subtle font-mono capitalize">{phaseLabel(phase)}</div>
+        </div>
+        <StatusBadge status={execution.status} />
+      </div>
+      <div className="p-3 space-y-3">
+        <div>
+          <div className="flex items-center justify-between text-[10px] font-mono text-theme-subtle mb-1">
+            <span>{runContext?.progress.currentStep ?? 'current run'}</span>
+            <span>{runContext?.progress.label ?? `${execution.completedNodes?.length ?? 0} nodes`}</span>
+          </div>
+          <div className="h-1.5 rounded-full bg-app-muted overflow-hidden">
+            <div className="h-full bg-accent transition-all" style={{ width: `${Math.max(0, Math.min(100, percent))}%` }} />
+          </div>
+        </div>
+
+        <div className="space-y-1">
+          {runContext?.linear && (
+            <ContextRow
+              icon={<ExternalLink className="w-3.5 h-3.5" />}
+              label="Linear"
+              value={runContext.linear.identifier ?? runContext.linear.title ?? 'Ticket'}
+              href={runContext.linear.url}
+              external
+            />
+          )}
+          {runContext?.workspace && (
+            <ContextRow
+              icon={<FolderGit2 className="w-3.5 h-3.5" />}
+              label="Workspace"
+              value={`${runContext.workspace.repoName ?? runContext.workspace.name ?? 'workspace'} · ${runContext.workspace.branch ?? 'branch'}`}
+              href={runContext.workspace.id ? `/workspaces/${runContext.workspace.id}` : undefined}
+            />
+          )}
+          {runContext?.pullRequest && (
+            <ContextRow
+              icon={<GitPullRequest className="w-3.5 h-3.5" />}
+              label="Pull request"
+              value={runContext.pullRequest.number ? `#${runContext.pullRequest.number} · ${runContext.pullRequest.status ?? 'open'}` : runContext.pullRequest.title ?? 'PR'}
+              href={runContext.pullRequest.url ?? undefined}
+              external
+            />
+          )}
+          <ContextRow
+            icon={<FileText className="w-3.5 h-3.5" />}
+            label="Artifacts"
+            value={`${runContext?.artifacts.length ?? artifactCount ?? 0} saved`}
+          />
+        </div>
+
+        {(pendingIntervention || runContext?.humanInput?.required) && (
+          <div className="rounded-md border border-accent-yellow/35 bg-yellow-500/10 px-3 py-2">
+            <div className="flex items-center gap-2 text-[11px] font-semibold text-accent-yellow">
+              <AlertTriangle className="w-3.5 h-3.5" />
+              Human input
+            </div>
+            <div className="mt-1 text-[11px] text-theme-secondary line-clamp-2">
+              {pendingIntervention?.title ?? runContext?.humanInput?.title ?? 'Waiting for input'}
+            </div>
+          </div>
+        )}
+
+        {runContext?.childAgents && runContext.childAgents.length > 0 && (
+          <div>
+            <div className="overline mb-1">Child Agents</div>
+            <div className="space-y-1">
+              {runContext.childAgents.slice(0, 5).map(child => (
+                <Link key={child.executionId} to={`/executions/${child.executionId}`} className="flex items-center justify-between gap-2 rounded-md px-2 py-1.5 bg-app-muted/50 hover:bg-app-muted">
+                  <span className="text-[11px] font-mono text-theme-primary truncate">{child.agentName}</span>
+                  <span className="text-[10px] font-mono text-theme-subtle shrink-0">{child.status}</span>
+                </Link>
+              ))}
+            </div>
+          </div>
+        )}
+      </div>
+    </section>
+  );
+}
+
 // ── Agent Execution View (single-node) ──
 
-function AgentExecutionView({ execution, agentName, traces, id, liveToolCalls, refresh }: {
-  execution: any; agentName: string; traces: any[]; id: string; liveToolCalls?: any[]; refresh: () => void;
+function AgentExecutionView({ execution, agentName, traces, id, liveToolCalls, refresh, runContext }: {
+  execution: any; agentName: string; traces: any[]; id: string; liveToolCalls?: any[]; refresh: () => void; runContext?: RunStatus | null;
 }) {
   // Attempt selector — when the user has resumed the agent at least once,
   // traces has multiple rows (one per attempt). The latest attempt is
@@ -513,6 +714,27 @@ function AgentExecutionView({ execution, agentName, traces, id, liveToolCalls, r
           </div>
         </div>
 
+        {runContext && (
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+            <div className="card p-3">
+              <span className="overline">Phase</span>
+              <div className="mt-1 text-sm text-theme-primary font-mono capitalize">{phaseLabel(runContext.progress.phase)}</div>
+            </div>
+            <div className="card p-3">
+              <span className="overline">Workspace</span>
+              <div className="mt-1 text-sm text-theme-primary font-mono truncate">
+                {runContext.workspace?.branch ?? runContext.workspace?.name ?? 'none'}
+              </div>
+            </div>
+            <div className="card p-3">
+              <span className="overline">Human Input</span>
+              <div className={`mt-1 text-sm font-mono ${runContext.humanInput.required ? 'text-accent-yellow' : 'text-theme-primary'}`}>
+                {runContext.humanInput.required ? 'required' : 'none'}
+              </div>
+            </div>
+          </div>
+        )}
+
         {/* Attempt tabs — shown when the agent has been resumed at least once.
             Each tab switches which trace (rawResponse / toolCalls / cost /
             duration) the rest of the page reflects. */}
@@ -690,6 +912,7 @@ export default function ExecutionDetailPage() {
   const [checkpointCount, setCheckpointCount] = useState<number | null>(null);
   const [artifactsOpen, setArtifactsOpen] = useState(false);
   const [artifactCount, setArtifactCount] = useState<number | null>(null);
+  const [runContext, setRunContext] = useState<RunStatus | null>(null);
   const [feedbackEntries, setFeedbackEntries] = useState<Array<{ id: string; content: string; targetNodes?: string[]; createdAt: string; createdBy?: string }>>([]);
   const [feedbackText, setFeedbackText] = useState('');
   const [feedbackTargetNodes, setFeedbackTargetNodes] = useState<string[]>([]);
@@ -712,6 +935,25 @@ export default function ExecutionDetailPage() {
       .catch(() => {});
     return () => { cancelled = true; };
   }, [id, execution?.status, execution?.completedNodes?.length]);
+
+  useEffect(() => {
+    if (!id) return;
+    let cancelled = false;
+    const loadContext = () => {
+      api.context(id)
+        .then((context) => { if (!cancelled) setRunContext(context); })
+        .catch(() => { if (!cancelled) setRunContext(null); });
+    };
+    loadContext();
+    if (execution?.status === 'running' || execution?.status === 'waiting_for_input' || execution?.status === 'queued') {
+      const timer = window.setInterval(loadContext, 3000);
+      return () => {
+        cancelled = true;
+        window.clearInterval(timer);
+      };
+    }
+    return () => { cancelled = true; };
+  }, [id, execution?.status, execution?.completedNodes?.length, execution?.currentNodes?.join('|')]);
 
   useEffect(() => {
     if (!id) return;
@@ -936,14 +1178,15 @@ export default function ExecutionDetailPage() {
   // chat or from a workflow orchestrator node). These render the simplified
   // AgentExecutionView instead of the full workflow graph.
   //
-  // Three signals, any one sufficient:
+  // Two signals, either sufficient:
   //   1. workflowName contains ':spawn_agent/' — the naming convention from
   //      Phase 1 (caller-qualified, e.g. 'develop:spawn_agent/frontend-developer'
   //      or legacy 'chat:spawn_agent/frontend-developer').
-  //   2. source === 'chat' — legacy chat-initiated spawns before Phase 1.
-  //   3. source === 'spawn' — workflow-initiated spawns after Phase 1.
+  //   2. source === 'spawn' — workflow-initiated spawns after Phase 1.
+  // Important: source === 'chat' is not enough. Real workflow executions can
+  // be started from chat and must still render the workflow execution page.
   const wfName = execution.workflowName ?? '';
-  const isAgentExecution = wfName.includes(':spawn_agent/') || execution.source === 'chat' || execution.source === 'spawn';
+  const isAgentExecution = wfName.includes(':spawn_agent/') || execution.source === 'spawn';
   if (isAgentExecution) {
     // Parse the agent name from the caller-qualified workflowName.
     // Pattern: '<caller>:spawn_agent/<agentName>' — split on ':spawn_agent/'
@@ -958,6 +1201,7 @@ export default function ExecutionDetailPage() {
       id={id!}
       liveToolCalls={liveToolCallsByNode.get(agentName)}
       refresh={refresh}
+      runContext={runContext}
     />;
   }
 
@@ -1328,12 +1572,20 @@ export default function ExecutionDetailPage() {
         </div>
       )}
 
-      {/* Main content — graph + detail top, timeline bottom */}
+      {/* Main content — prototype-aligned trace rail + work area + context/inspector */}
       <div className="flex-1 flex flex-col overflow-hidden">
-        {/* Top: Graph + Node detail side by side */}
+        {/* Top: Trace rail + graph + context/selected-node detail */}
         <div className="flex-1 flex overflow-hidden min-h-0">
-          {/* Left: Live graph (takes most space) */}
-          <div className="flex-1 overflow-hidden">
+          <TraceRail
+            workflowNodes={workflow?.parsed?.nodes ? Object.keys(workflow.parsed.nodes) : []}
+            nodeStates={nodeStates}
+            selectedNode={selectedNode}
+            onSelectNode={setSelectedNode}
+            children={children ?? []}
+          />
+
+          {/* Center: Live graph */}
+          <div className="flex-1 overflow-hidden bg-[rgb(var(--color-app-background))]">
             <LiveGraph
               workflow={workflow}
               nodeStates={nodeStates}
@@ -1346,9 +1598,9 @@ export default function ExecutionDetailPage() {
             />
           </div>
 
-          {/* Right: Node detail + inline human input — resizable */}
+          {/* Right: Run context + Node detail — resizable */}
           <div
-            className="overflow-hidden shrink-0 bg-surface border-l-2 border-app hover:border-accent-blue/50 transition-colors relative"
+            className="overflow-hidden shrink-0 bg-surface border-l-2 border-app hover:border-accent-blue/50 transition-colors relative flex flex-col"
             style={{ width: `${rightWidth}%` }}
           >
             {/* Invisible resize grab zone on the left edge */}
@@ -1356,27 +1608,35 @@ export default function ExecutionDetailPage() {
               className="absolute top-0 left-0 bottom-0 w-2 cursor-col-resize z-10"
               onMouseDown={rightResizeStart}
             />
-            {/*
-              The inline human-input form is intentionally DISABLED here.
-              Human interventions now surface on the dedicated Interventions
-              page (/interventions/:id) — we pass `waitingInput={null}` so
-              NodeDetail never renders its inline form. The pending-intervention
-              banner at the top of this page is the awareness surface; the
-              Interventions page is the action surface. See §9.7 of
-              docs/plans/feature-and-bug-workflows.md.
-            */}
-            <NodeDetail
-              nodeName={selectedNode ?? ''}
-              nodeState={selectedState}
-              trace={selectedTrace}
-              allTraces={selectedTraces}
-              waitingInput={null}
-              onSubmitInput={handleSubmitInput}
-              spawnedChildren={(children ?? []).filter(c => c.parentCaller === selectedNode)}
-              allChildren={children ?? []}
-              descendantsMode={descendantsMode}
-              onToggleDescendants={toggleDescendants}
+            <RunContextPanel
+              runContext={runContext}
+              execution={execution}
+              pendingIntervention={pendingIntervention}
+              artifactCount={artifactCount}
             />
+            <div className="flex-1 min-h-0 overflow-hidden">
+              {/*
+                The inline human-input form is intentionally DISABLED here.
+                Human interventions now surface on the dedicated Interventions
+                page (/interventions/:id) — we pass `waitingInput={null}` so
+                NodeDetail never renders its inline form. The pending-intervention
+                banner at the top of this page is the awareness surface; the
+                Interventions page is the action surface. See §9.7 of
+                docs/plans/feature-and-bug-workflows.md.
+              */}
+              <NodeDetail
+                nodeName={selectedNode ?? ''}
+                nodeState={selectedState}
+                trace={selectedTrace}
+                allTraces={selectedTraces}
+                waitingInput={null}
+                onSubmitInput={handleSubmitInput}
+                spawnedChildren={(children ?? []).filter(c => c.parentCaller === selectedNode)}
+                allChildren={children ?? []}
+                descendantsMode={descendantsMode}
+                onToggleDescendants={toggleDescendants}
+              />
+            </div>
           </div>
         </div>
 

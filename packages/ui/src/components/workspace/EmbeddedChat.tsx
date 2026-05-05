@@ -20,9 +20,10 @@ interface EmbeddedChatProps {
   worktreePath: string;
   linkedSessionId?: string | null;
   onClose: () => void;
+  onLinkedSession?: (sessionId: string) => void;
 }
 
-export function EmbeddedChat({ workspaceId, workspaceName, worktreePath, linkedSessionId, onClose }: EmbeddedChatProps) {
+export function EmbeddedChat({ workspaceId, workspaceName, worktreePath, linkedSessionId, onClose, onLinkedSession }: EmbeddedChatProps) {
   const navigate = useNavigate();
   const {
     sessions, activeSessionId, messages, streaming, streamText,
@@ -71,10 +72,11 @@ export function EmbeddedChat({ workspaceId, workspaceName, worktreePath, linkedS
   const createAndLink = useCallback(async () => {
     const session = await createSession(selectedProvider, selectedModel || undefined);
     await wsApi.linkChat(workspaceId, session._id);
+    onLinkedSession?.(session._id);
     setInitialized(true);
     setForcedNew(false);
     return session._id;
-  }, [selectedProvider, selectedModel, workspaceId]);
+  }, [selectedProvider, selectedModel, workspaceId, onLinkedSession]);
 
   const handleSend = useCallback(async (content: string) => {
     if (!activeSessionId) {
@@ -142,22 +144,8 @@ export function EmbeddedChat({ workspaceId, workspaceName, worktreePath, linkedS
         )}
       </div>
 
-      {/* Agent selector + Input */}
+      {/* Input */}
       <div className="shrink-0">
-        {/* Agent selector */}
-        <div className="px-2 pt-1.5 pb-0.5 flex items-center gap-1.5 border-t border-app">
-          <AgentChatDropdown
-            value={selectedAgent}
-            onChange={(name, cwd) => {
-              setSelectedAgent(name);
-              setSelectedAgentCwd(cwd);
-            }}
-            agents={allAgents}
-            disabled={agentLocked}
-            loading={agentsLoading}
-          />
-          {agentLocked && <span className="text-[9px] text-theme-subtle font-mono">locked</span>}
-        </div>
         <ChatInput
           ref={chatInputRef}
           onSend={handleSend}
@@ -169,6 +157,19 @@ export function EmbeddedChat({ workspaceId, workspaceName, worktreePath, linkedS
           selectedModel={activeSession?.model ?? selectedModel}
           modelLocked={!!activeSessionId}
           onProviderChange={(p, m) => { setSelectedProvider(p); setSelectedModel(m); }}
+          extraControls={(
+            <AgentChatDropdown
+              value={selectedAgent}
+              onChange={(name, cwd) => {
+                setSelectedAgent(name);
+                setSelectedAgentCwd(cwd);
+              }}
+              agents={allAgents}
+              disabled={agentLocked}
+              loading={agentsLoading}
+              variant="composer"
+            />
+          )}
         />
       </div>
     </div>

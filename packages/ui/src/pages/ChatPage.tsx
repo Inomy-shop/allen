@@ -1,12 +1,12 @@
 import { useEffect, useState, useRef } from 'react';
 import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
 import { useChat } from '../hooks/useChat';
-import ChatInput, { RepoOption } from '../components/chat/ChatInput';
+import ChatInput, { type ReasoningEffortValue, type RepoOption } from '../components/chat/ChatInput';
 import ChatMessageList from '../components/chat/ChatMessageList';
 import CommandPalette from '../components/chat/CommandPalette';
 import ConversationLogs from '../components/chat/ConversationLogs';
-import ConversationsSidebar from '../components/chat/ConversationsSidebar';
 import AgentChatDropdown from '../components/chat/AgentChatDropdown';
+import ChatRunSidebar from '../components/chat/ChatRunSidebar';
 import { ToolCallLog } from '../components/common/ToolCallLog';
 import { CHAT_TITLE, CHAT_EMPTY_PROMPT } from '../lib/brand';
 import {
@@ -47,11 +47,12 @@ export default function ChatPage() {
     planMode?: boolean | null;
   }>({});
   const chatInputRef = useRef<{ setValue: (v: string) => void; focus: () => void } | null>(null);
+  const processedDeepLinkRef = useRef<string | null>(null);
 
   const {
     sessions, activeSessionId, messages, streaming, streamText,
     thinkingText, activeToolCalls, agentThreads, agentReports, threadsByMessage,
-    spawnedAgents, pendingUserQuestion, answerUserQuestion,
+    spawnedAgents, pendingUserQuestion, answerUserQuestion, answerWorkflowIntervention,
     loadingSessions, loadingMessages,
     sendMessage, createSession, switchSession, cancelStream,
     updateSessionTitle, refresh: refreshSessions,
@@ -148,43 +149,36 @@ export default function ChatPage() {
     }
   }, [activeSessionId]);
 
-  // Deep-link support: ?agent=NAME&prompt=PREFILL
-  // We preselect the agent and prefill the input, then strip the query params
-  // so a refresh doesn't re-apply them. The user must click Send themselves
-  // — no auto-submit, so they can review/edit the proposed prompt first.
-  useEffect(() => {
-    const wantedAgent = searchParams.get('agent');
-    const wantedPrompt = searchParams.get('prompt');
-    if (!wantedAgent && !wantedPrompt) return;
-
-    if (wantedAgent) setSelectedAgent(wantedAgent);
-    if (wantedPrompt) {
-      // setValue is exposed by ChatInput's forwardRef. Defer to next tick so
-      // the input is mounted.
-      setTimeout(() => chatInputRef.current?.setValue(wantedPrompt), 0);
-    }
-
-    // Strip the params so refresh doesn't re-trigger this effect
-    const next = new URLSearchParams(searchParams);
-    next.delete('agent');
-    next.delete('prompt');
-    setSearchParams(next, { replace: true });
-  }, [searchParams]);
-
-  async function handleSend(content: string) {
+  async function handleSend(
+    content: string,
+    agentOverride?: string | null,
+    cwdOverride?: string | null,
+    options?: {
+      provider?: string | null;
+      model?: string | null;
+      repoId?: string | null;
+      agentOverrides?: {
+        reasoningEffort?: ReasoningEffortValue | null;
+        planMode?: boolean | null;
+      };
+    },
+  ) {
+    const agentName = agentOverride ?? selectedAgent;
+    const agentCwd = cwdOverride ?? selectedAgentCwd;
     if (!activeSessionId) {
       // Only pass pending overrides that are explicitly set (not null/undefined).
       const overrides: Record<string, unknown> = {};
-      if (pendingOverrides.reasoningEffort != null) overrides.reasoningEffort = pendingOverrides.reasoningEffort;
-      if (pendingOverrides.planMode != null) overrides.planMode = pendingOverrides.planMode;
+      const effectivePendingOverrides = options?.agentOverrides ?? pendingOverrides;
+      if (effectivePendingOverrides.reasoningEffort != null) overrides.reasoningEffort = effectivePendingOverrides.reasoningEffort;
+      if (effectivePendingOverrides.planMode != null) overrides.planMode = effectivePendingOverrides.planMode;
       const session = await createSession(
-        selectedProvider,
-        selectedModel || undefined,
+        options?.provider ?? selectedProvider,
+        (options?.model ?? selectedModel) || undefined,
         Object.keys(overrides).length > 0 ? overrides : undefined,
-        selectedRepo?._id || undefined,
+        (options?.repoId ?? selectedRepo?._id) || undefined,
       );
       navigate(`/chat/${session._id}`, { replace: true });
-      sendMessage(content, session._id, selectedAgent ?? undefined, selectedAgentCwd ?? undefined);
+      sendMessage(content, session._id, agentName ?? undefined, agentCwd ?? undefined);
       // Server auto-summarizes the title from the first message; pull
       // a fresh sessions list shortly after so the sidebar shows the
       // summarized title instead of the placeholder.
@@ -192,8 +186,78 @@ export default function ChatPage() {
       setTimeout(() => { void refreshSessions(); }, 5000);
       return;
     }
-    sendMessage(content, undefined, selectedAgent ?? undefined, selectedAgentCwd ?? undefined);
+    sendMessage(content, undefined, agentName ?? undefined, agentCwd ?? undefined);
   }
+
+  // Deep-link support: ?agent=NAME&prompt=PREFILL. Command-center sends use
+  // autosend=1 so the user lands in the focused current chat, not a prior
+  // conversation picker.
+  useEffect(() => {
+    const wantedAgent = searchParams.get('agent');
+    const wantedAgentCwd = searchParams.get('agentCwd');
+    const wantedPrompt = searchParams.get('prompt');
+    const autoSend = searchParams.get('autosend') === '1';
+    const wantedProvider = searchParams.get('provider');
+    const wantedModel = searchParams.get('model');
+    const wantedRepoId = searchParams.get('repoId');
+    const wantedReasoning = searchParams.get('reasoningEffort') as ReasoningEffortValue | null;
+    const wantedPlanMode = searchParams.get('planMode');
+    const hasRepoSelection = wantedRepoId ? repos.some((repo) => repo._id === wantedRepoId) : true;
+    const signature = [
+      wantedAgent ?? '',
+      wantedAgentCwd ?? '',
+      wantedPrompt ?? '',
+      wantedProvider ?? '',
+      wantedModel ?? '',
+      wantedRepoId ?? '',
+      wantedReasoning ?? '',
+      wantedPlanMode ?? '',
+      autoSend ? 'send' : 'prefill',
+    ].join(':');
+    if ((!wantedAgent && !wantedPrompt) || processedDeepLinkRef.current === signature) return;
+    if (wantedRepoId && repos.length === 0) return;
+    processedDeepLinkRef.current = signature;
+
+    if (wantedAgent) setSelectedAgent(wantedAgent);
+    if (wantedAgentCwd) setSelectedAgentCwd(wantedAgentCwd);
+    if (wantedProvider) setSelectedProvider(wantedProvider);
+    if (wantedModel) setSelectedModel(wantedModel);
+    if (wantedRepoId) setSelectedRepo(repos.find((repo) => repo._id === wantedRepoId) ?? null);
+    const nextOverrides = {
+      ...(wantedReasoning ? { reasoningEffort: wantedReasoning } : {}),
+      ...(wantedPlanMode != null ? { planMode: wantedPlanMode === 'true' } : {}),
+    };
+    if (Object.keys(nextOverrides).length > 0) setPendingOverrides(nextOverrides);
+
+    const next = new URLSearchParams(searchParams);
+    next.delete('agent');
+    next.delete('agentCwd');
+    next.delete('prompt');
+    next.delete('autosend');
+    next.delete('provider');
+    next.delete('model');
+    next.delete('repoId');
+    next.delete('reasoningEffort');
+    next.delete('planMode');
+    setSearchParams(next, { replace: true });
+
+    if (!wantedPrompt) return;
+    if (autoSend) {
+      setTimeout(() => {
+        void handleSend(wantedPrompt, wantedAgent, wantedAgentCwd, {
+          provider: wantedProvider,
+          model: wantedModel,
+          repoId: hasRepoSelection ? wantedRepoId : null,
+          agentOverrides: nextOverrides,
+        });
+      }, 0);
+    } else {
+      setTimeout(() => {
+        chatInputRef.current?.setValue(wantedPrompt);
+        chatInputRef.current?.focus();
+      }, 0);
+    }
+  }, [searchParams, repos]);
 
   function handleSuggestionClick(prompt: string) { handleSend(prompt); }
   function handleCommandSelect(prompt: string, partial?: boolean) {
@@ -236,14 +300,11 @@ export default function ChatPage() {
 
   return (
     <div className="flex-1 flex h-full min-w-0">
-      {/* Conversations sidebar (matches handoff/pages/chat.jsx ChatV2) */}
-      <ConversationsSidebar />
-
       <div className="flex-1 flex flex-col h-full min-w-0">
       {/* Header — matches handoff/pages/chat.jsx ChatV2 */}
       <div className="px-6 pt-4 pb-3 border-b border-app shrink-0">
         <div className="flex items-center gap-2 mb-2 text-[12px] text-theme-muted">
-          <span>Inbox</span>
+          <span>Threads</span>
           {activeSessionId && (
             <>
               <span className="text-theme-subtle">/</span>
@@ -367,30 +428,11 @@ export default function ChatPage() {
           </div>
         </div>
       ) : (
-        <ChatMessageList messages={messages} streamText={streamText} thinkingText={thinkingText} streaming={streaming} activeToolCalls={activeToolCalls} agentThreads={agentThreads} agentReports={agentReports} threadsByMessage={threadsByMessage} spawnedAgents={spawnedAgents} pendingUserQuestion={pendingUserQuestion} onAnswerUserQuestion={answerUserQuestion} activeAgent={activeSession?.activeAgent} onSuggestionClick={handleSuggestionClick} onSaveToLearnings={handleSaveToLearnings} />
+        <ChatMessageList messages={messages} streamText={streamText} thinkingText={thinkingText} streaming={streaming} activeToolCalls={activeToolCalls} agentThreads={agentThreads} agentReports={agentReports} threadsByMessage={threadsByMessage} spawnedAgents={spawnedAgents} pendingUserQuestion={pendingUserQuestion} onAnswerUserQuestion={answerUserQuestion} onAnswerWorkflowIntervention={answerWorkflowIntervention} activeAgent={activeSession?.activeAgent} onSuggestionClick={handleSuggestionClick} onSaveToLearnings={handleSaveToLearnings} />
       )}
 
-      {/* Agent selector + Input */}
+      {/* Input */}
       <div>
-        {/* Agent selector */}
-        {(() => {
-          const agentLocked = !!activeSession?.activeAgent && (activeSession?.messageCount ?? 0) > 0;
-          return (
-            <div className="px-4 pt-2.5 pb-1 flex items-center gap-2 border-t border-app">
-              <AgentChatDropdown
-                value={selectedAgent}
-                onChange={(name, cwd) => {
-                  setSelectedAgent(name);
-                  setSelectedAgentCwd(cwd);
-                }}
-                agents={allAgents}
-                disabled={agentLocked}
-                loading={agentsLoading}
-              />
-              {agentLocked && <span className="text-[10px] text-theme-subtle font-mono">locked</span>}
-            </div>
-          );
-        })()}
         <ChatInput
           ref={chatInputRef} onSend={handleSend} onCancel={cancelStream} streaming={streaming}
           disabled={activeSession?.source === 'slack'}
@@ -413,6 +455,22 @@ export default function ChatPage() {
           inheritedEffort={selectedAgentDoc?.reasoningEffort ?? (activeProvider === 'codex' ? 'high' : 'medium')}
           inheritedPlanMode={selectedAgentDoc?.planMode ?? null}
           onAgentOverridesChanged={handleOverridesChange}
+          extraControls={(() => {
+            const agentLocked = !!activeSession?.activeAgent && (activeSession?.messageCount ?? 0) > 0;
+            return (
+              <AgentChatDropdown
+                value={selectedAgent}
+                onChange={(name, cwd) => {
+                  setSelectedAgent(name);
+                  setSelectedAgentCwd(cwd);
+                }}
+                agents={allAgents}
+                disabled={agentLocked || activeSession?.source === 'slack'}
+                loading={agentsLoading}
+                variant="composer"
+              />
+            );
+          })()}
         />
       </div>
 
@@ -441,6 +499,7 @@ export default function ChatPage() {
         </div>
       )}
       </div>
+      {spawnedAgents.length > 0 && <ChatRunSidebar runs={spawnedAgents} />}
     </div>
   );
 }

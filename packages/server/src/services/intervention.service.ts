@@ -2,7 +2,7 @@
  * Intervention Service
  *
  * Owns the `workflow_interventions` collection. Every human pause in
- * any workflow (feature, bug, or existing coding-workflow via the
+ * any workflow (feature, bug, or repair workflows via the
  * engine hook) becomes an intervention record. The service has three
  * core responsibilities:
  *

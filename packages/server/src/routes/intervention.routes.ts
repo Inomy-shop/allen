@@ -106,6 +106,7 @@ export function interventionRoutes(db: Db): Router {
         answered_by_user_id,
         human_node_name,
         retry_target_override,
+        source,
       } = (req.body ?? {}) as {
         decision?: InterventionDecision;
         field_values?: Record<string, unknown>;
@@ -115,6 +116,7 @@ export function interventionRoutes(db: Db): Router {
         answered_by_user_id?: string;
         human_node_name?: string;
         retry_target_override?: string;
+        source?: 'chat' | 'execution_page' | 'interventions_page';
       };
 
       if (!decision) {
@@ -147,6 +149,12 @@ export function interventionRoutes(db: Db): Router {
           for (const [k, v] of Object.entries(field_values)) {
             payload[k] = v;
           }
+        } else if (originalFields.some(f => f.name === 'approval_decision')) {
+          payload.approval_decision = 'approve';
+          if (feedback != null) payload.approval_feedback = feedback;
+        } else if (originalFields.some(f => f.name === 'decision')) {
+          payload.decision = 'approve';
+          if (feedback != null) payload.feedback = feedback;
         } else if (answer != null && originalFields.length > 0) {
           // Legacy fallback: single-field nodes where the UI only sent
           // a free-form `answer` string. Use the first field's name as
@@ -174,6 +182,66 @@ export function interventionRoutes(db: Db): Router {
       // ── REQUEST CHANGES → patch state + retryFromNode ──
       let retry_triggered;
       if (decision === 'request_changes') {
+        const originalFields = (existing as unknown as { fields?: Array<{ name: string }> }).fields ?? [];
+        const nodeName = human_node_name ?? existing.stage;
+        const payload: Record<string, unknown> = field_values && typeof field_values === 'object'
+          ? { ...field_values }
+          : {};
+        const hasDecisionField = originalFields.some(f => f.name === 'approval_decision' || f.name === 'decision');
+        if (hasDecisionField) {
+          if (originalFields.some(f => f.name === 'approval_decision') && payload.approval_decision == null) {
+            payload.approval_decision = 'request_changes';
+          }
+          if (originalFields.some(f => f.name === 'decision') && payload.decision == null) {
+            payload.decision = 'request_changes';
+          }
+          if (originalFields.some(f => f.name === 'approval_feedback') && payload.approval_feedback == null) {
+            payload.approval_feedback = feedback ?? answer ?? '';
+          }
+          if (originalFields.some(f => f.name === 'feedback') && payload.feedback == null) {
+            payload.feedback = feedback ?? answer ?? '';
+          }
+
+          const delivered = await executionService.submitInput(existing.workflow_run_id, nodeName, payload);
+          if (delivered) {
+            await execCol.updateOne(
+              { id: existing.workflow_run_id },
+              { $set: { status: 'running' } },
+            );
+            retry_triggered = {
+              target_node: nodeName,
+              retry_attempt: 1,
+              retry_source: 'human_node_decision',
+            };
+          } else {
+            console.warn(`[intervention.respond] no pending input resolver for ${existing.workflow_run_id}:${nodeName}; falling back to retryFromNode`);
+          }
+          if (delivered) {
+            const updated = await service.recordResponse(intervention_id, {
+              decision,
+              feedback,
+              scope,
+              answer,
+              answered_by_user_id,
+              retry_triggered,
+            });
+
+            await clearChatPendingQuestionForIntervention(
+              db,
+              existing.workflow_run_id,
+              intervention_id,
+              existing.stage,
+              decision,
+              field_values,
+              answer,
+              feedback,
+              source,
+            );
+
+            return res.json(updated);
+          }
+        }
+
         const targetNode = retry_target_override ?? retryTargetForStage(existing.stage, scope);
         retry_triggered = {
           target_node: targetNode,
@@ -224,6 +292,18 @@ export function interventionRoutes(db: Db): Router {
         retry_triggered,
       });
 
+      await clearChatPendingQuestionForIntervention(
+        db,
+        existing.workflow_run_id,
+        intervention_id,
+        existing.stage,
+        decision,
+        field_values,
+        answer,
+        feedback,
+        source,
+      );
+
       res.json(updated);
     } catch (err: unknown) {
       res.status(500).json({ error: (err as Error).message });
@@ -231,6 +311,123 @@ export function interventionRoutes(db: Db): Router {
   });
 
   return router;
+}
+
+function escapeRegex(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+async function clearChatPendingQuestionForIntervention(
+  db: Db,
+  executionId: string,
+  interventionId: string,
+  stage: string,
+  decision: InterventionDecision,
+  fieldValues?: Record<string, unknown>,
+  answer?: string,
+  feedback?: string,
+  source?: string,
+): Promise<void> {
+  const idPatterns = [executionId, interventionId]
+    .filter(Boolean)
+    .map((value) => new RegExp(escapeRegex(value), 'i'));
+  if (idPatterns.length === 0) return;
+
+  const match = {
+    'pendingUserQuestion.status': 'pending',
+    $or: [
+      { 'pendingUserQuestion.executionId': executionId },
+      { 'pendingUserQuestion.interventionId': interventionId },
+      { 'pendingUserQuestion.question': { $in: idPatterns } },
+    ],
+  };
+
+  const sessions = await db.collection('chat_sessions')
+    .find(match, { projection: { _id: 1 } })
+    .toArray();
+
+  if (sessions.length === 0) return;
+
+  const now = new Date();
+  const answerForAssistant = interventionAnswerForAssistant({
+    executionId,
+    interventionId,
+    stage,
+    decision,
+    fieldValues,
+    answer,
+    feedback,
+  });
+
+  await db.collection('chat_sessions').updateMany(match, {
+    $set: {
+      'pendingUserQuestion.status': 'answered',
+      'pendingUserQuestion.answer': answerForAssistant,
+      'pendingUserQuestion.answeredAt': now,
+      'pendingUserQuestion.workflowResolution': {
+        executionId,
+        interventionId,
+        stage,
+        decision,
+      },
+    },
+  });
+
+  if (source === 'chat') return;
+
+  const exec = await db.collection('executions').findOne(
+    { id: executionId },
+    { projection: { status: 1 } },
+  );
+  const content = [
+    `Workflow input was submitted for execution \`${executionId}\`.`,
+    `Intervention \`${interventionId}\` at \`${stage}\` was resolved with \`${decision}\`.`,
+    `Current execution status: \`${String(exec?.status ?? 'running')}\`.`,
+    'Continue from the latest execution state; do not ask for this same input again.',
+  ].join('\n');
+
+  await db.collection('chat_messages').insertMany(sessions.map((session) => ({
+    sessionId: String(session._id),
+    role: 'assistant',
+    content,
+    status: 'completed',
+    senderSource: 'system',
+    createdAt: now,
+    completedAt: now,
+  })));
+
+  await db.collection('chat_sessions').updateMany(
+    { _id: { $in: sessions.map((session) => session._id) } },
+    {
+      $set: { lastMessageAt: now, updatedAt: now },
+      $inc: { messageCount: 1 },
+    },
+  );
+}
+
+function interventionAnswerForAssistant(input: {
+  executionId: string;
+  interventionId: string;
+  stage: string;
+  decision: InterventionDecision;
+  fieldValues?: Record<string, unknown>;
+  answer?: string;
+  feedback?: string;
+}): string {
+  const values = input.fieldValues && Object.keys(input.fieldValues).length > 0
+    ? `\nField values: ${JSON.stringify(input.fieldValues)}`
+    : '';
+  const answer = input.answer ? `\nAnswer: ${input.answer}` : '';
+  const feedback = input.feedback ? `\nFeedback: ${input.feedback}` : '';
+  return [
+    `The workflow intervention has already been answered.`,
+    `Execution: ${input.executionId}`,
+    `Intervention: ${input.interventionId}`,
+    `Stage: ${input.stage}`,
+    `Decision: ${input.decision}`,
+    `${values}${answer}${feedback}`,
+    `Continue from the latest workflow state and do not ask for this same input again.`,
+  ].filter(Boolean).join('\n');
 }
 
 /**
@@ -262,6 +459,7 @@ function retryTargetForStage(stage: string, scope?: string | null): string {
     audit_tdd_escalation: 'produce_tdd',
     qa_escalation: 'qa_failure_triage',
     validator_escalation: 'plan_implementation',
+    implementation_approval_human: 'investigate',
     feature_escalation: 'investigate',
     repro_question: 'investigate',
   };

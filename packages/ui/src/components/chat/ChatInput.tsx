@@ -1,4 +1,4 @@
-import { useState, useRef, useCallback, useEffect, forwardRef, useImperativeHandle } from 'react';
+import { useState, useRef, useCallback, useEffect, forwardRef, useImperativeHandle, type ReactNode } from 'react';
 import { Send, Square, ChevronDown, Paperclip, Loader2, X, Sparkles, ShieldCheck } from 'lucide-react';
 import MentionAutocomplete, { type MentionOption } from './MentionAutocomplete';
 import { authHeaders } from '../../services/api';
@@ -48,6 +48,7 @@ interface ChatInputProps {
   selectedRepoName?: string | null;
   repoLocked?: boolean;
   onRepoChange?: (repo: RepoOption | null) => void;
+  extraControls?: ReactNode;
 }
 
 const PROVIDER_COLORS: Record<string, string> = {
@@ -62,6 +63,9 @@ const EFFORT_OPTIONS: Array<{ value: ReasoningEffortValue; label: string; descri
   { value: 'high', label: 'High', description: 'Deliberate' },
   { value: 'max', label: 'Max', description: 'Opus only' },
 ];
+
+const TEXTAREA_MIN_HEIGHT = 82; // 3 text lines.
+const TEXTAREA_MAX_HEIGHT = TEXTAREA_MIN_HEIGHT; // Fixed at 3 lines; longer input scrolls.
 
 function capitalize(s: string): string {
   return s.charAt(0).toUpperCase() + s.slice(1);
@@ -102,6 +106,7 @@ const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function ChatInput
     selectedRepoName,
     repoLocked,
     onRepoChange,
+    extraControls,
   },
   ref,
 ) {
@@ -111,6 +116,9 @@ const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function ChatInput
   const [showModelPicker, setShowModelPicker] = useState(false);
   const [showEffortPicker, setShowEffortPicker] = useState(false);
   const [showRepoPicker, setShowRepoPicker] = useState(false);
+  const [modelPlacement, setModelPlacement] = useState<'up' | 'down'>('up');
+  const [effortPlacement, setEffortPlacement] = useState<'up' | 'down'>('up');
+  const [repoPlacement, setRepoPlacement] = useState<'up' | 'down'>('up');
   const effortPickerRef = useRef<HTMLDivElement>(null);
   const repoPickerRef = useRef<HTMLDivElement>(null);
 
@@ -147,6 +155,15 @@ const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function ChatInput
 
   function togglePlanMode(): void {
     onAgentOverridesChanged?.({ ...agentOverrides, planMode: !effectivePlanMode });
+  }
+
+  function placementFor(ref: React.RefObject<HTMLElement | null>, estimatedHeight = 300): 'up' | 'down' {
+    const rect = ref.current?.getBoundingClientRect();
+    if (!rect) return 'up';
+    const spaceAbove = rect.top;
+    const spaceBelow = window.innerHeight - rect.bottom;
+    if (spaceAbove < estimatedHeight && spaceBelow > spaceAbove) return 'down';
+    return 'up';
   }
   const [attachments, setAttachments] = useState<{ name: string; url: string }[]>([]);
   const [uploading, setUploading] = useState(false);
@@ -215,8 +232,8 @@ const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function ChatInput
   useEffect(() => {
     const el = textareaRef.current;
     if (!el) return;
-    el.style.height = 'auto';
-    el.style.height = Math.min(el.scrollHeight, 160) + 'px';
+    el.style.height = `${TEXTAREA_MIN_HEIGHT}px`;
+    el.style.overflowY = el.scrollHeight > TEXTAREA_MAX_HEIGHT ? 'auto' : 'hidden';
   }, [value]);
 
   const handleChange = useCallback((e: React.ChangeEvent<HTMLTextAreaElement>) => {
@@ -262,7 +279,10 @@ const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function ChatInput
       message = message ? `${message}\n\nAttached files:\n${fileLinks}` : `Attached files:\n${fileLinks}`;
     }
     onSend(message); setValue(''); setAttachments([]); setMentionVisible(false);
-    if (textareaRef.current) textareaRef.current.style.height = 'auto';
+    if (textareaRef.current) {
+      textareaRef.current.style.height = `${TEXTAREA_MIN_HEIGHT}px`;
+      textareaRef.current.style.overflowY = 'hidden';
+    }
   }, [value, attachments, streaming, disabled, onSend]);
 
   const currentProvider = providers?.find(p => p.provider === selectedProvider);
@@ -314,76 +334,26 @@ const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function ChatInput
           onPaste={handlePaste}
           placeholder={CHAT_PLACEHOLDER}
           disabled={streaming || disabled}
-          rows={1}
-          className="w-full resize-none bg-transparent px-3 pt-2.5 pb-10 text-sm text-theme-primary placeholder-gray-600 font-body focus:outline-none disabled:opacity-50 disabled:cursor-not-allowed"
-          style={{ minHeight: '44px', maxHeight: '160px' }}
+          rows={3}
+          className="w-full resize-none bg-transparent px-3 pt-2.5 pb-2 text-sm text-theme-primary placeholder-gray-600 font-body focus:outline-none disabled:opacity-50 disabled:cursor-not-allowed"
+          style={{ minHeight: `${TEXTAREA_MIN_HEIGHT}px`, maxHeight: `${TEXTAREA_MAX_HEIGHT}px`, overflowY: 'hidden' }}
         />
 
         {/* Bottom bar inside the input — model selector + send button */}
-        <div className="absolute bottom-0 left-0 right-0 flex items-center justify-between px-2 py-1.5">
+        <div className="chat-input-controls flex items-center justify-between gap-3 border-t border-app px-2 py-1.5">
           {/* ── Left cluster: model, effort, plan, attach ── */}
-          <div className="flex items-center gap-1">
-
-          {/* Repo selector — left of model picker */}
-          {(repos && repos.length > 0) && (
-            <div className="relative" ref={repoPickerRef}>
-              <button
-                type="button"
-                disabled={repoLocked}
-                onClick={() => !repoLocked && setShowRepoPicker(v => !v)}
-                className={[
-                  'flex items-center gap-1 px-2 py-1 rounded text-xs font-medium transition-colors',
-                  repoLocked
-                    ? 'opacity-60 cursor-not-allowed text-gray-400'
-                    : 'hover:bg-gray-700 text-gray-300 cursor-pointer',
-                ].join(' ')}
-                title={repoLocked ? `Repo: ${selectedRepoName ?? 'none'}` : 'Select repository'}
-              >
-                {/* Folder icon */}
-                <svg className="w-3 h-3 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                  <path strokeLinecap="round" strokeLinejoin="round"
-                    d="M3 7a2 2 0 012-2h4l2 2h8a2 2 0 012 2v9a2 2 0 01-2 2H5a2 2 0 01-2-2V7z" />
-                </svg>
-                <span className="max-w-[120px] truncate">
-                  {selectedRepoName ?? 'Repo'}
-                </span>
-                {!repoLocked && (
-                  <ChevronDown className="w-3 h-3 opacity-60 flex-shrink-0" />
-                )}
-              </button>
-
-              {showRepoPicker && !repoLocked && (
-                <div className="absolute bottom-full left-0 mb-1 bg-gray-800 border border-gray-600
-                                rounded-lg shadow-xl z-50 min-w-[200px] max-h-[240px] overflow-y-auto py-1">
-                  <button
-                    className="w-full text-left px-3 py-1.5 text-xs text-gray-400 hover:bg-gray-700"
-                    onClick={() => { onRepoChange?.(null); setShowRepoPicker(false); }}
-                  >
-                    No repository
-                  </button>
-                  <div className="h-px bg-gray-700 my-1" />
-                  {repos.map(repo => (
-                    <button
-                      key={repo._id}
-                      className={[
-                        'w-full text-left px-3 py-1.5 text-xs hover:bg-gray-700',
-                        selectedRepoName === repo.name ? 'text-blue-400 font-medium' : 'text-gray-200',
-                      ].join(' ')}
-                      onClick={() => { onRepoChange?.(repo); setShowRepoPicker(false); }}
-                    >
-                      {repo.name}
-                    </button>
-                  ))}
-                </div>
-              )}
-            </div>
-          )}
+          <div className="flex flex-wrap items-center gap-1">
+            {extraControls}
 
           {/* Model selector */}
           <div className="relative" ref={pickerRef}>
             {providers && providers.length > 0 && (
               <button
-                onClick={() => !modelLocked && setShowModelPicker(!showModelPicker)}
+                onClick={() => {
+                  if (modelLocked) return;
+                  setModelPlacement(placementFor(pickerRef, 320));
+                  setShowModelPicker(!showModelPicker);
+                }}
                 disabled={modelLocked}
                 title={modelLocked ? 'Model locked for this conversation' : 'Select model'}
                 className={`flex items-center gap-1 px-2 py-0.5 rounded-md text-[11px] font-mono transition-all ${
@@ -403,7 +373,9 @@ const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function ChatInput
 
             {/* Model picker dropdown — opens upward */}
             {showModelPicker && !modelLocked && (
-              <div className="absolute bottom-full left-0 mb-1 z-30 bg-surface-100 border border-app rounded-lg shadow-2xl overflow-hidden min-w-[220px]">
+              <div className={`absolute left-0 z-30 bg-surface-100 border border-app rounded-lg shadow-2xl overflow-hidden min-w-[220px] ${
+                modelPlacement === 'down' ? 'top-full mt-1' : 'bottom-full mb-1'
+              }`}>
                 {providers?.map(p => (
                   <div key={p.provider}>
                     <div className="px-3 py-1 bg-app-muted/50 border-b border-app">
@@ -430,7 +402,10 @@ const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function ChatInput
           <div className="relative" ref={effortPickerRef}>
             <button
               type="button"
-              onClick={() => setShowEffortPicker((v) => !v)}
+              onClick={() => {
+                setEffortPlacement(placementFor(effortPickerRef, 280));
+                setShowEffortPicker((v) => !v);
+              }}
               title="Reasoning effort"
               className={`flex items-center gap-1 px-2 py-0.5 rounded-md text-[11px] font-mono transition-all ${
                 agentOverrides?.reasoningEffort
@@ -444,7 +419,9 @@ const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function ChatInput
             </button>
 
             {showEffortPicker && (
-              <div className="absolute bottom-full left-0 mb-1 z-30 bg-surface-100 border border-app rounded-lg shadow-2xl overflow-hidden min-w-[220px]">
+              <div className={`absolute left-0 z-30 bg-surface-100 border border-app rounded-lg shadow-2xl overflow-hidden min-w-[220px] ${
+                effortPlacement === 'down' ? 'top-full mt-1' : 'bottom-full mb-1'
+              }`}>
                 <div className="px-3 py-1 bg-app-muted/50 border-b border-app">
                   <span className="overline">
                     Reasoning Effort
@@ -515,6 +492,64 @@ const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function ChatInput
             </button>
           )}
 
+          {/* Repo selector */}
+          {(repos && repos.length > 0) && (
+            <div className="relative" ref={repoPickerRef}>
+              <button
+                type="button"
+                disabled={repoLocked}
+                onClick={() => {
+                  if (repoLocked) return;
+                  setRepoPlacement(placementFor(repoPickerRef, 280));
+                  setShowRepoPicker(v => !v);
+                }}
+                className={`flex items-center gap-1 px-2 py-0.5 rounded-md text-[11px] font-mono transition-all ${
+                  repoLocked
+                    ? 'text-theme-subtle cursor-default'
+                    : selectedRepoName
+                      ? 'text-accent-blue hover:bg-accent-blue/10 cursor-pointer'
+                      : 'text-theme-muted hover:text-theme-secondary hover:bg-surface-100/50 cursor-pointer'
+                }`}
+                title={repoLocked ? `Repo: ${selectedRepoName ?? 'none'}` : 'Select repository'}
+              >
+                <svg className="w-3 h-3 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                  <path strokeLinecap="round" strokeLinejoin="round"
+                    d="M3 7a2 2 0 012-2h4l2 2h8a2 2 0 012 2v9a2 2 0 01-2 2H5a2 2 0 01-2-2V7z" />
+                </svg>
+                <span className="max-w-[120px] truncate">
+                  {selectedRepoName ?? 'Auto'}
+                </span>
+                {!repoLocked && <ChevronDown className="w-2.5 h-2.5 text-theme-subtle" />}
+              </button>
+
+              {showRepoPicker && !repoLocked && (
+                <div className={`absolute left-0 bg-surface-100 border border-app
+                                rounded-lg shadow-xl z-50 min-w-[240px] max-h-[260px] overflow-y-auto py-1 ${
+                  repoPlacement === 'down' ? 'top-full mt-1' : 'bottom-full mb-1'
+                }`}>
+                  <button
+                    className="w-full text-left px-3 py-1.5 text-xs font-mono text-accent hover:bg-app-muted"
+                    onClick={() => { onRepoChange?.(null); setShowRepoPicker(false); }}
+                  >
+                    Auto
+                  </button>
+                  <div className="h-px bg-app my-1" />
+                  {repos.map(repo => (
+                    <button
+                      key={repo._id}
+                      className={`w-full text-left px-3 py-1.5 text-xs font-mono hover:bg-app-muted ${
+                        selectedRepoName === repo.name ? 'text-accent-blue bg-accent-blue/5' : 'text-theme-secondary'
+                      }`}
+                      onClick={() => { onRepoChange?.(repo); setShowRepoPicker(false); }}
+                    >
+                      <span className="block truncate">{repo.name}</span>
+                      <span className="block truncate text-[10px] text-theme-subtle">{repo.path}</span>
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
           {/* Attach button */}
           <button onClick={() => fileInputRef.current?.click()} disabled={uploading || disabled}
             className="p-1 text-theme-muted hover:text-theme-secondary rounded transition-colors disabled:opacity-30" title="Attach file">

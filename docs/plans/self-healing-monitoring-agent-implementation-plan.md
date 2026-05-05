@@ -147,11 +147,7 @@ seeded by `seedDefaultWorkflows()`:
 | Workflow | Purpose |
 |---|---|
 | `self-healing-incident-triage` | Given an incident ID, hydrate evidence, classify root cause, decide actionability, update incident state, and create/update Linear. Mostly analysis and routing; no code changes. |
-| `self-healing-repair-allen` | Given a Linear issue or incident ID, create an isolated worktree for the Allen repo, run investigation, fix, tests, review, docs, and PR creation. This should reuse the same pattern as `bug-investigate-and-fix` but with incident evidence as the bug report. |
-| `self-healing-memory-repair` | Specialized repair workflow for memory extraction/injection failures; runs memory diagnostics, fixes code/config/prompts, adds regression tests, and opens a PR. |
-| `self-healing-tooling-repair` | Specialized repair workflow for MCP/tool/schema/env/context failures; runs tooling diagnostics, fixes code/config/prompts, adds regression tests, and opens a PR. |
-| `self-healing-workflow-repair` | Specialized repair workflow for workflow YAML/engine/node failures; validates workflow definitions, fixes engine/workflow code or YAML, adds regression tests, and opens a PR. |
-| `self-healing-prompt-instruction-repair` | Specialized repair workflow for bad agent prompts, workflow node prompts, system instructions, delegation guidance, memory instructions, or tool-use instructions; updates built-in prompts/instructions in Allen and adds regression coverage. |
+| `self-healing-repair` | Given a Linear issue or incident ID, create an isolated worktree for the Allen repo, run investigation, fix, tests, review, and PR creation. It handles Allen repo, memory, tooling, workflow, prompt, and instruction repair through `repair_area`. |
 
 Update `cleanupOrphanedSeedEntities()` keep list in `packages/server/src/app.ts`
 so these built-in workflows are not deleted on boot.
@@ -291,12 +287,12 @@ Routing table:
 
 | Root Cause | Source Type | Target |
 |---|---|---|
-| `memory_system` | memory/chat/agent | workflow `self-healing-memory-repair` |
-| `tool_integration` | tool_call/mcp/chat/agent | workflow `self-healing-tooling-repair` |
-| `workflow_definition` | workflow_execution | workflow `self-healing-workflow-repair` |
-| `agent_prompt` | chat/agent/delegation/workflow_execution | workflow `self-healing-prompt-instruction-repair` |
-| `instruction_bug` | chat/agent/delegation/workflow_execution/tool_call | workflow `self-healing-prompt-instruction-repair` |
-| `allen_repo` | any | workflow `self-healing-repair-allen` |
+| `memory_system` | memory/chat/agent | workflow `self-healing-repair`, `repair_area=memory_system` |
+| `tool_integration` | tool_call/mcp/chat/agent | workflow `self-healing-repair`, `repair_area=tool_integration` |
+| `workflow_definition` | workflow_execution | workflow `self-healing-repair`, `repair_area=workflow_definition` |
+| `agent_prompt` | chat/agent/delegation/workflow_execution | workflow `self-healing-repair`, `repair_area=prompt_instruction` |
+| `instruction_bug` | chat/agent/delegation/workflow_execution/tool_call | workflow `self-healing-repair`, `repair_area=prompt_instruction` |
+| `allen_repo` | any | workflow `self-healing-repair`, `repair_area=allen_repo` |
 | `unknown` with high severity | any | agent `allen-incident-router` |
 
 Auto-dispatch rules:
@@ -461,11 +457,7 @@ Engine:
 - `packages/engine/src/state-manager.ts`
 - `packages/engine/src/learning-manager.ts`
 - `packages/engine/workflows/self-healing-incident-triage.yml`
-- `packages/engine/workflows/self-healing-repair-allen.yml`
-- `packages/engine/workflows/self-healing-memory-repair.yml`
-- `packages/engine/workflows/self-healing-tooling-repair.yml`
-- `packages/engine/workflows/self-healing-workflow-repair.yml`
-- `packages/engine/workflows/self-healing-prompt-instruction-repair.yml`
+- `packages/engine/workflows/self-healing-repair.yml`
 
 Seeds:
 

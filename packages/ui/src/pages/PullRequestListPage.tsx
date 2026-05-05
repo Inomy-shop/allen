@@ -5,7 +5,7 @@ import { repos as reposApi } from '../services/api';
 import {
   GitPullRequest, RefreshCw, Loader2, ExternalLink,
   GitMerge, XCircle, FolderGit2, Clock, FileDiff,
-  Plus, Minus, ArrowRight, Wrench, X,
+  Plus, Minus, ArrowRight, Wrench, X, Bot,
 } from 'lucide-react';
 import { SetupProgressDialog } from '../components/workspace/SetupProgressDialog';
 import { workflows as workflowsApi, executions as executionsApi } from '../services/api';
@@ -105,14 +105,14 @@ export default function PullRequestListPage() {
   return (
     <div className="flex flex-col h-full overflow-hidden">
       {/* Header */}
-      <div className="px-6 pt-5 pb-3 border-b border-app shrink-0">
-        <div className="flex items-center gap-2 mb-2 text-[12px] text-theme-muted">
-          <span>Code</span>
+      <div className="surface-bar shrink-0">
+        <div className="page-crumb">
+          <span>Sources</span>
           <span className="text-theme-subtle">/</span>
           <span>Pull requests</span>
         </div>
         <div className="flex items-center gap-3">
-          <h1 className="text-[20px] font-semibold text-theme-primary tracking-tight">Pull requests</h1>
+          <h1 className="page-title">Pull requests</h1>
           <span className="text-[12px] font-mono text-theme-muted">{prs.length}</span>
           <span className="flex-1" />
           <button
@@ -130,12 +130,10 @@ export default function PullRequestListPage() {
         </div>
 
         {/* Filters */}
-        <div className="flex items-center gap-1 mt-3">
+        <div className="segmented mt-3">
           {['open', 'merged', 'closed', ''].map(s => (
             <button key={s} onClick={() => setStatusFilter(s)}
-              className={`text-[12px] font-mono px-2.5 py-1 rounded-md transition-colors ${statusFilter === s
-                ? 'bg-accent-soft text-accent'
-                : 'text-theme-muted hover:text-theme-primary hover:bg-app-muted'}`}>
+              className={`segmented-btn ${statusFilter === s ? 'segmented-btn-active' : ''}`}>
               {s || 'All'}
             </button>
           ))}
@@ -153,9 +151,9 @@ export default function PullRequestListPage() {
             <p className="text-xs text-theme-subtle mt-1">Click "Sync from GitHub" to import PRs</p>
           </div>
         ) : (
-          <div className="space-y-3">
+          <div className="entity-list">
             {prs.map(pr => (
-              <div key={pr._id} className="card-hover p-4 cursor-pointer" onClick={() => navigate(`/pull-requests/${pr._id}`)}>
+              <div key={pr._id} className="entity-row cursor-pointer" onClick={() => navigate(`/pull-requests/${pr._id}`)}>
                 <div className="flex items-start gap-3">
                   {statusIcon(pr.status)}
                   <div className="flex-1 min-w-0">
@@ -168,7 +166,11 @@ export default function PullRequestListPage() {
                       <span>{pr.repoName}</span>
                       <span className="flex items-center gap-1">{pr.branch} <ArrowRight className="w-3 h-3" /> {pr.baseBranch}</span>
                       <span>by {pr.author}</span>
-                      {pr.createdByAgent && <span className="text-accent">🤖 {pr.createdByAgent}</span>}
+                      {pr.createdByAgent && (
+                        <span className="text-accent inline-flex items-center gap-1">
+                          <Bot className="w-3 h-3" /> {pr.createdByAgent}
+                        </span>
+                      )}
                     </div>
                     <div className="flex items-center gap-3 mt-1.5 text-[10px] text-theme-subtle">
                       <span className="flex items-center gap-1"><Clock className="w-3 h-3" />{timeAgo(pr.updatedAt)}</span>

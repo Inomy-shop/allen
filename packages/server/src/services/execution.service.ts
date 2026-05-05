@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import type { Db } from 'mongodb';
+import { ObjectId, type Db } from 'mongodb';
 import { logger } from '../logger.js';
 import {
   AllenEngine,
@@ -23,6 +23,7 @@ import { WorkspaceManager } from './workspace.service.js';
 import { ArtifactService } from './artifact.service.js';
 import { MonitoringService } from './self-healing-monitor.service.js';
 import { assertSelfHealingLinearConfig, isSelfHealingWorkflowName } from './self-healing-env.js';
+import { AgentActivityService, type PersistedActivityRow } from './agent-activity.service.js';
 
 /**
  * Build the in-process service hook bundle the engine passes to built-ins.
@@ -131,7 +132,7 @@ const CHILDREN_PROJECTION = {
   id: 1, workflowName: 1, parentExecutionId: 1, parentCaller: 1,
   rootExecutionId: 1, spawnDepth: 1, status: 1, startedAt: 1,
   completedAt: 1, durationMs: 1, cost: 1, failedNode: 1,
-  errorMessage: 1, input: 1, meta: 1,
+  errorMessage: 1, input: 1, meta: 1, currentNodes: 1, completedNodes: 1,
 };
 
 function decorateChildRow(
@@ -164,9 +165,71 @@ function decorateChildRow(
     cost: row.cost ?? null,
     failedNode: row.failedNode ?? null,
     errorMessage: row.errorMessage ?? null,
+    currentStep: Array.isArray(row.currentNodes) && row.currentNodes.length > 0
+      ? (row.currentNodes as unknown[]).filter(Boolean).join(', ')
+      : null,
+    completedNodes: row.completedNodes ?? [],
     promptPreview,
     linkType,
   };
+}
+
+function stringValue(v: unknown): string | undefined {
+  return typeof v === 'string' && v.trim() ? v.trim() : undefined;
+}
+
+function firstUrl(values: unknown[], pattern?: RegExp): string | undefined {
+  for (const value of values) {
+    const s = stringValue(value);
+    if (!s) continue;
+    if (!/^https?:\/\//i.test(s)) continue;
+    if (pattern && !pattern.test(s)) continue;
+    return s;
+  }
+  return undefined;
+}
+
+export type RunOrigin = 'chat' | 'linear' | 'workflow' | 'direct_agent';
+export type RunType = 'workflow' | 'agent';
+export type RunPhase =
+  | 'queued'
+  | 'planning'
+  | 'inspecting'
+  | 'editing'
+  | 'testing'
+  | 'reviewing'
+  | 'opening_pr'
+  | 'waiting_for_human'
+  | 'running'
+  | 'completed'
+  | 'failed'
+  | 'cancelled';
+
+const CANCELLED_STATUSES = new Set(['cancelled', 'canceled']);
+
+export interface RunStatus {
+  origin: RunOrigin;
+  runType: RunType;
+  title: string;
+  status: string;
+  execution: Record<string, unknown>;
+  progress: {
+    completed: number;
+    total: number;
+    percent: number;
+    label: string;
+    currentStep: string | null;
+    phase: RunPhase;
+  };
+  humanInput: Record<string, unknown>;
+  linear: Record<string, unknown> | null;
+  workspace: Record<string, unknown> | null;
+  pullRequest: Record<string, unknown> | null;
+  childAgents: Record<string, unknown>[];
+  workflowSteps: Record<string, unknown>[];
+  interventions: Record<string, unknown>[];
+  artifacts: Record<string, unknown>[];
+  recentActivity: Record<string, unknown>[];
 }
 
 export class ExecutionService {
@@ -411,12 +474,125 @@ export class ExecutionService {
       skip: opts.skip,
       limit: opts.limit,
     });
-    return { items: items as unknown as Record<string, unknown>[], total };
+    await this.attachChatMetadataFromMessages(items as unknown as Record<string, unknown>[]);
+    const enriched = await Promise.all(
+      (items as unknown as Record<string, unknown>[]).map((item) => this.listItemContext(item)),
+    );
+    return { items: enriched, total };
   }
 
   async getById(id: string): Promise<Record<string, unknown> | null> {
     const result = await this.stateManager.getExecution(id);
     return result as unknown as Record<string, unknown> | null;
+  }
+
+  async getContext(id: string): Promise<RunStatus> {
+    const exec = await this.stateManager.getExecution(id);
+    if (!exec) throw new Error('Execution not found');
+
+    const row = exec as unknown as Record<string, unknown>;
+    const input = (exec.input ?? {}) as Record<string, unknown>;
+    const state = (exec.state ?? {}) as Record<string, unknown>;
+    const meta = ((row.meta ?? {}) as Record<string, unknown>) ?? {};
+    const workflowName = exec.workflowName ?? '';
+    const isAgentExecution = workflowName.includes(':spawn_agent/')
+      || row.source === 'spawn'
+      || (!exec.workflowId && row.source === 'chat');
+
+    const [workflowDoc, traces, directChildren, interventions, logs, activity] = await Promise.all([
+      exec.workflowId && ObjectId.isValid(exec.workflowId)
+        ? this.db.collection('workflows').findOne(
+            { _id: new ObjectId(exec.workflowId) },
+            { projection: { name: 1, parsed: 1 } },
+          )
+        : Promise.resolve(null),
+      this.stateManager.getTraces(id),
+      this.getChildren(id, 'direct'),
+      new InterventionService(this.db).listForWorkflowRun(id).catch(() => []),
+      this.db
+        .collection('execution_logs')
+        .find({ executionId: id })
+        .sort({ timestamp: -1, createdAt: -1 })
+        .limit(25)
+        .toArray()
+        .catch(() => []),
+      new AgentActivityService(this.db).listForRef(id, { limit: 50 }).catch(() => []),
+    ]);
+
+    const workspace = await this.findExecutionWorkspace(input, state, meta);
+    const assignment = await this.findExecutionAssignment(id, workspace, input, state, meta);
+    const pullRequest = await this.findExecutionPullRequest(id, workspace, input, state, meta);
+    const artifacts = await this.findExecutionArtifacts(id, isAgentExecution, row, meta);
+
+    const workflowNodes = ((workflowDoc?.parsed as Record<string, unknown> | undefined)?.nodes ?? {}) as Record<string, unknown>;
+    const workflowNodeNames = Object.keys(workflowNodes);
+    const workflowNodeSet = new Set(workflowNodeNames);
+    const completedWorkflowNodes = [...new Set((exec.completedNodes ?? [])
+      .filter((node) => workflowNodeSet.size === 0 || workflowNodeSet.has(node)))];
+    const totalNodes = isAgentExecution
+      ? 1
+      : workflowNodeNames.length || Math.max(completedWorkflowNodes.length, exec.currentNodes?.length ?? 0);
+    const completedCount = isAgentExecution
+      ? (exec.status === 'completed' ? 1 : 0)
+      : Math.min(completedWorkflowNodes.length, totalNodes);
+    const pendingIntervention = interventions.find((i: any) => i.status === 'pending') ?? null;
+    const currentStep = this.currentStep(exec, isAgentExecution, traces);
+    const percent = totalNodes > 0 ? Math.round((completedCount / totalNodes) * 100) : 0;
+    const origin = this.inferOrigin(row, assignment) as RunOrigin;
+    const runType: RunType = isAgentExecution ? 'agent' : 'workflow';
+
+    return {
+      origin,
+      runType,
+      title: stringValue(meta.requestText)
+        ?? stringValue(meta.linearTitle)
+        ?? stringValue(input.task)
+        ?? stringValue(input.prompt)
+        ?? workflowName,
+      status: exec.status,
+      execution: {
+        id,
+        workflowId: exec.workflowId,
+        workflowName,
+        status: exec.status,
+        source: row.source ?? null,
+        startedAt: exec.startedAt,
+        completedAt: exec.completedAt ?? null,
+        durationMs: exec.durationMs,
+        cost: exec.cost,
+        currentNodes: exec.currentNodes ?? [],
+        completedNodes: exec.completedNodes ?? [],
+        failedNode: exec.failedNode ?? null,
+        errorMessage: exec.errorMessage ?? null,
+        isAgentExecution,
+      },
+      progress: {
+        completed: completedCount,
+        total: totalNodes,
+        percent,
+        label: totalNodes > 0 ? `${completedCount} / ${totalNodes}` : '0 / 0',
+        currentStep,
+        phase: this.phaseForExecution(exec, logs, activity),
+      },
+      humanInput: pendingIntervention ? {
+        required: true,
+        interventionId: pendingIntervention.intervention_id,
+        title: pendingIntervention.title,
+        stage: pendingIntervention.stage,
+        severity: pendingIntervention.severity,
+      } : {
+        required: exec.status === 'waiting_for_input',
+        title: exec.status === 'waiting_for_input' ? 'Waiting for input' : undefined,
+      },
+      linear: this.linearContext(assignment, input, state, meta),
+      workspace: workspace ? this.workspaceContext(workspace) : null,
+      pullRequest: pullRequest ? this.pullRequestContext(pullRequest) : null,
+      childAgents: directChildren.map((child) => this.childAgentContext(child)),
+      workflowSteps: isAgentExecution ? [] : this.workflowStepContext(exec as unknown as Record<string, unknown>, workflowNodes, traces),
+      interventions: interventions.map((intervention) => ({ ...intervention })),
+      artifacts: artifacts.map((artifact) => this.artifactContext(artifact)),
+      recentActivity: this.recentActivity(logs, activity),
+    };
   }
 
   async listFeedback(executionId: string): Promise<WorkflowFeedbackEntry[]> {
@@ -623,7 +799,13 @@ export class ExecutionService {
     if (!workflowDoc) throw new Error('Workflow not found');
 
     const workflow = workflowDoc.parsed as WorkflowDef;
-    const emitter = createSSEEmitter(executionId);
+    const baseEmitter = createSSEEmitter(executionId);
+    const emitter = this.wrapEmitterWithInterventionHook(
+      baseEmitter,
+      executionId,
+      workflow,
+      (exec.input ?? {}) as Record<string, unknown>,
+    );
 
     const allWorkflowDocs = await this.db.collection('workflows').find({}).toArray();
     const workflows: Record<string, WorkflowDef> = {};
@@ -824,6 +1006,477 @@ export class ExecutionService {
       .toArray();
 
     return rows.map(row => decorateChildRow(row, 'direct'));
+  }
+
+  private inferOrigin(exec: Record<string, unknown>, assignment: Record<string, unknown> | null): string {
+    const meta = (exec.meta ?? {}) as Record<string, unknown>;
+    if (stringValue(meta.origin)) return stringValue(meta.origin)!;
+    if (assignment?.linearIssueId || meta.linearIssueId) return 'linear';
+    if (exec.source === 'chat') return 'chat';
+    if (exec.source === 'spawn') return 'workflow';
+    if (String(exec.workflowName ?? '').includes(':spawn_agent/')) return 'direct_agent';
+    return 'workflow';
+  }
+
+  private executionTitle(
+    workflowName: string,
+    input: Record<string, unknown>,
+    meta: Record<string, unknown>,
+  ): string {
+    return stringValue(meta.requestText)
+      ?? stringValue(meta.linearTitle)
+      ?? stringValue(input.task)
+      ?? stringValue(input.prompt)
+      ?? stringValue(input.request)
+      ?? workflowName;
+  }
+
+  private async listItemContext(item: Record<string, unknown>): Promise<Record<string, unknown>> {
+    const id = stringValue(item.id) ?? '';
+    const workflowName = stringValue(item.workflowName) ?? '';
+    const input = ((item.input ?? {}) as Record<string, unknown>) ?? {};
+    const state = ((item.state ?? {}) as Record<string, unknown>) ?? {};
+    const meta = ((item.meta ?? {}) as Record<string, unknown>) ?? {};
+    const isAgentExecution = workflowName.includes(':spawn_agent/')
+      || item.source === 'spawn'
+      || (!item.workflowId && item.source === 'chat');
+
+    const workspace = await this.findExecutionWorkspace(input, state, meta);
+    const assignment = id ? await this.findExecutionAssignment(id, workspace, input, state, meta) : null;
+    const pullRequest = id ? await this.findExecutionPullRequest(id, workspace, input, state, meta) : null;
+
+    return {
+      ...item,
+      type: isAgentExecution ? 'agent' : 'workflow',
+      origin: this.inferOrigin(item, assignment),
+      title: this.executionTitle(workflowName, input, meta),
+      linear: this.linearContext(assignment, input, state, meta),
+      pullRequest: pullRequest ? this.pullRequestContext(pullRequest) : null,
+    };
+  }
+
+  private async attachChatMetadataFromMessages(items: Record<string, unknown>[]): Promise<void> {
+    const missingIds = items
+      .filter((item) => {
+        const meta = ((item.meta ?? {}) as Record<string, unknown>) ?? {};
+        return !stringValue(meta.chatSessionId);
+      })
+      .map((item) => stringValue(item.id))
+      .filter((id): id is string => Boolean(id));
+
+    if (missingIds.length === 0) return;
+
+    const messages = await this.db.collection('chat_messages')
+      .find({
+        role: 'assistant',
+        $or: [
+          { 'toolCalls.result.id': { $in: missingIds } },
+          { 'toolCalls.result.execution_id': { $in: missingIds } },
+        ],
+      }, {
+        projection: { _id: 1, sessionId: 1, toolCalls: 1, createdAt: 1 },
+      })
+      .sort({ createdAt: -1 })
+      .limit(200)
+      .toArray()
+      .catch(() => []);
+
+    if (messages.length === 0) return;
+
+    const linkByExecution = new Map<string, { chatSessionId: string; parentMessageId: string }>();
+    const ids = new Set(missingIds);
+    for (const message of messages) {
+      const sessionId = stringValue(message.sessionId);
+      const parentMessageId = String(message._id ?? '');
+      if (!sessionId || !parentMessageId) continue;
+      for (const call of ((message.toolCalls ?? []) as Array<Record<string, unknown>>)) {
+        const result = ((call.result ?? {}) as Record<string, unknown>) ?? {};
+        const executionId = stringValue(result.id) ?? stringValue(result.execution_id);
+        if (!executionId || !ids.has(executionId) || linkByExecution.has(executionId)) continue;
+        linkByExecution.set(executionId, { chatSessionId: sessionId, parentMessageId });
+      }
+    }
+
+    if (linkByExecution.size === 0) return;
+
+    for (const item of items) {
+      const id = stringValue(item.id);
+      if (!id) continue;
+      const link = linkByExecution.get(id);
+      if (!link) continue;
+      const meta = ((item.meta ?? {}) as Record<string, unknown>) ?? {};
+      item.source = item.source ?? 'chat';
+      item.meta = {
+        ...meta,
+        origin: stringValue(meta.origin) ?? 'chat',
+        chatSessionId: link.chatSessionId,
+        parentMessageId: stringValue(meta.parentMessageId) ?? link.parentMessageId,
+      };
+    }
+
+    await this.db.collection('executions').bulkWrite(
+      [...linkByExecution.entries()].map(([executionId, link]) => ({
+        updateOne: {
+          filter: { id: executionId, 'meta.chatSessionId': { $exists: false } },
+          update: {
+            $set: {
+              source: 'chat',
+              'meta.origin': 'chat',
+              'meta.chatSessionId': link.chatSessionId,
+              'meta.parentMessageId': link.parentMessageId,
+            },
+          },
+        },
+      })),
+      { ordered: false },
+    ).catch(() => {});
+  }
+
+  private currentStep(exec: ExecutionState, isAgentExecution: boolean, traces: Record<string, unknown>[]): string | null {
+    if (exec.status === 'waiting_for_input') {
+      return exec.currentNodes?.[0] ?? 'waiting for input';
+    }
+    if (exec.status === 'failed') return exec.failedNode ?? 'failed';
+    if (exec.status === 'completed' || CANCELLED_STATUSES.has(exec.status)) return null;
+    if (exec.currentNodes?.length) return exec.currentNodes.filter(n => n !== 'END').join(', ');
+    if (isAgentExecution) {
+      const latest = [...traces].sort(
+        (a, b) => new Date(b.startedAt as string | Date | undefined ?? 0).getTime()
+          - new Date(a.startedAt as string | Date | undefined ?? 0).getTime(),
+      )[0];
+      return stringValue(latest?.node) ?? null;
+    }
+    return exec.completedNodes?.[exec.completedNodes.length - 1] ?? null;
+  }
+
+  private phaseForExecution(
+    exec: ExecutionState,
+    logs: Record<string, unknown>[],
+    activity: PersistedActivityRow[],
+  ): RunPhase {
+    if (exec.status === 'queued') return 'queued';
+    if (exec.status === 'waiting_for_input') return 'waiting_for_human';
+    if (exec.status === 'completed') return 'completed';
+    if (exec.status === 'failed') return 'failed';
+    if (exec.status === 'cancelled') return 'cancelled';
+    const currentStep = (exec.currentNodes ?? []).join(' ');
+    if (/\b(review|validate|validation|approve|qa)\b/i.test(currentStep)) return 'reviewing';
+    if (/\b(test|qa|verify)\b/i.test(currentStep)) return 'testing';
+    if (/\b(develop|implement|code|edit|build|fix)\b/i.test(currentStep)) return 'editing';
+    if (/\b(plan|intake|scope|design|requirements?)\b/i.test(currentStep)) return 'planning';
+    const recentText = logs
+      .slice(0, 8)
+      .map((l) => `${l.type ?? ''} ${l.event ?? ''} ${l.message ?? ''} ${l.content ?? ''} ${l.tool ?? ''} ${l.command ?? ''}`)
+      .concat(activity.slice(-8).map((a) => `${a.type} ${a.tool ?? ''} ${a.content ?? ''}`))
+      .join('\n');
+    if (/\b(gh pr create|open.*pr|pull request|git push)\b/i.test(recentText)) return 'opening_pr';
+    if (/\b(vitest|pytest|npm test|pnpm test|playwright|test)\b/i.test(recentText)) return 'testing';
+    if (/\b(apply_patch|edit|write|save file|create file|patch)\b/i.test(recentText)) return 'editing';
+    if (/\b(read|grep|rg|glob|sed|inspect|search|list)\b/i.test(recentText)) return 'inspecting';
+    if (/\b(plan|todo|requirements?|design)\b/i.test(recentText)) return 'planning';
+    return 'running';
+  }
+
+  private async findExecutionWorkspace(
+    input: Record<string, unknown>,
+    state: Record<string, unknown>,
+    meta: Record<string, unknown>,
+  ): Promise<Record<string, unknown> | null> {
+    const workspaceId =
+      stringValue(meta.workspaceId)
+      ?? stringValue(state.workspace_id)
+      ?? stringValue(input.workspace_id);
+    if (workspaceId && ObjectId.isValid(workspaceId)) {
+      const ws = await this.db.collection('workspaces').findOne({ _id: new ObjectId(workspaceId) });
+      if (ws) return ws;
+    }
+
+    const workspacePath =
+      stringValue(meta.workspacePath)
+      ?? stringValue(state.worktree_path)
+      ?? stringValue(input.worktree_path)
+      ?? stringValue(input.repo_path)
+      ?? stringValue(meta.cwd);
+    if (workspacePath) {
+      const ws = await this.db.collection('workspaces').findOne({ worktreePath: workspacePath });
+      if (ws) return ws;
+    }
+    return null;
+  }
+
+  private async findExecutionAssignment(
+    executionId: string,
+    workspace: Record<string, unknown> | null,
+    input: Record<string, unknown>,
+    state: Record<string, unknown>,
+    meta: Record<string, unknown>,
+  ): Promise<Record<string, unknown> | null> {
+    const ors: Record<string, unknown>[] = [{ executionId }];
+    const workspaceId = workspace?._id ? String(workspace._id) : undefined;
+    const workspacePath = stringValue(workspace?.worktreePath) ?? stringValue(meta.workspacePath);
+    if (workspaceId) ors.push({ workspaceId });
+    if (workspacePath) ors.push({ workspacePath });
+    const issueId =
+      stringValue(meta.linearIssueId)
+      ?? stringValue(input.linear_issue_id)
+      ?? stringValue(state.linear_issue_id);
+    if (issueId) ors.push({ linearIssueId: issueId });
+    return this.db.collection('ticket_assignments').findOne({ $or: ors });
+  }
+
+  private async findExecutionPullRequest(
+    executionId: string,
+    workspace: Record<string, unknown> | null,
+    input: Record<string, unknown>,
+    state: Record<string, unknown>,
+    meta: Record<string, unknown>,
+  ): Promise<Record<string, unknown> | null> {
+    const ors: Record<string, unknown>[] = [
+      { originatingExecutionId: executionId },
+      { 'resolutionInProgress.executionId': executionId },
+    ];
+    const workspaceId = workspace?._id ? String(workspace._id) : undefined;
+    if (workspaceId) ors.push({ workspaceId });
+    const prUrl = firstUrl(
+      [state.pr_url, state.url, input.pr_url, input.url, meta.prUrl, meta.url, workspace?.prUrl],
+      /\/pull\/\d+/i,
+    );
+    if (prUrl) ors.push({ url: prUrl });
+    return this.db.collection('pull_requests').findOne({ $or: ors }, { sort: { updatedAt: -1 } });
+  }
+
+  private async findExecutionArtifacts(
+    executionId: string,
+    isAgentExecution: boolean,
+    row: Record<string, unknown>,
+    meta: Record<string, unknown>,
+  ): Promise<Record<string, unknown>[]> {
+    const exactRoots: Array<Record<string, unknown>> = [
+      { rootType: isAgentExecution ? 'agent' : 'workflow', rootId: executionId },
+    ];
+    const scopedRoots: Array<Record<string, unknown>> = [];
+    const chatSessionId = stringValue(meta.chatSessionId);
+    if (chatSessionId) scopedRoots.push({ rootType: 'chat', rootId: chatSessionId });
+    const rootExecutionId = stringValue(row.rootExecutionId);
+    if (rootExecutionId && rootExecutionId !== executionId) {
+      scopedRoots.push({ rootType: 'workflow', rootId: rootExecutionId });
+    }
+    const scopedArtifactClauses = scopedRoots.flatMap((root) => [
+      { ...root, 'spawnContext.agentExecutionId': executionId },
+      { ...root, 'spawnContext.parentId': executionId },
+    ]);
+    const clauses = [...exactRoots, ...scopedArtifactClauses];
+    return this.db
+      .collection('artifacts')
+      .find({ $or: clauses })
+      .sort({ createdAt: -1 })
+      .limit(50)
+      .project({
+        _id: 0,
+        artifactId: 1,
+        rootType: 1,
+        rootId: 1,
+        filename: 1,
+        relativePath: 1,
+        contentType: 1,
+        sizeBytes: 1,
+        description: 1,
+        createdAt: 1,
+        spawnContext: 1,
+      })
+      .toArray();
+  }
+
+  private linearContext(
+    assignment: Record<string, unknown> | null,
+    input: Record<string, unknown>,
+    state: Record<string, unknown>,
+    meta: Record<string, unknown>,
+  ): Record<string, unknown> | null {
+    const identifier =
+      stringValue(meta.linearIdentifier)
+      ?? stringValue(input.linear_identifier)
+      ?? stringValue(input.ticket_id)
+      ?? stringValue(state.linear_identifier)
+      ?? stringValue(state.ticket_id);
+    const url = firstUrl([meta.linearUrl, input.linear_url, input.ticket_url, state.linear_url, state.ticket_url], /linear\.app/i);
+    const issueId = stringValue(assignment?.linearIssueId) ?? stringValue(meta.linearIssueId) ?? stringValue(input.linear_issue_id);
+    if (!assignment && !identifier && !url && !issueId) return null;
+    return {
+      issueId,
+      identifier,
+      title: stringValue(meta.linearTitle) ?? stringValue(input.linear_title) ?? stringValue(state.linear_title),
+      url,
+      assignment: assignment ? {
+        status: assignment.status ?? null,
+        targetKind: assignment.targetKind ?? null,
+        targetName: assignment.targetName ?? assignment.agentName ?? assignment.workflowName ?? null,
+        assignedBy: assignment.assignedBy ?? null,
+        assignedAt: assignment.assignedAt ?? null,
+      } : null,
+    };
+  }
+
+  private workspaceContext(workspace: Record<string, unknown>): Record<string, unknown> {
+    return {
+      id: String(workspace._id),
+      name: workspace.name ?? null,
+      status: workspace.status ?? null,
+      repoId: workspace.repoId ?? null,
+      repoName: workspace.repoName ?? null,
+      branch: workspace.branch ?? null,
+      baseBranch: workspace.baseBranch ?? null,
+      worktreePath: workspace.worktreePath ?? null,
+      prUrl: workspace.prUrl ?? null,
+    };
+  }
+
+  private pullRequestContext(pr: Record<string, unknown>): Record<string, unknown> {
+    return {
+      id: pr._id ? String(pr._id) : undefined,
+      number: pr.number ?? null,
+      title: pr.title ?? null,
+      url: pr.url ?? null,
+      status: pr.status ?? null,
+      branch: pr.branch ?? null,
+      baseBranch: pr.baseBranch ?? null,
+      createdAt: pr.createdAt ?? null,
+      updatedAt: pr.updatedAt ?? null,
+      mergedAt: pr.mergedAt ?? null,
+    };
+  }
+
+  private childAgentContext(child: Record<string, unknown>): Record<string, unknown> {
+    return {
+      id: child.id,
+      executionId: child.id,
+      agentName: child.agentName,
+      status: child.status,
+      currentStep: child.currentStep ?? null,
+      durationMs: child.durationMs ?? null,
+      failedNode: child.failedNode ?? null,
+      errorMessage: child.errorMessage ?? null,
+      promptPreview: child.promptPreview ?? '',
+      parentCaller: child.parentCaller ?? null,
+      linkType: child.linkType ?? 'direct',
+    };
+  }
+
+  private artifactContext(artifact: Record<string, unknown>): Record<string, unknown> {
+    const artifactId = stringValue(artifact.artifactId);
+    return {
+      artifactId,
+      filename: artifact.filename ?? null,
+      relativePath: artifact.relativePath ?? null,
+      contentType: artifact.contentType ?? null,
+      sizeBytes: artifact.sizeBytes ?? null,
+      description: artifact.description ?? null,
+      rootType: artifact.rootType ?? null,
+      rootId: artifact.rootId ?? null,
+      spawnContext: artifact.spawnContext ?? null,
+      url: artifactId ? `/api/artifacts/${artifactId}/content` : null,
+      createdAt: artifact.createdAt ?? null,
+    };
+  }
+
+  private workflowStepContext(
+    exec: Record<string, unknown>,
+    workflowNodes: Record<string, unknown>,
+    traces: Record<string, unknown>[],
+  ): Record<string, unknown>[] {
+    const completedSet = new Set(((exec.completedNodes as unknown[]) ?? []).filter(Boolean).map(String));
+    const currentSet = new Set(((exec.currentNodes as unknown[]) ?? []).filter(Boolean).map(String));
+    const runStatus = String(exec.status ?? '').toLowerCase();
+    const failedNode = stringValue(exec.failedNode);
+    const sortedTraces = [...traces].sort((a, b) => {
+      const aTime = new Date((a.startedAt ?? a.completedAt ?? 0) as string | Date).getTime();
+      const bTime = new Date((b.startedAt ?? b.completedAt ?? 0) as string | Date).getTime();
+      return aTime - bTime;
+    });
+    const tracesByNode = new Map<string, Record<string, unknown>[]>();
+    for (const trace of sortedTraces) {
+      const node = stringValue(trace.node);
+      if (!node) continue;
+      const list = tracesByNode.get(node) ?? [];
+      list.push(trace);
+      tracesByNode.set(node, list);
+    }
+
+    return Object.entries(workflowNodes).map(([nodeName, rawNode], index) => {
+      const nodeDef = (rawNode && typeof rawNode === 'object' ? rawNode : {}) as Record<string, unknown>;
+      const nodeTraces = tracesByNode.get(nodeName) ?? [];
+      const firstTrace = nodeTraces[0] ?? null;
+      const lastTrace = nodeTraces[nodeTraces.length - 1] ?? null;
+      const attempts = nodeTraces.length || (completedSet.has(nodeName) || currentSet.has(nodeName) ? 1 : 0);
+      const retryReasons = [...new Set(nodeTraces.map(t => stringValue(t.retryReason)).filter((v): v is string => Boolean(v)))];
+      const traceStatus = stringValue(lastTrace?.status);
+      const status =
+        failedNode === nodeName || traceStatus === 'failed' ? 'failed'
+        : completedSet.has(nodeName) || (runStatus === 'completed' && traceStatus === 'completed') ? 'completed'
+        : currentSet.has(nodeName) && runStatus !== 'completed' ? 'running'
+        : CANCELLED_STATUSES.has(runStatus) && currentSet.has(nodeName) ? 'cancelled'
+        : 'pending';
+      const runtimeContext = (lastTrace?.runtimeContext && typeof lastTrace.runtimeContext === 'object'
+        ? lastTrace.runtimeContext
+        : {}) as Record<string, unknown>;
+      const agentOverrides = (lastTrace?.agentOverrides && typeof lastTrace.agentOverrides === 'object'
+        ? lastTrace.agentOverrides
+        : {}) as Record<string, unknown>;
+      const startedAt = firstTrace?.startedAt ?? null;
+      const completedAt = lastTrace?.completedAt ?? null;
+      const tracedDurationMs = nodeTraces.reduce((total, trace) => {
+        const duration = typeof trace.durationMs === 'number' ? trace.durationMs : 0;
+        return total + duration;
+      }, 0);
+      const elapsedDurationMs = (() => {
+        if (!startedAt) return null;
+        const startMs = new Date(startedAt as string | Date).getTime();
+        if (!Number.isFinite(startMs)) return null;
+        const endMs = completedAt ? new Date(completedAt as string | Date).getTime() : Date.now();
+        if (!Number.isFinite(endMs) || endMs < startMs) return null;
+        return endMs - startMs;
+      })();
+      return {
+        id: nodeName,
+        name: nodeName,
+        index,
+        type: nodeDef.type ?? (nodeDef.agent ? 'agent' : nodeDef.function ? 'code' : 'agent'),
+        agent: nodeDef.agent ?? null,
+        status,
+        attempts,
+        retryReasons,
+        model: runtimeContext.resolvedModel ?? agentOverrides.model ?? null,
+        startedAt,
+        completedAt,
+        durationMs: tracedDurationMs > 0 ? tracedDurationMs : elapsedDurationMs,
+        error: lastTrace?.error ?? (failedNode === nodeName ? exec.errorMessage : null),
+      };
+    });
+  }
+
+  private recentActivity(
+    logs: Record<string, unknown>[],
+    activity: PersistedActivityRow[],
+  ): Record<string, unknown>[] {
+    const logRows = logs.map((log) => ({
+      type: log.type ?? log.event ?? log.category ?? 'log',
+      label: log.message ?? log.content ?? log.tool ?? log.command ?? log.type ?? 'activity',
+      tool: log.tool ?? null,
+      at: log.timestamp ?? log.createdAt ?? null,
+      source: 'execution_log',
+    }));
+    const activityRows = activity.map((row) => ({
+      type: row.type,
+      label: row.content ?? row.tool ?? row.type,
+      agent: row.agent,
+      tool: row.tool ?? null,
+      at: row.at,
+      source: 'agent_activity',
+    }));
+    return [...logRows, ...activityRows]
+      .filter((row) => row.at)
+      .sort((a, b) => new Date(a.at as string | Date).getTime() - new Date(b.at as string | Date).getTime())
+      .slice(-50);
   }
 
   // ── Human Intervention Protocol hook ──────────────────────────────────

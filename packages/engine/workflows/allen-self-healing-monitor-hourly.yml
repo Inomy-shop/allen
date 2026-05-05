@@ -242,17 +242,17 @@ nodes:
       If auto_dispatch is false, record routing recommendations only.
 
       Routing map:
-      - memory_system -> self-healing-memory-repair
-      - tool_integration -> self-healing-tooling-repair
-      - workflow_definition -> self-healing-workflow-repair
-      - agent_prompt or instruction_bug -> self-healing-prompt-instruction-repair
-      - allen_repo -> self-healing-repair-allen
+      - memory_system -> self-healing-repair with repair_area=memory_system
+      - tool_integration -> self-healing-repair with repair_area=tool_integration
+      - workflow_definition -> self-healing-repair with repair_area=workflow_definition
+      - agent_prompt or instruction_bug -> self-healing-repair with repair_area=prompt_instruction
+      - allen_repo -> self-healing-repair with repair_area=allen_repo
       - unknown -> self-healing-incident-triage
 
       Before dispatching, call mcp__allen__allen_monitoring_resolve_repo_path.
       Dispatch with mcp__allen__run_workflow. Pass incident id/fingerprint,
       Linear id/identifier/url, repo_path, source_type, root_cause_area,
-      incident_summary, and evidence.
+      repair_area, incident_summary, and evidence.
 
       After dispatch, call mcp__allen__allen_monitoring_update_incident with
       status=dispatched, dispatch_execution_id, and routing_target. If you do

@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { RotateCcw, Check, Palette, Type, Sparkles, Server, User, Eye,
   Bot, Brain, Zap, Cpu, Atom, Terminal, Code, Rocket, Shield, Hexagon, Flame, Monitor, Moon, Sun,
-  ShieldCheck, Settings,
+  Bell, Keyboard, ShieldCheck,
 } from 'lucide-react';
 import McpServerManager from '../components/settings/McpServerManager';
 import { useAuthStore } from '../stores/authStore';
@@ -26,9 +26,12 @@ const ICON_MAP: Record<string, React.ElementType> = {
 // ── Settings Tabs ──
 
 const TABS = [
-  { id: 'profile', label: 'Profile', icon: User, description: 'Your account', adminOnly: false },
-  { id: 'users', label: 'Users', icon: ShieldCheck, description: 'Team member management', adminOnly: true },
-  { id: 'mcp', label: 'MCP Servers', icon: Server, description: 'External tool integrations', adminOnly: false },
+  { id: 'account', label: 'account', icon: User, adminOnly: false },
+  { id: 'appearance', label: 'appearance', icon: Palette, adminOnly: false },
+  { id: 'shortcuts', label: 'shortcuts', icon: Keyboard, adminOnly: false },
+  { id: 'notifications', label: 'notifications', icon: Bell, adminOnly: false },
+  { id: 'users', label: 'users', icon: ShieldCheck, adminOnly: true },
+  { id: 'mcp', label: 'mcp servers', icon: Server, adminOnly: false },
 ] as const;
 
 type TabId = (typeof TABS)[number]['id'];
@@ -48,9 +51,9 @@ function SectionHeader({ icon: Icon, title }: { icon: React.ElementType; title: 
 
 function ProfileRow({ label, value }: { label: string; value: React.ReactNode }) {
   return (
-    <div className="flex items-center justify-between py-2 border-b border-app last:border-0">
-      <span className="overline">{label}</span>
-      <span className="text-sm text-theme-secondary font-mono">{value}</span>
+    <div className="pref-row">
+      <span className="pref-k">{label}</span>
+      <span className="pref-v">{value}</span>
     </div>
   );
 }
@@ -73,9 +76,13 @@ function ProfileTab() {
 
   if (!user) {
     return (
-      <div className="space-y-6">
-        <h1 className="font-heading text-xl text-theme-primary tracking-wider">Profile</h1>
-        <div className="card p-6 text-sm text-theme-muted font-body">Not signed in.</div>
+      <div className="settings-body">
+        <div className="pref-list">
+          <div className="pref-row">
+            <span className="pref-k">account</span>
+            <span className="pref-v">not signed in</span>
+          </div>
+        </div>
       </div>
     );
   }
@@ -88,52 +95,24 @@ function ProfileTab() {
     .join('');
 
   return (
-    <div className="space-y-6">
-      <div>
-        <h1 className="font-heading text-xl text-theme-primary tracking-wider">Profile</h1>
-        <p className="text-sm text-theme-muted font-body mt-1">Your Allen account</p>
+    <div className="settings-body">
+      <div className="settings-id">
+        <div className="settings-avatar">{initials || '?'}</div>
+        <div className="min-w-0">
+          <div className="settings-name">{user.name}</div>
+          <div className="settings-email">{user.email}</div>
+        </div>
+        <span className={`lib-pill ${user.role === 'admin' ? 'ok' : 'waiting'}`}>{user.role}</span>
       </div>
 
-      {/* Identity card */}
-      <div className="card p-6">
-        <div className="flex items-center gap-5">
-          <div className="w-16 h-16 rounded-sm bg-accent-soft flex items-center justify-center">
-            <span className="font-heading text-xl text-accent-blue tracking-wider">{initials || '?'}</span>
-          </div>
-          <div className="min-w-0 flex-1">
-            <div className="text-lg font-heading text-theme-primary truncate">{user.name}</div>
-            <div className="text-sm text-theme-muted font-mono truncate">{user.email}</div>
-            <div className="mt-2 inline-flex items-center gap-2">
-              <span
-                className={`text-[10px] font-mono uppercase tracking-wider px-2 py-0.5 rounded-sm border ${
-                  user.role === 'admin'
-                    ? 'bg-accent-blue/10 text-accent-blue border-accent-blue/40'
-                    : 'bg-app-muted text-theme-muted border-app'
-                }`}
-              >
-                {user.role}
-              </span>
-              {user.mustResetPassword && (
-                <span className="text-[10px] font-mono uppercase tracking-wider px-2 py-0.5 rounded-sm bg-accent-yellow/10 text-accent-yellow border border-accent-yellow/40">
-                  must reset
-                </span>
-              )}
-            </div>
-          </div>
-        </div>
-      </div>
-
-      {/* Account details */}
-      <div className="card p-5">
-        <SectionHeader icon={User} title="Account" />
-        <div className="space-y-0">
-          <ProfileRow label="Email" value={user.email} />
-          <ProfileRow label="Name" value={user.name} />
-          <ProfileRow label="Role" value={user.role} />
-          <ProfileRow label="User ID" value={<span className="text-[11px]">{user.id}</span>} />
-          <ProfileRow label="Created" value={formatProfileDate(user.createdAt)} />
-          <ProfileRow label="Last Login" value={formatProfileDate(user.lastLoginAt)} />
-        </div>
+      <div className="pref-list">
+        <ProfileRow label="name" value={user.name} />
+        <ProfileRow label="email" value={user.email} />
+        <ProfileRow label="role" value={user.role} />
+        <ProfileRow label="user id" value={<span className="mono text-[11px]">{user.id}</span>} />
+        <ProfileRow label="created" value={formatProfileDate(user.createdAt)} />
+        <ProfileRow label="last login" value={formatProfileDate(user.lastLoginAt)} />
+        {user.mustResetPassword && <ProfileRow label="password" value="reset required" />}
       </div>
     </div>
   );
@@ -142,7 +121,11 @@ function ProfileTab() {
 // ── Users Tab ──
 
 function UsersTab() {
-  return <UsersAdminPage />;
+  return (
+    <div className="settings-body wide">
+      <UsersAdminPage />
+    </div>
+  );
 }
 
 // ── Theme Tab (existing content extracted) ──
@@ -372,17 +355,149 @@ function ThemeTab() {
   );
 }
 
+function SettingsSegment({
+  active,
+  children,
+  onClick,
+}: {
+  active: boolean;
+  children: React.ReactNode;
+  onClick: () => void;
+}) {
+  return (
+    <button type="button" className={`pref-seg ${active ? 'active' : ''}`} onClick={onClick}>
+      {children}
+    </button>
+  );
+}
+
+function AppearanceTab() {
+  const colorMode = useSettingsStore((s) => s.colorMode);
+  const themeName = useSettingsStore((s) => s.themeName);
+  const fontName = useSettingsStore((s) => s.fontName);
+  const customAccent = useSettingsStore((s) => s.customAccent);
+  const agentIcon = useSettingsStore((s) => s.agentIcon);
+  const setColorMode = useSettingsStore((s) => s.setColorMode);
+  const setTheme = useSettingsStore((s) => s.setTheme);
+  const setFont = useSettingsStore((s) => s.setFont);
+  const setCustomAccent = useSettingsStore((s) => s.setCustomAccent);
+  const setAgentIcon = useSettingsStore((s) => s.setAgentIcon);
+  const resetToDefaults = useSettingsStore((s) => s.resetToDefaults);
+  const activeTheme = THEME_PRESETS.find((t) => t.name === themeName) ?? THEME_PRESETS[0];
+  const currentAccent = customAccent ?? activeTheme.colors.accent;
+
+  return (
+    <div className="settings-body">
+      <FontPreloader />
+      <div className="pref-list">
+        <div className="pref-row">
+          <span className="pref-k">theme mode</span>
+          <span className="pref-v">
+            {COLOR_MODE_OPTIONS.map((option) => (
+              <SettingsSegment key={option.value} active={colorMode === option.value} onClick={() => setColorMode(option.value)}>
+                {option.label.toLowerCase()}
+              </SettingsSegment>
+            ))}
+          </span>
+        </div>
+        <div className="pref-row">
+          <span className="pref-k">theme</span>
+          <span className="pref-v">
+            <select className="pref-select" value={themeName} onChange={event => setTheme(event.target.value)}>
+              {THEME_PRESETS.map((preset) => (
+                <option key={preset.name} value={preset.name}>{preset.label}</option>
+              ))}
+            </select>
+          </span>
+        </div>
+        <div className="pref-row">
+          <span className="pref-k">accent</span>
+          <span className="pref-v pref-swatches">
+            {getAccentOptions(colorMode).map((opt) => (
+              <button
+                key={opt.name}
+                type="button"
+                className={`pref-swatch ${currentAccent === opt.color ? 'active' : ''}`}
+                style={{ background: opt.color }}
+                title={opt.label}
+                onClick={() => setCustomAccent(opt.color)}
+              />
+            ))}
+            <button type="button" className="pref-seg" onClick={() => setCustomAccent(null)}>default</button>
+          </span>
+        </div>
+        <div className="pref-row">
+          <span className="pref-k">font</span>
+          <span className="pref-v">
+            <select className="pref-select" value={fontName} onChange={event => setFont(event.target.value)}>
+              {FONT_PRESETS.map((preset) => (
+                <option key={preset.name} value={preset.name}>{preset.label}</option>
+              ))}
+            </select>
+          </span>
+        </div>
+        <div className="pref-row">
+          <span className="pref-k">agent icon</span>
+          <span className="pref-v pref-icons">
+            {AGENT_ICON_PRESETS.map((preset) => {
+              const IconComp = ICON_MAP[preset.icon] ?? Bot;
+              return (
+                <button
+                  key={preset.name}
+                  type="button"
+                  className={`pref-icon ${agentIcon === preset.name ? 'active' : ''}`}
+                  title={preset.label}
+                  onClick={() => setAgentIcon(preset.name)}
+                >
+                  <IconComp className="h-4 w-4" />
+                </button>
+              );
+            })}
+          </span>
+        </div>
+        <div className="pref-row">
+          <span className="pref-k">reset</span>
+          <span className="pref-v">
+            <button type="button" className="pref-seg" onClick={resetToDefaults}>restore defaults</button>
+          </span>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function ShortcutsTab() {
+  return (
+    <div className="settings-body">
+      <div className="pref-list">
+        <div className="pref-row"><span className="pref-k">⌘ K</span><span className="pref-v">command palette</span></div>
+        <div className="pref-row"><span className="pref-k">⌘ N</span><span className="pref-v">new chat</span></div>
+        <div className="pref-row"><span className="pref-k">⌘ /</span><span className="pref-v">focus composer</span></div>
+        <div className="pref-row"><span className="pref-k">G then I</span><span className="pref-v">go to inbox</span></div>
+        <div className="pref-row"><span className="pref-k">G then M</span><span className="pref-v">go to my work</span></div>
+      </div>
+    </div>
+  );
+}
+
+function NotificationsTab() {
+  return (
+    <div className="settings-body">
+      <div className="pref-list">
+        <div className="pref-row"><span className="pref-k">when Allen needs me</span><span className="pref-v">in-app · slack · email</span></div>
+        <div className="pref-row"><span className="pref-k">when a PR is ready to review</span><span className="pref-v">in-app · slack</span></div>
+        <div className="pref-row"><span className="pref-k">when my run finishes</span><span className="pref-v">in-app</span></div>
+        <div className="pref-row"><span className="pref-k">daily digest</span><span className="pref-v">9:00 am</span></div>
+      </div>
+    </div>
+  );
+}
+
 // ── MCP Tab ──
 
 function McpTab() {
   return (
-    <div className="space-y-6">
-      <div>
-        <h1 className="font-heading text-xl text-theme-primary tracking-wider">MCP Servers</h1>
-        <p className="text-sm text-theme-muted font-body mt-1">
-          Connect external tools to the Allen Chat agent via Model Context Protocol servers.
-        </p>
-      </div>
+    <div className="settings-body wide">
       <McpServerManager />
     </div>
   );
@@ -392,7 +507,10 @@ function McpTab() {
 // ── Main Page ──
 
 const TAB_COMPONENTS: Record<TabId, React.FC> = {
-  profile: ProfileTab,
+  account: ProfileTab,
+  appearance: AppearanceTab,
+  shortcuts: ShortcutsTab,
+  notifications: NotificationsTab,
   users: UsersTab,
   mcp: McpTab,
 };
@@ -403,42 +521,38 @@ export default function SettingsPage() {
   const currentUser = useAuthStore((s) => s.user);
   const isAdmin = currentUser?.role === 'admin';
 
-  // If a non-admin lands on an admin-only tab, redirect to profile. We do NOT
-  // auto-redirect on bare /settings anymore — clicking the sidebar's Settings
-  // link should just expand the sub-tab menu in the sidebar without forcing
-  // the user into a specific page. They pick the tab they want themselves.
-  const requested = tab;
+  const requested = tab === 'profile' ? 'account' : (tab ?? 'account');
   const tabDef = TABS.find((t) => t.id === requested);
   const allowed = tabDef && (!tabDef.adminOnly || isAdmin);
-  const activeTab: TabId | null = requested && allowed ? (requested as TabId) : null;
+  const activeTab: TabId = requested && allowed ? (requested as TabId) : 'account';
 
   useEffect(() => {
     if (requested && !allowed) {
-      // Non-admin tried to access an admin-only tab — bounce to profile.
-      navigate('/settings/profile', { replace: true });
+      navigate('/settings/account', { replace: true });
     }
   }, [requested, allowed, navigate]);
 
-  // No tab chosen yet (bare /settings) — show a quiet placeholder so the
-  // user can pick a tab from the sidebar menu.
-  if (!activeTab) {
-    return (
-      <div className="flex-1 flex flex-col items-center justify-center text-center p-6">
-        <div className="w-14 h-14 rounded-xl bg-surface-100 border border-app flex items-center justify-center mb-4">
-          <Settings className="w-6 h-6 text-theme-muted" strokeWidth={1.5} />
-        </div>
-        <h2 className="font-heading text-base text-theme-primary tracking-wide mb-1">Settings</h2>
-        <p className="text-sm text-theme-muted font-body max-w-sm">
-          Pick a setting from the sidebar to get started.
-        </p>
-      </div>
-    );
-  }
-
   const TabContent = TAB_COMPONENTS[activeTab];
+  const visibleTabs = TABS.filter((item) => !item.adminOnly || isAdmin);
 
   return (
-    <div className="flex-1 overflow-auto p-6">
+    <div className="content scroll-hide" data-screen-label="settings">
+      <div className="page-head">
+        <h1>settings</h1>
+        <p className="sub">your preferences</p>
+        <nav className="topfilter-tabs">
+          {visibleTabs.map((item) => (
+            <button
+              key={item.id}
+              className={`tft ${activeTab === item.id ? 'active' : ''}`}
+              onClick={() => navigate(`/settings/${item.id}`)}
+              type="button"
+            >
+              {item.label}
+            </button>
+          ))}
+        </nav>
+      </div>
       <TabContent />
     </div>
   );

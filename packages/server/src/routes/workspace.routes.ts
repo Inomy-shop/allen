@@ -30,6 +30,11 @@ export function workspaceRoutes(db: Db): Router {
     } catch (err: unknown) { res.status(500).json({ error: (err as Error).message }); }
   });
 
+  router.get('/:id/chats', async (req: Request, res: Response) => {
+    try { res.json(await manager.listChats(p(req, 'id'))); }
+    catch (err: unknown) { res.status(500).json({ error: (err as Error).message }); }
+  });
+
   router.post('/', async (req: Request, res: Response) => {
     try {
       const { repoId, repoName, repoPath, branch, baseBranch, name } = req.body;

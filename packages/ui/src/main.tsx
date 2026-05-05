@@ -14,8 +14,8 @@ import RepoManagerPage from './pages/RepoManagerPage';
 import SettingsPage from './pages/SettingsPage';
 import LearningsPage from './pages/LearningsPage';
 import ChatPage from './pages/ChatPage';
+import ThreadsPage from './pages/ThreadsPage';
 import WorkspaceListPage from './pages/WorkspaceListPage';
-import WorkspaceDetailPage from './pages/WorkspaceDetailPage';
 import PullRequestListPage from './pages/PullRequestListPage';
 import PullRequestDetailPage from './pages/PullRequestDetailPage';
 import CronManagerPage from './pages/CronManagerPage';
@@ -49,10 +49,11 @@ const router = createBrowserRouter([
           { path: 'executions/:id', element: <ExecutionDetailPage /> },
           { path: 'agents', element: <RoleManagerPage /> },
           { path: 'teams', element: <Navigate to="/agents" replace /> },
+          { path: 'threads', element: <ThreadsPage /> },
           { path: 'chat', element: <ChatPage /> },
           { path: 'chat/:sessionId', element: <ChatPage /> },
           { path: 'workspaces', element: <WorkspaceListPage /> },
-          { path: 'workspaces/:id', element: <WorkspaceDetailPage /> },
+          { path: 'workspaces/:id', element: <WorkspaceListPage /> },
           { path: 'pull-requests', element: <PullRequestListPage /> },
           { path: 'pull-requests/:id', element: <PullRequestDetailPage /> },
           { path: 'crons', element: <CronManagerPage /> },
