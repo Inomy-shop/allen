@@ -50,24 +50,22 @@ export function XTerminal({ workspaceId, terminalId = 'default', className, init
       fontFamily: "'JetBrainsMono Nerd Font', 'JetBrains Mono', 'Fira Code', 'SF Mono', Menlo, monospace",
       lineHeight: 1.3,
       letterSpacing: 0,
-      // Linear-night palette — matches the v2 dark-mode tokens (surface
-       // #16171B / accent #7170FF) so the terminal blends into the IDE
-       // shell. Terminals stay dark in both light and dark page themes
-       // since terminals are universally expected to be dark.
+      // Prototype dark palette. Terminals stay dark in both light and
+      // dark page themes since terminals are universally expected to be dark.
       theme: {
-        background: '#16171b',
-        foreground: '#c2c3c8',
-        cursor: '#7170ff',
-        cursorAccent: '#16171b',
-        selectionBackground: '#7170ff44',
-        selectionForeground: '#f4f4f5',
-        black: '#34353c',
-        red: '#f85555',
-        green: '#34c782',
-        yellow: '#f5ad3f',
-        blue: '#7170ff',
-        magenta: '#c084fc',
-        cyan: '#38bdf8',
+        background: '#0d1116',
+        foreground: '#a7abb1',
+        cursor: '#5ca4ff',
+        cursorAccent: '#0d1116',
+        selectionBackground: '#5ca4ff44',
+        selectionForeground: '#dbdee2',
+        black: '#181c22',
+        red: '#fa6863',
+        green: '#43c07a',
+        yellow: '#f2a618',
+        blue: '#5ca4ff',
+        magenta: '#bc88f4',
+        cyan: '#00b8e1',
         white: '#c2c3c8',
         brightBlack: '#5c5d63',
         brightRed: '#ff7676',

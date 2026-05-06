@@ -63,9 +63,9 @@ On first boot, it backfills the most recent 24 hours.
    and Linear issues.
 7. `allen-incident-router` creates or updates Linear issues through Linear MCP
    tools. Backend code does not directly create the Linear ticket.
-8. `allen-incident-router` chooses the repair route and starts the selected
-   built-in repair workflow through Allen MCP `run_workflow`.
-9. The repair workflow creates an isolated worktree, diagnoses the issue,
+8. `allen-incident-router` chooses the bug-fix route and starts the
+   `bug-investigate-and-fix` workflow through Allen MCP `run_workflow`.
+9. The bug-fix workflow creates an isolated worktree, diagnoses the issue,
    implements the fix, validates it, and opens a PR.
 10. Agents write Linear metadata, routing, dispatch execution ID, evidence, and
     status back to `monitoring_incidents`.
@@ -160,22 +160,18 @@ The following workflows are seeded from `packages/engine/workflows/`:
 
 - `self-healing-incident-triage`
 - `allen-self-healing-monitor-hourly`
-- `self-healing-repair-allen`
-- `self-healing-memory-repair`
-- `self-healing-tooling-repair`
-- `self-healing-workflow-repair`
-- `self-healing-prompt-instruction-repair`
+- `bug-investigate-and-fix`
 
 Routing defaults:
 
 | Root Cause Area | Repair Target |
 |---|---|
-| `memory_system` | `self-healing-memory-repair` |
-| `tool_integration` | `self-healing-tooling-repair` |
-| `workflow_definition` | `self-healing-workflow-repair` |
-| `agent_prompt` | `self-healing-prompt-instruction-repair` |
-| `instruction_bug` | `self-healing-prompt-instruction-repair` |
-| `allen_repo` | `self-healing-repair-allen` |
+| `memory_system` | `bug-investigate-and-fix` |
+| `tool_integration` | `bug-investigate-and-fix` |
+| `workflow_definition` | `bug-investigate-and-fix` |
+| `agent_prompt` | `bug-investigate-and-fix` |
+| `instruction_bug` | `bug-investigate-and-fix` |
+| `allen_repo` | `bug-investigate-and-fix` |
 | `unknown` | `allen-incident-router` |
 
 ## API
@@ -211,5 +207,5 @@ workflow.
   workflow.
 - Evidence is redacted before storage in incidents or Linear tickets.
 - The hourly workflow has bounded record and ticket limits.
-- Agents decide whether to dispatch; repair workflows work in isolated
+- Agents decide whether to dispatch; bug-fix workflows work in isolated
   worktrees and open PRs rather than editing the base repo directly.

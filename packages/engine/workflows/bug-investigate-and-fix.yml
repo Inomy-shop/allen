@@ -1,17 +1,17 @@
 name: bug-investigate-and-fix
 description: >
-  Lean bug fix workflow: investigate the root cause, distinguish from
-  feature-in-disguise, create a worktree, dispatch the fix via the engineering-lead
-  orchestrator, write a regression test, run the full suite (no skip flag —
-  bug fixes are regression-risk), update tech docs, security-aware code
-  review, open a PR, post a summary.
+  Lean bug fix workflow: create an isolated worktree, investigate the
+  root cause, pause for human approval, dispatch the fix via the engineering-lead
+  orchestrator, write targeted unit/integration acceptance tests, skip the
+  slow regression suite, validate the fix against the root cause,
+  run security-aware code review, open a PR, post a summary.
 
-  Human touches per run (steady state): 1-2 total —
+  Human touches per run (steady state): 2 total —
     1. Initial bug report
-    2. PR merge on GitHub (external)
+    2. Root-cause/fix-scope approval before implementation
 
-  Escalation touches when investigate flags feature-in-disguise, when QA
-  can't triage a failure, or when reproduction isn't inferrable.
+  Additional escalation touches happen when QA can't triage a failure, when
+  validation fails repeatedly, when review blocks, or when PR creation fails.
 
 version: 1
 
@@ -53,73 +53,12 @@ input:
     description: User ID who started the run (for Slack DM routing of interventions).
 
 nodes:
-  investigate:
-    agent: bug-investigator
-    resume_on_retry: true
-    prompt: |
-      Investigate this bug and find the root cause.
-
-      BUG REPORT: {{bug_report}}
-      REPO PATH: {{repo_path}}
-      {{#if related_pr}}
-      RELATED PR: {{related_pr}}
-      {{/if}}
-
-      Follow your four-rule contract:
-        1. Reproduce first — run the reported steps in a terminal.
-        2. Walk the call stack — don't guess.
-        3. Distinguish bug from feature-in-disguise — set
-           looks_like_a_feature=true if the root cause is "the code was
-           never specified to handle this case."
-        4. Identify minimal fix scope — no while-we're-here cleanup.
-
-      End with a JSON block: root_cause, files_to_touch[], confidence,
-      scope, fix_description, looks_like_a_feature, reproduction_steps,
-      affected_components, security_implications.
-    outputs:
-      investigate_output: "The investigator's full JSON output."
-      files_to_touch: "Files the fix needs to touch."
-      looks_like_a_feature: "Boolean — if true, workflow pauses for user decision."
-      root_cause: "One-paragraph root cause."
-      fix_description: "One-paragraph fix description."
-
-  feature_escalation_human:
-    type: human
-    fields:
-      - name: decision
-        label: "This looks like a feature, not a bug. What do you want to do?"
-        type: select
-        options: [continue_as_bug, start_feature_workflow, cancel]
-        required: true
-    outputs:
-      decision: "continue_as_bug | start_feature_workflow | cancel"
-    prompt: |
-      ⚠ The bug-investigator determined this is actually a feature request,
-      not a bug fix. The code is behaving as specified — but the
-      specification doesn't cover this case.
-
-      Original bug report:
-      {{bug_report}}
-
-      Root cause:
-      {{root_cause}}
-
-      Proposed fix (as a bug):
-      {{fix_description}}
-
-      Options:
-        continue_as_bug        → proceed anyway with the minimal fix
-        start_feature_workflow → cancel this run, open a new
-                                 feature-plan-and-implement workflow for
-                                 proper design review
-        cancel                 → abandon the workflow
-
-  # Dedicated workspace-creation node — runs ONCE before implement. The
-  # engineering-lead used to create the workspace inline in its prompt,
-  # but that coupled dispatch to workspace setup and caused duplicate
-  # worktrees on retry. Now the code-node creates the worktree exactly
-  # once on the forward path; retries back to `implement` skip this node
-  # entirely and reuse the existing worktree_path carried in state.
+  # Dedicated workspace-creation node — runs ONCE before any bug-fix
+  # agent receives the repo. Investigation is read-only, but it still
+  # runs in the isolated worktree so every downstream command and any
+  # accidental write stays out of the main clone. Retries back to
+  # `implement` skip this node entirely and reuse the existing
+  # worktree_path carried in state.
   create_workspace:
     type: code
     function: create-workspace
@@ -137,6 +76,95 @@ nodes:
       status: "Workspace setup status — 'active' or 'running' on success."
       repo_path: "Alias of worktree_path — overwrites the input repo_path so downstream agents operate inside the worktree."
 
+  investigate:
+    agent: bug-investigator
+    resume_on_retry: true
+    prompt: |
+      Investigate this bug and find the root cause. This is a READ-ONLY
+      investigation step: do not edit files. Implementation happens in the
+      downstream engineering-lead node.
+
+      BUG REPORT: {{bug_report}}
+      WORKTREE PATH: {{worktree_path}}
+      {{#if related_pr}}
+      RELATED PR: {{related_pr}}
+      {{/if}}
+      {{#if retry_context}}
+      HUMAN FEEDBACK FROM PRE-IMPLEMENTATION APPROVAL:
+      {{retry_context}}
+      {{/if}}
+
+      Follow your four-rule contract:
+        1. Reproduce first — run the reported steps in a terminal from
+           {{worktree_path}}.
+        2. Walk the call stack — don't guess.
+        3. If the issue appears to be a design gap rather than a defect,
+           say so in the root_cause and fix_description so the approval
+           gate can decide whether to continue.
+        4. Identify minimal fix scope — no while-we're-here cleanup.
+
+      End with a JSON block: root_cause, files_to_touch[], confidence,
+      scope, fix_description, reproduction_steps,
+      affected_components, security_implications.
+    outputs:
+      investigate_output: "The investigator's full JSON output."
+      files_to_touch: "Files the fix needs to touch."
+      confidence: "Float 0-1 confidence in the diagnosed root cause."
+      scope: "S | M | L | XL fix scope."
+      root_cause: "One-paragraph root cause."
+      fix_description: "One-paragraph fix description."
+      reproduction_steps: "Steps or commands used to reproduce or infer the bug."
+      affected_components: "Components touched by the bug."
+      security_implications: "none | low | medium | high with explanation."
+
+  implementation_approval_human:
+    type: human
+    fields:
+      - name: approval_decision
+        label: "Approve this root cause and fix scope?"
+        type: select
+        options: [approve, request_changes, cancel]
+        required: true
+      - name: approval_feedback
+        label: "Feedback or reason (optional for approval)"
+        type: textarea
+        required: false
+    outputs:
+      approval_decision: "approve | request_changes | cancel"
+      approval_feedback: "Feedback passed back to the investigator or implementation lead."
+    prompt: |
+      Review the diagnosed root cause and proposed fix scope before any
+      implementation agent starts changing code.
+
+      Original bug report:
+      {{bug_report}}
+
+      Root cause:
+      {{root_cause}}
+
+      Proposed fix (as a bug):
+      {{fix_description}}
+
+      Confidence: {{confidence}}
+      Scope: {{scope}}
+
+      Reproduction:
+      {{reproduction_steps}}
+
+      Affected components:
+      {{affected_components}}
+
+      Security implications:
+      {{security_implications}}
+
+      Files proposed for implementation:
+      {{files_to_touch}}
+
+      Options:
+        approve         → start implementation with this root cause and scope
+        request_changes → send feedback back to investigation before coding
+        cancel          → abandon the workflow before implementation
+
   implement:
     agent: engineering-lead
     # Resume across retries (qa-fail, code-review-fail) so engineering-lead
@@ -149,15 +177,22 @@ nodes:
     # again. It groups files by specialist and dispatches via spawn_agent.
     prompt: |
       MODE: 2 (execute — fix dispatch into an existing worktree)
+      SCOPE: implementation_only
+      REQUIREMENT SOURCE: diagnosed_bug_fix
+      DOWNSTREAM GATES: qa_handled_downstream, review_handled_downstream, pr_handled_downstream
 
       You are the Engineering Lead dispatching a bug fix. The workspace
       has ALREADY been created upstream — reuse it. Group the files
       listed below by specialty, spawn the right specialist(s), collect
       results. You DO NOT write code.
 
+      BUG REPORT: {{bug_report}}
       BUG ROOT CAUSE: {{root_cause}}
       FIX DESCRIPTION: {{fix_description}}
       FILES TO TOUCH:  {{files_to_touch}}
+      AFFECTED COMPONENTS: {{affected_components}}
+      SECURITY IMPLICATIONS: {{security_implications}}
+      HUMAN APPROVAL FEEDBACK: {{approval_feedback}}
 
       EXISTING WORKSPACE (do NOT create a new one):
         worktree_path: {{worktree_path}}
@@ -168,17 +203,36 @@ nodes:
       Step-by-step:
         1. DO NOT call create_workspace. The worktree above already
            exists — all specialists must work inside {{worktree_path}}.
-        2. Group files_to_touch by specialty (backend-developer /
+        2. First produce a concrete implementation plan before spawning
+           specialists. The plan must include:
+             - acceptance_criteria[] derived from bug_report, root_cause,
+               and fix_description
+             - ordered plan_items[] with owner specialty, target files, and
+               expected behavior change
+             - test_strategy focused on unit/integration acceptance checks,
+               not slow regression-suite execution
+             - risk_checks for security, data, concurrency, and edge cases
+        3. Group files_to_touch by specialty (backend-developer /
            frontend-developer / devops-engineer / security-specialist /
-           documentation-writer). Most bug fixes touch one subsystem — a
-           single specialist is the common case.
-        3. For each specialist, spawn_agent with repo_path={{worktree_path}}
+           test-writer for test-only fixes). Most bug fixes touch one
+           subsystem — a single specialist is the common case. Do not spawn
+           documentation-writer in this workflow; docs are not part of this
+           lean bug-fix lane unless a doc file is explicitly part of the
+           root-cause fix.
+        4. For each specialist, spawn_agent with repo_path={{worktree_path}}
            and a prompt containing: root_cause, fix_description, the
-           specific files they own, and the worktree path.
-        4. Wait for each spawn via wait_for_execution. On failure, retry
+           relevant plan_items, acceptance_criteria, specific files they
+           own, security_implications, approval_feedback, and the worktree path.
+        5. Wait for each spawn via wait_for_execution. On failure, retry
            that specialist ONCE with the error output as context.
-        5. Emit the MODE 2 JSON output block with specialists_used,
-           files_changed, any_failures, failure_details. Do NOT re-emit
+        6. Self-judge the completed work against every plan item and
+           acceptance criterion before returning. If any plan item or
+           acceptance criterion is not implemented, retry the responsible
+           specialist once or set any_failures=true with exact details.
+        7. Emit the MODE 2 JSON output block with implementation_plan_json,
+           acceptance_criteria, plan_completion_checklist, self_judge_verdict,
+           specialists_used, files_changed, any_failures, failure_details.
+           any_failures MUST be a JSON boolean, not a string. Do NOT re-emit
            worktree_path / branch_name / workspace_id — the upstream
            create_workspace node already put those in state; downstream
            nodes read them directly from there.
@@ -187,12 +241,19 @@ nodes:
         - NEVER edit files yourself. Use spawn_agent for every change.
         - ALWAYS pass repo_path={{worktree_path}} to every spawn_agent call.
         - NEVER call create_workspace — the workspace is already provisioned.
+        - Do not create PRD/HLD/LLD for this node. This is a diagnosed bug
+          workflow; bug_report + root_cause + fix_description + files_to_touch
+          are the binding source of truth.
 
       {{#if retry_context}}
       RETRY FEEDBACK:
       {{retry_context}}
       {{/if}}
     outputs:
+      implementation_plan_json: "Structured fix plan with acceptance_criteria, plan_items, test_strategy, and risk_checks."
+      acceptance_criteria: "Concrete acceptance criteria derived from the bug report and root cause."
+      plan_completion_checklist: "Per-plan-item implementation status and evidence."
+      self_judge_verdict: "pass | fail — engineering-lead's self-check that all plan items and acceptance criteria were implemented."
       files_changed: "List of files changed by the fix."
       any_failures: "Boolean — true if any specialist returned a non-recoverable failure."
       failure_details: "Structured details per failing specialist. Empty on success."
@@ -203,27 +264,33 @@ nodes:
     retries: 1
     prompt: |
       You are the QA orchestrator. Drive the ENTIRE quality loop in one
-      call: spawn test-writer to write a regression test that would fail
-      without the fix, run build + lint + all tests, loop until green
-      or fail. Bug workflow ALWAYS runs the full regression suite — no
-      skip flag.
+      call: spawn test-writer to write targeted unit/integration tests for
+      the acceptance criteria, run build + lint + relevant unit/integration
+      tests, loop until green or fail. Do NOT run the slow regression suite
+      for this workflow.
 
       BUG REPORT: {{bug_report}}
       ROOT CAUSE: {{root_cause}}
       FIX DESCRIPTION: {{fix_description}}
+      IMPLEMENTATION PLAN: {{implementation_plan_json}}
+      ACCEPTANCE CRITERIA: {{acceptance_criteria}}
+      DEVELOPER SELF-JUDGE: {{self_judge_verdict}}
+      PLAN COMPLETION CHECKLIST: {{plan_completion_checklist}}
       FILES CHANGED: {{files_changed}}
       WORKTREE PATH: {{worktree_path}}
-      SKIP REGRESSION: false
+      TEST POLICY: unit_and_integration_acceptance_only
 
       Follow your five-rule contract:
-        1. Spawn test-writer with the bug context. Ask it to write a
-           regression test that would fail without the fix. Tag it
-           @unit or @integration — NOT @regression (that's for slow
-           pre-existing tests, and this new one must always run).
-        2. Run build + lint + full test suite inside {{worktree_path}}.
-        3. Verify the regression test actually catches the bug — if
-           the test passes WITHOUT the fix applied, test-writer wrote
-           a non-regression test and must rewrite.
+        1. Spawn test-writer with the bug context, implementation plan,
+           files changed, and acceptance_criteria. Ask it to write or
+           update targeted unit/integration tests that prove every
+           acceptance criterion.
+        2. Run build + lint + relevant unit tests and integration tests
+           inside {{worktree_path}}. Do not run slow regression packs,
+           slow e2e packs, or tests tagged slow/regression.
+        3. Verify acceptance coverage: every acceptance criterion must map
+           to at least one passing unit or integration test, or an explicit
+           no-test-setup explanation when the repo has no test framework.
         4. Loop until green (max 3 cycles).
         5. Emit your structured JSON verdict.
 
@@ -235,50 +302,93 @@ nodes:
       {{/if}}
     outputs:
       qa_verdict: "pass | fail | escalate"
-      test_files: "List of test files produced."
-      regression_test_file: "Path to the new regression test file."
-      regression_test_summary: "One paragraph describing what the test asserts."
+      build: "pass | fail"
+      lint: "pass | fail"
+      unit_tests: "pass | fail"
+      integration_tests: "pass | fail | skipped-no-infra"
+      regression_tests: "skipped-by-policy"
+      test_files: "List of unit/integration test files produced or updated."
+      verification_test_files: "List of targeted unit/integration tests used to prove acceptance criteria."
+      verification_test_summary: "One paragraph describing what the acceptance tests assert."
+      covered_acceptance_criteria: "Acceptance criteria covered by passing unit/integration tests."
+      uncovered_acceptance_criteria: "Acceptance criteria not covered by passing unit/integration tests."
       cycles_used: "Number of write-run-verify cycles."
       failure_target: "engineering-lead | test-writer | null"
       failure_details: "Details when verdict is fail or escalate."
 
-  update_docs:
-    agent: documentation-writer
+  implementation_validator:
+    agent: implementation-validator
     resume_on_retry: true
+    retries: 1
     prompt: |
-      MODE: update_docs
-
-      Update the in-repo technical documentation to reflect the bug fix.
-      For most bug fixes this is a small update — a behaviour note, a
-      corrected example, or nothing if the docs don't describe the
-      affected module.
+      Validate that the final bug-fix diff fully satisfies the actual bug
+      report and the diagnosed root cause. Treat the BUG REPORT + ROOT CAUSE
+      + FIX DESCRIPTION as the source-of-truth requirement for this bug run.
 
       WORKTREE PATH: {{worktree_path}}
-      FILES CHANGED: {{files_changed}}
-      BUG ROOT CAUSE: {{root_cause}}
+      BUG REPORT: {{bug_report}}
+      ROOT CAUSE: {{root_cause}}
       FIX DESCRIPTION: {{fix_description}}
+      IMPLEMENTATION PLAN: {{implementation_plan_json}}
+      ACCEPTANCE CRITERIA: {{acceptance_criteria}}
+      DEVELOPER SELF-JUDGE: {{self_judge_verdict}}
+      PLAN COMPLETION CHECKLIST: {{plan_completion_checklist}}
+      FILES CHANGED: {{files_changed}}
+      ACCEPTANCE TESTS: {{verification_test_files}} — {{verification_test_summary}}
+      COVERED ACCEPTANCE CRITERIA: {{covered_acceptance_criteria}}
+      UNCOVERED ACCEPTANCE CRITERIA: {{uncovered_acceptance_criteria}}
+      QA VERDICT: {{qa_verdict}}
 
-      Follow your 7-rule contract. Graceful no-op if there are no docs
-      to update.
+      Run your blocking-checks against the current diff in the worktree:
+        - the diff fixes the diagnosed root cause, not only the visible symptom
+        - every implementation plan item is reflected in the diff or marked
+          unnecessary with evidence
+        - every acceptance criterion is covered by a passing unit or
+          integration test, or has a valid no-test-framework explanation
+        - the changed files are the minimal files needed for that root cause
+        - no unrelated scope creep was introduced
+        - security-sensitive paths have explicit handling if the bug touches
+          auth, authorization, secrets, crypto, user input, or data exposure
+
+      End with your normal structured JSON block. Use:
+        prd_satisfied=true only if the bug report and root cause are fully
+        satisfied by the diff and unit/integration acceptance tests.
+        blocking_violations for anything that could leave the root cause
+        unfixed or partially fixed.
+
+      {{#if retry_context}}
+      RETRY FEEDBACK from a previous validator loop:
+      {{retry_context}}
+      {{/if}}
     outputs:
-      docs_updated: "Boolean."
-      doc_files: "Files updated."
+      prd_satisfied: "Boolean — true only when the bug report/root cause is fully fixed."
+      blocking_violations: "Array of blocking violations that leave the bug partially or incorrectly fixed."
+      informational_deviations: "Non-blocking notes about implementation drift or minor cleanup opportunities."
+      confidence: "Float 0-1."
 
   code_review:
     agent: code-reviewer
     resume_on_retry: true
     retries: 1
     prompt: |
-      Review the bug fix diff in the worktree, INCLUDING doc changes.
+      Review the bug fix diff in the worktree.
 
       WORKTREE PATH: {{worktree_path}}
       BRANCH: {{branch_name}}
       FILES CHANGED: {{files_changed}}
+      BUG REPORT: {{bug_report}}
       BUG ROOT CAUSE: {{root_cause}}
+      FIX DESCRIPTION: {{fix_description}}
+      IMPLEMENTATION PLAN: {{implementation_plan_json}}
+      ACCEPTANCE CRITERIA: {{acceptance_criteria}}
+      ACCEPTANCE TESTS: {{verification_test_files}} — {{verification_test_summary}}
+      VALIDATOR VERDICT: prd_satisfied={{prd_satisfied}}
+      VALIDATOR BLOCKERS: {{blocking_violations}}
 
       Run your full 15-point rubric including security checklist. Focus on:
         - Does the fix actually address the root cause (not just the symptom)?
-        - Is the regression test meaningful?
+        - Does the diff implement the plan without unrelated scope creep?
+        - Are the unit/integration acceptance tests meaningful?
         - Does the fix introduce any security regression?
         - Does the fix introduce any new deviation from the repo's conventions?
 
@@ -293,6 +403,7 @@ nodes:
       review_verdict: "APPROVED or REQUEST_CHANGES"
       review_feedback: "Markdown review notes."
       security_findings: "Array of security issues."
+      doc_drift_findings: "Array of doc drift notes. Empty when no docs changed."
 
   open_pr:
     agent: pr-creator
@@ -307,7 +418,11 @@ nodes:
       BUG REPORT: {{bug_report}}
       ROOT CAUSE: {{root_cause}}
       FIX DESCRIPTION: {{fix_description}}
-      REGRESSION TEST: {{regression_test_file}} — {{regression_test_summary}}
+      IMPLEMENTATION PLAN: {{implementation_plan_json}}
+      ACCEPTANCE CRITERIA: {{acceptance_criteria}}
+      ACCEPTANCE TESTS: {{verification_test_files}} — {{verification_test_summary}}
+      VALIDATOR VERDICT: prd_satisfied={{prd_satisfied}}
+      VALIDATOR BLOCKERS: {{blocking_violations}}
 
       CODE REVIEW SUMMARY: {{review_feedback}}
       SECURITY FINDINGS: {{security_findings}}
@@ -316,7 +431,8 @@ nodes:
       Follow your PR-creation contract: stage, commit with `fix: ...`
       message, push, gh pr create, handle errors at each step, and
       return structured JSON. Include bug report, root cause, fix
-      description, regression test path, security findings, and
+      description, acceptance criteria, unit/integration test evidence,
+      security findings, and
       verification steps in the PR body.
     outputs:
       pr_url: "The created (or reused) PR URL, or null on failure."
@@ -336,9 +452,9 @@ nodes:
         options: [retry_with_feedback, override_and_continue, abandon]
         required: true
       - name: feedback
-        label: "Feedback for the agent (required for retry)"
+        label: "Feedback or reason"
         type: textarea
-        required: false
+        required: true
     outputs:
       decision: "retry_with_feedback | override_and_continue | abandon"
       feedback: "Free-text feedback passed to the agent on retry"
@@ -352,13 +468,20 @@ nodes:
 
       QA VERDICT:        {{qa_verdict}}
       QA failure details: {{failure_details}}
+      VALIDATOR:         prd_satisfied={{prd_satisfied}}
+      VALIDATOR BLOCKERS: {{blocking_violations}}
       CODE REVIEW:       {{review_verdict}}
       CODE REVIEW NOTES: {{review_feedback}}
+      PR STATUS:         {{status}}
+      PR ERROR:          {{error}}
 
       Your decision:
         retry_with_feedback  — loop back to `implement` with your feedback.
-        override_and_continue — skip the failing stage (qa → update_docs
-                               or code_review → open_pr).
+                               If PR creation failed, retry PR creation.
+        override_and_continue — continue past the failing stage only when
+                               you accept the risk (qa → validator,
+                               validator → code_review, code_review → PR,
+                               PR failure → final partial summary).
         abandon              — end the run; artifacts so far are preserved.
 
   summary:
@@ -373,16 +496,23 @@ nodes:
       ROOT CAUSE: {{root_cause}}
       FIX DESCRIPTION: {{fix_description}}
       PR URL: {{pr_url}}
+      PR STATUS: {{status}}
+      PR ERROR: {{error}}
       BRANCH: {{branch_name}}
       WORKTREE PATH: {{worktree_path}}
       FILES CHANGED: {{files_changed}}
-      REGRESSION TEST: {{regression_test_file}}
+      IMPLEMENTATION PLAN: {{implementation_plan_json}}
+      ACCEPTANCE CRITERIA: {{acceptance_criteria}}
+      ACCEPTANCE TESTS: {{verification_test_files}}
+      TEST SUMMARY: {{verification_test_summary}}
+      VALIDATOR VERDICT: prd_satisfied={{prd_satisfied}}
+      VALIDATOR BLOCKERS: {{blocking_violations}}
       CODE REVIEW: {{review_feedback}}
       SECURITY FINDINGS: {{security_findings}}
 
       Follow your Mode 2 BUG contract: one-line bug, root cause, fix
-      file-by-file, regression test assertion, security notes, how to
-      verify manually.
+      file-by-file, implementation plan completion, acceptance criteria,
+      unit/integration test evidence, security notes, how to verify manually.
 
       End with a JSON block per your Mode 2 output contract.
     outputs:
@@ -391,35 +521,40 @@ nodes:
       workflow_verdict: "success or partial_success_with_manual_review"
 
 edges:
-  - { from: START, to: investigate }
-  # Forward paths to implementation go through `create_workspace` so the
-  # worktree is provisioned exactly once per run. Retry edges loop back
-  # directly to `implement` (see below) and reuse the existing worktree.
-  - { from: investigate, to: create_workspace, condition: "looks_like_a_feature == false" }
-  - { from: investigate, to: feature_escalation_human, condition: "looks_like_a_feature == true" }
-  # Honour the user's decision. Before this split, every choice
-  # unconditionally advanced to `implement`, so `start_feature_workflow`
-  # and `cancel` silently behaved like `continue_as_bug`.
-  - { from: feature_escalation_human, to: create_workspace, condition: "decision == 'continue_as_bug'" }
-  - { from: feature_escalation_human, to: END,       condition: "decision == 'start_feature_workflow'" }
-  - { from: feature_escalation_human, to: END,       condition: "decision == 'cancel'" }
-  - { from: create_workspace, to: implement }
-  - { from: implement, to: qa }
-  - { from: qa, to: update_docs, condition: "qa_verdict == 'pass'" }
+  # Forward paths start by provisioning the worktree exactly once. Retry
+  # edges loop back directly to `implement` (see below) and reuse the
+  # existing worktree.
+  - { from: START, to: create_workspace }
+  - { from: create_workspace, to: investigate }
+  - { from: investigate, to: implementation_approval_human }
+  - { from: implementation_approval_human, to: implement, condition: "approval_decision == 'approve'" }
+  - { from: implementation_approval_human, to: investigate, condition: "approval_decision == 'request_changes'", max_retries: 2, retry_context: "Human requested investigation changes before implementation:\n{{approval_feedback}}" }
+  - { from: implementation_approval_human, to: END, condition: "approval_decision == 'cancel'" }
+  - { from: implementation_approval_human, to: escalation_review, condition: "approval_decision == 'request_changes' AND __retry_exhausted_from == 'implementation_approval_human'" }
+  - { from: implement, to: qa, condition: "any_failures == false" }
+  - { from: implement, to: escalation_review, condition: "any_failures == true" }
+  - { from: qa, to: implementation_validator, condition: "qa_verdict == 'pass'" }
   - { from: qa, to: implement, condition: "qa_verdict == 'fail'", max_retries: 2, retry_context: "QA failed — build/lint/tests broken:\n{{failure_details}}" }
   - { from: qa, to: escalation_review, condition: "qa_verdict == 'escalate'" }
   # Retry-exhaustion fallbacks (guarded by __retry_exhausted_from so they
   # only fire AFTER the retry edge's budget is spent — see engine.ts).
   - { from: qa,          to: escalation_review, condition: "qa_verdict == 'fail' AND __retry_exhausted_from == 'qa'" }
+  - { from: implementation_validator, to: escalation_review, condition: "prd_satisfied != true AND __retry_exhausted_from == 'implementation_validator'" }
   - { from: code_review, to: escalation_review, condition: "review_verdict == 'REQUEST_CHANGES' AND __retry_exhausted_from == 'code_review'" }
-  - { from: update_docs, to: code_review }
+  - { from: implementation_validator, to: code_review, condition: "prd_satisfied == true" }
+  - { from: implementation_validator, to: implement, condition: "prd_satisfied != true", max_retries: 2, retry_context: "Validator found root-cause/blocking violations:\n{{blocking_violations}}" }
   - { from: code_review, to: open_pr, condition: "review_verdict == 'APPROVED'" }
   - { from: code_review, to: implement, condition: "review_verdict == 'REQUEST_CHANGES'", max_retries: 2, retry_context: "Review feedback:\n{{review_feedback}}" }
-  - { from: open_pr, to: summary }
+  - { from: open_pr, to: summary, condition: "status == 'created' OR status == 'reused_existing'" }
+  - { from: open_pr, to: escalation_review, condition: "status == 'failed'" }
   - { from: summary, to: END }
 
   # escalation_review outgoing
   - { from: escalation_review, to: END,         condition: "decision == 'abandon'" }
-  - { from: escalation_review, to: implement,   condition: "decision == 'retry_with_feedback'", retry_context: "Human intervened on bug-fix failure. Feedback:\n{{feedback}}" }
-  - { from: escalation_review, to: update_docs, condition: "decision == 'override_and_continue' AND (qa_verdict == 'escalate' OR qa_verdict == 'fail')" }
+  - { from: escalation_review, to: investigate, condition: "decision == 'retry_with_feedback' AND __retry_exhausted_from == 'implementation_approval_human'", retry_context: "Human intervened on pre-implementation approval feedback:\n{{feedback}}" }
+  - { from: escalation_review, to: implement,   condition: "decision == 'retry_with_feedback' AND (any_failures == true OR qa_verdict == 'escalate' OR qa_verdict == 'fail' OR __retry_exhausted_from == 'implementation_validator' OR review_verdict == 'REQUEST_CHANGES')", retry_context: "Human intervened on bug-fix failure. Feedback:\n{{feedback}}" }
+  - { from: escalation_review, to: open_pr,     condition: "decision == 'retry_with_feedback' AND status == 'failed'", retry_context: "Human intervened on PR creation failure. Feedback:\n{{feedback}}" }
+  - { from: escalation_review, to: implementation_validator, condition: "decision == 'override_and_continue' AND (qa_verdict == 'escalate' OR qa_verdict == 'fail')" }
+  - { from: escalation_review, to: code_review, condition: "decision == 'override_and_continue' AND __retry_exhausted_from == 'implementation_validator'" }
   - { from: escalation_review, to: open_pr,     condition: "decision == 'override_and_continue' AND review_verdict == 'REQUEST_CHANGES'" }
+  - { from: escalation_review, to: summary,     condition: "decision == 'override_and_continue' AND status == 'failed'" }

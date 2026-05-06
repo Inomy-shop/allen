@@ -312,6 +312,73 @@ function sanitizeFilter(obj: Record<string, unknown>, forbidden: string[]): Reco
   return clean;
 }
 
+function trimForTool(value: unknown, max = 220): string | undefined {
+  if (typeof value !== 'string') return undefined;
+  const normalized = value.replace(/\s+/g, ' ').trim();
+  if (!normalized) return undefined;
+  return normalized.length > max ? `${normalized.slice(0, max)}...` : normalized;
+}
+
+function formatActivityForCaller(row: Record<string, unknown>): string | undefined {
+  const agent = trimForTool(row.agent, 60) ?? 'agent';
+  const type = row.type;
+  if (type === 'tool_call') {
+    const tool = trimForTool(row.tool, 80) ?? 'tool';
+    const content = trimForTool(row.content, 140);
+    return content ? `${agent} called ${tool}: ${content}` : `${agent} called ${tool}`;
+  }
+  if (type === 'tool_result') {
+    const tool = trimForTool(row.tool, 80) ?? 'tool';
+    const content = trimForTool(row.content, 140);
+    return content ? `${agent} got ${tool} result: ${content}` : `${agent} received ${tool} result`;
+  }
+  const content = trimForTool(row.content, 180);
+  if (!content) return undefined;
+  return `${agent}: ${content}`;
+}
+
+function formatLogForCaller(log: Record<string, unknown>): string | undefined {
+  const msg = trimForTool(log.message ?? log.content ?? log.command ?? log.tool ?? log.type, 220);
+  if (!msg) return undefined;
+  const node = trimForTool(log.node, 60);
+  const category = trimForTool(log.category, 40);
+  const prefix = node ? `[${node}]` : category ? `[${category}]` : '';
+  return prefix ? `${prefix} ${msg}` : msg;
+}
+
+async function readExecutionLogWindow(
+  db: Db,
+  executionId: string,
+  since?: Date,
+): Promise<{ top_logs: Array<Record<string, unknown>>; log_summary: string[]; latest_log_at?: string }> {
+  const filter: Record<string, unknown> = { executionId };
+  if (since && !Number.isNaN(since.getTime())) filter.timestamp = { $gt: since };
+  const logs = await db.collection('execution_logs')
+    .find(filter)
+    .sort({ timestamp: -1, createdAt: -1 })
+    .limit(8)
+    .toArray();
+  logs.reverse();
+  const topLogs = logs.map((log) => ({
+    timestamp: log.timestamp ?? log.createdAt,
+    level: log.level,
+    category: log.category ?? log.type,
+    node: log.node ?? null,
+    message: trimForTool(log.message ?? log.content ?? log.command ?? log.tool ?? log.type, 300) ?? '',
+  }));
+  const logSummary = logs
+    .map((log) => formatLogForCaller(log))
+    .filter((line): line is string => Boolean(line))
+    .slice(-5);
+  const latest = logs.length > 0 ? logs[logs.length - 1] : null;
+  const latestAt = latest?.timestamp instanceof Date
+    ? latest.timestamp.toISOString()
+    : latest?.createdAt instanceof Date
+      ? latest.createdAt.toISOString()
+      : undefined;
+  return { top_logs: topLogs, log_summary: logSummary, latest_log_at: latestAt };
+}
+
 // ── Tool Implementations ──
 
 const listWorkflows: ChatTool = {
@@ -358,7 +425,7 @@ const runWorkflow: ChatTool = {
     },
     required: ['workflow_name'],
   },
-  async execute(args, db) {
+  async execute(args, db, context) {
     const name = args.workflow_name as string;
     const input = (args.input as Record<string, unknown>) ?? {};
 
@@ -392,6 +459,35 @@ const runWorkflow: ChatTool = {
 
     const executionService = new ExecutionService(db);
     const result = await executionService.start((workflow._id as ObjectId).toString(), input);
+    const executionId = String(result.id ?? '');
+    const activeCtx = resolveActiveSession(context);
+    const chatSessionId = activeCtx?.chatSessionId ?? context?.chatSessionId;
+    if (chatSessionId) {
+      const chatMeta: Record<string, unknown> = {
+        source: 'chat',
+        'meta.origin': 'chat',
+        'meta.chatSessionId': chatSessionId,
+      };
+      if (activeCtx?.parentMessageId) chatMeta['meta.parentMessageId'] = activeCtx.parentMessageId;
+      if (typeof input.linear_title === 'string') chatMeta['meta.linearTitle'] = input.linear_title;
+      if (typeof input.linear_identifier === 'string') chatMeta['meta.linearIdentifier'] = input.linear_identifier;
+      if (typeof input.linear_url === 'string') chatMeta['meta.linearUrl'] = input.linear_url;
+      if (typeof input.task === 'string') chatMeta['meta.requestText'] = input.task;
+      else if (typeof input.request === 'string') chatMeta['meta.requestText'] = input.request;
+      else if (typeof input.prompt === 'string') chatMeta['meta.requestText'] = input.prompt;
+      if (typeof input.workspace_id === 'string') chatMeta['meta.workspaceId'] = input.workspace_id;
+      if (typeof input.repo_path === 'string') chatMeta['meta.workspacePath'] = input.repo_path;
+      if (typeof input.worktree_path === 'string') chatMeta['meta.workspacePath'] = input.worktree_path;
+      await db.collection('executions').updateOne(
+        { id: executionId },
+        { $set: chatMeta },
+      ).catch((err) => logger.warn('[chat-tools] failed to attach chat metadata to workflow execution', {
+        component: 'chat-tools',
+        executionId,
+        chatSessionId,
+        error: (err as Error).message,
+      }));
+    }
     return {
       execution_id: result.id,
       status: result.status,
@@ -403,7 +499,7 @@ const runWorkflow: ChatTool = {
 
 const getExecution: ChatTool = {
   name: 'wait_for_execution',
-  description: `Get the status of a workflow or spawned agent execution. If still running, blocks up to 90 seconds waiting for completion (like wait_for_delegation). If status="waiting", call again. When completed, includes the agent's response. Also returns recent_activity (last 10 events since activity_since cursor) so the caller can narrate the delegated agent's progress — pass the returned activity_cursor back as activity_since on the next call to stream forward.`,
+  description: `Get the status of a workflow or spawned agent execution. If still running, blocks up to 90 seconds waiting for completion (like wait_for_delegation). If status="waiting", call again. When completed, includes the agent's response. Also returns recent_activity, top_logs, and activity_summary since activity_since so the caller can narrate what is happening inside the execution — pass the returned activity_cursor back as activity_since on the next call to stream forward.`,
   inputSchema: {
     type: 'object',
     properties: {
@@ -425,8 +521,25 @@ const getExecution: ChatTool = {
     const activityService = new AgentActivityService(db);
     const readActivity = async () => {
       const rows = await activityService.recent(executionId, { since: activitySince, limit: 10 });
-      const activityCursor = rows.length > 0 ? rows[rows.length - 1].at : activitySince?.toISOString();
-      return { recent_activity: rows, activity_cursor: activityCursor };
+      const logWindow = await readExecutionLogWindow(db, executionId, activitySince);
+      const activitySummary = [
+        ...rows.map((row) => formatActivityForCaller(row as unknown as Record<string, unknown>)),
+        ...logWindow.log_summary,
+      ].filter((line): line is string => Boolean(line)).slice(-8);
+      const cursorCandidates = [
+        rows.length > 0 ? rows[rows.length - 1].at : undefined,
+        logWindow.latest_log_at,
+        activitySince?.toISOString(),
+      ].filter((value): value is string => Boolean(value));
+      const activityCursor = cursorCandidates
+        .sort((a, b) => new Date(b).getTime() - new Date(a).getTime())[0];
+      return {
+        recent_activity: rows,
+        top_logs: logWindow.top_logs,
+        activity_summary: activitySummary,
+        progress_message: activitySummary.length > 0 ? activitySummary[activitySummary.length - 1] : undefined,
+        activity_cursor: activityCursor,
+      };
     };
 
     // Long-poll: wait up to 90s for completion (under MCP 120s timeout)
@@ -589,6 +702,51 @@ const cancelExecution: ChatTool = {
   },
 };
 
+const resumeExecution: ChatTool = {
+  name: 'resume_execution',
+  description: 'Resume a cancelled/failed/completed execution after the user explicitly chooses resume. Spawned agents/team leads resume their prior agent session when available. Workflows resume from a checkpoint; latest checkpoint is used if checkpoint_id is omitted.',
+  inputSchema: {
+    type: 'object',
+    properties: {
+      execution_id: { type: 'string', description: 'Cancelled/failed/completed execution ID to resume' },
+      prompt: { type: 'string', description: 'Follow-up prompt for agent/team-lead resumes. Optional for workflows.' },
+      checkpoint_id: { type: 'string', description: 'Workflow checkpoint ID to resume from. If omitted, uses latest checkpoint.' },
+    },
+    required: ['execution_id'],
+  },
+  async execute(args, db) {
+    const executionId = String(args.execution_id ?? '');
+    if (!executionId) return { error: 'execution_id is required' };
+    const exec = await db.collection('executions').findOne({ id: executionId });
+    if (!exec) return { error: `Execution "${executionId}" not found.` };
+
+    const workflowName = String(exec.workflowName ?? '');
+    const isAgentExecution = workflowName.includes(':spawn_agent/') || exec.source === 'chat' || exec.source === 'spawn';
+    if (isAgentExecution) {
+      const input = ((exec.input ?? {}) as Record<string, unknown>) ?? {};
+      const prompt = typeof args.prompt === 'string' && args.prompt.trim()
+        ? args.prompt.trim()
+        : `Resume the interrupted task. Original task: ${String(input.prompt ?? input.task ?? workflowName)}`;
+      return resumeAgentExecution(db, executionId, prompt);
+    }
+
+    const executionService = new ExecutionService(db);
+    let checkpointId = typeof args.checkpoint_id === 'string' && args.checkpoint_id.trim()
+      ? args.checkpoint_id.trim()
+      : '';
+    if (!checkpointId) {
+      const checkpoints = await executionService.listCheckpoints(executionId);
+      checkpointId = String(checkpoints[0]?._id ?? '');
+    }
+    if (!checkpointId) {
+      return {
+        error: `Workflow execution "${executionId}" has no checkpoints to resume from. Ask the user if they want a fresh start instead.`,
+      };
+    }
+    return executionService.runFromCheckpoint(executionId, checkpointId);
+  },
+};
+
 const listRepos: ChatTool = {
   name: 'list_repos',
   description: 'List all registered repositories with their detected tech stack.',
@@ -684,6 +842,7 @@ const spawnAgent: ChatTool = {
     const { randomUUID } = await import('node:crypto');
     const executionId = randomUUID();
     const activeCtxForMeta = resolveActiveSession(context);
+    const chatSessionIdForMeta = activeCtxForMeta?.chatSessionId ?? context?.chatSessionId;
 
     // ── Spawn-tree linkage (Phase 1 of the workflow-spawn visibility plan) ──
     //
@@ -742,7 +901,7 @@ const spawnAgent: ChatTool = {
         provider: (role.provider as string) ?? 'claude',
         model: (role.model as string) ?? 'sonnet',
         spawnedBy: activeCtxForMeta?.currentAgent ?? parentCaller ?? 'user',
-        chatSessionId: activeCtxForMeta?.chatSessionId,
+        chatSessionId: chatSessionIdForMeta,
         parentMessageId: activeCtxForMeta?.parentMessageId,
       },
       // Spawn-tree linkage — indexed for the /children query and Phase 3 fan-out.
@@ -1502,6 +1661,14 @@ async function runSpawnInBackground(
     // its session marker but later crashed/timed out / got SIGTERM'd loses
     // its session id and becomes un-resumable.
     const failedSessionId = currentResumeSession;
+    const currentExec = await db.collection('executions').findOne(
+      { id: executionId },
+      { projection: { status: 1 } },
+    ).catch(() => null);
+    if (currentExec?.status === 'cancelled') {
+      if (activeCtx) activeCtx.pendingBackgroundTasks--;
+      return;
+    }
     await db.collection('executions').updateOne(
       { id: executionId },
       { $set: {
@@ -1951,6 +2118,12 @@ const submitExecutionInput: ChatTool = {
         const payload: Record<string, unknown> = {};
         if (Object.keys(fieldValues).length > 0) {
           Object.assign(payload, fieldValues);
+        } else if (originalFields.some(f => f.name === 'approval_decision')) {
+          payload.approval_decision = 'approve';
+          if (args.feedback != null) payload.approval_feedback = args.feedback;
+        } else if (originalFields.some(f => f.name === 'decision')) {
+          payload.decision = 'approve';
+          if (args.feedback != null) payload.feedback = args.feedback;
         } else if (originalFields.length > 0) {
           // Fallback — single-field case where the caller only sent `data`
           // with a free-form response.
@@ -1966,6 +2139,45 @@ const submitExecutionInput: ChatTool = {
           { $set: { status: 'running' } },
         );
       } else if (decision === 'request_changes') {
+        const nodeName = intervention.stage;
+        const originalFields = (intervention as unknown as { fields?: Array<{ name: string }> }).fields ?? [];
+        const payload: Record<string, unknown> = { ...fieldValues };
+        const hasDecisionField = originalFields.some(f => f.name === 'approval_decision' || f.name === 'decision');
+        if (hasDecisionField) {
+          if (originalFields.some(f => f.name === 'approval_decision') && payload.approval_decision == null) {
+            payload.approval_decision = 'request_changes';
+          }
+          if (originalFields.some(f => f.name === 'decision') && payload.decision == null) {
+            payload.decision = 'request_changes';
+          }
+          if (originalFields.some(f => f.name === 'approval_feedback') && payload.approval_feedback == null) {
+            payload.approval_feedback = feedback ?? '';
+          }
+          if (originalFields.some(f => f.name === 'feedback') && payload.feedback == null) {
+            payload.feedback = feedback ?? '';
+          }
+          const delivered = await executionService.submitInput(intervention.workflow_run_id, nodeName, payload);
+          if (delivered) {
+            await db.collection('executions').updateOne(
+              { id: intervention.workflow_run_id },
+              { $set: { status: 'running' } },
+            );
+          } else {
+            const targetNode = retryTargetForStage(intervention.stage, scope);
+            await db.collection('executions').updateOne(
+              { id: intervention.workflow_run_id },
+              {
+                $set: {
+                  'state.__retry_target': [targetNode],
+                  'state.__retry_source': 'human_feedback',
+                  'state.__retry_attempt': 1,
+                  'state.retry_context': feedback ?? '',
+                },
+              },
+            );
+            await executionService.retryFromNode(intervention.workflow_run_id, targetNode);
+          }
+        } else {
         const targetNode = retryTargetForStage(intervention.stage, scope);
         await db.collection('executions').updateOne(
           { id: intervention.workflow_run_id },
@@ -1982,6 +2194,7 @@ const submitExecutionInput: ChatTool = {
           await executionService.retryFromNode(intervention.workflow_run_id, targetNode);
         } catch (err) {
           return { error: `retryFromNode failed: ${(err as Error).message}` };
+        }
         }
       } else if (decision === 'reject') {
         await db.collection('executions').updateOne(
@@ -2055,6 +2268,7 @@ function retryTargetForStage(stage: string, scope?: string): string {
     audit_tdd_escalation: 'produce_tdd',
     qa_escalation: 'qa_failure_triage',
     validator_escalation: 'plan_implementation',
+    implementation_approval_human: 'investigate',
     feature_escalation: 'investigate',
     repro_question: 'investigate',
   };
@@ -2371,7 +2585,7 @@ RULES:
 - If you can't answer the question yourself, use ask_delegator to escalate to YOUR caller.
 - NEVER respond to the user before status is "completed" or "failed".
 
-Also returns recent_activity (last 10 thread events since the activity_since cursor) so you can describe what the delegated agent is doing rather than polling silently — pass the returned activity_cursor back on the next call to stream forward.`,
+Also returns recent_activity and activity_summary (human-readable progress lines since the activity_since cursor) so you can describe what the delegated agent is doing rather than polling silently — pass the returned activity_cursor back on the next call to stream forward.`,
   inputSchema: {
     type: 'object',
     properties: {
@@ -2388,8 +2602,17 @@ Also returns recent_activity (last 10 thread events since the activity_since cur
     const activityService = new AgentActivityService(db);
     const readActivity = async () => {
       const rows = await activityService.recent(convId, { since: activitySince, limit: 10 });
+      const activitySummary = rows
+        .map((row) => formatActivityForCaller(row as unknown as Record<string, unknown>))
+        .filter((line): line is string => Boolean(line))
+        .slice(-8);
       const activityCursor = rows.length > 0 ? rows[rows.length - 1].at : activitySince?.toISOString();
-      return { recent_activity: rows, activity_cursor: activityCursor };
+      return {
+        recent_activity: rows,
+        activity_summary: activitySummary,
+        progress_message: activitySummary.length > 0 ? activitySummary[activitySummary.length - 1] : undefined,
+        activity_cursor: activityCursor,
+      };
     };
 
     let waitMs = 5000;
@@ -3205,6 +3428,7 @@ export const chatTools: ChatTool[] = [
   getExecution,
   listExecutions,
   cancelExecution,
+  resumeExecution,
   listRepos,
   listAgents,
   spawnAgent,

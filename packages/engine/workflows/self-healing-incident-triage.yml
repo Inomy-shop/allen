@@ -62,8 +62,8 @@ nodes:
       EVIDENCE:
       {{evidence}}
 
-      Decide whether this is actionable, whether it is Allen-owned, and what
-      repair path should handle it. Completed, failed, cancelled/canceled,
+      Decide whether this is actionable, whether it is Allen-owned, and whether
+      bug-investigate-and-fix or triage should handle it. Completed, failed, cancelled/canceled,
       interrupted, and stale records are all valid evidence.
 
       End with JSON: actionability, allen_owned, root_cause_area, severity,
@@ -98,4 +98,3 @@ edges:
   - { from: START, to: analyze }
   - { from: analyze, to: route }
   - { from: route, to: END }
-

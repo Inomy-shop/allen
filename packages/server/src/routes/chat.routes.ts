@@ -1,12 +1,106 @@
 import { Router, type Request, type Response } from 'express';
 import { param } from '../types.js';
-import { ChatService, cancelChatSession } from '../services/chat.service.js';
+import { ChatService, cancelChatSession, type ChatMessageSender } from '../services/chat.service.js';
 import { executeChatTool } from '../services/chat-tools.js';
+import { ExecutionService } from '../services/execution.service.js';
+import { InterventionService } from '../services/intervention.service.js';
 import type { Db } from 'mongodb';
+import { UserService } from '../services/user.service.js';
+import type { AuthedRequest } from '../middleware/requireAuth.js';
 
 export function chatRoutes(db: Db): Router {
   const router = Router();
   const chatService = new ChatService(db);
+  const users = new UserService(db);
+  const executionService = new ExecutionService(db);
+  const interventionService = new InterventionService(db);
+
+  const readSender = async (req: AuthedRequest): Promise<ChatMessageSender | undefined> => {
+    const authUser = req.user;
+    if (!authUser) return undefined;
+    const user = await users.findById(authUser.sub);
+    const email = user?.email ?? authUser.email;
+    return {
+      userId: authUser.sub,
+      name: user?.name ?? email?.split('@')[0] ?? authUser.sub,
+      email,
+      source: 'ui',
+    };
+  };
+
+  const submitChatAnswerToPendingWorkflow = async (
+    sessionId: string,
+    answer: string,
+    answeredBy: string,
+  ): Promise<Record<string, unknown> | null> => {
+    const waitingExecutions = await db.collection('executions')
+      .find({
+        'meta.chatSessionId': sessionId,
+        status: 'waiting_for_input',
+      })
+      .sort({ startedAt: -1 })
+      .limit(5)
+      .toArray();
+
+    for (const exec of waitingExecutions) {
+      const executionId = String(exec.id ?? '');
+      if (!executionId) continue;
+      const currentNodes = new Set(((exec.currentNodes as unknown[]) ?? []).filter(Boolean).map(String));
+      const pending = (await interventionService.listForWorkflowRun(executionId))
+        .filter((item) => item.status === 'pending')
+        .filter((item) => currentNodes.size === 0 || currentNodes.has(item.stage))
+        .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
+      const intervention = pending[0];
+      if (!intervention) continue;
+
+      // The chat answer box is free-form. Auto-submit only question-style
+      // pauses; approval/escalation nodes need their structured buttons.
+      if (intervention.severity !== 'question') {
+        return {
+          forwarded: false,
+          reason: 'pending_intervention_requires_structured_decision',
+          execution_id: executionId,
+          intervention_id: intervention.intervention_id,
+          severity: intervention.severity,
+        };
+      }
+
+      const fields = ((intervention as unknown as { fields?: Array<{ name?: string }> }).fields ?? [])
+        .filter((field): field is { name: string } => typeof field.name === 'string' && field.name.length > 0);
+      const fieldName = fields[0]?.name ?? 'answer';
+      const payload = { [fieldName]: answer };
+      const delivered = await executionService.submitInput(executionId, intervention.stage, payload);
+      if (!delivered) {
+        return {
+          forwarded: false,
+          reason: 'workflow_engine_not_waiting_for_input',
+          execution_id: executionId,
+          intervention_id: intervention.intervention_id,
+          node: intervention.stage,
+        };
+      }
+
+      await interventionService.recordResponse(intervention.intervention_id, {
+        decision: 'answer',
+        answer: JSON.stringify(payload),
+        answered_by_user_id: answeredBy,
+      });
+      await db.collection('executions').updateOne(
+        { id: executionId },
+        { $set: { status: 'running' } },
+      );
+
+      return {
+        forwarded: true,
+        execution_id: executionId,
+        intervention_id: intervention.intervention_id,
+        node: intervention.stage,
+        field: fieldName,
+      };
+    }
+
+    return null;
+  };
 
   // POST /api/chat/sessions/:id/cancel — kill the running LLM subprocess
   // AND clear the stale session so the next message starts fresh. Acts as
@@ -14,8 +108,8 @@ export function chatRoutes(db: Db): Router {
   // message without hitting "session busy" or "no rollout found" errors.
   router.post('/sessions/:id/cancel', async (req: Request, res: Response) => {
     const sessionId = param(req, 'id');
-    const cancelled = await cancelChatSession(sessionId, db);
-    res.json({ cancelled, sessionId });
+    const result = await cancelChatSession(sessionId, db);
+    res.json(result);
   });
 
   // Helper — pull the Allen MCP's x-allen-* context headers off an
@@ -221,7 +315,8 @@ export function chatRoutes(db: Db): Router {
         return res.status(400).json({ error: 'content is required' });
       }
       // sendMessage handles SSE headers and streaming
-      await chatService.sendMessage(sessionId, content, res, agent, cwd);
+      const sender = await readSender(req as AuthedRequest);
+      await chatService.sendMessage(sessionId, content, res, agent, cwd, sender);
     } catch (err: unknown) {
       if (!res.headersSent) {
         res.status(500).json({ error: (err as Error).message });
@@ -431,14 +526,28 @@ export function chatRoutes(db: Db): Router {
         },
       );
 
+      const authUser = (req as AuthedRequest).user;
+      const workflowInput = await submitChatAnswerToPendingWorkflow(
+        sessionId,
+        answer,
+        authUser?.sub ?? 'chat',
+      ).catch((err) => {
+        console.warn('[chat.agent-answer] workflow input bridge failed:', (err as Error).message);
+        return {
+          forwarded: false,
+          reason: 'bridge_error',
+          error: (err as Error).message,
+        };
+      });
+
       // Fan out to every other tab subscribed to this session's stream so
       // their ask_user popup clears immediately. The ask_user tool's poll
       // loop will still fire its own `user_answer` when it detects the
       // DB change, but its interval grows to 30s — too slow for a good
       // multi-tab experience.
-      chatService.broadcastToSession(sessionId, 'user_answer', { answer });
+      chatService.broadcastToSession(sessionId, 'user_answer', { answer, workflowInput });
 
-      res.json({ answered: true });
+      res.json({ answered: true, workflowInput });
     } catch (err: unknown) {
       res.status(500).json({ error: (err as Error).message });
     }

@@ -34,6 +34,7 @@ export const workspaces = {
   restartService: (id: string, name: string) => request<any>(`/workspaces/${id}/services/${name}/restart`, { method: 'POST' }),
   serviceLogsUrl: (id: string, name: string) => `${BASE}/workspaces/${id}/services/${name}/logs`,
   linkChat: (id: string, sessionId: string) => request<any>(`/workspaces/${id}/link-chat`, { method: 'POST', body: JSON.stringify({ sessionId }) }),
+  listChats: (id: string) => request<any[]>(`/workspaces/${id}/chats`),
   createPR: (id: string, title: string, body?: string) => request<any>(`/workspaces/${id}/create-pr`, { method: 'POST', body: JSON.stringify({ title, body }) }),
   getConfig: (repoId: string) => request<any>(`/workspaces/config/${repoId}`),
   saveConfig: (repoId: string, config: any) => request<any>(`/workspaces/config/${repoId}`, { method: 'PUT', body: JSON.stringify(config) }),

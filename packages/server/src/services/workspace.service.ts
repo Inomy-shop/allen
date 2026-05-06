@@ -8,7 +8,7 @@ import { promisify } from 'node:util';
 import { existsSync, mkdirSync, rmSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { spawn, type ChildProcess } from 'node:child_process';
-import type { Db, ObjectId } from 'mongodb';
+import { ObjectId, type Db } from 'mongodb';
 import { resolveWorkspacesDir } from '@allen/engine';
 import { watchWorkspace, unwatchWorkspace } from './workspace-watcher.js';
 
@@ -82,6 +82,7 @@ export interface Workspace {
   behind: number;
   lastCommit?: { hash: string; message: string; date: Date };
   chatSessionId?: string;
+  chatSessionIds?: string[];
   createdAt: Date;
   updatedAt: Date;
 }
@@ -525,12 +526,33 @@ export class WorkspaceManager {
     const ws = await this.get(id);
     if (!ws) throw new Error('Workspace not found');
 
-    // Show current uncommitted changes (staged + unstaged) — what the developer is actively working on
-    const { stdout: nameStatus } = await exec('git', ['diff', '--name-status', 'HEAD'], { cwd: ws.worktreePath }).catch(() => ({ stdout: '' }));
-    const { stdout: numstat } = await exec('git', ['diff', '--numstat', 'HEAD'], { cwd: ws.worktreePath }).catch(() => ({ stdout: '' }));
+    // Prefer current uncommitted changes. If the workspace branch has already
+    // committed the implementation, fall back to branch-vs-base so chat and
+    // workspace views can still show the completed code diff.
+    let diffRange = 'HEAD';
+    let baseRef = 'HEAD';
+    let includeUntracked = true;
+    let { stdout: nameStatus } = await exec('git', ['diff', '--name-status', diffRange], { cwd: ws.worktreePath }).catch(() => ({ stdout: '' }));
+    let { stdout: numstat } = await exec('git', ['diff', '--numstat', diffRange], { cwd: ws.worktreePath }).catch(() => ({ stdout: '' }));
+
+    if (!nameStatus.trim() && ws.baseBranch) {
+      const candidates = [`origin/${ws.baseBranch}...HEAD`, `${ws.baseBranch}...HEAD`];
+      for (const range of candidates) {
+        const status = await exec('git', ['diff', '--name-status', range], { cwd: ws.worktreePath }).catch(() => ({ stdout: '' }));
+        if (!status.stdout.trim()) continue;
+        nameStatus = status.stdout;
+        numstat = (await exec('git', ['diff', '--numstat', range], { cwd: ws.worktreePath }).catch(() => ({ stdout: '' }))).stdout;
+        diffRange = range;
+        baseRef = range.split('...')[0] ?? 'HEAD';
+        includeUntracked = false;
+        break;
+      }
+    }
 
     // Also include untracked new files
-    const { stdout: untracked } = await exec('git', ['ls-files', '--others', '--exclude-standard'], { cwd: ws.worktreePath }).catch(() => ({ stdout: '' }));
+    const { stdout: untracked } = includeUntracked
+      ? await exec('git', ['ls-files', '--others', '--exclude-standard'], { cwd: ws.worktreePath }).catch(() => ({ stdout: '' }))
+      : { stdout: '' };
 
     const statLines = numstat.trim().split('\n').filter(Boolean);
     const statusLines = nameStatus.trim().split('\n').filter(Boolean);
@@ -566,10 +588,11 @@ export class WorkspaceManager {
           file.modifiedContent = content;
         } else {
           const [{ stdout: diff }, orig, mod] = await Promise.all([
-            exec('git', ['diff', 'HEAD', '--', file.path], { cwd: ws.worktreePath }),
-            exec('git', ['show', `HEAD:${file.path}`], { cwd: ws.worktreePath }).then(r => r.stdout).catch(() => ''),
+            exec('git', ['diff', diffRange, '--', file.path], { cwd: ws.worktreePath }),
+            exec('git', ['show', `${baseRef}:${file.path}`], { cwd: ws.worktreePath }).then(r => r.stdout).catch(() => ''),
             (async () => {
               if (file.status === 'deleted') return '';
+              if (!includeUntracked) return exec('git', ['show', `HEAD:${file.path}`], { cwd: ws.worktreePath }).then(r => r.stdout).catch(() => '');
               try { return rf(join(ws.worktreePath, file.path), 'utf-8'); } catch { return ''; }
             })(),
           ]);
@@ -865,6 +888,20 @@ export class WorkspaceManager {
     return this.db.collection('workspace_activity').find({ workspaceId }).sort({ timestamp: -1 }).limit(limit).toArray();
   }
 
+  async listChats(workspaceId: string): Promise<any[]> {
+    const ws = await this.get(workspaceId);
+    if (!ws) throw new Error('Workspace not found');
+    const ids = Array.from(new Set([
+      ...(ws.chatSessionIds ?? []),
+      ...(ws.chatSessionId ? [ws.chatSessionId] : []),
+    ].filter(Boolean)));
+    if (ids.length === 0) return [];
+    return this.db.collection('chat_sessions')
+      .find({ _id: { $in: ids.map(id => new ObjectId(id)) } })
+      .sort({ lastMessageAt: -1 })
+      .toArray();
+  }
+
   // ── Bulk Operations ──
 
   async bulkArchive(ids: string[]): Promise<{ archived: number }> {
@@ -877,6 +914,16 @@ export class WorkspaceManager {
 
   async linkChat(id: string, chatSessionId: string): Promise<void> {
     const { ObjectId } = await import('mongodb');
-    await this.col.updateOne({ _id: new ObjectId(id) }, { $set: { chatSessionId, updatedAt: new Date() } });
+    await this.col.updateOne(
+      { _id: new ObjectId(id) },
+      {
+        $set: { chatSessionId, updatedAt: new Date() },
+        $addToSet: { chatSessionIds: chatSessionId },
+      },
+    );
+    await this.db.collection('chat_sessions').updateOne(
+      { _id: new ObjectId(chatSessionId) },
+      { $set: { workspaceId: id, updatedAt: new Date() } },
+    );
   }
 }

@@ -11,6 +11,14 @@ import { executeChatTool } from '../services/chat-tools.js';
 
 const ALLOWED_EFFORTS = new Set(['off', 'low', 'medium', 'high', 'max']);
 
+function titleFromAgentSlug(slug: string): string {
+  return slug
+    .split(/[-_]+/)
+    .filter(Boolean)
+    .map(part => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(' ');
+}
+
 function validateAgentSettingsFields(body: Record<string, unknown>): void {
   if (body.reasoningEffort !== undefined && body.reasoningEffort !== null) {
     if (typeof body.reasoningEffort !== 'string' || !ALLOWED_EFFORTS.has(body.reasoningEffort)) {
@@ -410,7 +418,7 @@ function buildImportedAgentDoc(
 ): Record<string, unknown> {
   return {
     name: parsed.name,
-    displayName: parsed.description.slice(0, 80) || parsed.name,
+    displayName: titleFromAgentSlug(parsed.name),
     description: parsed.description,
     teamName: 'unassigned',
     teamRole: 'member',

@@ -1,26 +1,34 @@
 import { useEffect, useState, useRef } from 'react';
 import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
 import { useChat } from '../hooks/useChat';
-import ChatInput, { RepoOption } from '../components/chat/ChatInput';
+import ChatInput, { type ReasoningEffortValue, type RepoOption } from '../components/chat/ChatInput';
 import ChatMessageList from '../components/chat/ChatMessageList';
 import CommandPalette from '../components/chat/CommandPalette';
 import ConversationLogs from '../components/chat/ConversationLogs';
-import ConversationsSidebar from '../components/chat/ConversationsSidebar';
 import AgentChatDropdown from '../components/chat/AgentChatDropdown';
+import ChatRunSidebar from '../components/chat/ChatRunSidebar';
 import { ToolCallLog } from '../components/common/ToolCallLog';
-import { CHAT_TITLE, CHAT_EMPTY_PROMPT } from '../lib/brand';
-import {
-  Command, Server, ScrollText,
-  Sparkles, Zap, BarChart3, Terminal, FolderOpen, AlertTriangle, Bot, Wrench,
-  FileText,
-} from 'lucide-react';
+import { BRAND_NAME } from '../lib/brand';
 import { chat as chatApi, mcp as mcpApi, learnings as learningsApi, agents as agentsApi, repos as reposApi } from '../services/api';
 import ArtifactsDrawer from '../components/artifacts/ArtifactsDrawer';
+import { MessageSquare, MoreHorizontal, FolderGit2, GitBranch } from 'lucide-react';
 
 const PROVIDER_DISPLAY: Record<string, { label: string; color: string }> = {
   codex: { label: 'Codex', color: 'text-accent-green' },
   'claude-cli': { label: 'Claude CLI', color: 'text-accent' },
 };
+
+function timeAgo(dateStr?: string): string {
+  if (!dateStr) return 'now';
+  const ms = Date.now() - new Date(dateStr).getTime();
+  const min = Math.floor(ms / 60_000);
+  if (min < 1) return 'now';
+  if (min < 60) return `${min}m`;
+  const hr = Math.floor(min / 60);
+  if (hr < 24) return `${hr}h`;
+  const day = Math.floor(hr / 24);
+  return `${day}d`;
+}
 
 export default function ChatPage() {
   const { sessionId: urlSessionId } = useParams<{ sessionId?: string }>();
@@ -47,12 +55,13 @@ export default function ChatPage() {
     planMode?: boolean | null;
   }>({});
   const chatInputRef = useRef<{ setValue: (v: string) => void; focus: () => void } | null>(null);
+  const processedDeepLinkRef = useRef<string | null>(null);
 
   const {
     sessions, activeSessionId, messages, streaming, streamText,
     thinkingText, activeToolCalls, agentThreads, agentReports, threadsByMessage,
-    spawnedAgents, pendingUserQuestion, answerUserQuestion,
-    loadingSessions, loadingMessages,
+    spawnedAgents, pendingUserQuestion, answerUserQuestion, answerWorkflowIntervention,
+    loadingMessages,
     sendMessage, createSession, switchSession, cancelStream,
     updateSessionTitle, refresh: refreshSessions,
   } = useChat();
@@ -148,43 +157,36 @@ export default function ChatPage() {
     }
   }, [activeSessionId]);
 
-  // Deep-link support: ?agent=NAME&prompt=PREFILL
-  // We preselect the agent and prefill the input, then strip the query params
-  // so a refresh doesn't re-apply them. The user must click Send themselves
-  // — no auto-submit, so they can review/edit the proposed prompt first.
-  useEffect(() => {
-    const wantedAgent = searchParams.get('agent');
-    const wantedPrompt = searchParams.get('prompt');
-    if (!wantedAgent && !wantedPrompt) return;
-
-    if (wantedAgent) setSelectedAgent(wantedAgent);
-    if (wantedPrompt) {
-      // setValue is exposed by ChatInput's forwardRef. Defer to next tick so
-      // the input is mounted.
-      setTimeout(() => chatInputRef.current?.setValue(wantedPrompt), 0);
-    }
-
-    // Strip the params so refresh doesn't re-trigger this effect
-    const next = new URLSearchParams(searchParams);
-    next.delete('agent');
-    next.delete('prompt');
-    setSearchParams(next, { replace: true });
-  }, [searchParams]);
-
-  async function handleSend(content: string) {
+  async function handleSend(
+    content: string,
+    agentOverride?: string | null,
+    cwdOverride?: string | null,
+    options?: {
+      provider?: string | null;
+      model?: string | null;
+      repoId?: string | null;
+      agentOverrides?: {
+        reasoningEffort?: ReasoningEffortValue | null;
+        planMode?: boolean | null;
+      };
+    },
+  ) {
+    const agentName = agentOverride ?? selectedAgent;
+    const agentCwd = cwdOverride ?? selectedAgentCwd;
     if (!activeSessionId) {
       // Only pass pending overrides that are explicitly set (not null/undefined).
       const overrides: Record<string, unknown> = {};
-      if (pendingOverrides.reasoningEffort != null) overrides.reasoningEffort = pendingOverrides.reasoningEffort;
-      if (pendingOverrides.planMode != null) overrides.planMode = pendingOverrides.planMode;
+      const effectivePendingOverrides = options?.agentOverrides ?? pendingOverrides;
+      if (effectivePendingOverrides.reasoningEffort != null) overrides.reasoningEffort = effectivePendingOverrides.reasoningEffort;
+      if (effectivePendingOverrides.planMode != null) overrides.planMode = effectivePendingOverrides.planMode;
       const session = await createSession(
-        selectedProvider,
-        selectedModel || undefined,
+        options?.provider ?? selectedProvider,
+        (options?.model ?? selectedModel) || undefined,
         Object.keys(overrides).length > 0 ? overrides : undefined,
-        selectedRepo?._id || undefined,
+        (options?.repoId ?? selectedRepo?._id) || undefined,
       );
       navigate(`/chat/${session._id}`, { replace: true });
-      sendMessage(content, session._id, selectedAgent ?? undefined, selectedAgentCwd ?? undefined);
+      sendMessage(content, session._id, agentName ?? undefined, agentCwd ?? undefined);
       // Server auto-summarizes the title from the first message; pull
       // a fresh sessions list shortly after so the sidebar shows the
       // summarized title instead of the placeholder.
@@ -192,8 +194,78 @@ export default function ChatPage() {
       setTimeout(() => { void refreshSessions(); }, 5000);
       return;
     }
-    sendMessage(content, undefined, selectedAgent ?? undefined, selectedAgentCwd ?? undefined);
+    sendMessage(content, undefined, agentName ?? undefined, agentCwd ?? undefined);
   }
+
+  // Deep-link support: ?agent=NAME&prompt=PREFILL. Command-center sends use
+  // autosend=1 so the user lands in the focused current chat, not a prior
+  // conversation picker.
+  useEffect(() => {
+    const wantedAgent = searchParams.get('agent');
+    const wantedAgentCwd = searchParams.get('agentCwd');
+    const wantedPrompt = searchParams.get('prompt');
+    const autoSend = searchParams.get('autosend') === '1';
+    const wantedProvider = searchParams.get('provider');
+    const wantedModel = searchParams.get('model');
+    const wantedRepoId = searchParams.get('repoId');
+    const wantedReasoning = searchParams.get('reasoningEffort') as ReasoningEffortValue | null;
+    const wantedPlanMode = searchParams.get('planMode');
+    const hasRepoSelection = wantedRepoId ? repos.some((repo) => repo._id === wantedRepoId) : true;
+    const signature = [
+      wantedAgent ?? '',
+      wantedAgentCwd ?? '',
+      wantedPrompt ?? '',
+      wantedProvider ?? '',
+      wantedModel ?? '',
+      wantedRepoId ?? '',
+      wantedReasoning ?? '',
+      wantedPlanMode ?? '',
+      autoSend ? 'send' : 'prefill',
+    ].join(':');
+    if ((!wantedAgent && !wantedPrompt) || processedDeepLinkRef.current === signature) return;
+    if (wantedRepoId && repos.length === 0) return;
+    processedDeepLinkRef.current = signature;
+
+    if (wantedAgent) setSelectedAgent(wantedAgent);
+    if (wantedAgentCwd) setSelectedAgentCwd(wantedAgentCwd);
+    if (wantedProvider) setSelectedProvider(wantedProvider);
+    if (wantedModel) setSelectedModel(wantedModel);
+    if (wantedRepoId) setSelectedRepo(repos.find((repo) => repo._id === wantedRepoId) ?? null);
+    const nextOverrides = {
+      ...(wantedReasoning ? { reasoningEffort: wantedReasoning } : {}),
+      ...(wantedPlanMode != null ? { planMode: wantedPlanMode === 'true' } : {}),
+    };
+    if (Object.keys(nextOverrides).length > 0) setPendingOverrides(nextOverrides);
+
+    const next = new URLSearchParams(searchParams);
+    next.delete('agent');
+    next.delete('agentCwd');
+    next.delete('prompt');
+    next.delete('autosend');
+    next.delete('provider');
+    next.delete('model');
+    next.delete('repoId');
+    next.delete('reasoningEffort');
+    next.delete('planMode');
+    setSearchParams(next, { replace: true });
+
+    if (!wantedPrompt) return;
+    if (autoSend) {
+      setTimeout(() => {
+        void handleSend(wantedPrompt, wantedAgent, wantedAgentCwd, {
+          provider: wantedProvider,
+          model: wantedModel,
+          repoId: hasRepoSelection ? wantedRepoId : null,
+          agentOverrides: nextOverrides,
+        });
+      }, 0);
+    } else {
+      setTimeout(() => {
+        chatInputRef.current?.setValue(wantedPrompt);
+        chatInputRef.current?.focus();
+      }, 0);
+    }
+  }, [searchParams, repos]);
 
   function handleSuggestionClick(prompt: string) { handleSend(prompt); }
   function handleCommandSelect(prompt: string, partial?: boolean) {
@@ -213,8 +285,10 @@ export default function ChatPage() {
     } catch {}
   }
 
-  const sessionTitle = activeSessionId ? activeSession?.title ?? 'Chat' : CHAT_TITLE;
-  const messageCount = activeSession?.messageCount ?? 0;
+  const sessionTitle = activeSessionId ? activeSession?.title ?? 'Chat' : 'New Conversation';
+  const titleTicket = sessionTitle.match(/\b[A-Z][A-Z0-9]+-\d+\b/)?.[0] ?? null;
+  const linkedRepoName = activeSession?.repoName ?? selectedRepo?.name ?? null;
+  const showRunSidebar = spawnedAgents.length > 0;
 
   // Inline title edit. Persists via useChat.updateSessionTitle which
   // does an optimistic local update so the sidebar reflects the new
@@ -235,24 +309,14 @@ export default function ChatPage() {
   }
 
   return (
-    <div className="flex-1 flex h-full min-w-0">
-      {/* Conversations sidebar (matches handoff/pages/chat.jsx ChatV2) */}
-      <ConversationsSidebar />
-
-      <div className="flex-1 flex flex-col h-full min-w-0">
+    <div className={`chat-page-shell ${showRunSidebar ? 'with-run-sidebar' : ''}`}>
+      <div className="chat-main-shell">
       {/* Header — matches handoff/pages/chat.jsx ChatV2 */}
-      <div className="px-6 pt-4 pb-3 border-b border-app shrink-0">
-        <div className="flex items-center gap-2 mb-2 text-[12px] text-theme-muted">
-          <span>Inbox</span>
-          {activeSessionId && (
-            <>
-              <span className="text-theme-subtle">/</span>
-              <span className="truncate max-w-[40rem]">{sessionTitle}</span>
-            </>
-          )}
-        </div>
+      <div className="chat-page-head">
         <div className="flex items-center justify-between gap-3">
-          <div className="flex items-center gap-3 min-w-0">
+          <div className="chat-conv-titlebar">
+            <MessageSquare className="h-4 w-4 text-theme-muted" />
+            <div className="min-w-0">
             {activeSessionId && titleDraft !== null ? (
               <input
                 autoFocus
@@ -263,23 +327,29 @@ export default function ChatPage() {
                   if (e.key === 'Enter') (e.target as HTMLInputElement).blur();
                   if (e.key === 'Escape') setTitleDraft(null);
                 }}
-                className="text-[20px] font-semibold text-theme-primary tracking-tight bg-transparent border border-app rounded px-2 py-0.5 focus:outline-none focus:border-accent w-[40rem] max-w-full"
+                className="chat-title-edit"
                 disabled={savingTitle}
               />
             ) : (
               <h1
-                className={`text-[20px] font-semibold text-theme-primary tracking-tight truncate ${activeSessionId ? 'cursor-text hover:text-accent transition-colors' : ''}`}
+                className={`truncate ${activeSessionId ? 'cursor-text hover:text-accent transition-colors' : ''}`}
                 onClick={() => activeSessionId && setTitleDraft(sessionTitle)}
                 title={activeSessionId ? 'Click to rename' : undefined}
               >
                 {sessionTitle}
               </h1>
             )}
-            {activeSessionId && activeProvider && (
-              <span className={`badge badge-muted ${PROVIDER_DISPLAY[activeProvider]?.color ?? 'text-theme-muted'}`}>
-                {PROVIDER_DISPLAY[activeProvider]?.label}
-              </span>
-            )}
+              <div className="chat-linked-row">
+                <span>linked:</span>
+                {titleTicket ? <span className="chat-linked-chip"><GitBranch className="h-2.5 w-2.5" /> {titleTicket}</span> : <span className="chat-linked-chip muted">auto</span>}
+                {linkedRepoName && <span className="chat-linked-chip"><FolderGit2 className="h-2.5 w-2.5" /> {linkedRepoName}</span>}
+                {(activeSessionId ? activeProvider : selectedProvider) && (
+                  <span className={`chat-linked-chip ${PROVIDER_DISPLAY[activeSessionId ? activeProvider : selectedProvider]?.color ?? 'text-theme-muted'}`}>
+                    {PROVIDER_DISPLAY[activeSessionId ? activeProvider : selectedProvider]?.label ?? BRAND_NAME}
+                  </span>
+                )}
+              </div>
+            </div>
             {selectedAgent && (() => {
               const agentInfo = allAgents.find((a: any) => a.name === selectedAgent);
               return (
@@ -290,36 +360,8 @@ export default function ChatPage() {
             })()}
           </div>
           <div className="flex items-center gap-2 shrink-0">
-            {mcpCount.enabled > 0 && (
-              <span className="text-[11px] font-mono flex items-center gap-1 text-theme-muted" title={`${mcpCount.connected}/${mcpCount.enabled} MCP`}>
-                <Server className="w-3 h-3" />
-                <span className={mcpCount.connected > 0 ? 'text-accent-green' : ''}>{mcpCount.connected}/{mcpCount.enabled}</span>
-              </span>
-            )}
-            {activeSessionId && (
-              <span className="text-[11px] text-theme-muted font-mono">
-                {activeSession?.totalCostUsd != null && <>${activeSession.totalCostUsd.toFixed(2)}</>}
-                {activeSession?.totalCostUsd != null && messageCount > 0 && ' · '}
-                {messageCount > 0 && <>{messageCount} message{messageCount === 1 ? '' : 's'}</>}
-              </span>
-            )}
-            {activeSessionId && (
-              <button onClick={() => setLogsOpen(true)} className="p-1.5 rounded-md text-theme-muted hover:text-theme-primary hover:bg-app-muted transition-colors" title="Logs">
-                <ScrollText className="w-3.5 h-3.5" />
-              </button>
-            )}
-            {activeSessionId && (
-              <button onClick={() => setToolLogOpen(o => !o)} className="p-1.5 rounded-md text-theme-muted hover:text-theme-primary hover:bg-app-muted transition-colors" title="Tool Log">
-                <Wrench className="w-3.5 h-3.5" />
-              </button>
-            )}
-            {activeSessionId && (
-              <button onClick={() => setArtifactsOpen(true)} className="p-1.5 rounded-md text-theme-muted hover:text-theme-primary hover:bg-app-muted transition-colors" title="Artifacts saved in this chat">
-                <FileText className="w-3.5 h-3.5" />
-              </button>
-            )}
             <button onClick={() => setCmdPaletteOpen(true)} className="p-1.5 rounded-md text-theme-muted hover:text-theme-primary hover:bg-app-muted transition-colors" title="Commands">
-              <Command className="w-3.5 h-3.5" />
+              <MoreHorizontal className="w-3.5 h-3.5" />
             </button>
           </div>
         </div>
@@ -329,68 +371,13 @@ export default function ChatPage() {
       {loadingMessages && messages.length === 0 && !streaming ? (
         <div className="flex-1 flex items-center justify-center"><div className="text-xs text-theme-subtle animate-pulse">Loading...</div></div>
       ) : messages.length === 0 && !activeSessionId && !streaming ? (
-        <div className="flex-1 flex flex-col items-center justify-center text-center px-8">
-          {/* Sparkle icon in rounded square */}
-          <div className="w-14 h-14 rounded-xl bg-accent-soft flex items-center justify-center mb-5">
-            <Sparkles className="w-6 h-6 text-accent" strokeWidth={1.5} />
-          </div>
-
-          {/* Headline */}
-          <h2 className="text-[20px] font-semibold text-theme-primary tracking-tight mb-2">
-            {CHAT_EMPTY_PROMPT}
-          </h2>
-          <p className="text-[13px] text-theme-muted font-body mb-8">
-            Use <span className="text-accent font-mono">@mentions</span> to reference workflows, repos, and agents.
-          </p>
-
-          {/* Quick-action grid (2 columns × 3 rows) */}
-          <div className="grid grid-cols-2 gap-2 w-full max-w-lg">
-            {[
-              { icon: Zap, label: 'List workflows', prompt: 'List all workflows' },
-              { icon: BarChart3, label: 'Dashboard stats', prompt: 'Show me the dashboard stats' },
-              { icon: Terminal, label: 'Recent executions', prompt: 'Show me recent executions' },
-              { icon: FolderOpen, label: 'List repos', prompt: 'List all registered repos' },
-              { icon: AlertTriangle, label: 'Failed today', prompt: 'Show me executions that failed today' },
-              { icon: Bot, label: 'Available agents', prompt: 'List all available agents' },
-            ].map(({ icon: Icon, label, prompt }) => (
-              <button
-                key={label}
-                onClick={() => handleSuggestionClick(prompt)}
-                className="card-hover flex items-center gap-2.5 px-3.5 py-2.5 text-left group cursor-pointer"
-              >
-                <Icon className="w-4 h-4 text-theme-muted group-hover:text-accent shrink-0 transition-colors" strokeWidth={1.5} />
-                <span className="text-[13px] text-theme-secondary group-hover:text-theme-primary transition-colors">
-                  {label}
-                </span>
-              </button>
-            ))}
-          </div>
-        </div>
+        <div className="chat-empty-stream" aria-label="New conversation" />
       ) : (
-        <ChatMessageList messages={messages} streamText={streamText} thinkingText={thinkingText} streaming={streaming} activeToolCalls={activeToolCalls} agentThreads={agentThreads} agentReports={agentReports} threadsByMessage={threadsByMessage} spawnedAgents={spawnedAgents} pendingUserQuestion={pendingUserQuestion} onAnswerUserQuestion={answerUserQuestion} activeAgent={activeSession?.activeAgent} onSuggestionClick={handleSuggestionClick} onSaveToLearnings={handleSaveToLearnings} />
+        <ChatMessageList messages={messages} streamText={streamText} thinkingText={thinkingText} streaming={streaming} activeToolCalls={activeToolCalls} agentThreads={agentThreads} agentReports={agentReports} threadsByMessage={threadsByMessage} spawnedAgents={spawnedAgents} pendingUserQuestion={pendingUserQuestion} onAnswerUserQuestion={answerUserQuestion} onAnswerWorkflowIntervention={answerWorkflowIntervention} activeAgent={activeSession?.activeAgent} onSuggestionClick={handleSuggestionClick} onSaveToLearnings={handleSaveToLearnings} />
       )}
 
-      {/* Agent selector + Input */}
-      <div>
-        {/* Agent selector */}
-        {(() => {
-          const agentLocked = !!activeSession?.activeAgent && (activeSession?.messageCount ?? 0) > 0;
-          return (
-            <div className="px-4 pt-2.5 pb-1 flex items-center gap-2 border-t border-app">
-              <AgentChatDropdown
-                value={selectedAgent}
-                onChange={(name, cwd) => {
-                  setSelectedAgent(name);
-                  setSelectedAgentCwd(cwd);
-                }}
-                agents={allAgents}
-                disabled={agentLocked}
-                loading={agentsLoading}
-              />
-              {agentLocked && <span className="text-[10px] text-theme-subtle font-mono">locked</span>}
-            </div>
-          );
-        })()}
+      {/* Input */}
+      <div className="chat-input-dock">
         <ChatInput
           ref={chatInputRef} onSend={handleSend} onCancel={cancelStream} streaming={streaming}
           disabled={activeSession?.source === 'slack'}
@@ -413,6 +400,22 @@ export default function ChatPage() {
           inheritedEffort={selectedAgentDoc?.reasoningEffort ?? (activeProvider === 'codex' ? 'high' : 'medium')}
           inheritedPlanMode={selectedAgentDoc?.planMode ?? null}
           onAgentOverridesChanged={handleOverridesChange}
+          extraControls={(() => {
+            const agentLocked = !!activeSession?.activeAgent && (activeSession?.messageCount ?? 0) > 0;
+            return (
+              <AgentChatDropdown
+                value={selectedAgent}
+                onChange={(name, cwd) => {
+                  setSelectedAgent(name);
+                  setSelectedAgentCwd(cwd);
+                }}
+                agents={allAgents}
+                disabled={agentLocked || activeSession?.source === 'slack'}
+                loading={agentsLoading}
+                variant="composer"
+              />
+            );
+          })()}
         />
       </div>
 
@@ -441,6 +444,7 @@ export default function ChatPage() {
         </div>
       )}
       </div>
+      {showRunSidebar && <ChatRunSidebar runs={spawnedAgents} />}
     </div>
   );
 }

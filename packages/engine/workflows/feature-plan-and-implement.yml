@@ -159,6 +159,15 @@ nodes:
       edge cases, out-of-scope items, affected areas, risks, assumptions,
       non-functional requirements, and any remaining open questions.
 
+      TRACEABILITY CONTRACT:
+        - Every requirement MUST have a stable id: REQ-001, REQ-002, ...
+        - Every acceptance criterion MUST have a stable id: AC-001, AC-002, ...
+        - Every edge case MUST have a stable id: EC-001, EC-002, ...
+        - Every non-functional requirement MUST have a stable id:
+          NFR-001, NFR-002, ...
+        - Each acceptance criterion must reference the requirement id it
+          validates. Do not emit unnumbered acceptance criteria.
+
       Use the refined_request as your primary input if present — it
       incorporates the user's original ask plus all clarification answers.
       Fall back to user_request only if no clarification occurred.
@@ -183,14 +192,14 @@ nodes:
         "prd_markdown": "<your full PRD as a markdown string>",
         "prd_artifact_url": "<url returned by allen_save_artifact>",
         "prd_json": {
-          "requirements": [...],
-          "acceptance_criteria": [...],
-          "edge_cases": [...],
+          "requirements": [{ "id": "REQ-001", "...": "..." }],
+          "acceptance_criteria": [{ "id": "AC-001", "requirement_id": "REQ-001", "...": "..." }],
+          "edge_cases": [{ "id": "EC-001", "...": "..." }],
           "assumptions": [...],
           "risks": [...],
           "open_questions": [...],
           "out_of_scope": [...],
-          "non_functional_requirements": [...]
+          "non_functional_requirements": [{ "id": "NFR-001", "...": "..." }]
         }
       }
       ```
@@ -272,6 +281,15 @@ nodes:
       technology choices with rationale, non-functional requirements, risks
       and mitigations, tradeoffs considered, out of scope.
 
+      TRACEABILITY CONTRACT:
+        - Every HLA component, data flow, risk mitigation, and NFR mapping
+          must reference the PRD ids it supports: REQ-xxx, AC-xxx, EC-xxx,
+          or NFR-xxx.
+        - If an HLA decision does not map to a PRD id, mark it as
+          "implementation support" and explain why it is necessary.
+        - Do not invent new requirements in the HLA. Send gaps back through
+          the audit/retry path instead.
+
       ARTIFACT + OUTPUT CONTRACT:
       Before emitting your JSON output, save the full HLA as a public
       markdown artifact so the human gate and downstream nodes can link
@@ -298,6 +316,9 @@ nodes:
           "non_functional_requirements": [...],
           "risks": [...],
           "build_vs_buy": [...],
+          "traceability_matrix": [
+            { "design_item": "...", "prd_ids": ["REQ-001", "AC-001"] }
+          ],
           "confidence": 0.95
         }
       }
@@ -393,6 +414,15 @@ nodes:
       diagrams, error taxonomy, observability plan, UI changes, implementation
       flags (has_backend_changes / has_frontend_changes).
 
+      TRACEABILITY CONTRACT:
+        - Every data model, API contract, UI change, validation rule, and
+          test strategy item must list the PRD ids it satisfies.
+        - Preserve the PRD ids exactly: REQ-xxx, AC-xxx, EC-xxx, NFR-xxx.
+        - Add a coverage matrix section mapping every AC id to concrete
+          implementation touchpoints and intended tests.
+        - Do not leave any AC id unmapped. If an AC needs no code change,
+          mark it not_applicable with a reason.
+
       ARTIFACT + OUTPUT CONTRACT:
       Before emitting your JSON output, save the full TDD as a public
       markdown artifact so the human gate and downstream nodes can link
@@ -417,6 +447,9 @@ nodes:
           "api_contracts": [...],
           "error_taxonomy": [...],
           "observability": {...},
+          "coverage_matrix": [
+            { "ac_id": "AC-001", "implementation_touchpoints": [...], "intended_tests": [...] }
+          ],
           "has_backend_changes": true,
           "has_frontend_changes": false
         },
@@ -601,10 +634,14 @@ nodes:
 
       Step-by-step:
         1. Read the inline PRD, HLA, and TDD markdown above.
-        2. Delegate to codebase-navigator with repo_path={{worktree_path}}
-           to inspect the files TDD touches, identify existing patterns,
-           dependency order, and validation commands. Treat the worktree
-           as the target repo; it's an isolated clone.
+        2. Spawn codebase-navigator with repo_path={{worktree_path}}
+           in READ-ONLY mode to inspect the files TDD touches, identify
+           existing patterns, dependency order, and validation commands.
+           Treat the worktree as the target repo; it's an isolated clone.
+           The navigator MUST NOT edit files, create tests, run formatters
+           that write files, commit, push, or patch anything. All code
+           changes must be done only by backend-developer, frontend-developer,
+           devops-engineer, or security-specialist.
         3. Build the plan (file entries with
            specialist hints, validation commands, risks).
         4. DO NOT call create_workspace. The worktree above already
@@ -615,10 +652,12 @@ nodes:
         6. Wait on each batch, retry each specialist once on failure,
            aggregate files_changed.
         7. Stop here. Emit a JSON output block including
-           implementation_plan_json, specialists_used, batches,
-           files_changed, any_failures, failure_details. For qa_review,
-           mark qa_lead/code_review/security_review/docs_review as
-           "not_run" because downstream workflow nodes own those stages.
+           implementation_plan_json, ac_coverage_matrix,
+           specialist_assignments, conflict_plan, validation_commands,
+           self_check, specialists_used, batches, files_changed,
+           any_failures, failure_details. For qa_review, mark
+           qa_lead/code_review/security_review/docs_review as "not_run"
+           because downstream workflow nodes own those stages.
 
       HARD RULES:
         - NEVER edit files yourself. Use spawn_agent for every change.
@@ -626,6 +665,12 @@ nodes:
         - NEVER call create_workspace — the workspace is already provisioned.
         - NEVER run QA, code review, security review, docs update, PR creation,
           or summary from this node.
+        - NEVER use codebase-navigator to write code. If navigator reports
+          that it edited files, set any_failures=true and explain it in
+          failure_details.
+        - Do not return success unless every PRD acceptance criterion / TDD
+          contract is assigned to at least one concrete plan item or explicitly
+          marked not_applicable with a reason.
 
       {{#if retry_context}}
       RETRY FEEDBACK:
@@ -633,9 +678,75 @@ nodes:
       {{/if}}
     outputs:
       implementation_plan_json: "The full implementation plan JSON — auto-captured as implementation_plan.json."
+      ac_coverage_matrix: "Array mapping each PRD acceptance criterion / requirement id to plan items, owner specialists, files, and expected validation evidence."
+      specialist_assignments: "Array of specialist dispatches with owner, owned files, plan items, status, and returned evidence."
+      conflict_plan: "Array describing file conflicts and serialization decisions."
+      validation_commands: "Commands discovered for build/lint/typecheck/tests and which node/specialist is responsible for running them."
+      self_check: "Engineering lead's pre-QA completeness check with verdict, missing_ac_items, unassigned_plan_items, specialist_failures, and navigator_write_findings."
       files_changed: "List of all files the specialists touched."
       any_failures: "Boolean — true if any specialist returned a non-recoverable failure."
       failure_details: "Structured details per failing specialist. Empty on success."
+
+  implementation_self_check:
+    agent: implementation-self-checker
+    resume_on_retry: false
+    prompt: |
+      Run a read-only implementation completeness check before QA starts.
+
+      This is NOT product validation and NOT code review. Your job is to
+      determine whether implementation specialists completed the planned
+      work and whether QA has enough complete evidence to proceed.
+
+      APPROVED PRD URL: {{prd_artifact_url}}
+      APPROVED HLA URL: {{hla_artifact_url}}
+      APPROVED TDD URL: {{tdd_artifact_url}}
+      (Fetch each URL with WebFetch/curl to read the document content.)
+
+      WORKTREE PATH: {{worktree_path}}
+      IMPLEMENTATION PLAN: {{implementation_plan_json}}
+      AC COVERAGE MATRIX FROM ENGINEERING LEAD: {{ac_coverage_matrix}}
+      SPECIALIST ASSIGNMENTS: {{specialist_assignments}}
+      CONFLICT PLAN: {{conflict_plan}}
+      VALIDATION COMMANDS: {{validation_commands}}
+      ENGINEERING SELF CHECK: {{self_check}}
+      FILES CHANGED BY ENGINEERING LEAD: {{files_changed}}
+      ANY FAILURES: {{any_failures}}
+      FAILURE DETAILS: {{failure_details}}
+
+      Mandatory full-check rules:
+        1. Read the PRD/HLA/TDD and current git diff.
+        2. Check every acceptance criterion / requirement id from the PRD.
+        3. Check every plan item from implementation_plan_json.
+        4. Check every specialist assignment result.
+        5. Check files_changed against git diff --name-only.
+        6. Check that codebase-navigator did not write files. If it did,
+           fail and report navigator_write_findings.
+        7. Continue after finding the first problem. Return ALL missing ACs,
+           unassigned plan items, specialist failures, validation handoff gaps,
+           and evidence gaps in one response.
+        8. Do not edit files or run commands that mutate the worktree.
+
+      Verdict:
+        pass     → QA can start.
+        fail     → implementation must run again with your failure_details.
+        escalate → the design/plan is contradictory or evidence cannot be
+                   obtained from the worktree.
+
+      {{#if retry_context}}
+      RETRY FEEDBACK:
+      {{retry_context}}
+      {{/if}}
+    outputs:
+      implementation_self_check_verdict: "pass | fail | escalate."
+      ac_coverage_matrix: "Verified matrix of AC/requirement id to planned files, actual files, evidence, and status."
+      plan_items_checked: "Array of plan items with owner, status, and evidence."
+      missing_ac_items: "All acceptance criteria / requirement ids with missing or partial implementation evidence."
+      unassigned_plan_items: "Plan items without a valid owner or without implementation evidence."
+      specialist_failures: "Specialist failures or incomplete specialist results."
+      navigator_write_findings: "Evidence that codebase-navigator changed files, if any."
+      validation_handoff_gaps: "Build/lint/type/test commands that were not run or not handed off to QA."
+      files_changed_verified: "Boolean indicating files_changed matches git diff evidence."
+      failure_details: "Complete failure details for implementation retry. Empty on pass."
 
   qa:
     agent: qa-lead
@@ -663,6 +774,15 @@ nodes:
         3. Verify coverage against the PRD's acceptance criteria.
         4. Loop until green (max 3 write-run-verify cycles).
         5. Emit your structured JSON verdict.
+
+      FULL-SWEEP REQUIREMENT:
+        - Do not stop at the first broken test, missing test, or failed AC.
+        - Inspect all AC ids from the PRD and return every uncovered or
+          failing AC in one response.
+        - Run or enumerate all configured validation commands. If one command
+          fails early, still inspect the remaining commands where possible.
+        - failure_details must be an array/object with all failures grouped by
+          build, lint, unit, integration, regression, and AC coverage.
 
       ALWAYS pass repo_path={{worktree_path}} to every spawn_agent call.
 
@@ -699,6 +819,15 @@ nodes:
 
       Run your blocking-checks list + informational-checks list against the
       current diff in the worktree. End with your structured JSON verdict.
+
+      FULL-SWEEP REQUIREMENT:
+        - Do not stop at the first blocking violation.
+        - Check every PRD AC id, edge case id, and NFR id before returning.
+        - Return all blocking violations and all informational deviations in
+          one response, grouped by id/rule.
+        - If a retry_context is present, re-check the entire PRD, not only the
+          previous failure list. Previously fixed issues should be marked
+          resolved only if the current diff proves it.
 
       {{#if retry_context}}
       RETRY FEEDBACK from a previous validator loop:
@@ -870,6 +999,13 @@ nodes:
       {{tdd_audit_rationale}}
       issues: {{tdd_audit_issues}}
 
+      IMPLEMENTATION SELF-CHECK: {{implementation_self_check_verdict}}
+      missing AC items: {{missing_ac_items}}
+      unassigned plan items: {{unassigned_plan_items}}
+      specialist failures: {{specialist_failures}}
+      navigator write findings: {{navigator_write_findings}}
+      validation handoff gaps: {{validation_handoff_gaps}}
+
       QA VERDICT:    {{qa_verdict}}
       cycles used: {{cycles_used}}
       failure details: {{failure_details}}
@@ -937,7 +1073,11 @@ edges:
   - { from: plan_approval_gate, to: produce_hla, condition: "decision == 'request_changes' AND scope == 'architecture'", max_retries: 2, retry_context: "Human feedback on HLA:\n{{feedback}}" }
   - { from: plan_approval_gate, to: produce_tdd, condition: "decision == 'request_changes' AND scope == 'technical_design'", max_retries: 2, retry_context: "Human feedback on TDD:\n{{feedback}}" }
   - { from: plan_approval_gate, to: produce_prd, condition: "decision == 'request_changes' AND scope == 'all'", max_retries: 2, retry_context: "Human feedback (full redesign):\n{{feedback}}" }
-  - { from: implement, to: qa }
+  - { from: implement, to: implementation_self_check, condition: "any_failures != true" }
+  - { from: implement, to: escalation_review, condition: "any_failures == true" }
+  - { from: implementation_self_check, to: qa, condition: "implementation_self_check_verdict == 'pass'" }
+  - { from: implementation_self_check, to: implement, condition: "implementation_self_check_verdict == 'fail'", max_retries: 2, retry_context: "Implementation self-check failed — complete ALL missing items before returning:\n{{failure_details}}\n\nMissing AC items:\n{{missing_ac_items}}\n\nUnassigned plan items:\n{{unassigned_plan_items}}\n\nSpecialist failures:\n{{specialist_failures}}\n\nNavigator write findings:\n{{navigator_write_findings}}\n\nValidation handoff gaps:\n{{validation_handoff_gaps}}" }
+  - { from: implementation_self_check, to: escalation_review, condition: "implementation_self_check_verdict == 'escalate'" }
   - { from: qa, to: implementation_validator, condition: "qa_verdict == 'pass'" }
   - { from: qa, to: implement, condition: "qa_verdict == 'fail'", max_retries: 2, retry_context: "QA failed — build/lint/tests broken:\n{{failure_details}}" }
   - { from: qa, to: escalation_review, condition: "qa_verdict == 'escalate'" }
@@ -961,6 +1101,7 @@ edges:
   - { from: audit_hla,                to: escalation_review, condition: "hla_audit_verdict == 'revise' AND __retry_exhausted_from == 'audit_hla'" }
   - { from: audit_tdd,                to: escalation_review, condition: "tdd_audit_verdict == 'revise' AND __retry_exhausted_from == 'audit_tdd'" }
   - { from: plan_approval_gate,       to: escalation_review, condition: "decision == 'request_changes' AND __retry_exhausted_from == 'plan_approval_gate'" }
+  - { from: implementation_self_check, to: escalation_review, condition: "implementation_self_check_verdict == 'fail' AND __retry_exhausted_from == 'implementation_self_check'" }
   - { from: qa,                       to: escalation_review, condition: "qa_verdict == 'fail' AND __retry_exhausted_from == 'qa'" }
   - { from: implementation_validator, to: escalation_review, condition: "prd_satisfied != true AND __retry_exhausted_from == 'implementation_validator'" }
   - { from: code_review,              to: escalation_review, condition: "review_verdict == 'REQUEST_CHANGES' AND __retry_exhausted_from == 'code_review'" }
@@ -988,7 +1129,7 @@ edges:
   # whenever prd_satisfied has never been set. Guard the validator branch
   # with `__retry_exhausted_from == 'implementation_validator'` instead —
   # that flag is only ever set after validator retries exhaust.
-  - { from: escalation_review, to: implement,   condition: "decision == 'retry_with_feedback' AND (qa_verdict == 'escalate' OR qa_verdict == 'fail' OR __retry_exhausted_from == 'implementation_validator' OR review_verdict == 'REQUEST_CHANGES')", retry_context: "Human intervened on implementation/validation/review failure. Feedback:\n{{feedback}}" }
+  - { from: escalation_review, to: implement,   condition: "decision == 'retry_with_feedback' AND (any_failures == true OR implementation_self_check_verdict == 'escalate' OR implementation_self_check_verdict == 'fail' OR qa_verdict == 'escalate' OR qa_verdict == 'fail' OR __retry_exhausted_from == 'implementation_validator' OR review_verdict == 'REQUEST_CHANGES')", retry_context: "Human intervened on implementation/self-check/validation/review failure. Feedback:\n{{feedback}}" }
   # Plan-approval-gate request_changes exhaustion — route back to the
   # producer for whichever scope the human last picked. Guarded by the
   # exhaustion source so these don't fan out with audit-driven retries
@@ -1009,6 +1150,7 @@ edges:
   - { from: escalation_review, to: create_workspace,        condition: "decision == 'override_and_continue' AND (tdd_audit_verdict == 'escalate' OR tdd_audit_verdict == 'revise') AND trusted_mode == true" }
   - { from: escalation_review, to: plan_approval_gate,      condition: "decision == 'override_and_continue' AND (tdd_audit_verdict == 'escalate' OR tdd_audit_verdict == 'revise') AND trusted_mode != true" }
   - { from: escalation_review, to: implementation_validator, condition: "decision == 'override_and_continue' AND (qa_verdict == 'escalate' OR qa_verdict == 'fail')" }
+  - { from: escalation_review, to: qa,                       condition: "decision == 'override_and_continue' AND (implementation_self_check_verdict == 'escalate' OR implementation_self_check_verdict == 'fail')" }
   - { from: escalation_review, to: update_docs,             condition: "decision == 'override_and_continue' AND __retry_exhausted_from == 'implementation_validator'" }
   - { from: escalation_review, to: open_pr,                 condition: "decision == 'override_and_continue' AND review_verdict == 'REQUEST_CHANGES'" }
   # For plan-approval and clarify exhaustions, overriding advances the

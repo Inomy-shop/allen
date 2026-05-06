@@ -119,6 +119,139 @@ export const workflows = {
 
 // ── Executions ─────────────────────────────────────────────────────────────
 
+export type RunPhase =
+  | 'queued'
+  | 'planning'
+  | 'inspecting'
+  | 'editing'
+  | 'testing'
+  | 'reviewing'
+  | 'opening_pr'
+  | 'waiting_for_human'
+  | 'running'
+  | 'completed'
+  | 'failed'
+  | 'cancelled';
+
+export interface RunStatus {
+  origin: 'chat' | 'linear' | 'workflow' | 'direct_agent';
+  runType: 'workflow' | 'agent';
+  title: string;
+  status: string;
+  execution: {
+    id: string;
+    workflowId?: string | null;
+    workflowName: string;
+    status: string;
+    source?: string | null;
+    startedAt?: string;
+    completedAt?: string | null;
+    durationMs?: number | null;
+    cost?: { actual: number | null; estimated: number } | null;
+    currentNodes?: string[];
+    completedNodes?: string[];
+    failedNode?: string | null;
+    errorMessage?: string | null;
+    isAgentExecution?: boolean;
+  };
+  progress: {
+    completed: number;
+    total: number;
+    percent: number;
+    label: string;
+    currentStep: string | null;
+    phase: RunPhase;
+  };
+  humanInput: {
+    required: boolean;
+    interventionId?: string;
+    title?: string;
+    stage?: string;
+    severity?: string;
+  };
+  linear: {
+    issueId?: string;
+    identifier?: string;
+    title?: string;
+    url?: string;
+    assignment?: Record<string, unknown> | null;
+  } | null;
+  workspace: {
+    id?: string;
+    name?: string | null;
+    status?: string | null;
+    repoName?: string | null;
+    branch?: string | null;
+    baseBranch?: string | null;
+    worktreePath?: string | null;
+    prUrl?: string | null;
+  } | null;
+  pullRequest: {
+    id?: string;
+    number?: number | null;
+    title?: string | null;
+    url?: string | null;
+    status?: string | null;
+    branch?: string | null;
+    baseBranch?: string | null;
+    createdAt?: string | null;
+    updatedAt?: string | null;
+    mergedAt?: string | null;
+  } | null;
+  childAgents: Array<{
+    executionId: string;
+    agentName: string;
+    status: string;
+    currentStep?: string | null;
+    durationMs?: number | null;
+    cost?: { actual: number | null; estimated: number } | null;
+    errorMessage?: string | null;
+  }>;
+  workflowSteps: Array<{
+    id: string;
+    name: string;
+    index: number;
+    type?: string | null;
+    agent?: string | null;
+    status: string;
+    attempts: number;
+    retryReasons?: string[];
+    model?: string | null;
+    startedAt?: string | null;
+    completedAt?: string | null;
+    durationMs?: number | null;
+    cost?: { actual: number | null; estimated: number } | null;
+    error?: string | null;
+  }>;
+  interventions: Record<string, unknown>[];
+  artifacts: Array<{
+    artifactId: string;
+    filename?: string | null;
+    relativePath?: string | null;
+    url?: string | null;
+    contentType?: string | null;
+    description?: string | null;
+    rootType?: string | null;
+    rootId?: string | null;
+    spawnContext?: {
+      originType?: string | null;
+      parentId?: string | null;
+      nodeName?: string | null;
+      agentName?: string | null;
+      agentExecutionId?: string | null;
+    } | null;
+    createdAt?: string | null;
+  }>;
+  recentActivity: Array<{
+    type: string;
+    label: string;
+    agent?: string;
+    tool?: string | null;
+    at?: string | null;
+    source?: string;
+  }>;
+}
+
 /** Shape returned by GET /executions/:id/children — spawn-tree row. */
 export interface SpawnedChild {
   id: string;
@@ -173,6 +306,7 @@ export const executions = {
     return request<{ items: any[]; total: number }>(`/executions?${qs.toString()}`);
   },
   get: (id: string) => request<any>(`/executions/${id}`),
+  context: (id: string) => request<RunStatus>(`/executions/${id}/context`),
   start: (workflowId: string, input: Record<string, unknown>) =>
     request<any>('/executions', { method: 'POST', body: JSON.stringify({ workflowId, input }) }),
   cancel: (id: string) =>
@@ -379,6 +513,7 @@ export const interventions = {
     answered_by_user_id?: string;
     human_node_name?: string;
     retry_target_override?: string;
+    source?: 'chat' | 'execution_page' | 'interventions_page';
   }) =>
     request<any>(`/interventions/${id}/respond`, {
       method: 'POST',

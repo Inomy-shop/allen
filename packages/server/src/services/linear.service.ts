@@ -548,7 +548,16 @@ export class LinearService {
     if (!workflowDoc) throw new Error('Workflow not found');
 
     const executionSvc = new ExecutionService(this.db);
-    const started = await executionSvc.start(workflowId, input);
+    const executionInput = {
+      ...input,
+      linear_issue_id: input.linear_issue_id ?? issue.id,
+      linear_identifier: input.linear_identifier ?? issue.identifier,
+      linear_title: input.linear_title ?? issue.title,
+      linear_url: input.linear_url ?? issue.url,
+      ticket_id: input.ticket_id ?? issue.identifier,
+      ticket_url: input.ticket_url ?? issue.url,
+    };
+    const started = await executionSvc.start(workflowId, executionInput);
     const executionId = typeof started.id === 'string' ? started.id : null;
     const executionStatus = typeof started.status === 'string' ? started.status : null;
     const workflowName =
@@ -572,6 +581,21 @@ export class LinearService {
       error: null,
     };
     await this.assignmentSvc.upsertDispatch(assignment);
+    if (executionId) {
+      await this.db.collection('executions').updateOne(
+        { id: executionId },
+        {
+          $set: {
+            'meta.origin': 'linear',
+            'meta.linearIssueId': issue.id,
+            'meta.linearIdentifier': issue.identifier,
+            'meta.linearTitle': issue.title,
+            'meta.linearUrl': issue.url,
+            'meta.requestText': input.task ?? input.request ?? issue.title,
+          },
+        },
+      ).catch(() => {});
+    }
     LinearService.issuesCache.clear();
     return assignment;
   }
@@ -728,6 +752,27 @@ export class LinearService {
       );
       const executionId = (result.execution_id as string | undefined) ?? undefined;
       const spawnError = result.error as string | undefined;
+
+      if (executionId) {
+        await this.db.collection('executions').updateOne(
+          { id: executionId },
+          {
+            $set: {
+              'meta.origin': 'linear',
+              'meta.linearIssueId': issue.id,
+              'meta.linearIdentifier': issue.identifier,
+              'meta.linearTitle': issue.title,
+              'meta.linearUrl': issue.url,
+              'meta.workspaceId': initial.workspaceId,
+              'meta.workspacePath': ready.worktreePath,
+              'meta.repoId': initial.repoId,
+              'meta.branch': initial.branch,
+              'meta.requestText': `${issue.identifier}: ${issue.title}`,
+              'meta.requiresCodeChanges': true,
+            },
+          },
+        ).catch(() => {});
+      }
 
       await this.assignmentSvc.patch(initial.linearIssueId, {
         status: spawnError ? 'failed' : 'running',

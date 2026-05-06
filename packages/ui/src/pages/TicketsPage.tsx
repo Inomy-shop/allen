@@ -7,10 +7,12 @@ import {
   workflows as workflowsApi,
 } from '../services/api';
 import { useAgents } from '../hooks/useAgents';
+import { useRunContext } from '../hooks/useRunContext';
 import { useToast } from '../components/common/Toast';
 import { renderMarkdown } from '../components/chat/ChatMessageList';
 import { type AgentOption, type TeamOption } from '../components/agents/AgentAssignDropdown';
 import DispatchModal, { type DispatchTarget, type WorkflowOption } from '../components/linear/DispatchModal';
+import RunStatusCard from '../components/executions/RunStatusCard';
 import {
   AlertCircle, ChevronDown, ChevronRight, Circle, Clock, ExternalLink,
   FolderGit2, KeyRound, Loader2, MinusCircle, Play, RefreshCw, Search, X, Sparkles, CheckCircle,
@@ -139,6 +141,96 @@ function compareRunRecency(a: LinearIssue, b: LinearIssue): number {
   return bTime - aTime;
 }
 
+function dispatchTargetLabel(target: DispatchTarget | null): string {
+  if (!target) return 'auto';
+  if (target.kind === 'workflow') return `workflow: ${target.workflowName}`;
+  if (target.kind === 'team-lead') return `team lead: ${target.agentName} (${target.teamName})`;
+  return `agent: ${target.name}`;
+}
+
+function compactWorkflowInputForPrompt(
+  issue: LinearIssue,
+  input?: Record<string, unknown>,
+): Record<string, unknown> | undefined {
+  if (!input) return undefined;
+  const seedTask = `[${issue.identifier}] ${issue.title}${issue.description ? `\n\n${issue.description}` : ''}`;
+  const duplicateByKey: Record<string, string[]> = {
+    task: [seedTask, issue.title, issue.description ?? ''],
+    topic: [seedTask, issue.title, issue.description ?? ''],
+    description: [seedTask, issue.description ?? '', issue.title],
+    user_request: [seedTask, issue.description ?? '', issue.title],
+    bug_report: [seedTask, issue.description ?? '', issue.title],
+    ticket_id: [issue.identifier, issue.id],
+    identifier: [issue.identifier],
+    title: [issue.title],
+    ticket_url: [issue.url],
+    url: [issue.url],
+  };
+  const compact = Object.fromEntries(
+    Object.entries(input).filter(([key, value]) => {
+      if (value == null || value === '') return false;
+      const normalized = typeof value === 'string' ? value.trim() : value;
+      if (typeof normalized !== 'string') return true;
+      const duplicates = duplicateByKey[key] ?? [];
+      return !duplicates.some(item => item.trim() === normalized);
+    }),
+  );
+  return Object.keys(compact).length > 0 ? compact : undefined;
+}
+
+function buildChatDispatchPrompt(
+  issue: LinearIssue,
+  args: {
+    target: DispatchTarget | null;
+    repoId: string;
+    repoName?: string;
+    repoPath?: string;
+    extraInstructions: string;
+    promptTemplate?: string;
+    workflowInput?: Record<string, unknown>;
+  },
+): string {
+  const workflowInputOverrides = compactWorkflowInputForPrompt(issue, args.workflowInput);
+  const lines = [
+    'Dispatch this Linear ticket through Allen.',
+    '',
+    'Ticket:',
+    `- Identifier: ${issue.identifier}`,
+    `- Linear issue id: ${issue.id}`,
+    `- Title: ${issue.title}`,
+    `- URL: ${issue.url}`,
+    `- Current status: ${issue.state?.name ?? 'unknown'} (${issue.state?.type ?? 'unknown'})`,
+    issue.project ? `- Project: ${issue.project.name}` : null,
+    issue.team ? `- Team: ${issue.team.name} (${issue.team.key})` : null,
+    issue.priorityLabel ? `- Priority: ${issue.priorityLabel}` : null,
+    issue.linearAssignee ? `- Linear assignee: ${issue.linearAssignee.name}` : null,
+    issue.labels.length > 0 ? `- Labels: ${issue.labels.map(label => label.name).join(', ')}` : null,
+    '',
+    'Description:',
+    issue.description?.trim() || '(no description)',
+    '',
+    'User dispatch preference:',
+    `- Selected target: ${dispatchTargetLabel(args.target)}`,
+    `- Target kind: ${args.target?.kind ?? 'auto'}`,
+    args.repoId ? `- Repo id: ${args.repoId}` : '- Repo id: not selected',
+    args.repoName ? `- Repo name: ${args.repoName}` : null,
+    args.repoPath ? `- Repo path: ${args.repoPath}` : null,
+    args.extraInstructions ? `- Extra instructions: ${args.extraInstructions}` : '- Extra instructions: none',
+    args.promptTemplate ? ['', 'Target-specific prompt override:', args.promptTemplate] : null,
+    workflowInputOverrides ? ['', 'Workflow input overrides:', '```json', JSON.stringify(workflowInputOverrides, null, 2), '```'] : null,
+    '',
+    'Instructions:',
+    '1. First update the Linear ticket status from Backlog/Todo/Unstarted to In Progress if it is not already in progress.',
+    '2. Decide the best route. If a target was selected, use it as a preference, but override it if another available workflow, lead agent, or specialist agent is clearly better. If target kind is auto, choose from available workflows, lead agents, and specialists yourself.',
+    '3. Use a matching workflow if available; if the chosen workflow has a workspace/create-workspace step, do not create a separate workspace first. Pass the ticket, repo, and dispatch context into the workflow and let the workflow create or reuse its workspace.',
+    '4. If assigning a lead agent or specialist agent directly and code changes are required, create or reuse a workspace before assigning implementation work.',
+    '5. Otherwise use a lead agent for multi-agent work, or the best specialist agent for single-agent work.',
+    '6. Keep progress visible in this chat with execution, workspace, and PR links when available.',
+    '7. If human input is needed, ask clearly in this chat.',
+  ];
+  return lines.flat().filter((line): line is string => line != null).join('\n');
+}
+
 export default function TicketsPage() {
   const navigate = useNavigate();
   const toast = useToast();
@@ -174,7 +266,7 @@ export default function TicketsPage() {
   // to satisfy React's rules of hooks.
   type TopTab = 'all' | 'active' | 'done' | 'running';
   const [topTab, setTopTab] = useState<TopTab>('all');
-  const [viewMode, setViewMode] = useState<'list' | 'board'>('list');
+  const [viewMode, setViewMode] = useState<'list' | 'board'>('board');
   useEffect(() => {
     if (topTab === 'active') setStateFilters(new Set<StateType>(['started', 'unstarted']));
     else if (topTab === 'done') setStateFilters(new Set<StateType>(['completed']));
@@ -353,54 +445,27 @@ export default function TicketsPage() {
   async function handleDispatch(
     issue: LinearIssue,
     args: {
-      target: DispatchTarget;
+      target: DispatchTarget | null;
       repoId: string;
       extraInstructions: string;
       promptTemplate?: string;
       workflowInput?: Record<string, unknown>;
     },
   ) {
-    if (args.target.kind === 'workflow') {
-      // Schema-driven: the dialog already collected + cast inputs per
-      // the workflow's parsed.input. Fall back to the old auto-built
-      // task payload if the workflow has no schema.
-      const input = args.workflowInput ?? {
-        task: [
-          `[${issue.identifier}] ${issue.title}`,
-          issue.description || '',
-          args.extraInstructions ? `\nAdditional instructions:\n${args.extraInstructions}` : '',
-        ].filter(Boolean).join('\n\n'),
-        ticket_id: issue.identifier,
-        ticket_url: issue.url,
-      };
-      const { assignment } = await linearApi.dispatchWorkflow(issue.id, {
-        workflowId: args.target.workflowId,
-        input,
-      });
-      setIssues(prev => prev.map(i => i.id === issue.id ? { ...i, agentAssignee: assignment } : i));
-      if (detail?.id === issue.id) setDetail({ ...detail, agentAssignee: assignment });
-      if (selectedId !== issue.id) setSelectedId(issue.id);
-      toast.success(`Started ${args.target.workflowName} on ${issue.identifier}`);
-      setDispatchFor(null);
-      setTimeout(() => { void linearApi.issue(issue.id).then(setDetail).catch(() => {}); }, 1500);
-      return;
-    }
-
-    // Both 'agent' and 'team-lead' route through the existing
-    // /linear/dispatch endpoint with the resolved agent name.
-    const agentName = args.target.kind === 'agent' ? args.target.name : args.target.agentName;
-    const { assignment } = await linearApi.dispatch(issue.id, {
-      agentName,
-      repoId: args.repoId,
-      extraInstructions: args.extraInstructions,
-      promptTemplate: args.promptTemplate,
+    const repo = repos.find(r => String(r._id) === args.repoId);
+    const prompt = buildChatDispatchPrompt(issue, {
+      ...args,
+      repoName: repo?.name,
+      repoPath: repo?.path,
     });
-    setIssues(prev => prev.map(i => i.id === issue.id ? { ...i, agentAssignee: assignment } : i));
-    if (detail?.id === issue.id) setDetail({ ...detail, agentAssignee: assignment });
-    if (selectedId !== issue.id) setSelectedId(issue.id);
-    toast.success(`Dispatching ${agentName} to ${issue.identifier}…`);
     setDispatchFor(null);
-    setTimeout(() => { void linearApi.issue(issue.id).then(setDetail).catch(() => {}); }, 3000);
+    toast.success(`Opening chat to dispatch ${issue.identifier}`);
+    const params = new URLSearchParams({
+      autosend: '1',
+      prompt,
+    });
+    if (args.repoId) params.set('repoId', args.repoId);
+    navigate(`/chat?${params.toString()}`);
   }
 
   const agentOptions: AgentOption[] = useMemo(
@@ -486,15 +551,15 @@ export default function TicketsPage() {
   return (
     <div className="flex h-full min-h-0 flex-col">
       {/* ── Top bar (matches handoff/pages/remaining.jsx LinearV2) ──────── */}
-      <div className="px-6 pt-5 pb-0 border-b border-app shrink-0">
-        <div className="flex items-center gap-2 mb-2 text-[12px] text-theme-muted">
-          <span>Code</span>
+      <div className="surface-bar pb-0 shrink-0">
+        <div className="page-crumb">
+          <span>Sources</span>
           <span className="text-theme-subtle">/</span>
-          <span>Linear</span>
+          <span>Tickets</span>
         </div>
         <div className="flex items-center justify-between mb-3">
           <div className="flex items-center gap-3">
-            <h1 className="text-[20px] font-semibold text-theme-primary tracking-tight">Linear</h1>
+            <h1 className="page-title">Tickets</h1>
             <div className="flex items-center gap-1.5 text-[11px] font-mono text-theme-muted">
               <span className="w-1.5 h-1.5 rounded-full bg-accent-green" />
               {status.workspaceName ?? 'Linear'} · {issues.length} issues
@@ -1046,6 +1111,7 @@ function TicketDrawer({
   const targetKind = runTargetKind(assignee);
   const targetName = runTargetName(assignee);
   const isWorkflowRun = targetKind === 'workflow';
+  const { runContext, loading: runContextLoading, error: runContextError } = useRunContext(assignee?.executionId);
 
   const statusTone =
     status === 'running' ? 'bg-accent/10 text-accent border-accent/30'
@@ -1115,6 +1181,15 @@ function TicketDrawer({
                 {isWorkflowRun && assignee.workflowId && <> · workflow <span className="text-theme-muted">{assignee.workflowName ?? assignee.workflowId}</span></>}
                 {assignee.branch && <> · branch <span className="text-theme-muted">{assignee.branch}</span></>}
               </div>
+              {assignee.executionId && (
+                <RunStatusCard
+                  context={runContext}
+                  loading={runContextLoading}
+                  error={runContextError}
+                  title="Live execution"
+                  compact
+                />
+              )}
               <TicketRunSteps assignee={assignee} />
               {assignee.error && (
                 <div className="text-[10px] font-mono text-accent-red break-words">{assignee.error}</div>

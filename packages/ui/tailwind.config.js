@@ -1,11 +1,11 @@
 /** @type {import('tailwindcss').Config} */
 // =====================================================================
-// ALLEN UI · v2 (Linear-clean direction)
+// ALLEN UI · v2 (prototype-aligned direction)
 // ---------------------------------------------------------------------
 // - darkMode: 'class' is preserved so the .dark theme works.
 // - Legacy v1 glow box-shadows kept as no-ops so existing JSX with
 //   className="shadow-glow-blue" doesn't break the build.
-// - accent-blue / accent-cyan aliased to violet so existing JSX
+// - accent-blue / accent-cyan aliased to the prototype blue so existing JSX
 //   keeps compiling (525+ usages).
 // =====================================================================
 export default {
@@ -34,7 +34,7 @@ export default {
         },
         accent: {
           // v1 names kept so existing className strings still resolve.
-          // Every alias now points at the v2 violet.
+          // Every alias now points at the prototype blue.
           DEFAULT: 'rgb(var(--color-accent) / <alpha-value>)',
           blue:    'rgb(var(--color-accent) / <alpha-value>)',   // legacy alias
           cyan:    'rgb(var(--color-accent) / <alpha-value>)',   // legacy alias
@@ -68,13 +68,13 @@ export default {
       },
       fontSize: {
         '2xs':    ['11px', { lineHeight: '1.5' }],
-        'meta':   ['11px', { lineHeight: '1.5', letterSpacing: '0.05em' }],
+        'meta':   ['11px', { lineHeight: '1.5', letterSpacing: '0' }],
         'caption':['12px', { lineHeight: '1.5' }],
         'body':   ['13px', { lineHeight: '1.55' }],
-        'title':  ['14px', { lineHeight: '1.4', letterSpacing: '-0.015em' }],
-        'h2':     ['18px', { lineHeight: '1.3', letterSpacing: '-0.02em' }],
-        'h1':     ['24px', { lineHeight: '1.25', letterSpacing: '-0.025em' }],
-        'display':['44px', { lineHeight: '1.05', letterSpacing: '-0.035em' }],
+        'title':  ['14px', { lineHeight: '1.4', letterSpacing: '0' }],
+        'h2':     ['18px', { lineHeight: '1.3', letterSpacing: '0' }],
+        'h1':     ['24px', { lineHeight: '1.25', letterSpacing: '0' }],
+        'display':['44px', { lineHeight: '1.05', letterSpacing: '0' }],
       },
       animation: {
         'pulse-running': 'pulse-running 2s ease-in-out infinite',

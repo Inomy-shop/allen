@@ -123,18 +123,18 @@ export default function WorkflowListPage() {
   }
 
   return (
-    <div className="px-6 pt-5 pb-8">
+    <div className="page-shell">
       {/* ── Breadcrumb ── */}
-      <div className="flex items-center gap-2 mb-2 text-[12px] text-theme-muted">
-        <span>Build</span>
+      <div className="page-crumb">
+        <span>Org</span>
         <span className="text-theme-subtle">/</span>
         <span>Workflows</span>
       </div>
 
       {/* ── Page header ── */}
-      <div className="flex items-center justify-between mb-5">
+      <div className="page-head">
         <div className="flex items-center gap-3">
-          <h1 className="text-[20px] font-semibold text-theme-primary tracking-tight">Workflows</h1>
+          <h1 className="page-title">Workflows</h1>
           <span className="text-[12px] font-mono text-theme-muted">{workflows.length}</span>
         </div>
         <div className="flex items-center gap-2">
@@ -193,7 +193,7 @@ export default function WorkflowListPage() {
               <div key={wf._id} className="border-b border-app last:border-b-0">
                 {/* ── Row ── */}
                 <div
-                  className="flex items-center gap-4 px-4 py-2.5 hover:bg-app-muted/50 transition-colors cursor-pointer select-none"
+                  className="flex items-center gap-4 px-4 py-2.5 hover:bg-app-muted/55 transition-colors cursor-pointer select-none"
                   onClick={() => toggleExpand(wf._id)}
                 >
                   {/* Expand chevron */}

@@ -447,7 +447,7 @@ const upsertIncident: ChatTool = {
 
 const updateIncident: ChatTool = {
   name: 'allen_monitoring_update_incident',
-  description: 'Update a monitoring incident after Linear ticketing, routing, repair dispatch, suppression, or resolution.',
+  description: 'Update a monitoring incident after Linear ticketing, routing, bug-fix dispatch, suppression, or resolution.',
   inputSchema: {
     type: 'object',
     properties: {
@@ -491,7 +491,7 @@ const updateIncident: ChatTool = {
 
 const resolveRepoPath: ChatTool = {
   name: 'allen_monitoring_resolve_repo_path',
-  description: 'Resolve the Allen repo path to pass into self-healing repair workflows.',
+  description: 'Resolve the Allen repo path to pass into bug-investigate-and-fix for self-healing incidents.',
   inputSchema: { type: 'object', properties: {} },
   async execute(_args, db) {
     if (process.env.ALLEN_SELF_HEALING_REPO_PATH) {

@@ -11,7 +11,7 @@ chat conversation, agent execution, lead-agent delegation, workflow execution,
 memory injection, tool call, or MCP integration fails, Allen must analyze the
 complete available runtime context, decide whether the failure is caused by an
 actionable issue in the Allen repo, create a Linear ticket with diagnostic
-evidence, and route the ticket to the correct repair path automatically.
+evidence, and route the ticket to the correct bug-fix or triage path automatically.
 The check runs every 1 hour and covers completed, failed, cancelled/canceled,
 interrupted, and stale records because Allen issues can appear even when a run
 technically completes.
@@ -75,9 +75,9 @@ The failure modes are broader than explicit `status: failed` runs. Examples:
   definitions, or integration glue.
 - Deduplicate recurring failures so Allen updates or groups an existing issue
   instead of spamming Linear.
-- Route created or reopened issues to the appropriate repair target:
-  engineering lead, specialist agent, bug-fix workflow, memory-system workflow,
-  workflow-definition maintainer, or integration agent.
+- Route created or reopened issues to the appropriate bug-fix or triage target:
+  bug-fix workflow, engineering lead, specialist agent, workflow-definition
+  maintainer, or integration agent.
 - Preserve enough evidence in the ticket for an agent to reproduce and act
   without requiring a human to manually inspect MongoDB or server logs.
 
@@ -295,12 +295,11 @@ path.
 ### 10.1 Routing Examples
 
 - Chat service failure → engineering lead or backend agent.
-- Tool call schema/dispatch failure → integration/tooling agent.
-- Workflow YAML/node issue → workflow maintainer or workflow-fix workflow.
-- Memory extraction/injection failure → memory-system agent or memory repair
-  workflow.
+- Tool call schema/dispatch failure → bug-fix workflow or integration/tooling agent.
+- Workflow YAML/node issue → bug-fix workflow or workflow maintainer.
+- Memory extraction/injection failure → bug-fix workflow or memory-system agent.
 - Agent prompt/delegation behavior → agent-builder or team lead.
-- Prompt/instruction behavior → prompt-instruction repair workflow.
+- Prompt/instruction behavior → bug-fix workflow.
 - Linear dispatch failure → Linear integration agent or backend agent.
 
 ### 10.2 Dispatch Behavior
@@ -311,7 +310,7 @@ The full version must be able to:
 - Dispatch an issue to an existing agent using the Linear dispatch flow.
 - Dispatch an issue to a bug-fix workflow with the Allen repo selected.
 - Start a lead-agent delegation when the issue spans multiple subsystems.
-- Track the repair execution ID back on the ticket and incident record.
+- Track the bug-fix execution ID back on the ticket and incident record.
 
 ## 11. Product Workflow
 
@@ -325,8 +324,8 @@ The full version must be able to:
 6. Deduper checks `monitoring_incidents` and Linear issue metadata.
 7. If actionable and unique, Linear ticket is created.
 8. If duplicate, existing ticket receives a compact update.
-9. Router dispatches or assigns the work to the correct Allen repair path.
-10. Repair execution status is tracked and linked back to the incident.
+9. Router dispatches or assigns the work to the correct Allen bug-fix or triage path.
+10. Bug-fix execution status is tracked and linked back to the incident.
 
 ## 12. Data Model Requirements
 
@@ -540,8 +539,8 @@ Track:
   node, failure report, trace/log summary, retry counts, and state summary.
 - Completed chats, agent runs, delegations, or workflows can create a ticket
   when logs, traces, messages, tool calls, or outputs show wrong Allen behavior.
-- Prompt/instruction issues can create a ticket and route to a built-in repair
-  workflow that changes Allen prompts, workflow node prompts, system guidance,
+- Prompt/instruction issues can create a ticket and route to bug-investigate-and-fix
+  to change Allen prompts, workflow node prompts, system guidance,
   memory guidance, or tool-use instructions.
 - Memory retrieval/injection failures can create a ticket with expected versus
   actual memory evidence and learning IDs.
@@ -550,8 +549,8 @@ Track:
 - Duplicate failures update the existing issue or incident record instead of
   creating repeated Linear issues.
 - Created issues use the required Linear team, project, and assignee env vars.
-- Auto-routing can dispatch at least one created issue to an Allen repair agent
-  or bug-fix workflow and persist the dispatch execution ID.
+- Auto-routing can dispatch at least one created issue to bug-investigate-and-fix
+  and persist the dispatch execution ID.
 - Monitoring failures do not break the original chat, agent, or workflow run.
 
 ## 20. Rollout Plan
@@ -577,7 +576,7 @@ Track:
 
 - Add routing table from source/root cause to agent or workflow.
 - Dispatch to existing Linear agent/workflow flow.
-- Track repair execution and update incidents.
+- Track bug-fix execution and update incidents.
 
 ### Phase 4: Self-Improving Loop
 

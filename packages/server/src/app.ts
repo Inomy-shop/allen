@@ -115,22 +115,12 @@ async function main(): Promise<void> {
     OrgSeedService.seedTeamNames,
     OrgSeedService.seedAgentNames,
     [
-      'coding-workflow',
       'feature-plan-and-implement',
       'bug-investigate-and-fix',
       'resolve-pr-reviews',
       'understand-and-plan',
-      'test-human-intervention',
-      'test-chat-loop',
-      'test-create-workspace',
-      'test-artifacts',
       'allen-self-healing-monitor-hourly',
       'self-healing-incident-triage',
-      'self-healing-repair-allen',
-      'self-healing-memory-repair',
-      'self-healing-tooling-repair',
-      'self-healing-workflow-repair',
-      'self-healing-prompt-instruction-repair',
     ],
   );
   await seedCronJobs(db);

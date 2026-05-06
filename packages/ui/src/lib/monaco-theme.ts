@@ -1,7 +1,6 @@
 /**
- * Monaco theme registration to match the Linear v2 design system.
- * Two themes: 'allen-light' (D2 / Linear-clean) and 'allen-dark'
- * (Linear-night). Pick one based on the current resolved color mode
+ * Monaco theme registration to match the Allen prototype design system.
+ * Two themes: 'allen-light' and 'allen-dark'. Pick one based on the current resolved color mode
  * via `resolveColorMode` from ./theme.
  */
 import type * as Monaco from 'monaco-editor';
@@ -15,22 +14,22 @@ function defineThemes(monaco: typeof Monaco) {
     rules: [],
     colors: {
       'editor.background': '#FFFFFF',
-      'editor.foreground': '#18181A',
-      'editor.lineHighlightBackground': '#F8F9FC',
-      'editor.lineHighlightBorder': '#F8F9FC',
-      'editorGutter.background': '#FBFBFA',
-      'editorLineNumber.foreground': '#B8B8BC',
-      'editorLineNumber.activeForeground': '#5E6AD2',
-      'editor.selectionBackground': '#EEF0FB',
-      'editor.inactiveSelectionBackground': '#F4F4F2',
-      'editorCursor.foreground': '#5E6AD2',
-      'editorIndentGuide.background': '#F4F4F2',
-      'editorIndentGuide.activeBackground': '#E8E7E4',
-      'editorWhitespace.foreground': '#E8E7E4',
-      'diffEditor.insertedTextBackground': '#05966915',
-      'diffEditor.removedTextBackground': '#DC262615',
-      'diffEditor.insertedLineBackground': '#0596690D',
-      'diffEditor.removedLineBackground': '#DC26260D',
+      'editor.foreground': '#12171B',
+      'editor.lineHighlightBackground': '#F9F8F6',
+      'editor.lineHighlightBorder': '#F9F8F6',
+      'editorGutter.background': '#FBFAF8',
+      'editorLineNumber.foreground': '#A1A5A9',
+      'editorLineNumber.activeForeground': '#2A76E2',
+      'editor.selectionBackground': '#DEF0FF',
+      'editor.inactiveSelectionBackground': '#F6F5F2',
+      'editorCursor.foreground': '#2A76E2',
+      'editorIndentGuide.background': '#F6F5F2',
+      'editorIndentGuide.activeBackground': '#E3E1DE',
+      'editorWhitespace.foreground': '#E3E1DE',
+      'diffEditor.insertedTextBackground': '#269E5F15',
+      'diffEditor.removedTextBackground': '#DE3B3D15',
+      'diffEditor.insertedLineBackground': '#269E5F0D',
+      'diffEditor.removedLineBackground': '#DE3B3D0D',
     },
   });
 
@@ -39,23 +38,23 @@ function defineThemes(monaco: typeof Monaco) {
     inherit: true,
     rules: [],
     colors: {
-      'editor.background': '#16171B',
-      'editor.foreground': '#F4F4F5',
-      'editor.lineHighlightBackground': '#1C1D22',
-      'editor.lineHighlightBorder': '#1C1D22',
-      'editorGutter.background': '#0F1014',
-      'editorLineNumber.foreground': '#5C5D63',
-      'editorLineNumber.activeForeground': '#7170FF',
-      'editor.selectionBackground': '#7170FF33',
-      'editor.inactiveSelectionBackground': '#23242A',
-      'editorCursor.foreground': '#7170FF',
-      'editorIndentGuide.background': '#1C1D22',
-      'editorIndentGuide.activeBackground': '#34353C',
-      'editorWhitespace.foreground': '#26272D',
-      'diffEditor.insertedTextBackground': '#34C78225',
-      'diffEditor.removedTextBackground': '#F8555525',
-      'diffEditor.insertedLineBackground': '#34C78215',
-      'diffEditor.removedLineBackground': '#F8555515',
+      'editor.background': '#0D1116',
+      'editor.foreground': '#DBDEE2',
+      'editor.lineHighlightBackground': '#13181D',
+      'editor.lineHighlightBorder': '#13181D',
+      'editorGutter.background': '#06080C',
+      'editorLineNumber.foreground': '#494E54',
+      'editorLineNumber.activeForeground': '#5CA4FF',
+      'editor.selectionBackground': '#5CA4FF33',
+      'editor.inactiveSelectionBackground': '#13181D',
+      'editorCursor.foreground': '#5CA4FF',
+      'editorIndentGuide.background': '#13181D',
+      'editorIndentGuide.activeBackground': '#181C22',
+      'editorWhitespace.foreground': '#1F2329',
+      'diffEditor.insertedTextBackground': '#43C07A25',
+      'diffEditor.removedTextBackground': '#FA686325',
+      'diffEditor.insertedLineBackground': '#43C07A15',
+      'diffEditor.removedLineBackground': '#FA686315',
     },
   });
 }

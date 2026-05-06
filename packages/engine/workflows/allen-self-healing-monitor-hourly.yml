@@ -2,8 +2,8 @@ name: allen-self-healing-monitor-hourly
 description: >
   Agent-led hourly self-healing monitor for Allen. Agents collect evidence
   through Allen MCP tools, analyze runtime behavior, create/update Linear
-  tickets through Linear MCP, route repair, and dispatch built-in repair
-  workflows through Allen MCP.
+  tickets through Linear MCP, route bug-fix work, and dispatch the built-in
+  bug-fix workflow through Allen MCP.
 
 version: 1
 
@@ -139,7 +139,7 @@ nodes:
         mcp__allen__allen_monitoring_create_evidence_bundle.
 
       Do not create Linear tickets in this node.
-      Do not route repair in this node.
+      Do not route or dispatch bug-fix work in this node.
 
       End with JSON: evidence_bundles[], reviewed_records[], notable_patterns[],
       no_issue_rationale.
@@ -216,7 +216,8 @@ nodes:
 
       Ticket content must include evidence reviewed, affected links/ids,
       suspected root cause, whether code/prompt/instruction/workflow/memory
-      changes may be needed, and the recommended repair workflow.
+      changes may be needed, and whether bug-investigate-and-fix or triage is
+      recommended.
 
       Do not call backend LinearService. Linear work must happen through Linear
       MCP tools.
@@ -232,7 +233,7 @@ nodes:
     agent: allen-incident-router
     resume_on_retry: true
     prompt: |
-      Route ticketed incidents to built-in repair workflows and dispatch them
+      Route ticketed incidents to the built-in bug-fix workflow and dispatch it
       using Allen MCP tools.
 
       AUTO DISPATCH: {{auto_dispatch}}
@@ -242,17 +243,21 @@ nodes:
       If auto_dispatch is false, record routing recommendations only.
 
       Routing map:
-      - memory_system -> self-healing-memory-repair
-      - tool_integration -> self-healing-tooling-repair
-      - workflow_definition -> self-healing-workflow-repair
-      - agent_prompt or instruction_bug -> self-healing-prompt-instruction-repair
-      - allen_repo -> self-healing-repair-allen
+      - memory_system -> bug-investigate-and-fix
+      - tool_integration -> bug-investigate-and-fix
+      - workflow_definition -> bug-investigate-and-fix
+      - agent_prompt or instruction_bug -> bug-investigate-and-fix
+      - allen_repo -> bug-investigate-and-fix
       - unknown -> self-healing-incident-triage
 
       Before dispatching, call mcp__allen__allen_monitoring_resolve_repo_path.
-      Dispatch with mcp__allen__run_workflow. Pass incident id/fingerprint,
-      Linear id/identifier/url, repo_path, source_type, root_cause_area,
-      incident_summary, and evidence.
+      Dispatch with mcp__allen__run_workflow. For bug-investigate-and-fix, pass:
+      - repo_path: resolved Allen repo path
+      - bug_report: a concise synthesized report containing incident
+        id/fingerprint, Linear id/identifier/url, source_type, root_cause_area,
+        incident_summary, evidence reviewed, suspected root cause, and the
+        subsystem focus.
+      - related_pr: blank unless the evidence identifies a specific PR.
 
       After dispatch, call mcp__allen__allen_monitoring_update_incident with
       status=dispatched, dispatch_execution_id, and routing_target. If you do
@@ -260,8 +265,8 @@ nodes:
 
       End with JSON: repair_routes[], repair_executions[], not_dispatched[].
     outputs:
-      repair_routes: "Chosen repair routes."
-      repair_executions: "Repair workflow execution ids."
+      repair_routes: "Chosen bug-fix or triage routes."
+      repair_executions: "bug-investigate-and-fix execution ids."
       not_dispatched: "Routes not dispatched with reasons."
 
   close_scan:
@@ -282,8 +287,8 @@ nodes:
       "hourly-agent" and last_successful_scan_at={{until}} only after you have
       recorded incident/ticket/dispatch status.
 
-      Summarize what happened. If a repair workflow failed to start because of
-      Allen itself, create a follow-up monitoring incident through
+      Summarize what happened. If bug-investigate-and-fix failed to start
+      because of Allen itself, create a follow-up monitoring incident through
       mcp__allen__allen_monitoring_upsert_incident.
 
       End with JSON: final_status, incidents_count, tickets_count,
@@ -292,7 +297,7 @@ nodes:
       final_status: "completed | completed_with_followups | failed"
       incidents_count: "Number of incidents analyzed."
       tickets_count: "Number of Linear tickets created or updated."
-      repairs_dispatched_count: "Number of repair workflows dispatched."
+      repairs_dispatched_count: "Number of bug-fix workflows dispatched."
 
 edges:
   - { from: START, to: plan_scan }

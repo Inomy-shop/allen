@@ -1,8 +1,23 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import type { ReactNode } from 'react';
 import { Link } from 'react-router-dom';
-import { AlertTriangle, CheckCircle, ExternalLink, Loader2, Play, RefreshCw, ShieldAlert, Ticket, Wrench } from 'lucide-react';
-import { monitoring as monitoringApi } from '../services/api';
+import {
+  AlertTriangle,
+  Check,
+  CheckCircle,
+  Clock,
+  DollarSign,
+  ExternalLink,
+  Loader2,
+  Play,
+  RefreshCw,
+  ShieldAlert,
+  Ticket,
+  Wrench,
+  X,
+  Zap,
+} from 'lucide-react';
+import StatusBadge from '../components/common/StatusBadge';
+import { executions as executionsApi, monitoring as monitoringApi } from '../services/api';
 import { useToast } from '../components/common/Toast';
 
 interface MonitoringIncident {
@@ -15,35 +30,21 @@ interface MonitoringIncident {
   confidence: number;
   title: string;
   summary: string;
-  firstSeenAt: string;
   lastSeenAt: string;
-  occurrenceCount: number;
-  linearIssueId?: string | null;
   linearIdentifier?: string | null;
   linearUrl?: string | null;
   dispatchExecutionId?: string | null;
-  routingTarget?: any;
-  relatedIds?: Record<string, unknown>;
-  evidence?: Record<string, unknown>;
 }
 
-const severityClass: Record<string, string> = {
-  critical: 'bg-accent-red/20 text-accent-red border-accent-red/40',
-  high: 'bg-accent-orange/20 text-accent-orange border-accent-orange/40',
-  medium: 'bg-accent-yellow/20 text-accent-yellow border-accent-yellow/40',
-  low: 'bg-accent-blue/15 text-accent-blue border-accent-blue/30',
-};
+type AnalyticsTab = 'overview' | 'workflows' | 'agents' | 'cost' | 'monitor';
 
-const statusClass: Record<string, string> = {
-  ticketed: 'bg-accent-blue/15 text-accent-blue border-accent-blue/30',
-  updated_existing: 'bg-accent-blue/15 text-accent-blue border-accent-blue/30',
-  dispatched: 'bg-accent-green/15 text-accent-green border-accent-green/30',
-  resolved: 'bg-accent-green/15 text-accent-green border-accent-green/30',
-  ignored: 'bg-app-muted text-theme-muted border-app',
-  suppressed: 'bg-app-muted text-theme-muted border-app',
-  failed_to_ticket: 'bg-accent-red/15 text-accent-red border-accent-red/30',
-  failed_to_dispatch: 'bg-accent-red/15 text-accent-red border-accent-red/30',
-};
+function shortDuration(ms: number | null | undefined): string {
+  if (ms == null) return '-';
+  const sec = ms / 1000;
+  if (sec < 60) return `${sec.toFixed(1)}s`;
+  const min = Math.floor(sec / 60);
+  return `${min}m ${Math.floor(sec % 60)}s`;
+}
 
 function relative(dateIso?: string): string {
   if (!dateIso) return '-';
@@ -55,31 +56,89 @@ function relative(dateIso?: string): string {
   return new Date(dateIso).toLocaleDateString();
 }
 
-function Badge({ children, className }: { children: ReactNode; className?: string }) {
+function executionCost(exec: any): number {
+  const cost = exec?.cost;
+  if (typeof cost === 'number') return cost;
+  return Number(cost?.actual ?? cost?.estimated ?? 0) || 0;
+}
+
+function workflowName(exec: any): string {
+  return exec?.workflowName ?? exec?.workflowId ?? exec?.type ?? 'unknown';
+}
+
+function KpiCard({
+  icon: Icon,
+  label,
+  value,
+  tone = 'muted',
+}: {
+  icon: typeof Play;
+  label: string;
+  value: string | number;
+  tone?: 'muted' | 'info' | 'ok' | 'warn' | 'err';
+}) {
   return (
-    <span className={`inline-flex items-center rounded-sm border px-1.5 py-0.5 text-[10px] font-mono uppercase ${className ?? 'bg-app-muted text-theme-muted border-app'}`}>
-      {children}
-    </span>
+    <div className="an-kpi">
+      <span className={`an-kpi-ic ${tone}`}><Icon className="h-3.5 w-3.5" /></span>
+      <div className="an-kpi-v">{value}</div>
+      <div className="an-kpi-l">{label}</div>
+    </div>
+  );
+}
+
+function MetricList({
+  title,
+  rows,
+  value,
+}: {
+  title: string;
+  rows: Array<{ name: string; metric: number; runs: number; label: string }>;
+  value: 'duration' | 'cost';
+}) {
+  const max = Math.max(...rows.map(row => row.metric), 1);
+  return (
+    <section className="an-section an-card">
+      <header className="an-h">
+        <h3>{value === 'cost' ? <Zap className="h-3 w-3" /> : <Clock className="h-3 w-3" />} {title}</h3>
+      </header>
+      <div className="an-metric-list">
+        {rows.length === 0 ? (
+          <div className="an-empty">no data yet.</div>
+        ) : rows.map((row, index) => (
+          <div key={row.name} className="an-metric-row">
+            <span className="an-rank">{index + 1}</span>
+            <span className="an-metric-name mono">{row.name}</span>
+            <span className="an-meter"><i style={{ width: `${Math.max(4, (row.metric / max) * 100)}%` }} /></span>
+            <span className="an-metric-value mono">{row.label}</span>
+            <span className="an-metric-runs mono">{row.runs} runs</span>
+          </div>
+        ))}
+      </div>
+    </section>
   );
 }
 
 export default function MonitoringPage() {
   const toast = useToast();
+  const [executions, setExecutions] = useState<any[]>([]);
+  const [total, setTotal] = useState(0);
   const [incidents, setIncidents] = useState<MonitoringIncident[]>([]);
-  const [selected, setSelected] = useState<MonitoringIncident | null>(null);
+  const [statusFilter, setStatusFilter] = useState('');
+  const [tab, setTab] = useState<AnalyticsTab>('overview');
+  const [range, setRange] = useState('24h');
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState<string | null>(null);
-  const [statusFilter, setStatusFilter] = useState('');
 
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const res = await monitoringApi.incidents({ status: statusFilter || undefined, limit: 100 });
-      setIncidents(res.incidents ?? []);
-      setSelected((prev) => {
-        if (!prev) return (res.incidents ?? [])[0] ?? null;
-        return (res.incidents ?? []).find((i: MonitoringIncident) => i.fingerprint === prev.fingerprint) ?? (res.incidents ?? [])[0] ?? null;
-      });
+      const [execRes, incidentRes] = await Promise.all([
+        executionsApi.listPaged({ limit: 100, offset: 0 }),
+        monitoringApi.incidents({ status: statusFilter || undefined, limit: 100 }).catch(() => ({ incidents: [] })),
+      ]);
+      setExecutions(execRes.items ?? []);
+      setTotal(execRes.total ?? 0);
+      setIncidents(incidentRes.incidents ?? []);
     } catch (err) {
       toast.error((err as Error).message);
     } finally {
@@ -87,20 +146,51 @@ export default function MonitoringPage() {
     }
   }, [statusFilter, toast]);
 
-  useEffect(() => { load(); }, [load]);
+  useEffect(() => { void load(); }, [load]);
 
-  const stats = useMemo(() => {
-    const byStatus = new Map<string, number>();
-    for (const incident of incidents) byStatus.set(incident.status, (byStatus.get(incident.status) ?? 0) + 1);
-    return {
-      total: incidents.length,
-      open: incidents.filter(i => !['resolved', 'ignored', 'suppressed'].includes(i.status)).length,
-      dispatched: byStatus.get('dispatched') ?? 0,
-      failed: incidents.filter(i => i.status.startsWith('failed')).length,
-    };
-  }, [incidents]);
+  const analytics = useMemo(() => {
+    const completed = executions.filter(e => e.status === 'completed').length;
+    const failed = executions.filter(e => e.status === 'failed').length;
+    const running = executions.filter(e => ['running', 'queued', 'waiting_for_input'].includes(e.status)).length;
+    const totalCost = executions.reduce((sum, exec) => sum + executionCost(exec), 0);
 
-  async function runAction(action: 'scan' | 'ticket' | 'dispatch' | 'ignored' | 'suppressed' | 'resolved', incident?: MonitoringIncident) {
+    const byWorkflow = new Map<string, { cost: number; duration: number; durationCount: number; runs: number }>();
+    for (const exec of executions) {
+      const key = workflowName(exec);
+      const current = byWorkflow.get(key) ?? { cost: 0, duration: 0, durationCount: 0, runs: 0 };
+      current.cost += executionCost(exec);
+      if (typeof exec.durationMs === 'number') {
+        current.duration += exec.durationMs;
+        current.durationCount += 1;
+      }
+      current.runs += 1;
+      byWorkflow.set(key, current);
+    }
+
+    const durationRows = [...byWorkflow.entries()]
+      .map(([name, row]) => ({
+        name,
+        metric: row.durationCount ? row.duration / row.durationCount : 0,
+        runs: row.runs,
+        label: shortDuration(row.durationCount ? row.duration / row.durationCount : null),
+      }))
+      .sort((a, b) => b.metric - a.metric)
+      .slice(0, 6);
+
+    const costRows = [...byWorkflow.entries()]
+      .map(([name, row]) => ({
+        name,
+        metric: row.cost,
+        runs: row.runs,
+        label: `$${row.cost.toFixed(2)}`,
+      }))
+      .sort((a, b) => b.metric - a.metric)
+      .slice(0, 6);
+
+    return { completed, failed, running, totalCost, durationRows, costRows };
+  }, [executions]);
+
+  async function runMonitorAction(action: 'scan' | 'ticket' | 'dispatch' | 'ignored' | 'suppressed' | 'resolved', incident?: MonitoringIncident) {
     const key = `${action}:${incident?.fingerprint ?? 'global'}`;
     setBusy(key);
     try {
@@ -121,166 +211,169 @@ export default function MonitoringPage() {
     }
   }
 
+  const monitorOpen = incidents.filter(i => !['resolved', 'ignored', 'suppressed'].includes(i.status)).length;
+  const monitorFailed = incidents.filter(i => i.status.startsWith('failed')).length;
+
   return (
-    <div className="h-full flex flex-col bg-app">
-      <div className="border-b border-app px-6 py-4 bg-app-card/60">
-        <div className="flex items-center justify-between gap-4">
+    <div className="content scroll-hide analytics-page" data-screen-label="analytics">
+      <div className="page-head">
+        <div className="ph-row">
           <div>
-            <div className="flex items-center gap-2">
-              <ShieldAlert className="w-5 h-5 text-accent-blue" />
-              <h1 className="text-lg font-semibold text-theme-primary">Self-Healing Monitor</h1>
-            </div>
-            <p className="text-xs text-theme-muted mt-1">
-              Hourly scan of Allen chats, agents, workflows, logs, traces, memory, tool calls, and dispatch records.
-            </p>
+            <h1>analytics</h1>
+            <p className="sub">cost, runtime, and run health across the org</p>
           </div>
-          <div className="flex items-center gap-2">
-            <select
-              value={statusFilter}
-              onChange={(e) => setStatusFilter(e.target.value)}
-              className="input text-xs h-8"
-            >
-              <option value="">All statuses</option>
-              <option value="ticketed">Ticketed</option>
-              <option value="updated_existing">Updated existing</option>
-              <option value="dispatched">Dispatched</option>
-              <option value="failed_to_ticket">Ticket failed</option>
-              <option value="failed_to_dispatch">Dispatch failed</option>
-              <option value="ignored">Ignored</option>
-              <option value="suppressed">Suppressed</option>
-              <option value="resolved">Resolved</option>
+          <div className="row gap-2">
+            <select className="lrn-select min-w-[140px]" value={range} onChange={e => setRange(e.target.value)}>
+              <option value="24h">Last 24 hours</option>
+              <option value="7d">Last 7 days</option>
+              <option value="30d">Last 30 days</option>
             </select>
-            <button className="btn-ghost text-xs" onClick={load} disabled={loading}>
-              <RefreshCw className={`w-3.5 h-3.5 ${loading ? 'animate-spin' : ''}`} />
-              Refresh
-            </button>
-            <button className="btn-primary text-xs" onClick={() => runAction('scan')} disabled={!!busy}>
-              {busy === 'scan:global' ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Play className="w-3.5 h-3.5" />}
-              Run scan
+            <button className="btn btn-secondary btn-sm" onClick={load} disabled={loading} title="Refresh analytics">
+              <RefreshCw className={`h-3.5 w-3.5 ${loading ? 'animate-spin' : ''}`} />
             </button>
           </div>
         </div>
-
-        <div className="grid grid-cols-4 gap-3 mt-4">
-          <div className="panel px-3 py-2"><div className="text-[10px] overline">Total</div><div className="text-xl font-semibold">{stats.total}</div></div>
-          <div className="panel px-3 py-2"><div className="text-[10px] overline">Open</div><div className="text-xl font-semibold">{stats.open}</div></div>
-          <div className="panel px-3 py-2"><div className="text-[10px] overline">Dispatched</div><div className="text-xl font-semibold">{stats.dispatched}</div></div>
-          <div className="panel px-3 py-2"><div className="text-[10px] overline">Failed</div><div className="text-xl font-semibold">{stats.failed}</div></div>
-        </div>
-      </div>
-
-      <div className="flex-1 grid grid-cols-[minmax(420px,0.9fr)_minmax(420px,1.1fr)] min-h-0">
-        <div className="border-r border-app overflow-y-auto">
-          {loading && (
-            <div className="flex items-center justify-center py-16 text-theme-muted">
-              <Loader2 className="w-5 h-5 animate-spin" />
-            </div>
-          )}
-          {!loading && incidents.length === 0 && (
-            <div className="text-center py-16 text-theme-muted">
-              <CheckCircle className="w-8 h-8 mx-auto mb-2 text-accent-green" />
-              <div className="text-sm">No monitoring incidents</div>
-            </div>
-          )}
-          {incidents.map((incident) => (
-            <button
-              key={incident.fingerprint}
-              onClick={() => setSelected(incident)}
-              className={`w-full text-left border-b border-app px-4 py-3 hover:bg-app-card transition-colors ${selected?.fingerprint === incident.fingerprint ? 'bg-app-card' : ''}`}
-            >
-              <div className="flex items-start justify-between gap-3">
-                <div className="min-w-0">
-                  <div className="text-sm font-medium text-theme-primary truncate">{incident.title}</div>
-                  <div className="text-xs text-theme-muted mt-1 line-clamp-2">{incident.summary}</div>
-                </div>
-                <Badge className={severityClass[incident.severity]}>{incident.severity}</Badge>
-              </div>
-              <div className="flex items-center gap-2 mt-2">
-                <Badge>{incident.sourceType}</Badge>
-                <Badge>{incident.rootCauseArea}</Badge>
-                <Badge className={statusClass[incident.status]}>{incident.status}</Badge>
-                <span className="text-[11px] text-theme-subtle ml-auto">{relative(incident.lastSeenAt)}</span>
-              </div>
+        <nav className="topfilter-tabs mt-3">
+          {[
+            ['overview', 'overview'],
+            ['workflows', 'workflows'],
+            ['agents', 'agents'],
+            ['cost', 'cost'],
+            ['monitor', 'monitor'],
+          ].map(([key, label]) => (
+            <button key={key} type="button" className={`tft ${tab === key ? 'active' : ''}`} onClick={() => setTab(key as AnalyticsTab)}>
+              {label}
             </button>
           ))}
-        </div>
-
-        <div className="overflow-y-auto">
-          {!selected ? (
-            <div className="h-full flex items-center justify-center text-theme-muted">
-              <AlertTriangle className="w-5 h-5 mr-2" />
-              Select an incident
-            </div>
-          ) : (
-            <div className="p-6 space-y-5">
-              <div>
-                <div className="flex items-start justify-between gap-4">
-                  <div>
-                    <h2 className="text-base font-semibold text-theme-primary">{selected.title}</h2>
-                    <p className="text-sm text-theme-muted mt-1">{selected.summary}</p>
-                  </div>
-                  <Badge className={statusClass[selected.status]}>{selected.status}</Badge>
-                </div>
-                <div className="flex flex-wrap gap-2 mt-3">
-                  <Badge className={severityClass[selected.severity]}>{selected.severity}</Badge>
-                  <Badge>{selected.sourceType}</Badge>
-                  <Badge>{selected.rootCauseArea}</Badge>
-                  <Badge>{Math.round((selected.confidence ?? 0) * 100)}% confidence</Badge>
-                  <Badge>{selected.occurrenceCount} occurrence{selected.occurrenceCount === 1 ? '' : 's'}</Badge>
-                </div>
-              </div>
-
-              <div className="flex flex-wrap gap-2">
-                {selected.linearUrl && (
-                  <a href={selected.linearUrl} target="_blank" rel="noreferrer" className="btn-ghost text-xs">
-                    <ExternalLink className="w-3.5 h-3.5" />
-                    {selected.linearIdentifier ?? 'Linear'}
-                  </a>
-                )}
-                {selected.dispatchExecutionId && (
-                  <Link to={`/executions/${selected.dispatchExecutionId}`} className="btn-ghost text-xs">
-                    <Wrench className="w-3.5 h-3.5" />
-                    Repair execution
-                  </Link>
-                )}
-                {!selected.linearIssueId && (
-                  <button className="btn-ghost text-xs" onClick={() => runAction('ticket', selected)} disabled={!!busy}>
-                    <Ticket className="w-3.5 h-3.5" />
-                    Ask agent to ticket
-                  </button>
-                )}
-                <button className="btn-ghost text-xs" onClick={() => runAction('dispatch', selected)} disabled={!!busy}>
-                  <Play className="w-3.5 h-3.5" />
-                  Ask agent to dispatch
-                </button>
-                <button className="btn-ghost text-xs" onClick={() => runAction('resolved', selected)} disabled={!!busy}>Resolve</button>
-                <button className="btn-ghost text-xs" onClick={() => runAction('suppressed', selected)} disabled={!!busy}>Suppress</button>
-                <button className="btn-ghost text-xs" onClick={() => runAction('ignored', selected)} disabled={!!busy}>Ignore</button>
-              </div>
-
-              <section className="panel p-4">
-                <h3 className="text-sm font-semibold text-theme-primary mb-2">Timeline</h3>
-                <div className="grid grid-cols-2 gap-3 text-xs">
-                  <div><span className="text-theme-muted">First seen</span><div className="font-mono">{new Date(selected.firstSeenAt).toLocaleString()}</div></div>
-                  <div><span className="text-theme-muted">Last seen</span><div className="font-mono">{new Date(selected.lastSeenAt).toLocaleString()}</div></div>
-                  <div><span className="text-theme-muted">Fingerprint</span><div className="font-mono break-all">{selected.fingerprint}</div></div>
-                  <div><span className="text-theme-muted">Route</span><div className="font-mono">{selected.routingTarget?.workflowName ?? selected.routingTarget?.agentName ?? '-'}</div></div>
-                </div>
-              </section>
-
-              <section className="panel p-4">
-                <h3 className="text-sm font-semibold text-theme-primary mb-2">Related IDs</h3>
-                <pre className="text-xs font-mono whitespace-pre-wrap overflow-x-auto text-theme-secondary">{JSON.stringify(selected.relatedIds ?? {}, null, 2)}</pre>
-              </section>
-
-              <section className="panel p-4">
-                <h3 className="text-sm font-semibold text-theme-primary mb-2">Evidence</h3>
-                <pre className="text-xs font-mono whitespace-pre-wrap overflow-x-auto text-theme-secondary">{JSON.stringify(selected.evidence ?? {}, null, 2)}</pre>
-              </section>
-            </div>
-          )}
-        </div>
+        </nav>
       </div>
+
+      {tab !== 'monitor' ? (
+        <div className="an-dashboard">
+          <div className="an-kpis">
+            <KpiCard icon={Play} label="total executions" value={total.toLocaleString()} />
+            <KpiCard icon={Loader2} label="running" value={analytics.running} tone="info" />
+            <KpiCard icon={Check} label="completed" value={analytics.completed} tone="ok" />
+            <KpiCard icon={X} label="failed" value={analytics.failed} tone="err" />
+            <KpiCard icon={DollarSign} label="total cost (est.)" value={`$${analytics.totalCost.toFixed(2)}`} tone="warn" />
+          </div>
+
+          <div className="an-body">
+            {(tab === 'overview' || tab === 'workflows' || tab === 'agents') && (
+              <MetricList title="avg duration by workflow" rows={analytics.durationRows} value="duration" />
+            )}
+            {(tab === 'overview' || tab === 'cost') && (
+              <MetricList title="cost by workflow" rows={analytics.costRows} value="cost" />
+            )}
+            <section className="an-section an-card">
+              <header className="an-h">
+                <h3><Play className="h-3 w-3" /> recent executions</h3>
+                <span className="an-h-ct">{total} total</span>
+              </header>
+              <div className="an-runlist">
+                {executions.slice(0, 10).map((exec: any) => (
+                  <Link key={exec.id ?? exec._id} className="an-run" to={`/executions/${exec.id}`}>
+                    <span className="mono an-run-id">{exec.id?.slice(0, 8) ?? 'N/A'}</span>
+                    <span className="an-run-wf">{workflowName(exec)}</span>
+                    <StatusBadge status={exec.status} />
+                    <span className="mono">{shortDuration(exec.durationMs)}</span>
+                  </Link>
+                ))}
+                {!loading && executions.length === 0 && <div className="an-empty">no executions yet.</div>}
+              </div>
+            </section>
+          </div>
+        </div>
+      ) : (
+        <div className="monitor-panel">
+          <div className="monitor-head">
+            <div>
+              <div className="row gap-2">
+                <ShieldAlert className="h-5 w-5 text-accent" />
+                <h2>self-healing monitor</h2>
+              </div>
+              <p className="sub">hourly scan of chats, agents, workflows, logs, traces, memory, tool calls, and dispatch records</p>
+            </div>
+            <div className="row gap-2">
+              <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)} className="lrn-select min-w-[150px]">
+                <option value="">All statuses</option>
+                <option value="ticketed">Ticketed</option>
+                <option value="updated_existing">Updated existing</option>
+                <option value="dispatched">Dispatched</option>
+                <option value="failed_to_ticket">Ticket failed</option>
+                <option value="failed_to_dispatch">Dispatch failed</option>
+                <option value="ignored">Ignored</option>
+                <option value="suppressed">Suppressed</option>
+                <option value="resolved">Resolved</option>
+              </select>
+              <button className="btn btn-secondary btn-sm" onClick={load} disabled={loading}>
+                <RefreshCw className={`h-3.5 w-3.5 ${loading ? 'animate-spin' : ''}`} />
+                refresh
+              </button>
+              <button className="btn btn-primary btn-sm" onClick={() => runMonitorAction('scan')} disabled={!!busy}>
+                {busy === 'scan:global' ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Play className="h-3.5 w-3.5" />}
+                run scan
+              </button>
+            </div>
+          </div>
+
+          <div className="monitor-stats">
+            <KpiCard icon={ShieldAlert} label="total" value={incidents.length} />
+            <KpiCard icon={AlertTriangle} label="open" value={monitorOpen} tone="warn" />
+            <KpiCard icon={Wrench} label="dispatched" value={incidents.filter(i => i.status === 'dispatched').length} tone="info" />
+            <KpiCard icon={X} label="failed" value={monitorFailed} tone="err" />
+          </div>
+
+          <div className="monitor-list">
+            {loading && incidents.length === 0 && <div className="an-empty">loading incidents...</div>}
+            {!loading && incidents.length === 0 && (
+              <div className="an-empty">
+                <CheckCircle className="mx-auto mb-2 h-8 w-8 text-accent-green" />
+                no monitoring incidents.
+              </div>
+            )}
+            {incidents.map((incident) => (
+              <div key={incident.fingerprint} className="monitor-row">
+                <div className="min-w-0">
+                  <div className="monitor-title">{incident.title}</div>
+                  <div className="monitor-sub">{incident.summary}</div>
+                  <div className="monitor-tags">
+                    <span className={`pill pill-${incident.severity === 'critical' || incident.severity === 'high' ? 'failed' : incident.severity === 'medium' ? 'warn' : 'queued'}`}>{incident.severity}</span>
+                    <span className="pill">{incident.sourceType}</span>
+                    <span className="pill">{incident.rootCauseArea}</span>
+                    <span className="pill">{incident.status}</span>
+                    <span className="muted mono">{relative(incident.lastSeenAt)}</span>
+                  </div>
+                </div>
+                <div className="monitor-actions">
+                  {incident.linearUrl && (
+                    <a href={incident.linearUrl} target="_blank" rel="noreferrer" className="btn btn-secondary btn-sm">
+                      <ExternalLink className="h-3.5 w-3.5" />
+                      {incident.linearIdentifier ?? 'linear'}
+                    </a>
+                  )}
+                  {incident.dispatchExecutionId && (
+                    <Link to={`/executions/${incident.dispatchExecutionId}`} className="btn btn-secondary btn-sm">
+                      <Wrench className="h-3.5 w-3.5" />
+                      bug-fix execution
+                    </Link>
+                  )}
+                  {!incident.linearUrl && (
+                    <button className="btn btn-secondary btn-sm" onClick={() => runMonitorAction('ticket', incident)} disabled={!!busy}>
+                      <Ticket className="h-3.5 w-3.5" />
+                      ticket
+                    </button>
+                  )}
+                  <button className="btn btn-secondary btn-sm" onClick={() => runMonitorAction('dispatch', incident)} disabled={!!busy}>
+                    <Play className="h-3.5 w-3.5" />
+                    dispatch
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
     </div>
   );
 }
