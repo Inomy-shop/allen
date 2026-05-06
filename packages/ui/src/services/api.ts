@@ -147,6 +147,7 @@ export interface RunStatus {
     startedAt?: string;
     completedAt?: string | null;
     durationMs?: number | null;
+    cost?: { actual: number | null; estimated: number } | null;
     currentNodes?: string[];
     completedNodes?: string[];
     failedNode?: string | null;
@@ -203,6 +204,7 @@ export interface RunStatus {
     status: string;
     currentStep?: string | null;
     durationMs?: number | null;
+    cost?: { actual: number | null; estimated: number } | null;
     errorMessage?: string | null;
   }>;
   workflowSteps: Array<{
@@ -218,6 +220,7 @@ export interface RunStatus {
     startedAt?: string | null;
     completedAt?: string | null;
     durationMs?: number | null;
+    cost?: { actual: number | null; estimated: number } | null;
     error?: string | null;
   }>;
   interventions: Record<string, unknown>[];

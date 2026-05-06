@@ -15,7 +15,7 @@ interface ChatSessionItem {
 type ThreadItem =
   { id: string; title: string; subtitle: string; status: string; href: string; startedAt?: string; provider?: string };
 
-type Tab = 'all' | 'ongoing' | 'recent' | 'history';
+type Tab = 'ongoing' | 'recent' | 'history';
 
 function timeAgo(dateStr?: string): string {
   if (!dateStr) return 'recently';
@@ -31,7 +31,7 @@ function timeAgo(dateStr?: string): string {
 
 export default function ThreadsPage() {
   const [chatSessions, setChatSessions] = useState<ChatSessionItem[]>([]);
-  const [tab, setTab] = useState<Tab>('all');
+  const [tab, setTab] = useState<Tab>('ongoing');
   const [query, setQuery] = useState('');
   const [loading, setLoading] = useState(true);
 
@@ -76,7 +76,6 @@ export default function ThreadsPage() {
     const archived = matched.filter((item) => item.status === 'archived');
 
     return {
-      all: matched,
       ongoing: active,
       recent: matched.slice(0, 80),
       history: archived.length > 0 ? archived : matched.slice(80),
@@ -84,9 +83,8 @@ export default function ThreadsPage() {
   }, [chatSessions, query]);
 
   const tabs: Array<{ key: Tab; label: string; count: number }> = [
-    { key: 'all', label: 'all threads', count: buckets.all.length },
-    { key: 'ongoing', label: 'active', count: buckets.ongoing.length },
-    { key: 'recent', label: 'recent conversations', count: buckets.recent.length },
+    { key: 'ongoing', label: 'ongoing', count: buckets.ongoing.length },
+    { key: 'recent', label: 'recently completed', count: buckets.recent.length },
     { key: 'history', label: 'history', count: buckets.history.length },
   ];
   const items = buckets[tab];
@@ -126,7 +124,7 @@ export default function ThreadsPage() {
         {loading && items.length === 0 && <div className="task-empty">loading threads...</div>}
         {!loading && items.length === 0 && <div className="task-empty">no threads here</div>}
         {items.map((item) => (
-          <Link key={`chat-${item.id}`} className="th-row" to={item.href}>
+          <Link key={`chat-${item.id}`} className="th-row th-row-chat" to={item.href}>
             <div className="r-refs">
               <span className="r-ref linear">chat</span>
               <span className="r-ref gh">{item.id.slice(0, 8)}</span>
@@ -135,7 +133,6 @@ export default function ThreadsPage() {
               <div className="th-title">{item.title}</div>
               <div className="th-sub">{item.subtitle}</div>
             </div>
-            <span className="chip">conversation</span>
           </Link>
         ))}
       </div>

@@ -181,6 +181,51 @@ describe('ExecutionService.getContext', () => {
     expect(context.recentActivity[0]).toMatchObject({ source: 'agent_activity', agent: 'backend-developer', tool: 'Read' });
   });
 
+  it('extracts PR context from an agent trace response when no PR row exists', async () => {
+    const db = makeDb({
+      executions: [
+        {
+          id: 'agent-pr-1',
+          workflowName: 'chat:spawn_agent/backend-developer',
+          source: 'chat',
+          status: 'completed',
+          input: { agent_name: 'backend-developer', prompt: 'Fix and raise a PR' },
+          state: {},
+          currentNodes: [],
+          completedNodes: ['backend-developer'],
+          cost: { actual: 1.25, estimated: 1.25 },
+          startedAt: new Date('2026-05-01T00:00:00Z'),
+          completedAt: new Date('2026-05-01T00:10:00Z'),
+          meta: { origin: 'chat', requestText: 'Fix and raise a PR' },
+        },
+      ],
+      execution_traces: [
+        {
+          executionId: 'agent-pr-1',
+          node: 'backend-developer',
+          status: 'completed',
+          rawResponse: 'Done. Opened PR: https://github.com/acme/allen/pull/77',
+          completedAt: new Date('2026-05-01T00:09:00Z'),
+        },
+      ],
+      execution_logs: [],
+      agent_activity: [],
+      workflow_interventions: [],
+      workspaces: [],
+      ticket_assignments: [],
+      pull_requests: [],
+      artifacts: [],
+    });
+
+    const context = await new ExecutionService(db).getContext('agent-pr-1');
+
+    expect(context.pullRequest).toMatchObject({
+      number: 77,
+      url: 'https://github.com/acme/allen/pull/77',
+      status: 'open',
+    });
+  });
+
   it('normalizes Linear, workspace, and PR context for dispatched runs', async () => {
     const workspaceId = new ObjectId();
     const db = makeDb({
@@ -218,6 +263,7 @@ describe('ExecutionService.getContext', () => {
     const context = await new ExecutionService(db).getContext('linear-1');
 
     expect(context.origin).toBe('linear');
+    expect(context.title).toBe('Fix login');
     expect(context.linear).toMatchObject({ issueId: 'issue-1', identifier: 'ENG-1453', url: 'https://linear.app/acme/issue/ENG-1453/fix-login' });
     expect(context.workspace).toMatchObject({ id: String(workspaceId), branch: 'linear/eng-1453' });
     expect(context.pullRequest).toMatchObject({ number: 598, url: 'https://github.com/acme/allen/pull/598' });

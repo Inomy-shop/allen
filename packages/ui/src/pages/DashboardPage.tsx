@@ -1,10 +1,9 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { ArrowRight, Bot, ExternalLink, GitBranch } from 'lucide-react';
+import { ArrowRight } from 'lucide-react';
 import { agents as agentsApi, chat as chatApi, executions, interventions, repos as reposApi } from '../services/api';
 import { pullRequests } from '../services/workspaceService';
 import { useAuthStore } from '../stores/authStore';
-import StatusBadge from '../components/common/StatusBadge';
 import ChatInput, { type ReasoningEffortValue, type RepoOption } from '../components/chat/ChatInput';
 import AgentChatDropdown from '../components/chat/AgentChatDropdown';
 
@@ -15,6 +14,11 @@ interface ExecutionItem {
   status: string;
   startedAt?: string;
   durationMs?: number | null;
+  currentNodes?: string[];
+  completedNodes?: string[];
+  failedNode?: string | null;
+  parentExecutionId?: string | null;
+  rootExecutionId?: string | null;
   type?: 'agent' | 'workflow';
   origin?: string;
   source?: string | null;
@@ -23,14 +27,20 @@ interface ExecutionItem {
     chatSessionId?: string;
     linearIssueId?: string;
     linearIdentifier?: string;
+    linearTitle?: string;
     linearUrl?: string;
+    requestText?: string;
+    taskTitle?: string;
   };
   input?: {
     task?: string;
     prompt?: string;
     request?: string;
     linear_identifier?: string;
+    linear_title?: string;
     ticket_id?: string;
+    ticket_title?: string;
+    task_title?: string;
   };
   linear?: {
     identifier?: string | null;
@@ -82,6 +92,7 @@ interface NeedsYouItem {
   title: string;
   sub: string;
   href: string;
+  external?: boolean;
   createdAt?: string;
 }
 
@@ -99,13 +110,25 @@ function timeAgo(dateStr?: string): string {
   return `${day}d ago`;
 }
 
-function progressFor(status: string): number {
-  switch (status) {
+function isActiveRun(run: ExecutionItem): boolean {
+  return ['running', 'queued', 'waiting_for_input'].includes(run.status);
+}
+
+function progressForRun(run: ExecutionItem): number {
+  if (run.pullRequest?.status === 'merged') return 100;
+  if (run.pullRequest?.status === 'open') return 92;
+  if (run.pullRequest?.status === 'closed') return 100;
+  switch (run.status) {
     case 'completed': return 100;
     case 'failed': return 60;
     case 'cancelled': return 20;
     case 'waiting_for_input': return 35;
-    case 'running': return 58;
+    case 'running': {
+      const completed = Array.isArray(run.completedNodes) ? run.completedNodes.filter(Boolean).length : 0;
+      const current = Array.isArray(run.currentNodes) ? run.currentNodes.filter(Boolean).length : 0;
+      if (completed > 0 || current > 0) return Math.max(20, Math.min(88, Math.round((completed / (completed + current + 1)) * 100)));
+      return 58;
+    }
     case 'queued': return 12;
     default: return 25;
   }
@@ -127,7 +150,56 @@ function humanizeLabel(value?: string): string {
     .join(' ');
 }
 
-function compactTitle(value?: string): string | null {
+function stepLabel(run: ExecutionItem): string | null {
+  if (run.status === 'waiting_for_input') return 'waiting on you';
+  if (run.status === 'queued') return 'queued';
+  if (run.status === 'failed') return run.failedNode ? `${humanizeLabel(run.failedNode)} failed` : 'failed';
+  const current = Array.isArray(run.currentNodes)
+    ? run.currentNodes.filter((node) => node && node !== 'END')
+    : [];
+  if (current.length > 0) return humanizeLabel(current.join(', '));
+  return null;
+}
+
+function workStatus(run: ExecutionItem): { label: string; cls: string } {
+  if (isActiveRun(run)) {
+    const label = stepLabel(run) ?? statusLabel(run.status);
+    return {
+      label,
+      cls: run.status === 'waiting_for_input' ? 'badge-human' : run.status === 'queued' ? 'badge-warn' : 'badge-info',
+    };
+  }
+
+  const prStatus = run.pullRequest?.status;
+  if (prStatus === 'open') return { label: 'review PR', cls: 'badge-human' };
+  if (prStatus === 'merged') return { label: 'merged', cls: 'badge-ok' };
+  if (prStatus === 'closed') return { label: 'PR closed', cls: 'badge-muted' };
+
+  if (run.status === 'completed') return { label: 'completed', cls: 'badge-ok' };
+  if (run.status === 'failed') return { label: stepLabel(run) ?? 'failed', cls: 'badge-err' };
+  if (run.status === 'cancelled' || run.status === 'canceled') return { label: 'cancelled', cls: 'badge-muted' };
+  return { label: statusLabel(run.status), cls: 'badge-muted' };
+}
+
+function WorkStatusBadge({ run }: { run: ExecutionItem }) {
+  const status = workStatus(run);
+  if (run.pullRequest?.status === 'open' && run.pullRequest.url) {
+    return (
+      <a className={`badge ${status.cls}`} href={run.pullRequest.url} target="_blank" rel="noreferrer" title="Review pull request">
+        <span className="status-dot" />
+        {status.label}
+      </a>
+    );
+  }
+  return (
+    <span className={`badge ${status.cls}`}>
+      <span className="status-dot" />
+      {status.label}
+    </span>
+  );
+}
+
+function compactTitle(value?: string | null): string | null {
   const trimmed = value?.replace(/\s+/g, ' ').trim();
   if (!trimmed) return null;
   return trimmed.length > 110 ? `${trimmed.slice(0, 110)}...` : trimmed;
@@ -184,6 +256,33 @@ function needsItemFromPr(pr: PullRequestReviewItem): NeedsYouItem {
   };
 }
 
+function needsItemFromRunPr(run: ExecutionItem): NeedsYouItem | null {
+  const pr = run.pullRequest;
+  if (!pr?.number || pr.status !== 'open') return null;
+  return {
+    id: `run-pr-${run.id}-${pr.number}`,
+    kind: 'review',
+    title: `Review PR #${pr.number}: ${compactTitle(pr.title) ?? runTitle(run)}`,
+    sub: runTitle(run),
+    href: pr.url ?? (pr.id ? `/pull-requests/${pr.id}` : '/pull-requests'),
+    external: Boolean(pr.url),
+    createdAt: pr.updatedAt ?? pr.createdAt ?? run.startedAt,
+  };
+}
+
+function dedupeNeeds(items: NeedsYouItem[]): NeedsYouItem[] {
+  const seen = new Set<string>();
+  const result: NeedsYouItem[] = [];
+  for (const item of items) {
+    const prKey = item.title.match(/PR #\d+/i)?.[0]?.toLowerCase();
+    const key = prKey ?? item.href ?? item.id;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    result.push(item);
+  }
+  return result;
+}
+
 function isAssignedTask(run: ExecutionItem): boolean {
   const origin = run.meta?.origin;
   const hasUserTaskInput = Boolean(
@@ -206,26 +305,32 @@ function isAssignedTask(run: ExecutionItem): boolean {
     || (run.type === 'workflow' && hasUserTaskInput);
 }
 
-function runSourceLabel(run: ExecutionItem): string {
-  if (linearIdentifierForRun(run) || run.meta?.linearIssueId || run.source === 'linear' || run.origin === 'linear') return 'Linear';
-  if (run.meta?.chatSessionId || run.source === 'chat' || run.meta?.origin === 'chat' || run.origin === 'chat') return 'Thread';
-  if (run.meta?.origin === 'direct_agent' || run.type === 'agent') return 'Agent';
-  return 'Workflow';
+function hasChatReference(run: ExecutionItem): boolean {
+  return Boolean(run.meta?.chatSessionId);
 }
 
-function runContextRef(run: ExecutionItem): string {
-  const linearIdentifier = linearIdentifierForRun(run);
-  if (linearIdentifier) return linearIdentifier;
-  if (run.meta?.chatSessionId) return run.meta.chatSessionId.slice(0, 8);
-  return run.id.slice(0, 8);
+function runPrimaryRef(run: ExecutionItem): string {
+  return linearIdentifierForRun(run) ?? 'Thread';
+}
+
+function runSecondaryRef(run: ExecutionItem): string {
+  if (run.pullRequest?.number) return String(run.pullRequest.number);
+  return run.meta?.chatSessionId?.slice(0, 8) ?? run.id.slice(0, 8);
 }
 
 function runTitle(run: ExecutionItem): string {
-  const directTitle = compactTitle(run.title)
-    ?? compactTitle(linearIdentifierForRun(run) ? `Work on ${linearIdentifierForRun(run)}` : undefined)
+  const directTitle = compactTitle(run.linear?.title)
+    ?? compactTitle(run.meta?.linearTitle)
+    ?? compactTitle(run.input?.linear_title)
+    ?? compactTitle(run.input?.ticket_title)
+    ?? compactTitle(run.meta?.taskTitle)
+    ?? compactTitle(run.input?.task_title)
+    ?? compactTitle(run.title)
+    ?? compactTitle(run.meta?.requestText)
     ?? compactTitle(run.input?.task)
     ?? compactTitle(run.input?.prompt)
-    ?? compactTitle(run.input?.request);
+    ?? compactTitle(run.input?.request)
+    ?? compactTitle(linearIdentifierForRun(run) ? `Work on ${linearIdentifierForRun(run)}` : undefined);
   if (directTitle && directTitle !== run.workflowName) return directTitle;
   if (run.workflowName) {
     const spawnName = run.workflowName.replace(/^.*:spawn_agent\//, '');
@@ -237,7 +342,7 @@ function runTitle(run: ExecutionItem): string {
 }
 
 function runSubline(run: ExecutionItem): string {
-  const parts = [statusLabel(run.status)];
+  const parts = [workStatus(run).label];
   if (run.meta?.chatSessionId) parts.push(`Thread ${run.meta.chatSessionId.slice(0, 8)}`);
   const linearIdentifier = linearIdentifierForRun(run);
   if (linearIdentifier) parts.push(linearIdentifier);
@@ -246,69 +351,57 @@ function runSubline(run: ExecutionItem): string {
 }
 
 function runPrimaryHref(run: ExecutionItem): string {
-  return run.meta?.chatSessionId ? `/chat/${run.meta.chatSessionId}` : `/executions/${run.id}`;
+  return `/chat/${run.meta?.chatSessionId}`;
 }
 
-function runExecutionKind(run: ExecutionItem): 'agent' | 'workflow' {
-  if (run.type === 'agent' || run.workflowName?.includes(':spawn_agent/')) return 'agent';
-  return 'workflow';
-}
-
-function runExecutionLabel(run: ExecutionItem): string {
-  return runExecutionKind(run) === 'workflow' ? 'Workflow Execution' : 'Agent Execution';
-}
-
-function RunExecutionLink({ run }: { run: ExecutionItem }) {
-  const kind = runExecutionKind(run);
-  const Icon = kind === 'workflow' ? GitBranch : Bot;
-  return (
-    <Link className="r-run-link" to={`/executions/${run.id}`} title={`Open ${runExecutionLabel(run).toLowerCase()}`}>
-      <Icon className="h-3 w-3" />
-      {kind === 'workflow' ? 'Workflow' : 'Agent'}
-      <ExternalLink className="h-3 w-3" />
-    </Link>
-  );
-}
-
-function prAge(pr?: ExecutionItem['pullRequest']): string {
-  if (!pr) return '';
-  return timeAgo(pr.mergedAt ?? pr.updatedAt ?? pr.createdAt ?? undefined);
-}
-
-function prStatusLabel(pr?: ExecutionItem['pullRequest']): string {
-  return humanizeLabel(pr?.status ?? '') || 'PR';
-}
-
-function TaskMetaLinks({ run }: { run: ExecutionItem }) {
+function taskGroupKey(run: ExecutionItem): string {
+  if (run.meta?.chatSessionId) return `chat:${run.meta.chatSessionId}`;
   const linearIdentifier = linearIdentifierForRun(run);
-  const linearUrl = run.linear?.url ?? run.meta?.linearUrl;
-  const pr = run.pullRequest;
+  if (linearIdentifier) return `linear:${linearIdentifier}`;
+  if (run.rootExecutionId) return `root:${run.rootExecutionId}`;
+  return `execution:${run.id}`;
+}
 
-  if (!linearIdentifier && !pr?.number) return null;
+function statusPriority(status: string): number {
+  if (['running', 'queued', 'waiting_for_input'].includes(status)) return 5;
+  if (status === 'completed') return 4;
+  if (status === 'failed') return 3;
+  if (status === 'cancelled' || status === 'canceled' || status === 'interrupted') return 2;
+  return 1;
+}
 
+function representativeScore(run: ExecutionItem): number {
+  const isTopLevel = !run.parentExecutionId;
+  const isRootExecution = !run.rootExecutionId || run.rootExecutionId === run.id;
+  const started = run.startedAt ? new Date(run.startedAt).getTime() : 0;
+  return statusPriority(run.status) * 1_000_000_000_000_000
+    + (isTopLevel ? 100_000_000_000_000 : 0)
+    + (isRootExecution ? 10_000_000_000_000 : 0)
+    + Math.min(started, 9_999_999_999_999);
+}
+
+function collapseTaskRuns(items: ExecutionItem[]): ExecutionItem[] {
+  const byTask = new Map<string, ExecutionItem>();
+  for (const run of items) {
+    const key = taskGroupKey(run);
+    const current = byTask.get(key);
+    if (!current || representativeScore(run) > representativeScore(current)) {
+      byTask.set(key, run);
+    }
+  }
+  return [...byTask.values()].sort((a, b) => {
+    const aTime = a.startedAt ? new Date(a.startedAt).getTime() : 0;
+    const bTime = b.startedAt ? new Date(b.startedAt).getTime() : 0;
+    return bTime - aTime;
+  });
+}
+
+function TaskRefs({ run }: { run: ExecutionItem }) {
   return (
-    <div className="r-links">
-      {linearIdentifier && (
-        linearUrl ? (
-          <a className="r-link-pill" href={linearUrl} target="_blank" rel="noreferrer">
-            {linearIdentifier}
-          </a>
-        ) : (
-          <span className="r-link-pill">{linearIdentifier}</span>
-        )
-      )}
-      {pr?.number && (
-        pr.url ? (
-          <a className={`r-link-pill pr ${pr.status ?? 'open'}`} href={pr.url} target="_blank" rel="noreferrer">
-            PR #{pr.number} · {prStatusLabel(pr)} · {prAge(pr)}
-          </a>
-        ) : (
-          <Link className={`r-link-pill pr ${pr.status ?? 'open'}`} to={pr.id ? `/pull-requests/${pr.id}` : '/pull-requests'}>
-            PR #{pr.number} · {prStatusLabel(pr)} · {prAge(pr)}
-          </Link>
-        )
-      )}
-    </div>
+    <Link className="r-refs r-open-area" to={runPrimaryHref(run)} title="Open chat thread">
+      <span className="r-ref linear">{runPrimaryRef(run)}</span>
+      <span className="r-ref gh">{runSecondaryRef(run)}</span>
+    </Link>
   );
 }
 
@@ -341,8 +434,8 @@ export default function DashboardPage() {
         pullRequests.list({ status: 'open' }).catch(() => []),
       ]);
       setPendingInterventions(pending ?? []);
-      setReviewPrs((prs ?? []).filter(isReviewNeededPr));
-      setRuns((execs.items ?? []).filter(isAssignedTask));
+      setReviewPrs((prs ?? []).filter((pr) => isReviewNeededPr(pr) && Boolean(pr.chatSessionId)));
+      setRuns(collapseTaskRuns((execs.items ?? []).filter((run) => isAssignedTask(run) && hasChatReference(run))));
     } finally {
       setInitialLoading(false);
     }
@@ -370,19 +463,24 @@ export default function DashboardPage() {
   }, []);
 
   const inFlight = useMemo(
-    () => runs.filter((run) => ['running', 'queued', 'waiting_for_input'].includes(run.status)).slice(0, 8),
+    () => runs.filter((run) => isActiveRun(run)).slice(0, 8),
     [runs],
   );
   const recent = useMemo(
-    () => runs.filter((run) => !['running', 'queued', 'waiting_for_input'].includes(run.status)).slice(0, 8),
+    () => runs.filter((run) => !isActiveRun(run)).slice(0, 8),
     [runs],
   );
   const needsYou = useMemo(
-    () => [
-      ...pendingInterventions.map(needsItemFromIntervention),
+    () => dedupeNeeds([
+      ...runs
+        .map(needsItemFromRunPr)
+        .filter((item): item is NeedsYouItem => Boolean(item)),
+      ...pendingInterventions
+        .filter((item) => runs.some((run) => run.id === item.workflow_run_id && hasChatReference(run)))
+        .map(needsItemFromIntervention),
       ...reviewPrs.map(needsItemFromPr),
-    ].sort((a, b) => new Date(b.createdAt ?? 0).getTime() - new Date(a.createdAt ?? 0).getTime()),
-    [pendingInterventions, reviewPrs],
+    ]).sort((a, b) => new Date(b.createdAt ?? 0).getTime() - new Date(a.createdAt ?? 0).getTime()),
+    [pendingInterventions, reviewPrs, runs],
   );
   const firstName = (user?.name || user?.email?.split('@')[0] || 'there').split(/\s+/)[0];
 
@@ -408,25 +506,14 @@ export default function DashboardPage() {
     <div className="content scroll-hide" data-screen-label="my-work">
       <div className="mw-greet">
         <div className="mw-hello">
-          <h1>Good Afternoon, {firstName}</h1>
+          <h1>good afternoon, {firstName}</h1>
           <p className="sub">
-            {needsYou.length} Need You · {inFlight.length} In Flight · {recent.length} Recent
+            {needsYou.length} need you · {inFlight.length} in flight · {recent.length} recent
           </p>
         </div>
       </div>
 
       <div className="mw-command">
-        <div className="mw-command-head">
-          <div>
-            <span className="mw-command-kicker">Command Center</span>
-            <h2>Tell Allen What To Answer, Plan, Or Run</h2>
-          </div>
-          <div className="mw-command-metrics">
-            <span>{needsYou.length} Waiting</span>
-            <span>{inFlight.length} Active</span>
-            <span>{recent.length} Recent</span>
-          </div>
-        </div>
         <div className="mw-command-composer">
           <ChatInput
             onSend={sendPrompt}
@@ -459,7 +546,6 @@ export default function DashboardPage() {
             )}
           />
         </div>
-        <div className="mw-command-note">Normal chat stays with Assistant; task intent can route to workflow, lead, or specialist.</div>
       </div>
 
       <section className="mw-sec">
@@ -483,12 +569,21 @@ export default function DashboardPage() {
         ) : (
           <div className="mw-needs">
             {needsYou.slice(0, 4).map((item) => (
+              item.external ? (
+                <a key={item.id} className="mw-need" href={item.href} target="_blank" rel="noreferrer">
+                  <span className={`need-kind ${item.kind}`}>{humanizeLabel(item.kind)}</span>
+                  <span className="need-title">{item.title}</span>
+                  <span className="need-sub">{item.sub}</span>
+                  <span className="need-age">{timeAgo(item.createdAt)}</span>
+                </a>
+              ) : (
               <Link key={item.id} className="mw-need" to={item.href}>
                 <span className={`need-kind ${item.kind}`}>{humanizeLabel(item.kind)}</span>
                 <span className="need-title">{item.title}</span>
                 <span className="need-sub">{item.sub}</span>
                 <span className="need-age">{timeAgo(item.createdAt)}</span>
               </Link>
+              )
             ))}
           </div>
         )}
@@ -516,22 +611,17 @@ export default function DashboardPage() {
           <div className="mw-flight">
             {inFlight.map((run) => (
               <div key={run.id} className="mw-flight-row">
-                <Link className="r-refs r-open-area" to={runPrimaryHref(run)} title={run.meta?.chatSessionId ? 'Open chat thread' : 'Open execution'}>
-                  <span className="r-ref linear">{runSourceLabel(run)}</span>
-                  <span className="r-ref gh">{runContextRef(run)}</span>
-                </Link>
-                <Link className="r-ttl r-open-area" to={runPrimaryHref(run)} title={run.meta?.chatSessionId ? 'Open chat thread' : 'Open execution'}>
+                <TaskRefs run={run} />
+                <Link className="r-ttl r-open-area" to={runPrimaryHref(run)} title="Open chat thread">
                   <div className="r-line">{runTitle(run)}</div>
                   <div className="r-sub">{runSubline(run)}</div>
                 </Link>
-                <TaskMetaLinks run={run} />
-                <Link className="r-prog r-open-area" to={runPrimaryHref(run)} title={run.meta?.chatSessionId ? 'Open chat thread' : 'Open execution'}>
-                  <div className="bar"><span style={{ width: `${progressFor(run.status)}%` }} /></div>
-                  <span className="r-pct">{progressFor(run.status)}%</span>
+                <Link className="r-prog r-open-area" to={runPrimaryHref(run)} title="Open chat thread">
+                  <div className="bar"><span style={{ width: `${progressForRun(run)}%` }} /></div>
+                  <span className="r-pct">{progressForRun(run)}%</span>
                 </Link>
                 <div className="r-actions">
-                  <StatusBadge status={run.status} />
-                  <RunExecutionLink run={run} />
+                  <WorkStatusBadge run={run} />
                 </div>
               </div>
             ))}
@@ -560,18 +650,13 @@ export default function DashboardPage() {
           <div className="mw-recent">
             {recent.map((run) => (
               <div key={run.id} className="mw-recent-row">
-                <Link className="r-refs r-open-area" to={runPrimaryHref(run)} title={run.meta?.chatSessionId ? 'Open chat thread' : 'Open execution'}>
-                  <span className="r-ref linear">{runSourceLabel(run)}</span>
-                  <span className="r-ref gh">{runContextRef(run)}</span>
-                </Link>
-                <Link className="r-ttl r-open-area" to={runPrimaryHref(run)} title={run.meta?.chatSessionId ? 'Open chat thread' : 'Open execution'}>
+                <TaskRefs run={run} />
+                <Link className="r-ttl r-open-area" to={runPrimaryHref(run)} title="Open chat thread">
                   <div className="r-line">{runTitle(run)}</div>
                   <div className="r-sub">{runSubline(run)}</div>
                 </Link>
-                <TaskMetaLinks run={run} />
                 <div className="r-actions">
-                  <StatusBadge status={run.status} />
-                  <RunExecutionLink run={run} />
+                  <WorkStatusBadge run={run} />
                 </div>
               </div>
             ))}

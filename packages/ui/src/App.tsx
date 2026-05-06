@@ -137,24 +137,24 @@ function AppTopbar({
   onColorModeToggle: () => void;
 }) {
   return (
-    <header className="h-[52px] shrink-0 border-b border-app bg-app-card flex items-center gap-3 px-4">
+    <header className="topbar">
       <button
         type="button"
         onClick={onSidebarToggle}
-        className="btn btn-ghost btn-sm"
+        className="btn ghost sm"
         title="Toggle sidebar"
         aria-label="Toggle sidebar"
       >
         <PanelLeft className="h-4 w-4" />
       </button>
 
-      <div className="flex min-w-0 items-center gap-2 text-[13px]">
-        <span className="text-theme-muted">allen</span>
-        <span className="text-theme-subtle">/</span>
-        <span className="truncate font-medium text-theme-primary">{title}</span>
+      <div className="crumb">
+        <span>allen</span>
+        <span className="sep">/</span>
+        <span className="now">{title}</span>
       </div>
 
-      <div className="flex-1" />
+      <div className="spacer" />
 
       <div className="hidden items-center gap-1.5 md:flex">
         <button
@@ -175,18 +175,18 @@ function AppTopbar({
       <button
         type="button"
         onClick={onCommandOpen}
-        className="hidden h-8 w-[280px] items-center gap-2 rounded-md border border-app bg-app-muted px-2.5 text-left text-[12px] text-theme-muted transition-colors hover:border-app-strong hover:text-theme-secondary lg:flex"
+        className="topbar-search"
         aria-expanded={commandOpen}
       >
         <Search className="h-3.5 w-3.5" />
         <span className="flex-1">Search or run command</span>
-        <kbd className="rounded border border-app bg-app-card px-1.5 py-0.5 font-mono text-[10px] text-theme-subtle">Cmd K</kbd>
+        <kbd>⌘K</kbd>
       </button>
 
       <button
         type="button"
         onClick={onColorModeToggle}
-        className="btn btn-ghost btn-sm"
+        className="btn ghost sm"
         title={`Switch to ${colorMode === 'dark' ? 'light' : 'dark'} mode`}
         aria-label="Toggle theme"
       >
@@ -413,13 +413,15 @@ export default function App() {
         pullRequestsApi.list(),
         workspacesApi.list(),
         executionsApi.listPaged({ limit: 1, offset: 0 }),
-        executionsApi.listPaged({ status: 'running', limit: 1, offset: 0 }),
+        executionsApi.listPaged({ status: 'running', limit: 100, offset: 0 }),
         learningsApi.stats(),
       ]);
       if (cancelled) return;
 
       const pendingCount = pending.status === 'fulfilled' ? (pending.value ?? []).length : undefined;
-      const activeCount = activeRuns.status === 'fulfilled' ? activeRuns.value.total ?? 0 : undefined;
+      const activeCount = activeRuns.status === 'fulfilled'
+        ? (activeRuns.value.items ?? []).filter((run: any) => Boolean(run?.meta?.chatSessionId)).length
+        : undefined;
       setNavCounts({
         mywork: (pendingCount ?? 0) + (activeCount ?? 0),
         inbox: pendingCount,
@@ -461,13 +463,13 @@ export default function App() {
   });
 
   return (
-    <div className="flex h-screen bg-app">
+    <div className="app-shell">
       {/* Navigation sidebar — collapsible and resizable */}
       {navPanel.collapsed ? (
-        <div className="w-14 bg-app-card flex flex-col shrink-0 border-r border-app items-center py-3 gap-2">
+        <div className="sidebar sidebar-icon">
           <button
             onClick={navPanel.toggle}
-            className="mb-1 rounded-md border border-accent/25 bg-accent-soft px-1.5 py-1 font-mono text-[11px] font-semibold text-accent"
+            className="brand-mark"
             title="Expand navigation"
             aria-label="Expand navigation"
           >
@@ -497,7 +499,7 @@ export default function App() {
           <div className="mt-auto">
             <button
               onClick={navPanel.toggle}
-              className="p-1.5 rounded text-theme-muted hover:text-theme-secondary hover:bg-app-muted transition-colors"
+              className="foot-btn"
               title="Expand navigation"
               aria-label="Expand navigation"
             >
@@ -507,19 +509,19 @@ export default function App() {
         </div>
       ) : (
         /* Expanded: full nav with dynamic width */
-        <nav style={{ width: navPanel.size }} className="bg-app-card flex flex-col shrink-0 border-r border-app">
+        <nav className="sidebar">
           {/* Workspace switcher pill — with collapse button */}
-          <div className="flex items-center gap-2 px-4 py-3 border-b border-app">
-            <NavLink to="/" className="flex items-center gap-2 flex-1 min-w-0">
-              <div className="rounded-md border border-accent/25 bg-accent-soft px-1.5 py-0.5 font-mono text-[12px] font-semibold text-accent shrink-0">
+          <div className="brand">
+            <NavLink to="/" className="brand-link">
+              <div className="brand-mark">
                 [a]
               </div>
-              <span className="font-heading text-[14px] font-semibold lowercase tracking-normal text-theme-primary truncate">{BRAND_NAME}</span>
+              <span className="brand-name">{BRAND_NAME}</span>
             </NavLink>
-            <span className="font-mono text-[10px] text-theme-subtle">v0.2</span>
+            <span className="brand-sub">v0.2</span>
             <button
               onClick={navPanel.toggle}
-              className="p-1 rounded text-theme-muted hover:text-theme-secondary hover:bg-app-muted transition-colors"
+              className="foot-btn"
               title="Collapse navigation"
               aria-label="Collapse navigation"
             >
@@ -528,13 +530,11 @@ export default function App() {
           </div>
 
           {/* Nav groups */}
-          <div className="flex-1 overflow-y-auto pb-2">
+          <div className="sidebar-inner scroll-hide">
             {NAV_GROUPS.map((group, gi) => (
-              <div key={gi} className={gi > 0 ? 'mt-2 px-2' : 'px-2 pt-2'}>
+              <div key={gi} className="nav-group">
                 {group.label && (
-                  <div className="px-2 py-1">
-                    <span className="overline">{group.label}</span>
-                  </div>
+                  <div className="nav-group-title">{group.label}</div>
                 )}
                 {group.items.map(item => (
                   <div key={item.to}>
@@ -542,21 +542,19 @@ export default function App() {
                       to={item.to}
                       end={item.end ?? item.to === '/'}
                       className={({ isActive }) =>
-                        `flex items-center gap-2.5 rounded-md border px-2.5 py-1.5 text-[13px] font-medium transition-colors ${
+                        `nav-item ${
                           isNavItemActive(item, location.pathname, isActive)
-                            ? 'bg-accent-soft text-accent border-accent/20'
-                            : 'text-theme-secondary hover:text-theme-primary hover:bg-app-muted border-transparent'
+                            ? 'active'
+                            : ''
                         }`
                       }
                     >
                       {({ isActive }) => (
                         <>
-                          <item.icon className={`w-4 h-4 shrink-0 ${
-                            isNavItemActive(item, location.pathname, isActive) ? 'text-accent' : 'text-theme-muted'
-                          }`} />
-                          <span className="flex-1 truncate">{item.label}</span>
+                          <item.icon className="ico" />
+                          <span className="lbl">{item.label}</span>
                           {formatNavBadge(item.badgeKey ? navCounts[item.badgeKey] : undefined) && (
-                            <span className="rounded border border-app bg-app-muted px-1.5 py-0.5 font-mono text-[10px] leading-none text-theme-muted">
+                            <span className="badge">
                               {formatNavBadge(item.badgeKey ? navCounts[item.badgeKey] : undefined)}
                             </span>
                           )}
@@ -570,39 +568,27 @@ export default function App() {
           </div>
 
           {/* Bottom — user chip + version */}
-          <div className="border-t border-app shrink-0">
+          <div className="sidebar-foot-wrap">
             {currentUser && (
-              <div className="flex items-center gap-2 px-3 py-2.5">
-                <div className="w-7 h-7 rounded-full bg-gradient-to-br from-accent to-accent-purple flex items-center justify-center shrink-0">
-                  <span className="text-white text-[11px] font-semibold">{userInitial}</span>
+              <div className="sidebar-foot">
+                <div className="avatar">
+                  {userInitial}
                 </div>
-                <div className="min-w-0 flex-1">
-                  <div className="text-[13px] text-theme-primary font-semibold truncate leading-tight">{currentUser.name}</div>
-                  <div className="text-[10px] text-theme-subtle font-mono truncate">{currentUser.email}</div>
+                <div className="user-meta">
+                  <div className="nm">{currentUser.name}</div>
+                  <div className="em">{currentUser.email}</div>
                 </div>
                 <button
                   onClick={handleLogout}
-                  className="shrink-0 p-1 rounded text-theme-muted hover:text-accent-red hover:bg-accent-red/10 transition-colors"
+                  className="foot-btn"
                   title="Sign out"
                 >
                   <LogOut className="w-3.5 h-3.5" />
                 </button>
               </div>
             )}
-
-            <div className="flex items-center justify-between px-3 py-1.5">
-              <span className="text-[10px] text-theme-subtle font-mono">v0.2</span>
-              <span className="text-[10px] text-theme-subtle font-mono">agentic os</span>
-            </div>
           </div>
         </nav>
-      )}
-      {/* Resize handle — only when nav is expanded */}
-      {!navPanel.collapsed && (
-        <div
-          onMouseDown={navPanel.onMouseDown}
-          className="w-px shrink-0 cursor-col-resize bg-border hover:bg-accent active:bg-accent/70 transition-colors z-10"
-        />
       )}
 
       <main className="flex-1 min-w-0 bg-app relative flex flex-col overflow-hidden">

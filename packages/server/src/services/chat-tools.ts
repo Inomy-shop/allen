@@ -469,6 +469,9 @@ const runWorkflow: ChatTool = {
         'meta.chatSessionId': chatSessionId,
       };
       if (activeCtx?.parentMessageId) chatMeta['meta.parentMessageId'] = activeCtx.parentMessageId;
+      if (typeof input.linear_title === 'string') chatMeta['meta.linearTitle'] = input.linear_title;
+      if (typeof input.linear_identifier === 'string') chatMeta['meta.linearIdentifier'] = input.linear_identifier;
+      if (typeof input.linear_url === 'string') chatMeta['meta.linearUrl'] = input.linear_url;
       if (typeof input.task === 'string') chatMeta['meta.requestText'] = input.task;
       else if (typeof input.request === 'string') chatMeta['meta.requestText'] = input.request;
       else if (typeof input.prompt === 'string') chatMeta['meta.requestText'] = input.prompt;

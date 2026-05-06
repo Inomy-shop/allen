@@ -121,7 +121,6 @@ async function main(): Promise<void> {
       'understand-and-plan',
       'allen-self-healing-monitor-hourly',
       'self-healing-incident-triage',
-      'self-healing-repair',
     ],
   );
   await seedCronJobs(db);

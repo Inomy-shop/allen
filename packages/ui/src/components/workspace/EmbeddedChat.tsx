@@ -98,9 +98,9 @@ export function EmbeddedChat({ workspaceId, workspaceName, worktreePath, linkedS
   const agentLocked = !!activeSession?.activeAgent && (activeSession?.messageCount ?? 0) > 0;
 
   return (
-    <div className="flex flex-col h-full">
+    <div className="workspace-embedded-chat">
       {/* Header */}
-      <div className="flex items-center gap-2 px-3 py-1.5 border-b border-app shrink-0">
+      <div className="workspace-embedded-chat-head">
         <MessageSquare className="w-3 h-3 text-accent" />
         <span className="overline">Chat</span>
         {activeSessionId && <span className="text-[9px] font-mono text-accent-green">linked</span>}
@@ -117,9 +117,9 @@ export function EmbeddedChat({ workspaceId, workspaceName, worktreePath, linkedS
       </div>
 
       {/* Messages */}
-      <div className="flex-1 overflow-y-auto min-h-0">
+      <div className="workspace-embedded-chat-messages">
         {!activeSessionId && !streaming ? (
-          <div className="flex flex-col items-center justify-center h-full text-center px-4">
+          <div className="workspace-embedded-chat-empty">
             <MessageSquare className="w-6 h-6 text-accent/20 mb-2" />
             <p className="text-[11px] text-theme-muted">Chat with AI about this workspace</p>
             <p className="text-[9px] text-theme-subtle mt-1 font-mono break-all">{worktreePath}</p>
@@ -145,7 +145,7 @@ export function EmbeddedChat({ workspaceId, workspaceName, worktreePath, linkedS
       </div>
 
       {/* Input */}
-      <div className="shrink-0">
+      <div className="workspace-embedded-chat-input">
         <ChatInput
           ref={chatInputRef}
           onSend={handleSend}

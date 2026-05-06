@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { useParams } from 'react-router-dom';
+import { useNavigate, useParams } from 'react-router-dom';
 import {
   ChevronDown, ChevronRight, ExternalLink, FileText, FolderGit2, GitBranch, GitCommit,
   GitPullRequest, Loader2, MessageSquare, Play, Plus, RefreshCw, RotateCw,
@@ -101,15 +101,46 @@ const STATUS_LETTER: Record<string, string> = {
 
 function parseDiff(diff?: string, fallbackContent?: string) {
   if (diff?.trim()) {
-    return diff.split('\n').slice(0, 220).map((line, idx) => {
-      if (line.startsWith('@@')) return { key: idx, type: 'h', marker: '', text: line };
-      if (line.startsWith('+') && !line.startsWith('+++')) return { key: idx, type: 'a', marker: '+', text: line.slice(1) };
-      if (line.startsWith('-') && !line.startsWith('---')) return { key: idx, type: 'r', marker: '-', text: line.slice(1) };
-      return { key: idx, type: 'c', marker: ' ', text: line };
-    });
+    const rows: Array<{ key: number; type: string; marker: string; text: string; lineNo?: number | string }> = [];
+    let oldLine = 0;
+    let newLine = 0;
+    for (const rawLine of diff.split('\n').slice(0, 260)) {
+      if (
+        rawLine.startsWith('diff --git ') ||
+        rawLine.startsWith('index ') ||
+        rawLine.startsWith('--- ') ||
+        rawLine.startsWith('+++ ')
+      ) {
+        continue;
+      }
+      if (rawLine.startsWith('@@')) {
+        const match = rawLine.match(/^@@\s+-(\d+)(?:,\d+)?\s+\+(\d+)(?:,\d+)?/);
+        if (match) {
+          oldLine = Number(match[1]);
+          newLine = Number(match[2]);
+        }
+        rows.push({ key: rows.length, type: 'h', marker: '', text: rawLine, lineNo: '' });
+        continue;
+      }
+      if (rawLine.startsWith('-')) {
+        rows.push({ key: rows.length, type: 'r', marker: '-', text: rawLine.slice(1), lineNo: oldLine || '' });
+        if (oldLine) oldLine += 1;
+        continue;
+      }
+      if (rawLine.startsWith('+')) {
+        rows.push({ key: rows.length, type: 'a', marker: '+', text: rawLine.slice(1), lineNo: newLine || '' });
+        if (newLine) newLine += 1;
+        continue;
+      }
+      const text = rawLine.startsWith(' ') ? rawLine.slice(1) : rawLine;
+      rows.push({ key: rows.length, type: 'c', marker: ' ', text, lineNo: newLine || oldLine || '' });
+      if (oldLine) oldLine += 1;
+      if (newLine) newLine += 1;
+    }
+    return rows;
   }
   const lines = (fallbackContent ?? '').split('\n').slice(0, 160);
-  return lines.map((line, idx) => ({ key: idx, type: 'c', marker: ' ', text: line }));
+  return lines.map((line, idx) => ({ key: idx, type: 'c', marker: ' ', text: line, lineNo: idx + 1 }));
 }
 
 function parseSplitDiff(diff?: string, fallbackContent?: string): SplitDiffRow[] {
@@ -150,7 +181,14 @@ function parseSplitDiff(diff?: string, fallbackContent?: string): SplitDiffRow[]
   };
 
   for (const rawLine of diff.split('\n').slice(0, 260)) {
-    if (rawLine.startsWith('---') || rawLine.startsWith('+++')) continue;
+    if (
+      rawLine.startsWith('diff --git ') ||
+      rawLine.startsWith('index ') ||
+      rawLine.startsWith('--- ') ||
+      rawLine.startsWith('+++ ')
+    ) {
+      continue;
+    }
     if (rawLine.startsWith('@@')) {
       flushChanges();
       const match = rawLine.match(/^@@\s+-(\d+)(?:,\d+)?\s+\+(\d+)(?:,\d+)?/);
@@ -269,6 +307,7 @@ function WorkspaceFileTreeNode({
 
 export default function WorkspaceListPage() {
   const { id: routeWorkspaceId } = useParams<{ id?: string }>();
+  const navigate = useNavigate();
   const [repos, setRepos] = useState<any[]>([]);
   const [workspaceList, setWorkspaceList] = useState<Workspace[]>([]);
   const [activeId, setActiveId] = useState('');
@@ -307,8 +346,8 @@ export default function WorkspaceListPage() {
     const groups = new Map<string, { key: string; label: string; items: Workspace[] }>();
     for (const ws of workspaceList) {
       const repo = ws.repoId ? repoById.get(ws.repoId) : null;
-      const key = ws.repoId ? `repo:${ws.repoId}` : ws.repoPath ? `path:${ws.repoPath}` : `name:${ws.repoName ?? 'unknown'}`;
       const label = repo?.name ?? ws.repoName ?? ws.repoPath?.split('/').pop() ?? 'repo unknown';
+      const key = `repo:${label.trim().toLowerCase()}`;
       const existing = groups.get(key);
       if (existing) existing.items.push(ws);
       else groups.set(key, { key, label, items: [ws] });
@@ -355,6 +394,23 @@ export default function WorkspaceListPage() {
     setActiveId(workspaceId);
   }
 
+  function switchWorkspace(workspaceId: string) {
+    selectWorkspace(workspaceId);
+    setActiveTab('diff');
+    patchWorkspaceUi(workspaceId, { activeTab: 'diff' });
+    navigate(`/workspaces/${workspaceId}`);
+  }
+
+  function openWorkspace(workspaceId: string) {
+    switchWorkspace(workspaceId);
+  }
+
+  function startCreateWorkspace() {
+    setCreating(true);
+    setActiveTab('diff');
+    navigate('/workspaces');
+  }
+
   function changeDiffMode(mode: 'unified' | 'split') {
     setDiffMode(mode);
     if (activeId) patchWorkspaceUi(activeId, { diffMode: mode });
@@ -371,7 +427,8 @@ export default function WorkspaceListPage() {
       setWorkspaceList(wsList);
       setActiveId(prev => {
         if (routeWorkspaceId && wsList.some((ws: Workspace) => ws._id === routeWorkspaceId)) return routeWorkspaceId;
-        return (prev && wsList.some((ws: Workspace) => ws._id === prev)) ? prev : (wsList[0]?._id ?? '');
+        if (prev && wsList.some((ws: Workspace) => ws._id === prev)) return prev;
+        return (wsList[0]?._id ?? '');
       });
     } finally {
       setLoading(false);
@@ -406,11 +463,11 @@ export default function WorkspaceListPage() {
       const cached = workspaceUiRef.current[activeId];
       const defaultChatId = chatsList[0]?._id ?? `new-${activeId}`;
       const restoredOpenChatIds = cached?.openChatIds?.length ? cached.openChatIds : [defaultChatId];
-      const restoredTab = cached?.activeTab ?? `chat:${restoredOpenChatIds[0]}`;
+      const restoredTab = cached?.activeTab === 'files' || cached?.activeTab === 'services' ? cached.activeTab : 'diff';
       const restoredTabIsValid =
         ['diff', 'files', 'services', 'terminal'].includes(restoredTab) ||
         restoredOpenChatIds.some(sessionId => restoredTab === `chat:${sessionId}`);
-      const nextTab = restoredTabIsValid ? restoredTab : `chat:${restoredOpenChatIds[0]}`;
+      const nextTab = restoredTabIsValid ? restoredTab : 'diff';
       setDiffFiles(files);
       setAllFiles(filesResult as FileEntry[]);
       setActiveFile(cached?.activeFile && files.some(file => file.path === cached.activeFile) ? cached.activeFile : (files[0]?.path ?? ''));
@@ -421,9 +478,6 @@ export default function WorkspaceListPage() {
       setWorkspaceChats(chatsList);
       setOpenChatIds(restoredOpenChatIds);
       setActiveTab(nextTab);
-      if (nextTab === 'terminal') {
-        setMountedTerminalIds(prev => prev.includes(activeId) ? prev : [...prev, activeId]);
-      }
     });
     return () => { cancelled = true; };
   }, [activeId]);
@@ -459,6 +513,24 @@ export default function WorkspaceListPage() {
     setOpenChatIds(nextOpenChatIds);
     setActiveTab(`chat:${tempId}`);
     if (activeId) patchWorkspaceUi(activeId, { openChatIds: nextOpenChatIds, activeTab: `chat:${tempId}` });
+  }
+
+  function openWorkspaceChat() {
+    if (openChatIds.length > 0) {
+      openChat(openChatIds[0]);
+      return;
+    }
+    if (workspaceChats[0]?._id) {
+      openChat(workspaceChats[0]._id);
+      return;
+    }
+    openNewChat();
+  }
+
+  function focusTerminal() {
+    if (!activeId) return;
+    setMountedTerminalIds(prev => prev.includes(activeId) ? prev : [...prev, activeId]);
+    document.querySelector('.ws-ide-terminal')?.scrollIntoView({ block: 'end', behavior: 'smooth' });
   }
 
   function closeChat(sessionId: string) {
@@ -566,88 +638,140 @@ export default function WorkspaceListPage() {
   const renderedSplitDiff = parseSplitDiff(activeDiff?.diff, activeDiff?.modifiedContent);
   const activeChatId = activeTab.startsWith('chat:') ? activeTab.slice(5) : null;
   const availablePreviousChats = workspaceChats.filter(chat => !openChatIds.includes(chat._id));
+  const activeStatus = (active?.status ?? 'idle').toLowerCase();
+  const totalChanged = active?.changedFiles || diffFiles.length;
+  const showWorkspaceDetail = true;
+
+  const listContent = (
+    <div className="ws-list-content scroll-hide">
+      <div className="ws-list-head">
+        <div>
+          <h1>Workspaces</h1>
+          <div className="sub">{workspaceList.length} active · isolated agent code environments</div>
+        </div>
+        <div className="ws-list-actions">
+          <button className="btn btn-secondary btn-sm" onClick={loadWorkspaces} type="button" title="Refresh workspaces">
+            <RefreshCw className={`h-3.5 w-3.5 ${loading ? 'animate-spin' : ''}`} />
+          </button>
+          <button className="btn btn-primary btn-sm" onClick={startCreateWorkspace} type="button">
+            <Plus className="h-3.5 w-3.5" /> New workspace
+          </button>
+        </div>
+      </div>
+
+      {loading && workspaceList.length === 0 ? (
+        <div className="ws-list-empty">
+          <Loader2 className="h-3.5 w-3.5 animate-spin" /> loading workspaces...
+        </div>
+      ) : workspaceList.length === 0 ? (
+        <div className="ws-list-empty">no workspaces yet.</div>
+      ) : workspaceGroups.map(group => (
+        <section key={group.key} className="ws-list-card">
+          <div className="ws-list-card-head">
+            <FolderGit2 className="h-3.5 w-3.5 text-theme-muted" />
+            <h2>{group.label}</h2>
+            <span>{group.items.length} workspaces</span>
+            <button className="btn btn-ghost btn-sm" type="button" onClick={() => setConfigRepoId(group.items[0]?.repoId ?? null)} disabled={!group.items[0]?.repoId}>
+              <Settings className="h-3 w-3" /> Config
+            </button>
+          </div>
+          <div className="ws-list-rows">
+            {group.items.map((ws, index) => {
+              const status = (ws.status ?? 'active').toLowerCase();
+              const changed = ws.changedFiles ?? 0;
+              return (
+                <div key={ws._id} className="ws-list-row" data-first={index === 0 ? 'true' : undefined}>
+                  <input type="checkbox" aria-label={`Select ${ws.name}`} />
+                  <div className="ws-list-row-main">
+                    <div className="ws-list-row-title">
+                      <FolderGit2 className="h-3 w-3 text-accent" />
+                      <span>{ws.name}</span>
+                      <span className={`ws-workspace-state ${status}`}>{ws.status ?? 'active'}</span>
+                      {changed > 0 ? <span className="ws-workspace-state changed">{changed} changed</span> : null}
+                    </div>
+                    <div className="ws-list-row-meta">
+                      <span>{ws.branch ?? 'branch unknown'}</span>
+                      {ws.basePort ? <><span>·</span><span>port {ws.basePort}</span></> : null}
+                      {ws.updatedAt ? <><span>·</span><span>{new Date(ws.updatedAt).toLocaleDateString()}</span></> : null}
+                    </div>
+                  </div>
+                  <button className="btn btn-ghost btn-sm" type="button" onClick={() => openWorkspace(ws._id)} title="Open workspace">
+                    <ExternalLink className="h-3.5 w-3.5" />
+                  </button>
+                </div>
+              );
+            })}
+          </div>
+        </section>
+      ))}
+    </div>
+  );
+
+  if (!showWorkspaceDetail) {
+    return (
+      <div className="ws-shell ws-list-shell" data-screen-label="workspaces">
+        {listContent}
+        {configRepoId && <WorkspaceConfigEditor repoId={configRepoId} onClose={() => setConfigRepoId(null)} />}
+        {pendingWsId && (
+          <SetupProgressDialog
+            workspaceId={pendingWsId}
+            onComplete={(ws) => { setPendingWsId(null); setActiveId(ws._id); loadWorkspaces(); }}
+            onFailed={() => { setPendingWsId(null); loadWorkspaces(); }}
+          />
+        )}
+      </div>
+    );
+  }
 
   return (
-    <div className="ws-shell" data-screen-label="workspaces">
-      <div className="ws-layout">
-        <aside className="ws-workspaces scroll-hide">
-          <div className="ws-workspaces-h">
-            <span>workspaces</span>
-            <button onClick={() => setCreating(true)} className="ws-workspaces-new" title="New workspace" type="button">
-              <Plus className="h-3.5 w-3.5" />
-            </button>
-          </div>
-          <div className="ws-workspaces-list">
-            {loading && workspaceList.length === 0 ? (
-              <div className="ws-workspaces-empty">
-                <Loader2 className="h-3.5 w-3.5 animate-spin" /> loading workspaces...
-              </div>
-            ) : workspaceList.length === 0 ? (
-              <div className="ws-workspaces-empty">no workspaces yet.</div>
-            ) : workspaceGroups.map(group => (
-              <div key={group.key} className="ws-repo-group">
-                <div className="ws-repo-group-h">
-                  <span>{group.label}</span>
-                  <em>{group.items.length}</em>
-                </div>
-                {group.items.map(ws => (
-                  <button
-                    key={ws._id}
-                    className={`ws-workspace-row ${active?._id === ws._id ? 'active' : ''}`}
-                    onClick={() => selectWorkspace(ws._id)}
-                    type="button"
-                  >
-                    <FolderGit2 className="h-3.5 w-3.5 shrink-0" />
-                    <span className="ws-workspace-main">
-                      <strong>{ws.name}</strong>
-                      <em>{ws.branch ?? 'branch unknown'}</em>
-                    </span>
-                    <span className="ws-workspace-state">{ws.status ?? 'active'}</span>
-                  </button>
-                ))}
-              </div>
-            ))}
-          </div>
-          <div className="ws-workspaces-foot">
-            <span className="mono">{workspaceList.length} workspaces</span>
-            <button onClick={loadWorkspaces} title="Refresh workspaces" type="button">
-              <RefreshCw className={`h-3.5 w-3.5 ${loading ? 'animate-spin' : ''}`} />
-            </button>
-          </div>
-        </aside>
-
+    <div className="ws-shell ws-detail-shell" data-screen-label="workspaces">
+      <div className="ws-detail-layout">
         <div className="ws-stage">
-          <header className="ws-top">
-            <div className="ws-top-l">
-              {active && (
-                <span className="ws-meta">
-                  <GitBranch className="h-3 w-3" />
-                  <span className="mono ws-branch">{active.branch ?? 'branch unknown'}</span>
-                  <span className="ws-dot">·</span>
-                  <span className="mono">{active.repoName ?? 'repo unknown'}</span>
-                  {active.basePort ? (
-                    <>
-                      <span className="ws-dot">·</span>
-                      <span className="mono">port {active.basePort}</span>
-                    </>
-                  ) : null}
-                </span>
-              )}
+          <header className="ws-ide-topbar">
+            <div className="ws-ide-select">
+              <FolderGit2 className="h-3.5 w-3.5 text-theme-muted" />
+              <select
+                value={activeId}
+                onChange={(event) => switchWorkspace(event.target.value)}
+                disabled={workspaceList.length === 0}
+                aria-label="Select workspace"
+              >
+                {workspaceList.map(ws => (
+                  <option key={ws._id} value={ws._id}>{ws.name}</option>
+                ))}
+              </select>
+              <ChevronDown className="h-3.5 w-3.5 text-theme-subtle" />
             </div>
-            <div className="ws-top-r">
+            <div className="ws-ide-meta">
+              <GitBranch className="h-3 w-3" />
+              <span>{active?.branch ?? 'branch unknown'}</span>
+              <span>→</span>
+              <span>{active?.baseBranch ?? 'development'}</span>
+              <span>·</span>
+              <span>{active?.repoName ?? 'repo unknown'}</span>
+              {active?.basePort ? <><span>·</span><span>port {active.basePort}</span></> : null}
+            </div>
+            <div className="ws-ide-actions">
               {loading && <Loader2 className="h-3.5 w-3.5 animate-spin text-theme-muted" />}
-              <button onClick={() => runGitAction('pull')} className="btn btn-secondary btn-sm" title="Pull latest" type="button" disabled={!active || gitBusy === 'pull'}>
-                {gitBusy === 'pull' ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="h-3.5 w-3.5" />} pull
+              <span className={`ws-workspace-state ${activeStatus}`}>{active?.status ?? 'idle'}</span>
+              <span className="ws-workspace-state changed">{totalChanged} changed</span>
+              <span className="ws-workspace-state active">+{totalPlus}</span>
+              <span className="ws-workspace-state failed">-{totalMinus}</span>
+              <button className="btn btn-ghost btn-sm" onClick={() => showWorkspaceTab('diff')} type="button">
+                <FileText className="h-3.5 w-3.5" /> open
               </button>
-              <button onClick={() => runGitAction('commit')} className="btn btn-secondary btn-sm" title="Commit changes" type="button" disabled={!active || gitBusy === 'commit'}>
-                {gitBusy === 'commit' ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <GitCommit className="h-3.5 w-3.5" />} commit
+              <button onClick={() => runGitAction('pull')} className="btn btn-ghost btn-sm" title="Pull latest" type="button" disabled={!active || gitBusy === 'pull'}>
+                <RefreshCw className={`h-3.5 w-3.5 ${gitBusy === 'pull' ? 'animate-spin' : ''}`} />
               </button>
-              <button onClick={() => runGitAction('push')} className="btn btn-secondary btn-sm" title="Push branch" type="button" disabled={!active || gitBusy === 'push'}>
-                {gitBusy === 'push' ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Upload className="h-3.5 w-3.5" />} push
+              <button onClick={() => runGitAction('commit')} className="btn btn-ghost btn-sm" title="Commit changes" type="button" disabled={!active || gitBusy === 'commit'}>
+                {gitBusy === 'commit' ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <GitCommit className="h-3.5 w-3.5" />}
+              </button>
+              <button onClick={() => runGitAction('push')} className="btn btn-ghost btn-sm" title="Push branch" type="button" disabled={!active || gitBusy === 'push'}>
+                {gitBusy === 'push' ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Upload className="h-3.5 w-3.5" />}
               </button>
               {active?.prUrl ? (
                 <a href={active.prUrl} target="_blank" rel="noreferrer" className="btn btn-primary btn-sm">
-                  <GitPullRequest className="h-3.5 w-3.5" /> PR #{active.prNumber ?? ''}
+                  <GitPullRequest className="h-3.5 w-3.5" /> open PR
                 </a>
               ) : (
                 <button onClick={() => runGitAction('pr')} disabled={!active || gitBusy === 'pr'} className="btn btn-primary btn-sm" type="button">
@@ -657,45 +781,42 @@ export default function WorkspaceListPage() {
             </div>
           </header>
 
-          <div className="ws-tabs">
-            <button className={`ws-tab ${activeTab === 'diff' ? 'active' : ''}`} onClick={() => showWorkspaceTab('diff')} type="button">
-              <FileText className="h-3.5 w-3.5" /> diff
-            </button>
-            <button className={`ws-tab ${activeTab === 'files' ? 'active' : ''}`} onClick={() => showWorkspaceTab('files')} type="button">
-              <FolderGit2 className="h-3.5 w-3.5" /> files
-            </button>
-            <button className={`ws-tab ${activeTab === 'services' ? 'active' : ''}`} onClick={() => showWorkspaceTab('services')} type="button">
-              <Play className="h-3.5 w-3.5" /> services
-            </button>
-            <button className={`ws-tab ${activeTab === 'terminal' ? 'active' : ''}`} onClick={() => showWorkspaceTab('terminal')} type="button">
-              <Terminal className="h-3.5 w-3.5" /> terminal
-            </button>
-            {openChatIds.map(sessionId => {
-              const session = workspaceChats.find(chat => chat._id === sessionId);
-              return (
-                <button key={sessionId} className={`ws-tab ${activeTab === `chat:${sessionId}` ? 'active' : ''}`} onClick={() => showWorkspaceTab(`chat:${sessionId}`)} type="button">
-                  <MessageSquare className="h-3.5 w-3.5" />
-                  <span>{chatLabel(session)}</span>
-                  <span className="ws-tab-close" onClick={(event) => { event.stopPropagation(); closeChat(sessionId); }} title="Close chat tab">
-                    <X className="h-3 w-3" />
-                  </span>
+          <div className="ws-ide-filebar">
+            <div className="ws-ide-filetitle">
+              <FileText className="h-3.5 w-3.5" />
+              <span>{activeDiff?.path ?? 'workspace preview'}</span>
+            </div>
+            <div className="ws-ide-fileactions">
+              <div className="ws-diff-mode" role="group" aria-label="Diff view mode">
+                <button className={diffMode === 'unified' ? 'active' : ''} onClick={() => changeDiffMode('unified')} type="button">
+                  unified
                 </button>
-              );
-            })}
-            <span className="ws-tabs-spacer" />
-            <select
-              className="ws-prev-chat"
-              value=""
-              onChange={(event) => { if (event.target.value) openChat(event.target.value); }}
-              disabled={!active || availablePreviousChats.length === 0}
-              title="Open previous workspace conversation"
-            >
-              <option value="">open previous chat...</option>
-              {availablePreviousChats.map(chat => <option key={chat._id} value={chat._id}>{chatLabel(chat)}</option>)}
-            </select>
-            <button onClick={openNewChat} className="ws-tab-action" type="button" disabled={!active}>
-              <Plus className="h-3.5 w-3.5" /> new chat
-            </button>
+                <button className={diffMode === 'split' ? 'active' : ''} onClick={() => changeDiffMode('split')} type="button">
+                  split
+                </button>
+              </div>
+              <button className="btn btn-ghost btn-sm" onClick={() => showWorkspaceTab('files')} type="button">files</button>
+              <button className="btn btn-ghost btn-sm" onClick={() => showWorkspaceTab('services')} type="button">services</button>
+              <button className="btn btn-ghost btn-sm" onClick={openWorkspaceChat} type="button">
+                <MessageSquare className="h-3.5 w-3.5" /> chat
+              </button>
+              <button className="btn btn-ghost btn-sm" onClick={openNewChat} type="button">
+                <Plus className="h-3.5 w-3.5" /> new chat
+              </button>
+              <select
+                className="ws-prev-chat"
+                value=""
+                onChange={(event) => { if (event.target.value) openChat(event.target.value); }}
+                disabled={!active || availablePreviousChats.length === 0}
+                title="Open previous workspace conversation"
+              >
+                <option value="">previous chats</option>
+                {availablePreviousChats.map(chat => <option key={chat._id} value={chat._id}>{chatLabel(chat)}</option>)}
+              </select>
+              <button className="btn btn-ghost btn-sm" onClick={focusTerminal} type="button">
+                <Terminal className="h-3.5 w-3.5" /> terminal
+              </button>
+            </div>
           </div>
 
           <div className="ws-main ws-panel" hidden={activeTab !== 'diff'}>
@@ -778,7 +899,7 @@ export default function WorkspaceListPage() {
                   ) : activeDiff && diffMode === 'unified' ? (
                     renderedDiff.map(line => (
                       <div key={line.key} className={`ws-line ${line.type}`}>
-                        <span className="ws-ln mono">{line.key + 1}</span>
+                        <span className="ws-ln mono">{line.lineNo ?? ''}</span>
                         <span className="ws-mark mono">{line.marker}</span>
                         <span className="ws-code mono">{line.text}</span>
                       </div>
@@ -931,6 +1052,16 @@ export default function WorkspaceListPage() {
               <MessageSquare className="h-8 w-8 text-theme-subtle" />
               <p>open a previous chat or start a new workspace chat.</p>
             </div>
+          )}
+
+          {activeId && !creating && (
+            <section className="ws-ide-terminal">
+              <div className="ws-ide-terminal-head">
+                <span><Terminal className="h-3.5 w-3.5" /> terminal · agent activity 20 lines</span>
+                <span className="ws-ide-live"><span /> live</span>
+              </div>
+              <XTerminal workspaceId={activeId} terminalId="default" className="ws-ide-terminal-body" />
+            </section>
           )}
         </div>
       </div>

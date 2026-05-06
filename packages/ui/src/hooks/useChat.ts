@@ -205,14 +205,17 @@ function upsertSpawnedRun(prev: SpawnedAgent[], run: Omit<Partial<SpawnedAgent>,
 
 function toolRunFromResult(tool: string, result: Record<string, unknown> | undefined): SpawnedAgent | null {
   if (!result) return null;
+  const normalizedTool = tool.split('__').pop() ?? tool;
+  const isRunTool = /^(run_workflow|spawn_agent|delegate_to_agent)$/.test(normalizedTool);
+  if (!isRunTool) return null;
+
   const executionId = typeof result.execution_id === 'string'
     ? result.execution_id
-    : typeof result.id === 'string' && /run_workflow|spawn_agent|workflow/i.test(tool)
+    : typeof result.id === 'string'
       ? result.id
       : undefined;
   if (!executionId) return null;
 
-  const normalizedTool = tool.split('__').pop() ?? tool;
   const isWorkflow = /run_workflow/i.test(normalizedTool)
     || typeof result.workflow_name === 'string'
     || typeof result.workflowName === 'string';

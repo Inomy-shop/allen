@@ -16,6 +16,20 @@ function shortDuration(ms: number | null | undefined): string {
   return `${m}m ${Math.floor(s % 60)}s`;
 }
 
+function shortAge(value: string | Date | null | undefined): string {
+  if (!value) return '—';
+  const then = new Date(value).getTime();
+  if (!Number.isFinite(then)) return '—';
+  const seconds = Math.max(0, Math.floor((Date.now() - then) / 1000));
+  if (seconds < 60) return `${seconds}s ago`;
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return `${minutes}m ago`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours}h ago`;
+  const days = Math.floor(hours / 24);
+  return `${days}d ago`;
+}
+
 function progressFor(status: string): number {
   switch (status) {
     case 'completed': return 100;
@@ -117,6 +131,43 @@ export default function ExecutionListPage() {
         </div>
       </div>
 
+      <div className="activity-filterbar">
+        <div className="flex items-center gap-2 flex-wrap">
+          <div className="relative">
+            <Search className="w-3.5 h-3.5 absolute left-2.5 top-1/2 -translate-y-1/2 text-theme-muted pointer-events-none" />
+            <input
+              type="text"
+              value={searchInput}
+              onChange={e => onSearchChange(e.target.value)}
+              placeholder="Search id, workflow, node…"
+              className="input pl-8 w-64 py-1.5 text-[12px]"
+            />
+          </div>
+          <select
+            value={typeFilter}
+            onChange={e => setTypeFilter(e.target.value)}
+            className="input py-1.5 text-[12px] w-auto"
+            title="Filter by execution type"
+          >
+            <option value="">All types</option>
+            <option value="workflow">Workflow</option>
+            <option value="agent">Agent</option>
+          </select>
+          <select
+            value={filter}
+            onChange={e => setFilter(e.target.value)}
+            className="input py-1.5 text-[12px] w-auto"
+          >
+            {statuses.map(s => (
+              <option key={s} value={s}>{s || 'All statuses'}</option>
+            ))}
+          </select>
+          <button title="Refresh executions" onClick={refresh} className="btn btn-secondary btn-sm">
+            <RefreshCw className="w-3.5 h-3.5" />
+          </button>
+        </div>
+      </div>
+
       <div className="an-body">
         <section className="an-section">
           <header className="an-h">
@@ -153,6 +204,7 @@ export default function ExecutionListPage() {
                 <span className="an-run-wf">{exec.workflowName}</span>
                 <StatusBadge status={exec.status} />
                 <span className="mono">{shortDuration(exec.durationMs)}</span>
+                <span className="muted mono">{shortAge(exec.startedAt)}</span>
               </Link>
             ))}
           </div>
@@ -183,43 +235,6 @@ export default function ExecutionListPage() {
             </div>
           )}
         </section>
-      </div>
-
-      <div className="activity-filterbar">
-        <div className="flex items-center gap-2 flex-wrap">
-          <div className="relative">
-            <Search className="w-3.5 h-3.5 absolute left-2.5 top-1/2 -translate-y-1/2 text-theme-muted pointer-events-none" />
-            <input
-              type="text"
-              value={searchInput}
-              onChange={e => onSearchChange(e.target.value)}
-              placeholder="Search id, workflow, node…"
-              className="input pl-8 w-64 py-1.5 text-[12px]"
-            />
-          </div>
-          <select
-            value={typeFilter}
-            onChange={e => setTypeFilter(e.target.value)}
-            className="input py-1.5 text-[12px] w-auto"
-            title="Filter by execution type"
-          >
-            <option value="">All types</option>
-            <option value="workflow">Workflow</option>
-            <option value="agent">Agent</option>
-          </select>
-          <select
-            value={filter}
-            onChange={e => setFilter(e.target.value)}
-            className="input py-1.5 text-[12px] w-auto"
-          >
-            {statuses.map(s => (
-              <option key={s} value={s}>{s || 'All statuses'}</option>
-            ))}
-          </select>
-          <button title="Refresh executions" onClick={refresh} className="btn btn-secondary btn-sm">
-            <RefreshCw className="w-3.5 h-3.5" />
-          </button>
-        </div>
       </div>
     </div>
   );

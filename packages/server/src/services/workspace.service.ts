@@ -526,12 +526,33 @@ export class WorkspaceManager {
     const ws = await this.get(id);
     if (!ws) throw new Error('Workspace not found');
 
-    // Show current uncommitted changes (staged + unstaged) — what the developer is actively working on
-    const { stdout: nameStatus } = await exec('git', ['diff', '--name-status', 'HEAD'], { cwd: ws.worktreePath }).catch(() => ({ stdout: '' }));
-    const { stdout: numstat } = await exec('git', ['diff', '--numstat', 'HEAD'], { cwd: ws.worktreePath }).catch(() => ({ stdout: '' }));
+    // Prefer current uncommitted changes. If the workspace branch has already
+    // committed the implementation, fall back to branch-vs-base so chat and
+    // workspace views can still show the completed code diff.
+    let diffRange = 'HEAD';
+    let baseRef = 'HEAD';
+    let includeUntracked = true;
+    let { stdout: nameStatus } = await exec('git', ['diff', '--name-status', diffRange], { cwd: ws.worktreePath }).catch(() => ({ stdout: '' }));
+    let { stdout: numstat } = await exec('git', ['diff', '--numstat', diffRange], { cwd: ws.worktreePath }).catch(() => ({ stdout: '' }));
+
+    if (!nameStatus.trim() && ws.baseBranch) {
+      const candidates = [`origin/${ws.baseBranch}...HEAD`, `${ws.baseBranch}...HEAD`];
+      for (const range of candidates) {
+        const status = await exec('git', ['diff', '--name-status', range], { cwd: ws.worktreePath }).catch(() => ({ stdout: '' }));
+        if (!status.stdout.trim()) continue;
+        nameStatus = status.stdout;
+        numstat = (await exec('git', ['diff', '--numstat', range], { cwd: ws.worktreePath }).catch(() => ({ stdout: '' }))).stdout;
+        diffRange = range;
+        baseRef = range.split('...')[0] ?? 'HEAD';
+        includeUntracked = false;
+        break;
+      }
+    }
 
     // Also include untracked new files
-    const { stdout: untracked } = await exec('git', ['ls-files', '--others', '--exclude-standard'], { cwd: ws.worktreePath }).catch(() => ({ stdout: '' }));
+    const { stdout: untracked } = includeUntracked
+      ? await exec('git', ['ls-files', '--others', '--exclude-standard'], { cwd: ws.worktreePath }).catch(() => ({ stdout: '' }))
+      : { stdout: '' };
 
     const statLines = numstat.trim().split('\n').filter(Boolean);
     const statusLines = nameStatus.trim().split('\n').filter(Boolean);
@@ -567,10 +588,11 @@ export class WorkspaceManager {
           file.modifiedContent = content;
         } else {
           const [{ stdout: diff }, orig, mod] = await Promise.all([
-            exec('git', ['diff', 'HEAD', '--', file.path], { cwd: ws.worktreePath }),
-            exec('git', ['show', `HEAD:${file.path}`], { cwd: ws.worktreePath }).then(r => r.stdout).catch(() => ''),
+            exec('git', ['diff', diffRange, '--', file.path], { cwd: ws.worktreePath }),
+            exec('git', ['show', `${baseRef}:${file.path}`], { cwd: ws.worktreePath }).then(r => r.stdout).catch(() => ''),
             (async () => {
               if (file.status === 'deleted') return '';
+              if (!includeUntracked) return exec('git', ['show', `HEAD:${file.path}`], { cwd: ws.worktreePath }).then(r => r.stdout).catch(() => '');
               try { return rf(join(ws.worktreePath, file.path), 'utf-8'); } catch { return ''; }
             })(),
           ]);

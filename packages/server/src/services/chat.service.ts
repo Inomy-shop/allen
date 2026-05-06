@@ -422,6 +422,28 @@ function executionRequestTitle(exec: Record<string, unknown>): string {
   );
 }
 
+function compactChatTitle(value: unknown): string | null {
+  if (typeof value !== 'string') return null;
+  const trimmed = value.replace(/\s+/g, ' ').trim();
+  if (!trimmed) return null;
+  return trimmed.length > 90 ? `${trimmed.slice(0, 90)}...` : trimmed;
+}
+
+function deterministicSessionTaskTitle(userMessage: string): string | null {
+  const linearTitleMatch = userMessage.match(/Linear title:\s*([^\n]+)/i)
+    ?? userMessage.match(/Ticket title:\s*([^\n]+)/i)
+    ?? userMessage.match(/Issue title:\s*([^\n]+)/i);
+  const linearTitle = compactChatTitle(linearTitleMatch?.[1]);
+  if (linearTitle) return linearTitle;
+
+  const dispatchMatch = userMessage.match(/Dispatch Linear ticket\s+([A-Z][A-Z0-9]+-\d+)\s*(?:[:\-–—]\s*|\s+through\s+Allen\b\s*)?([^\n]*)/i);
+  const dispatchTitle = compactChatTitle(dispatchMatch?.[2]);
+  if (dispatchTitle && !/^through allen$/i.test(dispatchTitle)) return dispatchTitle;
+
+  const assignMatch = userMessage.match(/\b(?:assign|work on|fix|implement|review|debug|investigate)\b(?:\s+this)?(?:\s+task|\s+ticket|\s+issue)?[:\-–—]?\s+([^\n]+)/i);
+  return compactChatTitle(assignMatch?.[1]) ?? null;
+}
+
 async function cancelLinkedChatExecutions(sessionId: string, db: Db): Promise<CancelledExecutionInfo[]> {
   const linkedRows = await db.collection('executions')
     .find(
@@ -1125,7 +1147,8 @@ User: ${userMessage.slice(0, 500)}`;
       if (shouldAutoTitle) {
         // assistantContent may be empty if the user aborted — that's fine, we pass undefined
         const responseText = result.text.trim() || undefined;
-        this.generateTitleWithLLM(content, responseText)
+        const deterministicTitle = deterministicSessionTaskTitle(content);
+        Promise.resolve(deterministicTitle ?? this.generateTitleWithLLM(content, responseText))
           .then(async (generatedTitle) => {
             if (generatedTitle) {
               await this.updateSessionTitle(sessionId, generatedTitle, 'auto');
@@ -1149,7 +1172,8 @@ User: ${userMessage.slice(0, 500)}`;
           (session?.titleSource === 'default' || session?.titleSource === 'auto' || !session?.titleSource) &&
           ((session?.messageCount as number) ?? 0) <= 4;
         if (shouldAutoTitleOnAbort) {
-          this.generateTitleWithLLM(content, entry.currentText.trim() || undefined)
+          const deterministicTitle = deterministicSessionTaskTitle(content);
+          Promise.resolve(deterministicTitle ?? this.generateTitleWithLLM(content, entry.currentText.trim() || undefined))
             .then(async (generatedTitle) => {
               if (generatedTitle) {
                 await this.updateSessionTitle(sessionId, generatedTitle, 'auto');

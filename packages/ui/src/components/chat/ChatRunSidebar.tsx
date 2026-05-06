@@ -1,9 +1,11 @@
-import { useMemo, type ReactNode } from 'react';
+import { useMemo, useState, type ReactNode } from 'react';
 import { Link } from 'react-router-dom';
 import {
   Activity,
   AlertTriangle,
   Bot,
+  ChevronDown,
+  ChevronRight,
   CheckCircle2,
   ExternalLink,
   FileText,
@@ -17,7 +19,8 @@ import {
   X,
 } from 'lucide-react';
 import type { SpawnedAgent } from '../../hooks/useChat';
-import type { RunStatus } from '../../services/api';
+import { artifacts as artifactsApi, type ArtifactDoc, type RunStatus } from '../../services/api';
+import ArtifactViewer from '../artifacts/ArtifactViewer';
 
 const FAILED_STATUSES = new Set(['failed', 'failure', 'error', 'errored']);
 const CANCELLED_STATUSES = new Set(['cancelled', 'canceled']);
@@ -53,6 +56,24 @@ function formatDuration(ms?: number | null): string {
   const min = Math.floor(sec / 60);
   const rem = Math.round(sec % 60);
   return rem ? `${min}m ${rem}s` : `${min}m`;
+}
+
+function formatCost(cost?: { actual?: number | null; estimated?: number | null } | null): string {
+  if (!cost) return '$0.00';
+  const value = Number(cost.actual ?? cost.estimated ?? 0);
+  if (!Number.isFinite(value) || value <= 0) return '$0.00';
+  if (value < 0.01) return `$${value.toFixed(4)}`;
+  return `$${value.toFixed(2)}`;
+}
+
+function costValue(cost?: { actual?: number | null; estimated?: number | null } | null): number {
+  const value = Number(cost?.actual ?? cost?.estimated ?? 0);
+  return Number.isFinite(value) ? value : 0;
+}
+
+function formatRunSequenceCost(runs: SpawnedAgent[]): string {
+  const total = runs.reduce((sum, run) => sum + costValue(run.runContext?.execution.cost), 0);
+  return formatCost({ actual: total, estimated: total });
 }
 
 function runExecutionLabel(context: RunStatus | null): string {
@@ -176,6 +197,44 @@ function artifactsForRun(run: SpawnedAgent, context: RunStatus | null) {
   });
 }
 
+function artifactTypeLabel(artifact: RunStatus['artifacts'][number]): string {
+  const raw = artifact.contentType?.split('/').pop() ?? artifact.rootType ?? 'file';
+  return humanLabel(raw).toLowerCase();
+}
+
+function artifactContentType(value?: string | null): ArtifactDoc['contentType'] {
+  const normalized = (value ?? '').toLowerCase();
+  if (normalized.includes('markdown') || normalized === 'md') return 'markdown';
+  if (normalized.includes('json')) return 'json';
+  if (normalized.includes('csv')) return 'csv';
+  if (normalized.includes('javascript') || normalized.includes('typescript') || normalized.includes('python') || normalized.includes('code')) return 'code';
+  if (normalized.includes('octet-stream') || normalized.includes('binary')) return 'binary';
+  return 'text';
+}
+
+function fallbackArtifactDoc(artifact: RunStatus['artifacts'][number], run: SpawnedAgent): ArtifactDoc {
+  const filename = artifact.filename ?? artifact.relativePath ?? 'artifact.md';
+  return {
+    artifactId: artifact.artifactId,
+    rootType: artifact.rootType === 'chat' || artifact.rootType === 'workflow' || artifact.rootType === 'agent' ? artifact.rootType : 'agent',
+    rootId: artifact.rootId ?? run.executionId,
+    spawnContext: {
+      originType: 'spawn_agent',
+      parentId: artifact.spawnContext?.parentId ?? run.executionId,
+      nodeName: artifact.spawnContext?.nodeName ?? undefined,
+      agentName: artifact.spawnContext?.agentName ?? run.agent,
+      agentExecutionId: artifact.spawnContext?.agentExecutionId ?? run.executionId,
+    },
+    filename,
+    relativePath: artifact.relativePath ?? filename,
+    contentType: artifactContentType(artifact.contentType),
+    sizeBytes: 0,
+    description: artifact.description ?? undefined,
+    createdAt: artifact.createdAt ?? new Date().toISOString(),
+    createdByAgent: artifact.spawnContext?.agentName ?? run.agent,
+  };
+}
+
 function StepDot({ state }: { state: 'ok' | 'run' | 'wait-you' | 'fail' | 'wait' }) {
   const base = 'relative z-[1] flex h-5 w-5 items-center justify-center rounded-full border font-mono text-[10px]';
   if (state === 'ok') return <span className={`${base} border-accent-green/35 bg-accent-green/10 text-accent-green`}><CheckCircle2 className="h-3 w-3" /></span>;
@@ -196,11 +255,11 @@ function nodeStepState(status?: string | null): 'ok' | 'run' | 'wait-you' | 'fai
 
 function RailSection({ title, count, children }: { title: string; count?: string; children: ReactNode }) {
   return (
-    <section>
-      <h3 className="mb-2.5 flex items-center gap-2 font-mono text-[10px] font-semibold uppercase tracking-[0.1em] text-theme-muted">
+    <section className="cr-section">
+      <h6>
         {title}
-        {count && <span className="font-mono text-[11px] font-normal normal-case tracking-normal text-theme-subtle">{count}</span>}
-      </h3>
+        {count && <span className="cr-ct">{count}</span>}
+      </h6>
       {children}
     </section>
   );
@@ -211,42 +270,86 @@ function WorkflowNodeStep({ step, isLast }: { step: NonNullable<RunStatus['workf
   const attempts = Math.max(0, step.attempts ?? 0);
   const meta = [
     step.agent || humanLabel(step.type ?? 'node'),
-    attempts > 1 ? `${attempts} attempts` : attempts === 1 ? '1 attempt' : 'pending',
+    formatDuration(step.durationMs),
+    formatCost(step.cost),
+  ].filter(Boolean).join(' · ');
+  const sub = [
+    attempts > 1 ? `${attempts} attempts` : null,
     step.model ? String(step.model).replace(/^claude-/, '') : null,
+    step.error ? 'error' : null,
   ].filter(Boolean).join(' · ');
 
   return (
-    <div className="relative grid grid-cols-[26px_1fr] gap-3 py-1.5">
-      {!isLast && <span className="absolute bottom-[-8px] left-[9.5px] top-[20px] w-[2px] rounded-full bg-[rgb(var(--color-border))]" />}
-      <div className="relative z-[2]">
-        <StepDot state={state} />
+    <div className={`step ${state}`}>
+      <div className="step-dot">
+        {state === 'ok' && '✓'}
+        {state === 'run' && <span className="spin">●</span>}
+        {state === 'wait' && '○'}
+        {state === 'wait-you' && '?'}
+        {state === 'fail' && '✕'}
       </div>
-      <div className="min-w-0">
-        <div className={`truncate text-[13px] font-medium ${state === 'run' || state === 'wait-you' ? 'text-theme-primary' : 'text-theme-secondary'}`}>
-          {humanLabel(step.name)}
+      <div className="step-body">
+        <div className="step-name">{humanLabel(step.name)}</div>
+        <div className="step-meta">{meta}</div>
+        {sub && <div className="step-sub">{sub}</div>}
+      </div>
+    </div>
+  );
+}
+
+function workflowAttemptFailureLabel(run: SpawnedAgent): string {
+  const context = run.runContext;
+  const failedStep = context?.execution.failedNode
+    ?? context?.progress.currentStep
+    ?? context?.workflowSteps.find(step => nodeStepState(step.status) === 'fail')?.name
+    ?? null;
+  if (failedStep) return `Failed at ${humanLabel(String(failedStep))}`;
+  return 'Failed';
+}
+
+function AttemptRow({ run, index }: { run: SpawnedAgent; index: number }) {
+  const context = run.runContext ?? null;
+  const state = runState(context, run);
+  const status = context?.status ?? run.status;
+  const cost = formatCost(context?.execution.cost);
+  const percent = Math.max(0, Math.min(100, context?.progress.percent ?? (state === 'ok' ? 100 : 0)));
+  const kind = runKindLabel(context, run).replace(' Run', '');
+  const workflowSteps = context?.runType === 'workflow' ? context.workflowSteps ?? [] : [];
+  const summary =
+    state === 'fail' ? workflowAttemptFailureLabel(run)
+      : state === 'ok' ? 'Passed'
+        : context?.progress.currentStep ? `Running ${humanLabel(context.progress.currentStep)}`
+          : humanLabel(context?.progress.phase ?? status);
+  return (
+    <div className={`step ${state}`}>
+      <div className="step-dot">
+        {state === 'ok' && '✓'}
+        {state === 'run' && <span className="spin">●</span>}
+        {state === 'wait' && '○'}
+        {state === 'wait-you' && '?'}
+        {state === 'fail' && '✕'}
+      </div>
+      <div className="step-body">
+        <div className="step-name-row">
+          <div className="step-name">Attempt {index + 1}</div>
+          <Link to={`/executions/${run.executionId}`} className="step-link-icon" title="Open execution">
+            <ExternalLink className="h-3.5 w-3.5" />
+          </Link>
         </div>
-        <div className="mt-0.5 truncate font-mono text-[11px] text-theme-muted">{meta}</div>
-        <div className="mt-1.5 grid grid-cols-3 gap-1.5 font-mono text-[10px] text-theme-subtle">
-          <span className="flex min-w-0 items-center gap-1 truncate" title="Started at">
-            <PlayCircle className="h-3 w-3 shrink-0 text-accent-green" />
-            <span className="truncate">{formatClock(step.startedAt)}</span>
-          </span>
-          <span className="flex min-w-0 items-center gap-1 truncate" title="Ended at">
-            <StopCircle className="h-3 w-3 shrink-0 text-accent-red" />
-            <span className="truncate">{formatClock(step.completedAt)}</span>
-          </span>
-          <span className="flex min-w-0 items-center gap-1 truncate" title="Duration">
-            <Timer className="h-3 w-3 shrink-0 text-accent" />
-            <span className="truncate">{formatDuration(step.durationMs)}</span>
-          </span>
+        <div className="step-meta">{kind} · {summary} · {cost}</div>
+        <div className="attempt-bar" aria-label={`Attempt ${index + 1} progress ${percent}%`}>
+          <span style={{ width: `${percent}%` }} />
         </div>
-        {(attempts > 1 || Boolean(step.retryReasons?.length)) && (
-          <div className="mt-1 inline-flex items-center rounded bg-accent-yellow/10 px-1.5 py-0.5 font-mono text-[10px] text-accent-yellow">
-            retry {attempts}x{step.retryReasons?.[0] ? ` · ${humanLabel(step.retryReasons[0])}` : ''}
+        {workflowSteps.length > 0 && (
+          <div className="attempt-workflow-steps">
+            {workflowSteps.map((step, stepIndex) => (
+              <WorkflowNodeStep
+                key={step.id}
+                step={step}
+                isLast={stepIndex === workflowSteps.length - 1}
+              />
+            ))}
           </div>
-        )}
-        {step.error && (
-          <div className="mt-1 rounded bg-accent-red/10 px-1.5 py-0.5 text-[11px] text-accent-red">{step.error}</div>
         )}
       </div>
     </div>
@@ -255,61 +358,118 @@ function WorkflowNodeStep({ step, isLast }: { step: NonNullable<RunStatus['workf
 
 function ReferenceLinks({ run, context }: { run: SpawnedAgent; context: RunStatus | null }) {
   const pr = context?.pullRequest;
-  const artifacts = artifactsForRun(run, context);
-  const hasReferences = Boolean(context?.linear || context?.workspace || pr?.number || artifacts.length || run.executionId);
+  const hasReferences = Boolean(context?.linear || context?.workspace || pr?.number || run.executionId);
   if (!hasReferences) return null;
 
   return (
-    <div className="mt-3 space-y-1.5">
+    <>
       {context?.linear && (
-        <a href={context.linear.url ?? '#'} target={context.linear.url ? '_blank' : undefined} rel="noreferrer" className="grid grid-cols-[24px_1fr_14px] items-center gap-2.5 rounded-lg border border-app-strong bg-app-card px-2.5 py-2 text-inherit transition-colors hover:bg-app-muted">
-          <span className="flex h-[22px] w-[22px] items-center justify-center rounded bg-accent-purple/10 font-mono text-[11px] font-bold text-accent-purple">L</span>
-          <span className="min-w-0">
-            <span className="block truncate font-mono text-[12px] text-theme-primary">{context.linear.identifier ?? context.linear.title ?? 'Linear Ticket'}</span>
-            <span className="block truncate font-mono text-[11px] text-theme-muted">{context.linear.title ?? 'Linear'}</span>
+        <a href={context.linear.url ?? '#'} target={context.linear.url ? '_blank' : undefined} rel="noreferrer" className="cr-ref">
+          <span className="cr-ref-ic linear">L</span>
+          <span className="cr-ref-body">
+            <span className="cr-ref-id">{context.linear.identifier ?? context.linear.title ?? 'Linear Ticket'}</span>
+            <span className="cr-ref-sub">linear · {humanLabel(String(context.linear.assignment?.status ?? context?.status ?? 'linked'))}</span>
           </span>
           {context.linear.url && <ExternalLink className="h-3.5 w-3.5 text-theme-subtle" />}
         </a>
       )}
       {pr?.number && (
-        <a href={pr.url ?? '#'} target={pr.url ? '_blank' : undefined} rel="noreferrer" className="grid grid-cols-[24px_1fr_14px] items-center gap-2.5 rounded-lg border border-app-strong bg-app-card px-2.5 py-2 text-inherit transition-colors hover:bg-app-muted">
-          <span className="flex h-[22px] w-[22px] items-center justify-center rounded bg-[rgb(var(--color-text-primary))] font-mono text-[10px] font-bold text-[rgb(var(--color-surface))]">GH</span>
-          <span className="min-w-0">
-            <span className="block truncate font-mono text-[12px] text-theme-primary">PR #{pr.number} <StatusBadge status={pr.status ?? 'open'} /></span>
-            <span className="block truncate font-mono text-[11px] text-theme-muted">{timeAgo(pr.mergedAt ?? pr.updatedAt ?? pr.createdAt)}</span>
+        <a href={pr.url ?? '#'} target={pr.url ? '_blank' : undefined} rel="noreferrer" className="cr-ref">
+          <span className="cr-ref-ic gh">⌥</span>
+          <span className="cr-ref-body">
+            <span className="cr-ref-id">#{pr.number} <span className={`cr-ref-tag ${pr.status === 'draft' ? 'draft' : pr.status === 'open' ? 'open' : ''}`}>{pr.status ?? 'open'}</span></span>
+            <span className="cr-ref-sub">{pr.branch ?? 'pull request'} · {timeAgo(pr.mergedAt ?? pr.updatedAt ?? pr.createdAt)}</span>
           </span>
           {pr.url && <ExternalLink className="h-3.5 w-3.5 text-theme-subtle" />}
         </a>
       )}
       {context?.workspace && (
-        <Link to={context.workspace.id ? `/workspaces/${context.workspace.id}` : `/executions/${run.executionId}`} className="grid grid-cols-[24px_1fr_14px] items-center gap-2.5 rounded-lg border border-app-strong bg-app-card px-2.5 py-2 text-inherit transition-colors hover:bg-app-muted">
-          <span className="flex h-[22px] w-[22px] items-center justify-center rounded border border-app bg-app-muted text-theme-muted"><FolderGit2 className="h-3 w-3" /></span>
-          <span className="min-w-0">
-            <span className="block truncate font-mono text-[12px] text-theme-primary">{context.workspace.branch ?? context.workspace.name ?? 'Workspace'}</span>
-            <span className="block truncate font-mono text-[11px] text-theme-muted">{context.workspace.repoName ?? 'Workspace'} {context.workspace.status && <StatusBadge status={context.workspace.status} />}</span>
+        <Link to={context.workspace.id ? `/workspaces/${context.workspace.id}` : `/executions/${run.executionId}`} className="cr-ref">
+          <span className="cr-ref-ic repo">⎇</span>
+          <span className="cr-ref-body">
+            <span className="cr-ref-id">{context.workspace.branch ?? context.workspace.name ?? 'Workspace'}</span>
+            <span className="cr-ref-sub">{context.workspace.repoName ?? 'workspace'}</span>
           </span>
           <ExternalLink className="h-3.5 w-3.5 text-theme-subtle" />
         </Link>
       )}
-      {artifacts.slice(0, 2).map((artifact) => (
-        <a key={artifact.artifactId} href={artifact.url ?? '#'} target="_blank" rel="noreferrer" className="grid grid-cols-[24px_1fr_14px] items-center gap-2.5 rounded-lg border border-app-strong bg-app-card px-2.5 py-2 text-inherit transition-colors hover:bg-app-muted">
-          <span className="flex h-[22px] w-[22px] items-center justify-center rounded border border-app bg-app-muted text-theme-muted"><FileText className="h-3 w-3" /></span>
-          <span className="min-w-0">
-            <span className="block truncate font-mono text-[12px] text-theme-primary">{artifact.filename ?? 'Artifact'}</span>
-            <span className="block truncate font-mono text-[11px] text-theme-muted">{artifact.contentType ?? 'output'}</span>
-          </span>
-          <ExternalLink className="h-3.5 w-3.5 text-theme-subtle" />
-        </a>
-      ))}
-      <Link to={`/executions/${run.executionId}`} className="grid grid-cols-[24px_1fr_14px] items-center gap-2.5 rounded-lg border border-app-strong bg-app-card px-2.5 py-2 text-inherit transition-colors hover:bg-app-muted" title={`Open ${runExecutionLabel(context).toLowerCase()}`}>
-        <span className="flex h-[22px] w-[22px] items-center justify-center rounded border border-app bg-app-muted text-theme-muted"><RunExecutionIcon context={context} /></span>
-        <span className="min-w-0">
-          <span className="block truncate font-mono text-[12px] text-theme-primary">{run.executionId.slice(0, 8)}</span>
-          <span className="block truncate font-mono text-[11px] text-theme-muted">{runExecutionLabel(context)} <StatusBadge status={context?.status ?? run.status} /></span>
+      <Link to={`/executions/${run.executionId}`} className="cr-ref" title={`Open ${runExecutionLabel(context).toLowerCase()}`}>
+        <span className="cr-ref-ic repo">⎇</span>
+        <span className="cr-ref-body">
+          <span className="cr-ref-id">{run.executionId.slice(0, 8)}</span>
+          <span className="cr-ref-sub">{runExecutionLabel(context)} · {humanLabel(context?.status ?? run.status)}</span>
         </span>
         <ExternalLink className="h-3.5 w-3.5 text-theme-subtle" />
       </Link>
-    </div>
+    </>
+  );
+}
+
+function ArtifactLinks({ run, context }: { run: SpawnedAgent; context: RunStatus | null }) {
+  const artifacts = artifactsForRun(run, context);
+  const [expanded, setExpanded] = useState(false);
+  const [selectedArtifact, setSelectedArtifact] = useState<ArtifactDoc | null>(null);
+  const [loadingArtifactId, setLoadingArtifactId] = useState<string | null>(null);
+
+  async function openArtifact(artifact: RunStatus['artifacts'][number]) {
+    setLoadingArtifactId(artifact.artifactId);
+    try {
+      setSelectedArtifact(await artifactsApi.get(artifact.artifactId));
+    } catch {
+      setSelectedArtifact(fallbackArtifactDoc(artifact, run));
+    } finally {
+      setLoadingArtifactId(null);
+    }
+  }
+
+  if (artifacts.length === 0) return null;
+  return (
+    <section className="cr-section">
+      <button type="button" className="cr-section-toggle" onClick={() => setExpanded(value => !value)}>
+        <h6>
+          artifacts
+          <span className="cr-ct">{artifacts.length}</span>
+        </h6>
+        {expanded ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronRight className="h-3.5 w-3.5" />}
+      </button>
+      {expanded && (
+        <div className="cr-section-body">
+          {artifacts.map((artifact) => {
+            const isLoading = loadingArtifactId === artifact.artifactId;
+            return (
+              <button
+                key={artifact.artifactId}
+                type="button"
+                onClick={() => openArtifact(artifact)}
+                className={`cr-art ${isLoading ? 'loading' : ''}`}
+              >
+                <span className="cr-art-ic"><FileText className="h-3 w-3" /></span>
+                <span className="cr-art-body">
+                  <span className="cr-art-h">
+                    <span className="cr-art-tag">{artifactTypeLabel(artifact)}</span>
+                    <span className="cr-art-v">v1</span>
+                  </span>
+                  <span className="cr-art-title">{artifact.filename ?? artifact.relativePath ?? 'Artifact'}</span>
+                  <span className="cr-art-sub">edited {timeAgo(artifact.createdAt)}</span>
+                </span>
+                {isLoading ? <Loader2 className="h-3 w-3 animate-spin text-theme-subtle" /> : <FileText className="h-3 w-3 text-theme-subtle" />}
+              </button>
+            );
+          })}
+        </div>
+      )}
+      {selectedArtifact && (
+        <div className="artifact-modal-backdrop" role="dialog" aria-modal="true" aria-label="Artifact viewer">
+          <div className="artifact-modal">
+            <ArtifactViewer
+              artifact={selectedArtifact}
+              onClose={() => setSelectedArtifact(null)}
+              showExternalLink={false}
+            />
+          </div>
+        </div>
+      )}
+    </section>
   );
 }
 
@@ -320,6 +480,7 @@ function ExecutionStep({ run, index, isLast }: { run: SpawnedAgent; index: numbe
   const title = context?.title ?? run.agent;
   const currentStep = context?.progress.currentStep ?? context?.progress.label ?? run.prompt ?? 'Waiting for activity';
   const childSteps = compactSteps(context).slice(-3);
+  const cost = formatCost(context?.execution.cost);
 
   return (
     <div className="relative grid grid-cols-[26px_1fr] gap-3 pb-4">
@@ -332,7 +493,7 @@ function ExecutionStep({ run, index, isLast }: { run: SpawnedAgent; index: numbe
           <div className="min-w-0">
             <div className="mb-1 font-mono text-[10px] font-semibold uppercase tracking-[0.08em] text-theme-muted">Step {index + 1}</div>
             <div className="truncate text-[13px] font-semibold text-theme-primary">{title}</div>
-            <div className="mt-1 font-mono text-[10.5px] text-theme-muted">{runKindLabel(context, run)} · {expectedOutcome(context)}</div>
+            <div className="mt-1 font-mono text-[10.5px] text-theme-muted">{runKindLabel(context, run)} · {cost} · {expectedOutcome(context)}</div>
           </div>
           <StatusBadge status={context?.status ?? run.status} />
         </div>
@@ -380,76 +541,84 @@ export default function ChatRunSidebar({ runs }: { runs: SpawnedAgent[] }) {
     return !['completed', 'failed', 'cancelled', 'canceled'].includes(status);
   }) ?? sortedRuns[sortedRuns.length - 1] ?? null;
   const activeContext = activeRun?.runContext ?? null;
-  const showWorkflowNodes = sortedRuns.length === 1 && activeContext?.runType === 'workflow' && (activeContext.workflowSteps?.length ?? 0) > 0;
+  const attemptRuns = sortedRuns;
+  const showAttempts = attemptRuns.length > 1;
+  const showWorkflowNodes = !showAttempts && activeContext?.runType === 'workflow' && (activeContext.workflowSteps?.length ?? 0) > 0;
 
   if (!activeRun) return null;
 
+  const percent = Math.max(0, Math.min(100, activeContext?.progress.percent ?? 0));
+  const activeCost = showAttempts ? formatRunSequenceCost(attemptRuns) : formatCost(activeContext?.execution.cost);
+
   return (
-    <aside className="hidden h-full w-[320px] shrink-0 flex-col gap-5 overflow-y-auto border-l border-app bg-app-sunken px-[18px] py-5 xl:flex">
-      <div className="flex items-center justify-between gap-3">
-        <h2 className="m-0 font-mono text-[11px] font-semibold uppercase tracking-[0.08em] text-theme-muted">
-          {sortedRuns.length > 1 ? 'Task Sequence' : 'This Task'}
-        </h2>
-        {sortedRuns.length === 1 && (
-          <Link
-            to={`/executions/${activeRun.executionId}`}
-            className="inline-flex items-center gap-1 rounded border border-app bg-app-card px-2 py-1 font-mono text-[10px] text-theme-muted transition-colors hover:bg-app-muted hover:text-theme-primary"
-            title="Open full execution trace"
-          >
-            {activeContext?.runType === 'workflow' ? 'workflow trace' : activeContext?.runType === 'agent' ? 'agent trace' : 'trace'}
-            <ExternalLink className="h-3 w-3" />
-          </Link>
-        )}
+    <aside className="chat-rail hidden h-full w-[320px] shrink-0 xl:flex">
+      <div className="cr-head">
+        <h5>{sortedRuns.length > 1 ? 'task sequence' : 'this task'}</h5>
+        <Link to={`/executions/${activeRun.executionId}`} className="cr-close" title="Open full execution trace">
+          <ExternalLink className="h-3.5 w-3.5" />
+        </Link>
       </div>
 
-      <section className="border-b border-app-strong pb-4">
-        <div className="mb-1.5 flex justify-between text-[12px]">
-          <span className="text-theme-muted">progress</span>
-          <span className="font-mono text-theme-primary">{Math.max(0, Math.min(100, activeContext?.progress.percent ?? 0))}%</span>
+      <section className="cr-progress">
+        <div className="cr-prog-row">
+          <span>progress</span>
+          <span className="mono">{percent}%</span>
         </div>
-        <div className="h-1.5 overflow-hidden rounded-full bg-app-muted">
-          <div className="h-full rounded-full bg-accent transition-all" style={{ width: `${Math.max(0, Math.min(100, activeContext?.progress.percent ?? 0))}%` }} />
+        <div className="bar">
+          <span style={{ width: `${percent}%` }} />
         </div>
-        <div className="mt-2 flex justify-between text-[12px]">
-          <span className="text-theme-muted">status</span>
-          <StatusBadge status={activeContext?.status ?? activeRun.status} />
+        <div className="cr-prog-row sub">
+          <span>status</span>
+          <span className="mono">{humanLabel(activeContext?.status ?? activeRun.status)}</span>
+        </div>
+        <div className="cr-prog-row sub">
+          <span>current</span>
+          <span className="mono">{activeContext?.progress.currentStep ?? activeContext?.progress.label ?? 'done'}</span>
+        </div>
+        <div className="cr-prog-row sub">
+          <span>cost</span>
+          <span className="mono">{activeCost}</span>
         </div>
       </section>
 
+      <ArtifactLinks run={activeRun} context={activeContext} />
+
+      <RailSection title="references">
+        <ReferenceLinks run={activeRun} context={activeContext} />
+      </RailSection>
+
+      {showAttempts && (
+        <RailSection title="attempts" count={`${attemptRuns.length}`}>
+          <div className="cr-steps">
+            {attemptRuns.map((run, index) => (
+              <AttemptRow key={run.executionId} run={run} index={index} />
+            ))}
+          </div>
+        </RailSection>
+      )}
+
       {showWorkflowNodes ? (
         <>
-          <RailSection title="Current Work">
-            <div className="rounded-lg border border-app bg-app-card p-3">
-              <div className="mb-1.5 flex items-start gap-2">
-                {statusIcon(activeContext?.status ?? activeRun.status)}
-                <div className="min-w-0">
-                  <div className="truncate text-[13px] font-semibold text-theme-primary">{activeContext?.title ?? activeRun.agent}</div>
-                  <div className="mt-1 font-mono text-[10.5px] text-theme-muted">Workflow Run · {activeRun.executionId.slice(0, 8)}</div>
-                </div>
-              </div>
-              <ReferenceLinks run={activeRun} context={activeContext} />
-            </div>
-          </RailSection>
-          <RailSection title="Workflow Steps" count={`${activeContext?.progress.completed ?? 0}/${activeContext?.progress.total ?? activeContext?.workflowSteps.length}`}>
-            <div className="flex flex-col">
+          <RailSection title="steps" count={`${activeContext?.progress.completed ?? 0}/${activeContext?.progress.total ?? activeContext?.workflowSteps.length}`}>
+            <div className="cr-steps">
               {activeContext!.workflowSteps.map((step, index) => (
                 <WorkflowNodeStep key={step.id} step={step} isLast={index === activeContext!.workflowSteps.length - 1} />
               ))}
             </div>
           </RailSection>
         </>
-      ) : (
-        <RailSection title="Execution Steps" count={`${sortedRuns.length}`}>
-          <div className="flex flex-col">
+      ) : !showAttempts ? (
+        <RailSection title="steps" count={`${sortedRuns.length}`}>
+          <div className="cr-steps">
             {sortedRuns.map((run, index) => (
               <ExecutionStep key={run.executionId} run={run} index={index} isLast={index === sortedRuns.length - 1} />
             ))}
           </div>
         </RailSection>
-      )}
+      ) : null}
 
       {activeContext?.childAgents && activeContext.childAgents.length > 0 && (
-        <RailSection title="Agents">
+        <RailSection title="agents">
           <div className="space-y-1">
             {activeContext.childAgents.map(child => (
               <Link
@@ -459,6 +628,7 @@ export default function ChatRunSidebar({ runs }: { runs: SpawnedAgent[] }) {
               >
                 <span className="truncate">{child.agentName}</span>
                 <span className="inline-flex shrink-0 items-center gap-1">
+                  <span className="font-mono text-[10px] text-theme-subtle">{formatCost(child.cost)}</span>
                   <StatusBadge status={child.status} />
                   <ExternalLink className="h-3.5 w-3.5 text-theme-subtle" />
                 </span>
@@ -469,8 +639,8 @@ export default function ChatRunSidebar({ runs }: { runs: SpawnedAgent[] }) {
       )}
 
       {(activeContext?.humanInput.required || activeContext?.pullRequest?.url) && (
-        <RailSection title="Actions">
-          <div className="flex flex-col gap-1.5">
+        <RailSection title="actions">
+          <div className="cr-acts">
             {activeContext?.humanInput.required && (
               <Link to={activeContext.humanInput.interventionId ? `/interventions/${activeContext.humanInput.interventionId}` : '/interventions'} className="btn-primary justify-center gap-1.5 text-[12px]">
                 Resolve Input

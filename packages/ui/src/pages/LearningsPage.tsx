@@ -201,16 +201,12 @@ export default function LearningsPage() {
   }, [activeTab, fetchEvolutionCandidates]);
 
   return (
-    <div className="px-6 pt-5 pb-8">
+    <div className="content scroll-hide learnings-page" data-screen-label="learnings">
       {/* Header */}
-      <div className="flex items-center gap-2 mb-2 text-[12px] text-theme-muted">
-        <span>Insight</span>
-        <span className="text-theme-subtle">/</span>
-        <span>Learnings</span>
-      </div>
-      <div className="flex items-center justify-between mb-5">
-        <div className="flex items-center gap-3">
-          <h1 className="text-[20px] font-semibold text-theme-primary tracking-tight">Learnings</h1>
+      <div className="learnings-head">
+        <div>
+          <h1>learnings</h1>
+          <p className="sub">captured preferences, decisions, and mistakes — fed back into agent runs</p>
         </div>
         <div className="flex items-center gap-2">
           <button title="Add learning" onClick={() => setShowAdd(!showAdd)} className="btn btn-primary btn-sm whitespace-nowrap">
@@ -226,28 +222,20 @@ export default function LearningsPage() {
       </div>
 
       {/* Tab toggle */}
-      <div className="flex items-center gap-1 mb-5 border-b border-app">
+      <div className="topfilter-tabs learnings-tabs">
         <button
           onClick={() => setActiveTab('learnings')}
           title="View learnings"
-          className={`px-2.5 py-1.5 text-[13px] -mb-px transition-colors ${
-            activeTab === 'learnings'
-              ? 'text-theme-primary font-medium border-b-2 border-accent'
-              : 'text-theme-muted hover:text-theme-primary border-b-2 border-transparent'
-          }`}
+          className={`tft ${activeTab === 'learnings' ? 'active' : ''}`}
         >
-          Learnings
+          learnings
         </button>
         <button
           onClick={() => setActiveTab('evolution')}
           title="Agent evolution candidates"
-          className={`px-2.5 py-1.5 text-[13px] -mb-px transition-colors flex items-center gap-1.5 ${
-            activeTab === 'evolution'
-              ? 'text-theme-primary font-medium border-b-2 border-accent'
-              : 'text-theme-muted hover:text-theme-primary border-b-2 border-transparent'
-          }`}
+          className={`tft ${activeTab === 'evolution' ? 'active' : ''}`}
         >
-          <Sparkles className="w-3 h-3" /> Evolution
+          evolution
         </button>
       </div>
 

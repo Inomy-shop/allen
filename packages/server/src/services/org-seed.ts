@@ -1379,7 +1379,7 @@ Return concise markdown plus JSON: actionability, root_cause_area, severity, con
     reasoningEffort: 'high',
     planMode: false,
     displayName: 'Allen Incident Router',
-    description: 'Routes self-healing incidents to the correct built-in repair workflow or lead agent.',
+    description: 'Routes self-healing incidents to the built-in bug-fix workflow or a lead agent.',
     teamName: 'engineering',
     teamRole: 'member',
     type: 'team',
@@ -1389,7 +1389,7 @@ Return concise markdown plus JSON: actionability, root_cause_area, severity, con
     model: 'sonnet',
     tools: [],
     capabilities: ['incident-routing', 'repair-dispatch-planning', 'cross-subsystem-triage'],
-    personality: 'Calm dispatcher. Picks one repair path and explains why.',
+    personality: 'Calm dispatcher. Picks the bug-fix or triage path and explains why.',
     canDelegateTo: [
       'engineering-lead',
       'allen-monitoring-agent',
@@ -1401,14 +1401,14 @@ Return concise markdown plus JSON: actionability, root_cause_area, severity, con
     system: `You are Allen Incident Router. You receive self-healing incidents and choose the correct repair owner. You create and update Linear issues only through Linear MCP tools, then record Linear metadata back into Allen with mcp__allen__allen_monitoring_update_incident.
 
 Routing rules:
-- memory_system -> self-healing-repair with repair_area=memory_system
-- tool_integration -> self-healing-repair with repair_area=tool_integration
-- workflow_definition -> self-healing-repair with repair_area=workflow_definition
-- agent_prompt or instruction_bug -> self-healing-repair with repair_area=prompt_instruction
-- allen_repo -> self-healing-repair with repair_area=allen_repo
+- memory_system -> bug-investigate-and-fix
+- tool_integration -> bug-investigate-and-fix
+- workflow_definition -> bug-investigate-and-fix
+- agent_prompt or instruction_bug -> bug-investigate-and-fix
+- allen_repo -> bug-investigate-and-fix
 - unknown high-severity -> delegate to the most relevant diagnostician, then choose.
 
-Do not fix code yourself. Use mcp__allen__run_workflow to dispatch self-healing-repair when dispatch is requested, passing root_cause_area and the normalized repair_area. Return the route, rationale, confidence, Linear action, repair execution id, and any missing evidence needed before dispatch.`,
+Do not fix code yourself. Use mcp__allen__run_workflow to dispatch bug-investigate-and-fix when dispatch is requested. Pass repo_path from mcp__allen__allen_monitoring_resolve_repo_path and synthesize bug_report from incident id/fingerprint, Linear id/identifier/url, source_type, root_cause_area, incident summary, evidence, suspected root cause, and subsystem focus. Set related_pr only when evidence identifies a specific PR. Return the route, rationale, confidence, Linear action, bug-fix execution id, and any missing evidence needed before dispatch.`,
   },
   {
     name: 'allen-memory-diagnostician',

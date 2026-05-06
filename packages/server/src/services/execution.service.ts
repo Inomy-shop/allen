@@ -189,6 +189,51 @@ function firstUrl(values: unknown[], pattern?: RegExp): string | undefined {
   return undefined;
 }
 
+function collectStringValues(value: unknown, out: string[] = [], seen = new Set<unknown>()): string[] {
+  if (out.length >= 120 || value == null) return out;
+  if (typeof value === 'string') {
+    if (value.trim()) out.push(value.slice(0, 8000));
+    return out;
+  }
+  if (typeof value !== 'object') return out;
+  if (seen.has(value)) return out;
+  seen.add(value);
+  if (Array.isArray(value)) {
+    for (const item of value) collectStringValues(item, out, seen);
+    return out;
+  }
+  for (const item of Object.values(value as Record<string, unknown>)) {
+    collectStringValues(item, out, seen);
+  }
+  return out;
+}
+
+function firstGithubPullRequestUrl(values: unknown[]): string | undefined {
+  const direct = firstUrl(values, /github\.com\/[^/\s]+\/[^/\s]+\/pull\/\d+/i);
+  if (direct) return direct;
+  for (const value of values) {
+    for (const text of collectStringValues(value)) {
+      const match = text.match(/https?:\/\/github\.com\/[\w.-]+\/[\w.-]+\/pull\/\d+/i);
+      if (match?.[0]) return match[0];
+    }
+  }
+  return undefined;
+}
+
+function executionDisplayTitle(input: Record<string, unknown>, meta: Record<string, unknown>, fallback: string): string {
+  return stringValue(meta.linearTitle)
+    ?? stringValue(input.linear_title)
+    ?? stringValue(input.issue_title)
+    ?? stringValue(input.ticket_title)
+    ?? stringValue(meta.taskTitle)
+    ?? stringValue(input.task_title)
+    ?? stringValue(meta.requestText)
+    ?? stringValue(input.task)
+    ?? stringValue(input.request)
+    ?? stringValue(input.prompt)
+    ?? fallback;
+}
+
 export type RunOrigin = 'chat' | 'linear' | 'workflow' | 'direct_agent';
 export type RunType = 'workflow' | 'agent';
 export type RunPhase =
@@ -521,10 +566,18 @@ export class ExecutionService {
 
     const workspace = await this.findExecutionWorkspace(input, state, meta);
     const assignment = await this.findExecutionAssignment(id, workspace, input, state, meta);
-    const pullRequest = await this.findExecutionPullRequest(id, workspace, input, state, meta);
+    const pullRequest = await this.findExecutionPullRequest(id, workspace, input, state, meta, [row, ...traces, ...logs, ...activity]);
     const artifacts = await this.findExecutionArtifacts(id, isAgentExecution, row, meta);
 
-    const workflowNodes = ((workflowDoc?.parsed as Record<string, unknown> | undefined)?.nodes ?? {}) as Record<string, unknown>;
+    const workflowSnapshot = (row.workflowSnapshot && typeof row.workflowSnapshot === 'object'
+      ? row.workflowSnapshot
+      : {}) as Record<string, unknown>;
+    const workflowSnapshotNodes = ((workflowSnapshot.nodes && typeof workflowSnapshot.nodes === 'object'
+      ? workflowSnapshot.nodes
+      : ((workflowSnapshot.parsed && typeof workflowSnapshot.parsed === 'object'
+        ? (workflowSnapshot.parsed as Record<string, unknown>).nodes
+        : {}) ?? {})) ?? {}) as Record<string, unknown>;
+    const workflowNodes = ((workflowDoc?.parsed as Record<string, unknown> | undefined)?.nodes ?? workflowSnapshotNodes) as Record<string, unknown>;
     const workflowNodeNames = Object.keys(workflowNodes);
     const workflowNodeSet = new Set(workflowNodeNames);
     const completedWorkflowNodes = [...new Set((exec.completedNodes ?? [])
@@ -544,11 +597,7 @@ export class ExecutionService {
     return {
       origin,
       runType,
-      title: stringValue(meta.requestText)
-        ?? stringValue(meta.linearTitle)
-        ?? stringValue(input.task)
-        ?? stringValue(input.prompt)
-        ?? workflowName,
+      title: executionDisplayTitle(input, meta, workflowName),
       status: exec.status,
       execution: {
         id,
@@ -1023,12 +1072,7 @@ export class ExecutionService {
     input: Record<string, unknown>,
     meta: Record<string, unknown>,
   ): string {
-    return stringValue(meta.requestText)
-      ?? stringValue(meta.linearTitle)
-      ?? stringValue(input.task)
-      ?? stringValue(input.prompt)
-      ?? stringValue(input.request)
-      ?? workflowName;
+    return executionDisplayTitle(input, meta, workflowName);
   }
 
   private async listItemContext(item: Record<string, unknown>): Promise<Record<string, unknown>> {
@@ -1043,7 +1087,7 @@ export class ExecutionService {
 
     const workspace = await this.findExecutionWorkspace(input, state, meta);
     const assignment = id ? await this.findExecutionAssignment(id, workspace, input, state, meta) : null;
-    const pullRequest = id ? await this.findExecutionPullRequest(id, workspace, input, state, meta) : null;
+    const pullRequest = id ? await this.findExecutionPullRequest(id, workspace, input, state, meta, [item]) : null;
 
     return {
       ...item,
@@ -1230,6 +1274,7 @@ export class ExecutionService {
     input: Record<string, unknown>,
     state: Record<string, unknown>,
     meta: Record<string, unknown>,
+    evidence: unknown[] = [],
   ): Promise<Record<string, unknown> | null> {
     const ors: Record<string, unknown>[] = [
       { originatingExecutionId: executionId },
@@ -1237,12 +1282,35 @@ export class ExecutionService {
     ];
     const workspaceId = workspace?._id ? String(workspace._id) : undefined;
     if (workspaceId) ors.push({ workspaceId });
-    const prUrl = firstUrl(
-      [state.pr_url, state.url, input.pr_url, input.url, meta.prUrl, meta.url, workspace?.prUrl],
-      /\/pull\/\d+/i,
-    );
+    const prUrl = firstGithubPullRequestUrl([
+      state.pr_url,
+      state.url,
+      input.pr_url,
+      input.url,
+      meta.prUrl,
+      meta.url,
+      workspace?.prUrl,
+      state,
+      input,
+      meta,
+      ...evidence,
+    ]);
     if (prUrl) ors.push({ url: prUrl });
-    return this.db.collection('pull_requests').findOne({ $or: ors }, { sort: { updatedAt: -1 } });
+    const stored = await this.db.collection('pull_requests').findOne({ $or: ors }, { sort: { updatedAt: -1 } });
+    if (stored) return stored;
+    if (!prUrl) return null;
+    const numberMatch = prUrl.match(/\/pull\/(\d+)/i);
+    return {
+      number: numberMatch ? Number(numberMatch[1]) : null,
+      title: stringValue(state.pr_title) ?? stringValue(input.pr_title) ?? stringValue(meta.prTitle) ?? null,
+      url: prUrl,
+      status: stringValue(state.pr_status) ?? stringValue(input.pr_status) ?? stringValue(meta.prStatus) ?? 'open',
+      branch: stringValue(state.branch_name) ?? stringValue(state.branch) ?? stringValue(input.branch_name) ?? stringValue(input.branch) ?? stringValue(workspace?.branch) ?? null,
+      baseBranch: stringValue(state.base_branch) ?? stringValue(input.base_branch) ?? stringValue(workspace?.baseBranch) ?? null,
+      createdAt: state.pr_created_at ?? input.pr_created_at ?? meta.prCreatedAt ?? null,
+      updatedAt: state.pr_updated_at ?? input.pr_updated_at ?? meta.prUpdatedAt ?? null,
+      mergedAt: state.pr_merged_at ?? input.pr_merged_at ?? meta.prMergedAt ?? null,
+    };
   }
 
   private async findExecutionArtifacts(
@@ -1354,6 +1422,7 @@ export class ExecutionService {
       status: child.status,
       currentStep: child.currentStep ?? null,
       durationMs: child.durationMs ?? null,
+      cost: child.cost ?? null,
       failedNode: child.failedNode ?? null,
       errorMessage: child.errorMessage ?? null,
       promptPreview: child.promptPreview ?? '',
@@ -1428,6 +1497,14 @@ export class ExecutionService {
         const duration = typeof trace.durationMs === 'number' ? trace.durationMs : 0;
         return total + duration;
       }, 0);
+      const cost = nodeTraces.reduce<{ estimated: number; actual: number | null }>((total, trace) => {
+        const traceCost = (trace.cost && typeof trace.cost === 'object' ? trace.cost : {}) as Record<string, unknown>;
+        const estimated = typeof traceCost.estimated === 'number' ? traceCost.estimated : 0;
+        const actual = typeof traceCost.actual === 'number' ? traceCost.actual : null;
+        total.estimated += estimated;
+        if (actual != null) total.actual = (total.actual ?? 0) + actual;
+        return total;
+      }, { estimated: 0, actual: null });
       const elapsedDurationMs = (() => {
         if (!startedAt) return null;
         const startMs = new Date(startedAt as string | Date).getTime();
@@ -1449,6 +1526,7 @@ export class ExecutionService {
         startedAt,
         completedAt,
         durationMs: tracedDurationMs > 0 ? tracedDurationMs : elapsedDurationMs,
+        cost: cost.estimated > 0 || cost.actual != null ? cost : null,
         error: lastTrace?.error ?? (failedNode === nodeName ? exec.errorMessage : null),
       };
     });

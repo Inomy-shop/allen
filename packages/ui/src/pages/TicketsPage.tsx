@@ -266,7 +266,7 @@ export default function TicketsPage() {
   // to satisfy React's rules of hooks.
   type TopTab = 'all' | 'active' | 'done' | 'running';
   const [topTab, setTopTab] = useState<TopTab>('all');
-  const [viewMode, setViewMode] = useState<'list' | 'board'>('list');
+  const [viewMode, setViewMode] = useState<'list' | 'board'>('board');
   useEffect(() => {
     if (topTab === 'active') setStateFilters(new Set<StateType>(['started', 'unstarted']));
     else if (topTab === 'done') setStateFilters(new Set<StateType>(['completed']));

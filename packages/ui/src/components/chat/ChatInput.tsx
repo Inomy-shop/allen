@@ -288,7 +288,7 @@ const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function ChatInput
   const currentProvider = providers?.find(p => p.provider === selectedProvider);
 
   return (
-    <div className="relative border-t border-app bg-surface-50 p-3">
+    <div className="chat-composer relative">
       <MentionAutocomplete query={mentionQuery} visible={mentionVisible} onSelect={handleMentionSelect} onDismiss={() => setMentionVisible(false)} />
 
       {disabled && disabledReason && (
@@ -315,7 +315,7 @@ const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function ChatInput
 
       {/* Input container with model selector inside */}
       <div
-        className={`relative bg-app-muted border rounded-lg focus-within:border-accent-blue/50 transition-colors ${dragOver ? 'border-accent-blue border-dashed bg-accent-blue/5' : 'border-app'}`}
+        className={`chat-composer-field relative transition-colors ${dragOver ? 'is-dragging' : ''}`}
         onDragOver={e => { e.preventDefault(); setDragOver(true); }}
         onDragLeave={() => setDragOver(false)}
         onDrop={handleDrop}
@@ -340,7 +340,7 @@ const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function ChatInput
         />
 
         {/* Bottom bar inside the input — model selector + send button */}
-        <div className="chat-input-controls flex items-center justify-between gap-3 border-t border-app px-2 py-1.5">
+        <div className="chat-input-controls cc-foot">
           {/* ── Left cluster: model, effort, plan, attach ── */}
           <div className="flex flex-wrap items-center gap-1">
             {extraControls}

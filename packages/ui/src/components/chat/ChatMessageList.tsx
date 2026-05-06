@@ -1,16 +1,16 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { Bot, AlertCircle, AlertTriangle, Copy, Check, Clock, Wrench, CheckCircle, ExternalLink, Loader2, Brain,
   Sparkles, Zap, Cpu, Atom, Terminal, Code, Rocket, Shield, Hexagon, Flame,
   ChevronDown, ChevronRight, GitPullRequest, FolderGit2, FileText, PlayCircle, StopCircle, Timer,
-  Send, BarChart3, FolderOpen,
+  Send, Bookmark,
 } from 'lucide-react';
 import type { ChatMessage, ToolCallRecord, ActiveToolCall, AgentThread as AgentThreadType, AgentReport, SpawnedAgent, WorkflowInterventionAnswer } from '../../hooks/useChat';
 import { AgentThread } from './AgentThread';
 import { AgentQuestionPrompt } from './AgentQuestionPrompt';
 import RoleIcon from '../common/RoleIcon';
-import { useSettingsStore } from '../../stores/settingsStore';
-import { CHAT_EMPTY_PROMPT } from '../../lib/brand';
 import MermaidChatBlock from './MermaidChatBlock';
+import { agents as agentsApi } from '../../services/api';
+import { workspaces as workspacesApi } from '../../services/workspaceService';
 
 const AGENT_ICONS: Record<string, React.ElementType> = {
   bot: Bot, brain: Brain, sparkles: Sparkles, zap: Zap, cpu: Cpu, atom: Atom,
@@ -56,11 +56,30 @@ type WorkflowIntervention = {
   title?: string;
   question?: string;
   context_summary?: string;
+  created_at?: string;
+  createdAt?: string;
   fields?: WorkflowInterventionField[];
   options?: Array<{ label?: string; value?: string; primary?: boolean; destructive?: boolean }>;
 };
 
 type WorkflowInterventionOption = { label?: string; value: string; primary?: boolean; destructive?: boolean };
+
+type ChatDiffFile = {
+  path: string;
+  status?: string;
+  additions?: number;
+  deletions?: number;
+  diff?: string;
+  modifiedContent?: string;
+  workspaceName?: string | null;
+  key?: string;
+};
+
+type ChatDiffBundle = {
+  workspaceId: string;
+  workspaceName?: string | null;
+  files: ChatDiffFile[];
+};
 
 /* ── Copy button for code blocks ─────────────────────────────────────────── */
 function CopyButton({ text }: { text: string }) {
@@ -156,18 +175,210 @@ function formatDuration(ms?: number | null): string {
 }
 
 function userDisplayName(msg: ChatMessage): string {
-  return msg.senderName?.trim()
+  const raw = msg.senderName?.trim()
     || msg.senderEmail?.split('@')[0]
     || (msg.senderSource === 'slack' ? 'Slack user' : 'User');
+  return displayName(raw);
 }
 
-function initialsForName(name: string): string {
-  return name
+function displayName(value: string): string {
+  const trimmed = value.trim();
+  if (!trimmed) return 'User';
+  if (/\s/.test(trimmed) && /[A-Z]/.test(trimmed)) return trimmed;
+  return trimmed
+    .replace(/[_.-]+/g, ' ')
     .split(/\s+/)
     .filter(Boolean)
-    .slice(0, 2)
-    .map((part) => part[0]?.toUpperCase())
-    .join('') || 'U';
+    .map((part) => part.length <= 2 && part === part.toUpperCase()
+      ? part
+      : part.charAt(0).toUpperCase() + part.slice(1))
+    .join(' ');
+}
+
+function assistantDisplayName(agentInfo?: { displayName?: string }): string {
+  return displayName(agentInfo?.displayName ?? 'Allen');
+}
+
+function senderInitial(label: string): string {
+  return label.trim().charAt(0).toUpperCase() || 'U';
+}
+
+function parseDiffSummary(code: string) {
+  const files: Array<ChatDiffFile & { isNew: boolean }> = [];
+  let current: { path: string; additions: number; deletions: number; isNew: boolean; lines: string[] } | null = null;
+  for (const line of code.split('\n')) {
+    if (line.startsWith('diff --git ')) {
+      if (current) files.push({ ...current, diff: current.lines.join('\n') });
+      const match = line.match(/ b\/(.+)$/) ?? line.match(/ a\/(.+?) /);
+      current = { path: match?.[1] ?? 'changed file', additions: 0, deletions: 0, isNew: false, lines: [line] };
+      continue;
+    }
+    if (!current && line.startsWith('+++ b/')) {
+      current = { path: line.slice(6), additions: 0, deletions: 0, isNew: false, lines: [line] };
+      continue;
+    }
+    if (!current) continue;
+    current.lines.push(line);
+    if (line.startsWith('new file')) current.isNew = true;
+    if (line.startsWith('+') && !line.startsWith('+++')) current.additions += 1;
+    if (line.startsWith('-') && !line.startsWith('---')) current.deletions += 1;
+  }
+  if (current) files.push({ ...current, diff: current.lines.join('\n') });
+  return files.length > 0 ? files : [{ path: 'workspace changes', additions: code.split('\n').filter(line => line.startsWith('+') && !line.startsWith('+++')).length, deletions: code.split('\n').filter(line => line.startsWith('-') && !line.startsWith('---')).length, isNew: false, diff: code }];
+}
+
+function diffText(file: ChatDiffFile): string {
+  return file.diff?.trim() || file.modifiedContent?.trim() || 'No diff available.';
+}
+
+function diffLineClass(line: string): 'add' | 'del' | 'hunk' | 'meta' | 'ctx' {
+  if (line.startsWith('+') && !line.startsWith('+++')) return 'add';
+  if (line.startsWith('-') && !line.startsWith('---')) return 'del';
+  if (line.startsWith('@@')) return 'hunk';
+  if (/^(diff --git|index |new file|deleted file|--- |\+\+\+ )/.test(line)) return 'meta';
+  return 'ctx';
+}
+
+function diffRows(text: string): Array<{ line: string; kind: ReturnType<typeof diffLineClass>; lineNumber: string }> {
+  let oldLine = 1;
+  let newLine = 1;
+  let sawHunk = false;
+  return text
+    .split('\n')
+    .filter(line => !/^(diff --git|index |new file mode|deleted file mode|similarity index|rename from |rename to |--- |\+\+\+ )/.test(line))
+    .map((line, index) => {
+      const kind = diffLineClass(line);
+      const hunk = line.match(/^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@/);
+      if (hunk) {
+        oldLine = Number(hunk[1]);
+        newLine = Number(hunk[2]);
+        sawHunk = true;
+        return { line, kind, lineNumber: '' };
+      }
+      if (line.startsWith('\\ No newline')) {
+        return { line, kind: 'meta' as const, lineNumber: '' };
+      }
+      if (kind === 'add') {
+        const lineNumber = String(sawHunk ? newLine : index + 1);
+        newLine += 1;
+        return { line, kind, lineNumber };
+      }
+      if (kind === 'del') {
+        const lineNumber = String(sawHunk ? oldLine : index + 1);
+        oldLine += 1;
+        return { line, kind, lineNumber };
+      }
+      const lineNumber = String(sawHunk ? newLine : index + 1);
+      oldLine += 1;
+      newLine += 1;
+      return { line, kind, lineNumber };
+    });
+}
+
+function DiffCodeView({ text }: { text: string }) {
+  const rows = diffRows(text);
+  return (
+    <div className="chat-diff-code">
+      {rows.map(({ line, kind, lineNumber }, index) => {
+        return (
+          <div key={`${index}-${line}`} className={`chat-diff-line ${kind}`}>
+            <span className="ln">{lineNumber}</span>
+            <code>{line || ' '}</code>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+function ChatCodeDiffCard({
+  files,
+  title,
+  state,
+}: {
+  files: ChatDiffFile[];
+  title: string;
+  state?: React.ReactNode;
+}) {
+  const normalized = files.map((file, index) => ({
+    ...file,
+    key: file.key ?? `${file.workspaceName ?? 'diff'}:${file.path}:${index}`,
+    additions: file.additions ?? 0,
+    deletions: file.deletions ?? 0,
+    status: file.status ?? ((file as ChatDiffFile & { isNew?: boolean }).isNew ? 'added' : 'modified'),
+  }));
+  const [expandedFiles, setExpandedFiles] = useState<Set<string>>(new Set());
+  const totalAdditions = normalized.reduce((sum, file) => sum + (file.additions ?? 0), 0);
+  const totalDeletions = normalized.reduce((sum, file) => sum + (file.deletions ?? 0), 0);
+
+  const toggle = (key: string) => {
+    setExpandedFiles(prev => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  };
+
+  if (normalized.length === 0) return null;
+
+  return (
+    <div className="ch-card code-card">
+      <div className="ch-card-h">
+        <span className="cc-tag impl">code diff</span>
+        <span className="cc-title">{title}</span>
+        <span className="cc-pct">
+          <span className="cf-p">+{totalAdditions}</span>
+          <span className="cf-m">-{totalDeletions}</span>
+          {state && <span className="chat-diff-status">{state}</span>}
+        </span>
+      </div>
+      <div className="ch-card-b">
+        <div className="cc-files">
+          {normalized.map(file => {
+            const key = file.key ?? file.path;
+            const expanded = expandedFiles.has(key);
+            return (
+              <div key={key} className="cc-file-wrap">
+                <button type="button" className="cc-file cc-file-btn" onClick={() => toggle(key)}>
+                  {expanded ? <ChevronDown className="cf-chevron" /> : <ChevronRight className="cf-chevron" />}
+                  <span className="cf-n">{file.path}</span>
+                  {(file.status === 'added' || file.status === 'untracked') && <span className="cf-new">new</span>}
+                  {file.workspaceName && <span className="cf-ws">{file.workspaceName}</span>}
+                  <span className="cf-p">+{file.additions ?? 0}</span>
+                  <span className="cf-m">-{file.deletions ?? 0}</span>
+                </button>
+                {expanded && (
+                  <div className="cc-file-diff">
+                    <DiffCodeView text={diffText(file)} />
+                  </div>
+                )}
+              </div>
+            );
+          })}
+          <div className="cc-file muted">
+            <span className="cf-n">{normalized.length} file{normalized.length === 1 ? '' : 's'} · {totalAdditions} additions / {totalDeletions} deletions</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function InlineCodeDiffCard({ code }: { code: string }) {
+  const files = parseDiffSummary(code);
+  return <ChatCodeDiffCard files={files} title="Proposed changes" state="diff" />;
+}
+
+function splitFirstDiffFence(content: string): { text: string; diff: string | null } {
+  const match = content.match(/```diff\n?([\s\S]*?)```/i);
+  if (!match || match.index == null) return { text: content, diff: null };
+  const before = content.slice(0, match.index).trimEnd();
+  const after = content.slice(match.index + match[0].length).trimStart();
+  return {
+    text: [before, after].filter(Boolean).join('\n\n'),
+    diff: match[1].replace(/\n$/, ''),
+  };
 }
 
 /* ── Markdown rendering pipeline ─────────────────────────────────────────── */
@@ -190,6 +401,8 @@ export function renderMarkdown(content: string): React.ReactNode {
     const code = match[2].replace(/\n$/, '');
     if (lang.toLowerCase() === 'mermaid') {
       parts.push(<MermaidChatBlock key={key++} code={code} />);
+    } else if (lang.toLowerCase() === 'diff') {
+      parts.push(<InlineCodeDiffCard key={key++} code={code} />);
     } else {
       parts.push(
         <div key={key++} className="group/code relative my-3 rounded-md overflow-hidden border border-app bg-[rgb(var(--color-editor-background))]">
@@ -542,24 +755,6 @@ function renderInline(text: string): React.ReactNode {
   return <>{parts}</>;
 }
 
-/** Render @mentions as colored chips (for user messages) */
-function renderUserContent(content: string): React.ReactNode {
-  const parts = content.split(/(@[\w-]+)/g);
-  return parts.map((part, i) => {
-    if (part.startsWith('@')) {
-      return (
-        <span
-          key={i}
-          className="inline-flex items-center px-1.5 py-0.5 rounded bg-white/10 text-accent-blue text-xs font-mono"
-        >
-          {part}
-        </span>
-      );
-    }
-    return <span key={i}>{part}</span>;
-  });
-}
-
 /* ── Tool Call Card ───────────────────────────────────────────────────────── */
 
 const TOOL_LABELS: Record<string, { label: string; color: string }> = {
@@ -725,28 +920,133 @@ function ActiveToolCallsSection({ calls, liveThreads, agentMap }: { calls: Activ
   );
 }
 
+function ChatCodeDiffPreview({ runs, onReady }: { runs: SpawnedAgent[]; onReady?: () => void }) {
+  const [bundles, setBundles] = useState<ChatDiffBundle[]>([]);
+  const [loading, setLoading] = useState(false);
+
+  const workspaceRefs: Array<{ id: string; name?: string | null }> = [];
+  const allTerminal = runs.length > 0 && runs.every(run => TERMINAL_RUN_STATUSES.has(run.runContext?.status ?? run.status));
+  for (const run of runs) {
+    const id = run.runContext?.workspace?.id;
+    if (typeof id === 'string' && id.length > 0) {
+      workspaceRefs.push({
+        id,
+        name: run.runContext?.workspace?.name ?? run.runContext?.workspace?.repoName,
+      });
+    }
+  }
+  const workspaceSignature = [...new Set(workspaceRefs.map(ref => ref.id))].join('|');
+
+  useEffect(() => {
+    if (!workspaceSignature) {
+      setBundles([]);
+      return;
+    }
+    let cancelled = false;
+    const uniqueRefs = workspaceRefs.filter((ref, index, arr) => arr.findIndex(item => item.id === ref.id) === index);
+    setLoading(true);
+    Promise.all(uniqueRefs.map(async (ref) => {
+      try {
+        const result = await workspacesApi.getDiff(ref.id);
+        const files = ((result.files ?? []) as ChatDiffFile[]).filter(file => file.diff?.trim() || file.modifiedContent?.trim());
+        return { workspaceId: ref.id, workspaceName: ref.name, files };
+      } catch {
+        return { workspaceId: ref.id, workspaceName: ref.name, files: [] };
+      }
+    })).then(next => {
+      if (cancelled) return;
+      const populated = next.filter(bundle => bundle.files.length > 0);
+      setBundles(populated);
+      if (populated.length > 0) window.setTimeout(() => onReady?.(), 0);
+    }).finally(() => {
+      if (!cancelled) setLoading(false);
+    });
+    return () => { cancelled = true; };
+  }, [workspaceSignature, onReady]);
+
+  if (!workspaceSignature) return null;
+  const totalFiles = bundles.reduce((sum, bundle) => sum + bundle.files.length, 0);
+  const visibleFiles = bundles.flatMap(bundle => bundle.files.map((file, index) => ({
+    ...file,
+    workspaceName: bundle.workspaceName,
+    key: `${bundle.workspaceId}:${file.path}:${index}`,
+  })));
+
+  if (!loading && totalFiles === 0) return null;
+
+  return (
+    <div className="ch-msg allen al-msg-enter">
+      <div className="ch-avatar">a</div>
+      <div className="ch-msg-body">
+        {loading ? (
+          <div className="chat-diff-card">
+            <div className="chat-diff-head">
+              <div className="chat-diff-title">
+                <span className="chat-diff-badge">code diff</span>
+                <span>Checking workspace diff</span>
+              </div>
+              <div className="chat-diff-stats">
+                <span className="dot pulse accent" />
+                <span>loading</span>
+              </div>
+            </div>
+          </div>
+        ) : (
+          <ChatCodeDiffCard
+            files={visibleFiles}
+            title={`${totalFiles} file${totalFiles === 1 ? '' : 's'} modified`}
+            state={allTerminal ? 'completed' : <><span className="dot pulse accent" /> live</>}
+          />
+        )}
+      </div>
+    </div>
+  );
+}
+
+function ChatPullRequestCards({ runs }: { runs: SpawnedAgent[] }) {
+  const prs = new Map<string, NonNullable<NonNullable<SpawnedAgent['runContext']>['pullRequest']>>();
+  for (const run of runs) {
+    const pr = run.runContext?.pullRequest;
+    const key = pr?.url ?? (pr?.number != null ? String(pr.number) : '');
+    if (pr && key) prs.set(key, pr);
+  }
+  if (prs.size === 0) return null;
+  return (
+    <>
+      {[...prs.values()].map((pr) => {
+        const status = humanLabel(pr.status ?? 'open');
+        const age = timeAgo(pr.mergedAt ?? pr.updatedAt ?? pr.createdAt);
+        return (
+          <div key={pr.url ?? pr.number ?? pr.title ?? 'pr'} className="ch-msg allen al-msg-enter">
+            <div className="ch-avatar">a</div>
+            <div className="ch-msg-body">
+              <div className="ch-card pr-card-inline">
+                <div className="ch-card-h">
+                  <span className="cc-tag pr">pull request</span>
+                  <span className="cc-title">PR {pr.number ? `#${pr.number}` : ''} {status}</span>
+                  <span className="cc-pct">{age}</span>
+                </div>
+                <div className="ch-card-b">
+                  <div className="cc-pr-meta">
+                    {pr.title ?? 'Pull request ready'}{pr.branch ? <> · branch <code>{pr.branch}</code></> : null}
+                  </div>
+                  <div className="cc-acts">
+                    {pr.url && (
+                      <a className="btn primary sm" href={pr.url} target="_blank" rel="noopener noreferrer">review on github</a>
+                    )}
+                    <a className="btn sm" href="/pull-requests">open pull requests</a>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        );
+      })}
+    </>
+  );
+}
+
 /* ── Main component ──────────────────────────────────────────────────────── */
-
-const QUICK_ACTIONS = [
-  { label: 'List workflows', icon: 'zap', prompt: 'What workflows do I have?' },
-  { label: 'Dashboard stats', icon: 'chart', prompt: 'Show me dashboard stats' },
-  { label: 'Recent executions', icon: 'terminal', prompt: 'Show my recent executions' },
-  { label: 'List repos', icon: 'folder', prompt: 'List my registered repos' },
-  { label: 'Failed today', icon: 'alert', prompt: 'Find all failed executions in the last 24 hours' },
-  { label: 'Available agents', icon: 'bot', prompt: 'What agents are available?' },
-] as const;
-
-const QUICK_ICONS: Record<string, React.ReactNode> = {
-  zap: <Zap className="w-3.5 h-3.5 text-accent-blue" />,
-  chart: <BarChart3 className="w-3.5 h-3.5 text-accent-green" />,
-  terminal: <Terminal className="w-3.5 h-3.5 text-theme-secondary" />,
-  folder: <FolderOpen className="w-3.5 h-3.5 text-accent-yellow" />,
-  alert: <AlertTriangle className="w-3.5 h-3.5 text-accent-red" />,
-  bot: <Bot className="w-3.5 h-3.5 text-accent-purple" />,
-};
-
-import { Bookmark } from 'lucide-react';
-import { agents as agentsApi } from '../../services/api';
 
 /** Build a tree from a flat thread list using parentConversationId */
 function buildThreadTree(threads: AgentThreadType[]): AgentThreadType[] {
@@ -988,7 +1288,99 @@ function RunProgressCard({ run }: { run: SpawnedAgent }) {
   );
 }
 
+function workflowAttemptFailureLabel(run: SpawnedAgent): string {
+  const context = run.runContext;
+  const failedStep = context?.execution.failedNode
+    ?? context?.progress.currentStep
+    ?? context?.workflowSteps.find(step => step.status === 'failed' || step.status === 'cancelled')?.name
+    ?? null;
+  if (failedStep) return `Failed at ${humanLabel(String(failedStep))}`;
+  return 'Failed';
+}
+
+function WorkflowAttemptCard({ run, index }: { run: SpawnedAgent; index: number }) {
+  const context = run.runContext;
+  const status = context?.status ?? run.status;
+  const summary =
+    status === 'failed' || status === 'cancelled' ? workflowAttemptFailureLabel(run)
+      : status === 'completed' ? 'Passed'
+        : context?.progress.currentStep ? `Running ${humanLabel(context.progress.currentStep)}`
+          : humanLabel(context?.progress.phase ?? status);
+
+  return (
+    <div className={`border rounded-lg p-3 ${statusTone(status)}`}>
+      <div className="flex items-start gap-2">
+        <StatusIcon status={status} />
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center gap-2 min-w-0">
+            <span className="text-[9px] uppercase text-theme-subtle font-mono shrink-0">Attempt {index + 1}</span>
+            <span className="text-[11px] font-mono font-bold text-theme-secondary truncate">{summary}</span>
+          </div>
+          <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-[10px] text-theme-muted">
+            <span className="font-mono">{run.executionId.slice(0, 8)}</span>
+            <span className="font-mono">{context?.progress.label ?? 'workflow'}</span>
+            <span className="font-mono capitalize">{humanLabel(status)}</span>
+          </div>
+        </div>
+        <a href={`/executions/${run.executionId}`} target="_blank" rel="noopener noreferrer" className="shrink-0 p-1 rounded-sm text-accent hover:bg-app-muted" title="Open execution">
+          <ExternalLink className="w-3.5 h-3.5" />
+        </a>
+      </div>
+    </div>
+  );
+}
+
 function RunProgressTimeline({ runs }: { runs: SpawnedAgent[] }) {
+  const workflowAttemptRuns = runs.filter(run => run.runContext?.runType === 'workflow' || run.kind === 'workflow');
+  if (workflowAttemptRuns.length > 1 && workflowAttemptRuns.length === runs.length) {
+    const fullRun =
+      [...workflowAttemptRuns].reverse().find(run => run.runContext?.status === 'completed' && (run.runContext.workflowSteps?.length ?? 0) > 0)
+      ?? [...workflowAttemptRuns].reverse().find(run => (run.runContext?.workflowSteps?.length ?? 0) > 0)
+      ?? workflowAttemptRuns[workflowAttemptRuns.length - 1];
+    const steps = fullRun.runContext?.workflowSteps ?? [];
+    return (
+      <div className="max-w-[820px]">
+        <div className="space-y-0">
+          {workflowAttemptRuns.map((run, index) => {
+            const isLast = index === workflowAttemptRuns.length - 1 && steps.length === 0;
+            const status = run.runContext?.status ?? run.status;
+            return (
+              <div key={run.executionId} className="relative grid grid-cols-[26px_1fr] gap-3 pb-3">
+                {!isLast && <span className="absolute bottom-[-14px] left-[11px] top-[24px] w-[2px] rounded-full bg-[rgb(var(--color-border))]" />}
+                <div className={`relative z-[1] flex h-6 w-6 items-center justify-center rounded-full border bg-app-card ${statusTone(status)}`}>
+                  <StatusIcon status={status} />
+                </div>
+                <div className="min-w-0">
+                  <WorkflowAttemptCard run={run} index={index} />
+                </div>
+              </div>
+            );
+          })}
+          {steps.length > 0 && (
+            <div className="ml-[26px] border-l-[2px] border-app pl-3">
+              <div className="mb-2 font-mono text-[10px] uppercase tracking-[0.08em] text-theme-muted">
+                Successful workflow steps
+              </div>
+              {steps.map((step, index) => {
+                const isLast = index === steps.length - 1;
+                return (
+                  <div key={`${fullRun.executionId}-${step.id}`} className="relative grid grid-cols-[26px_1fr] gap-3 pb-3">
+                    {!isLast && <span className="absolute bottom-[-14px] left-[11px] top-[24px] w-[2px] rounded-full bg-[rgb(var(--color-border))]" />}
+                    <div className={`relative z-[1] flex h-6 w-6 items-center justify-center rounded-full border bg-app-card ${nodeStatusTone(step.status)}`}>
+                      <NodeStatusIcon status={step.status} />
+                    </div>
+                    <WorkflowStepCard step={step} run={fullRun} />
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+        <RunProgressFeed runs={runs} />
+      </div>
+    );
+  }
+
   if (runs.length === 1 && runs[0].runContext?.runType === 'workflow' && (runs[0].runContext.workflowSteps?.length ?? 0) > 0) {
     const run = runs[0];
     const steps = run.runContext!.workflowSteps;
@@ -1159,6 +1551,7 @@ function WorkflowInterventionPrompt({
   const [fieldValues, setFieldValues] = useState<Record<string, string>>({});
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [modalOpen, setModalOpen] = useState(false);
 
   const textFields = fields.filter(field => field !== selectField);
   const primaryTextField = textFields[0];
@@ -1190,119 +1583,173 @@ function WorkflowInterventionPrompt({
         answer: !isApproval ? answerText : undefined,
         humanNodeName: intervention.stage,
       });
+      setModalOpen(false);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to submit response');
       setSubmitting(false);
     }
   }
 
+  const title = intervention.title ?? run.runContext?.humanInput?.title ?? 'Workflow input needed';
+  const question = intervention.question ?? intervention.context_summary ?? '';
+  const previewOptions = optionRows.slice(0, 3);
+  const actorLabel = humanLabel(intervention.stage ?? run.runContext?.progress.currentStep ?? 'plan-gate');
+  const interventionAge = timeAgo(intervention.created_at ?? intervention.createdAt ?? null);
+  const postedLabel = interventionAge === 'recently' || interventionAge === 'just now' ? 'posted now' : `posted ${interventionAge}`;
+
   return (
-    <div className="mx-4 mb-4 max-w-[820px] overflow-hidden rounded-lg border border-accent-yellow/40 bg-accent-yellow/5 shadow-sm">
-      <div className="flex items-center gap-2.5 border-b border-accent-yellow/15 px-4 py-3">
-        <div className="flex h-7 w-7 items-center justify-center rounded-md border border-accent-yellow/30 bg-accent-yellow/10 text-accent-yellow">
-          <AlertTriangle className="h-4 w-4" />
-        </div>
-        <div className="min-w-0 flex-1">
-          <div className="flex items-center gap-2">
-            <span className="rounded bg-accent-yellow/15 px-1.5 py-0.5 font-mono text-[9px] uppercase tracking-[0.08em] text-accent-yellow">Needs You</span>
-            <span className="truncate font-mono text-[10px] text-theme-subtle">{run.executionId.slice(0, 8)}</span>
+    <>
+      <div className="chat-intervention-block">
+        <div className="ch-msg allen">
+          <div className="ch-avatar">a</div>
+          <div className="ch-msg-body">
+            <div className="ch-msg-head">
+              <span className="ch-msg-who">{actorLabel}</span>
+              {(intervention.created_at ?? intervention.createdAt) && (
+                <span className="ch-msg-ts">{formatTime(intervention.created_at ?? intervention.createdAt)}</span>
+              )}
+            </div>
+            <div className="ch-msg-text">
+              {question ? renderMarkdown(question) : title}
+            </div>
+            <div className="ch-card gate-card" onClick={() => setModalOpen(true)} role="button" tabIndex={0} onKeyDown={(event) => {
+            if (event.key === 'Enter' || event.key === ' ') {
+              event.preventDefault();
+              setModalOpen(true);
+            }
+          }}>
+              <div className="ch-card-h">
+                <span className="cc-tag waiting">waiting on you</span>
+                <span className="cc-title">{title}</span>
+                <span className="cc-pct">{postedLabel}</span>
+              </div>
+              <div className="ch-card-b">
+                <p className="cc-summary">{question ? 'Allen needs your input to proceed.' : title}</p>
+                <div className="cc-acts">
+                  <button type="button" className="btn primary sm" onClick={(event) => { event.stopPropagation(); setModalOpen(true); }}>
+                    answer →
+                  </button>
+                </div>
+              </div>
+            </div>
           </div>
-          <div className="mt-0.5 truncate text-[13px] font-heading font-semibold text-theme-primary">
-            {intervention.title ?? run.runContext?.humanInput?.title ?? 'Workflow input needed'}
-          </div>
         </div>
-        <a href={`/executions/${run.executionId}`} target="_blank" rel="noopener noreferrer" className="rounded p-1 text-accent hover:bg-app-muted" title="Open execution">
-          <ExternalLink className="h-3.5 w-3.5" />
-        </a>
       </div>
 
-      <div className="space-y-3 px-4 py-3">
-        {(intervention.question || intervention.context_summary) && (
-          <div className="rounded-md border border-app bg-app-card px-3 py-2 text-[13px] leading-relaxed text-theme-secondary">
-            {renderMarkdown(intervention.question ?? intervention.context_summary ?? '')}
-          </div>
-        )}
+      {modalOpen && (
+        <div className="chat-intervention-modal" role="dialog" aria-modal="true" aria-label={title}>
+          <button className="chat-intervention-backdrop" type="button" onClick={() => !submitting && setModalOpen(false)} aria-label="Close intervention dialog" />
+          <div className="chat-intervention-dialog">
+            <div className="chat-intervention-dialog-head">
+              <div className="chat-intervention-dialog-icon">
+                <AlertCircle className="h-4 w-4" />
+              </div>
+              <div className="min-w-0 flex-1">
+                <div className="flex items-center gap-2">
+                  <span className="rounded bg-accent-yellow/15 px-1.5 py-0.5 font-mono text-[9px] uppercase tracking-[0.08em] text-accent-yellow">Needs You</span>
+                  <span className="truncate font-mono text-[10px] text-theme-subtle">{run.executionId.slice(0, 8)}</span>
+                </div>
+                <div className="mt-0.5 truncate text-[13px] font-heading font-semibold text-theme-primary">
+                  {title}
+                </div>
+              </div>
+              <a href={`/executions/${run.executionId}`} target="_blank" rel="noopener noreferrer" className="rounded p-1 text-accent hover:bg-app-muted" title="Open execution">
+                <ExternalLink className="h-3.5 w-3.5" />
+              </a>
+              <button type="button" onClick={() => !submitting && setModalOpen(false)} className="rounded px-2 py-1 font-mono text-[12px] text-theme-muted hover:bg-app-muted hover:text-theme-primary" disabled={submitting}>
+                Esc
+              </button>
+            </div>
 
-        {optionRows.length > 0 && (
-          <div className="flex flex-wrap gap-2">
-            {optionRows.map(option => {
-              const value = option.value ?? '';
-              const active = selected === value;
-              const destructive = option.destructive || value === 'reject';
-              return (
+            <div className="space-y-3 px-4 py-3">
+              {question && (
+                <div className="rounded-md border border-app bg-app-card px-3 py-2 text-[13px] leading-relaxed text-theme-secondary">
+                  {renderMarkdown(question)}
+                </div>
+              )}
+
+              {optionRows.length > 0 && (
+                <div className="flex flex-wrap gap-2">
+                  {optionRows.map(option => {
+                    const value = option.value ?? '';
+                    const active = selected === value;
+                    const destructive = option.destructive || value === 'reject';
+                    return (
+                      <button
+                        key={value}
+                        type="button"
+                        onClick={() => setSelected(value)}
+                        disabled={submitting}
+                        className={`rounded-md border px-3 py-1.5 font-mono text-[11px] capitalize transition-colors disabled:opacity-50 ${
+                          active
+                            ? destructive
+                              ? 'border-accent-red/40 bg-accent-red/10 text-accent-red'
+                              : 'border-accent-blue/45 bg-accent-blue/10 text-accent-blue'
+                            : 'border-app bg-app-card text-theme-muted hover:border-accent-blue/25 hover:text-theme-secondary'
+                        }`}
+                      >
+                        {option.label ?? humanLabel(value)}
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+
+              {textFields.length > 0 ? textFields.map(field => (
+                <div key={field.name} className="space-y-1.5">
+                  <label className="text-[10px] font-mono uppercase tracking-[0.08em] text-theme-muted">
+                    {field.label ?? humanLabel(field.name)}
+                    {field.required !== false && <span className="ml-1 text-accent-yellow">*</span>}
+                  </label>
+                  <textarea
+                    value={fieldValues[field.name] ?? ''}
+                    onChange={event => setFieldValues(prev => ({ ...prev, [field.name]: event.target.value }))}
+                    placeholder={field.placeholder ?? (needsFeedback ? 'Tell the workflow what should change...' : 'Type your response...')}
+                    rows={3}
+                    disabled={submitting}
+                    className="max-h-[110px] min-h-[84px] w-full resize-none overflow-y-auto rounded-md border border-app bg-app-muted px-3 py-2 text-sm text-theme-primary placeholder:text-theme-subtle focus:border-accent-yellow/50 focus:outline-none disabled:opacity-50"
+                  />
+                </div>
+              )) : (
+                !isApproval && (
+                  <textarea
+                    value={fieldValues.answer ?? ''}
+                    onChange={event => setFieldValues(prev => ({ ...prev, answer: event.target.value }))}
+                    placeholder="Type your response..."
+                    rows={3}
+                    disabled={submitting}
+                    className="max-h-[110px] min-h-[84px] w-full resize-none overflow-y-auto rounded-md border border-app bg-app-muted px-3 py-2 text-sm text-theme-primary placeholder:text-theme-subtle focus:border-accent-yellow/50 focus:outline-none disabled:opacity-50"
+                  />
+                )
+              )}
+
+              {error && (
+                <div className="rounded-md border border-accent-red/25 bg-accent-red/10 px-3 py-2 text-[12px] text-accent-red">{error}</div>
+              )}
+
+              <div className="flex items-center justify-between gap-3">
+                <span className="truncate font-mono text-[10px] text-theme-subtle">
+                  {humanLabel(intervention.stage ?? run.runContext?.progress.currentStep ?? 'workflow pause')}
+                </span>
                 <button
-                  key={value}
                   type="button"
-                  onClick={() => setSelected(value)}
-                  disabled={submitting}
-                  className={`rounded-md border px-3 py-1.5 font-mono text-[11px] capitalize transition-colors disabled:opacity-50 ${
-                    active
-                      ? destructive
-                        ? 'border-accent-red/40 bg-accent-red/10 text-accent-red'
-                        : 'border-accent-blue/45 bg-accent-blue/10 text-accent-blue'
-                      : 'border-app bg-app-card text-theme-muted hover:border-accent-blue/25 hover:text-theme-secondary'
-                  }`}
+                  onClick={submit}
+                  disabled={submitDisabled}
+                  className="inline-flex items-center gap-1.5 rounded-md bg-accent-blue/15 px-4 py-1.5 font-mono text-[12px] text-accent-blue transition-colors hover:bg-accent-blue/25 disabled:cursor-not-allowed disabled:opacity-40"
                 >
-                  {option.label ?? humanLabel(value)}
+                  <Send className="h-3.5 w-3.5" />
+                  Submit
                 </button>
-              );
-            })}
+              </div>
+            </div>
           </div>
-        )}
-
-        {textFields.length > 0 ? textFields.map(field => (
-          <div key={field.name} className="space-y-1.5">
-            <label className="text-[10px] font-mono uppercase tracking-[0.08em] text-theme-muted">
-              {field.label ?? humanLabel(field.name)}
-              {field.required !== false && <span className="ml-1 text-accent-yellow">*</span>}
-            </label>
-            <textarea
-              value={fieldValues[field.name] ?? ''}
-              onChange={event => setFieldValues(prev => ({ ...prev, [field.name]: event.target.value }))}
-              placeholder={field.placeholder ?? (needsFeedback ? 'Tell the workflow what should change...' : 'Type your response...')}
-              rows={3}
-              disabled={submitting}
-              className="max-h-[110px] min-h-[84px] w-full resize-none overflow-y-auto rounded-md border border-app bg-app-muted px-3 py-2 text-sm text-theme-primary placeholder:text-theme-subtle focus:border-accent-yellow/50 focus:outline-none disabled:opacity-50"
-            />
-          </div>
-        )) : (
-          !isApproval && (
-            <textarea
-              value={fieldValues.answer ?? ''}
-              onChange={event => setFieldValues(prev => ({ ...prev, answer: event.target.value }))}
-              placeholder="Type your response..."
-              rows={3}
-              disabled={submitting}
-              className="max-h-[110px] min-h-[84px] w-full resize-none overflow-y-auto rounded-md border border-app bg-app-muted px-3 py-2 text-sm text-theme-primary placeholder:text-theme-subtle focus:border-accent-yellow/50 focus:outline-none disabled:opacity-50"
-            />
-          )
-        )}
-
-        {error && (
-          <div className="rounded-md border border-accent-red/25 bg-accent-red/10 px-3 py-2 text-[12px] text-accent-red">{error}</div>
-        )}
-
-        <div className="flex items-center justify-between gap-3">
-          <span className="truncate font-mono text-[10px] text-theme-subtle">
-            {humanLabel(intervention.stage ?? run.runContext?.progress.currentStep ?? 'workflow pause')}
-          </span>
-          <button
-            type="button"
-            onClick={submit}
-            disabled={submitDisabled}
-            className="inline-flex items-center gap-1.5 rounded-md bg-accent-blue/15 px-4 py-1.5 font-mono text-[12px] text-accent-blue transition-colors hover:bg-accent-blue/25 disabled:cursor-not-allowed disabled:opacity-40"
-          >
-            <Send className="h-3.5 w-3.5" />
-            Submit
-          </button>
         </div>
-      </div>
-    </div>
+      )}
+    </>
   );
 }
 
-export default function ChatMessageList({ messages, streamText, thinkingText, streaming, activeToolCalls = [], agentThreads = [], agentReports = [], threadsByMessage = {}, pendingUserQuestion, onAnswerUserQuestion, activeAgent, spawnedAgents = [], onAnswerWorkflowIntervention, onSuggestionClick, onSaveToLearnings }: ChatMessageListProps) {
-  const agentIconName = useSettingsStore((s) => s.agentIcon);
+export default function ChatMessageList({ messages, streamText, thinkingText, streaming, activeToolCalls = [], agentThreads = [], agentReports = [], threadsByMessage = {}, pendingUserQuestion, onAnswerUserQuestion, activeAgent, spawnedAgents = [], onAnswerWorkflowIntervention, onSaveToLearnings }: ChatMessageListProps) {
   const [agentMap, setAgentMap] = useState<Record<string, { displayName?: string; icon?: string; color?: string }>>({});
   const pendingWorkflowIntervention = onAnswerWorkflowIntervention ? workflowInterventionFromRuns(spawnedAgents) : null;
 
@@ -1314,10 +1761,14 @@ export default function ChatMessageList({ messages, streamText, thinkingText, st
       setAgentMap(map);
     }).catch(() => {});
   }, []);
-  const AgentIcon = AGENT_ICONS[agentIconName] ?? Bot;
   const bottomRef = useRef<HTMLDivElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const autoScrollRef = useRef(true);
+  const scrollToBottomIfPinned = useCallback(() => {
+    if (autoScrollRef.current) {
+      bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
+    }
+  }, []);
 
   useEffect(() => {
     const container = containerRef.current;
@@ -1337,131 +1788,63 @@ export default function ChatMessageList({ messages, streamText, thinkingText, st
   }, [messages, streamText, pendingWorkflowIntervention?.intervention.intervention_id]);
 
   return (
-    <div ref={containerRef} className="flex-1 overflow-y-auto px-4 py-6 space-y-5">
-      {/* Empty state with quick actions */}
+    <div ref={containerRef} className="chat-stream-v2">
       {messages.length === 0 && !streaming && (
-        <div className="flex flex-col items-center justify-center h-full text-center">
-          <div className="w-14 h-14 rounded-lg bg-accent-blue/10 border border-accent-blue/20 flex items-center justify-center mb-4">
-            <AgentIcon className="w-7 h-7 text-accent-blue/50" />
-          </div>
-          <p className="text-sm text-theme-secondary font-body">
-            {CHAT_EMPTY_PROMPT}
-          </p>
-          <p className="text-xs text-theme-subtle mt-2 font-body max-w-xs">
-            Use <span className="text-accent-blue font-mono">@mentions</span> to reference workflows, repos, and agents.
-          </p>
-          {onSuggestionClick && (
-            <div className="mt-6 grid grid-cols-2 gap-2 max-w-sm">
-              {QUICK_ACTIONS.map(action => (
-                <button
-                  key={action.label}
-                  onClick={() => onSuggestionClick(action.prompt)}
-                  className="flex items-center gap-2.5 px-3 py-2 rounded-lg bg-app-muted border border-app hover:bg-surface-200/70 hover:border-accent-blue/30 transition-all text-left group"
-                  title={action.prompt}
-                >
-                  {QUICK_ICONS[action.icon]}
-                  <span className="text-xs text-theme-secondary group-hover:text-theme-secondary font-body">{action.label}</span>
-                </button>
-              ))}
-            </div>
-          )}
-        </div>
+        <div className="chat-empty-stream" />
       )}
 
       {/* Messages */}
       {messages.map((msg, i) => {
         const msgThreads = msg._id ? threadsByMessage[msg._id] : undefined;
         const senderLabel = msg.role === 'user' ? userDisplayName(msg) : '';
-        const senderInitials = msg.role === 'user' ? initialsForName(senderLabel) : '';
+        const diffSplit = msg.role === 'assistant' ? splitFirstDiffFence(msg.content) : { text: msg.content, diff: null };
         return (<React.Fragment key={msg._id || i}>
-        <div
-          className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'} al-msg-enter`}
-        >
-          <div className={`group/msg flex gap-3 ${msg.role === 'user' ? 'flex-row-reverse max-w-[75%]' : 'max-w-[90%]'}`}>
-            {/* Avatar — only for user messages */}
-            {msg.role === 'user' && (
-              <div className="shrink-0 w-8 h-8 rounded-lg flex items-center justify-center mt-0.5 bg-accent-blue/10 border border-accent-blue/20 text-accent-blue">
-                <span className="text-[11px] font-heading font-semibold">{senderInitials}</span>
-              </div>
-            )}
+        <div className={`ch-msg ${msg.role === 'user' ? 'you' : 'allen'} group/msg al-msg-enter`}>
+          <div className="ch-avatar">{msg.role === 'user' ? senderInitial(senderLabel) : 'a'}</div>
+          <div className="ch-msg-body">
+            <div className="ch-msg-head">
+              <span className="ch-msg-who">
+                {msg.role === 'user' ? senderLabel : assistantDisplayName(activeAgent ? agentMap[activeAgent] : undefined)}
+              </span>
+              {msg.createdAt && <span className="ch-msg-ts">{formatTime(msg.createdAt)}</span>}
+              {msg.role !== 'user' && msg.costUsd != null && msg.costUsd > 0 && <span className="ch-msg-ts">${msg.costUsd.toFixed(4)}</span>}
+              {msg.role !== 'user' && msg.durationMs != null && msg.durationMs > 0 && <span className="ch-msg-ts">{(msg.durationMs / 1000).toFixed(1)}s</span>}
+            </div>
 
-            {/* Content */}
-            <div className={`min-w-0 flex-1 ${msg.role === 'user' ? 'text-right' : ''}`}>
-              {/* Message bubble */}
-              {msg.role === 'user' ? (
-                <>
-                  <div className="flex items-center gap-2 mb-1.5 justify-end">
-                    <span className="overline">{senderLabel}</span>
-                    {msg.createdAt && <span className="text-[10px] font-mono text-theme-subtle flex items-center gap-1"><Clock className="w-2.5 h-2.5" />{formatTime(msg.createdAt)}</span>}
-                  </div>
-                  <div className="inline-block px-4 py-2.5 rounded-2xl rounded-br-sm bg-accent-blue/15 border border-accent-blue/10 text-sm font-body text-theme-secondary leading-relaxed whitespace-pre-wrap break-words text-left">
-                    {renderUserContent(msg.content)}
-                  </div>
-                </>
-              ) : (() => {
-                const agentColor = activeAgent && agentMap[activeAgent]?.color ? agentMap[activeAgent].color : '#6b7280';
-                const agentInfo = activeAgent ? agentMap[activeAgent] : undefined;
-                return (
-                  <div>
-                    {/* Agent header */}
-                    <div className="flex items-center gap-2 mb-1.5">
-                      {agentInfo ? (
-                        <div className="w-5 h-5 rounded-md flex items-center justify-center shrink-0" style={{ backgroundColor: agentColor + '15', border: `1px solid ${agentColor}25` }}>
-                          <RoleIcon icon={agentInfo.icon} color={agentColor} size={13} />
-                        </div>
-                      ) : null}
-                      <span className="text-[12px] font-heading font-semibold tracking-wide" style={{ color: agentColor }}>
-                        {agentInfo?.displayName ?? 'Assistant'}
-                      </span>
-                      {msg.createdAt && <span className="text-[10px] font-mono text-theme-subtle flex items-center gap-1"><Clock className="w-2.5 h-2.5" />{formatTime(msg.createdAt)}</span>}
-                      {msg.costUsd != null && msg.costUsd > 0 && <span className="text-[10px] font-mono text-theme-subtle">${msg.costUsd.toFixed(4)}</span>}
-                      {msg.durationMs != null && msg.durationMs > 0 && <span className="text-[10px] font-mono text-theme-subtle">{(msg.durationMs / 1000).toFixed(1)}s</span>}
-                    </div>
-
-                    {/* Thread-line container — brighter line for main response */}
-                    <div className="ml-2 pl-3 pr-3 border-l-[3px] rounded-bl-md" style={{
-                      borderColor: msg.status === 'failed' ? '#ef4444a0' : (agentColor + '80'),
-                      backgroundColor: msg.status === 'failed' ? '#ef444408' : (agentColor + '08'),
-                    }}>
-                      {/* Tool calls + threads */}
-                      <ToolCallsSection calls={msg.toolCalls} threads={msgThreads} agentMap={agentMap} />
-
-                      {/* Text response */}
-                      {msg.content && (
-                        <div className={`${msg.toolCalls?.length ? 'mt-2 ' : ''}py-2 text-sm font-body leading-relaxed break-words ${
-                          msg.status === 'failed' ? 'text-red-300' : 'text-theme-secondary'
-                        }`}>
-                          {renderMarkdown(msg.content)}
-                        </div>
-                      )}
-
-                      {/* Save to learnings */}
-                      <div className="flex items-center gap-2 mt-1 pb-1">
-                        {msg.content && onSaveToLearnings && (
-                          <button
-                            onClick={() => onSaveToLearnings(msg.content)}
-                            className="flex items-center gap-1 text-[10px] text-theme-subtle hover:text-accent-blue transition-colors opacity-0 group-hover/msg:opacity-100"
-                            title="Save to learnings"
-                          >
-                            <Bookmark className="w-3 h-3" /> Save
-                          </button>
-                        )}
-                      </div>
-
-                      {/* Error */}
-                      {msg.error && (
-                        <div className="mt-1 flex items-center gap-1.5 text-xs text-accent-red font-mono bg-red-500/5 border border-red-500/10 px-2.5 py-1.5 rounded-md">
-                          <AlertCircle className="w-3 h-3 shrink-0" />
-                          {msg.error}
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                );
-              })()}
+            <div className={`ch-msg-text ${msg.status === 'failed' ? 'failed' : ''}`}>
+              {diffSplit.text && (
+                <div>
+                  {renderMarkdown(diffSplit.text)}
+                </div>
+              )}
+              {msg.role !== 'user' && msg.content && onSaveToLearnings && (
+                <div className="chat-save-row">
+                  <button
+                    onClick={() => onSaveToLearnings(msg.content)}
+                    title="Save to learnings"
+                  >
+                    <Bookmark className="w-3 h-3" /> Save
+                  </button>
+                </div>
+              )}
+              {msg.error && (
+                <div className="chat-msg-error">
+                  <AlertCircle className="w-3 h-3 shrink-0" />
+                  {msg.error}
+                </div>
+              )}
             </div>
           </div>
         </div>
+
+        {diffSplit.diff && (
+          <div className="ch-msg allen al-msg-enter">
+            <div className="ch-avatar">a</div>
+            <div className="ch-msg-body">
+              <InlineCodeDiffCard code={diffSplit.diff} />
+            </div>
+          </div>
+        )}
 
         {/* Threads not linked to a tool call (fallback — render below message) */}
         {msgThreads && msgThreads.length > 0 && (() => {
@@ -1474,7 +1857,7 @@ export default function ChatMessageList({ messages, streamText, thinkingText, st
           const unlinked = msgThreads.filter(t => !toolConvIds.has(t.conversationId));
           if (unlinked.length === 0) return null;
           return (
-            <div className="ml-11 space-y-2">
+            <div className="chat-linked-threads">
               {buildThreadTree(unlinked).map(thread => (
                 <AgentThread key={thread.conversationId} thread={thread} agents={agentMap} />
               ))}
@@ -1486,31 +1869,19 @@ export default function ChatMessageList({ messages, streamText, thinkingText, st
 
       {/* Streaming message */}
       {streaming && (() => {
-        const sAgentColor = activeAgent && agentMap[activeAgent]?.color ? agentMap[activeAgent].color : '#6b7280';
         const sAgentInfo = activeAgent ? agentMap[activeAgent] : undefined;
         return (
-          <div className="al-msg-enter max-w-[90%]">
-            {/* Agent header */}
-            <div className="flex items-center gap-2 mb-1.5">
-              {sAgentInfo ? (
-                <div className="w-5 h-5 rounded-md flex items-center justify-center shrink-0" style={{ backgroundColor: sAgentColor + '15', border: `1px solid ${sAgentColor}25` }}>
-                  <RoleIcon icon={sAgentInfo.icon} color={sAgentColor} size={13} />
-                </div>
-              ) : null}
-              <span className="text-[12px] font-heading font-semibold tracking-wide" style={{ color: sAgentColor }}>
-                {sAgentInfo?.displayName ?? 'Assistant'}
-              </span>
-              <span className="text-[10px] text-accent-blue font-mono flex items-center gap-1.5">
-                <span className="w-1.5 h-1.5 rounded-full bg-accent-blue animate-pulse" />
-                generating
-              </span>
-            </div>
-
-            {/* Thread-line container */}
-            <div className="ml-2 pl-3 pr-3 border-l-[3px] rounded-bl-md" style={{ borderColor: sAgentColor + '80', backgroundColor: sAgentColor + '08' }}>
+          <div className="ch-msg allen al-msg-enter">
+            <div className="ch-avatar">a</div>
+            <div className="ch-msg-body">
+              <div className="ch-msg-head">
+                <span className="ch-msg-who">{assistantDisplayName(sAgentInfo)}</span>
+                <span className="ch-msg-ts">generating</span>
+              </div>
+              <div className="ch-msg-text">
               {thinkingText && !streamText && <ThinkingBlock text={thinkingText} />}
               <ActiveToolCallsSection calls={activeToolCalls} liveThreads={agentThreads} agentMap={agentMap} />
-              <div className={`${activeToolCalls.length > 0 || (thinkingText && !streamText) ? 'mt-2 ' : ''}py-2 text-sm text-theme-secondary font-body leading-relaxed break-words`}>
+              <div className={activeToolCalls.length > 0 || (thinkingText && !streamText) ? 'mt-2' : undefined}>
                 {streamText ? (
                   <>
                     {renderMarkdown(streamText)}
@@ -1525,6 +1896,7 @@ export default function ChatMessageList({ messages, streamText, thinkingText, st
                   <TypingDots />
                 )}
               </div>
+              </div>
             </div>
           </div>
         );
@@ -1532,7 +1904,7 @@ export default function ChatMessageList({ messages, streamText, thinkingText, st
 
       {/* Agent progress reports */}
       {agentReports.length > 0 && (
-        <div className="mx-4 space-y-1.5">
+        <div className="chat-progress-mini">
           {agentReports.map((report, i) => {
             const reportAgent = agentMap[report.agent];
             return (
@@ -1550,6 +1922,9 @@ export default function ChatMessageList({ messages, streamText, thinkingText, st
         </div>
       )}
 
+      <ChatCodeDiffPreview runs={spawnedAgents} onReady={scrollToBottomIfPinned} />
+      <ChatPullRequestCards runs={spawnedAgents} />
+
       {/* Agent threads — only render orphans not already shown inline with tool calls */}
       {agentThreads.length > 0 && !streaming && (() => {
         // During streaming, threads are rendered inline with ActiveToolCallsSection
@@ -1558,7 +1933,7 @@ export default function ChatMessageList({ messages, streamText, thinkingText, st
         const orphans = agentThreads.filter(t => !t.parentConversationId);
         if (orphans.length === 0) return null;
         return (
-          <div className="mx-4 space-y-2">
+          <div className="chat-linked-threads">
             {buildThreadTree(orphans).map(thread => (
               <AgentThread key={thread.conversationId} thread={thread} agents={agentMap} />
             ))}
@@ -1576,9 +1951,9 @@ export default function ChatMessageList({ messages, streamText, thinkingText, st
         />
       )}
 
-      {/* Routed workflow/agent executions — chat shows only live logs; sidebar owns step details */}
+      {/* Routed workflow/agent executions — only live progress belongs in chat; completed steps live in the sidebar. */}
       {spawnedAgents.some(run => !TERMINAL_RUN_STATUSES.has(run.runContext?.status ?? run.status)) && (
-        <div className="px-4 my-3">
+        <div className="chat-run-feed-wrap">
           <RunProgressFeed runs={spawnedAgents} />
         </div>
       )}

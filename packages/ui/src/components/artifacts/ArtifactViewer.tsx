@@ -24,9 +24,10 @@ export interface ArtifactViewerProps {
   artifact: ArtifactDoc;
   onClose?: () => void;
   onDelete?: () => void;
+  showExternalLink?: boolean;
 }
 
-export default function ArtifactViewer({ artifact, onClose, onDelete }: ArtifactViewerProps) {
+export default function ArtifactViewer({ artifact, onClose, onDelete, showExternalLink = true }: ArtifactViewerProps) {
   const [content, setContent] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -98,15 +99,17 @@ export default function ArtifactViewer({ artifact, onClose, onDelete }: Artifact
             >
               <Copy className="w-3.5 h-3.5" />
             </button>
-            <a
-              href={url}
-              target="_blank"
-              rel="noreferrer"
-              title="Open in new tab"
-              className="p-1.5 rounded-md hover:bg-app-muted text-theme-muted hover:text-theme-secondary transition-colors"
-            >
-              <ExternalLink className="w-3.5 h-3.5" />
-            </a>
+            {showExternalLink && (
+              <a
+                href={url}
+                target="_blank"
+                rel="noreferrer"
+                title="Open in new tab"
+                className="p-1.5 rounded-md hover:bg-app-muted text-theme-muted hover:text-theme-secondary transition-colors"
+              >
+                <ExternalLink className="w-3.5 h-3.5" />
+              </a>
+            )}
             <a
               href={url}
               download={artifact.filename}

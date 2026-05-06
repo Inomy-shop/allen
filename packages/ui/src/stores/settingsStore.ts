@@ -148,13 +148,13 @@ export const FONT_PRESETS: FontPreset[] = [
   },
   {
     name: 'clean',
-    label: 'Clean',
-    heading: 'Inter',
-    body: 'Inter',
+    label: 'Prototype',
+    heading: 'Inter Tight',
+    body: 'Inter Tight',
     mono: 'JetBrains Mono',
-    labelFont: 'Inter',
+    labelFont: 'Inter Tight',
     googleFontsUrl:
-      'https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap',
+      'https://fonts.googleapis.com/css2?family=Inter+Tight:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap',
   },
   // ── Non-robotic / Classic / Elegant fonts ──
   {

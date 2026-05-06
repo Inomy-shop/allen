@@ -15,7 +15,7 @@ Build a built-in Allen self-healing loop:
    runtime configuration.
 4. Create or update a deduplicated Linear issue in the Allen project.
 5. Route the issue to a built-in Allen agent or built-in workflow.
-6. Track the repair execution back to the incident and Linear ticket.
+6. Track the bug-fix execution back to the incident and Linear ticket.
 
 All agents, workflows, cron jobs, and system actions required for this loop must
 be seeded as Allen built-ins. Nothing critical should depend on manually-created
@@ -96,7 +96,7 @@ Scanner cursor behavior:
 
 The hourly cron target is the built-in workflow
 `allen-self-healing-monitor-hourly`. Backend code does not analyze incidents,
-create Linear tickets, or route repairs. It only starts the workflow and exposes
+create Linear tickets, or route bug-fix work. It only starts the workflow and exposes
 safe Allen MCP tools for agents.
 
 Add a compatibility service file:
@@ -126,7 +126,7 @@ normal seed path.
 | Agent | Team | Type | Purpose |
 |---|---|---|---|
 | `allen-monitoring-agent` | engineering | technical | Plans scans, collects evidence through Allen MCP tools, analyzes logs/messages/traces/tool calls, persists evidence bundles, and decides whether an issue is Allen-owned. |
-| `allen-incident-router` | engineering | team | Deduplicates incidents, creates/updates Linear tickets through Linear MCP tools, chooses repair target, and dispatches selected repair workflows through Allen MCP. |
+| `allen-incident-router` | engineering | team | Deduplicates incidents, creates/updates Linear tickets through Linear MCP tools, chooses bug-fix or triage target, and dispatches `bug-investigate-and-fix` through Allen MCP. |
 | `allen-memory-diagnostician` | engineering | technical | Specializes in learning extraction, embedding, retrieval, and prompt-injection failures. |
 | `allen-tooling-diagnostician` | engineering | technical | Specializes in MCP, tool schema, tool allowlist, env propagation, and artifact/workspace context failures. |
 | `allen-workflow-diagnostician` | engineering | technical | Specializes in workflow YAML, engine node execution, traces, retries, conditions, and stuck workflow states. |
@@ -147,7 +147,7 @@ seeded by `seedDefaultWorkflows()`:
 | Workflow | Purpose |
 |---|---|
 | `self-healing-incident-triage` | Given an incident ID, hydrate evidence, classify root cause, decide actionability, update incident state, and create/update Linear. Mostly analysis and routing; no code changes. |
-| `self-healing-repair` | Given a Linear issue or incident ID, create an isolated worktree for the Allen repo, run investigation, fix, tests, review, and PR creation. It handles Allen repo, memory, tooling, workflow, prompt, and instruction repair through `repair_area`. |
+| `bug-investigate-and-fix` | Given a synthesized incident bug report, create an isolated worktree for the Allen repo, run investigation, fix, tests, review, and PR creation. |
 
 Update `cleanupOrphanedSeedEntities()` keep list in `packages/server/src/app.ts`
 so these built-in workflows are not deleted on boot.
@@ -287,12 +287,12 @@ Routing table:
 
 | Root Cause | Source Type | Target |
 |---|---|---|
-| `memory_system` | memory/chat/agent | workflow `self-healing-repair`, `repair_area=memory_system` |
-| `tool_integration` | tool_call/mcp/chat/agent | workflow `self-healing-repair`, `repair_area=tool_integration` |
-| `workflow_definition` | workflow_execution | workflow `self-healing-repair`, `repair_area=workflow_definition` |
-| `agent_prompt` | chat/agent/delegation/workflow_execution | workflow `self-healing-repair`, `repair_area=prompt_instruction` |
-| `instruction_bug` | chat/agent/delegation/workflow_execution/tool_call | workflow `self-healing-repair`, `repair_area=prompt_instruction` |
-| `allen_repo` | any | workflow `self-healing-repair`, `repair_area=allen_repo` |
+| `memory_system` | memory/chat/agent | workflow `bug-investigate-and-fix` |
+| `tool_integration` | tool_call/mcp/chat/agent | workflow `bug-investigate-and-fix` |
+| `workflow_definition` | workflow_execution | workflow `bug-investigate-and-fix` |
+| `agent_prompt` | chat/agent/delegation/workflow_execution | workflow `bug-investigate-and-fix` |
+| `instruction_bug` | chat/agent/delegation/workflow_execution/tool_call | workflow `bug-investigate-and-fix` |
+| `allen_repo` | any | workflow `bug-investigate-and-fix` |
 | `unknown` with high severity | any | agent `allen-incident-router` |
 
 Auto-dispatch rules:
@@ -431,7 +431,7 @@ E2E/manual:
 4. Add event hooks.
 5. Add memory injection audit records.
 6. Add built-in diagnosis agents.
-7. Add triage and repair workflows.
+7. Add triage and bug-fix workflow routing.
 8. Enable auto-dispatch for confidence >= 0.70.
 9. Add UI controls.
 10. Add recurrence checks to the hourly scanner.
@@ -457,7 +457,7 @@ Engine:
 - `packages/engine/src/state-manager.ts`
 - `packages/engine/src/learning-manager.ts`
 - `packages/engine/workflows/self-healing-incident-triage.yml`
-- `packages/engine/workflows/self-healing-repair.yml`
+- `packages/engine/workflows/bug-investigate-and-fix.yml`
 
 Seeds:
 
@@ -489,6 +489,6 @@ Docs:
   ticketed, routed, fixed, tested, and shipped through the same loop.
 - Actionable Allen-owned incidents create or update Linear issues using the
   Linear team, project, and assignee configured in required env vars.
-- Auto-dispatch can start the correct built-in repair workflow or built-in
+- Auto-dispatch can start the built-in bug-fix workflow or built-in
   routing agent.
 - Monitoring failures never break the original user-facing chat/agent/workflow.

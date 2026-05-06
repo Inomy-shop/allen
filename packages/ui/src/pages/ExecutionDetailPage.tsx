@@ -312,18 +312,31 @@ function RunContextPanel({
   pendingIntervention?: any;
   artifactCount: number | null;
 }) {
+  const [expanded, setExpanded] = useState(false);
   const percent = runContext?.progress.percent ?? 0;
   const phase = runContext?.progress.phase ?? execution.status;
   return (
-    <section className="border-b border-app bg-surface">
-      <div className="px-4 py-3 border-b border-app flex items-center justify-between gap-3">
-        <div>
-          <div className="text-[13px] font-semibold text-theme-primary">Context</div>
-          <div className="text-[10px] text-theme-subtle font-mono capitalize">{phaseLabel(phase)}</div>
+    <section className="shrink-0 border-b border-app bg-surface">
+      <button
+        type="button"
+        onClick={() => setExpanded(v => !v)}
+        className="w-full px-4 py-2.5 border-b border-app flex items-center justify-between gap-3 text-left hover:bg-app-muted/40 transition-colors"
+      >
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center gap-2">
+            {expanded ? <ChevronDown className="w-3.5 h-3.5 text-theme-muted shrink-0" /> : <ChevronRight className="w-3.5 h-3.5 text-theme-muted shrink-0" />}
+            <div className="text-[13px] font-semibold text-theme-primary">Context</div>
+            <StatusBadge status={execution.status} />
+          </div>
+          <div className="mt-1 flex items-center gap-2 min-w-0 text-[10px] text-theme-subtle font-mono">
+            <span className="capitalize shrink-0">{phaseLabel(phase)}</span>
+            <span className="text-theme-subtle">·</span>
+            <span className="truncate">{runContext?.progress.currentStep ?? 'current run'}</span>
+            <span className="shrink-0">{Math.round(Math.max(0, Math.min(100, percent)))}%</span>
+          </div>
         </div>
-        <StatusBadge status={execution.status} />
-      </div>
-      <div className="p-3 space-y-3">
+      </button>
+      {expanded && <div className="max-h-[34vh] overflow-y-auto p-3 space-y-3">
         <div>
           <div className="flex items-center justify-between text-[10px] font-mono text-theme-subtle mb-1">
             <span>{runContext?.progress.currentStep ?? 'current run'}</span>
@@ -393,7 +406,7 @@ function RunContextPanel({
             </div>
           </div>
         )}
-      </div>
+      </div>}
     </section>
   );
 }
@@ -1600,7 +1613,7 @@ export default function ExecutionDetailPage() {
 
           {/* Right: Run context + Node detail — resizable */}
           <div
-            className="overflow-hidden shrink-0 bg-surface border-l-2 border-app hover:border-accent-blue/50 transition-colors relative flex flex-col"
+            className="min-h-0 overflow-hidden shrink-0 bg-surface border-l-2 border-app hover:border-accent-blue/50 transition-colors relative flex flex-col"
             style={{ width: `${rightWidth}%` }}
           >
             {/* Invisible resize grab zone on the left edge */}
@@ -1614,7 +1627,7 @@ export default function ExecutionDetailPage() {
               pendingIntervention={pendingIntervention}
               artifactCount={artifactCount}
             />
-            <div className="flex-1 min-h-0 overflow-hidden">
+            <div className="flex-1 min-h-0 overflow-y-auto">
               {/*
                 The inline human-input form is intentionally DISABLED here.
                 Human interventions now surface on the dedicated Interventions

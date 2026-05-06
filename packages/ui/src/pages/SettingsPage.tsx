@@ -87,24 +87,8 @@ function ProfileTab() {
     );
   }
 
-  const initials = user.name
-    .split(/\s+/)
-    .filter(Boolean)
-    .slice(0, 2)
-    .map((s) => s[0]?.toUpperCase())
-    .join('');
-
   return (
     <div className="settings-body">
-      <div className="settings-id">
-        <div className="settings-avatar">{initials || '?'}</div>
-        <div className="min-w-0">
-          <div className="settings-name">{user.name}</div>
-          <div className="settings-email">{user.email}</div>
-        </div>
-        <span className={`lib-pill ${user.role === 'admin' ? 'ok' : 'waiting'}`}>{user.role}</span>
-      </div>
-
       <div className="pref-list">
         <ProfileRow label="name" value={user.name} />
         <ProfileRow label="email" value={user.email} />
@@ -537,7 +521,7 @@ export default function SettingsPage() {
 
   return (
     <div className="content scroll-hide" data-screen-label="settings">
-      <div className="page-head">
+      <div className="settings-head">
         <h1>settings</h1>
         <p className="sub">your preferences</p>
         <nav className="topfilter-tabs">

@@ -103,17 +103,14 @@ export default function PullRequestListPage() {
   }
 
   return (
-    <div className="flex flex-col h-full overflow-hidden">
+    <div className="content scroll-hide pr-page" data-screen-label="pull-requests">
       {/* Header */}
-      <div className="surface-bar shrink-0">
-        <div className="page-crumb">
-          <span>Sources</span>
-          <span className="text-theme-subtle">/</span>
-          <span>Pull requests</span>
-        </div>
-        <div className="flex items-center gap-3">
-          <h1 className="page-title">Pull requests</h1>
-          <span className="text-[12px] font-mono text-theme-muted">{prs.length}</span>
+      <div className="page-head pr-head">
+        <div className="flex items-start gap-3">
+          <div>
+            <h1>Pull requests</h1>
+            <p className="sub">{prs.length} results · synced from GitHub</p>
+          </div>
           <span className="flex-1" />
           <button
             onClick={() => { setResolveOpen(true); setResolveUrl(''); setResolveError(null); }}
@@ -130,10 +127,10 @@ export default function PullRequestListPage() {
         </div>
 
         {/* Filters */}
-        <div className="segmented mt-3">
+        <div className="topfilter-tabs mt-6">
           {['open', 'merged', 'closed', ''].map(s => (
             <button key={s} onClick={() => setStatusFilter(s)}
-              className={`segmented-btn ${statusFilter === s ? 'segmented-btn-active' : ''}`}>
+              className={`tft ${statusFilter === s ? 'active' : ''}`}>
               {s || 'All'}
             </button>
           ))}
@@ -141,7 +138,7 @@ export default function PullRequestListPage() {
       </div>
 
       {/* List */}
-      <div className="flex-1 overflow-y-auto px-6 py-4">
+      <div className="pr-list">
         {loading ? (
           <div className="flex justify-center py-12"><Loader2 className="w-6 h-6 animate-spin text-theme-muted" /></div>
         ) : prs.length === 0 ? (
@@ -151,9 +148,9 @@ export default function PullRequestListPage() {
             <p className="text-xs text-theme-subtle mt-1">Click "Sync from GitHub" to import PRs</p>
           </div>
         ) : (
-          <div className="entity-list">
+          <div className="entity-list pr-entity-list">
             {prs.map(pr => (
-              <div key={pr._id} className="entity-row cursor-pointer" onClick={() => navigate(`/pull-requests/${pr._id}`)}>
+              <div key={pr._id} className="entity-row pr-card cursor-pointer" onClick={() => navigate(`/pull-requests/${pr._id}`)}>
                 <div className="flex items-start gap-3">
                   {statusIcon(pr.status)}
                   <div className="flex-1 min-w-0">
