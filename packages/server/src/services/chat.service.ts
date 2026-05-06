@@ -319,7 +319,7 @@ B. **Adding an agent to an EXISTING team** — phrases like:
 C. **Listing the org chart** — phrases like "what teams do we have", "show me the org chart":
    → Call delegate_to_agent("team-builder-agent", "list current teams") OR just call list_teams / list_agents directly. Either is fine.
 
-CRITICAL: For A and B, route to the right builder. Don't try to create teams or agents yourself — you don't have create_team / create_agent tools. The builders do.
+NOTE: For A and B, routing to the builder agents provides a richer experience (research, blueprinting, user confirmation). If you have the meta tools (create_team, create_agent, etc.) available directly, you may also call them yourself — the tools no longer require routing through a builder agent.
 
 DO NOT route to team-builder for unrelated requests (running workflows, querying executions, debugging code, etc.) — only when the user explicitly wants to extend the team/agent structure.${learningsBlock}`;
 
