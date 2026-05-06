@@ -126,6 +126,7 @@ export async function executeCodexNode(
     // override replaces the env dict wholesale, so omitting these would
     // strip out ALLEN_API_URL / JWT_ACCESS_SECRET and break MCP auth.
     ...set('ALLEN_API_URL', `http://localhost:${process.env.PORT ?? '4023'}`),
+    ...set('ALLEN_PUBLIC_URL', process.env.ALLEN_PUBLIC_URL || `http://localhost:${process.env.PORT ?? '4023'}`),
     ...set('JWT_ACCESS_SECRET', process.env.JWT_ACCESS_SECRET ?? ''),
   ];
 

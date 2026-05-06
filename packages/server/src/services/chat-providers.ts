@@ -164,6 +164,7 @@ export async function syncMcpToCodex(db: Db): Promise<void> {
     await execFileAsync('codex', [
       'mcp', 'add', MCP_SERVER_NAME,
       '--env', `ALLEN_API_URL=http://localhost:${process.env.PORT ?? '4023'}`,
+      '--env', `ALLEN_PUBLIC_URL=${process.env.ALLEN_PUBLIC_URL || `http://localhost:${process.env.PORT ?? '4023'}`}`,
       // Shared with the MCP subprocess so it can mint its own access token
       // when calling back into /api/* — see allen-mcp-server.ts.
       '--env', `JWT_ACCESS_SECRET=${process.env.JWT_ACCESS_SECRET ?? ''}`,
@@ -266,6 +267,7 @@ export async function runCodexCLI(
       // dict replacement in some codex versions, so re-state them to be
       // safe across CLI variants.
       '-c', `mcp_servers.${MCP_SERVER_NAME}.env.ALLEN_API_URL="http://localhost:${process.env.PORT ?? '4023'}"`,
+      '-c', `mcp_servers.${MCP_SERVER_NAME}.env.ALLEN_PUBLIC_URL="${process.env.ALLEN_PUBLIC_URL || `http://localhost:${process.env.PORT ?? '4023'}`}"`,
       '-c', `mcp_servers.${MCP_SERVER_NAME}.env.JWT_ACCESS_SECRET="${process.env.JWT_ACCESS_SECRET ?? ''}"`,
     );
   }

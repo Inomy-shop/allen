@@ -125,6 +125,7 @@ async function runClaudeCLI(
       args: runner.args,
       env: {
         ALLEN_API_URL: `http://localhost:${process.env.PORT ?? '4023'}`,
+        ALLEN_PUBLIC_URL: process.env.ALLEN_PUBLIC_URL || `http://localhost:${process.env.PORT ?? '4023'}`,
         // Shared with the MCP subprocess so it can mint its own access token
         // when calling back into /api/* — see allen-mcp-server.ts.
         JWT_ACCESS_SECRET: process.env.JWT_ACCESS_SECRET ?? '',

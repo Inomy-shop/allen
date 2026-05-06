@@ -5,7 +5,8 @@
  * Both Codex CLI and Claude CLI can connect to this as a native MCP server.
  *
  * Usage: node allen-mcp-server.js
- * Env: ALLEN_API_URL (default: http://localhost:4023)
+ * Env: ALLEN_API_URL (default: http://localhost:4023) — internal service-to-service base URL
+ *      ALLEN_PUBLIC_URL (optional) — public-facing base URL for artifact links; falls back to ALLEN_API_URL
  */
 
 // This runs as a standalone process — communicates via stdin/stdout JSON-RPC.
@@ -15,6 +16,7 @@
 import { BRAND_NAME, MCP_SERVER_NAME } from '@allen/engine';
 
 const API_BASE = process.env.ALLEN_API_URL ?? `http://localhost:${process.env.PORT ?? '4023'}`;
+const PUBLIC_BASE = (process.env.ALLEN_PUBLIC_URL || API_BASE).replace(/\/$/, '');
 
 // Spawn-tree context — passed in by whoever launched this MCP server (a
 // workflow node's claude-cli, or an already-spawned agent's claude-cli).
@@ -767,7 +769,7 @@ async function executeTool(name: string, args: Record<string, unknown>): Promise
       const data = await res.json() as Record<string, unknown>;
       if (data.url) {
         // Return full public URL so agents can share it
-        data.publicUrl = `${API_BASE}${data.url}`;
+        data.publicUrl = `${PUBLIC_BASE}${data.url}`;
       }
       return data;
     }
@@ -805,7 +807,7 @@ async function executeTool(name: string, args: Record<string, unknown>): Promise
       });
       const data = await res.json() as Record<string, unknown>;
       if (!res.ok) return { error: data.error ?? `Save failed (${res.status})` };
-      if (data.url) data.publicUrl = `${API_BASE}${data.url}`;
+      if (data.url) data.publicUrl = `${PUBLIC_BASE}${data.url}`;
       return data;
     }
     case 'allen_list_artifacts': {
@@ -826,7 +828,7 @@ async function executeTool(name: string, args: Record<string, unknown>): Promise
       // Fetch content via the public endpoint (same MIME rules as UI).
       const contentRes = await fetch(`${API_BASE}/api/artifacts/${encodeURIComponent(id)}/content`);
       const content = await contentRes.text();
-      return { ...meta, content, publicUrl: `${API_BASE}/api/artifacts/${encodeURIComponent(id)}/content` };
+      return { ...meta, content, publicUrl: `${PUBLIC_BASE}/api/artifacts/${encodeURIComponent(id)}/content` };
     }
     default: {
       // Fallback dispatcher: forward any tool not handled above to the generic

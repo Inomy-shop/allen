@@ -1030,6 +1030,7 @@ async function runSpawnInBackground(
       }
       mcpEnvOverrides.push(
         '-c', `mcp_servers.${MCP_SERVER_NAME}.env.ALLEN_API_URL="http://localhost:${process.env.PORT ?? '4023'}"`,
+        '-c', `mcp_servers.${MCP_SERVER_NAME}.env.ALLEN_PUBLIC_URL="${process.env.ALLEN_PUBLIC_URL || `http://localhost:${process.env.PORT ?? '4023'}`}"`,
         '-c', `mcp_servers.${MCP_SERVER_NAME}.env.JWT_ACCESS_SECRET="${process.env.JWT_ACCESS_SECRET ?? ''}"`,
       );
 
@@ -2738,6 +2739,7 @@ async function runAgentTurn(
           '-c', `mcp_servers.${MCP_SERVER_NAME}.env.ALLEN_ARTIFACT_PARENT_ID="${convId}"`,
           '-c', `mcp_servers.${MCP_SERVER_NAME}.env.ALLEN_CHAT_SESSION_ID="${activeCtx.chatSessionId}"`,
           '-c', `mcp_servers.${MCP_SERVER_NAME}.env.ALLEN_API_URL="http://localhost:${process.env.PORT ?? '4023'}"`,
+          '-c', `mcp_servers.${MCP_SERVER_NAME}.env.ALLEN_PUBLIC_URL="${process.env.ALLEN_PUBLIC_URL || `http://localhost:${process.env.PORT ?? '4023'}`}"`,
           '-c', `mcp_servers.${MCP_SERVER_NAME}.env.JWT_ACCESS_SECRET="${process.env.JWT_ACCESS_SECRET ?? ''}"`,
         );
       }
@@ -2932,6 +2934,7 @@ async function runAgentTurn(
         args: ['tsx', serverPath],
         env: {
           ALLEN_API_URL: `http://localhost:${process.env.PORT ?? '4023'}`,
+          ALLEN_PUBLIC_URL: process.env.ALLEN_PUBLIC_URL || `http://localhost:${process.env.PORT ?? '4023'}`,
           JWT_ACCESS_SECRET: process.env.JWT_ACCESS_SECRET ?? '',
           // Artifact-root context so `allen_save_artifact` inside this
           // delegated agent routes files to the parent chat's Artifacts
