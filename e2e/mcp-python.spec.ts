@@ -82,8 +82,14 @@ async function mockMcpApis(page: import('@playwright/test').Page) {
 async function gotoMcpSettings(page: import('@playwright/test').Page) {
   await mockMcpApis(page);
   await page.setViewportSize({ width: 1400, height: 800 });
+  const responsePromise = page.waitForResponse(
+    (resp) =>
+      resp.url().includes('/api/mcp/servers') &&
+      !resp.url().includes('/discover') &&
+      resp.request().method() === 'GET',
+  );
   await page.goto(`${UI}/settings/mcp`);
-  await page.waitForTimeout(1500);
+  await responsePromise;
 }
 
 /**
@@ -162,25 +168,37 @@ async function mockMcpApisWithPythonServer(page: import('@playwright/test').Page
 async function gotoMcpSettingsWithPythonServer(page: import('@playwright/test').Page) {
   await mockMcpApisWithPythonServer(page);
   await page.setViewportSize({ width: 1400, height: 800 });
+  const responsePromise = page.waitForResponse(
+    (resp) =>
+      resp.url().includes('/api/mcp/servers') &&
+      !resp.url().includes('/discover') &&
+      resp.request().method() === 'GET',
+  );
   await page.goto(`${UI}/settings/mcp`);
-  await page.waitForTimeout(1500);
+  await responsePromise;
 }
 
 /** Open Add modal and switch to the "From Repo" tab. */
 async function openAddFromRepoModal(page: import('@playwright/test').Page) {
   await page.locator('button:has-text("Add")').click();
-  await page.waitForTimeout(500);
+  // Wait for the modal to appear in the DOM before interacting further
+  await expect(page.locator('text=Add MCP Server')).toBeVisible();
   await page.locator('button:has-text("From Repo")').click();
-  await page.waitForTimeout(300);
+  // Wait for the repo dropdown to be rendered after switching tabs
+  await expect(page.locator('select').first()).toBeVisible();
 }
 
 /** Select the fake repo and wait for discovery to complete. */
 async function pickFakeRepo(page: import('@playwright/test').Page) {
   const repoSelect = page.locator('select').first();
   await expect(repoSelect).toBeVisible({ timeout: 3000 });
+  // Register the waiter before triggering the selection so the mocked
+  // discovery response is captured even if it arrives immediately.
+  const discoveryPromise = page.waitForResponse(
+    (resp) => resp.url().includes('/discover'),
+  );
   await repoSelect.selectOption(FAKE_REPO_ID);
-  // Wait for the (mocked) discovery response to arrive
-  await page.waitForTimeout(800);
+  await discoveryPromise;
 }
 
 // ── Tests ──────────────────────────────────────────────────────────────────
@@ -227,7 +245,6 @@ test.describe('Python MCP server support', () => {
 
     // Type a Python entry file path
     await entryInput.fill('src/mcp_server.py');
-    await page.waitForTimeout(300);
 
     // Command field must appear with value "python3"
     const commandInput = page.locator('input[placeholder*="python3"]');
@@ -245,7 +262,6 @@ test.describe('Python MCP server support', () => {
     const entryInput = page.locator('input[placeholder*="or type path"]');
     await expect(entryInput).toBeVisible({ timeout: 3000 });
     await entryInput.fill('src/mcp_server.py');
-    await page.waitForTimeout(300);
 
     // Helper hint should appear below the Command field
     await expect(
@@ -263,7 +279,6 @@ test.describe('Python MCP server support', () => {
     const entryInput = page.locator('input[placeholder*="or type path"]');
     await expect(entryInput).toBeVisible({ timeout: 3000 });
     await entryInput.fill('src/mcp_server.ts');
-    await page.waitForTimeout(300);
 
     // Python hint must be absent for TypeScript entry files
     await expect(
@@ -290,7 +305,12 @@ test.describe('Python MCP server support', () => {
     // Click the "Test connection" button (icon-only button, identified by title)
     const testBtn = page.locator('button[title="Test connection"]');
     await expect(testBtn).toBeVisible({ timeout: 3000 });
+    // Register waiter before clicking so the mocked /test response is captured
+    const testResponsePromise = page.waitForResponse(
+      (resp) => resp.url().includes('/api/mcp/servers') && resp.url().includes('/test'),
+    );
     await testBtn.click();
+    await testResponsePromise;
 
     // Flash message should appear: "✓ 1 tool"
     // (toolCount=1 → singular "tool" per the component's template string)
@@ -312,7 +332,12 @@ test.describe('Python MCP server support', () => {
     // Reinstall button is only rendered for repo-sourced servers
     const reinstallBtn = page.locator('button[title="Reinstall dependencies"]');
     await expect(reinstallBtn).toBeVisible({ timeout: 3000 });
+    // Register waiter before clicking so the mocked /reinstall response is captured
+    const reinstallResponsePromise = page.waitForResponse(
+      (resp) => resp.url().includes('/api/mcp/servers') && resp.url().includes('/reinstall'),
+    );
     await reinstallBtn.click();
+    await reinstallResponsePromise;
 
     // Flash message should contain the Python user-managed skip text
     await expect(

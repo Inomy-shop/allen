@@ -175,7 +175,7 @@ describe('discoverMcpEntries', () => {
 
     const candidates = discoverMcpEntries(tmpDir);
     const pyFiles = candidates.filter((c) => c.detectedLanguage === 'python');
-    expect(pyFiles.length).toBeGreaterThanOrEqual(2);
+    expect(pyFiles).toHaveLength(2);
   });
 
   // ── .py at root of .claude/mcp/ (no subdir) ─────────────────────────────────
@@ -231,8 +231,8 @@ describe('discoverMcpEntries', () => {
     const candidates = discoverMcpEntries(tmpDir);
     const pyFiles = candidates.filter((c) => c.detectedLanguage === 'python');
     const nodeFiles = candidates.filter((c) => c.detectedLanguage === 'node');
-    expect(pyFiles.length).toBeGreaterThanOrEqual(1);
-    expect(nodeFiles.length).toBeGreaterThanOrEqual(1);
+    expect(pyFiles).toHaveLength(1);
+    expect(nodeFiles).toHaveLength(1);
   });
 
   // ── maxDepth parameter is respected ─────────────────────────────────────────
@@ -361,7 +361,7 @@ describe('POST /api/mcp/servers/:id/reinstall', () => {
     const app = buildApp(server, repo);
     const res = await request(app).post('/api/mcp/servers/node-srv-1/reinstall');
 
-    expect(res.status).toBeGreaterThanOrEqual(400);
+    expect(res.status).toBe(500);
   });
 
   it('returns 400 for non-repo server', async () => {
@@ -374,5 +374,85 @@ describe('POST /api/mcp/servers/:id/reinstall', () => {
     const res = await request(app).post('/api/mcp/servers/manual-srv/reinstall');
 
     expect(res.status).toBe(400);
+  });
+
+  // ── AC-010: Node entry with package.json present → ensureInstalled runs ─────
+
+  it('AC-010: Node entry with package.json → calls ensureInstalled and returns install result', async () => {
+    // Default existsSync → true (package.json present)
+    vi.mocked(ensureInstalled).mockResolvedValue({
+      installDir: '/tmp/noderepo',
+      packageManager: 'npm',
+      durationMs: 1234,
+      skipped: false,
+    });
+
+    const server = {
+      ownerId: null,
+      source: {
+        kind: 'repo',
+        repoId: FAKE_REPO_OID,
+        entryPath: 'index.ts',
+      },
+    };
+    const repo = { path: '/tmp/noderepo' };
+
+    const app = buildApp(server, repo);
+    const res = await request(app).post('/api/mcp/servers/node-srv-happy/reinstall');
+
+    expect(vi.mocked(ensureInstalled)).toHaveBeenCalled();
+    expect(res.status).toBe(200);
+    expect(res.body.packageManager).toBe('npm');
+    expect(res.body.skipped).toBe(false);
+  });
+});
+
+// ── GET /api/mcp/servers/discover/:repoId authorization ──────────────────────
+
+describe('GET /api/mcp/servers/discover/:repoId authorization', () => {
+  const FAKE_OWNER_OID = '000000000000000000000001';
+  const FAKE_REPO_OID = '000000000000000000000002';
+  const OTHER_OWNER_OID = '000000000000000000000099';
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(existsSync).mockReturnValue(true);
+  });
+
+  it('returns 403 when repo belongs to a different user', async () => {
+    // Repo is owned by OTHER_OWNER_OID, but the requesting user is FAKE_OWNER_OID
+    const mockFindOne = vi.fn().mockResolvedValue({ _id: FAKE_REPO_OID, ownerId: OTHER_OWNER_OID, path: '/tmp/repo' });
+
+    const mockDb = {
+      collection: vi.fn().mockReturnValue({
+        findOne: mockFindOne,
+        find: vi.fn().mockReturnValue({
+          sort: vi.fn().mockReturnValue({ toArray: vi.fn().mockResolvedValue([]) }),
+        }),
+        insertOne: vi.fn(),
+        findOneAndUpdate: vi.fn(),
+        updateOne: vi.fn(),
+        deleteOne: vi.fn(),
+      }),
+    };
+
+    const app = express();
+    app.use(express.json());
+    // Inject fake auth — requesting user is FAKE_OWNER_OID (different from repo owner)
+    app.use((req: express.Request & { user?: unknown }, _res, next) => {
+      req.user = {
+        sub: FAKE_OWNER_OID,
+        email: 'test@example.com',
+        role: 'admin',
+        mustResetPassword: false,
+      };
+      next();
+    });
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    app.use('/api/mcp', mcpRoutes(mockDb as any));
+
+    const res = await request(app).get(`/api/mcp/servers/discover/${FAKE_REPO_OID}`);
+
+    expect(res.status).toBe(403);
   });
 });

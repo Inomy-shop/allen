@@ -14,7 +14,7 @@
  * the ALLEN_-prefix allowlist below.
  */
 
-import type { Db, ObjectId } from 'mongodb';
+import { type Db, ObjectId } from 'mongodb';
 import { resolve, join, dirname, extname, isAbsolute } from 'node:path';
 import { existsSync } from 'node:fs';
 
@@ -85,7 +85,7 @@ export function inferCommand(entryPath: string): { command: string; leadingArgs:
 }
 
 async function resolveRepoPath(db: Db, repoId: string): Promise<string | null> {
-  const doc = await db.collection('repos').findOne({ _id: new (await import('mongodb')).ObjectId(repoId) });
+  const doc = await db.collection('repos').findOne({ _id: new ObjectId(repoId) });
   if (!doc || typeof doc.path !== 'string') return null;
   return doc.path;
 }
@@ -136,7 +136,8 @@ async function resolveSourcedStdio(
       : dirname(entryAbs);
 
     // Path-traversal guard: the resolved entry must stay inside the repo.
-    if (!entryAbs.startsWith(repoPath + '/') && entryAbs !== repoPath) {
+    const normRepoPath = repoPath.endsWith('/') ? repoPath.slice(0, -1) : repoPath;
+    if (!entryAbs.startsWith(normRepoPath + '/') && entryAbs !== normRepoPath) {
       console.error(`[mcp-loader] entryPath "${entryPath}" escapes repo ${repoPath}`);
       return null;
     }
@@ -196,8 +197,7 @@ export async function loadMcpServers(
     if (options.ownerId === null) {
       filter.ownerId = null;  // implicit admin — legacy records
     } else if (typeof options.ownerId === 'string') {
-      const { ObjectId: OID } = await import('mongodb');
-      filter.ownerId = new OID(options.ownerId);
+      filter.ownerId = new ObjectId(options.ownerId);
     } else {
       filter.ownerId = options.ownerId;
     }

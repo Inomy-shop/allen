@@ -246,6 +246,10 @@ export function mcpRoutes(db: Db): Router {
       try { oid = new ObjectId(repoId); } catch { return res.status(400).json({ error: 'invalid repoId' }); }
       const repo = await db.collection('repos').findOne({ _id: oid });
       if (!repo) return res.status(404).json({ error: 'repo not found' });
+      const requestOwnerId = ownerIdOf(req);
+      if (repo.ownerId && String(repo.ownerId) !== String(requestOwnerId)) {
+        return res.status(403).json({ error: 'repo belongs to another user' });
+      }
       if (typeof repo.path !== 'string' || !existsSync(repo.path)) {
         return res.status(400).json({ error: 'repo path does not exist on disk' });
       }
@@ -304,7 +308,7 @@ export function mcpRoutes(db: Db): Router {
         ].filter((k) => process.env[k] === undefined || process.env[k] === '');
         if (missing.length > 0) {
           return res.status(400).json({
-            error: `Missing required env var${missing.length > 1 ? 's' : ''} in Allen's .env: ${missing.join(', ')}. Add ${missing.length > 1 ? 'them' : 'it'} to /Users/shreemantkumar/flowforge/.env and restart the server.`,
+            error: `Missing required env var${missing.length > 1 ? 's' : ''} in Allen's .env: ${missing.join(', ')}. Add ${missing.length > 1 ? 'them' : 'it'} to Allen's .env and restart the server.`,
             missing,
           });
         }
@@ -330,7 +334,7 @@ export function mcpRoutes(db: Db): Router {
         const missing = needed.filter((k) => process.env[k] === undefined || process.env[k] === '');
         if (missing.length > 0) {
           return res.status(400).json({
-            error: `Missing required env var${missing.length > 1 ? 's' : ''} in Allen's .env: ${missing.join(', ')}. Add ${missing.length > 1 ? 'them' : 'it'} to /Users/shreemantkumar/flowforge/.env and restart the server.`,
+            error: `Missing required env var${missing.length > 1 ? 's' : ''} in Allen's .env: ${missing.join(', ')}. Add ${missing.length > 1 ? 'them' : 'it'} to Allen's .env and restart the server.`,
             missing,
           });
         }
