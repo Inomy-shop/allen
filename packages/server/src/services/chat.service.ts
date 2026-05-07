@@ -384,6 +384,7 @@ interface ActiveQuery {
   currentText: string;
   toolCalls: ToolCallRecord[];
   listeners: Set<Response>;
+  eventHandlers?: Set<ChatEventHandler>;
   aborted: boolean;
   /** Abort controller for the underlying LLM subprocess. Calling .abort()
    *  kills the claude-cli process (SIGTERM) and stops token generation.
@@ -406,6 +407,8 @@ export interface ChatCancelResult {
   sessionId: string;
   cancelledExecutions: CancelledExecutionInfo[];
 }
+
+export type ChatEventHandler = (event: string, data: unknown) => void;
 
 function executionRequestTitle(exec: Record<string, unknown>): string {
   const meta = ((exec.meta ?? {}) as Record<string, unknown>) ?? {};
@@ -589,6 +592,9 @@ function broadcastToListeners(entry: ActiveQuery, event: string, data: unknown):
     try { listener.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`); }
     catch { entry.listeners.delete(listener); }
   }
+  for (const handler of entry.eventHandlers ?? []) {
+    try { handler(event, data); } catch { entry.eventHandlers?.delete(handler); }
+  }
 }
 
 // ── Service ──
@@ -707,6 +713,7 @@ export class ChatService {
     content: string,
     agent?: string,
     sender?: ChatMessageSender,
+    onEvent?: ChatEventHandler,
   ): Promise<{ text: string; costUsd: number; durationMs: number }> {
     const session = await this.sessions.findOne({ _id: new ObjectId(sessionId) });
     if (!session) throw new Error('Session not found');
@@ -732,6 +739,7 @@ export class ChatService {
     const entry: ActiveQuery = {
       sessionId, messageId: assistantMsgId, currentText: '', toolCalls: [],
       listeners: new Set(), aborted: false, abortController: new AbortController(),
+      ...(onEvent ? { eventHandlers: new Set([onEvent]) } : {}),
     };
     activeQueries.set(sessionId, entry);
 

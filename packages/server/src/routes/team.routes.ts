@@ -182,7 +182,7 @@ export function teamRoutes(db: Db): Router {
         });
       }
 
-      // Verify all member agents exist + are movable
+      // Verify all member agents exist.
       const memberDocs = memberAgentNames.length > 0
         ? await db.collection('agents').find({ name: { $in: memberAgentNames } }).toArray()
         : [];
@@ -190,12 +190,6 @@ export function teamRoutes(db: Db): Router {
         const found = new Set(memberDocs.map(m => m.name));
         const missing = memberAgentNames.filter(n => !found.has(n));
         return res.status(400).json({ error: `Member agent(s) not found: ${missing.join(', ')}` });
-      }
-      const builtInMembers = memberDocs.filter(m => m.isBuiltIn).map(m => m.name as string);
-      if (builtInMembers.length > 0) {
-        return res.status(403).json({
-          error: `Cannot move built-in agents into a new team: ${builtInMembers.join(', ')}`,
-        });
       }
 
       // Step 1: insert the auto-lead agent.

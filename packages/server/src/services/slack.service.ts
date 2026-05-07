@@ -12,7 +12,9 @@
  */
 
 import type { Db } from 'mongodb';
-import { ChatService, type ChatMessageSender } from './chat.service.js';
+import { ChatService, type ChatEventHandler, type ChatMessageSender } from './chat.service.js';
+import { getDefaultChatProvider, PROVIDERS, type ChatProvider } from './chat-providers.js';
+import type { ReasoningEffort } from './agent-settings.js';
 
 // ── Types ──
 
@@ -55,6 +57,7 @@ interface SlackThreadMapping {
 const MENTION_REGEX = /<@[A-Z0-9]+>/g;
 
 const SLACK_API = 'https://slack.com/api';
+const SLACK_PROGRESS_MIN_MS = 5000;
 
 // ── Service ──
 
@@ -87,6 +90,32 @@ export class SlackService {
   async isConfigured(): Promise<boolean> {
     const [token, secret] = await Promise.all([this.getBotToken(), this.getSigningSecret()]);
     return Boolean(token && secret);
+  }
+
+  private resolveSlackDefaults(text: string): {
+    provider: ChatProvider;
+    model: string;
+    reasoningEffort?: ReasoningEffort;
+  } {
+    const explicitCodex = /\b(?:use|with|via)\s+codex\b|^codex\s*:/i.test(text);
+    const explicitClaude = /\b(?:use|with|via)\s+(?:claude|cloud)\b|^(?:claude|cloud)\s*:/i.test(text);
+
+    const envProvider = process.env.ALLEN_SLACK_DEFAULT_PROVIDER?.trim() as ChatProvider | undefined;
+    const provider = explicitCodex
+      ? 'codex'
+      : explicitClaude
+        ? 'claude-cli'
+        : PROVIDERS.some((p) => p.provider === envProvider)
+          ? envProvider!
+          : getDefaultChatProvider();
+
+    const providerConfig = PROVIDERS.find((p) => p.provider === provider) ?? PROVIDERS[0];
+    const envModel = process.env.ALLEN_SLACK_DEFAULT_MODEL?.trim();
+    const model = envModel || providerConfig.defaultModel;
+    const rawEffort = process.env.ALLEN_SLACK_REASONING_EFFORT?.trim() as ReasoningEffort | undefined;
+    const reasoningEffort = rawEffort || (provider === 'codex' ? 'high' : 'medium');
+
+    return { provider, model, reasoningEffort };
   }
 
   /**
@@ -170,17 +199,18 @@ export class SlackService {
       combinedMessage = cleanedText;
     }
 
-    // Create a new chat session marked as Slack-sourced. Default the Slack
-    // entry point to Claude Opus with medium reasoning effort — Slack traffic
-    // is usually short-form Q&A from non-technical users, so we want better
-    // reasoning than Codex default but not max-effort token burn on every
-    // @mention. Users can still override per-session via the UI if needed.
+    const defaults = this.resolveSlackDefaults(cleanedText);
+
+    // Create a new chat session marked as Slack-sourced. Slack defaults are
+    // configurable via ALLEN_SLACK_DEFAULT_PROVIDER / _MODEL and fall back to
+    // the app default provider. Users can override per message with phrases
+    // like "use codex" or "use claude".
     const session = await this.chatService.createSession(
-      'claude-cli',
-      'opus',
+      defaults.provider,
+      defaults.model,
       'slack',
       { channelId, threadTs, teamId },
-      { reasoningEffort: 'medium' },
+      { reasoningEffort: defaults.reasoningEffort },
     );
     const sessionId = session._id!.toString();
 
@@ -235,9 +265,10 @@ export class SlackService {
   ): Promise<void> {
     // Acknowledge with hourglass reaction
     await this.addReaction(channelId, reactionTs, 'hourglass_flowing_sand').catch(() => {});
+    const onProgress = this.createProgressHandler(channelId, threadTs);
 
     try {
-      const result = await this.chatService.sendMessageForSlack(sessionId, content, undefined, sender);
+      const result = await this.chatService.sendMessageForSlack(sessionId, content, undefined, sender, onProgress);
 
       await this.removeReaction(channelId, reactionTs, 'hourglass_flowing_sand').catch(() => {});
       await this.addReaction(channelId, reactionTs, 'white_check_mark').catch(() => {});
@@ -261,6 +292,43 @@ export class SlackService {
       await this.addReaction(channelId, reactionTs, 'x').catch(() => {});
       await this.postToSlack(channelId, threadTs, `Sorry, something went wrong: ${errMsg}`);
     }
+  }
+
+  private createProgressHandler(channelId: string, threadTs: string): ChatEventHandler {
+    const postedKeys = new Set<string>();
+    let lastPostAt = 0;
+
+    return (event, data) => {
+      const now = Date.now();
+      const payload = (data ?? {}) as Record<string, unknown>;
+      let key = '';
+      let message = '';
+
+      if (event === 'agent_report') {
+        const report = typeof payload.message === 'string' ? payload.message.trim() : '';
+        if (!report) return;
+        key = `report:${report}`;
+        message = report;
+      } else if (event === 'tool_start') {
+        const tool = typeof payload.tool === 'string' ? payload.tool : 'tool';
+        key = `tool:${tool}`;
+        message = `Working on it: ${toolProgressLabel(tool)}`;
+      } else if (event === 'error') {
+        const err = typeof payload.error === 'string' ? payload.error : 'unknown error';
+        key = `error:${err}`;
+        message = `I hit an error while working: ${err}`;
+      } else {
+        return;
+      }
+
+      if (postedKeys.has(key) && now - lastPostAt < 30_000) return;
+      if (event === 'tool_start' && now - lastPostAt < SLACK_PROGRESS_MIN_MS) return;
+      postedKeys.add(key);
+      lastPostAt = now;
+      this.postToSlack(channelId, threadTs, message).catch((err) => {
+        console.error('[slack] progress post failed:', err);
+      });
+    };
   }
 
   // ── Slack Web API helpers ──
@@ -375,6 +443,22 @@ function splitMessage(text: string, maxLen: number): string[] {
 
   if (remaining.length > 0) chunks.push(remaining);
   return chunks;
+}
+
+function toolProgressLabel(tool: string): string {
+  const normalized = tool
+    .replace(/^mcp__allen__/, '')
+    .replace(/^mcp__/, '')
+    .replace(/__/g, ' ')
+    .replace(/_/g, ' ');
+  if (tool.includes('list_workflows')) return 'checking available workflows';
+  if (tool.includes('run_workflow')) return 'starting a workflow';
+  if (tool.includes('wait_for_execution')) return 'waiting for execution progress';
+  if (tool.includes('spawn_agent')) return 'assigning an agent';
+  if (tool.includes('wait_for_delegation')) return 'waiting for the agent';
+  if (tool.includes('list_repos')) return 'checking repositories';
+  if (tool.includes('linear')) return 'checking Linear';
+  return normalized;
 }
 
 /**

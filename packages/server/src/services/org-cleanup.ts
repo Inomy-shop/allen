@@ -2,9 +2,9 @@
  * Org Cleanup — removes seed teams, agents, and workflows that are no longer
  * in the current seed definition.
  *
- * Called once per server boot, AFTER `OrgSeedService.seed()` creates/updates
- * the current set of teams and agents. Any seed entity not in the `keep`
- * lists is hard-deleted.
+ * Called only when SEED_OVERRIDE=true, AFTER `OrgSeedService.seed()` creates or
+ * updates the current set of teams and agents. Any seed entity not in the
+ * `keep` lists is hard-deleted.
  *
  * CRITICAL SAFETY RULES:
  * - The meta team and every agent inside it are NEVER deleted, even if the

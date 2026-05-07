@@ -4,14 +4,15 @@
  * Currently seeds one job: "repo-scan-daily" which runs at 5 AM UTC daily and
  * re-scans repos whose base-branch HEAD has changed.
  *
- * Syncs display fields on existing rows so code changes propagate to previously
- * seeded DBs. Never deletes user-created jobs. Safe to call on every startup.
+ * Existing rows are only updated when SEED_OVERRIDE=true. Never deletes
+ * user-created jobs. Safe to call on every startup.
  */
 
 import type { Db } from 'mongodb';
 import { computeNextRun } from './cron.service.js';
 import type { CronJob } from './cron.types.js';
 import { getSelfHealingLinearConfig } from './self-healing-env.js';
+import { isSeedOverrideEnabled } from './seed-policy.js';
 
 const selfHealingLinearConfig = getSelfHealingLinearConfig();
 
@@ -144,6 +145,7 @@ const SEED_JOBS: Omit<CronJob, '_id' | 'nextRunAt' | 'lastRunAt' | 'lastRunStatu
 
 export async function seedCronJobs(db: Db): Promise<number> {
   const col = db.collection('cron_jobs');
+  const override = isSeedOverrideEnabled();
   let created = 0;
 
   for (const seed of SEED_JOBS) {
@@ -164,8 +166,8 @@ export async function seedCronJobs(db: Db): Promise<number> {
       } as CronJob);
       created++;
       console.log(`[cron] seeded built-in job: ${seed.name}`);
-    } else {
-      // Sync display fields + schedule so code changes propagate
+    } else if (override) {
+      // Sync display fields + schedule only when seed override is explicit.
       await col.updateOne(
         { name: seed.name },
         {
