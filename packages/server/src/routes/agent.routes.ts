@@ -308,9 +308,6 @@ export function agentRoutes(db: Db): Router {
 
       const agent = await col.findOne({ name });
       if (!agent) return res.status(404).json({ error: 'Agent not found' });
-      if (agent.isBuiltIn) {
-        return res.status(403).json({ error: 'Built-in agents cannot be moved' });
-      }
 
       // Verify the target team exists (unless it's the unassigned holding area,
       // which is seeded but we tolerate the absence defensively).
@@ -368,10 +365,6 @@ export function agentRoutes(db: Db): Router {
           skipped.push({ name: n, reason: 'not-found' });
           continue;
         }
-        if (agent.isBuiltIn) {
-          skipped.push({ name: n, reason: 'built-in' });
-          continue;
-        }
         await col.updateOne(
           { name: n },
           { $set: { teamName, teamRole: 'member', updatedAt: new Date() } },
@@ -384,7 +377,7 @@ export function agentRoutes(db: Db): Router {
       if (autoWire && team?.leadAgentName && moved.length > 0) {
         const leadName = team.leadAgentName as string;
         const lead = await col.findOne({ name: leadName });
-        if (lead && !lead.isBuiltIn) {
+        if (lead) {
           const existing = (lead.canDelegateTo as string[] | undefined) ?? [];
           const merged = Array.from(new Set([...existing, ...moved]));
           if (merged.length !== existing.length) {

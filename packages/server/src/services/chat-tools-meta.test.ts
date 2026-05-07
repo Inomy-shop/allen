@@ -408,6 +408,38 @@ describe('chat-tools-meta — allowlist removal (ENG-1524)', () => {
         updated: expect.arrayContaining(['displayName', 'system', 'model']),
       });
     });
+
+    it('allows updating built-in agents', async () => {
+      vi.mocked(getAnyActiveSession).mockReturnValue(undefined);
+      configureTeamService();
+      const db = makeMockDb({
+        agents: [
+          {
+            name: 'engineering-lead',
+            displayName: 'Engineering Lead',
+            isBuiltIn: true,
+            teamName: 'engineering',
+            teamRole: 'lead',
+            canDelegateTo: ['frontend-developer'],
+          },
+        ],
+      });
+
+      const result = await tool.execute(
+        {
+          name: 'engineering-lead',
+          canDelegateTo: ['frontend-developer', 'ui-copywriter'],
+          system: 'Updated built-in lead prompt.',
+        },
+        db,
+      );
+
+      expect(result).not.toMatchObject({ error: expect.stringContaining('built-in') });
+      expect(result).toMatchObject({
+        success: true,
+        updated: expect.arrayContaining(['canDelegateTo', 'system']),
+      });
+    });
   });
 
   // ── delete_agent ────────────────────────────────────────────────────────────

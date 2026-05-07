@@ -24,6 +24,7 @@
 
 import type { Db } from 'mongodb';
 import { TeamService } from './team.service.js';
+import { isSeedOverrideEnabled } from './seed-policy.js';
 
 // ── Static seed data ──
 
@@ -726,12 +727,12 @@ export class TeamSeedService {
    * Seed the 4 meta team agents (research, planner, team-builder, agent-builder).
    * Each is created with teamName="meta" and teamRole pre-set.
    *
-   * Idempotent on creation. ALSO syncs `type`, `system`, `displayName`,
-   * `canDelegateTo` on existing meta agents on every startup so changes to
-   * META_AGENTS in this file propagate to previously-seeded DBs.
+   * Idempotent on creation. Existing meta agents are only synced from
+   * META_AGENTS when SEED_OVERRIDE=true.
    */
   private async seedMetaAgents(): Promise<number> {
     const agents = this.db.collection('agents');
+    const override = isSeedOverrideEnabled();
     let created = 0;
     for (const meta of META_AGENTS) {
       const existing = await agents.findOne({ name: meta.name });
@@ -760,9 +761,9 @@ export class TeamSeedService {
           updatedAt: new Date(),
         });
         created++;
-      } else {
-        // Sync drifted fields. We refresh the spec-driven fields but never
-        // touch user-mutable state. (Built-ins shouldn't have any anyway.)
+      } else if (override) {
+        // Sync drifted fields only when the operator explicitly allows seed
+        // overrides.
         await agents.updateOne(
           { name: meta.name },
           {

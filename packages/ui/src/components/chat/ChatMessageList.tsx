@@ -1,15 +1,16 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { Bot, AlertCircle, AlertTriangle, Copy, Check, Clock, Wrench, CheckCircle, ExternalLink, Loader2, Brain,
   Sparkles, Zap, Cpu, Atom, Terminal, Code, Rocket, Shield, Hexagon, Flame,
   ChevronDown, ChevronRight, GitPullRequest, FolderGit2, FileText, PlayCircle, StopCircle, Timer,
-  Send, Bookmark,
+  Send, Bookmark, Download, X,
 } from 'lucide-react';
 import type { ChatMessage, ToolCallRecord, ActiveToolCall, AgentThread as AgentThreadType, AgentReport, SpawnedAgent, WorkflowInterventionAnswer } from '../../hooks/useChat';
 import { AgentThread } from './AgentThread';
 import { AgentQuestionPrompt } from './AgentQuestionPrompt';
 import RoleIcon from '../common/RoleIcon';
 import MermaidChatBlock from './MermaidChatBlock';
-import { agents as agentsApi } from '../../services/api';
+import { agents as agentsApi, artifacts as artifactsApi, type ArtifactDoc } from '../../services/api';
 import { workspaces as workspacesApi } from '../../services/workspaceService';
 
 const AGENT_ICONS: Record<string, React.ElementType> = {
@@ -370,6 +371,137 @@ function InlineCodeDiffCard({ code }: { code: string }) {
   return <ChatCodeDiffCard files={files} title="Proposed changes" state="diff" />;
 }
 
+function artifactIdFromUrl(url: string): string | null {
+  const match = url.match(/(?:^|\/)api\/artifacts\/([^/?#]+)(?:\/content)?(?:[?#].*)?$/)
+    ?? url.match(/(?:^|\/)artifacts\/([^/?#]+)(?:\/content)?(?:[?#].*)?$/);
+  return match?.[1] ? decodeURIComponent(match[1]) : null;
+}
+
+function ArtifactMarkdownLink({ href, children, className }: { href: string; children: React.ReactNode; className?: string }) {
+  const artifactId = artifactIdFromUrl(href);
+  const [artifact, setArtifact] = useState<ArtifactDoc | null>(null);
+  const [content, setContent] = useState('');
+  const [open, setOpen] = useState(false);
+  const [loading, setLoading] = useState(false);
+  const [copied, setCopied] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  if (!artifactId) {
+    return (
+      <a href={href} target="_blank" rel="noopener noreferrer" className={className}>
+        {children}
+      </a>
+    );
+  }
+  const resolvedArtifactId = artifactId;
+
+  async function openArtifact() {
+    setOpen(true);
+    if (artifact && content) return;
+    setLoading(true);
+    setError(null);
+    try {
+      const doc = await artifactsApi.get(resolvedArtifactId);
+      setArtifact(doc);
+      if (doc.contentType === 'binary') {
+        setContent('');
+      } else {
+        const response = await fetch(artifactsApi.contentUrl(resolvedArtifactId));
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        setContent(await response.text());
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to load artifact');
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function copyContent() {
+    if (!content) return;
+    await navigator.clipboard.writeText(content).catch(() => {});
+    setCopied(true);
+    window.setTimeout(() => setCopied(false), 1200);
+  }
+
+  const downloadUrl = artifactsApi.contentUrl(resolvedArtifactId);
+  const filename = artifact?.filename ?? 'artifact.md';
+  const title = artifact?.relativePath ?? filename;
+
+  return (
+    <>
+      <button
+        type="button"
+        onClick={openArtifact}
+        className={`inline border-0 bg-transparent p-0 text-left align-baseline font-inherit ${className ?? ''}`}
+      >
+        {children}
+      </button>
+      {open && createPortal(
+        <div className="artifact-modal-backdrop" role="dialog" aria-modal="true" aria-label="Artifact viewer">
+          <div className="artifact-modal">
+            <div className="flex h-full flex-col">
+              <div className="shrink-0 border-b border-app bg-app-muted/40 px-4 py-2.5">
+                <div className="flex items-center gap-2.5">
+                  <FileText className="h-4 w-4 shrink-0 text-accent-blue" />
+                  <div className="min-w-0 flex-1">
+                    <div className="truncate font-mono text-[13px] text-theme-primary">{title}</div>
+                    <div className="mt-0.5 flex items-center gap-2 font-mono text-[10px] text-theme-subtle">
+                      <span>{artifact?.contentType ?? 'artifact'}</span>
+                      {artifact?.sizeBytes != null && <span>{artifact.sizeBytes.toLocaleString()} bytes</span>}
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={copyContent}
+                    disabled={!content}
+                    className="rounded-md p-1.5 text-theme-muted transition-colors hover:bg-app-muted hover:text-theme-secondary disabled:opacity-30"
+                    title="Copy content"
+                  >
+                    {copied ? <Check className="h-3.5 w-3.5 text-accent-green" /> : <Copy className="h-3.5 w-3.5" />}
+                  </button>
+                  <a
+                    href={downloadUrl}
+                    download={filename}
+                    className="rounded-md p-1.5 text-theme-muted transition-colors hover:bg-app-muted hover:text-theme-secondary"
+                    title="Download"
+                  >
+                    <Download className="h-3.5 w-3.5" />
+                  </a>
+                  <button
+                    type="button"
+                    onClick={() => setOpen(false)}
+                    className="rounded-md p-1.5 text-theme-muted transition-colors hover:bg-app-muted hover:text-theme-secondary"
+                    title="Close viewer"
+                  >
+                    <X className="h-3.5 w-3.5" />
+                  </button>
+                </div>
+              </div>
+              <div className="min-h-0 flex-1 overflow-auto p-4">
+                {loading && <div className="font-mono text-xs text-theme-muted">Loading artifact...</div>}
+                {error && <div className="font-mono text-xs text-accent-red">Failed to load artifact: {error}</div>}
+                {!loading && !error && artifact?.contentType === 'markdown' && (
+                  <div className="prose prose-sm prose-invert max-w-none">{renderMarkdown(content)}</div>
+                )}
+                {!loading && !error && artifact?.contentType !== 'markdown' && artifact?.contentType !== 'binary' && (
+                  <pre className="whitespace-pre-wrap break-words rounded-md border border-app bg-app-muted/50 p-3 font-mono text-[12px] leading-relaxed text-theme-primary">{content}</pre>
+                )}
+                {!loading && !error && artifact?.contentType === 'binary' && (
+                  <div className="rounded-md border border-app bg-app-muted/40 p-4 text-sm text-theme-muted">
+                    Binary artifact. Use the download button to save it.
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+        </div>,
+        document.body,
+      )}
+    </>
+  );
+}
+
 function splitFirstDiffFence(content: string): { text: string; diff: string | null } {
   const match = content.match(/```diff\n?([\s\S]*?)```/i);
   if (!match || match.index == null) return { text: content, diff: null };
@@ -723,16 +855,15 @@ function renderInline(text: string): React.ReactNode {
       );
     } else if (m[6]) {
       // link [text](url)
+      const linkClass = 'text-accent-blue hover:text-accent-blue/80 underline underline-offset-2 decoration-accent-blue/30 hover:decoration-accent-blue/60 transition-colors';
       parts.push(
-        <a
+        <ArtifactMarkdownLink
           key={k++}
           href={m[8]}
-          target="_blank"
-          rel="noopener noreferrer"
-          className="text-accent-blue hover:text-accent-blue/80 underline underline-offset-2 decoration-accent-blue/30 hover:decoration-accent-blue/60 transition-colors"
+          className={linkClass}
         >
           {m[7]}
-        </a>,
+        </ArtifactMarkdownLink>,
       );
     } else if (m[9]) {
       // @mention
@@ -1246,10 +1377,10 @@ function RunProgressCard({ run }: { run: SpawnedAgent }) {
           </a>
         )}
         {artifacts.slice(0, 2).map(artifact => (
-          <a key={artifact.artifactId} href={artifact.url ?? '#'} target="_blank" rel="noopener noreferrer" className="flex items-center gap-1.5 text-theme-muted hover:text-accent min-w-0">
+          <ArtifactMarkdownLink key={artifact.artifactId} href={artifact.url ?? `/api/artifacts/${artifact.artifactId}/content`} className="flex items-center gap-1.5 text-theme-muted hover:text-accent min-w-0">
             <FileText className="w-3 h-3 shrink-0" />
             <span className="truncate">{artifact.filename ?? 'Artifact'}</span>
-          </a>
+          </ArtifactMarkdownLink>
         ))}
       </div>
 

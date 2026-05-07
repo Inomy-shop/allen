@@ -5,7 +5,7 @@ import {
   GitPullRequest, Loader2, MessageSquare, Play, Plus, RefreshCw, RotateCw,
   Save, Settings, Square, Terminal, Upload, X,
 } from 'lucide-react';
-import Editor from '@monaco-editor/react';
+import Editor, { DiffEditor } from '@monaco-editor/react';
 import { workspaces } from '../services/workspaceService';
 import { repos as repoApi } from '../services/api';
 import StatusBadge from '../components/common/StatusBadge';
@@ -46,6 +46,7 @@ type DiffFile = {
   additions: number;
   deletions: number;
   diff?: string;
+  originalContent?: string;
   modifiedContent?: string;
 };
 
@@ -634,8 +635,6 @@ export default function WorkspaceListPage() {
     loadWorkspaces();
   }
 
-  const renderedDiff = parseDiff(activeDiff?.diff, activeDiff?.modifiedContent);
-  const renderedSplitDiff = parseSplitDiff(activeDiff?.diff, activeDiff?.modifiedContent);
   const activeChatId = activeTab.startsWith('chat:') ? activeTab.slice(5) : null;
   const availablePreviousChats = workspaceChats.filter(chat => !openChatIds.includes(chat._id));
   const activeStatus = (active?.status ?? 'idle').toLowerCase();
@@ -896,30 +895,36 @@ export default function WorkspaceListPage() {
                         <button type="submit" className="btn btn-primary btn-sm">create workspace</button>
                       </div>
                     </form>
-                  ) : activeDiff && diffMode === 'unified' ? (
-                    renderedDiff.map(line => (
-                      <div key={line.key} className={`ws-line ${line.type}`}>
-                        <span className="ws-ln mono">{line.lineNo ?? ''}</span>
-                        <span className="ws-mark mono">{line.marker}</span>
-                        <span className="ws-code mono">{line.text}</span>
-                      </div>
-                    ))
                   ) : activeDiff ? (
-                    <div className="ws-split-diff">
-                      <div className="ws-split-head">
-                        <span>old</span>
-                        <span>new</span>
-                      </div>
-                      {renderedSplitDiff.map(row => row.type === 'h' ? (
-                        <div key={row.key} className="ws-split-h mono">{row.header}</div>
-                      ) : (
-                        <div key={row.key} className={`ws-split-row ${row.type}`}>
-                          <span className="ws-split-ln mono">{row.leftNo ?? ''}</span>
-                          <span className="ws-split-code mono">{row.leftText ?? ''}</span>
-                          <span className="ws-split-ln mono">{row.rightNo ?? ''}</span>
-                          <span className="ws-split-code mono">{row.rightText ?? ''}</span>
-                        </div>
-                      ))}
+                    <div className="ws-monaco-diff">
+                      <DiffEditor
+                        height="100%"
+                        language={getLanguage(activeDiff.path)}
+                        original={activeDiff.originalContent ?? ''}
+                        modified={activeDiff.modifiedContent ?? ''}
+                        theme={getMonacoTheme()}
+                        beforeMount={setupMonaco}
+                        options={{
+                          readOnly: true,
+                          originalEditable: false,
+                          renderSideBySide: diffMode === 'split',
+                          automaticLayout: true,
+                          scrollBeyondLastLine: false,
+                          minimap: { enabled: false },
+                          fontSize: 12,
+                          fontFamily: "'JetBrains Mono', monospace",
+                          wordWrap: 'on',
+                          diffWordWrap: 'on',
+                          wrappingStrategy: 'advanced',
+                          renderOverviewRuler: false,
+                          hideUnchangedRegions: {
+                            enabled: true,
+                            contextLineCount: 3,
+                            minimumLineCount: 8,
+                            revealLineCount: 12,
+                          },
+                        }}
+                      />
                     </div>
                   ) : (
                     <div className="ws-diff-empty">

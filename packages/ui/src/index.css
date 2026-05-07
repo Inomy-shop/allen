@@ -2033,7 +2033,7 @@
   }
 
   .ws-diff {
-    @apply flex min-h-0 flex-col overflow-auto bg-app-card;
+    @apply flex min-h-0 flex-col overflow-hidden bg-app-card;
   }
 
   .ws-diff-h {
@@ -2061,7 +2061,11 @@
   }
 
   .ws-diff-body {
-    @apply py-2 font-mono text-[12.5px] leading-relaxed;
+    @apply min-h-0 flex-1 font-mono text-[12.5px] leading-relaxed;
+  }
+
+  .ws-monaco-diff {
+    @apply h-full min-h-[420px] overflow-hidden;
   }
 
   .ws-diff-empty {

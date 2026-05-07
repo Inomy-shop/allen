@@ -333,13 +333,14 @@ const createAgentTool: ChatTool = {
 
 const updateAgentTool: ChatTool = {
   name: 'update_agent',
-  description: 'Update an existing agent. Any caller may update any field on non-built-in agents. Built-in agents cannot be updated.',
+  description: 'Update an existing agent, including built-in agents. Protected identity, team, source, and built-in flag fields are not writable through this tool.',
   destructive: true,
   inputSchema: {
     type: 'object',
     properties: {
       name: { type: 'string', description: 'Agent name to update' },
       displayName: { type: 'string' },
+      description: { type: 'string' },
       system: { type: 'string' },
       tools: { type: 'array', items: { type: 'string' } },
       capabilities: { type: 'array', items: { type: 'string' } },
@@ -347,6 +348,10 @@ const updateAgentTool: ChatTool = {
       personality: { type: 'string' },
       model: { type: 'string' },
       provider: { type: 'string', enum: ['claude-cli', 'codex'] },
+      icon: { type: 'string' },
+      color: { type: 'string' },
+      reasoningEffort: { type: 'string', enum: ['off', 'low', 'medium', 'high', 'max'] },
+      planMode: { type: 'boolean' },
     },
     required: ['name'],
   },
@@ -354,12 +359,23 @@ const updateAgentTool: ChatTool = {
     const name = args.name as string;
     const target = await db.collection('agents').findOne({ name });
     if (!target) return { error: `Agent "${name}" not found` };
-    if (target.isBuiltIn) {
-      return { error: `Agent "${name}" is built-in and cannot be modified` };
-    }
 
     // Build updates object
-    const allowedKeys = ['displayName', 'system', 'tools', 'capabilities', 'canDelegateTo', 'personality', 'model', 'provider'];
+    const allowedKeys = [
+      'displayName',
+      'description',
+      'system',
+      'tools',
+      'capabilities',
+      'canDelegateTo',
+      'personality',
+      'model',
+      'provider',
+      'icon',
+      'color',
+      'reasoningEffort',
+      'planMode',
+    ];
     const updates: Record<string, unknown> = {};
     for (const key of allowedKeys) {
       if (args[key] !== undefined) updates[key] = args[key];
@@ -427,8 +443,8 @@ const deleteAgentTool: ChatTool = {
 // workflows created here are usable immediately without a restart and
 // without writing a YAML seed file.
 //
-// Workflows are created with createdBy="workflow-builder" so the YAML
-// seed loop never overwrites them.
+// Workflows are created with createdBy="workflow-builder"; the YAML seed loop
+// only overwrites existing workflows when SEED_OVERRIDE=true.
 
 function parseWorkflowInput(args: Record<string, unknown>): { yaml?: string; parsed?: WorkflowDef; error?: string } {
   const rawYaml = args.yaml as string | undefined;
@@ -478,7 +494,7 @@ const validateWorkflowTool: ChatTool = {
 
 const createWorkflowTool: ChatTool = {
   name: 'create_workflow',
-  description: 'Persist a new workflow to the database. Validates first; returns the validation result inline so the caller can read errors and retry. Created workflows are usable immediately by the editor and executor — no restart needed. Stored with createdBy="workflow-builder" so the YAML seed loop will not touch them.',
+  description: 'Persist a new workflow to the database. Validates first; returns the validation result inline so the caller can read errors and retry. Created workflows are usable immediately by the editor and executor — no restart needed. Stored with createdBy="workflow-builder"; the YAML seed loop only overwrites existing workflows when SEED_OVERRIDE=true.',
   destructive: true,
   inputSchema: {
     type: 'object',

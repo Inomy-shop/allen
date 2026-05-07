@@ -16,11 +16,12 @@
  * renaming an agent therefore only requires editing `canDelegateTo` here —
  * no prompt text changes.
  *
- * Safe to call on every startup — idempotent on team/agent names. Updates
- * system prompts on existing rows so prompt changes propagate.
+ * Safe to call on every startup — idempotent on team/agent names. Existing
+ * rows are only updated when SEED_OVERRIDE=true.
  */
 
 import type { Db } from 'mongodb';
+import { isSeedOverrideEnabled } from './seed-policy.js';
 
 // ── Types ──
 
@@ -1921,7 +1922,7 @@ PROCESS — follow this order:
    - Fix issues and revalidate. Loop until valid:true. NEVER call create_workflow on an invalid workflow.
 
 7. PERSIST
-   - Call create_workflow with the validated YAML. The DB stores it with createdBy="workflow-builder" so the YAML seed loop will never overwrite it.
+   - Call create_workflow with the validated YAML. The YAML seed loop only overwrites existing workflows when SEED_OVERRIDE=true.
    - Return the saved workflow's _id and name to the caller. Do NOT auto-run it — the user runs it themselves from the editor or via run_workflow when they're ready.
 
 RULES:
@@ -2957,6 +2958,7 @@ export class OrgSeedService {
   async seed(): Promise<{ teamsCreated: number; agentsCreated: number; agentsUpdated: number }> {
     const agentsCol = this.db.collection('agents');
     const teamsCol = this.db.collection('teams');
+    const override = isSeedOverrideEnabled();
     let teamsCreated = 0;
     let agentsCreated = 0;
     let agentsUpdated = 0;
@@ -2974,7 +2976,7 @@ export class OrgSeedService {
           updatedAt: new Date(),
         });
         agentsCreated++;
-      } else {
+      } else if (override) {
         await agentsCol.updateOne(
           { name: agent.name },
           {
@@ -3022,7 +3024,7 @@ export class OrgSeedService {
           updatedAt: new Date(),
         });
         teamsCreated++;
-      } else {
+      } else if (override) {
         await teamsCol.updateOne(
           { name: team.name },
           {

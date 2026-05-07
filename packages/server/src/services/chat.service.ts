@@ -384,6 +384,7 @@ interface ActiveQuery {
   currentText: string;
   toolCalls: ToolCallRecord[];
   listeners: Set<Response>;
+  eventHandlers?: Set<ChatEventHandler>;
   aborted: boolean;
   /** Abort controller for the underlying LLM subprocess. Calling .abort()
    *  kills the claude-cli process (SIGTERM) and stops token generation.
@@ -407,6 +408,11 @@ export interface ChatCancelResult {
   cancelledExecutions: CancelledExecutionInfo[];
 }
 
+export type ChatEventHandler = (event: string, data: unknown) => void;
+
+const CHAT_TITLE_MAX_CHARS = 70;
+const CHAT_TITLE_MAX_WORDS = 10;
+
 function executionRequestTitle(exec: Record<string, unknown>): string {
   const meta = ((exec.meta ?? {}) as Record<string, unknown>) ?? {};
   const input = ((exec.input ?? {}) as Record<string, unknown>) ?? {};
@@ -424,9 +430,9 @@ function executionRequestTitle(exec: Record<string, unknown>): string {
 
 function compactChatTitle(value: unknown): string | null {
   if (typeof value !== 'string') return null;
-  const trimmed = value.replace(/\s+/g, ' ').trim();
+  const trimmed = sanitizeChatTitle(value);
   if (!trimmed) return null;
-  return trimmed.length > 90 ? `${trimmed.slice(0, 90)}...` : trimmed;
+  return trimmed;
 }
 
 function deterministicSessionTaskTitle(userMessage: string): string | null {
@@ -442,6 +448,59 @@ function deterministicSessionTaskTitle(userMessage: string): string | null {
 
   const assignMatch = userMessage.match(/\b(?:assign|work on|fix|implement|review|debug|investigate)\b(?:\s+this)?(?:\s+task|\s+ticket|\s+issue)?[:\-–—]?\s+([^\n]+)/i);
   return compactChatTitle(assignMatch?.[1]) ?? null;
+}
+
+function titleLooksLikeAssistantReply(title: string): boolean {
+  return /^(i\s+(need|don'?t|cannot|can'?t|understand|appreciate|see|can|am)|based on|could you|please clarify|here'?s|the concise title|generate a concise title)\b/i.test(title)
+    || /\b(clarify|need more context|don't have access|i can help|i notice|you(?:'re| are) asking me)\b/i.test(title);
+}
+
+export function sanitizeChatTitle(candidate: unknown): string | null {
+  if (typeof candidate !== 'string') return null;
+  let title = candidate
+    .replace(/\r/g, '\n')
+    .split('\n')
+    .map((line) => line.trim())
+    .find(Boolean) ?? '';
+
+  title = title
+    .replace(/^[-*#>\s]+/, '')
+    .replace(/^title\s*:\s*/i, '')
+    .replace(/^["'`]+|["'`.]+$/g, '')
+    .replace(/^\*\*(.+)\*\*$/g, '$1')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+  if (!title) return null;
+
+  const words = title.split(/\s+/);
+  if (words.length > CHAT_TITLE_MAX_WORDS) {
+    title = words.slice(0, CHAT_TITLE_MAX_WORDS).join(' ');
+  }
+  if (title.length > CHAT_TITLE_MAX_CHARS) {
+    const truncated = title.slice(0, CHAT_TITLE_MAX_CHARS).replace(/\s+\S*$/, '').trim();
+    title = truncated || title.slice(0, CHAT_TITLE_MAX_CHARS).trim();
+  }
+
+  title = title.replace(/[.,;:!?-]+$/g, '').trim();
+  return title || null;
+}
+
+function fallbackTitleFromUserMessage(userMessage: string): string {
+  const cleaned = userMessage
+    .replace(/https?:\/\/\S+/g, '')
+    .replace(/```[\s\S]*?```/g, ' ')
+    .replace(/`([^`]+)`/g, '$1')
+    .replace(/\b(can you|could you|please|do one thing|i want to|we need to)\b/gi, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+  return sanitizeChatTitle(cleaned) ?? 'New conversation';
+}
+
+export function normalizeGeneratedChatTitle(candidate: unknown, userMessage: string): string {
+  const title = sanitizeChatTitle(candidate);
+  if (title && !titleLooksLikeAssistantReply(title)) return title;
+  return fallbackTitleFromUserMessage(userMessage);
 }
 
 async function cancelLinkedChatExecutions(sessionId: string, db: Db): Promise<CancelledExecutionInfo[]> {
@@ -589,6 +648,9 @@ function broadcastToListeners(entry: ActiveQuery, event: string, data: unknown):
     try { listener.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`); }
     catch { entry.listeners.delete(listener); }
   }
+  for (const handler of entry.eventHandlers ?? []) {
+    try { handler(event, data); } catch { entry.eventHandlers?.delete(handler); }
+  }
 }
 
 // ── Service ──
@@ -707,6 +769,7 @@ export class ChatService {
     content: string,
     agent?: string,
     sender?: ChatMessageSender,
+    onEvent?: ChatEventHandler,
   ): Promise<{ text: string; costUsd: number; durationMs: number }> {
     const session = await this.sessions.findOne({ _id: new ObjectId(sessionId) });
     if (!session) throw new Error('Session not found');
@@ -732,6 +795,7 @@ export class ChatService {
     const entry: ActiveQuery = {
       sessionId, messageId: assistantMsgId, currentText: '', toolCalls: [],
       listeners: new Set(), aborted: false, abortController: new AbortController(),
+      ...(onEvent ? { eventHandlers: new Set([onEvent]) } : {}),
     };
     activeQueries.set(sessionId, entry);
 
@@ -832,9 +896,10 @@ export class ChatService {
    */
   private async generateTitleWithLLM(userMessage: string, assistantResponse?: string): Promise<string> {
     const prompt = assistantResponse
-      ? `Generate a concise, descriptive title (4–8 words) for this conversation.
+      ? `Generate a concise, descriptive title for this conversation.
 
 Rules:
+- Maximum 10 words
 - Start with an action verb when possible (Fix, Build, Debug, Review, Find, Add, Improve, Analyse, etc.)
 - Name the specific resource, feature, or system involved (repo name, component, API, etc.)
 - Be concrete — avoid generic labels like "Chat about X" or "Help with Y"
@@ -850,9 +915,10 @@ Good examples:
 User: ${userMessage.slice(0, 500)}
 
 Assistant: ${assistantResponse.slice(0, 500)}`
-      : `Generate a concise, descriptive title (4–8 words) for a conversation that starts with the following message.
+      : `Generate a concise, descriptive title for a conversation that starts with the following message.
 
 Rules:
+- Maximum 10 words
 - Start with an action verb when possible (Fix, Build, Debug, Review, Find, Add, Improve, Analyse, etc.)
 - Name the specific resource, feature, or system involved (repo name, component, API, etc.)
 - Be concrete — avoid generic labels like "Chat about X" or "Help with Y"
@@ -880,14 +946,13 @@ User: ${userMessage.slice(0, 500)}`;
       });
       const raw = result.text.trim();
       if (raw.length > 0) {
-        const title = raw.replace(/^["']|["']$/g, '');
-        return title.length > 0 ? title : userMessage.slice(0, 60);
+        return normalizeGeneratedChatTitle(raw, userMessage);
       }
     } catch (err) {
       console.error('LLM title generation failed:', err instanceof Error ? err.message : err);
     }
 
-    return userMessage.slice(0, 60);
+    return deterministicSessionTaskTitle(userMessage) ?? fallbackTitleFromUserMessage(userMessage);
   }
 
   /**
@@ -1440,9 +1505,12 @@ RULES:
   }
 
   async updateSessionTitle(sessionId: string, title: string, titleSource: 'default' | 'auto' | 'user' = 'user'): Promise<void> {
+    const safeTitle = titleSource === 'user'
+      ? (sanitizeChatTitle(title) ?? 'New Conversation')
+      : (sanitizeChatTitle(title) ?? fallbackTitleFromUserMessage(title));
     await this.sessions.updateOne(
       { _id: new ObjectId(sessionId) },
-      { $set: { title, titleSource, updatedAt: new Date() } }
+      { $set: { title: safeTitle, titleSource, updatedAt: new Date() } }
     );
   }
 
@@ -1458,7 +1526,10 @@ RULES:
   ): Promise<ChatSession | null> {
     // Only whitelist known fields so clients can't smuggle arbitrary keys in.
     const set: Record<string, unknown> = { updatedAt: new Date() };
-    if (update.title !== undefined) { set.title = update.title; set.titleSource = 'user'; }
+    if (update.title !== undefined) {
+      set.title = sanitizeChatTitle(update.title) ?? 'New Conversation';
+      set.titleSource = 'user';
+    }
     if (update.status !== undefined) set.status = update.status;
     if (update.provider !== undefined) set.provider = update.provider;
     if (update.model !== undefined) set.model = update.model;

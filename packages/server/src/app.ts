@@ -57,6 +57,7 @@ import { requireAuth } from './middleware/requireAuth.js';
 import { blockIfMustReset } from './middleware/blockIfMustReset.js';
 import { logger } from './logger.js';
 import { requestLogger, errorLogger } from './middleware/request-logger.js';
+import { isSeedOverrideEnabled } from './services/seed-policy.js';
 
 const PORT = parseInt(process.env.PORT ?? '4000', 10);
 
@@ -107,22 +108,25 @@ async function main(): Promise<void> {
   // await new TeamSeedService(db).migrate();
   await seedDefaultWorkflows(db);
 
-  // Remove orphaned seed teams/agents/workflows from prior schemas.
-  // Meta team is always protected by cleanupOrphanedSeedEntities.
-  // Keep this list in sync with the .yml files in packages/engine/workflows/.
-  await cleanupOrphanedSeedEntities(
-    db,
-    OrgSeedService.seedTeamNames,
-    OrgSeedService.seedAgentNames,
-    [
-      'feature-plan-and-implement',
-      'bug-investigate-and-fix',
-      'resolve-pr-reviews',
-      'understand-and-plan',
-      'allen-self-healing-monitor-hourly',
-      'self-healing-incident-triage',
-    ],
-  );
+  if (isSeedOverrideEnabled()) {
+    // Remove orphaned seed teams/agents/workflows from prior schemas only when
+    // the operator has explicitly enabled seed override.
+    // Meta team is always protected by cleanupOrphanedSeedEntities.
+    // Keep this list in sync with the .yml files in packages/engine/workflows/.
+    await cleanupOrphanedSeedEntities(
+      db,
+      OrgSeedService.seedTeamNames,
+      OrgSeedService.seedAgentNames,
+      [
+        'feature-plan-and-implement',
+        'bug-investigate-and-fix',
+        'resolve-pr-reviews',
+        'understand-and-plan',
+        'allen-self-healing-monitor-hourly',
+        'self-healing-incident-triage',
+      ],
+    );
+  }
   await seedCronJobs(db);
   setStreamDb(db);
 

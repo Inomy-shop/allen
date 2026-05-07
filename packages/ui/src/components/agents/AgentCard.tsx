@@ -42,9 +42,8 @@ export function AgentCard({
         <input
           type="checkbox"
           checked={!!selected}
-          disabled={isBuiltIn}
           onChange={() => onToggleSelect?.(name)}
-          title={isBuiltIn ? 'Built-in agents cannot be moved' : 'Select'}
+          title="Select"
           className="mt-1 shrink-0"
         />
 

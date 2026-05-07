@@ -5,6 +5,7 @@ import yaml from 'js-yaml';
 import type { Db } from 'mongodb';
 import { loadAgents, validateWorkflow, getBuiltIns } from '@allen/engine';
 import type { WorkflowDef } from '@allen/engine';
+import { isSeedOverrideEnabled } from './services/seed-policy.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -14,31 +15,36 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 export async function seedDefaultAgents(db: Db): Promise<void> {
   const col = db.collection('agents');
   const agents = loadAgents();
+  const override = isSeedOverrideEnabled();
+  let created = 0;
+  let updated = 0;
 
   for (const [name, agent] of Object.entries(agents)) {
-    await col.updateOne(
-      { name },
-      {
-        $set: {
-          system: agent.system,
-          model: agent.model,
-          provider: agent.provider,
-          tools: agent.tools,
-          icon: agent.icon,
-          color: agent.color,
-          type: agent.type ?? 'technical',
-          displayName: agent.displayName ?? name,
-          personality: agent.personality,
-          capabilities: agent.capabilities ?? [],
-          canDelegateTo: agent.canDelegateTo ?? [],
-          canTrigger: agent.canTrigger ?? [],
-          isBuiltIn: true,
-          updatedAt: new Date(),
-        },
-        $setOnInsert: { createdAt: new Date() },
-      },
-      { upsert: true },
-    );
+    const existing = await col.findOne({ name });
+    const doc = {
+      system: agent.system,
+      model: agent.model,
+      provider: agent.provider,
+      tools: agent.tools,
+      icon: agent.icon,
+      color: agent.color,
+      type: agent.type ?? 'technical',
+      displayName: agent.displayName ?? name,
+      personality: agent.personality,
+      capabilities: agent.capabilities ?? [],
+      canDelegateTo: agent.canDelegateTo ?? [],
+      canTrigger: agent.canTrigger ?? [],
+      isBuiltIn: true,
+      createdBy: 'seed',
+    };
+
+    if (!existing) {
+      await col.insertOne({ name, ...doc, createdAt: new Date(), updatedAt: new Date() });
+      created++;
+    } else if (override) {
+      await col.updateOne({ name }, { $set: { ...doc, updatedAt: new Date() } });
+      updated++;
+    }
   }
 
   // Ensure indexes for agent_conversations collection
@@ -46,7 +52,7 @@ export async function seedDefaultAgents(db: Db): Promise<void> {
   await convCol.createIndex({ chatSessionId: 1 }).catch(() => {});
   await convCol.createIndex({ fromAgent: 1, toAgent: 1 }).catch(() => {});
 
-  console.log(`Seeded ${Object.keys(agents).length} default agents`);
+  console.log(`Seeded ${created} new, updated ${updated} default agents (${Object.keys(agents).length} checked)`);
 }
 
 /**
@@ -85,6 +91,7 @@ export async function seedDefaultWorkflows(db: Db): Promise<void> {
 
   let seeded = 0;
   let updated = 0;
+  const override = isSeedOverrideEnabled();
   const files = readdirSync(workflowDir).filter(f => f.endsWith('.yml') || f.endsWith('.yaml'));
 
   for (const file of files) {
@@ -112,11 +119,9 @@ export async function seedDefaultWorkflows(db: Db): Promise<void> {
       continue;
     }
 
-    // Auto-update system-seeded workflows when the YAML on disk changes.
-    // User-edited workflows (createdBy !== 'system') are never touched.
-    const isSystemSeed = existing.createdBy === 'system';
+    // Auto-update existing workflows only when explicitly requested.
     const yamlChanged = existing.yaml !== content;
-    if (isSystemSeed && yamlChanged) {
+    if (override && yamlChanged) {
       await col.updateOne(
         { _id: existing._id },
         {
