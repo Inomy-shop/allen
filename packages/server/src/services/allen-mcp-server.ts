@@ -138,7 +138,7 @@ const TOOLS = [
   // ── Workflows ──
   { name: 'list_workflows', description: 'List all workflows with name, description, node count, validation status.', params: {} },
   { name: 'get_workflow', description: 'Get full details of a specific workflow: YAML source, parsed nodes, edges, input schema, version.', params: { name: 'string — workflow name', id: 'string — workflow MongoDB _id (use name OR id)' } },
-  { name: 'run_workflow', description: 'Start executing a workflow. Returns execution ID.', params: { workflow_name: 'string (required)', input: 'object — workflow input parameters' } },
+  { name: 'run_workflow', description: 'Start executing a workflow. Returns execution ID. Before calling this, call get_workflow for the chosen workflow and pass input using the exact parsed.input field names for that workflow. Do not invent aliases or nested shapes.', params: { workflow_name: 'string (required)', input: 'object — workflow input parameters matching get_workflow.parsed.input exactly' } },
   { name: 'validate_workflow', description: 'Validate a workflow YAML or parsed object against the live agent registry. Returns { valid, errors, warnings }. Read-only.', params: { yaml: 'string — YAML source', parsed: 'object — parsed workflow object (alternative to yaml)' } },
   { name: 'create_workflow', description: 'Create a new workflow. Validates before persisting. Usable immediately after creation.', params: { yaml: 'string — YAML source (preferred)', parsed: 'object — parsed workflow object (alternative)', tags: 'object — optional tags array' } },
   { name: 'update_workflow', description: 'Update an existing workflow by name or id. Bumps version. Refuses system-seeded workflows.', params: { id: 'string — MongoDB ObjectId', name: 'string — workflow name (used when id omitted)', yaml: 'string — new YAML source', parsed: 'object — new parsed workflow object' } },
@@ -401,11 +401,31 @@ async function executeTool(name: string, args: Record<string, unknown>): Promise
       const workflows = await callAPI('/api/workflows') as any[];
       const wf = workflows?.find((w: any) => w.name === args.workflow_name || w.parsed?.name === args.workflow_name);
       if (!wf) return { error: `Workflow "${args.workflow_name}" not found` };
+      const wfDetails = await callAPI(`/api/workflows/${wf._id}`) as any;
+      const input = (args.input ?? {}) as Record<string, unknown>;
+      const inputDef = wfDetails?.parsed?.input as Record<string, { required?: boolean; type?: string; label?: string }> | undefined;
+      if (inputDef) {
+        const missingFields = Object.entries(inputDef)
+          .filter(([key, def]) => def.required && (input[key] === undefined || input[key] === null || input[key] === ''))
+          .map(([key]) => key);
+        if (missingFields.length > 0) {
+          return {
+            error: `Missing required inputs: ${missingFields.join(', ')}`,
+            hint: 'Call get_workflow first and rebuild input with the exact parsed.input field names.',
+            required_inputs: Object.entries(inputDef).map(([name, def]) => ({
+              name,
+              type: def.type ?? 'string',
+              required: def.required ?? false,
+              label: def.label,
+            })),
+          };
+        }
+      }
       const url = `${API_BASE}/api/executions`;
       const res = await fetch(url, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ workflowId: wf._id, input: args.input ?? {} }),
+        body: JSON.stringify({ workflowId: wf._id, input }),
       });
       return res.json();
     }

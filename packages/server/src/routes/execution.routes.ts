@@ -34,8 +34,13 @@ export function executionRoutes(db: Db): Router {
       res.status(201).json(execution);
     } catch (err: unknown) {
       const msg = (err as Error).message;
-      const status = msg.includes('Concurrency limit') ? 429 : 500;
-      res.status(status).json({ error: msg });
+      const code = (err as Error & { code?: string }).code;
+      const status = code === 'WORKFLOW_INPUT_VALIDATION_FAILED'
+        ? 400
+        : msg.includes('Concurrency limit')
+          ? 429
+          : 500;
+      res.status(status).json({ error: msg, ...(code ? { code } : {}) });
     }
   });
 
