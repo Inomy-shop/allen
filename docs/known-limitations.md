@@ -25,7 +25,8 @@ Allen is early alpha. These limitations are intentional to document current real
 ## Secrets
 
 - `.env` is local and must not be committed.
-- Integration credentials live in `.env`; MCP presets follow the `ALLEN_`-prefix convention.
+- Integration credentials live in `.env`; MCP presets and repo-based MCP servers follow the `ALLEN_`-prefix convention.
+- Python MCP server dependencies are not auto-installed by Allen. The user must install the required Python packages into the interpreter before registering the server.
 - Public artifact/file links are capability URLs and should not contain secrets.
 
 ## Deployment

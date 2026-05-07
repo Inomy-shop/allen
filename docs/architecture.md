@@ -55,7 +55,7 @@ Important files:
 - `src/template.ts` - template rendering and binding capture for node inputs.
 - `src/router.ts` - agent routing rules consumed by chat and built-in nodes.
 - `src/agents-loader.ts` and `agents.yml` - agent definitions for teams and specialists.
-- `src/mcp-loader.ts` and `src/mcp-install.ts` - MCP server loading, installation, and `ALLEN_`-prefix env mapping.
+- `src/mcp-loader.ts` and `src/mcp-install.ts` - MCP server loading, installation, and `ALLEN_`-prefix env mapping. Supports both Node.js (`.ts`/`.js`/`.mjs`) and Python (`.py`) entry files; Python MCPs default to `python3` and skip automatic `npm install`.
 - `src/output-extractor.ts` - output parsing from model responses.
 - `src/state-manager.ts` - persisted execution state.
 - `src/learning-manager.ts` - learnings capture, retrieval, and prompt injection.
@@ -95,7 +95,7 @@ Routes (registered in `packages/server/src/app.ts`):
 - `/api/repos` - repo registration.
 - `/api/workspaces` - workspaces, terminals, file watch, preview proxy.
 - `/api/chat` - chat sessions and messages.
-- `/api/mcp` - MCP server registry.
+- `/api/mcp` - MCP server registry. Includes `GET /servers/discover/:repoId` (scan a repo for Python and Node MCP entry files) and `POST /servers/:id/reinstall` (bust the install cache and re-run `npm install`; Python MCPs return a skip response instead).
 - `/api/linear` - Linear integration.
 - `/api/slack` - Slack integration (raw body, signature-verified).
 - `/api/pull-requests` - PR list and detail.
@@ -138,7 +138,7 @@ Responsibilities:
 - Workspace list/detail, terminal, file preview, service preview.
 - Repo manager.
 - Ticket and PR views.
-- Settings for agents, MCP, integrations, and users.
+- Settings for agents, MCP (including preset and repo-based registration with Python MCP support), integrations, and users.
 
 ## Data Model
 
@@ -213,7 +213,7 @@ Allen has integration paths for:
 - MCP server presets and custom MCP servers.
 - Cron-driven background tasks.
 
-Integration credentials are read from `.env`. MCP servers use the `ALLEN_` prefix convention: an MCP-required key like `GITHUB_PERSONAL_ACCESS_TOKEN` is read from `ALLEN_GITHUB_PERSONAL_ACCESS_TOKEN` and forwarded to the MCP subprocess without the prefix.
+Integration credentials are read from `.env`. MCP servers use the `ALLEN_` prefix convention: an MCP-required key like `GITHUB_PERSONAL_ACCESS_TOKEN` is read from `ALLEN_GITHUB_PERSONAL_ACCESS_TOKEN` and forwarded to the MCP subprocess without the prefix. Both Node.js and Python MCP servers follow this model. Python MCPs require `python3` (or a custom interpreter) on `PATH`; their dependencies are not managed by Allen and must be installed separately by the user.
 
 ## Runtime Ports
 

@@ -291,9 +291,9 @@ Slack webhooks require raw request body handling, so do not move `/api/slack` be
 
 ## MCP Server Missing Environment Variables
 
-MCP presets use the `ALLEN_` prefix convention.
+MCP presets and repo-based MCP servers use the `ALLEN_` prefix convention.
 
-If a preset says it needs:
+If a preset or repo MCP says it needs:
 
 ```text
 POSTGRES_CONNECTION_STRING
@@ -306,6 +306,30 @@ ALLEN_POSTGRES_CONNECTION_STRING=<value>
 ```
 
 Restart Allen after editing `.env`.
+
+## Python MCP Server Does Not Start
+
+Python MCP servers are spawned with `python3` (or the command you specify) and Allen does **not** auto-install their Python dependencies. If the server fails to start:
+
+1. Verify `python3` is on `PATH`:
+
+   ```bash
+   python3 --version
+   ```
+
+2. Install the required packages manually into the interpreter Allen will use, for example:
+
+   ```bash
+   pip3 install mcp fastmcp  # or whatever the server requires
+   ```
+
+3. If you need a virtual environment, specify its interpreter in the **Command** field when registering or editing the server (e.g., `venv/bin/python`).
+
+4. Click **Test connection** in Settings → MCP Servers to confirm the server starts and lists its tools.
+
+Note: the **Reinstall** button is shown for repo-sourced MCP servers but deliberately skips Python servers — it returns a `python-no-auto-install` skip notice instead of running `npm install`.
+
+Allen resolves any `envKeys` you configure for the Python server using the same `ALLEN_<KEY>` convention as Node MCP servers.
 
 ## Public Artifact or File Link Exposes Sensitive Data
 
