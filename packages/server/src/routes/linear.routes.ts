@@ -46,7 +46,19 @@ export function linearRoutes(db: Db): Router {
       const limitRaw = typeof req.query.limit === 'string' ? Number.parseInt(req.query.limit, 10) : NaN;
       const limit = Number.isFinite(limitRaw) && limitRaw > 0 ? limitRaw : undefined;
 
-      const issues = await service.listIssues({ projectId, stateTypes, q, limit });
+      // When assignee=me, resolve to authenticated user's email
+      const assigneeEmail = req.query.assignee === 'me' && req.user?.email
+        ? req.user.email : undefined;
+
+      if (req.query.assignee === 'me') {
+        if (req.user?.email) {
+          console.log('[linear] assignee=me resolved — email present');
+        } else {
+          console.log('[linear] assignee=me ignored — req.user.email missing');
+        }
+      }
+
+      const issues = await service.listIssues({ projectId, stateTypes, q, limit, assigneeEmail });
       res.json(issues);
     } catch (err: unknown) {
       res.status(500).json({ error: (err as Error).message });

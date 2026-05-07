@@ -1,7 +1,7 @@
 import { useState, useRef, useCallback, useEffect, forwardRef, useImperativeHandle, type ReactNode } from 'react';
 import { Send, Square, ChevronDown, Paperclip, Loader2, X, Sparkles, ShieldCheck } from 'lucide-react';
 import MentionAutocomplete, { type MentionOption } from './MentionAutocomplete';
-import { authHeaders } from '../../services/api';
+import { authHeaders, linear, type LinearIssueSummary } from '../../services/api';
 import { CHAT_PLACEHOLDER } from '../../lib/brand';
 
 export type ReasoningEffortValue = 'off' | 'low' | 'medium' | 'high' | 'max';
@@ -113,6 +113,15 @@ const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function ChatInput
   const [value, setValue] = useState('');
   const [mentionVisible, setMentionVisible] = useState(false);
   const [mentionQuery, setMentionQuery] = useState('');
+
+  // ── Linear mention mode ──────────────────────────────────────────────
+  const [linearMode, setLinearMode]       = useState(false);
+  const [linearLoading, setLinearLoading] = useState(false);
+  const [linearIssues, setLinearIssues]   = useState<LinearIssueSummary[]>([]);
+  const [linearError, setLinearError]     = useState<'empty' | 'unconfigured' | 'error' | null>(null);
+  const controllerRef   = useRef<AbortController | null>(null);
+  const linearStatusRef = useRef<{ configured: boolean } | null>(null);
+
   const [showModelPicker, setShowModelPicker] = useState(false);
   const [showEffortPicker, setShowEffortPicker] = useState(false);
   const [showRepoPicker, setShowRepoPicker] = useState(false);
@@ -156,6 +165,52 @@ const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function ChatInput
   function togglePlanMode(): void {
     onAgentOverridesChanged?.({ ...agentOverrides, planMode: !effectivePlanMode });
   }
+
+  // ── Linear issue fetch ─────────────────────────────────────────────────
+  const fetchLinearIssues = useCallback(async () => {
+    // Abort any in-flight request
+    controllerRef.current?.abort();
+    const controller = new AbortController();
+    controllerRef.current = controller;
+
+    setLinearLoading(true);
+    setLinearIssues([]);
+    setLinearError(null);
+
+    try {
+      // Check linear status once per ChatInput instance
+      if (!linearStatusRef.current) {
+        const status = await linear.status(controller.signal);
+        linearStatusRef.current = { configured: status.configured };
+      }
+
+      if (!linearStatusRef.current.configured) {
+        setLinearError('unconfigured');
+        setLinearLoading(false);
+        return;
+      }
+
+      // Fetch assigned issues — signal is now wired so AbortError fires on cancel
+      const issues = await linear.issues(
+        { assignee: 'me', state: 'started,unstarted,backlog', limit: 25 },
+        controller.signal,
+      );
+
+      if (!issues || issues.length === 0) {
+        setLinearError('empty');
+      } else {
+        setLinearIssues(issues);
+      }
+    } catch (err: unknown) {
+      if (err instanceof Error && err.name === 'AbortError') return;
+      console.error('[mention:linear] fetch failed', err);
+      setLinearError('error');
+    } finally {
+      if (!controller.signal.aborted) {
+        setLinearLoading(false);
+      }
+    }
+  }, []);
 
   function placementFor(ref: React.RefObject<HTMLElement | null>, estimatedHeight = 300): 'up' | 'down' {
     const rect = ref.current?.getBoundingClientRect();
@@ -246,11 +301,38 @@ const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function ChatInput
       const afterAt = textBeforeCursor.slice(lastAt + 1);
       const charBefore = lastAt > 0 ? textBeforeCursor[lastAt - 1] : ' ';
       if ((charBefore === ' ' || charBefore === '\n' || lastAt === 0) && !afterAt.includes(' ')) {
-        setMentionVisible(true); setMentionQuery(afterAt); return;
+        setMentionVisible(true);
+        setMentionQuery(afterAt);
+
+        // Enter Linear mode when afterAt exactly matches 'linear' (case-insensitive)
+        if (afterAt.toLowerCase() === 'linear') {
+          if (!linearMode) {
+            setLinearMode(true);
+            fetchLinearIssues();
+          }
+        } else if (linearMode) {
+          // Leaving linear mode (typing a different mention)
+          setLinearMode(false);
+          controllerRef.current?.abort();
+          setLinearLoading(false);
+          setLinearIssues([]);
+          setLinearError(null);
+        }
+
+        return;
       }
     }
-    setMentionVisible(false); setMentionQuery('');
-  }, []);
+    // No valid mention — dismiss + reset linear mode
+    setMentionVisible(false);
+    setMentionQuery('');
+    if (linearMode) {
+      setLinearMode(false);
+      controllerRef.current?.abort();
+      setLinearLoading(false);
+      setLinearIssues([]);
+      setLinearError(null);
+    }
+  }, [linearMode, fetchLinearIssues]);
 
   const handleMentionSelect = useCallback((option: MentionOption) => {
     const el = textareaRef.current;
@@ -260,7 +342,15 @@ const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function ChatInput
     const lastAt = textBeforeCursor.lastIndexOf('@');
     const textAfterCursor = value.slice(cursorPos);
     const newValue = value.slice(0, lastAt) + '@' + option.name + ' ' + textAfterCursor;
-    setValue(newValue); setMentionVisible(false); setMentionQuery('');
+    setValue(newValue);
+    setMentionVisible(false);
+    setMentionQuery('');
+    // Reset linear mode on selection
+    setLinearMode(false);
+    controllerRef.current?.abort();
+    setLinearLoading(false);
+    setLinearIssues([]);
+    setLinearError(null);
     setTimeout(() => { if (el) { const np = lastAt + option.name.length + 2; el.focus(); el.selectionStart = np; el.selectionEnd = np; } }, 0);
   }, [value]);
 
@@ -278,7 +368,16 @@ const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function ChatInput
       const fileLinks = attachments.map(a => `[${a.name}](${a.url})`).join('\n');
       message = message ? `${message}\n\nAttached files:\n${fileLinks}` : `Attached files:\n${fileLinks}`;
     }
-    onSend(message); setValue(''); setAttachments([]); setMentionVisible(false);
+    onSend(message);
+    setValue('');
+    setAttachments([]);
+    setMentionVisible(false);
+    setMentionQuery('');
+    setLinearMode(false);
+    controllerRef.current?.abort();
+    setLinearLoading(false);
+    setLinearIssues([]);
+    setLinearError(null);
     if (textareaRef.current) {
       textareaRef.current.style.height = `${TEXTAREA_MIN_HEIGHT}px`;
       textareaRef.current.style.overflowY = 'hidden';
@@ -289,7 +388,24 @@ const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function ChatInput
 
   return (
     <div className="chat-composer relative">
-      <MentionAutocomplete query={mentionQuery} visible={mentionVisible} onSelect={handleMentionSelect} onDismiss={() => setMentionVisible(false)} />
+      <MentionAutocomplete
+        query={mentionQuery}
+        visible={mentionVisible}
+        onSelect={handleMentionSelect}
+        onDismiss={() => {
+          setMentionVisible(false);
+          setMentionQuery('');
+          setLinearMode(false);
+          controllerRef.current?.abort();
+          setLinearLoading(false);
+          setLinearIssues([]);
+          setLinearError(null);
+        }}
+        mode={linearMode ? 'linear' : 'default'}
+        linearIssues={linearIssues}
+        linearLoading={linearLoading}
+        linearError={linearError}
+      />
 
       {disabled && disabledReason && (
         <div className="mb-2 px-3 py-2 rounded-md border border-app bg-surface-100/50 text-[11px] font-mono text-theme-secondary">

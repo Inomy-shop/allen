@@ -58,21 +58,21 @@ function redirectToLogin(): void {
   window.location.assign(`/login?from=${encodeURIComponent(current)}`);
 }
 
-async function doFetch(path: string, options: RequestInit, token: string | null): Promise<Response> {
+async function doFetch(path: string, options: RequestInit, token: string | null, signal?: AbortSignal): Promise<Response> {
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
     ...((options.headers as Record<string, string>) ?? {}),
   };
   if (token) headers.Authorization = `Bearer ${token}`;
-  return fetch(`${BASE}${path}`, { ...options, headers });
+  return fetch(`${BASE}${path}`, { ...options, headers, signal });
 }
 
-async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
+async function request<T>(path: string, options: RequestInit = {}, signal?: AbortSignal): Promise<T> {
   // Don't attach tokens to /auth/login or /auth/refresh themselves.
   const isPublicAuth = path.startsWith('/auth/login') || path.startsWith('/auth/refresh');
   const token = isPublicAuth ? null : useAuthStore.getState().accessToken;
 
-  let res = await doFetch(path, options, token);
+  let res = await doFetch(path, options, token, signal);
 
   if (res.status === 401 && !isPublicAuth) {
     // Try to refresh once.
@@ -81,7 +81,7 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
       redirectToLogin();
       throw new Error('session_expired');
     }
-    res = await doFetch(path, options, fresh);
+    res = await doFetch(path, options, fresh, signal);
     if (res.status === 401) {
       useAuthStore.getState().clear();
       redirectToLogin();
@@ -794,23 +794,41 @@ export const auth = {
   me: () => request<{ user: AuthUser }>('/auth/me'),
 };
 
+// ── Linear Types ──────────────────────────────────────────────────────────
+export interface LinearIssueSummary {
+  id: string;
+  identifier: string;
+  title: string;
+  description?: string;
+  url: string;
+  priority: number;
+  priorityLabel: string;
+  state: {
+    id: string;
+    name: string;
+    type: string;
+    color: string;
+  };
+}
+
 // ── Linear ────────────────────────────────────────────────────────────────
 export const linear = {
-  status: () => request<{
+  status: (signal?: AbortSignal) => request<{
     configured: boolean;
     workspaceName?: string;
     workspaceUrlKey?: string;
     error?: string;
-  }>('/linear/status'),
+  }>('/linear/status', {}, signal),
   projects: () => request<any[]>('/linear/projects'),
-  issues: (filters: { projectId?: string; state?: string; q?: string; limit?: number } = {}) => {
+  issues: (filters: { projectId?: string; state?: string; q?: string; limit?: number; assignee?: 'me' } = {}, signal?: AbortSignal): Promise<LinearIssueSummary[]> => {
     const qs = new URLSearchParams();
     if (filters.projectId) qs.set('projectId', filters.projectId);
     if (filters.state) qs.set('state', filters.state);
     if (filters.q) qs.set('q', filters.q);
     if (filters.limit) qs.set('limit', String(filters.limit));
+    if (filters.assignee === 'me') qs.set('assignee', 'me');
     const query = qs.toString();
-    return request<any[]>(`/linear/issues${query ? `?${query}` : ''}`);
+    return request<LinearIssueSummary[]>(`/linear/issues${query ? `?${query}` : ''}`, {}, signal);
   },
   issue: (id: string) => request<any>(`/linear/issues/${id}`),
   assignAgent: (id: string, agentName: string | null) =>
