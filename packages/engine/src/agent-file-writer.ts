@@ -140,6 +140,93 @@ export function withNonInteractiveGuidance(systemPrompt: string | undefined): st
   return s.includes(NON_INTERACTIVE_GUIDANCE_SENTINEL) ? s : `${s}${NON_INTERACTIVE_GUIDANCE}`;
 }
 
+export const PAGINATION_GUIDANCE_SENTINEL = '# Handling large MCP responses';
+
+export const PAGINATION_GUIDANCE = `
+
+# Handling large MCP responses
+
+Allen MCP tools expose \`limit\`, \`before\` cursors, \`projection\`, \`filter\`, and
+\`sort\` parameters. When you call tools such as \`get_chat_messages\`,
+\`get_chat_logs\`, \`query_database\`, \`allen_monitoring_search_records\`,
+\`get_my_session_history\`, \`list_executions\`, \`search_executions\`,
+\`search_learnings\`, \`allen_list_artifacts\`, or any OpenSearch / MongoDB /
+PostgreSQL tool, follow these rules to stay within the 25 k-token response cap.
+
+## Detection
+
+If a tool response feels truncated, is exactly 25 000 tokens, or the data ends
+abruptly without a clear closing delimiter, assume it was truncated and
+immediately switch to paginated fetches.
+
+## Always-on rules
+
+1. **Pass \`limit\` on every call.** Default to ≤ 50 records. Never omit
+   \`limit\` unless the tool explicitly has no such parameter.
+2. **Use \`projection\` (field selection) first.** Request only the fields you
+   need. Drop large blobs (\`content\`, \`html\`, \`raw\`) unless they are the
+   subject of the investigation.
+3. **Summarize before fetching more.** After processing a page, write a 2–4
+   sentence summary of what you found, then fetch the next page. This keeps
+   your context window under control.
+4. **Use cursor / \`before\` for backward traversal** and \`sort\` + value cursor
+   for forward traversal. Do not re-fetch the same records.
+
+## Worked example — get_chat_messages (cursor-based paging)
+
+\`\`\`
+// First page — newest 50 messages
+{ tool: "get_chat_messages", input: { session_id: "<id>", limit: 50 } }
+// → returns messages[0..49]; note the oldest message id, e.g. "msg_abc"
+
+// Summarize page 1 findings in 2–4 sentences.
+
+// Second page — next 50 messages older than msg_abc
+{ tool: "get_chat_messages", input: { session_id: "<id>", limit: 50, before: "msg_abc" } }
+// → repeat until messages array is empty
+\`\`\`
+
+## Worked example — query_database (limit + projection + sort cursor)
+
+\`\`\`
+// First page — 50 records, only fields you need
+{
+  tool: "query_database",
+  input: {
+    collection: "chat_sessions",
+    filter: { status: "active" },
+    projection: { _id: 1, created_at: 1, agent_name: 1 },
+    sort: { created_at: -1 },
+    limit: 50
+  }
+}
+// → note the created_at of the last record, e.g. "2026-04-01T00:00:00Z"
+
+// Summarize page 1 findings.
+
+// Second page — records older than the cursor
+{
+  tool: "query_database",
+  input: {
+    collection: "chat_sessions",
+    filter: { status: "active", created_at: { "$lt": "2026-04-01T00:00:00Z" } },
+    projection: { _id: 1, created_at: 1, agent_name: 1 },
+    sort: { created_at: -1 },
+    limit: 50
+  }
+}
+\`\`\`
+
+Apply the same summarize-old-then-fetch-new pattern for all paginated tools.
+`;
+
+export function withPaginationGuidance(systemPrompt: string): string {
+  if (systemPrompt.includes(PAGINATION_GUIDANCE_SENTINEL)) {
+    return systemPrompt;
+  }
+  return systemPrompt + PAGINATION_GUIDANCE;
+}
+
 export type MaterializedAgent = {
   /** e.g. "allen-brand-strategist" — pass this to `claude --agent <name>`. */
   subagentName: string;
@@ -190,7 +277,7 @@ export function renderAgentFile(agent: AgentSpec): { subagentName: string; body:
   // skips a duplicate append in that case. Same for the non-interactive
   // guidance — materialized CLI subagents are spawned outside chat (workflow
   // / direct agent CLI), so ask_user / delegate_to_agent must be off-limits.
-  const sourceSystem = withNonInteractiveGuidance(withArtifactsGuidance(agent.system));
+  const sourceSystem = withPaginationGuidance(withNonInteractiveGuidance(withArtifactsGuidance(agent.system)));
 
   // A line of three+ dashes in the body would prematurely terminate the YAML
   // frontmatter we're about to emit. Swap it for `***`, an equivalent markdown

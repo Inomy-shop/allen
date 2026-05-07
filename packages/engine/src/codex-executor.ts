@@ -4,7 +4,7 @@ import type { NodeDef, AgentDef, EngineEventEmitter } from './types.js';
 import { renderTemplate } from './template.js';
 import { extractOutputs, buildOutputInstruction } from './output-extractor.js';
 import { buildToolCallRecord, type ToolCallRecord } from './tool-call.js';
-import { withArtifactsGuidance, withNonInteractiveGuidance } from './agent-file-writer.js';
+import { withArtifactsGuidance, withNonInteractiveGuidance, withPaginationGuidance } from './agent-file-writer.js';
 import { MCP_SERVER_NAME } from './brand.js';
 
 /** Scratch dir when no worktree/repo is in scope. Never fall back to
@@ -72,7 +72,7 @@ export async function executeCodexNode(
     // via the synced Codex config). Non-interactive guidance is layered on top
     // so codex workflow runs can't call ask_user / delegate_to_agent (no chat
     // surface to resolve them on).
-    prompt = `${withNonInteractiveGuidance(withArtifactsGuidance(role.system))}\n\n${prompt}`;
+    prompt = `${withPaginationGuidance(withNonInteractiveGuidance(withArtifactsGuidance(role.system)))}\n\n${prompt}`;
   }
   prompt += buildOutputInstruction(nodeDef.outputs, nodeDef.output_format);
   if (nodeContext) {

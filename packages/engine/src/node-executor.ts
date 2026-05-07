@@ -14,7 +14,7 @@ import { evaluateCondition } from './condition-parser.js';
 import { executeCodexNode } from './codex-executor.js';
 import { buildToolCallRecord, type ToolCallRecord } from './tool-call.js';
 import { normalizeModelAlias } from './model-alias.js';
-import { withArtifactsGuidance, withNonInteractiveGuidance } from './agent-file-writer.js';
+import { withArtifactsGuidance, withNonInteractiveGuidance, withPaginationGuidance } from './agent-file-writer.js';
 import { statSync, mkdirSync } from 'node:fs';
 
 /** Agent-safe fallback cwd. Kept in sync with chat-providers.ts's
@@ -528,6 +528,9 @@ ${context}
   // disabled. Goes last so it overrides any "use delegate_to_agent" line
   // that came in via role.system or the org-chart block above.
   if (effectiveSystem !== undefined) effectiveSystem = withNonInteractiveGuidance(effectiveSystem);
+  // Pagination guidance — teaches agents to use limit/cursor/projection on
+  // every MCP call so responses stay within the 25 k-token SDK cap.
+  if (effectiveSystem !== undefined) effectiveSystem = withPaginationGuidance(effectiveSystem);
 
   // Captured across all callAgent invocations for this node. First-seen
   // init message's `tools` array — the agent's full tool allowlist. Used

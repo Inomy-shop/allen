@@ -17,7 +17,7 @@ import { monitoringAgentTools } from './monitoring-agent-tools.js';
 import { buildRepoContextBlock } from './repo-context-builder.js';
 import { AGENT_FALLBACK_CWD } from './chat-providers.js';
 import { MonitoringService } from './self-healing-monitor.service.js';
-import { MCP_SERVER_NAME, normalizeModelAlias, ARTIFACTS_GUIDANCE, NON_INTERACTIVE_GUIDANCE } from '@allen/engine';
+import { MCP_SERVER_NAME, normalizeModelAlias, ARTIFACTS_GUIDANCE, NON_INTERACTIVE_GUIDANCE, PAGINATION_GUIDANCE } from '@allen/engine';
 
 /**
  * Claude-spawn-only system-prompt notice. Appended (via appendSystemPrompt
@@ -1246,7 +1246,7 @@ async function runSpawnInBackground(
         args.push('--json', '--dangerously-bypass-approvals-and-sandbox', '--skip-git-repo-check');
         if (model) args.push('-c', `model="${model}"`);
         if (mcpEnvOverrides.length > 0) args.push(...mcpEnvOverrides);
-        args.push(`${(role.system as string) ?? ''}${repoContextBlock}${workspaceConstraint}${ARTIFACTS_GUIDANCE}${NON_INTERACTIVE_GUIDANCE}\n\n${prompt}`);
+        args.push(`${(role.system as string) ?? ''}${repoContextBlock}${workspaceConstraint}${ARTIFACTS_GUIDANCE}${NON_INTERACTIVE_GUIDANCE}${PAGINATION_GUIDANCE}\n\n${prompt}`);
       }
 
       const result = await new Promise<{ text: string; threadId?: string }>((resolveP, rejectP) => {
@@ -1476,7 +1476,7 @@ async function runSpawnInBackground(
         // full-replacement behavior. Matches node-executor.ts wiring.
         // CLAUDE_SPAWN_NOTICE warns the model that ToolSearch isn't wired
         // here (claude-cli only — codex path above has its own prompt).
-        const systemPromptBody = `${CLAUDE_SPAWN_NOTICE}\n\n${(role.system as string) ?? ''}${repoContextBlock}${workspaceConstraint}${ARTIFACTS_GUIDANCE}${NON_INTERACTIVE_GUIDANCE}`;
+        const systemPromptBody = `${CLAUDE_SPAWN_NOTICE}\n\n${(role.system as string) ?? ''}${repoContextBlock}${workspaceConstraint}${ARTIFACTS_GUIDANCE}${NON_INTERACTIVE_GUIDANCE}${PAGINATION_GUIDANCE}`;
         if (process.env.ALLEN_SYSTEM_PROMPT_MODE === 'custom') sdkOptions.customSystemPrompt = systemPromptBody;
         else sdkOptions.appendSystemPrompt = systemPromptBody;
       }
@@ -1519,7 +1519,7 @@ async function runSpawnInBackground(
             // instruction to save via allen_save_artifact. Without
             // CLAUDE_SPAWN_NOTICE, CLI-mode agents emit `ToolSearch` out of
             // harness habit and stall their stream for ~15 min.
-            system: `${CLAUDE_SPAWN_NOTICE}\n\n${(role.system as string) ?? ''}${repoContextBlock}${workspaceConstraint}${ARTIFACTS_GUIDANCE}${NON_INTERACTIVE_GUIDANCE}`,
+            system: `${CLAUDE_SPAWN_NOTICE}\n\n${(role.system as string) ?? ''}${repoContextBlock}${workspaceConstraint}${ARTIFACTS_GUIDANCE}${NON_INTERACTIVE_GUIDANCE}${PAGINATION_GUIDANCE}`,
             model: sdkOptions.model as string | undefined,
             tools: Array.isArray((role as any)?.tools) ? (role as any).tools : undefined,
             mcpToolNames: discoveredMcpTools,
@@ -2973,6 +2973,8 @@ async function runAgentTurn(
     } catch {}
     // Artifacts guidance for the delegated agent — same block spawned agents get.
     systemPrompt += ARTIFACTS_GUIDANCE;
+    // Pagination guidance — teaches the delegated agent to use limit/cursor/projection.
+    systemPrompt += PAGINATION_GUIDANCE;
   }
 
   // Retry loop — if CLI times out, resume the same session and continue

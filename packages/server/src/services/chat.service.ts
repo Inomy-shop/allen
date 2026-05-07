@@ -17,6 +17,7 @@ import { searchSimilar, backfillEmbeddings } from './embedding.service.js';
 import { buildOrgContextBlock } from './org-context.js';
 import { MonitoringService } from './self-healing-monitor.service.js';
 import { ExecutionService } from './execution.service.js';
+import { withPaginationGuidance } from '@allen/engine';
 // Note: embedding.service.ts re-exports from @allen/engine — single implementation shared by engine + server
 
 // ── Types ──
@@ -353,7 +354,7 @@ DO NOT route to team-builder for unrelated requests (running workflows, querying
   // are listed so the model picks them up correctly under either MCP
   // surface (codex namespaces tools with the server prefix; claude-cli
   // surfaces them by bare name via buildToolInstructions()).
-  return `${base}
+  return withPaginationGuidance(`${base}
 
 You have MCP tools available. Use them to get data — don't describe what you would do, actually call the tool.
 
@@ -380,7 +381,7 @@ Examples:
 - "Work on LIN-123" → inspect the ticket via Linear if available, decide workflow vs lead vs specialist by task size/specialty, inspect the chosen workflow schema with get_workflow before run_workflow, then start execution with exact input keys
 - If an execution is waiting for input → present the fields, then submit_execution_input
 
-For code tasks: create or reuse an Allen workspace before any code-changing workflow/agent. For read-only planning or explanation, answer directly or use read-only tools. Remind any sub-agent you spawn to save its deliverables via allen_save_artifact so they appear in this chat's Artifacts panel.${orgBlock}${reposBlock}`;
+For code tasks: create or reuse an Allen workspace before any code-changing workflow/agent. For read-only planning or explanation, answer directly or use read-only tools. Remind any sub-agent you spawn to save its deliverables via allen_save_artifact so they appear in this chat's Artifacts panel.${orgBlock}${reposBlock}`);
 }
 
 // ── Active Query Tracking ──
@@ -1508,7 +1509,7 @@ RULES:
       }
     } catch {}
 
-    return parts.join('\n');
+    return withPaginationGuidance(parts.join('\n'));
   }
 
   async updateSessionTitle(sessionId: string, title: string, titleSource: 'default' | 'auto' | 'user' = 'user'): Promise<void> {
