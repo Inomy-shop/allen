@@ -13,7 +13,7 @@
 
 import type { Db } from 'mongodb';
 import { ChatService, type ChatEventHandler, type ChatMessageSender } from './chat.service.js';
-import { getDefaultChatProvider, PROVIDERS, type ChatProvider } from './chat-providers.js';
+import type { ChatProvider } from './chat-providers.js';
 import type { ReasoningEffort } from './agent-settings.js';
 
 // ── Types ──
@@ -58,6 +58,8 @@ const MENTION_REGEX = /<@[A-Z0-9]+>/g;
 
 const SLACK_API = 'https://slack.com/api';
 const SLACK_PROGRESS_MIN_MS = 5000;
+const SLACK_DEFAULT_PROVIDER: ChatProvider = 'codex';
+const SLACK_DEFAULT_MODEL = 'gpt-5.5';
 
 // ── Service ──
 
@@ -97,23 +99,10 @@ export class SlackService {
     model: string;
     reasoningEffort?: ReasoningEffort;
   } {
-    const explicitCodex = /\b(?:use|with|via)\s+codex\b|^codex\s*:/i.test(text);
-    const explicitClaude = /\b(?:use|with|via)\s+(?:claude|cloud)\b|^(?:claude|cloud)\s*:/i.test(text);
-
-    const envProvider = process.env.ALLEN_SLACK_DEFAULT_PROVIDER?.trim() as ChatProvider | undefined;
-    const provider = explicitCodex
-      ? 'codex'
-      : explicitClaude
-        ? 'claude-cli'
-        : PROVIDERS.some((p) => p.provider === envProvider)
-          ? envProvider!
-          : getDefaultChatProvider();
-
-    const providerConfig = PROVIDERS.find((p) => p.provider === provider) ?? PROVIDERS[0];
-    const envModel = process.env.ALLEN_SLACK_DEFAULT_MODEL?.trim();
-    const model = envModel || providerConfig.defaultModel;
+    const provider = SLACK_DEFAULT_PROVIDER;
+    const model = SLACK_DEFAULT_MODEL;
     const rawEffort = process.env.ALLEN_SLACK_REASONING_EFFORT?.trim() as ReasoningEffort | undefined;
-    const reasoningEffort = rawEffort || (provider === 'codex' ? 'high' : 'medium');
+    const reasoningEffort = rawEffort || 'high';
 
     return { provider, model, reasoningEffort };
   }
@@ -201,10 +190,8 @@ export class SlackService {
 
     const defaults = this.resolveSlackDefaults(cleanedText);
 
-    // Create a new chat session marked as Slack-sourced. Slack defaults are
-    // configurable via ALLEN_SLACK_DEFAULT_PROVIDER / _MODEL and fall back to
-    // the app default provider. Users can override per message with phrases
-    // like "use codex" or "use claude".
+    // Create a new chat session marked as Slack-sourced. Slack always uses
+    // Codex 5.5; message text cannot switch Slack sessions to Claude CLI.
     const session = await this.chatService.createSession(
       defaults.provider,
       defaults.model,
