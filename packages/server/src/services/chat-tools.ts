@@ -4,7 +4,7 @@
  * The chat service registers these with the Anthropic Messages API for native tool calling.
  */
 
-import type { Db, ObjectId } from 'mongodb';
+import { ObjectId, type Db } from 'mongodb';
 import { mkdirSync } from 'node:fs';
 import { logger } from '../logger.js';
 import { ExecutionService } from './execution.service.js';
@@ -410,16 +410,60 @@ const listWorkflows: ChatTool = {
   },
 };
 
+const getWorkflow: ChatTool = {
+  name: 'get_workflow',
+  description: 'Get full workflow details, including parsed.input. Call this before run_workflow and pass input using the exact parsed.input field names.',
+  inputSchema: {
+    type: 'object',
+    properties: {
+      name: { type: 'string', description: 'Workflow name' },
+      id: { type: 'string', description: 'Workflow MongoDB _id' },
+    },
+  },
+  async execute(args, db) {
+    const id = typeof args.id === 'string' ? args.id : undefined;
+    const name = typeof args.name === 'string' ? args.name : undefined;
+    if (!id && !name) return { error: 'Provide either name or id' };
+
+    const filter: Record<string, unknown> = { archived: { $ne: true } };
+    if (id) {
+      if (!ObjectId.isValid(id)) return { error: `Invalid workflow id "${id}"` };
+      filter._id = new ObjectId(id);
+    } else {
+      filter.name = name;
+    }
+
+    const workflow = await db.collection('workflows').findOne(filter);
+    if (!workflow) return { error: 'Workflow not found' };
+    return {
+      id: (workflow._id as ObjectId).toString(),
+      name: workflow.name,
+      description: workflow.description ?? '',
+      version: workflow.version ?? 1,
+      input: workflow.parsed?.input ?? {},
+      nodes: workflow.parsed?.nodes ?? {},
+      edges: workflow.parsed?.edges ?? [],
+      parsed: {
+        input: workflow.parsed?.input ?? {},
+        nodes: workflow.parsed?.nodes ?? {},
+        edges: workflow.parsed?.edges ?? [],
+      },
+      validation: workflow.validation ?? null,
+      yaml: workflow.yaml ?? '',
+    };
+  },
+};
+
 const runWorkflow: ChatTool = {
   name: 'run_workflow',
-  description: 'Start executing a workflow with given input parameters. Returns execution ID to track progress. Use list_workflows first to find the workflow name and ID.',
+  description: 'Start executing a workflow with given input parameters. Returns execution ID to track progress. Use list_workflows to choose a workflow, then get_workflow to inspect parsed.input. The input object must use the exact schema field names.',
   inputSchema: {
     type: 'object',
     properties: {
       workflow_name: { type: 'string', description: 'Name of the workflow to run (e.g., "coding-agent", "blog-post")' },
       input: {
         type: 'object',
-        description: 'Input parameters for the workflow. Check the workflow definition for required inputs (e.g., task, repo_path).',
+        description: 'Input parameters for the workflow, matching get_workflow.parsed.input exactly. Do not use aliases such as task when the workflow requires user_request.',
         additionalProperties: true,
       },
     },
@@ -448,6 +492,7 @@ const runWorkflow: ChatTool = {
       if (missingFields.length > 0) {
         return {
           error: `Missing required inputs: ${missingFields.join(', ')}`,
+          hint: 'Call get_workflow first and rebuild input with the exact parsed.input field names.',
           required_inputs: Object.entries(inputDef).map(([k, v]) => ({
             name: k,
             type: (v as Record<string, unknown>).type ?? 'string',
@@ -3424,6 +3469,7 @@ const createPullRequest: ChatTool = {
 export const chatTools: ChatTool[] = [
   // Core
   listWorkflows,
+  getWorkflow,
   runWorkflow,
   getExecution,
   listExecutions,

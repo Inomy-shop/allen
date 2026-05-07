@@ -292,6 +292,7 @@ export class ExecutionService {
     if (!workflowDoc) throw new Error('Workflow not found');
 
     const workflow = workflowDoc.parsed as WorkflowDef;
+    this.validateWorkflowInput(workflow, input);
     if (isSelfHealingWorkflowName(workflow.name)) {
       const config = assertSelfHealingLinearConfig();
       input = {
@@ -342,6 +343,28 @@ export class ExecutionService {
 
     // Start immediately
     return this.launchExecution(executionId, workflowId, workflow, input);
+  }
+
+  private validateWorkflowInput(workflow: WorkflowDef, input: Record<string, unknown>): void {
+    const inputDef = (workflow as unknown as { input?: Record<string, { required?: boolean; type?: string; label?: string }> }).input;
+    if (!inputDef) return;
+
+    const missingFields = Object.entries(inputDef)
+      .filter(([key, def]) => def.required && (input[key] === undefined || input[key] === null || input[key] === ''))
+      .map(([key]) => key);
+    if (missingFields.length === 0) return;
+
+    const requiredInputs = Object.entries(inputDef)
+      .filter(([, def]) => def.required)
+      .map(([name, def]) => `${name}${def.type ? ` (${def.type})` : ''}`)
+      .join(', ');
+
+    const err = new Error(
+      `Missing required workflow input${missingFields.length === 1 ? '' : 's'} for "${workflow.name}": ${missingFields.join(', ')}. Required inputs: ${requiredInputs}. Call get_workflow first and rebuild input with the exact parsed.input field names.`,
+    );
+    (err as Error & { code?: string; missingFields?: string[] }).code = 'WORKFLOW_INPUT_VALIDATION_FAILED';
+    (err as Error & { missingFields?: string[] }).missingFields = missingFields;
+    throw err;
   }
 
   /**
