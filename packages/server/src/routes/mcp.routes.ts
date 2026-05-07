@@ -105,11 +105,22 @@ async function syncUserToCodex(service: McpService, req: AuthedRequest): Promise
 
 /** Scan a repo for candidate MCP entry files. Heuristics: files matching
  * `*.mcp.{ts,js,mjs}`, files inside a `.claude/mcp/*` subtree, or files that
- * reference `@modelcontextprotocol/sdk` as a header import. Skips node_modules
- * and .git. Returns absolute + repo-relative paths sorted by path. */
-function discoverMcpEntries(repoPath: string, maxDepth = 4): Array<{ entry: string; repoRelative: string }> {
-  const out: Array<{ entry: string; repoRelative: string }> = [];
+ * reference `@modelcontextprotocol/sdk` as a header import (Node) or contain
+ * known Python MCP fingerprints (.py). Skips node_modules, .git, .venv,
+ * __pycache__. Returns absolute + repo-relative paths sorted by path. */
+export function discoverMcpEntries(
+  repoPath: string,
+  maxDepth = 4,
+): Array<{ entry: string; repoRelative: string; detectedLanguage: 'python' | 'node' }> {
+  const out: Array<{ entry: string; repoRelative: string; detectedLanguage: 'python' | 'node' }> = [];
   const SDK_IMPORT = '@modelcontextprotocol/sdk';
+  const PY_FINGERPRINTS = [
+    'mcp.server.fastmcp',
+    'FastMCP',
+    'from mcp.server',
+    'mcp.run(',
+    '@mcp.tool',
+  ];
 
   function walk(dir: string, depth: number) {
     if (depth > maxDepth) return;
@@ -117,6 +128,7 @@ function discoverMcpEntries(repoPath: string, maxDepth = 4): Array<{ entry: stri
     try { entries = readdirSync(dir); } catch { return; }
     for (const name of entries) {
       if (name === 'node_modules' || name === '.git' || name.startsWith('.DS_')) continue;
+      if (name === '.venv' || name === '__pycache__') continue; // skip Python env dirs
       const full = join(dir, name);
       let st;
       try { st = statSync(full); } catch { continue; }
@@ -126,24 +138,37 @@ function discoverMcpEntries(repoPath: string, maxDepth = 4): Array<{ entry: stri
       }
       if (!st.isFile()) continue;
       const ext = extname(name).toLowerCase();
-      if (!['.ts', '.tsx', '.js', '.mjs', '.cjs'].includes(ext)) continue;
+      if (!['.ts', '.tsx', '.js', '.mjs', '.cjs', '.py'].includes(ext)) continue;
 
-      // Convention-based pickup: *.mcp.{ts,js,mjs} or .claude/mcp/**
-      const byConvention =
-        /\.mcp\.(ts|tsx|js|mjs|cjs)$/.test(name) ||
-        full.includes('/.claude/mcp/');
+      const isPython = ext === '.py';
 
-      // Content-based pickup: file imports the MCP SDK
+      // Convention-based pickup:
+      //   Node: *.mcp.{ts,tsx,js,mjs,cjs} or .claude/mcp/**
+      //   Python: any .py file inside .claude/mcp/** (REQ-002)
+      const byConvention = isPython
+        ? full.includes('/.claude/mcp/')
+        : /\.mcp\.(ts|tsx|js|mjs|cjs)$/.test(name) || full.includes('/.claude/mcp/');
+
+      // Content-based pickup: file imports the MCP SDK (Node) or contains
+      // Python MCP fingerprints (Python) — only read if not already accepted (REQ-003)
       let byContent = false;
       if (!byConvention && st.size < 200 * 1024) {
         try {
           const sample = readFileSync(full, 'utf8').slice(0, 4096);
-          byContent = sample.includes(SDK_IMPORT);
+          if (isPython) {
+            byContent = PY_FINGERPRINTS.some((fp) => sample.includes(fp));
+          } else {
+            byContent = sample.includes(SDK_IMPORT);
+          }
         } catch { /* ignore */ }
       }
 
       if (byConvention || byContent) {
-        out.push({ entry: full, repoRelative: relative(repoPath, full) });
+        out.push({
+          entry: full,
+          repoRelative: relative(repoPath, full),
+          detectedLanguage: isPython ? 'python' : 'node',
+        });
       }
     }
   }
@@ -344,6 +369,11 @@ export function mcpRoutes(db: Db): Router {
 
       if (bundleId && server._id) bundleService.markLinked(bundleId, server._id.toString());
 
+      // NFR-009: log Python MCP registrations once per record creation
+      if (source?.kind === 'repo' && extname(source.entryPath ?? '').toLowerCase() === '.py') {
+        console.log(`[mcp] registered Python MCP "${name}" command="${finalCommand ?? 'python3 (auto)'}" entry=${source.entryPath}`);
+      }
+
       syncUserToCodex(service, req).catch(() => {});
       res.status(201).json(server);
     } catch (err: unknown) {
@@ -475,6 +505,21 @@ export function mcpRoutes(db: Db): Router {
       const installDir = server.source.installPath
         ? resolvePath(repo.path, server.source.installPath)
         : resolvePath(repo.path, server.source.entryPath, '..');
+
+      // Python MCPs have no package.json — deps are user-managed via pip.
+      // Skip the npm install flow entirely rather than letting ensureInstalled
+      // throw "MCP installDir has no package.json". AC-009: Node MCPs without
+      // package.json still bubble through to ensureInstalled normally.
+      const entryExt = extname(server.source.entryPath ?? '').toLowerCase();
+      const hasPkgJson = existsSync(join(installDir, 'package.json'));
+      if (!hasPkgJson && entryExt === '.py') {
+        return res.json({
+          installDir,
+          skipped: true,
+          reason: 'python-no-auto-install',
+          message: 'Python MCP deps are user-managed. Ensure the interpreter specified in Command has the required packages installed.',
+        });
+      }
 
       forgetInstall(installDir);
       const result = await ensureInstalled(installDir);

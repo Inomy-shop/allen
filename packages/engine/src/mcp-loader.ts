@@ -77,8 +77,9 @@ function resolveArgKeys(argKeys: string[] | undefined): string[] {
 
 // ── New path: resolve source → command/args/cwd ────────────────────────────
 
-function inferCommand(entryPath: string): { command: string; leadingArgs: string[] } {
+export function inferCommand(entryPath: string): { command: string; leadingArgs: string[] } {
   const ext = extname(entryPath).toLowerCase();
+  if (ext === '.py') return { command: 'python3', leadingArgs: [] };
   if (ext === '.ts' || ext === '.tsx') return { command: 'npx', leadingArgs: ['tsx'] };
   return { command: 'node', leadingArgs: [] };
 }

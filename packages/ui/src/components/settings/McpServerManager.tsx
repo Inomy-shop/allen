@@ -7,6 +7,7 @@ import {
   type McpPreset,
   type McpDiscoverResult,
 } from '../../services/api';
+import { commandForExtension, commandForCandidate } from './mcp-command';
 import {
   Server, Plus, Trash2, RefreshCw, Power, PowerOff,
   CheckCircle, XCircle, HelpCircle, ExternalLink, ChevronDown, ChevronRight, Wrench,
@@ -57,7 +58,11 @@ function ServerCard({
       setFlash(result.status === 'connected'
         ? { kind: 'ok', text: `${result.toolCount ?? 0} tool${result.toolCount === 1 ? '' : 's'}` }
         : { kind: 'err', text: result.error ?? 'failed' });
-      onChange();
+      // Defer onChange so the flash has time to render before the parent's
+      // loading state unmounts ServerCard. React 18 batches synchronous state
+      // updates, so calling onChange() immediately would batch setLoading(true)
+      // with setFlash(...) and unmount the card before the flash paints.
+      setTimeout(() => onChange(), 300);
     } finally {
       setBusy(null);
       setTimeout(() => setFlash(null), 4000);
@@ -73,7 +78,14 @@ function ServerCard({
     setBusy('reinstall');
     try {
       const r = await api.reinstall(server._id);
-      setFlash({ kind: 'ok', text: r.skipped ? 'already installed' : `installed via ${r.packageManager} (${Math.round(r.durationMs / 1000)}s)` });
+      if (r.reason === 'python-no-auto-install') {
+        setFlash({ kind: 'ok', text: r.message ?? 'Python deps are user-managed.' });
+      } else {
+        setFlash({ kind: 'ok', text: r.skipped
+          ? 'already installed'
+          : `installed via ${r.packageManager ?? '?'} (${Math.round((r.durationMs ?? 0) / 1000)}s)`
+        });
+      }
     } catch (e) {
       setFlash({ kind: 'err', text: (e as Error).message });
     } finally {
@@ -419,6 +431,7 @@ function AddFromRepo({ onAdded, onClose }: { onAdded: () => void; onClose: () =>
   const [discovering, setDiscovering] = useState(false);
   const [entryPath, setEntryPath] = useState('');
   const [installPath, setInstallPath] = useState('');
+  const [command, setCommand] = useState<string>('');
   const [name, setName] = useState('');
   const [envKeysInput, setEnvKeysInput] = useState('');
   const [busy, setBusy] = useState(false);
@@ -465,6 +478,7 @@ function AddFromRepo({ onAdded, onClose }: { onAdded: () => void; onClose: () =>
           installPath: installPath || undefined,
         },
         envKeys,
+        command: command.trim() || undefined,
       });
       onAdded();
       onClose();
@@ -510,6 +524,8 @@ function AddFromRepo({ onAdded, onClose }: { onAdded: () => void; onClose: () =>
                     setEntryPath(e.target.value);
                     const last = e.target.value.lastIndexOf('/');
                     if (last > 0) setInstallPath(e.target.value.slice(0, last));
+                    const candidate = discover?.candidates.find((c) => c.repoRelative === e.target.value);
+                    if (candidate) setCommand(commandForCandidate(candidate));
                   }}
                 >
                   <option value="">Pick a candidate…</option>
@@ -522,7 +538,10 @@ function AddFromRepo({ onAdded, onClose }: { onAdded: () => void; onClose: () =>
                 type="text"
                 placeholder="or type path, e.g. .claude/mcp/postgres/server.mjs"
                 value={entryPath}
-                onChange={(e) => setEntryPath(e.target.value)}
+                onChange={(e) => {
+                  setEntryPath(e.target.value);
+                  if (e.target.value) setCommand(commandForExtension(e.target.value));
+                }}
                 className="w-full px-2.5 py-1.5 rounded-md border border-app bg-app-card text-theme-primary text-sm font-mono placeholder:text-theme-subtle focus:outline-none focus:border-accent-blue/60"
               />
             </div>
@@ -543,6 +562,21 @@ function AddFromRepo({ onAdded, onClose }: { onAdded: () => void; onClose: () =>
             <div className="text-[10px] text-theme-subtle mt-1 font-body">
               Directory containing <code className="font-mono text-theme-muted">package.json</code>. Leave blank to use the entry file's folder.
             </div>
+          </Field>
+
+          <Field label="Command">
+            <input
+              type="text"
+              value={command}
+              onChange={(e) => setCommand(e.target.value)}
+              placeholder="e.g. python3, venv/bin/python, node, npx tsx"
+              className="w-full px-2.5 py-1.5 rounded-md border border-app bg-app-card text-theme-primary text-sm font-mono placeholder:text-theme-subtle focus:outline-none focus:border-accent-blue/60"
+            />
+            {entryPath.toLowerCase().endsWith('.py') && (
+              <p className="text-[10px] text-theme-subtle font-body mt-1">
+                Python deps are not auto-installed. Ensure the specified interpreter has the required packages installed.
+              </p>
+            )}
           </Field>
 
           <Field label="Name">

@@ -667,7 +667,11 @@ export interface McpPreset {
 export interface McpDiscoverResult {
   repoId: string;
   repoPath: string;
-  candidates: Array<{ entry: string; repoRelative: string }>;
+  candidates: Array<{
+    entry: string;
+    repoRelative: string;
+    detectedLanguage: 'python' | 'node';
+  }>;
 }
 
 export const mcp = {
@@ -706,7 +710,14 @@ export const mcp = {
   discover: (repoId: string) => request<McpDiscoverResult>(`/mcp/servers/discover/${repoId}`),
   /** Bust the install cache + re-run `npm install` for a repo-sourced MCP. */
   reinstall: (id: string) =>
-    request<{ installDir: string; packageManager: string; durationMs: number; skipped: boolean }>(
+    request<{
+      installDir?: string;
+      packageManager?: string;
+      durationMs?: number;
+      skipped: boolean;
+      reason?: string;
+      message?: string;
+    }>(
       `/mcp/servers/${id}/reinstall`,
       { method: 'POST' },
     ),
