@@ -1235,6 +1235,7 @@ async function runSpawnInBackground(
       mcpEnvOverrides.push(
         '-c', `mcp_servers.${MCP_SERVER_NAME}.env.ALLEN_API_URL="http://localhost:${process.env.PORT ?? '4023'}"`,
         '-c', `mcp_servers.${MCP_SERVER_NAME}.env.JWT_ACCESS_SECRET="${process.env.JWT_ACCESS_SECRET ?? ''}"`,
+        '-c', `mcp_servers.${MCP_SERVER_NAME}.env.ALLEN_PUBLIC_URL="${process.env.ALLEN_PUBLIC_URL ?? `http://localhost:${process.env.PORT ?? '4023'}`}"`,
       );
 
       const args: string[] = ['exec'];
@@ -3007,6 +3008,7 @@ async function runAgentTurn(
           '-c', `mcp_servers.${MCP_SERVER_NAME}.env.ALLEN_CHAT_SESSION_ID="${activeCtx.chatSessionId}"`,
           '-c', `mcp_servers.${MCP_SERVER_NAME}.env.ALLEN_API_URL="http://localhost:${process.env.PORT ?? '4023'}"`,
           '-c', `mcp_servers.${MCP_SERVER_NAME}.env.JWT_ACCESS_SECRET="${process.env.JWT_ACCESS_SECRET ?? ''}"`,
+          '-c', `mcp_servers.${MCP_SERVER_NAME}.env.ALLEN_PUBLIC_URL="${process.env.ALLEN_PUBLIC_URL ?? `http://localhost:${process.env.PORT ?? '4023'}`}"`,
         );
       }
 
@@ -3201,6 +3203,7 @@ async function runAgentTurn(
         env: {
           ALLEN_API_URL: `http://localhost:${process.env.PORT ?? '4023'}`,
           JWT_ACCESS_SECRET: process.env.JWT_ACCESS_SECRET ?? '',
+          ALLEN_PUBLIC_URL: process.env.ALLEN_PUBLIC_URL ?? `http://localhost:${process.env.PORT ?? '4023'}`,
           // Artifact-root context so `allen_save_artifact` inside this
           // delegated agent routes files to the parent chat's Artifacts
           // panel instead of failing with "env vars not set". The Claude
