@@ -6,7 +6,7 @@ import { existsSync, mkdirSync, unlinkSync, readdirSync, readFileSync, statSync 
 import { join, relative, resolve as resolvePath, extname } from 'node:path';
 import multer from 'multer';
 import { ObjectId, type Db } from 'mongodb';
-import { forgetInstall, ensureInstalled } from '@allen/engine';
+import { forgetInstall, ensureInstalled, ensurePythonVenv, deletePythonVenv } from '@allen/engine';
 import { param } from '../types.js';
 import {
   McpService,
@@ -105,11 +105,22 @@ async function syncUserToCodex(service: McpService, req: AuthedRequest): Promise
 
 /** Scan a repo for candidate MCP entry files. Heuristics: files matching
  * `*.mcp.{ts,js,mjs}`, files inside a `.claude/mcp/*` subtree, or files that
- * reference `@modelcontextprotocol/sdk` as a header import. Skips node_modules
- * and .git. Returns absolute + repo-relative paths sorted by path. */
-function discoverMcpEntries(repoPath: string, maxDepth = 4): Array<{ entry: string; repoRelative: string }> {
-  const out: Array<{ entry: string; repoRelative: string }> = [];
+ * reference `@modelcontextprotocol/sdk` as a header import (Node) or contain
+ * known Python MCP fingerprints (.py). Skips node_modules, .git, .venv,
+ * __pycache__. Returns absolute + repo-relative paths sorted by path. */
+export function discoverMcpEntries(
+  repoPath: string,
+  maxDepth = 4,
+): Array<{ entry: string; repoRelative: string; detectedLanguage: 'python' | 'node' }> {
+  const out: Array<{ entry: string; repoRelative: string; detectedLanguage: 'python' | 'node' }> = [];
   const SDK_IMPORT = '@modelcontextprotocol/sdk';
+  const PY_FINGERPRINTS = [
+    'mcp.server.fastmcp',
+    'FastMCP',
+    'from mcp.server',
+    'mcp.run(',
+    '@mcp.tool',
+  ];
 
   function walk(dir: string, depth: number) {
     if (depth > maxDepth) return;
@@ -117,6 +128,7 @@ function discoverMcpEntries(repoPath: string, maxDepth = 4): Array<{ entry: stri
     try { entries = readdirSync(dir); } catch { return; }
     for (const name of entries) {
       if (name === 'node_modules' || name === '.git' || name.startsWith('.DS_')) continue;
+      if (name === '.venv' || name === '__pycache__') continue; // skip Python env dirs
       const full = join(dir, name);
       let st;
       try { st = statSync(full); } catch { continue; }
@@ -126,24 +138,37 @@ function discoverMcpEntries(repoPath: string, maxDepth = 4): Array<{ entry: stri
       }
       if (!st.isFile()) continue;
       const ext = extname(name).toLowerCase();
-      if (!['.ts', '.tsx', '.js', '.mjs', '.cjs'].includes(ext)) continue;
+      if (!['.ts', '.tsx', '.js', '.mjs', '.cjs', '.py'].includes(ext)) continue;
 
-      // Convention-based pickup: *.mcp.{ts,js,mjs} or .claude/mcp/**
-      const byConvention =
-        /\.mcp\.(ts|tsx|js|mjs|cjs)$/.test(name) ||
-        full.includes('/.claude/mcp/');
+      const isPython = ext === '.py';
 
-      // Content-based pickup: file imports the MCP SDK
+      // Convention-based pickup:
+      //   Node: *.mcp.{ts,tsx,js,mjs,cjs} or .claude/mcp/**
+      //   Python: any .py file inside .claude/mcp/** (REQ-002)
+      const byConvention = isPython
+        ? full.includes('/.claude/mcp/')
+        : /\.mcp\.(ts|tsx|js|mjs|cjs)$/.test(name) || full.includes('/.claude/mcp/');
+
+      // Content-based pickup: file imports the MCP SDK (Node) or contains
+      // Python MCP fingerprints (Python) — only read if not already accepted (REQ-003)
       let byContent = false;
       if (!byConvention && st.size < 200 * 1024) {
         try {
           const sample = readFileSync(full, 'utf8').slice(0, 4096);
-          byContent = sample.includes(SDK_IMPORT);
+          if (isPython) {
+            byContent = PY_FINGERPRINTS.some((fp) => sample.includes(fp));
+          } else {
+            byContent = sample.includes(SDK_IMPORT);
+          }
         } catch { /* ignore */ }
       }
 
       if (byConvention || byContent) {
-        out.push({ entry: full, repoRelative: relative(repoPath, full) });
+        out.push({
+          entry: full,
+          repoRelative: relative(repoPath, full),
+          detectedLanguage: isPython ? 'python' : 'node',
+        });
       }
     }
   }
@@ -221,6 +246,10 @@ export function mcpRoutes(db: Db): Router {
       try { oid = new ObjectId(repoId); } catch { return res.status(400).json({ error: 'invalid repoId' }); }
       const repo = await db.collection('repos').findOne({ _id: oid });
       if (!repo) return res.status(404).json({ error: 'repo not found' });
+      const requestOwnerId = ownerIdOf(req);
+      if (repo.ownerId && String(repo.ownerId) !== String(requestOwnerId)) {
+        return res.status(403).json({ error: 'repo belongs to another user' });
+      }
       if (typeof repo.path !== 'string' || !existsSync(repo.path)) {
         return res.status(400).json({ error: 'repo path does not exist on disk' });
       }
@@ -238,7 +267,7 @@ export function mcpRoutes(db: Db): Router {
         name, description, type, enabled,
         source, envKeys, argKeys,
         command, args, env, url, headers,
-        bundleId,
+        bundleId, python,
       } = req.body as {
         name?: string; description?: string; type?: McpServerRecord['type']; enabled?: boolean;
         source?: McpServerSource;
@@ -246,6 +275,7 @@ export function mcpRoutes(db: Db): Router {
         command?: string; args?: string[]; env?: Record<string, string>;
         url?: string; headers?: Record<string, string>;
         bundleId?: string;
+        python?: { interpreter?: string; requirementsPath?: string };
       };
       if (!name || !type) return res.status(400).json({ error: 'name and type are required' });
 
@@ -279,7 +309,7 @@ export function mcpRoutes(db: Db): Router {
         ].filter((k) => process.env[k] === undefined || process.env[k] === '');
         if (missing.length > 0) {
           return res.status(400).json({
-            error: `Missing required env var${missing.length > 1 ? 's' : ''} in Allen's .env: ${missing.join(', ')}. Add ${missing.length > 1 ? 'them' : 'it'} to /Users/shreemantkumar/flowforge/.env and restart the server.`,
+            error: `Missing required env var${missing.length > 1 ? 's' : ''} in Allen's .env: ${missing.join(', ')}. Add ${missing.length > 1 ? 'them' : 'it'} to Allen's .env and restart the server.`,
             missing,
           });
         }
@@ -305,7 +335,7 @@ export function mcpRoutes(db: Db): Router {
         const missing = needed.filter((k) => process.env[k] === undefined || process.env[k] === '');
         if (missing.length > 0) {
           return res.status(400).json({
-            error: `Missing required env var${missing.length > 1 ? 's' : ''} in Allen's .env: ${missing.join(', ')}. Add ${missing.length > 1 ? 'them' : 'it'} to /Users/shreemantkumar/flowforge/.env and restart the server.`,
+            error: `Missing required env var${missing.length > 1 ? 's' : ''} in Allen's .env: ${missing.join(', ')}. Add ${missing.length > 1 ? 'them' : 'it'} to Allen's .env and restart the server.`,
             missing,
           });
         }
@@ -326,6 +356,19 @@ export function mcpRoutes(db: Db): Router {
         bundleEntry = meta.entry;
       }
 
+      // Persist python block ONLY for repo-sourced .py entries with no manual
+      // command override. Other shapes ignore it — keeps the record clean.
+      const isPythonRepoMcp =
+        source?.kind === 'repo' &&
+        extname(source.entryPath ?? '').toLowerCase() === '.py' &&
+        !finalCommand;
+      const finalPython = isPythonRepoMcp
+        ? {
+            interpreter: python?.interpreter || 'python3',
+            ...(python?.requirementsPath ? { requirementsPath: python.requirementsPath } : {}),
+          }
+        : undefined;
+
       const server = await service.create({
         ownerId,
         name,
@@ -340,9 +383,15 @@ export function mcpRoutes(db: Db): Router {
         env,            // legacy literal env — passthrough, may contain @secret:KEY refs
         url, headers,
         bundleId, bundlePath, bundleEntry,
+        python: finalPython,
       } as Parameters<typeof service.create>[0]);
 
       if (bundleId && server._id) bundleService.markLinked(bundleId, server._id.toString());
+
+      // NFR-009: log Python MCP registrations once per record creation
+      if (source?.kind === 'repo' && extname(source.entryPath ?? '').toLowerCase() === '.py') {
+        console.log(`[mcp] registered Python MCP "${name}" command="${finalCommand ?? 'python3 (auto)'}" entry=${source.entryPath}`);
+      }
 
       syncUserToCodex(service, req).catch(() => {});
       res.status(201).json(server);
@@ -414,6 +463,10 @@ export function mcpRoutes(db: Db): Router {
       }
       await service.delete(id);
       if (existing.bundleId) bundleService.delete(existing.bundleId);
+      // Wipe Allen-managed Python venv (no-op for non-Python MCPs).
+      try { deletePythonVenv(id); } catch (err) {
+        console.warn(`[mcp] failed to wipe venv for ${id}:`, (err as Error).message);
+      }
       syncUserToCodex(service, req).catch(() => {});
       res.status(204).send();
     } catch (err: unknown) {
@@ -475,6 +528,54 @@ export function mcpRoutes(db: Db): Router {
       const installDir = server.source.installPath
         ? resolvePath(repo.path, server.source.installPath)
         : resolvePath(repo.path, server.source.entryPath, '..');
+
+      const entryExt = extname(server.source.entryPath ?? '').toLowerCase();
+      const hasPkgJson = existsSync(join(installDir, 'package.json'));
+
+      // Python MCPs (no manual command override): wipe the Allen-managed venv
+      // and let the next spawn recreate it via ensurePythonVenv. Eager-trigger
+      // ensurePythonVenv here so the user sees the install timing in the
+      // response instead of waiting for the next chat turn.
+      if (entryExt === '.py' && !server.command) {
+        const interpreter = server.python?.interpreter || 'python3';
+
+        // Resolve requirements.txt: explicit on the record, else sibling auto-detect.
+        let requirementsAbsPath: string | null = null;
+        const explicit = server.python?.requirementsPath;
+        if (explicit) {
+          requirementsAbsPath = resolvePath(repo.path, explicit);
+        } else {
+          const sibling = resolvePath(repo.path, server.source.entryPath, '..', 'requirements.txt');
+          if (existsSync(sibling)) requirementsAbsPath = sibling;
+        }
+
+        try {
+          deletePythonVenv(id);
+          const status = await ensurePythonVenv({
+            mcpId: id,
+            interpreter,
+            requirementsAbsPath,
+          });
+          return res.json({
+            installDir: status.venvPath,
+            packageManager: 'pip',
+            durationMs: status.durationMs,
+            skipped: false,
+            requirementsInstalled: status.installed,
+            requirementsPath: requirementsAbsPath ? relative(repo.path, requirementsAbsPath) : null,
+          });
+        } catch (err) {
+          return res.status(500).json({
+            error: `pip install failed: ${(err as Error).message}`,
+          });
+        }
+      }
+
+      if (!hasPkgJson) {
+        return res.status(400).json({
+          error: `installDir has no package.json: ${installDir}`,
+        });
+      }
 
       forgetInstall(installDir);
       const result = await ensureInstalled(installDir);

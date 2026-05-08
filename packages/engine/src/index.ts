@@ -17,7 +17,16 @@ export { loadMcpServers, loadAllMcpServers, getAllenMcpConfig, buildSingleServer
 export { queryViaCli, type CliQueryOptions } from './cli-runner.js';
 export { writeAgentFile, renderAgentFile, ARTIFACTS_GUIDANCE, withArtifactsGuidance, NON_INTERACTIVE_GUIDANCE, withNonInteractiveGuidance, type AgentSpec, type MaterializedAgent } from './agent-file-writer.js';
 export { expandToClaudeTools } from './tool-mapping.js';
-export { ensureInstalled, forgetInstall, type InstallStatus } from './mcp-install.js';
+export {
+  ensureInstalled,
+  forgetInstall,
+  ensurePythonVenv,
+  deletePythonVenv,
+  venvPathFor,
+  type InstallStatus,
+  type PythonVenvStatus,
+  type EnsurePythonVenvOptions,
+} from './mcp-install.js';
 export { normalizeModelAlias } from './model-alias.js';
 export {
   synthesizeClarifyContext, needsSynthesis,

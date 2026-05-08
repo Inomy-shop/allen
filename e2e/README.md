@@ -30,15 +30,16 @@ On an AWS EC2 deploy, the bootstrap script (`infra/templates/bootstrap.sh`)
 installs the Chromium browser bundle and its system libs automatically, so
 `npm run test:e2e` on the server works with no additional steps.
 
-## What's covered — 82 tests in 16 spec files
+## What's covered — 88 tests in 16 spec files
 
 | Area | Specs |
 |---|---|
 | **Workspace lifecycle** | `workspace.spec.ts`, `workspace-sandbox.spec.ts` |
-| **Workspace features** | `workspace-terminal.spec.ts`, `workspace-chat.spec.ts`, `workspace-image-preview.spec.ts`, `workspace-security-hardening.spec.ts` |
+| **Workspace features** | `workspace-terminal.spec.ts`, `workspace-chat.spec.ts`, `workspace-image-preview.spec.ts`, `workspace-security-hardening.spec.ts`, `workspace-panels.spec.ts` |
 | **Executions & agents** | `agent-execution.spec.ts`, `agent-live-test.spec.ts`, `exec-logs-test.spec.ts`, `exec-desc-test.spec.ts` |
 | **Repos** | `repo-list.spec.ts` |
-| **Editor / UI widgets** | `monaco-test.spec.ts`, `markdown-preview.spec.ts`, `scroll-test.spec.ts`, `icon-theme.spec.ts`, `terminal-screenshot.spec.ts` |
+| **MCP** | `mcp-python.spec.ts` |
+| **Editor / UI widgets** | `markdown-preview.spec.ts`, `icon-theme.spec.ts`, `terminal-screenshot.spec.ts` |
 
 ## Configuration
 

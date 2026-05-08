@@ -643,6 +643,8 @@ export interface McpServer {
   args?: string[];
   url?: string;
   headers?: Record<string, string>;
+  /** Python venv config for repo-sourced .py MCPs without a manual command override. */
+  python?: { interpreter?: string; requirementsPath?: string };
   status: 'connected' | 'failed' | 'untested' | 'disabled';
   lastTestedAt?: string;
   lastError?: string;
@@ -667,7 +669,11 @@ export interface McpPreset {
 export interface McpDiscoverResult {
   repoId: string;
   repoPath: string;
-  candidates: Array<{ entry: string; repoRelative: string }>;
+  candidates: Array<{
+    entry: string;
+    repoRelative: string;
+    detectedLanguage: 'python' | 'node';
+  }>;
 }
 
 export const mcp = {
@@ -690,6 +696,8 @@ export const mcp = {
     args?: string[];
     url?: string;
     headers?: Record<string, string>;
+    /** Python venv config — sent only for .py entries without a manual command override. */
+    python?: { interpreter?: string; requirementsPath?: string };
   }) => request<McpServer>('/mcp/servers', { method: 'POST', body: JSON.stringify(body) }),
   update: (id: string, body: Partial<McpServer>) =>
     request<McpServer>(`/mcp/servers/${id}`, { method: 'PUT', body: JSON.stringify(body) }),
@@ -704,9 +712,19 @@ export const mcp = {
     ),
   /** Scan a registered repo for likely MCP entry files. */
   discover: (repoId: string) => request<McpDiscoverResult>(`/mcp/servers/discover/${repoId}`),
-  /** Bust the install cache + re-run `npm install` for a repo-sourced MCP. */
+  /** Bust the install cache + re-run `npm install` (Node) or recreate the
+   * venv (Python) for a repo-sourced MCP. */
   reinstall: (id: string) =>
-    request<{ installDir: string; packageManager: string; durationMs: number; skipped: boolean }>(
+    request<{
+      installDir?: string;
+      packageManager?: string;
+      durationMs?: number;
+      skipped: boolean;
+      reason?: string;
+      message?: string;
+      requirementsInstalled?: boolean;
+      requirementsPath?: string | null;
+    }>(
       `/mcp/servers/${id}/reinstall`,
       { method: 'POST' },
     ),
