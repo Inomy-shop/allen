@@ -55,7 +55,7 @@ Important files:
 - `src/template.ts` - template rendering and binding capture for node inputs.
 - `src/router.ts` - agent routing rules consumed by chat and built-in nodes.
 - `src/agents-loader.ts` and `agents.yml` - agent definitions for teams and specialists.
-- `src/mcp-loader.ts` and `src/mcp-install.ts` - MCP server loading, installation, and `ALLEN_`-prefix env mapping. Supports both Node.js (`.ts`/`.js`/`.mjs`) and Python (`.py`) entry files; Python MCPs default to `python3` and skip automatic `npm install`.
+- `src/mcp-loader.ts` and `src/mcp-install.ts` - MCP server loading, installation, and `ALLEN_`-prefix env mapping. Supports both Node.js (`.ts`/`.js`/`.mjs`) and Python (`.py`) entry files. Python MCPs get a per-MCP virtual environment at `<ALLEN_HOME>/venvs/<mcpId>/` with `requirements.txt` auto-installed on first spawn (`ensurePythonVenv`). Setting a manual **Command** override opts out of venv management; the user takes ownership of the interpreter.
 - `src/output-extractor.ts` - output parsing from model responses.
 - `src/state-manager.ts` - persisted execution state.
 - `src/learning-manager.ts` - learnings capture, retrieval, and prompt injection.
@@ -221,7 +221,7 @@ Allen has integration paths for:
 - MCP server presets and custom MCP servers.
 - Cron-driven background tasks.
 
-Integration credentials are read from `.env`. MCP servers use the `ALLEN_` prefix convention: an MCP-required key like `GITHUB_PERSONAL_ACCESS_TOKEN` is read from `ALLEN_GITHUB_PERSONAL_ACCESS_TOKEN` and forwarded to the MCP subprocess without the prefix. Both Node.js and Python MCP servers follow this model. Python MCPs require `python3` (or a custom interpreter) on `PATH`; their dependencies are not managed by Allen and must be installed separately by the user.
+Integration credentials are read from `.env`. MCP servers use the `ALLEN_` prefix convention: an MCP-required key like `GITHUB_PERSONAL_ACCESS_TOKEN` is read from `ALLEN_GITHUB_PERSONAL_ACCESS_TOKEN` and forwarded to the MCP subprocess without the prefix. Both Node.js and Python MCP servers follow this model. Python MCPs require `python3` (or a custom bootstrap interpreter) on `PATH`; Allen creates an isolated venv per MCP at `<ALLEN_HOME>/venvs/<mcpId>/` and installs `requirements.txt` into it on first spawn. To update deps, click **Reinstall** in Settings → MCP Servers (wipes the venv) or delete and re-add the MCP. A manual **Command** override (e.g. pointing at an existing project venv) opts out of Allen-managed venv creation.
 
 ### Linear Integration
 

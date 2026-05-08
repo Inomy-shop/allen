@@ -309,27 +309,33 @@ Restart Allen after editing `.env`.
 
 ## Python MCP Server Does Not Start
 
-Python MCP servers are spawned with `python3` (or the command you specify) and Allen does **not** auto-install their Python dependencies. If the server fails to start:
+For repo-sourced MCP servers whose entry file ends in `.py`, Allen creates an isolated Python virtual environment per MCP at `<ALLEN_HOME>/venvs/<mcpId>/` (typically `~/.allen/venvs/<mcpId>/`) and installs `requirements.txt` into it on the first spawn. Each MCP gets its own venv, so dep versions never collide between MCPs.
 
-1. Verify `python3` is on `PATH`:
+When the **Test connection** error reads `process exited prematurely` followed by `stderr: ModuleNotFoundError: No module named '<pkg>'`, the entry file imports a package that isn't in the MCP's `requirements.txt`. Add it to `requirements.txt` next to the entry file, then either:
 
-   ```bash
-   python3 --version
-   ```
+1. Click **Reinstall** in Settings → MCP Servers (wipes the venv and re-runs `pip install -r requirements.txt`), OR
+2. Delete the MCP and re-add it.
 
-2. Install the required packages manually into the interpreter Allen will use, for example:
+To bootstrap the venv, Allen needs a base interpreter on `PATH`. Verify it:
 
-   ```bash
-   pip3 install mcp fastmcp  # or whatever the server requires
-   ```
+```bash
+python3 --version
+```
 
-3. If you need a virtual environment, specify its interpreter in the **Command** field when registering or editing the server (e.g., `venv/bin/python`).
+You can override the bootstrap interpreter (e.g. to pin `python3.11`) via the **Python interpreter** field when adding/editing the MCP. The interpreter is only used once — to create the venv. After that, every spawn uses `<venvPath>/bin/python`.
 
-4. Click **Test connection** in Settings → MCP Servers to confirm the server starts and lists its tools.
+### Manual interpreter (escape hatch)
 
-Note: the **Reinstall** button is shown for repo-sourced MCP servers but deliberately skips Python servers — it returns a `python-no-auto-install` skip notice instead of running `npm install`.
+If you'd rather manage the interpreter yourself (e.g. you have an existing project venv with the deps already installed), fill in the **Command** field with the path to that interpreter (`venv/bin/python`, `/opt/homebrew/bin/python3.11`, etc.). When **Command** is set, Allen skips venv creation and `pip install` entirely — the interpreter you specify must already have the required packages.
 
-Allen resolves any `envKeys` you configure for the Python server using the same `ALLEN_<KEY>` convention as Node MCP servers.
+### Updating dependencies
+
+Allen does **not** detect changes to `requirements.txt` automatically. To pick up new or upgraded deps:
+
+- Click **Reinstall** in Settings → MCP Servers, **or**
+- Delete the MCP and re-add it (this also wipes the venv).
+
+`envKeys` you configure are resolved using the same `ALLEN_<KEY>` convention as Node MCP servers.
 
 ## Public Artifact or File Link Exposes Sensitive Data
 

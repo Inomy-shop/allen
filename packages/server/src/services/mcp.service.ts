@@ -51,6 +51,20 @@ export interface McpServerRecord {
    */
   envKeys?: string[];
 
+  /**
+   * Python-specific config. Set when source is a repo entry ending in .py
+   * AND the user has not supplied a manual `command` override. Allen creates
+   * a per-MCP venv at <ALLEN_HOME>/venvs/<_id>/ on first spawn, runs
+   * `pip install -r <requirementsPath>` once, and spawns subsequent runs with
+   * that venv's python. To pick up dep changes, delete the MCP and re-add it.
+   */
+  python?: {
+    /** Bootstrap interpreter (e.g. 'python3' or absolute path). Default 'python3'. */
+    interpreter?: string;
+    /** Repo-relative path to requirements.txt. Auto-detected from sibling file when blank. */
+    requirementsPath?: string;
+  };
+
   // stdio
   command?: string;
   args?: string[];

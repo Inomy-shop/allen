@@ -12,7 +12,7 @@ import { tmpdir } from 'os';
 import express from 'express';
 import request from 'supertest';
 import { McpService } from '../services/mcp.service.js';
-import { ensureInstalled } from '@allen/engine';
+import { ensureInstalled, ensurePythonVenv, deletePythonVenv } from '@allen/engine';
 
 // ── Module-level mocks (hoisted before imports by vitest) ────────────────────
 
@@ -38,6 +38,8 @@ vi.mock('../services/mcp-bundle.service.js', () => ({
 vi.mock('@allen/engine', () => ({
   forgetInstall: vi.fn(),
   ensureInstalled: vi.fn(),
+  ensurePythonVenv: vi.fn(),
+  deletePythonVenv: vi.fn(),
   buildSingleServerConfig: vi.fn().mockResolvedValue(null),
 }));
 
@@ -318,9 +320,21 @@ describe('POST /api/mcp/servers/:id/reinstall', () => {
     vi.mocked(existsSync).mockReturnValue(true);
   });
 
-  it('returns 200 skip payload for Python entry with no package.json', async () => {
-    // existsSync(join(installDir, 'package.json')) → false
+  it('Python entry: wipes venv and re-runs ensurePythonVenv via the Reinstall button', async () => {
+    // existsSync controls two things in this handler: package.json detection
+    // (we want false → not a Node MCP) and sibling requirements.txt detection
+    // (we want false → no requirements). Both stay false in this scenario.
     vi.mocked(existsSync).mockReturnValue(false);
+    vi.mocked(ensurePythonVenv).mockResolvedValue({
+      venvPath: '/tmp/venvs/py-srv-1',
+      pythonBin: '/tmp/venvs/py-srv-1/bin/python',
+      durationMs: 1234,
+      skipped: false,
+      created: true,
+      installed: false,
+      stdout: '',
+      stderr: '',
+    });
 
     const server = {
       ownerId: null,
@@ -336,17 +350,20 @@ describe('POST /api/mcp/servers/:id/reinstall', () => {
     const res = await request(app).post('/api/mcp/servers/py-srv-1/reinstall');
 
     expect(res.status).toBe(200);
-    expect(res.body.skipped).toBe(true);
-    expect(res.body.reason).toBe('python-no-auto-install');
-    expect(res.body.message).toContain('Python MCP deps are user-managed');
+    expect(res.body.packageManager).toBe('pip');
+    expect(res.body.requirementsInstalled).toBe(false);
+    expect(res.body.requirementsPath).toBeNull();
+    expect(deletePythonVenv).toHaveBeenCalledWith('py-srv-1');
+    expect(ensurePythonVenv).toHaveBeenCalledWith(expect.objectContaining({
+      mcpId: 'py-srv-1',
+      interpreter: 'python3',
+      requirementsAbsPath: null,
+    }));
   });
 
-  it('returns 500 for Node entry with no package.json (ensureInstalled throws)', async () => {
+  it('returns 400 for Node entry with no package.json (clear error, no ensureInstalled call)', async () => {
     // existsSync → false (no package.json), entryPath is .ts → not Python
     vi.mocked(existsSync).mockReturnValue(false);
-    vi.mocked(ensureInstalled).mockRejectedValue(
-      new Error('MCP installDir has no package.json'),
-    );
 
     const server = {
       ownerId: null,
@@ -361,7 +378,9 @@ describe('POST /api/mcp/servers/:id/reinstall', () => {
     const app = buildApp(server, repo);
     const res = await request(app).post('/api/mcp/servers/node-srv-1/reinstall');
 
-    expect(res.status).toBe(500);
+    expect(res.status).toBe(400);
+    expect(res.body.error).toContain('package.json');
+    expect(ensureInstalled).not.toHaveBeenCalled();
   });
 
   it('returns 400 for non-repo server', async () => {

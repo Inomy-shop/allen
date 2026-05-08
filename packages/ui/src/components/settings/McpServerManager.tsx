@@ -78,14 +78,19 @@ function ServerCard({
     setBusy('reinstall');
     try {
       const r = await api.reinstall(server._id);
-      if (r.reason === 'python-no-auto-install') {
-        setFlash({ kind: 'ok', text: r.message ?? 'Python deps are user-managed.' });
+      const pm = r.packageManager ?? '?';
+      const seconds = Math.round((r.durationMs ?? 0) / 1000);
+      let text: string;
+      if (r.skipped) {
+        text = 'already installed';
+      } else if (pm === 'pip') {
+        text = r.requirementsInstalled
+          ? `venv recreated, installed ${r.requirementsPath ?? 'requirements.txt'} (${seconds}s)`
+          : `empty venv recreated — no requirements.txt (${seconds}s)`;
       } else {
-        setFlash({ kind: 'ok', text: r.skipped
-          ? 'already installed'
-          : `installed via ${r.packageManager ?? '?'} (${Math.round((r.durationMs ?? 0) / 1000)}s)`
-        });
+        text = `installed via ${pm} (${seconds}s)`;
       }
+      setFlash({ kind: 'ok', text });
     } catch (e) {
       setFlash({ kind: 'err', text: (e as Error).message });
     } finally {
@@ -432,11 +437,23 @@ function AddFromRepo({ onAdded, onClose }: { onAdded: () => void; onClose: () =>
   const [entryPath, setEntryPath] = useState('');
   const [installPath, setInstallPath] = useState('');
   const [command, setCommand] = useState<string>('');
+  const [pythonInterpreter, setPythonInterpreter] = useState<string>('python3');
+  const [requirementsPath, setRequirementsPath] = useState<string>('');
   const [name, setName] = useState('');
   const [envKeysInput, setEnvKeysInput] = useState('');
   const [busy, setBusy] = useState(false);
   const [missing, setMissing] = useState<string[] | null>(null);
   const [error, setError] = useState<string | null>(null);
+
+  const isPyEntry = entryPath.toLowerCase().endsWith('.py');
+  // Default the requirements path to a sibling file when entry is .py and the
+  // user hasn't typed one. This is a best-effort hint — the backend tolerates
+  // a missing file (creates an empty venv with a console warning).
+  const requirementsDefault = useMemo(() => {
+    if (!isPyEntry || !entryPath) return '';
+    const last = entryPath.lastIndexOf('/');
+    return last > 0 ? `${entryPath.slice(0, last)}/requirements.txt` : 'requirements.txt';
+  }, [isPyEntry, entryPath]);
 
   useEffect(() => {
     reposApi.list().then((list) =>
@@ -466,6 +483,16 @@ function AddFromRepo({ onAdded, onClose }: { onAdded: () => void; onClose: () =>
     setError(null);
     setBusy(true);
     try {
+      const trimmedCommand = command.trim();
+      // Send python block ONLY for .py entries with no manual command override.
+      // Backend ignores it for other shapes; sending it unconditionally would
+      // pollute non-Python records.
+      const pythonBlock = isPyEntry && !trimmedCommand
+        ? {
+            interpreter: pythonInterpreter.trim() || 'python3',
+            ...(requirementsPath.trim() ? { requirementsPath: requirementsPath.trim() } : {}),
+          }
+        : undefined;
       await api.create({
         name: name.trim(),
         type: 'stdio',
@@ -478,7 +505,8 @@ function AddFromRepo({ onAdded, onClose }: { onAdded: () => void; onClose: () =>
           installPath: installPath || undefined,
         },
         envKeys,
-        command: command.trim() || undefined,
+        command: trimmedCommand || undefined,
+        python: pythonBlock,
       });
       onAdded();
       onClose();
@@ -525,7 +553,11 @@ function AddFromRepo({ onAdded, onClose }: { onAdded: () => void; onClose: () =>
                     const last = e.target.value.lastIndexOf('/');
                     if (last > 0) setInstallPath(e.target.value.slice(0, last));
                     const candidate = discover?.candidates.find((c) => c.repoRelative === e.target.value);
-                    if (candidate) setCommand(commandForCandidate(candidate));
+                    // For Python candidates, leave Command empty so Allen
+                    // creates an isolated venv; user can override manually.
+                    if (candidate) {
+                      setCommand(candidate.detectedLanguage === 'python' ? '' : commandForCandidate(candidate));
+                    }
                   }}
                 >
                   <option value="">Pick a candidate…</option>
@@ -539,8 +571,10 @@ function AddFromRepo({ onAdded, onClose }: { onAdded: () => void; onClose: () =>
                 placeholder="or type path, e.g. .claude/mcp/postgres/server.mjs"
                 value={entryPath}
                 onChange={(e) => {
-                  setEntryPath(e.target.value);
-                  if (e.target.value) setCommand(commandForExtension(e.target.value));
+                  const v = e.target.value;
+                  setEntryPath(v);
+                  // .py → empty (Allen-managed venv); other ext → auto-fill node/npx tsx.
+                  if (v) setCommand(v.toLowerCase().endsWith('.py') ? '' : commandForExtension(v));
                 }}
                 className="w-full px-2.5 py-1.5 rounded-md border border-app bg-app-card text-theme-primary text-sm font-mono placeholder:text-theme-subtle focus:outline-none focus:border-accent-blue/60"
               />
@@ -569,15 +603,50 @@ function AddFromRepo({ onAdded, onClose }: { onAdded: () => void; onClose: () =>
               type="text"
               value={command}
               onChange={(e) => setCommand(e.target.value)}
-              placeholder="e.g. python3, venv/bin/python, node, npx tsx"
+              placeholder={isPyEntry ? 'leave blank — Allen will create a venv' : 'e.g. node, npx tsx'}
               className="w-full px-2.5 py-1.5 rounded-md border border-app bg-app-card text-theme-primary text-sm font-mono placeholder:text-theme-subtle focus:outline-none focus:border-accent-blue/60"
             />
-            {entryPath.toLowerCase().endsWith('.py') && (
+            {isPyEntry && !command && (
               <p className="text-[10px] text-theme-subtle font-body mt-1">
-                Python deps are not auto-installed. Ensure the specified interpreter has the required packages installed.
+                Allen will create an isolated venv at <code className="font-mono text-theme-muted">~/.allen/venvs/&lt;id&gt;/</code> and install requirements.txt on first spawn.
+              </p>
+            )}
+            {isPyEntry && command && (
+              <p className="text-[10px] text-theme-subtle font-body mt-1">
+                Manual command set — Allen will skip venv creation. The interpreter you specify must have the required packages installed.
               </p>
             )}
           </Field>
+
+          {isPyEntry && !command && (
+            <>
+              <Field label="Python interpreter">
+                <input
+                  type="text"
+                  value={pythonInterpreter}
+                  onChange={(e) => setPythonInterpreter(e.target.value)}
+                  placeholder="python3"
+                  className="w-full px-2.5 py-1.5 rounded-md border border-app bg-app-card text-theme-primary text-sm font-mono placeholder:text-theme-subtle focus:outline-none focus:border-accent-blue/60"
+                />
+                <div className="text-[10px] text-theme-subtle mt-1 font-body">
+                  Used once to bootstrap the venv (e.g. <code className="font-mono text-theme-muted">python3.11</code>). Must be on PATH or absolute.
+                </div>
+              </Field>
+
+              <Field label="requirements.txt">
+                <input
+                  type="text"
+                  value={requirementsPath}
+                  onChange={(e) => setRequirementsPath(e.target.value)}
+                  placeholder={requirementsDefault || 'auto-detected sibling'}
+                  className="w-full px-2.5 py-1.5 rounded-md border border-app bg-app-card text-theme-primary text-sm font-mono placeholder:text-theme-subtle focus:outline-none focus:border-accent-blue/60"
+                />
+                <div className="text-[10px] text-theme-subtle mt-1 font-body">
+                  Repo-relative path. Leave blank to auto-detect a sibling <code className="font-mono text-theme-muted">requirements.txt</code> next to the entry. To update deps later, delete this MCP and re-add it.
+                </div>
+              </Field>
+            </>
+          )}
 
           <Field label="Name">
             <input

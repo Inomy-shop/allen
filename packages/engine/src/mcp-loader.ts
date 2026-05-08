@@ -18,7 +18,7 @@ import { type Db, ObjectId } from 'mongodb';
 import { resolve, join, dirname, extname, isAbsolute } from 'node:path';
 import { existsSync } from 'node:fs';
 
-import { ensureInstalled } from './mcp-install.js';
+import { ensureInstalled, ensurePythonVenv } from './mcp-install.js';
 
 // ── env allowlist from process.env (ALLEN_<key> → <key>) ───────────────────
 
@@ -142,8 +142,76 @@ async function resolveSourcedStdio(
       return null;
     }
 
-    // Install deps once per installDir per process lifetime. If package.json
-    // is absent (some MCP servers are single-file with no deps), skip silently.
+    const isPython = extname(entryAbs).toLowerCase() === '.py';
+    const hasManualCommand = typeof s.command === 'string' && (s.command as string).length > 0;
+
+    // Python venv path: when the user has NOT supplied a manual Command override,
+    // Allen owns the interpreter — provisions a per-MCP venv at
+    // <ALLEN_HOME>/venvs/<mcpId>/, runs `pip install -r requirements.txt` once,
+    // and spawns with that venv's python. Manual Command opts out entirely
+    // (escape hatch for users who manage their own interpreter).
+    if (isPython && !hasManualCommand) {
+      const mcpId = String(s._id ?? '');
+      if (!mcpId) {
+        console.error(`[mcp-loader] Python MCP "${s.name}" has no _id — cannot derive venv path`);
+        return null;
+      }
+
+      const py = (s.python as Record<string, unknown> | undefined) ?? {};
+      const interpreter = (py.interpreter as string | undefined) ?? 'python3';
+
+      // Resolve requirements.txt: explicit path on the record wins, otherwise
+      // auto-detect a sibling file next to the entry. Path-traversal-guard the
+      // explicit case the same way we guard entryPath.
+      let requirementsAbsPath: string | null = null;
+      const explicitReq = py.requirementsPath as string | undefined;
+      if (explicitReq) {
+        const reqAbs = isAbsolute(explicitReq) ? explicitReq : resolve(repoPath, explicitReq);
+        if (!reqAbs.startsWith(normRepoPath + '/') && reqAbs !== normRepoPath) {
+          console.error(`[mcp-loader] requirementsPath "${explicitReq}" escapes repo ${repoPath}`);
+          return null;
+        }
+        if (!existsSync(reqAbs)) {
+          console.warn(`[mcp-loader] requirementsPath "${explicitReq}" does not exist — skipping pip install`);
+        } else {
+          requirementsAbsPath = reqAbs;
+        }
+      } else {
+        const sibling = join(dirname(entryAbs), 'requirements.txt');
+        if (existsSync(sibling)) requirementsAbsPath = sibling;
+      }
+
+      let pythonBin: string;
+      try {
+        const status = await ensurePythonVenv({
+          mcpId,
+          interpreter,
+          requirementsAbsPath,
+        });
+        pythonBin = status.pythonBin;
+        if (status.created || status.installed) {
+          console.log(
+            `[mcp-loader] provisioned venv for "${s.name}" at ${status.venvPath} ` +
+            `(${Math.round(status.durationMs / 1000)}s${status.installed ? ', installed deps' : ''})`,
+          );
+        }
+      } catch (err) {
+        console.error(`[mcp-loader] venv setup failed for "${s.name}":`, (err as Error).message);
+        return null;
+      }
+
+      const args = [entryAbs, ...extraArgs, ...resolveArgKeys(argKeys)];
+      return {
+        type: 'stdio',
+        command: pythonBin,
+        args,
+        env: buildEnvFromAllowlist(envKeys, extraEnv),
+        cwd: installDir,
+      };
+    }
+
+    // Node path (and Python with manual Command override) — fall through to
+    // npm install + auto-inferred command.
     if (existsSync(join(installDir, 'package.json'))) {
       try {
         await ensureInstalled(installDir);

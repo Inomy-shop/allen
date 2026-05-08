@@ -6,7 +6,7 @@ import { existsSync, mkdirSync, unlinkSync, readdirSync, readFileSync, statSync 
 import { join, relative, resolve as resolvePath, extname } from 'node:path';
 import multer from 'multer';
 import { ObjectId, type Db } from 'mongodb';
-import { forgetInstall, ensureInstalled } from '@allen/engine';
+import { forgetInstall, ensureInstalled, ensurePythonVenv, deletePythonVenv } from '@allen/engine';
 import { param } from '../types.js';
 import {
   McpService,
@@ -267,7 +267,7 @@ export function mcpRoutes(db: Db): Router {
         name, description, type, enabled,
         source, envKeys, argKeys,
         command, args, env, url, headers,
-        bundleId,
+        bundleId, python,
       } = req.body as {
         name?: string; description?: string; type?: McpServerRecord['type']; enabled?: boolean;
         source?: McpServerSource;
@@ -275,6 +275,7 @@ export function mcpRoutes(db: Db): Router {
         command?: string; args?: string[]; env?: Record<string, string>;
         url?: string; headers?: Record<string, string>;
         bundleId?: string;
+        python?: { interpreter?: string; requirementsPath?: string };
       };
       if (!name || !type) return res.status(400).json({ error: 'name and type are required' });
 
@@ -355,6 +356,19 @@ export function mcpRoutes(db: Db): Router {
         bundleEntry = meta.entry;
       }
 
+      // Persist python block ONLY for repo-sourced .py entries with no manual
+      // command override. Other shapes ignore it — keeps the record clean.
+      const isPythonRepoMcp =
+        source?.kind === 'repo' &&
+        extname(source.entryPath ?? '').toLowerCase() === '.py' &&
+        !finalCommand;
+      const finalPython = isPythonRepoMcp
+        ? {
+            interpreter: python?.interpreter || 'python3',
+            ...(python?.requirementsPath ? { requirementsPath: python.requirementsPath } : {}),
+          }
+        : undefined;
+
       const server = await service.create({
         ownerId,
         name,
@@ -369,6 +383,7 @@ export function mcpRoutes(db: Db): Router {
         env,            // legacy literal env — passthrough, may contain @secret:KEY refs
         url, headers,
         bundleId, bundlePath, bundleEntry,
+        python: finalPython,
       } as Parameters<typeof service.create>[0]);
 
       if (bundleId && server._id) bundleService.markLinked(bundleId, server._id.toString());
@@ -448,6 +463,10 @@ export function mcpRoutes(db: Db): Router {
       }
       await service.delete(id);
       if (existing.bundleId) bundleService.delete(existing.bundleId);
+      // Wipe Allen-managed Python venv (no-op for non-Python MCPs).
+      try { deletePythonVenv(id); } catch (err) {
+        console.warn(`[mcp] failed to wipe venv for ${id}:`, (err as Error).message);
+      }
       syncUserToCodex(service, req).catch(() => {});
       res.status(204).send();
     } catch (err: unknown) {
@@ -510,18 +529,51 @@ export function mcpRoutes(db: Db): Router {
         ? resolvePath(repo.path, server.source.installPath)
         : resolvePath(repo.path, server.source.entryPath, '..');
 
-      // Python MCPs have no package.json — deps are user-managed via pip.
-      // Skip the npm install flow entirely rather than letting ensureInstalled
-      // throw "MCP installDir has no package.json". AC-009: Node MCPs without
-      // package.json still bubble through to ensureInstalled normally.
       const entryExt = extname(server.source.entryPath ?? '').toLowerCase();
       const hasPkgJson = existsSync(join(installDir, 'package.json'));
-      if (!hasPkgJson && entryExt === '.py') {
-        return res.json({
-          installDir,
-          skipped: true,
-          reason: 'python-no-auto-install',
-          message: 'Python MCP deps are user-managed. Ensure the interpreter specified in Command has the required packages installed.',
+
+      // Python MCPs (no manual command override): wipe the Allen-managed venv
+      // and let the next spawn recreate it via ensurePythonVenv. Eager-trigger
+      // ensurePythonVenv here so the user sees the install timing in the
+      // response instead of waiting for the next chat turn.
+      if (entryExt === '.py' && !server.command) {
+        const interpreter = server.python?.interpreter || 'python3';
+
+        // Resolve requirements.txt: explicit on the record, else sibling auto-detect.
+        let requirementsAbsPath: string | null = null;
+        const explicit = server.python?.requirementsPath;
+        if (explicit) {
+          requirementsAbsPath = resolvePath(repo.path, explicit);
+        } else {
+          const sibling = resolvePath(repo.path, server.source.entryPath, '..', 'requirements.txt');
+          if (existsSync(sibling)) requirementsAbsPath = sibling;
+        }
+
+        try {
+          deletePythonVenv(id);
+          const status = await ensurePythonVenv({
+            mcpId: id,
+            interpreter,
+            requirementsAbsPath,
+          });
+          return res.json({
+            installDir: status.venvPath,
+            packageManager: 'pip',
+            durationMs: status.durationMs,
+            skipped: false,
+            requirementsInstalled: status.installed,
+            requirementsPath: requirementsAbsPath ? relative(repo.path, requirementsAbsPath) : null,
+          });
+        } catch (err) {
+          return res.status(500).json({
+            error: `pip install failed: ${(err as Error).message}`,
+          });
+        }
+      }
+
+      if (!hasPkgJson) {
+        return res.status(400).json({
+          error: `installDir has no package.json: ${installDir}`,
         });
       }
 
