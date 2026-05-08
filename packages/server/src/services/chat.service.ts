@@ -443,6 +443,32 @@ interface ActiveQuery {
 const activeQueries = new Map<string, ActiveQuery>();
 const ACTIVE_EXECUTION_STATUSES = ['running', 'queued', 'waiting_for_input'];
 
+// ── SSE Heartbeat ──
+// Emits `: keepalive\n\n` every 15 s to every active SSE listener.
+// This is a SSE comment line (starts with `:`) — the spec ignores it as
+// event data but it resets the browser/proxy idle-timeout timer, preventing
+// the "Error: network error" drop that occurs during long tool-execution
+// quiet periods (ENG-1581).
+const SSE_HEARTBEAT_INTERVAL_MS = 15_000;
+// WeakMap so entries are GC-d automatically once a Response is released.
+const listenerHeartbeats = new WeakMap<Response, ReturnType<typeof setInterval>>();
+
+function attachHeartbeat(res: Response): void {
+  const handle = setInterval(() => {
+    try { res.write(': keepalive\n\n'); }
+    catch { clearInterval(handle); }
+  }, SSE_HEARTBEAT_INTERVAL_MS);
+  listenerHeartbeats.set(res, handle);
+}
+
+function detachHeartbeat(res: Response): void {
+  const handle = listenerHeartbeats.get(res);
+  if (handle !== undefined) {
+    clearInterval(handle);
+    listenerHeartbeats.delete(res);
+  }
+}
+
 interface CancelledExecutionInfo {
   id: string;
   workflowName?: string;
@@ -800,7 +826,8 @@ export class ChatService {
 
     const entry: ActiveQuery = { sessionId, messageId: assistantMsgId, currentText: '', toolCalls: [], listeners: new Set([res]), aborted: false, abortController: new AbortController() };
     activeQueries.set(sessionId, entry);
-    res.on('close', () => { entry.listeners.delete(res); });
+    attachHeartbeat(res);
+    res.on('close', () => { detachHeartbeat(res); entry.listeners.delete(res); });
 
     this.runLLM(sessionId, assistantMsgId, content, entry, agent, 0, cwd).catch(() => {});
   }
@@ -868,7 +895,8 @@ export class ChatService {
     if (entry) {
       if (entry.currentText) sendSSE(res, 'message_delta', { text: entry.currentText, messageId: entry.messageId });
       entry.listeners.add(res);
-      res.on('close', () => { entry.listeners.delete(res); });
+      attachHeartbeat(res);
+      res.on('close', () => { detachHeartbeat(res); entry.listeners.delete(res); });
     } else {
       sendSSE(res, 'stream_inactive', { sessionId });
       res.end();
@@ -1424,7 +1452,7 @@ User: ${userMessage.slice(0, 500)}`;
       // they'll complete on their own but the SSE stream closes so UI isn't stuck
       await waitForBackgroundTasks(sessionId, 30_000);
       unregisterActiveSession(sessionId);
-      for (const listener of entry.listeners) { try { listener.end(); } catch {} }
+      for (const listener of entry.listeners) { try { detachHeartbeat(listener); listener.end(); } catch {} }
       activeQueries.delete(sessionId);
     }
   }
