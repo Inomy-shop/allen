@@ -74,6 +74,7 @@ export interface ListIssuesFilters {
   stateTypes?: LinearStateType[];
   q?: string;
   limit?: number;
+  assigneeEmail?: string;
 }
 
 export interface LinearCreateIssueInput {
@@ -299,6 +300,9 @@ export class LinearService {
         { title: { containsIgnoreCase: q } },
         { description: { containsIgnoreCase: q } },
       ];
+    }
+    if (filters.assigneeEmail) {
+      linearFilter.assignee = { email: { eq: filters.assigneeEmail } };
     }
 
     const cacheKey = `${token}::${limit}::${JSON.stringify(linearFilter)}`;
