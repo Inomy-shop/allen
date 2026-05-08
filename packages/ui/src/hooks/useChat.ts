@@ -2,6 +2,28 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import { chat as api, executions as executionsApi, interventions as interventionsApi, authHeaders, type RunStatus } from '../services/api';
 import { useAuthStore, type AuthUser } from '../stores/authStore';
 
+/** Maximum number of automatic reconnect attempts on a transient stream error. */
+export const MAX_RECONNECT_ATTEMPTS = 3;
+
+/**
+ * Check whether the backend session is still streaming.
+ * Returns false on any error so callers can safely fall through to
+ * the "show failed message" path.
+ */
+export async function checkIsStreaming(sessionId: string): Promise<boolean> {
+  try {
+    const { streaming } = await api.isStreaming(sessionId);
+    return streaming;
+  } catch {
+    return false;
+  }
+}
+
+/** Tiny sleep helper used for reconnect back-off. */
+export function sleep(ms: number): Promise<void> {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
 export interface ChatSession {
   _id: string;
   title: string;
@@ -458,13 +480,34 @@ export function useChat() {
         const streamingMsg = session.messages?.find((m: any) => m.status === 'streaming');
         if (streamingMsg?.content) setStreamText(streamingMsg.content);
 
-        const response = await fetch(api.streamUrl(activeSessionId), {
-          headers: authHeaders(),
-        });
-        if (cancelled || !response.body) { setStreaming(false); console.warn('[useChat:refresh] SSE stream fetch returned no body'); return; }
-        console.log('[useChat:refresh] SSE reader attached');
+        // Attempt to attach an SSE reader with up to MAX_RECONNECT_ATTEMPTS retries.
+        let sessionReader: ReadableStreamDefaultReader<Uint8Array> | null = null;
+        for (let attempt = 1; attempt <= MAX_RECONNECT_ATTEMPTS; attempt++) {
+          if (cancelled) break;
+          try {
+            const response = await fetch(api.streamUrl(activeSessionId), {
+              headers: authHeaders(),
+            });
+            if (response.body) {
+              sessionReader = response.body.getReader();
+              console.log('[useChat:refresh] SSE reader attached (attempt', attempt, ')');
+              break;
+            }
+          } catch (fetchErr) {
+            console.warn('[useChat:refresh] SSE fetch attempt', attempt, 'failed:', fetchErr);
+          }
+          if (attempt < MAX_RECONNECT_ATTEMPTS) {
+            await sleep(attempt === 1 ? 1000 : 2000);
+          }
+        }
 
-        const reader = response.body.getReader();
+        if (cancelled || !sessionReader) {
+          setStreaming(false);
+          console.warn('[useChat:refresh] SSE stream fetch returned no body after retries');
+          return;
+        }
+
+        const reader = sessionReader;
         const decoder = new TextDecoder();
         let buffer = '';
         let currentEvent = '';
@@ -1119,22 +1162,94 @@ export function useChat() {
         }
       }
     } catch (err) {
-      if ((err as Error).name !== 'AbortError') {
-        console.error('Chat stream error:', err);
-        setMessages(prev => [
-          ...prev,
-          {
-            sessionId,
-            role: 'assistant',
-            content: `Error: ${(err as Error).message}`,
-            status: 'failed',
-            error: (err as Error).message,
-            createdAt: new Date().toISOString(),
-          },
-        ]);
+      if ((err as Error).name === 'AbortError') {
+        // User cancelled — clean up without showing an error message.
+        setStreamText('');
+        setActiveToolCalls([]);
+      } else {
+        // Network / transport error. Before giving up, check whether the
+        // backend session is still streaming so we can attempt to reconnect.
+        console.warn('Chat stream error (will check if backend still active):', err);
+
+        let reconnected = false;
+        for (let attempt = 1; attempt <= MAX_RECONNECT_ATTEMPTS; attempt++) {
+          // Back-off: 1 s, 2 s, 2 s
+          await sleep(attempt === 1 ? 1000 : 2000);
+
+          // If the user aborted while we were sleeping, stop retrying.
+          if (abortRef.current?.signal.aborted) break;
+
+          const stillStreaming = await checkIsStreaming(sessionId);
+          if (!stillStreaming) break;
+
+          console.log(`[useChat] backend still streaming — reconnect attempt ${attempt}/${MAX_RECONNECT_ATTEMPTS}`);
+          try {
+            // Backfill any partial content that arrived before the drop.
+            const session = await api.getSession(sessionId);
+            const streamingMsg = session.messages?.find((m: any) => m.status === 'streaming');
+            if (streamingMsg?.content) {
+              setStreamText(streamingMsg.content);
+            }
+
+            // Attach a fresh SSE reader to the existing stream.
+            const reconnectResponse = await fetch(api.streamUrl(sessionId), {
+              headers: authHeaders(),
+            });
+            if (!reconnectResponse.body) continue;
+
+            const rReader = reconnectResponse.body.getReader();
+            const rDecoder = new TextDecoder();
+            let rBuffer = '';
+            let rCurrentEvent = '';
+
+            reconnected = true;
+            while (true) {
+              const { done, value } = await rReader.read();
+              if (done) break;
+              rBuffer += rDecoder.decode(value, { stream: true });
+              const rLines = rBuffer.split('\n');
+              rBuffer = rLines.pop() ?? '';
+              for (const line of rLines) {
+                if (line.startsWith('event: ')) {
+                  rCurrentEvent = line.slice(7).trim();
+                } else if (line.startsWith('data: ') && rCurrentEvent) {
+                  try {
+                    const data = JSON.parse(line.slice(6));
+                    handleSSEEvent(rCurrentEvent, data, sessionId);
+                  } catch { /* ignore parse errors */ }
+                  rCurrentEvent = '';
+                }
+              }
+            }
+            // Stream ended cleanly after reconnect — no error message needed.
+            break;
+          } catch (reconnectErr) {
+            if ((reconnectErr as Error).name === 'AbortError') break;
+            console.warn(`[useChat] reconnect attempt ${attempt} failed:`, reconnectErr);
+            reconnected = false;
+            // loop continues to next attempt
+          }
+        }
+
+        if (!reconnected) {
+          // All reconnect attempts failed (or backend was not streaming).
+          console.error('Chat stream error (giving up after reconnect attempts):', err);
+          setMessages(prev => [
+            ...prev,
+            {
+              sessionId,
+              role: 'assistant',
+              content: `Error: ${(err as Error).message}`,
+              status: 'failed',
+              error: (err as Error).message,
+              createdAt: new Date().toISOString(),
+            },
+          ]);
+        }
+
+        setStreamText('');
+        setActiveToolCalls([]);
       }
-      setStreamText('');
-      setActiveToolCalls([]);
     } finally {
       setStreaming(false);
       sendingRef.current = false;
