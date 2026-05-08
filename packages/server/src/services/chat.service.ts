@@ -456,7 +456,10 @@ const listenerHeartbeats = new WeakMap<Response, ReturnType<typeof setInterval>>
 function attachHeartbeat(res: Response): void {
   const handle = setInterval(() => {
     try { res.write(': keepalive\n\n'); }
-    catch { clearInterval(handle); }
+    catch {
+      clearInterval(handle);
+      listenerHeartbeats.delete(res);
+    }
   }, SSE_HEARTBEAT_INTERVAL_MS);
   listenerHeartbeats.set(res, handle);
 }

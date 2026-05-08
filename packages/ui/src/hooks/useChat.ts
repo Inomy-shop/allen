@@ -1177,7 +1177,7 @@ export function useChat() {
           await sleep(attempt === 1 ? 1000 : 2000);
 
           // If the user aborted while we were sleeping, stop retrying.
-          if (abortRef.current?.signal.aborted) break;
+          if (!abortRef.current || abortRef.current.signal.aborted) break;
 
           const stillStreaming = await checkIsStreaming(sessionId);
           if (!stillStreaming) break;
@@ -1194,7 +1194,9 @@ export function useChat() {
             // Attach a fresh SSE reader to the existing stream.
             const reconnectResponse = await fetch(api.streamUrl(sessionId), {
               headers: authHeaders(),
+              signal: abortController.signal,
             });
+            if (!reconnectResponse.ok) continue;  // skip this attempt, try again
             if (!reconnectResponse.body) continue;
 
             const rReader = reconnectResponse.body.getReader();
@@ -1204,6 +1206,10 @@ export function useChat() {
 
             reconnected = true;
             while (true) {
+              if (!abortRef.current || abortRef.current.signal.aborted) {
+                await rReader.cancel();
+                break;
+              }
               const { done, value } = await rReader.read();
               if (done) break;
               rBuffer += rDecoder.decode(value, { stream: true });
