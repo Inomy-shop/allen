@@ -81,6 +81,11 @@ async function checkStdioServer(server: McpServerRecord, db: Db): Promise<Health
     let proc: ReturnType<typeof spawn> | null = null;
     let buffer = '';
     let settled = false;
+    // Capture stderr so we can surface it in the error message when the child
+    // exits prematurely. Bounded to STDERR_TAIL_BYTES — Python tracebacks are
+    // a few hundred bytes; 1KB covers ModuleNotFoundError + traceback comfortably.
+    const STDERR_TAIL_BYTES = 1024;
+    let stderrTail = '';
     const pending = new Map<string | number, (msg: any) => void>();
 
     const finish = (result: PartialResult) => {
@@ -154,9 +159,13 @@ async function checkStdioServer(server: McpServerRecord, db: Db): Promise<Health
       if (settled) return;
       // Process died before handshake completed
       clearTimeout(overallTimeout);
+      const baseMsg = `process exited prematurely (code=${code ?? 'null'}, signal=${signal ?? 'null'})`;
+      const stderrTrimmed = stderrTail.trim();
       finish({
         ok: false,
-        error: `process exited prematurely (code=${code ?? 'null'}, signal=${signal ?? 'null'})`,
+        error: stderrTrimmed
+          ? `${baseMsg}\nstderr: ${stderrTrimmed}`
+          : baseMsg,
       });
     });
 
@@ -177,8 +186,15 @@ async function checkStdioServer(server: McpServerRecord, db: Db): Promise<Health
       }
     });
 
-    // We don't need stderr output, but we drain it so the pipe doesn't fill up
-    childProc.stderr?.on('data', () => { /* drain */ });
+    // Drain stderr to keep the pipe flowing AND retain the most recent
+    // STDERR_TAIL_BYTES so the exit handler can surface it (e.g. Python
+    // ModuleNotFoundError tracebacks would otherwise vanish).
+    childProc.stderr?.on('data', (chunk: Buffer) => {
+      stderrTail += chunk.toString();
+      if (stderrTail.length > STDERR_TAIL_BYTES) {
+        stderrTail = stderrTail.slice(-STDERR_TAIL_BYTES);
+      }
+    });
 
     const sendRpc = (method: string, params?: unknown): Promise<any> => {
       const id = randomUUID();

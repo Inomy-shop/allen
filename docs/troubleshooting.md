@@ -291,9 +291,9 @@ Slack webhooks require raw request body handling, so do not move `/api/slack` be
 
 ## MCP Server Missing Environment Variables
 
-MCP presets use the `ALLEN_` prefix convention.
+MCP presets and repo-based MCP servers use the `ALLEN_` prefix convention.
 
-If a preset says it needs:
+If a preset or repo MCP says it needs:
 
 ```text
 POSTGRES_CONNECTION_STRING
@@ -306,6 +306,36 @@ ALLEN_POSTGRES_CONNECTION_STRING=<value>
 ```
 
 Restart Allen after editing `.env`.
+
+## Python MCP Server Does Not Start
+
+For repo-sourced MCP servers whose entry file ends in `.py`, Allen creates an isolated Python virtual environment per MCP at `<ALLEN_HOME>/venvs/<mcpId>/` (typically `~/.allen/venvs/<mcpId>/`) and installs `requirements.txt` into it on the first spawn. Each MCP gets its own venv, so dep versions never collide between MCPs.
+
+When the **Test connection** error reads `process exited prematurely` followed by `stderr: ModuleNotFoundError: No module named '<pkg>'`, the entry file imports a package that isn't in the MCP's `requirements.txt`. Add it to `requirements.txt` next to the entry file, then either:
+
+1. Click **Reinstall** in Settings → MCP Servers (wipes the venv and re-runs `pip install -r requirements.txt`), OR
+2. Delete the MCP and re-add it.
+
+To bootstrap the venv, Allen needs a base interpreter on `PATH`. Verify it:
+
+```bash
+python3 --version
+```
+
+You can override the bootstrap interpreter (e.g. to pin `python3.11`) via the **Python interpreter** field when adding/editing the MCP. The interpreter is only used once — to create the venv. After that, every spawn uses `<venvPath>/bin/python`.
+
+### Manual interpreter (escape hatch)
+
+If you'd rather manage the interpreter yourself (e.g. you have an existing project venv with the deps already installed), fill in the **Command** field with the path to that interpreter (`venv/bin/python`, `/opt/homebrew/bin/python3.11`, etc.). When **Command** is set, Allen skips venv creation and `pip install` entirely — the interpreter you specify must already have the required packages.
+
+### Updating dependencies
+
+Allen does **not** detect changes to `requirements.txt` automatically. To pick up new or upgraded deps:
+
+- Click **Reinstall** in Settings → MCP Servers, **or**
+- Delete the MCP and re-add it (this also wipes the venv).
+
+`envKeys` you configure are resolved using the same `ALLEN_<KEY>` convention as Node MCP servers.
 
 ## Public Artifact or File Link Exposes Sensitive Data
 

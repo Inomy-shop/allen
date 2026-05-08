@@ -55,7 +55,7 @@ Important files:
 - `src/template.ts` - template rendering and binding capture for node inputs.
 - `src/router.ts` - agent routing rules consumed by chat and built-in nodes.
 - `src/agents-loader.ts` and `agents.yml` - agent definitions for teams and specialists.
-- `src/mcp-loader.ts` and `src/mcp-install.ts` - MCP server loading, installation, and `ALLEN_`-prefix env mapping.
+- `src/mcp-loader.ts` and `src/mcp-install.ts` - MCP server loading, installation, and `ALLEN_`-prefix env mapping. Supports both Node.js (`.ts`/`.js`/`.mjs`) and Python (`.py`) entry files. Python MCPs get a per-MCP virtual environment at `<ALLEN_HOME>/venvs/<mcpId>/` with `requirements.txt` auto-installed on first spawn (`ensurePythonVenv`). Setting a manual **Command** override opts out of venv management; the user takes ownership of the interpreter.
 - `src/output-extractor.ts` - output parsing from model responses.
 - `src/state-manager.ts` - persisted execution state.
 - `src/learning-manager.ts` - learnings capture, retrieval, and prompt injection.
@@ -95,7 +95,7 @@ Routes (registered in `packages/server/src/app.ts`):
 - `/api/repos` - repo registration.
 - `/api/workspaces` - workspaces, terminals, file watch, preview proxy.
 - `/api/chat` - chat sessions and messages.
-- `/api/mcp` - MCP server registry.
+- `/api/mcp` - MCP server registry. Includes `GET /servers/discover/:repoId` (scan a repo for Python and Node MCP entry files) and `POST /servers/:id/reinstall` (bust the install cache and re-run `npm install`; Python MCPs return a skip response instead).
 - `/api/linear` - Linear integration.
 - `/api/slack` - Slack integration (raw body, signature-verified).
 - `/api/pull-requests` - PR list and detail.
@@ -118,7 +118,9 @@ Important server files:
 - `src/services/workspace-watcher.ts` - file watcher attached to the terminal WebSocket.
 - `src/services/workspace-proxy.ts` - workspace preview proxy.
 - `src/services/github-auth.ts` - GitHub token resolution from `.env`.
-- `src/services/linear.service.ts`, `services/slack.service.ts`, `services/slack-notifier.ts` - integrations.
+- `src/services/linear.service.ts` - Linear GraphQL client, TTL caches, agent/workflow dispatch, and issue fetching.
+- `src/services/chat.service.ts` `resolveMentions()` - resolves `@ENG-123`-style tokens to Linear ticket context and `@name` tokens to workflow/repo/agent context before the LLM call.
+- `services/slack.service.ts`, `services/slack-notifier.ts` - Slack integrations.
 - `src/routes/file.routes.ts` and `routes/artifact.routes.ts` - capability-URL public routes.
 
 Public capability-style routes exist for generated file links, artifact links, execution SSE, workspace log SSE, and workspace previews. See `docs/security.md` before changing them.
@@ -131,14 +133,20 @@ Responsibilities:
 
 - Login and password reset.
 - Dashboard views.
-- Chat and agent delegation UX.
+- Chat and agent delegation UX, including `@mention` autocomplete for workflows, repos, agents, and Linear tickets.
 - Workflow list and workflow builder.
 - Workflow run dialogs.
 - Execution timeline, node detail, logs, state, artifacts, checkpoints, and interventions.
 - Workspace list/detail, terminal, file preview, service preview.
 - Repo manager.
 - Ticket and PR views.
-- Settings for agents, MCP, integrations, and users.
+- Settings for agents, MCP (including preset and repo-based registration with Python MCP support), integrations, and users.
+
+Key chat UI components:
+
+- `src/components/chat/ChatInput.tsx` - message composer with model/effort/plan/repo selectors, file attachments, and @mention detection.
+- `src/components/chat/MentionAutocomplete.tsx` - autocomplete dropdown with two modes: **default** (workflows, repos, agents filtered by query) and **linear** (activated by `@linear`, shows the user's assigned active tickets with priority dots and state badges).
+- `src/services/api.ts` `linear` object - typed wrappers for all `/api/linear/*` endpoints including the `assignee: 'me'` filter shorthand.
 
 ## Data Model
 
@@ -208,12 +216,34 @@ Default behavior:
 Allen has integration paths for:
 
 - GitHub tokens and pull request workflows.
-- Linear ticket dispatch.
+- Linear ticket dispatch and chat @mention resolution.
 - Slack thread/chat handling and human intervention notifications.
 - MCP server presets and custom MCP servers.
 - Cron-driven background tasks.
 
-Integration credentials are read from `.env`. MCP servers use the `ALLEN_` prefix convention: an MCP-required key like `GITHUB_PERSONAL_ACCESS_TOKEN` is read from `ALLEN_GITHUB_PERSONAL_ACCESS_TOKEN` and forwarded to the MCP subprocess without the prefix.
+Integration credentials are read from `.env`. MCP servers use the `ALLEN_` prefix convention: an MCP-required key like `GITHUB_PERSONAL_ACCESS_TOKEN` is read from `ALLEN_GITHUB_PERSONAL_ACCESS_TOKEN` and forwarded to the MCP subprocess without the prefix. Both Node.js and Python MCP servers follow this model. Python MCPs require `python3` (or a custom bootstrap interpreter) on `PATH`; Allen creates an isolated venv per MCP at `<ALLEN_HOME>/venvs/<mcpId>/` and installs `requirements.txt` into it on first spawn. To update deps, click **Reinstall** in Settings → MCP Servers (wipes the venv) or delete and re-add the MCP. A manual **Command** override (e.g. pointing at an existing project venv) opts out of Allen-managed venv creation.
+
+### Linear Integration
+
+Requires `ALLEN_LINEAR_ACCESS_TOKEN` in `.env`. The `LinearService` (`packages/server/src/services/linear.service.ts`) wraps Linear's GraphQL API in read/write mode with short-lived TTL caches (status: 5 min, projects: 1 min, issues: 30 s) to stay within Linear's 4500 req/hr rate limit.
+
+**API routes (`/api/linear`):**
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/status` | Check whether Linear is configured and return workspace info. |
+| `GET` | `/projects` | List all Linear projects. |
+| `GET` | `/issues` | List issues with optional filters: `projectId`, `state` (comma-separated state types), `q` (full-text search), `limit`, `assignee=me`. |
+| `GET` | `/issues/:id` | Fetch a single issue by Linear ID. |
+| `PATCH` | `/issues/:id/assign-agent` | Store a local agent assignment for a ticket. Body: `{ agentName: string \| null }`. |
+| `POST` | `/issues/:id/dispatch` | Create an isolated git worktree from a chosen repo, wait for it to become active, then spawn an agent with the ticket body as the prompt. Body: `{ agentName, repoId, extraInstructions?, promptTemplate? }`. Returns HTTP 202 with the initial `pending` assignment; the UI polls `/issues/:id` for progress. |
+| `POST` | `/issues/:id/dispatch-workflow` | Start a registered workflow with the ticket's metadata injected into the input. Body: `{ workflowId, input }`. Returns HTTP 202 with the assignment. |
+
+**`assignee=me` filter:** when `assignee=me` is passed, the route resolves it to the authenticated user's email from the JWT and forwards it as a Linear `assignee.email.eq` filter.
+
+**Chat @mention resolution:** when a chat message contains a token matching `@[A-Z]+-\d+` (e.g. `@ENG-123`), `resolveMentions()` in `chat.service.ts` fetches the issue from Linear (up to 3 tickets per message, description capped at 800 chars) and injects a context block into the LLM conversation before any workflow/repo/agent mentions are resolved. If Linear is not configured or the identifier is not found, the token is silently skipped.
+
+**Chat @mention autocomplete:** the `ChatInput` component detects when the user types `@linear` and switches `MentionAutocomplete` into linear mode. In linear mode the component fetches the authenticated user's assigned active tickets (`started,unstarted,backlog`, limit 25) via the `/api/linear/issues?assignee=me&state=…&limit=25` endpoint. Selecting a ticket inserts `@ENG-123` into the message text. Each row shows a priority dot, the identifier, the issue title, and a colour-coded state badge.
 
 ## Runtime Ports
 
