@@ -16,6 +16,7 @@ import {
 } from '../services/mcp.service.js';
 import { McpBundleService } from '../services/mcp-bundle.service.js';
 import { healthCheckMcpServer } from '../services/mcp-health.service.js';
+import { evictMcpConnection } from '../services/chat-mcp-client.js';
 
 const BUNDLE_UPLOAD_TMP = '/tmp/mcp-bundle-uploads';
 if (!existsSync(BUNDLE_UPLOAD_TMP)) mkdirSync(BUNDLE_UPLOAD_TMP, { recursive: true });
@@ -98,6 +99,7 @@ async function syncUserToCodex(service: McpService, req: AuthedRequest): Promise
       args.push('--', cmd, ...cmdArgs);
       await execFileAsync('codex', args, { timeout: 10000 });
     }
+
   } catch (err) {
     console.error('[mcp] Codex sync failed:', (err as Error).message);
   }
@@ -462,6 +464,12 @@ export function mcpRoutes(db: Db): Router {
         return res.status(403).json({ error: 'you can only delete your own MCP servers' });
       }
       await service.delete(id);
+      evictMcpConnection(existing.name);
+      // Synchronously remove from Codex before the fire-and-forget sync so
+      // there is no window where the deleted name re-appears in a later
+      // syncUserToCodex run.  Ignore errors (e.g. Codex not installed or
+      // server was never registered).
+      try { await execFileAsync('codex', ['mcp', 'remove', existing.name], { timeout: 5000 }); } catch {}
       if (existing.bundleId) bundleService.delete(existing.bundleId);
       // Wipe Allen-managed Python venv (no-op for non-Python MCPs).
       try { deletePythonVenv(id); } catch (err) {
