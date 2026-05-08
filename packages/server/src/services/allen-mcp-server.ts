@@ -530,7 +530,38 @@ async function executeTool(name: string, args: Record<string, unknown>): Promise
       const repos = await callAPI('/api/repos') as any[];
       if (!Array.isArray(repos)) return repos; // error passthrough
       const repo = repos.find((r: any) => r.path === repoPath);
-      if (!repo) return { error: `No registered repo found at ${repoPath}. Call list_repos and pass an exact path.` };
+      if (!repo) {
+        // Fallback: repoPath might be an existing Allen worktree path
+        // (e.g. /home/ubuntu/.allen/workspaces/<id>) rather than a registered
+        // repo path. Look it up in /api/workspaces and return the existing
+        // workspace without creating a new one.
+        const allWorkspaces = await callAPI('/api/workspaces') as any;
+        const existingWs = Array.isArray(allWorkspaces)
+          ? allWorkspaces.find((ws: any) =>
+              ws.worktreePath === repoPath &&
+              !['archived', 'archiving', 'failed'].includes(ws.status),
+            )
+          : null;
+        if (existingWs) {
+          const wsId = String(existingWs._id ?? existingWs.id);
+          if (SPAWN_CHAT_SESSION_ID) {
+            await callAPI(
+              `/api/workspaces/${encodeURIComponent(wsId)}/link-chat`,
+              'POST',
+              { sessionId: SPAWN_CHAT_SESSION_ID },
+            ).catch(() => {});
+          }
+          return {
+            workspace_id: wsId,
+            worktree_path: existingWs.worktreePath,
+            branch: existingWs.branch,
+            base_branch: existingWs.baseBranch,
+            status: existingWs.status,
+            chat_session_id: SPAWN_CHAT_SESSION_ID,
+          };
+        }
+        return { error: `No registered repo found at ${repoPath}. Call list_repos and pass an exact path.` };
+      }
 
       // Resolve the base branch. Precedence: explicit caller arg → the
       // repo's detected default branch (captured at scan time) → 'dev' as

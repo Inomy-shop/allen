@@ -71,6 +71,40 @@ export const createWorkspace: BuiltInFunction = async (config, state, ctx) => {
       repo = await repoCol.findOne({ name: repoPath });
     }
   }
+  // NEW: check if repoPath is an existing Allen worktree path. This handles
+  // the case where an orchestrator passes a workspace's worktreePath (e.g.
+  // /home/ubuntu/.allen/workspaces/<id>) as repo_path instead of the
+  // registered repo path. We return the existing workspace without creating
+  // a new one — fully idempotent.
+  if (!repo && repoPath) {
+    const existingWorkspace = await ctx.db.collection('workspaces').findOne({
+      worktreePath: repoPath,
+      status: { $nin: ['archived', 'archiving', 'failed'] },
+    });
+    if (existingWorkspace) {
+      ctx.emitter.emit({
+        event: 'execution_log',
+        data: {
+          level: 'info',
+          category: 'workspace',
+          message: `Returning existing workspace for worktree path ${repoPath}`,
+          details: { workspaceId: String(existingWorkspace._id), worktreePath: repoPath },
+        },
+      });
+      return {
+        workspace_id: String(existingWorkspace._id),
+        workspace_name: String(existingWorkspace.name ?? ''),
+        branch: String(existingWorkspace.branch ?? ''),
+        branch_name: String(existingWorkspace.branch ?? ''),
+        base_branch: String(existingWorkspace.baseBranch ?? ''),
+        worktree_path: String(existingWorkspace.worktreePath ?? repoPath),
+        base_port: Number(existingWorkspace.basePort ?? 0),
+        status: String(existingWorkspace.status ?? ''),
+        repo_path: String(existingWorkspace.worktreePath ?? repoPath),
+      };
+    }
+  }
+
   if (!repo) {
     const tried = [repoId, repoName, repoPath].filter(Boolean).join(', ') || '(none)';
     throw new Error(
