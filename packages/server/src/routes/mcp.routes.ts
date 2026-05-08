@@ -6,7 +6,7 @@ import { existsSync, mkdirSync, unlinkSync, readdirSync, readFileSync, statSync 
 import { join, relative, resolve as resolvePath, extname } from 'node:path';
 import multer from 'multer';
 import { ObjectId, type Db } from 'mongodb';
-import { forgetInstall, ensureInstalled, ensurePythonVenv, deletePythonVenv } from '@allen/engine';
+import { forgetInstall, ensureInstalled, ensurePythonVenv, deletePythonVenv, resolvePythonInterpreter } from '@allen/engine';
 import { param } from '../types.js';
 import {
   McpService,
@@ -537,7 +537,7 @@ export function mcpRoutes(db: Db): Router {
       // ensurePythonVenv here so the user sees the install timing in the
       // response instead of waiting for the next chat turn.
       if (entryExt === '.py' && !server.command) {
-        const interpreter = server.python?.interpreter || 'python3';
+        const interpreter = resolvePythonInterpreter(server.python?.interpreter);
 
         // Resolve requirements.txt: explicit on the record, else sibling auto-detect.
         let requirementsAbsPath: string | null = null;
