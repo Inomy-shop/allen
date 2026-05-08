@@ -1,7 +1,7 @@
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useLayoutEffect, useCallback, useRef } from 'react';
 import { workflows as wfApi, repos as repoApi, agents as agentsApi } from '../../services/api';
 import type { LinearIssueSummary } from '../../services/api';
-import { GitBranch, FolderGit2, Users, ExternalLink } from 'lucide-react';
+import { GitBranch, FolderGit2, Users, ExternalLink, Search } from 'lucide-react';
 
 // ── Discriminated union option types ──────────────────────────────────────
 export type BaseOption = {
@@ -87,7 +87,10 @@ export default function MentionAutocomplete({
   const [options, setOptions] = useState<MentionOption[]>([]);
   const [selectedIndex, setSelectedIndex] = useState(0);
   const [loaded, setLoaded] = useState(false);
+  const [linearSearchQuery, setLinearSearchQuery] = useState('');
+  const [placement, setPlacement] = useState<'top' | 'bottom'>('top');
   const listRef = useRef<HTMLDivElement>(null);
+  const linearSearchInputRef = useRef<HTMLInputElement>(null);
 
   // ── Load workflow / repo / agent resources once (skip in linear mode) ──
   useEffect(() => {
@@ -147,11 +150,22 @@ export default function MentionAutocomplete({
     linearStateColor: issue.state.color,
   }));
 
+  // ── Apply in-dropdown search filter (linear mode only) ────────────────
+  // Matches identifier ("ENG-123"), title, and status name — case-insensitive.
+  const lq = linearSearchQuery.trim().toLowerCase();
+  const filteredLinearOptions: LinearOption[] = lq
+    ? linearOptions.filter(opt =>
+        opt.linearIdentifier.toLowerCase().includes(lq) ||
+        (opt.description ?? '').toLowerCase().includes(lq) ||
+        (opt.linearStateName ?? '').toLowerCase().includes(lq),
+      )
+    : linearOptions;
+
   // ── Filter default-mode options by query (linear mode uses API results) ─
   const q = query.toLowerCase();
   const filtered: MentionOption[] =
     mode === 'linear'
-      ? linearOptions
+      ? filteredLinearOptions
       : q
         ? options.filter(o => o.name.toLowerCase().includes(q))
         : options;
@@ -164,23 +178,78 @@ export default function MentionAutocomplete({
   }
 
   // ── Flat list for keyboard navigation ─────────────────────────────────
-  // In linear mode: only the mapped LinearOptions (terminal states NOT included)
+  // In linear mode: only the filtered LinearOptions (terminal states NOT included)
   const flatList: MentionOption[] =
     mode === 'linear'
-      ? linearOptions
+      ? filteredLinearOptions
       : Object.values(grouped).flat();
 
   // ── Decide whether to show the popup ──────────────────────────────────
+  // In linear mode keep the popup open whenever issues were loaded (even if
+  // the active search filter has zero matches) so the search input stays
+  // visible and the user can adjust their query.
   const showDropdown =
     visible &&
     (mode === 'linear'
-      ? linearLoading || !!linearError || flatList.length > 0
+      ? linearLoading || !!linearError || linearOptions.length > 0
       : flatList.length > 0);
 
   // ── Reset selection when query changes ────────────────────────────────
   useEffect(() => {
     setSelectedIndex(0);
-  }, [query]);
+  }, [query, linearSearchQuery]);
+
+  // ── Reset linear search when leaving linear mode or hiding ────────────
+  useEffect(() => {
+    if (mode !== 'linear' || !visible) {
+      setLinearSearchQuery('');
+    }
+  }, [mode, visible]);
+
+  // ── Auto-focus the linear search input once issues finish loading ─────
+  useEffect(() => {
+    if (
+      mode === 'linear' &&
+      visible &&
+      !linearLoading &&
+      !linearError &&
+      linearIssues.length > 0
+    ) {
+      // requestAnimationFrame ensures the input is in the DOM before focus.
+      const id = requestAnimationFrame(() => {
+        linearSearchInputRef.current?.focus();
+      });
+      return () => cancelAnimationFrame(id);
+    }
+  }, [mode, visible, linearLoading, linearError, linearIssues.length]);
+
+  // ── Flip the dropdown above/below the input based on available space ──
+  // Default placement is `top` (above the input) which works when the chat
+  // composer is at the bottom of the viewport. When space above is too small
+  // (e.g. composer is high on screen, or window is short), drop below instead.
+  useLayoutEffect(() => {
+    const el = listRef.current;
+    if (!el) return;
+    const parent = el.parentElement;
+    if (!parent) return;
+    const parentRect = parent.getBoundingClientRect();
+    // Prefer measured height; fall back to the Tailwind max-h-64 = 256px cap.
+    const dropdownHeight = el.offsetHeight || 256;
+    const spaceAbove = parentRect.top;
+    const spaceBelow = window.innerHeight - parentRect.bottom;
+    if (spaceAbove < dropdownHeight && spaceBelow > spaceAbove) {
+      setPlacement('bottom');
+    } else {
+      setPlacement('top');
+    }
+  }, [
+    visible,
+    mode,
+    flatList.length,
+    linearLoading,
+    linearError,
+    linearIssues.length,
+  ]);
 
   // ── Keyboard handler ──────────────────────────────────────────────────
   const handleKeyDown = useCallback(
@@ -234,15 +303,52 @@ export default function MentionAutocomplete({
   return (
     <div
       ref={listRef}
-      className="absolute bottom-full left-0 right-0 mb-1 bg-surface-100 border border-app rounded-sm shadow-xl max-h-64 overflow-y-auto z-50"
+      className={`absolute ${
+        placement === 'top' ? 'bottom-full mb-1' : 'top-full mt-1'
+      } left-0 right-0 bg-surface-100 border border-app rounded-sm shadow-xl max-h-64 overflow-y-auto z-50`}
     >
       {mode === 'linear' ? (
         // ── Linear mode ─────────────────────────────────────────────────
         <div>
           {(!linearLoading && !linearError && linearOptions.length > 0) && (
-            <div className="px-3 py-1.5 overline border-b border-app">
-              Linear Tickets
-            </div>
+            <>
+              <div className="px-3 py-1.5 overline border-b border-app">
+                Linear Tickets
+              </div>
+              {/* Search filter — auto-focused so the user can start typing
+                  immediately to narrow the list. */}
+              <div className="sticky top-0 bg-surface-100 border-b border-app px-2 py-1.5 z-10">
+                <div className="flex items-center gap-2 px-2 py-1 rounded bg-app-muted">
+                  <Search className="w-3 h-3 text-theme-muted flex-shrink-0" />
+                  <input
+                    ref={linearSearchInputRef}
+                    type="text"
+                    value={linearSearchQuery}
+                    onChange={e => setLinearSearchQuery(e.target.value)}
+                    placeholder="Search tickets…"
+                    className="flex-1 bg-transparent border-0 outline-none text-xs text-theme-primary placeholder:text-theme-subtle"
+                    // Stop the textarea-level Enter/Escape handlers in
+                    // ChatInput from intercepting these — the document-level
+                    // listener inside this component still fires via bubbling.
+                    onKeyDown={e => e.stopPropagation()}
+                  />
+                  {linearSearchQuery && (
+                    <button
+                      type="button"
+                      onMouseDown={e => {
+                        e.preventDefault();
+                        setLinearSearchQuery('');
+                        linearSearchInputRef.current?.focus();
+                      }}
+                      className="text-theme-subtle hover:text-theme-primary text-xs flex-shrink-0"
+                      aria-label="Clear search"
+                    >
+                      ×
+                    </button>
+                  )}
+                </div>
+              </div>
+            </>
           )}
 
           {/* Terminal state: loading */}
@@ -274,9 +380,16 @@ export default function MentionAutocomplete({
             </div>
           )}
 
+          {/* No matches for the active search filter */}
+          {!linearLoading && !linearError && linearOptions.length > 0 && filteredLinearOptions.length === 0 && (
+            <div className="px-3 py-2 text-sm text-theme-muted select-none">
+              No tickets match "{linearSearchQuery}"
+            </div>
+          )}
+
           {/* Issue rows */}
           {!linearLoading && !linearError &&
-            linearOptions.map(item => {
+            filteredLinearOptions.map(item => {
               const idx = flatIndex++;
               const isSelected = idx === selectedIndex;
               return (

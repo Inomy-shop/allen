@@ -190,9 +190,11 @@ const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function ChatInput
         return;
       }
 
-      // Fetch assigned issues — signal is now wired so AbortError fires on cancel
+      // Fetch assigned issues — signal is now wired so AbortError fires on cancel.
+      // limit: 250 is the server-side max (linear.service.ts caps via Math.min(_, 250)).
+      // Client-side filtering inside the dropdown handles narrowing the list.
       const issues = await linear.issues(
-        { assignee: 'me', state: 'started,unstarted,backlog', limit: 25 },
+        { assignee: 'me', state: 'started,unstarted,backlog', limit: 250 },
         controller.signal,
       );
 
