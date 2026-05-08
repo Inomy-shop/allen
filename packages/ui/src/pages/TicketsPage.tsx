@@ -340,7 +340,9 @@ export default function TicketsPage() {
         q: search.trim() || undefined,
         limit: 200,
       });
-      setIssues(list ?? []);
+      // Cast: linear.issues() returns LinearIssueSummary[] (chat-mention minimal type);
+      // the real API response includes all LinearIssue fields — safe at runtime.
+      setIssues((list ?? []) as unknown as LinearIssue[]);
     } catch (err) {
       toast.error(`Failed to load Linear issues: ${(err as Error).message}`);
       setIssues([]);

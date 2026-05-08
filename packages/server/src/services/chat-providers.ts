@@ -167,6 +167,7 @@ export async function syncMcpToCodex(db: Db): Promise<void> {
       // Shared with the MCP subprocess so it can mint its own access token
       // when calling back into /api/* — see allen-mcp-server.ts.
       '--env', `JWT_ACCESS_SECRET=${process.env.JWT_ACCESS_SECRET ?? ''}`,
+      '--env', `ALLEN_PUBLIC_URL=${process.env.ALLEN_PUBLIC_URL ?? `http://localhost:${process.env.PORT ?? '4023'}`}`,
       '--', ...runner, serverPath,
     ], { timeout: 10000 });
     log('Registered Allen MCP server with Codex CLI');
@@ -267,6 +268,7 @@ export async function runCodexCLI(
       // safe across CLI variants.
       '-c', `mcp_servers.${MCP_SERVER_NAME}.env.ALLEN_API_URL="http://localhost:${process.env.PORT ?? '4023'}"`,
       '-c', `mcp_servers.${MCP_SERVER_NAME}.env.JWT_ACCESS_SECRET="${process.env.JWT_ACCESS_SECRET ?? ''}"`,
+      '-c', `mcp_servers.${MCP_SERVER_NAME}.env.ALLEN_PUBLIC_URL="${process.env.ALLEN_PUBLIC_URL ?? `http://localhost:${process.env.PORT ?? '4023'}`}"`,
     );
   }
 

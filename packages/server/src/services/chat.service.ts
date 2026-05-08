@@ -17,6 +17,7 @@ import { searchSimilar, backfillEmbeddings } from './embedding.service.js';
 import { buildOrgContextBlock } from './org-context.js';
 import { MonitoringService } from './self-healing-monitor.service.js';
 import { ExecutionService } from './execution.service.js';
+import { LinearService } from './linear.service.js';
 // Note: embedding.service.ts re-exports from @allen/engine — single implementation shared by engine + server
 
 // ── Types ──
@@ -101,16 +102,55 @@ function sendSSE(res: Response, event: string, data: unknown): void {
 
 // ── Mention Resolution ──
 
-async function resolveMentions(content: string, db: Db): Promise<{ context: string; repoPath?: string }> {
+export async function resolveMentions(content: string, db: Db): Promise<{ context: string; repoPath?: string }> {
   const mentionRegex = /@([\w-]+)/g;
   const matches = [...content.matchAll(mentionRegex)];
   if (matches.length === 0) return { context: '' };
 
+  // ── Linear ticket resolution (checked FIRST, before workflow/repo/agent) ──
+  let linearContext = '';
+  {
+    const identifierPattern = /^[A-Z]+-\d+$/;
+    // Preserve match order, deduplicate, cap at 3
+    const identifiers = new Set<string>();
+    for (const m of matches) {
+      if (identifierPattern.test(m[1])) {
+        identifiers.add(m[1]);
+        if (identifiers.size >= 3) break;
+      }
+    }
+    let resolvedCount = 0;
+    let skippedCount = 0;
+    if (identifiers.size > 0) {
+      const linearSvc = new LinearService(db);
+      // Sequential — not parallel — to stay within Linear API rate limits (NFR-007).
+      for (const identifier of identifiers) {
+        try {
+          const detail = await linearSvc.getIssue(identifier);
+          if (!detail) {
+            skippedCount++;
+            continue;
+          }
+          const description = (detail.fullDescription ?? detail.description ?? '').slice(0, 800);
+          linearContext += `\n[LINEAR TICKET: ${detail.identifier}] Title: ${detail.title}\nURL: ${detail.url}\nDescription: ${description}\n`;
+          resolvedCount++;
+        } catch {
+          skippedCount++;
+        }
+      }
+    }
+    console.log(`[linear:resolveMentions] tokens=${identifiers.size} resolved=${resolvedCount} skipped=${skippedCount} cap=3`);
+  }
+
   const names = [...new Set(matches.map(m => m[1]))];
-  let context = '';
+  let context = linearContext;
   let repoPath: string | undefined;
 
+  const _identifierPattern = /^[A-Z]+-\d+$/;
   for (const name of names) {
+    // Skip Linear ticket identifiers — already resolved in the Linear branch above.
+    // This prevents unnecessary workflow/repo/agent DB lookups for ticket IDs (EC-009).
+    if (_identifierPattern.test(name)) continue;
     const wf = await db.collection('workflows').findOne({ name, archived: { $ne: true } });
     if (wf) {
       const nodeNames = wf.parsed?.nodes ? Object.keys(wf.parsed.nodes).join(', ') : 'none';
