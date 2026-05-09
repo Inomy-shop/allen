@@ -13,6 +13,7 @@ import express from 'express';
 import request from 'supertest';
 import { McpService } from '../services/mcp.service.js';
 import { ensureInstalled, ensurePythonVenv, deletePythonVenv } from '@allen/engine';
+import { evictMcpConnection } from '../services/chat-mcp-client.js';
 
 // ── Module-level mocks (hoisted before imports by vitest) ────────────────────
 
@@ -42,6 +43,14 @@ vi.mock('@allen/engine', () => ({
   deletePythonVenv: vi.fn(),
   resolvePythonInterpreter: vi.fn((preferred?: string) => preferred ?? 'python3'),
   buildSingleServerConfig: vi.fn().mockResolvedValue(null),
+}));
+
+vi.mock('../services/chat-mcp-client.js', () => ({
+  evictMcpConnection: vi.fn(),
+  loadMcpTools: vi.fn().mockResolvedValue([]),
+  executeMcpTool: vi.fn(),
+  isMcpTool: vi.fn().mockReturnValue(false),
+  disconnectAll: vi.fn(),
 }));
 
 describe('discoverMcpEntries', () => {
@@ -424,6 +433,117 @@ describe('POST /api/mcp/servers/:id/reinstall', () => {
     expect(res.status).toBe(200);
     expect(res.body.packageManager).toBe('npm');
     expect(res.body.skipped).toBe(false);
+  });
+});
+
+// ── DELETE /api/mcp/servers/:id ───────────────────────────────────────────────
+
+describe('DELETE /api/mcp/servers/:id', () => {
+  const FAKE_OWNER_OID = '000000000000000000000001';
+  const OTHER_OWNER_OID = '000000000000000000000099';
+
+  /** Build a minimal Express app for DELETE route tests with given getById/delete stubs. */
+  function buildDeleteApp(mockGetById: ReturnType<typeof vi.fn>, mockDelete: ReturnType<typeof vi.fn>) {
+    vi.mocked(McpService).mockImplementation(() => ({
+      getById: mockGetById,
+      delete: mockDelete,
+      list: vi.fn().mockResolvedValue([]),
+      updateStatus: vi.fn(),
+    } as unknown as McpService));
+
+    const mockDb = {
+      collection: vi.fn().mockReturnValue({
+        findOne: vi.fn().mockResolvedValue(null),
+        find: vi.fn().mockReturnValue({
+          sort: vi.fn().mockReturnValue({ toArray: vi.fn().mockResolvedValue([]) }),
+        }),
+        insertOne: vi.fn(),
+        findOneAndUpdate: vi.fn(),
+        updateOne: vi.fn(),
+        deleteOne: vi.fn(),
+      }),
+    };
+
+    const app = express();
+    app.use(express.json());
+    app.use((req: express.Request & { user?: unknown }, _res, next) => {
+      req.user = {
+        sub: FAKE_OWNER_OID,
+        email: 'test@example.com',
+        role: 'admin',
+        mustResetPassword: false,
+      };
+      next();
+    });
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    app.use('/api/mcp', mcpRoutes(mockDb as any));
+    return app;
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(existsSync).mockReturnValue(true);
+  });
+
+  it('happy path (204): calls service.delete and evictMcpConnection for own server', async () => {
+    const mockGetById = vi.fn().mockResolvedValue({
+      _id: '507f1f77bcf86cd799439011',
+      name: 'my-mcp-server',
+      ownerId: FAKE_OWNER_OID,
+    });
+    const mockDelete = vi.fn().mockResolvedValue(undefined);
+
+    const app = buildDeleteApp(mockGetById, mockDelete);
+    const res = await request(app).delete('/api/mcp/servers/507f1f77bcf86cd799439011');
+
+    expect(res.status).toBe(204);
+    expect(mockDelete).toHaveBeenCalledWith('507f1f77bcf86cd799439011');
+    expect(vi.mocked(evictMcpConnection)).toHaveBeenCalledWith('my-mcp-server');
+  });
+
+  it('not found (404): returns 404 and does not call service.delete when server not found', async () => {
+    const mockGetById = vi.fn().mockResolvedValue(null);
+    const mockDelete = vi.fn();
+
+    const app = buildDeleteApp(mockGetById, mockDelete);
+    const res = await request(app).delete('/api/mcp/servers/507f1f77bcf86cd799439099');
+
+    expect(res.status).toBe(404);
+    expect(mockDelete).not.toHaveBeenCalled();
+    expect(vi.mocked(evictMcpConnection)).not.toHaveBeenCalled();
+  });
+
+  it('wrong owner (403): returns 403 and does not call service.delete for another user\'s server', async () => {
+    const mockGetById = vi.fn().mockResolvedValue({
+      _id: '507f1f77bcf86cd799439011',
+      name: 'their-server',
+      ownerId: OTHER_OWNER_OID,
+    });
+    const mockDelete = vi.fn();
+
+    const app = buildDeleteApp(mockGetById, mockDelete);
+    const res = await request(app).delete('/api/mcp/servers/507f1f77bcf86cd799439011');
+
+    expect(res.status).toBe(403);
+    expect(mockDelete).not.toHaveBeenCalled();
+    expect(vi.mocked(evictMcpConnection)).not.toHaveBeenCalled();
+  });
+
+  it('service.delete called exactly once on successful deletion', async () => {
+    const mockGetById = vi.fn().mockResolvedValue({
+      _id: '507f1f77bcf86cd799439011',
+      name: 'codex-tracked-server',
+      ownerId: FAKE_OWNER_OID,
+    });
+    const mockDelete = vi.fn().mockResolvedValue(undefined);
+
+    const app = buildDeleteApp(mockGetById, mockDelete);
+    const res = await request(app).delete('/api/mcp/servers/507f1f77bcf86cd799439011');
+
+    expect(res.status).toBe(204);
+    expect(mockDelete).toHaveBeenCalledTimes(1);
+    // syncUserToCodex is fired-and-forgotten; confirm the delete path completed
+    expect(vi.mocked(evictMcpConnection)).toHaveBeenCalledWith('codex-tracked-server');
   });
 });
 

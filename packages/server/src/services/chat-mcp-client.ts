@@ -38,6 +38,10 @@ const connections = new Map<string, McpConnection>();
 // connection, spawn a fresh one." Keyed by server name; resolves to the
 // connection once handshake completes.
 const inFlightSpawns = new Map<string, Promise<McpConnection>>();
+// Tombstone set: names deleted while their spawn was in flight.  After
+// evictMcpConnection() fires, the completing spawn IIFE checks this set and
+// immediately kills the freshly-connected process rather than registering it.
+const evictedNames = new Set<string>();
 
 // Force-kill the entire process group of an MCP child. Without this,
 // mcp-mongo-server keeps its node event loop alive via the MongoDB
@@ -180,6 +184,19 @@ async function connectServer(server: McpServerRecord, db: Db): Promise<McpConnec
       // server isn't mistaken for a healthy one by later callers.
       connections.set(server.name, conn);
 
+      // Guard against a delete that fired during the handshake window.
+      // evictMcpConnection() may have run while we were awaiting the 1s
+      // startup sleep + RPC round-trips.  If so, kill the freshly-connected
+      // process and surface an error rather than silently re-inserting a
+      // server whose DB record no longer exists.
+      if (evictedNames.has(server.name)) {
+        connections.delete(server.name);
+        evictedNames.delete(server.name);
+        killMcpProcessGroup(proc, 'SIGTERM');
+        setTimeout(() => killMcpProcessGroup(proc, 'SIGKILL'), 2_000).unref();
+        throw new Error(`MCP server "${server.name}" was deleted during spawn`);
+      }
+
       console.log(`\x1b[32m[mcp]\x1b[0m Connected to ${server.name}: ${conn.tools.length} tools`);
       return conn;
     } catch (err) {
@@ -283,4 +300,30 @@ export function disconnectAll(): void {
     setTimeout(() => killMcpProcessGroup(conn.process, 'SIGKILL'), 2_000).unref();
   }
   connections.clear();
+}
+
+/**
+ * Evict a named server's cached connection and in-flight spawn promise,
+ * and kill its OS process group so the detached child doesn't linger.
+ * Call this after deleting an MCP server from the DB so subsequent chat
+ * sessions cannot reuse the stale handle.
+ *
+ * Sends SIGTERM to the process group immediately, then escalates to SIGKILL
+ * after 2 s (same pattern as disconnectAll). Also sets a tombstone so that
+ * any in-flight spawn handshake — which may be racing this call — detects
+ * the deletion and kills the freshly-connected process instead of
+ * re-inserting it into the connections Map.
+ */
+export function evictMcpConnection(name: string): void {
+  const conn = connections.get(name);
+  if (conn) {
+    killMcpProcessGroup(conn.process, 'SIGTERM');
+    setTimeout(() => killMcpProcessGroup(conn.process, 'SIGKILL'), 2_000).unref();
+  }
+  connections.delete(name);
+  inFlightSpawns.delete(name);
+  // Tombstone so an in-flight spawn IIFE can detect this eviction after its
+  // async handshake completes and kill the just-connected process tree
+  // rather than re-registering a server that no longer exists in the DB.
+  evictedNames.add(name);
 }
