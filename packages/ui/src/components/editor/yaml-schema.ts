@@ -22,6 +22,7 @@ const nodeProperties = [
   { label: 'outputs', detail: 'Output keys with descriptions', insertText: 'outputs:\n    result: "What this output should contain"' },
   { label: 'output_format', detail: 'json | freeform', insertText: 'output_format: json' },
   { label: 'resume_on_retry', detail: 'Reuse Claude session', insertText: 'resume_on_retry: true' },
+  { label: 'session_key', detail: 'Session key template', insertText: 'session_key: "{{current_milestone_id}}"' },
   { label: 'timeout', detail: 'Timeout in seconds', insertText: 'timeout: 300' },
   { label: 'function', detail: 'Built-in function name', insertText: 'function: ' },
   { label: 'config', detail: 'Function config', insertText: 'config:\n    ' },

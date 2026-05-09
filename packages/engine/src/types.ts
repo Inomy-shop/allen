@@ -55,6 +55,8 @@ export interface NodeDef {
   output_extraction?: Record<string, string>;
   /** Resume the agent's prior session on retry. Default: true. Set to false for stateless nodes (e.g. reviewers) that should start fresh each run. */
   resume_on_retry?: boolean;
+  /** Optional template for the persisted LLM session key. Defaults to the node name. Use loop state here when repeated visits to the same node should not share a session. */
+  session_key?: string;
   timeout?: number;              // seconds
 
   // code nodes
@@ -261,6 +263,7 @@ export interface NodeTrace {
   rawResponse?: string;
   activity: ActivityEntry[];
   sessionId?: string;
+  sessionKey?: string;
   cost: CostInfo;
   durationMs: number;
   startedAt: Date;

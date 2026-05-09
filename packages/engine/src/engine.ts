@@ -1228,7 +1228,7 @@ ${lines.join('\n')}
 
       // Track session for resume
       if (result.sessionId) {
-        exec.sessions[nodeName] = result.sessionId;
+        exec.sessions[result.sessionKey ?? nodeName] = result.sessionId;
       }
 
       // Update cost (sequential — no race condition)
@@ -1264,6 +1264,7 @@ ${lines.join('\n')}
         rawResponse: result.rawResponse,
         activity: [],
         sessionId: result.sessionId,
+        sessionKey: result.sessionKey,
         cost: result.cost,
         durationMs: result.durationMs,
         startedAt: traceStart,
@@ -1703,7 +1704,7 @@ ${lines.join('\n')}
 
         // Track session (safe — different keys per branch)
         if (result.sessionId) {
-          exec.sessions[nodeName] = result.sessionId;
+          exec.sessions[result.sessionKey ?? nodeName] = result.sessionId;
         }
 
         return { node: nodeName, outputs: result.outputs, result, traceStart, injectedLearningIds: branchLearningIds };
@@ -1812,6 +1813,7 @@ ${lines.join('\n')}
         rawResponse: br.result.rawResponse,
         activity: [],
         sessionId: br.result.sessionId,
+        sessionKey: br.result.sessionKey,
         cost: br.result.cost,
         durationMs: br.result.durationMs,
         startedAt: br.traceStart,

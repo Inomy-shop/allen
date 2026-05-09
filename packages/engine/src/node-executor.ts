@@ -80,6 +80,7 @@ export interface NodeResult {
   outputs: Record<string, unknown>;
   rawResponse?: string;
   sessionId?: string;
+  sessionKey?: string;
   cost: CostInfo;
   durationMs: number;
   /** Per-tool-call log captured during the node's agent turn(s). Empty
@@ -137,6 +138,13 @@ export interface NodeResult {
   }>;
 }
 
+function resolveSessionKey(nodeName: string, nodeDef: NodeDef, state: Record<string, unknown>): string {
+  const template = nodeDef.session_key;
+  if (!template) return nodeName;
+  const rendered = renderTemplate(template, state).trim();
+  return rendered || nodeName;
+}
+
 export async function executeNode(
   nodeName: string,
   nodeDef: NodeDef,
@@ -160,8 +168,9 @@ export async function executeNode(
             ? 'codex'
             : 'claude';
       if (effectiveProvider === 'codex') {
-        const existingSession = sessions[nodeName];
-        return executeCodexNode(
+        const sessionKey = resolveSessionKey(nodeName, nodeDef, state);
+        const existingSession = sessions[sessionKey];
+        const result = await executeCodexNode(
           nodeName,
           nodeDef,
           state,
@@ -173,6 +182,7 @@ export async function executeNode(
           deps.feedbackContext,
           deps.abortSignal,
         );
+        return { ...result, sessionKey };
       }
       return executeAgentNode(nodeName, nodeDef, state, sessions, deps);
     }
@@ -251,7 +261,8 @@ async function executeAgentNode(
     mkdirSync(AGENT_FALLBACK_CWD, { recursive: true });
     cwd = AGENT_FALLBACK_CWD;
   }
-  const existingSession = sessions[nodeName];
+  const sessionKey = resolveSessionKey(nodeName, nodeDef, state);
+  const existingSession = sessions[sessionKey];
   // A node re-enters the executor in two distinct shapes, and the prompt
   // we send is different for each. In BOTH cases we resume the prior
   // session — the resumed conversation already carries the agent's role,
@@ -1124,6 +1135,7 @@ Use auto-gate only if the original prompt's workflow context explicitly allowed 
     outputs,
     rawResponse,
     sessionId,
+    sessionKey,
     cost: {
       actual: actualCost,
       estimated: (COST_PER_TURN[model] ?? 0.05) * turns,

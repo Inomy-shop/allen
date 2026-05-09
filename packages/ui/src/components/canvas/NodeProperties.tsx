@@ -184,6 +184,15 @@ export default function NodeProperties({ node, onUpdate, onDelete, workflowInput
             <input type="checkbox" checked={!!localData.resume_on_retry} onChange={e => update('resume_on_retry', e.target.checked)} className="w-3.5 h-3.5 rounded-sm bg-surface-200 border-accent-blue/30 accent-accent-blue" />
             <label className="text-xs text-theme-secondary font-label">Resume on retry</label>
           </div>
+          <div>
+            <label className="block text-xs font-label font-medium text-theme-secondary mb-1 uppercase tracking-wider">Session key</label>
+            <input
+              className="input w-full text-xs font-mono"
+              value={(localData.session_key as string) ?? ''}
+              onChange={e => update('session_key', e.target.value)}
+              placeholder="node-name:{{current_milestone_id}}"
+            />
+          </div>
           <AgentNodeOverrides
             agentName={(localData.agent as string) ?? ''}
             agentList={agentList}
