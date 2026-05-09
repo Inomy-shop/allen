@@ -18,7 +18,7 @@
  * -r requirements.txt` into it, and spawns the entry with that venv's python.
  */
 import { existsSync, mkdirSync, rmSync } from 'node:fs';
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { resolve as resolvePath, join } from 'node:path';
 import { resolveAllenHome } from './paths.js';
 
@@ -135,6 +135,36 @@ export type EnsurePythonVenvOptions = {
    */
   venvPath?: string;
 };
+
+/**
+ * Pick a Python interpreter usable for MCP venvs. The `mcp` package requires
+ * Python ≥3.10, but on macOS `python3` often resolves to the system 3.9, so
+ * a naïve default silently breaks `pip install`. We probe candidates in
+ * descending-version order and return the first one that reports ≥3.10.
+ *
+ * If `preferred` is set we honour it verbatim (user opt-in escape hatch).
+ * Throws if nothing usable is on PATH.
+ */
+export function resolvePythonInterpreter(preferred?: string): string {
+  if (preferred && preferred !== 'python3') return preferred;
+  const candidates = [
+    'python3.14', 'python3.13', 'python3.12', 'python3.11', 'python3.10', 'python3',
+  ];
+  for (const bin of candidates) {
+    const r = spawnSync(bin, ['--version'], { encoding: 'utf8' });
+    if (r.status !== 0) continue;
+    const out = `${r.stdout}${r.stderr}`;
+    const m = out.match(/Python\s+(\d+)\.(\d+)/);
+    if (!m) continue;
+    const major = Number(m[1]);
+    const minor = Number(m[2]);
+    if (major > 3 || (major === 3 && minor >= 10)) return bin;
+  }
+  throw new Error(
+    'No Python ≥3.10 found on PATH. Install one (e.g. `brew install python@3.12`) ' +
+    'or set python.interpreter on the MCP record.',
+  );
+}
 
 /** Build the canonical venv path for an MCP record. */
 export function venvPathFor(mcpId: string, override?: string): string {

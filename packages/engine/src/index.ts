@@ -23,6 +23,7 @@ export {
   ensurePythonVenv,
   deletePythonVenv,
   venvPathFor,
+  resolvePythonInterpreter,
   type InstallStatus,
   type PythonVenvStatus,
   type EnsurePythonVenvOptions,
