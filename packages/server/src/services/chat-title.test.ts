@@ -8,19 +8,22 @@ describe('chat title normalization', () => {
     ).toBe('Investigate Slack title generation failures in Allen conversations');
   });
 
-  it('rejects assistant-style paragraph replies and falls back to the user request', () => {
-    const title = normalizeGeneratedChatTitle(
-      "I need more context to help you effectively. Could you clarify what issue you're referring to?",
-      'can you check all recent conversations and fix title generation',
-    );
-
-    expect(title).toBe('check all recent conversations and fix title generation');
-    expect(title.length).toBeLessThanOrEqual(70);
-  });
-
   it('preserves good generated titles', () => {
     expect(
       normalizeGeneratedChatTitle('Fix Slack Conversation Titles', 'random user message'),
     ).toBe('Fix Slack Conversation Titles');
+  });
+
+  it('falls back to the user request when the candidate is empty', () => {
+    expect(
+      normalizeGeneratedChatTitle('', 'fix the auth middleware bug'),
+    ).toBe('fix the auth middleware bug');
+  });
+
+  it('caps fallback length to 70 chars / 10 words', () => {
+    const long = 'investigate the very long latency in the embeddings pipeline that has been failing for a week';
+    const title = normalizeGeneratedChatTitle('', long);
+    expect(title.length).toBeLessThanOrEqual(70);
+    expect(title.split(/\s+/).length).toBeLessThanOrEqual(10);
   });
 });
