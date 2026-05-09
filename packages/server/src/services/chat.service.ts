@@ -497,11 +497,6 @@ function deterministicSessionTaskTitle(userMessage: string): string | null {
   return compactChatTitle(assignMatch?.[1]) ?? null;
 }
 
-function titleLooksLikeAssistantReply(title: string): boolean {
-  return /^(i\s+(need|don'?t|cannot|can'?t|understand|appreciate|see|can|am)|based on|could you|please clarify|here'?s|the concise title|generate a concise title)\b/i.test(title)
-    || /\b(clarify|need more context|don't have access|i can help|i notice|you(?:'re| are) asking me)\b/i.test(title);
-}
-
 export function sanitizeChatTitle(candidate: unknown): string | null {
   if (typeof candidate !== 'string') return null;
   let title = candidate
@@ -535,9 +530,9 @@ export function sanitizeChatTitle(candidate: unknown): string | null {
 
 function fallbackTitleFromUserMessage(userMessage: string): string {
   const cleaned = userMessage
-    .replace(/https?:\/\/\S+/g, '')
     .replace(/```[\s\S]*?```/g, ' ')
     .replace(/`([^`]+)`/g, '$1')
+    .replace(/https?:\/\/\S+/g, '')
     .replace(/\b(can you|could you|please|do one thing|i want to|we need to)\b/gi, '')
     .replace(/\s+/g, ' ')
     .trim();
@@ -545,9 +540,42 @@ function fallbackTitleFromUserMessage(userMessage: string): string {
 }
 
 export function normalizeGeneratedChatTitle(candidate: unknown, userMessage: string): string {
-  const title = sanitizeChatTitle(candidate);
-  if (title && !titleLooksLikeAssistantReply(title)) return title;
-  return fallbackTitleFromUserMessage(userMessage);
+  return sanitizeChatTitle(candidate) ?? fallbackTitleFromUserMessage(userMessage);
+}
+
+interface VerifiedTitle {
+  title: string;
+  isValid: boolean;
+  reason?: string;
+}
+
+/**
+ * Parse the LLM's structured self-verification response. Tolerates code-fence
+ * wrappers, leading prose, and trailing prose by extracting the first JSON
+ * object that looks right.
+ */
+function parseTitleVerification(raw: string): VerifiedTitle | null {
+  if (!raw) return null;
+  const fenced = raw.match(/```(?:json)?\s*([\s\S]*?)```/);
+  const candidates: string[] = [];
+  if (fenced?.[1]) candidates.push(fenced[1]);
+  const objMatch = raw.match(/\{[\s\S]*\}/);
+  if (objMatch?.[0]) candidates.push(objMatch[0]);
+  candidates.push(raw);
+
+  for (const c of candidates) {
+    try {
+      const parsed = JSON.parse(c.trim());
+      if (parsed && typeof parsed === 'object' && typeof parsed.final_title === 'string') {
+        return {
+          title: parsed.final_title,
+          isValid: parsed.is_valid !== false,
+          reason: typeof parsed.reason === 'string' ? parsed.reason : undefined,
+        };
+      }
+    } catch {}
+  }
+  return null;
 }
 
 async function cancelLinkedChatExecutions(sessionId: string, db: Db): Promise<CancelledExecutionInfo[]> {
@@ -898,13 +926,13 @@ export class ChatService {
   }
 
   /**
-   * Generate (or regenerate) a title for an existing session by fetching
-   * its first user + assistant messages and running them through the LLM
+   * Generate (or regenerate) a title for an existing session by fetching the
+   * first user + first assistant message and running them through the LLM
    * title generator. Used by the manual backfill endpoint so operators can
-   * fix sessions that were created before auto-title was implemented.
+   * fix sessions that were poorly titled.
    *
-   * Returns the generated title string, or null if the session doesn't have
-   * both a user message and an assistant message yet.
+   * Returns the generated title string, or null if the session has no user
+   * messages yet.
    */
   async generateTitleForSession(sessionId: string): Promise<string | null> {
     const [userMsg, assistantMsg] = await Promise.all([
@@ -936,8 +964,49 @@ export class ChatService {
   }
 
   /**
+   * Run a title-generating prompt against codex gpt-5.5, expecting structured
+   * JSON with the model's own self-verification verdict. If the model marks
+   * its draft invalid, retry once with the model's stated reason as feedback.
+   * Returns the sanitized final title, or null if both attempts failed.
+   */
+  private async runVerifiedTitleLLM(prompt: string, userMessage: string): Promise<string | null> {
+    const callOnce = async (p: string): Promise<VerifiedTitle | null> => {
+      try {
+        const result = await runChatLLM(this.db, {
+          provider: 'codex',
+          model: 'gpt-5.5',
+          systemPrompt: '',
+          messages: [{ role: 'user', content: p }],
+          skipTools: true,
+          onText: () => {},
+          onToolStart: () => {},
+          onToolResult: () => {},
+        });
+        return parseTitleVerification(result.text.trim());
+      } catch (err) {
+        console.error('LLM title generation failed:', err instanceof Error ? err.message : err);
+        return null;
+      }
+    };
+
+    const first = await callOnce(prompt);
+    if (first?.isValid && first.title) {
+      return normalizeGeneratedChatTitle(first.title, userMessage);
+    }
+
+    const feedback = first?.reason || 'The previous draft did not meet the rules. Produce a corrected title.';
+    const retryPrompt = `${prompt}\n\nYour previous attempt failed self-verification with reason: ${feedback}\nProduce a fully verified title that passes every rule.`;
+    const second = await callOnce(retryPrompt);
+    if (second?.isValid && second.title) {
+      return normalizeGeneratedChatTitle(second.title, userMessage);
+    }
+
+    return null;
+  }
+
+  /**
    * Generate a concise, meaningful title for a conversation using the LLM.
-   * Uses claude-haiku with no tools (fast, cheap). Falls back to string truncation.
+   * Uses codex gpt-5.5 with no tools. Falls back to string truncation.
    * assistantResponse is optional — omit it when titling from a user message only
    * (e.g. the first turn was aborted before the LLM responded).
    */
@@ -950,9 +1019,20 @@ Rules:
 - Start with an action verb when possible (Fix, Build, Debug, Review, Find, Add, Improve, Analyse, etc.)
 - Name the specific resource, feature, or system involved (repo name, component, API, etc.)
 - Be concrete — avoid generic labels like "Chat about X" or "Help with Y"
-- Return ONLY the title — no quotes, no trailing punctuation, no explanation
 
-Good examples:
+Self-verification (the model MUST do this internally before answering):
+- Read the user message (and assistant response if present).
+- Draft a candidate title obeying every rule above.
+- Check the candidate: is it a sentence fragment, an assistant-style reply, a single-word command (approve/yes/ok), a bare ID/URL/email, or a copy-pasted metadata line? If yes, reject and redraft.
+- Confirm the final title actually summarises what the user is trying to accomplish.
+
+Output format — RETURN ONLY this JSON object on a single line, nothing else:
+{"final_title":"<the verified title>","is_valid":true,"reason":""}
+
+If you cannot produce a title that passes every check, return:
+{"final_title":"","is_valid":false,"reason":"<short explanation>"}
+
+Good examples (the title field):
 - Fix visual search failure in image embeddings
 - Review Allen chat productivity gaps
 - Find extraction and transformation prompts
@@ -969,9 +1049,20 @@ Rules:
 - Start with an action verb when possible (Fix, Build, Debug, Review, Find, Add, Improve, Analyse, etc.)
 - Name the specific resource, feature, or system involved (repo name, component, API, etc.)
 - Be concrete — avoid generic labels like "Chat about X" or "Help with Y"
-- Return ONLY the title — no quotes, no trailing punctuation, no explanation
 
-Good examples:
+Self-verification (the model MUST do this internally before answering):
+- Read the user message (and assistant response if present).
+- Draft a candidate title obeying every rule above.
+- Check the candidate: is it a sentence fragment, an assistant-style reply, a single-word command (approve/yes/ok), a bare ID/URL/email, or a copy-pasted metadata line? If yes, reject and redraft.
+- Confirm the final title actually summarises what the user is trying to accomplish.
+
+Output format — RETURN ONLY this JSON object on a single line, nothing else:
+{"final_title":"<the verified title>","is_valid":true,"reason":""}
+
+If you cannot produce a title that passes every check, return:
+{"final_title":"","is_valid":false,"reason":"<short explanation>"}
+
+Good examples (the title field):
 - Fix visual search failure in image embeddings
 - Review Allen chat productivity gaps
 - Find extraction and transformation prompts
@@ -980,25 +1071,8 @@ Good examples:
 
 User: ${userMessage.slice(0, 500)}`;
 
-    try {
-      const result = await runChatLLM(this.db, {
-        provider: 'claude-cli',
-        model: 'haiku',
-        systemPrompt: '',
-        messages: [{ role: 'user', content: prompt }],
-        skipTools: true,
-        onText: () => {},
-        onToolStart: () => {},
-        onToolResult: () => {},
-      });
-      const raw = result.text.trim();
-      if (raw.length > 0) {
-        return normalizeGeneratedChatTitle(raw, userMessage);
-      }
-    } catch (err) {
-      console.error('LLM title generation failed:', err instanceof Error ? err.message : err);
-    }
-
+    const verified = await this.runVerifiedTitleLLM(prompt, userMessage);
+    if (verified) return verified;
     return deterministicSessionTaskTitle(userMessage) ?? fallbackTitleFromUserMessage(userMessage);
   }
 
@@ -1249,15 +1323,17 @@ User: ${userMessage.slice(0, 500)}`;
         messageId: assistantMsgId, text: result.text, costUsd, durationMs, toolCalls: entry.toolCalls,
       });
 
-      // Auto-generate title for the session after first response (or when aborted)
-      // Guard: only retitle when source is 'default' or 'auto', and within the first 2 turns.
-      // Do NOT retitle after the user has explicitly set a title ('user' source).
-      const shouldAutoTitle =
-        (session?.titleSource === 'default' || session?.titleSource === 'auto' || !session?.titleSource) &&
-        ((session?.messageCount as number) ?? 0) <= 4;
+      // Auto-title strategy: fire exactly once on turn 1, using only the
+      // first turn's user message + assistant response. Skip if the user
+      // manually set a title or if a title was already generated.
+      // Note: sendMessage() inserts both messages and increments messageCount
+      // by 2 BEFORE calling runLLM, then runLLM reloads the session. So at
+      // this point a "first turn" session has messageCount === 2, not 0.
+      const priorCount = (session?.messageCount as number) ?? 0;
+      const prevSource = session?.titleSource;
+      const shouldAutoTitle = priorCount <= 2 && prevSource !== 'user' && prevSource !== 'auto';
 
       if (shouldAutoTitle) {
-        // assistantContent may be empty if the user aborted — that's fine, we pass undefined
         const responseText = result.text.trim() || undefined;
         const deterministicTitle = deterministicSessionTaskTitle(content);
         Promise.resolve(deterministicTitle ?? this.generateTitleWithLLM(content, responseText))
@@ -1279,10 +1355,13 @@ User: ${userMessage.slice(0, 500)}`;
       // Do NOT overwrite the status to 'failed' or log it as an error.
       if (entry.aborted) {
         console.log(`[chat] Turn cancelled by user — skipping error handler`);
-        // Auto-title even on abort — use whatever partial text exists (or just the user message).
-        const shouldAutoTitleOnAbort =
-          (session?.titleSource === 'default' || session?.titleSource === 'auto' || !session?.titleSource) &&
-          ((session?.messageCount as number) ?? 0) <= 4;
+        // Auto-title even on abort — same turn-1-only rule as the success path.
+        // priorCount counts post-bump (sendMessage already inserted both messages
+        // and incremented before runLLM was invoked), so turn 1 reads as 2.
+        const priorCount = (session?.messageCount as number) ?? 0;
+        const prevSource = session?.titleSource;
+        const shouldAutoTitleOnAbort = priorCount <= 2 && prevSource !== 'user' && prevSource !== 'auto';
+
         if (shouldAutoTitleOnAbort) {
           const deterministicTitle = deterministicSessionTaskTitle(content);
           Promise.resolve(deterministicTitle ?? this.generateTitleWithLLM(content, entry.currentText.trim() || undefined))
