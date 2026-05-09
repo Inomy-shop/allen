@@ -18,7 +18,7 @@ import { type Db, ObjectId } from 'mongodb';
 import { resolve, join, dirname, extname, isAbsolute } from 'node:path';
 import { existsSync } from 'node:fs';
 
-import { ensureInstalled, ensurePythonVenv } from './mcp-install.js';
+import { ensureInstalled, ensurePythonVenv, resolvePythonInterpreter } from './mcp-install.js';
 
 // ── env allowlist from process.env (ALLEN_<key> → <key>) ───────────────────
 
@@ -158,7 +158,13 @@ async function resolveSourcedStdio(
       }
 
       const py = (s.python as Record<string, unknown> | undefined) ?? {};
-      const interpreter = (py.interpreter as string | undefined) ?? 'python3';
+      let interpreter: string;
+      try {
+        interpreter = resolvePythonInterpreter(py.interpreter as string | undefined);
+      } catch (err) {
+        console.error(`[mcp-loader] python interpreter resolution failed for "${s.name}":`, (err as Error).message);
+        return null;
+      }
 
       // Resolve requirements.txt: explicit path on the record wins, otherwise
       // auto-detect a sibling file next to the entry. Path-traversal-guard the

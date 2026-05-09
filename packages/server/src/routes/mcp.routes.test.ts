@@ -41,6 +41,7 @@ vi.mock('@allen/engine', () => ({
   ensureInstalled: vi.fn(),
   ensurePythonVenv: vi.fn(),
   deletePythonVenv: vi.fn(),
+  resolvePythonInterpreter: vi.fn((preferred?: string) => preferred ?? 'python3'),
   buildSingleServerConfig: vi.fn().mockResolvedValue(null),
 }));
 
