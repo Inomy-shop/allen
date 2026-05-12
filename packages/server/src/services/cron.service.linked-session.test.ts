@@ -115,7 +115,7 @@ function makeJob(overrides: Partial<CronJob> = {}): CronJob {
     displayName: 'Daily Status Prep',
     description: 'test job',
     enabled: true,
-    schedule: '45 9 * * 1-5',
+    schedule: '30 9 * * 1-5',
     timezone: 'America/New_York',
     target: {
       type: 'agent',

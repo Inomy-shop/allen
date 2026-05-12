@@ -96,9 +96,9 @@ const SEED_JOBS: Omit<CronJob, '_id' | 'nextRunAt' | 'lastRunAt' | 'lastRunStatu
     name: 'daily-status-prep',
     displayName: 'Daily Status Prep',
     description:
-      'Generates a weekday morning briefing 15 minutes before the 10 AM ET daily status call and posts it to a persistent chat thread.',
+      'Generates a weekday morning briefing 30 minutes before the 10 AM ET daily status call and posts it to a persistent chat thread and Slack.',
     enabled: true,
-    schedule: '45 9 * * 1-5',
+    schedule: '30 9 * * 1-5',
     timezone: 'America/New_York',
     target: {
       type: 'agent' as const,

@@ -65,7 +65,7 @@ describe('cron-seed.service: daily-status-prep', () => {
     const job = db.store.cron_jobs.find((j: any) => j.name === 'daily-status-prep');
     expect(job).toBeDefined();
     expect(job.displayName).toBe('Daily Status Prep');
-    expect(job.schedule).toBe('45 9 * * 1-5');
+    expect(job.schedule).toBe('30 9 * * 1-5');
     expect(job.timezone).toBe('America/New_York');
     expect(job.target.type).toBe('agent');
     expect(job.target.agentName).toBe('daily-status-prep');
@@ -109,7 +109,7 @@ describe('cron-seed.service: daily-status-prep', () => {
     const job = db.store.cron_jobs.find((j: any) => j.name === 'daily-status-prep');
     // Display fields should be updated
     expect(job.displayName).toBe('Daily Status Prep');
-    expect(job.schedule).toBe('45 9 * * 1-5');
+    expect(job.schedule).toBe('30 9 * * 1-5');
     expect(job.timezone).toBe('America/New_York');
     // linkedChatSessionId must NOT be touched
     expect(job.linkedChatSessionId).toBe(existingSessionId);
@@ -165,7 +165,7 @@ describe('cron-seed.service: daily-status-prep', () => {
     await seedCronJobs(db);
 
     const job = db.store.cron_jobs.find((j: any) => j.name === 'daily-status-prep');
-    expect(job.schedule).toBe('45 9 * * 1-5');
+    expect(job.schedule).toBe('30 9 * * 1-5');
     expect(job.timezone).toBe('America/New_York');
     expect(job.displayName).toBe('Daily Status Prep');
     expect(job.description).toContain('weekday morning briefing');

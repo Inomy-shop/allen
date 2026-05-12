@@ -2945,7 +2945,7 @@ ${DELEGATION_INSTRUCTIONS}`,
     reasoningEffort: 'medium',
     planMode: false,
     displayName: 'Daily Status Prep',
-    description: 'Automation agent that generates a weekday morning briefing for the 10 AM ET daily status call and posts it to a persistent chat thread.',
+    description: 'Automation agent that generates a weekday morning briefing for the 10 AM ET daily status call and posts it to a persistent chat thread and Slack status channel.',
     teamName: 'engineering',
     teamRole: 'member',
     type: 'technical',
@@ -2991,6 +2991,12 @@ Extract LINKED_CHAT_SESSION_ID, AUTOMATION_API_TOKEN, and AUTOMATION_MESSAGE_URL
    - If set but call fails → add to Section 6: "Source temporarily unavailable: Slack API error: <message>". Skip.
 6. Google Meet/Calendar notes: ALWAYS add to Section 6: "Source unavailable: Google Calendar integration not configured". This is an MVP gap.
 
+## SLACK DELIVERY TARGET
+- After saving the artifact and posting the report to the persistent chat session, also post the same report to Slack channel [#daily-status](https://inomy.slack.com/archives/C0B312Y45HT).
+- Default channel ID: C0B312Y45HT. If process.env.DAILY_STATUS_SLACK_CHANNEL_ID is set, use that value instead.
+- Use process.env.ALLEN_SLACK_BOT_TOKEN or process.env.SLACK_BOT_TOKEN for Slack Web API authentication.
+- Slack delivery is additive. If the token is missing, the bot is not in the channel, or chat.postMessage fails, log the Slack failure and still complete successfully after the chat/artifact delivery succeeds.
+
 ## CONFIDENCE LABELS
 Add to every claim or bullet that is inferred rather than directly observed:
 - [HIGH CONFIDENCE] — directly confirmed by tool data (e.g., execution completed, PR merged, issue closed)
@@ -3035,6 +3041,7 @@ Generate the report in this exact structure:
 [Include ALL of the following that apply:]
 - Source unavailable: Linear token not configured
 - Source unavailable: Slack not configured
+- Slack delivery target: [#daily-status](https://inomy.slack.com/archives/C0B312Y45HT)
 - Source unavailable: Google Calendar integration not configured
 - Source unavailable: no GitHub repos registered
 [Then list evidence items:]
@@ -3079,7 +3086,29 @@ Generate the report in this exact structure:
    - If response HTTP status is 401: log "AUTOMATION_POST_FAILED: unauthorized (token may have expired). Artifact was saved. Exiting cleanly." and exit — do NOT crash or retry.
    - If response HTTP status is 404: log "AUTOMATION_POST_FAILED: session not found. Artifact was saved. Exiting cleanly." and exit — do NOT crash.
    - Any other error: log the HTTP status and response body, exit cleanly.
-9. Report completion and exit.
+9. POST the same report to Slack channel C0B312Y45HT using the Bash tool:
+   \`\`\`bash
+   SLACK_TOKEN="\${ALLEN_SLACK_BOT_TOKEN:-$SLACK_BOT_TOKEN}"
+   SLACK_CHANNEL_ID="\${DAILY_STATUS_SLACK_CHANNEL_ID:-C0B312Y45HT}"
+   if [ -z "$SLACK_TOKEN" ]; then
+     echo "SLACK_POST_SKIPPED: Slack token not configured."
+   else
+     SLACK_PAYLOAD=$(jq -n \
+       --arg channel "$SLACK_CHANNEL_ID" \
+       --arg text "$REPORT_CONTENT" \
+       '{channel: $channel, text: $text, unfurl_links: false, unfurl_media: false}')
+     SLACK_RESPONSE=$(curl -s -X POST "https://slack.com/api/chat.postMessage" \
+       -H "Authorization: Bearer $SLACK_TOKEN" \
+       -H "Content-Type: application/json; charset=utf-8" \
+       -d "$SLACK_PAYLOAD")
+     echo "$SLACK_RESPONSE" | jq -e '.ok == true' >/dev/null \
+       && echo "SLACK_POST_SUCCESS: report posted to $SLACK_CHANNEL_ID." \
+       || echo "SLACK_POST_FAILED: $(echo "$SLACK_RESPONSE" | jq -r '.error // "unknown_error"')."
+   fi
+   \`\`\`
+   - If Slack returns "not_in_channel", "channel_not_found", or "missing_scope", log it and complete successfully. Do NOT fail the daily report.
+   - If Slack succeeds and returns a timestamp, include the Slack channel permalink in any completion logs when available.
+10. Report completion and exit.
 
 ## REPORT SIZE LIMIT
 If the full report would exceed 900,000 characters:

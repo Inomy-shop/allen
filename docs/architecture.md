@@ -121,7 +121,7 @@ Important server files:
 - `src/services/linear.service.ts` - Linear GraphQL client, TTL caches, agent/workflow dispatch, and issue fetching.
 - `src/services/chat.service.ts` — `resolveMentions()` resolves `@ENG-123`-style tokens to Linear ticket context and `@name` tokens to workflow/repo/agent context before the LLM call. `ChatSession.source` accepts `'ui' | 'slack' | 'automation'`; automation sessions carry an `automationKey` field used as a deduplication key. `appendAutomationMessage(sessionId, role, content)` inserts a message into an automation thread without starting a live LLM session (content capped at 1 MB, `role:admin` rejected, throws `'Not an automation session'` if `session.source !== 'automation'`).
 - `src/services/cron.service.ts` — Scheduler using `node-cron`. For agent-target jobs where `agentName === job.name`, `ensureLinkedSession()` upserts a persistent `chat_sessions` document keyed by `automationKey` (race-safe via `$setOnInsert` + E11000 fallback), then injects an `AUTOMATION_CONTEXT` block into the agent prompt (`LINKED_CHAT_SESSION_ID`, `AUTOMATION_API_TOKEN`, `AUTOMATION_MESSAGE_URL`) so the agent can POST its output back to the linked thread. The `AUTOMATION_API_TOKEN` is minted with a 5-minute TTL (via `signAccessToken(..., '5m')`) to avoid persisting a long-lived credential in the `chat_messages` collection. A stale-pointer recovery path re-links `cron_jobs.linkedChatSessionId` if the session was deleted and recreated.
-- `src/services/cron-seed.service.ts` — Seeds built-in cron jobs. Includes the `daily-status-prep` job (schedule `45 9 * * 1-5`, `America/New_York`) that fires the `daily-status-prep` agent 15 minutes before the 10 AM ET daily call. `linkedChatSessionId` is intentionally excluded from `SEED_OVERRIDE` `$set` to preserve the persistent automation thread across restarts.
+- `src/services/cron-seed.service.ts` — Seeds built-in cron jobs. Includes the `daily-status-prep` job (schedule `30 9 * * 1-5`, `America/New_York`) that fires the `daily-status-prep` agent 30 minutes before the 10 AM ET daily call. `linkedChatSessionId` is intentionally excluded from `SEED_OVERRIDE` `$set` to preserve the persistent automation thread across restarts.
 - `services/slack.service.ts`, `services/slack-notifier.ts` - Slack integrations.
 - `src/routes/file.routes.ts` and `routes/artifact.routes.ts` - capability-URL public routes.
 
@@ -270,7 +270,7 @@ The persistent linked chat thread accumulates every run's output in one scrollab
 
 | Name | Schedule | Description |
 |------|----------|-------------|
-| `daily-status-prep` | `45 9 * * 1-5` ET | Weekday morning briefing 15 min before the 10 AM ET daily call. |
+| `daily-status-prep` | `30 9 * * 1-5` ET | Weekday morning briefing 30 min before the 10 AM ET daily call. |
 
 ## Runtime Ports
 
