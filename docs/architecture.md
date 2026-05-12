@@ -136,11 +136,16 @@ Responsibilities:
 - Chat and agent delegation UX, including `@mention` autocomplete for workflows, repos, agents, and Linear tickets.
 - Workflow list and workflow builder.
 - Workflow run dialogs.
+- Paginated activity feed: server-side execution list (50 per page) with status filter, type filter (agent / workflow), and debounced text search. Page position is encoded in `?page=N` URL state and resets to 0 on filter or search changes. The page auto-refreshes every 5 s while running or queued executions are present.
 - Execution timeline, node detail, logs, state, artifacts, checkpoints, and interventions.
 - Workspace list/detail, terminal, file preview, service preview.
 - Repo manager.
 - Ticket and PR views.
 - Settings for agents, MCP (including preset and repo-based registration with Python MCP support), integrations, and users.
+
+Key activity page components:
+
+- `src/pages/ExecutionListPage.tsx` - Activity page. Renders the paginated execution list. Exports the `paginationViewModel({ page, total, pageSize })` pure function that computes UI-state (`visible`, `pageCount`, `currentPageLabel`, `prevDisabled`, `nextDisabled`) with no DOM dependency so it can be tested in isolation.
 
 Key chat UI components:
 

@@ -8,6 +8,8 @@ Allen is currently pre-release, so behavior can change between commits. Versione
 
 ### Added
 
+- Activity page (`ExecutionListPage`) now paginates the execution list server-side: 50 executions per page, `?page=N` URL state, Previous / Next controls with a "Page X of Y" label. Controls are hidden when the total count fits on one page.
+- `paginationViewModel()` pure function (exported from `ExecutionListPage.tsx`) computes `{ visible, pageCount, currentPageLabel, prevDisabled, nextDisabled }` from `{ page, total, pageSize }` with no DOM dependency, enabling isolated unit tests.
 - `npm run setup` script that verifies Node 22+, installs MongoDB 7 (Homebrew on macOS), the Claude Code CLI, and the Codex CLI when missing, runs `npm install`, and creates `.env` with freshly generated JWT secrets.
 - `npm start` as the canonical command to run the full Allen stack locally.
 - Documentation for the two repo registration flows (local path and clone-via-SSH), the Linear ticket dispatch flow, and the workflow creation paths (visual builder vs. seed YAML).
