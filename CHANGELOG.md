@@ -8,6 +8,10 @@ Allen is currently pre-release, so behavior can change between commits. Versione
 
 ### Added
 
+- **Automation agent infrastructure** — cron jobs with `target.agentName === job.name` now get a persistent linked chat session (one `chat_sessions` document per job, keyed by a sparse-unique `automationKey` index). On each dispatch, `CronService.ensureLinkedSession()` upserts the session race-safely and injects `AUTOMATION_CONTEXT` (session ID, 5-min JWT token, message URL) into the agent prompt so it can POST results back via the new `POST /api/chat/sessions/:id/automation-message` endpoint. `cron_jobs.linkedChatSessionId` is persisted on first creation and excluded from `SEED_OVERRIDE` updates. `signAccessToken` extended with an optional `expiresIn` override so automation tokens (`'5m'`) do not leak a long-lived credential into the `chat_messages` collection.
+- **`daily-status-prep` cron job** — weekday morning automation (schedule `45 9 * * 1-5` ET) that fires the `daily-status-prep` agent 15 minutes before the 10 AM ET daily call and posts a 6-section briefing to its linked chat thread.
+- **Dashboard Automations panel** — displays configured automation jobs above in-flight work. Each card shows last-run status (with animated `Loader2` spinner + `glow-running` badge while running), next-run time, and a `View Report →` link to the linked chat thread.
+
 - `npm run setup` script that verifies Node 22+, installs MongoDB 7 (Homebrew on macOS), the Claude Code CLI, and the Codex CLI when missing, runs `npm install`, and creates `.env` with freshly generated JWT secrets.
 - `npm start` as the canonical command to run the full Allen stack locally.
 - Documentation for the two repo registration flows (local path and clone-via-SSH), the Linear ticket dispatch flow, and the workflow creation paths (visual builder vs. seed YAML).

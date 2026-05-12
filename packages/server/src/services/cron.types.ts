@@ -54,6 +54,13 @@ export interface CronJob {
   // Used by the atomic claim guard to prevent double-fire across overlapping ticks.
   runStatus: 'idle' | 'running';
 
+  // Persistent chat session linked to this automation agent job.
+  // Stores the ObjectId hex string of the chat_sessions document used to post
+  // automation results. Set by ensureLinkedSession() on first dispatch and
+  // never overwritten by seed updates (linkedChatSessionId is excluded from
+  // SEED_OVERRIDE $set).
+  linkedChatSessionId?: string | null;
+
   isBuiltIn: boolean;
   createdBy: 'seed' | 'user';
   createdAt: Date;

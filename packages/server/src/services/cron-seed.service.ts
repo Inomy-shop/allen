@@ -93,6 +93,22 @@ const SEED_JOBS: Omit<CronJob, '_id' | 'nextRunAt' | 'lastRunAt' | 'lastRunStatu
     createdBy: 'seed',
   },
   {
+    name: 'daily-status-prep',
+    displayName: 'Daily Status Prep',
+    description:
+      'Generates a weekday morning briefing 15 minutes before the 10 AM ET daily status call and posts it to a persistent chat thread.',
+    enabled: true,
+    schedule: '45 9 * * 1-5',
+    timezone: 'America/New_York',
+    target: {
+      type: 'agent' as const,
+      agentName: 'daily-status-prep',
+      prompt: 'Generate the Daily Status Prep report for today. Context will be injected automatically.',
+    },
+    isBuiltIn: true,
+    createdBy: 'seed' as const,
+  },
+  {
     name: 'allen-self-healing-monitor-hourly',
     displayName: 'Allen Self-Healing Monitor',
     description:
@@ -168,6 +184,10 @@ export async function seedCronJobs(db: Db): Promise<number> {
       console.log(`[cron] seeded built-in job: ${seed.name}`);
     } else if (override) {
       // Sync display fields + schedule only when seed override is explicit.
+      // NOTE: linkedChatSessionId is intentionally excluded from this $set so
+      // that the persistent automation chat thread is never overwritten by a
+      // seed update — once ensureLinkedSession() sets it on first dispatch,
+      // it must survive restarts and SEED_OVERRIDE re-runs.
       await col.updateOne(
         { name: seed.name },
         {
