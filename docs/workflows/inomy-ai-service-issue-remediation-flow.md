@@ -38,21 +38,25 @@ If the request is too vague, the workflow pauses and asks for clarification. The
 
 The workflow input schema owns these runtime defaults. Allen applies them before the intake node runs, so agents receive the same values whether the workflow is started from the UI or API.
 
+For the deployed dev Allen workflow, the defaults are:
+
 | Item | Default |
 | --- | --- |
-| Primary repo | `/Users/apple/.allen/repositories/inomy-ai-service` |
-| Search repo | `/Users/apple/.allen/repositories/inomy-mono` |
-| Legacy NestJS API | `http://localhost:3000/api/v1` |
-| Go search-lite endpoint | `http://localhost:4100/search/os/get-matches` |
+| Primary repo | `/home/ubuntu/.allen/repositories/inomy-ai-service` |
+| Search repo | `/home/ubuntu/.allen/repositories/inomy-mono` |
+| Dev API base for canonical/legacy replay | `https://api.dev.inomy.shop/api/v1` |
+| Go search-lite endpoint | `http://internal-inomy-search-lite-dev-1599955105.us-east-1.elb.amazonaws.com/search/os/get-matches` |
 | GEPA iterations | `3` |
 | Routing confidence | `0.7` |
 | Repo changes | allowed |
 | Direct prompt DB mutation | disabled |
-| Prompt best-practice reference | `/Users/apple/allen/docs/claude-prompting-best-practices.md` |
+| Prompt best-practice reference | `/home/ubuntu/.allen/repositories/allen/docs/claude-prompting-best-practices.md` |
 
 Prompt changes are repo-backed. The workflow should not directly mutate production prompt storage.
 
-The registered Allen repo paths are under `/Users/apple/.allen/repositories`. The shorter `/Users/apple/inomy/inomy-ai-service` and `/Users/apple/inomy/inomy-mono` paths are local symlinks to those registered repos, so either form resolves to the same working tree.
+Do not place API tokens in workflow input. The dev API can require authentication, so replay through the `api-caller` MCP server when auth is needed; that server injects its auth header from its own environment. The search-lite default is an internal ALB URL and must be reachable from the Allen runtime network.
+
+On a workstation, the registered Allen repo paths may be under `/Users/apple/.allen/repositories`. The shorter `/Users/apple/inomy/inomy-ai-service` and `/Users/apple/inomy/inomy-mono` paths are local symlinks to those registered repos, so either form resolves to the same working tree.
 
 ## Big Picture
 
@@ -294,11 +298,11 @@ If legacy or canonical evidence is correct and Go search-lite differs for the sa
 /Users/apple/.allen/repositories/inomy-mono/apps/search-lite
 ```
 
-The default replay endpoints are:
+The deployed dev replay endpoints are:
 
 ```text
-Legacy NestJS API: http://localhost:3000/api/v1
-Go search-lite:    http://localhost:4100/search/os/get-matches
+Dev API base:   https://api.dev.inomy.shop/api/v1
+Go search-lite: http://internal-inomy-search-lite-dev-1599955105.us-east-1.elb.amazonaws.com/search/os/get-matches
 ```
 
 ## Agents Updated For This Flow
@@ -392,8 +396,8 @@ Override runtime values only when you intentionally want a non-default repo or r
 ```json
 {
   "raw_user_query": "Search-lite returns 4 variants but legacy returns 10 for this payload.",
-  "search_lite_base_url": "http://localhost:4100/search/os/get-matches",
-  "old_search_api_base_url": "http://localhost:3000/api/v1"
+  "search_lite_base_url": "http://internal-inomy-search-lite-dev-1599955105.us-east-1.elb.amazonaws.com/search/os/get-matches",
+  "old_search_api_base_url": "https://api.dev.inomy.shop/api/v1"
 }
 ```
 
@@ -408,7 +412,7 @@ Improve query_understander so laptop searches for video editing do not ask unnec
 ```
 
 ```text
-Search-lite returns 4 variants for this payload, but legacy NestJS returns 10. Use http://localhost:4100/search/os/get-matches and http://localhost:3000/api/v1 for replay.
+Search-lite returns 4 variants for this payload, but the canonical dev API returns 10. Use the default dev replay endpoints.
 ```
 
 If the request is too short, Allen will ask for the missing evidence before it edits anything.
