@@ -292,6 +292,7 @@ export class ExecutionService {
     if (!workflowDoc) throw new Error('Workflow not found');
 
     const workflow = workflowDoc.parsed as WorkflowDef;
+    input = this.applyWorkflowInputDefaults(workflow, input);
     this.validateWorkflowInput(workflow, input);
     if (isSelfHealingWorkflowName(workflow.name)) {
       const config = assertSelfHealingLinearConfig();
@@ -343,6 +344,28 @@ export class ExecutionService {
 
     // Start immediately
     return this.launchExecution(executionId, workflowId, workflow, input);
+  }
+
+  private applyWorkflowInputDefaults(
+    workflow: WorkflowDef,
+    input: Record<string, unknown>,
+  ): Record<string, unknown> {
+    const inputDef = workflow.input;
+    if (!inputDef) return input;
+
+    const withDefaults = { ...input };
+    for (const [key, def] of Object.entries(inputDef)) {
+      if (
+        withDefaults[key] === undefined
+        || withDefaults[key] === null
+        || withDefaults[key] === ''
+      ) {
+        if (def.default !== undefined) {
+          withDefaults[key] = def.default;
+        }
+      }
+    }
+    return withDefaults;
   }
 
   private validateWorkflowInput(workflow: WorkflowDef, input: Record<string, unknown>): void {
