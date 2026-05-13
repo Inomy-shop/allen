@@ -8,6 +8,34 @@ type TypeFilter = '' | 'agent' | 'workflow';
 
 const PAGE_SIZE = 50;
 
+export interface PaginationViewModel {
+  visible: boolean;
+  pageCount: number;
+  currentPageLabel: number; // 1-indexed display
+  prevDisabled: boolean;
+  nextDisabled: boolean;
+}
+
+export function paginationViewModel({
+  page,
+  total,
+  pageSize,
+}: {
+  page: number;
+  total: number | null | undefined;
+  pageSize: number;
+}): PaginationViewModel {
+  const safeTotal = total ?? 0;
+  const safePage = Math.max(0, page);
+  return {
+    visible: safeTotal > pageSize,
+    pageCount: Math.max(1, Math.ceil(safeTotal / pageSize)),
+    currentPageLabel: safePage + 1,
+    prevDisabled: safePage === 0,
+    nextDisabled: (safePage + 1) * pageSize >= safeTotal,
+  };
+}
+
 function shortDuration(ms: number | null | undefined): string {
   if (ms == null) return '-';
   const s = ms / 1000;
@@ -115,7 +143,9 @@ export default function ExecutionListPage() {
 
   const statuses = ['', 'running', 'completed', 'failed', 'cancelled', 'queued', 'waiting_for_input'];
   const runningNow = sorted.filter(exec => exec.status === 'running' || exec.status === 'queued' || exec.status === 'waiting_for_input');
-  const recentExecs = sorted.slice(0, 12);
+  const recentExecs = sorted;
+
+  const vm = paginationViewModel({ page, total, pageSize: PAGE_SIZE });
 
   return (
     <div className="content scroll-hide" data-screen-label="activity">
@@ -208,6 +238,31 @@ export default function ExecutionListPage() {
               </Link>
             ))}
           </div>
+          {vm.visible && (
+            <div className="an-pagination">
+              <button
+                type="button"
+                className="btn btn-secondary btn-sm"
+                disabled={vm.prevDisabled}
+                aria-label="Previous page"
+                onClick={() => updateParams({ page: String(page - 1) })}
+              >
+                Previous
+              </button>
+              <span className="an-pagination-label">
+                Page {vm.currentPageLabel} of {vm.pageCount}
+              </span>
+              <button
+                type="button"
+                className="btn btn-secondary btn-sm"
+                disabled={vm.nextDisabled}
+                aria-label="Next page"
+                onClick={() => updateParams({ page: String(page + 1) })}
+              >
+                Next
+              </button>
+            </div>
+          )}
         </section>
 
         <section className="an-section">
