@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { ArrowRight } from 'lucide-react';
-import { agents as agentsApi, chat as chatApi, executions, interventions, repos as reposApi } from '../services/api';
+import { ArrowRight, Loader2 } from 'lucide-react';
+import { agents as agentsApi, chat as chatApi, crons, executions, interventions, repos as reposApi } from '../services/api';
 import { pullRequests } from '../services/workspaceService';
 import { useAuthStore } from '../stores/authStore';
 import ChatInput, { type ReasoningEffortValue, type RepoOption } from '../components/chat/ChatInput';
@@ -108,6 +108,16 @@ function timeAgo(dateStr?: string): string {
   if (hr < 24) return `${hr}h ago`;
   const day = Math.floor(hr / 24);
   return `${day}d ago`;
+}
+
+function timeUntil(dateStr?: string): string {
+  if (!dateStr) return '';
+  const ms = new Date(dateStr).getTime() - Date.now();
+  if (ms < 0) return 'overdue';
+  if (ms < 60_000) return 'in <1 min';
+  if (ms < 3_600_000) return `in ${Math.round(ms / 60_000)} min`;
+  if (ms < 86_400_000) return `in ${Math.round(ms / 3_600_000)} hr`;
+  return `in ${Math.round(ms / 86_400_000)} day(s)`;
 }
 
 function isActiveRun(run: ExecutionItem): boolean {
@@ -405,6 +415,56 @@ function TaskRefs({ run }: { run: ExecutionItem }) {
   );
 }
 
+function DailyStatusPrepCard({ job }: { job: any | null }) {
+  if (!job) {
+    return (
+      <div style={{ padding: '12px', color: 'var(--text-muted, #888)', fontSize: '13px' }}>
+        Daily Status Prep — not yet configured
+      </div>
+    );
+  }
+
+  const { displayName, lastRunAt, nextRunAt, lastRunStatus, runStatus, linkedChatSessionId } = job;
+
+  let badgeClass = '';
+  let badgeText = 'Never run';
+  if (runStatus === 'running') {
+    badgeClass = 'badge-info';
+    badgeText = 'Generating…';
+  } else if (lastRunStatus === 'success') {
+    badgeClass = 'badge-ok';
+    badgeText = 'Ready';
+  } else if (lastRunStatus === 'failed') {
+    badgeClass = 'badge-err';
+    badgeText = 'Failed';
+  } else if (lastRunStatus === 'skipped') {
+    badgeClass = 'badge-muted';
+    badgeText = 'Skipped';
+  } else {
+    badgeClass = 'badge-muted';
+    badgeText = 'Never run';
+  }
+
+  return (
+    <div className="r-open-area">
+      <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+        <span style={{ fontWeight: 500 }}>{displayName || 'Daily Status Prep'}</span>
+        <span className={`badge ${badgeClass}${runStatus === 'running' ? ' glow-running' : ''}`.trim()}>
+          {runStatus === 'running' && <Loader2 className="inline animate-spin" style={{ width: '12px', height: '12px', marginRight: '4px', verticalAlign: 'middle' }} />}
+          {badgeText}
+        </span>
+        {linkedChatSessionId ? (
+          <Link className="link" to={`/chat/${linkedChatSessionId}`}>View Report →</Link>
+        ) : null}
+      </div>
+      <div className="mw-sec-meta" style={{ marginTop: '4px', fontSize: '12px' }}>
+        {lastRunAt ? `Last run: ${timeAgo(lastRunAt)}` : 'Never run'}
+        {nextRunAt ? ` · Next: ${timeUntil(nextRunAt)}` : ''}
+      </div>
+    </div>
+  );
+}
+
 export default function DashboardPage() {
   const navigate = useNavigate();
   const user = useAuthStore((s) => s.user);
@@ -425,6 +485,7 @@ export default function DashboardPage() {
     reasoningEffort?: ReasoningEffortValue | null;
     planMode?: boolean | null;
   }>({});
+  const [cronJobs, setCronJobs] = useState<any[]>([]);
 
   async function load() {
     try {
@@ -436,6 +497,7 @@ export default function DashboardPage() {
       setPendingInterventions(pending ?? []);
       setReviewPrs((prs ?? []).filter((pr) => isReviewNeededPr(pr) && Boolean(pr.chatSessionId)));
       setRuns(collapseTaskRuns((execs.items ?? []).filter((run) => isAssignedTask(run) && hasChatReference(run))));
+      // cron data is loaded separately on a 30 s interval (see loadCrons below)
     } finally {
       setInitialLoading(false);
     }
@@ -445,6 +507,19 @@ export default function DashboardPage() {
     void load();
     const interval = setInterval(load, 10000);
     return () => clearInterval(interval);
+  }, []);
+
+  // NFR-006: cron state changes slowly (job completes once per run).
+  // Load on mount and refresh every 30 s, independent of the 10 s exec poll.
+  useEffect(() => {
+    function loadCrons() {
+      crons.list().catch(() => []).then((data) => {
+        setCronJobs(Array.isArray(data) ? data : []);
+      });
+    }
+    loadCrons();
+    const cronInterval = setInterval(loadCrons, 30_000);
+    return () => clearInterval(cronInterval);
   }, []);
 
   useEffect(() => {
@@ -587,6 +662,16 @@ export default function DashboardPage() {
             ))}
           </div>
         )}
+      </section>
+
+      {/* Automations */}
+      <section className="mw-sec">
+        <header className="mw-sec-h">
+          <h3>Automations</h3>
+        </header>
+        <DailyStatusPrepCard
+          job={cronJobs.find((j: any) => j.name === 'daily-status-prep') ?? null}
+        />
       </section>
 
       <section className="mw-sec">

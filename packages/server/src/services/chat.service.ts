@@ -39,7 +39,8 @@ export interface ChatSession {
   provider: ChatProvider;
   model?: string;
   llmSessionId?: string;
-  source?: 'ui' | 'slack';
+  source?: 'ui' | 'slack' | 'automation';
+  automationKey?: string;
   slackContext?: SlackContext;
   repoId?: string;     // ObjectId string referencing repos collection
   repoPath?: string;   // Snapshot of repo.path at session creation time
@@ -1642,6 +1643,68 @@ RULES:
     } catch {}
 
     return parts.join('\n');
+  }
+
+  /**
+   * Append a message authored by the automation system to an existing chat session.
+   * Used by the daily-status-prep (and future automation) agents to post their
+   * generated content into a persistent linked chat thread.
+   *
+   * Called from POST /api/chat/sessions/:id/automation-message (internal endpoint,
+   * token minted by buildInternalApiHeaders in cron.service.ts).
+   */
+  async appendAutomationMessage(
+    sessionId: string,
+    role: 'user' | 'assistant',
+    content: string,
+  ): Promise<{ messageId: string }> {
+    // Validate role
+    if (!role || !['user', 'assistant'].includes(role)) {
+      throw new Error('role must be one of: user, assistant');
+    }
+    // Validate content
+    if (!content || typeof content !== 'string' || content.trim().length === 0) {
+      throw new Error('content is required');
+    }
+    if (content.length > 1_000_000) {
+      throw new Error('content exceeds maximum length');
+    }
+
+    let objectId: ObjectId;
+    try {
+      objectId = new ObjectId(sessionId);
+    } catch {
+      throw new Error('Session not found');
+    }
+
+    const session = await this.sessions.findOne({ _id: objectId });
+    if (!session) {
+      throw new Error('Session not found');
+    }
+    if ((session as Record<string, unknown>).source !== 'automation') {
+      throw new Error('Not an automation session');
+    }
+
+    const now = new Date();
+    const result = await this.messages.insertOne({
+      sessionId,
+      role,
+      content,
+      status: 'completed',
+      senderSource: 'system',
+      createdAt: now,
+      completedAt: now,
+    });
+
+    await this.sessions.updateOne(
+      { _id: objectId },
+      {
+        $inc: { messageCount: 1 },
+        $set: { lastMessageAt: now, updatedAt: now },
+      },
+    );
+
+    return { messageId: result.insertedId.toHexString() };
   }
 
   async updateSessionTitle(sessionId: string, title: string, titleSource: 'default' | 'auto' | 'user' = 'user'): Promise<void> {

@@ -234,7 +234,7 @@ export class CronService {
 
     switch (target.type) {
       case 'agent':
-        return this.dispatchAgent(target, job.name);
+        return this.dispatchAgent(target, job);
 
       case 'workflow':
         return this.dispatchWorkflow(target, job.name);
@@ -247,17 +247,107 @@ export class CronService {
     }
   }
 
+  /**
+   * Ensure a persistent linked chat session exists for this automation cron job.
+   * Uses upsert + $setOnInsert to avoid race conditions — idempotent on concurrent
+   * calls. Stores the resulting ObjectId hex string back onto the cron_jobs document
+   * (but only the first time — $setOnInsert ensures it's never overwritten).
+   */
+  private async ensureLinkedSession(job: CronJob): Promise<string> {
+    const { ObjectId } = await import('mongodb');
+    const sessions = this.db.collection('chat_sessions');
+    const automationKey = job.name;
+
+    let sessionDoc: Record<string, unknown> | null = null;
+    try {
+      // Race-safe: $setOnInsert means concurrent callers both get the same doc
+      const result = await sessions.findOneAndUpdate(
+        { automationKey },
+        {
+          $setOnInsert: {
+            automationKey,
+            title: job.displayName,
+            source: 'automation',
+            status: 'active',
+            messageCount: 0,
+            lastMessageAt: null,
+            totalCostUsd: 0,
+            provider: null,
+            createdAt: new Date(),
+            updatedAt: new Date(),
+          },
+        },
+        { upsert: true, returnDocument: 'after' },
+      );
+      sessionDoc = result as Record<string, unknown> | null;
+    } catch (err: unknown) {
+      // Handle duplicate-key race (E11000) — another process just created it
+      const mongoErr = err as { code?: number };
+      if (mongoErr.code === 11000) {
+        sessionDoc = (await sessions.findOne({ automationKey })) as Record<string, unknown> | null;
+      } else {
+        throw err;
+      }
+    }
+
+    if (!sessionDoc?._id) {
+      throw new Error(`ensureLinkedSession: could not find or create session for ${automationKey}`);
+    }
+
+    const sessionId = String(sessionDoc._id);
+
+    // Persist the sessionId onto the cron_jobs row on first creation OR whenever
+    // the session changed (stale-pointer recovery — old session was deleted and a
+    // new one was created under the same automationKey).
+    if (!job.linkedChatSessionId || job.linkedChatSessionId !== sessionId) {
+      await this.jobs.updateOne(
+        { _id: job._id },
+        { $set: { linkedChatSessionId: sessionId } },
+      );
+    }
+
+    return sessionId;
+  }
+
   private async dispatchAgent(
     target: Extract<CronJob['target'], { type: 'agent' }>,
-    jobName: string,
+    job: CronJob,
   ): Promise<{ executionId?: string; notes?: string; status: CronRunStatus }> {
+    let prompt = target.prompt;
+
+    // For automation-convention jobs (agentName === job.name), inject
+    // AUTOMATION_CONTEXT so the agent can post results back via the API.
+    if (target.agentName === job.name) {
+      const sessionId = await this.ensureLinkedSession(job);
+      // Short-lived (5 min) token — sufficient for the agent execution window.
+      // This token is embedded in the agent prompt which is stored in MongoDB,
+      // so using ACCESS_TTL (24 h) would leave a long-lived credential at rest.
+      const token = signAccessToken({
+        sub: 'cron-system',
+        email: 'cron@internal.local',
+        role: 'admin',
+        mustResetPassword: false,
+      }, '5m');
+      const messageUrl = `http://localhost:${PORT}/api/chat/sessions/${sessionId}/automation-message`;
+      const automationContextBlock = [
+        '',
+        '---',
+        'AUTOMATION_CONTEXT:',
+        `LINKED_CHAT_SESSION_ID: ${sessionId}`,
+        `AUTOMATION_API_TOKEN: ${token}`,
+        `AUTOMATION_MESSAGE_URL: ${messageUrl}`,
+        '---',
+      ].join('\n');
+      prompt = prompt + automationContextBlock;
+    }
+
     const url = `http://localhost:${PORT}/api/chat/spawn-agent`;
     const res = await fetch(url, {
       method: 'POST',
       headers: buildInternalApiHeaders(),
       body: JSON.stringify({
         agent_name: target.agentName,
-        prompt: target.prompt,
+        prompt,
         repo_path: target.repoPath,
       }),
     });
@@ -267,7 +357,7 @@ export class CronService {
     }
     return {
       executionId: data.execution_id as string | undefined,
-      notes: `Spawned agent "${target.agentName}" via cron:${jobName}`,
+      notes: `Spawned agent "${target.agentName}" via cron:${job.name}`,
       status: 'success',
     };
   }

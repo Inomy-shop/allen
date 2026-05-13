@@ -28,8 +28,8 @@ export interface RefreshTokenPayload {
   jti: string;
 }
 
-export function signAccessToken(payload: AccessTokenPayload): string {
-  return jwt.sign(payload, accessSecret(), { expiresIn: ACCESS_TTL } as SignOptions);
+export function signAccessToken(payload: AccessTokenPayload, expiresIn?: string): string {
+  return jwt.sign(payload, accessSecret(), { expiresIn: expiresIn ?? ACCESS_TTL } as SignOptions);
 }
 
 export function verifyAccessToken(token: string): AccessTokenPayload {
