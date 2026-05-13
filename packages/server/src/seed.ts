@@ -151,6 +151,28 @@ Before starting execution that changes state or consumes a specialist/workflow r
 const SKILL_CAPABILITY_DISCOVERY_SECTION = `## Capability discovery
 Before choosing an execution route, inspect the available Allen workflows, specialized team leads/agents, and relevant external MCP tools that could do the job. Prefer the most specific workflow or specialized lead/agent that owns the end-to-end task. Use raw external MCP tools directly only for simple tool-native queries/actions or as evidence for the selected route. Keep skill selection internal; do not mention skill names or skill IDs in user-facing responses unless the user explicitly asks.`;
 
+const SKILL_DELEGATE_TO_SPECIALISTS_SECTION = `## Delegate to specialists
+Allen's org chart, agent library, and workflow catalog are dynamic — teams, agents, skills, and workflows are added, renamed, retired, and re-scoped over time. Do not assume any specific agent, team, or workflow name exists. Always discover the right target at runtime from the user's intent and the current state of the system.
+
+When the user's request matches a task that an existing workflow, team lead, or specialist owns, route through it. The top-level assistant must not perform the owner's job directly:
+
+- State-changing meta operations (create/edit teams, agents, workflows, skills) → delegate to the meta builder whose description matches the operation. Never call create_team / create_agent / create_workflow / create_skill from the top-level assistant.
+- Code changes (file edits, commits, pushes, PRs) → delegate to the team lead whose team owns the relevant domain, or spawn the specialist whose description matches the change. The top-level assistant must not touch files, branches, or PRs directly.
+- Test/build/lint authoring or fixes → route through the team or specialist whose mission covers quality and testing.
+- Domain-specific work (data, ops, search, vendor onboarding, product strategy, etc.) → use the team lead or specialist whose mission/description matches the domain rather than acting via raw MCP tools.
+- Multi-step repeatable processes → prefer a registered workflow over hand-orchestrating specialists, when the workflow's description and required inputs match.
+
+Discovery procedure (run before choosing a target):
+1. Classify the user's intent into a primary domain (org/meta, code, test, data, ops, product, search, etc.) and the type of action (create, edit, investigate, explain, run).
+2. Read this skill's relatedAgents / relatedWorkflows as soft hints — they may be stale; verify each still exists via list_agents / list_workflows before relying on them.
+3. Run list_teams, list_agents, and/or list_workflows scoped to the inferred domain. Read descriptions, missions, categories, and (for agents) team membership.
+4. Pick the most specific match by description/mission. Prefer a team lead when coordination across specialties is needed; prefer a single specialist for narrow one-shot work; prefer a workflow when the steps are well-defined and inputs are satisfiable.
+5. If no match exists, ask the user how to proceed — register a new agent/workflow via the matching meta-builder, or proceed via raw tools only with explicit user confirmation.
+
+If wait_for_delegation returns "waiting" or appears stale on a continuation, do not bypass by calling the specialist's underlying tools yourself. Continue the loop: delegate_to_agent(conversation_id=…, task="continue") then wait_for_delegation, until status is "completed" or "failed". Bypassing creates race conditions and hides progress from the user.
+
+Top-level direct tool calls are reserved for: read-only data queries, normal conversation, explanation/brainstorming, and forwarding answers to a delegated specialist's questions.`;
+
 function withSkillOperatingRules(body: string): string {
   let next = body.trim();
   const lower = next.toLowerCase();
@@ -159,6 +181,9 @@ function withSkillOperatingRules(body: string): string {
   }
   if (!lower.includes('## capability discovery')) {
     next = `${next}\n\n${SKILL_CAPABILITY_DISCOVERY_SECTION}`;
+  }
+  if (!lower.includes('## delegate to specialists')) {
+    next = `${next}\n\n${SKILL_DELEGATE_TO_SPECIALISTS_SECTION}`;
   }
   return next;
 }
@@ -433,33 +458,53 @@ Return workspace path/link, validation result, PR URL or reason PR was skipped.`
   },
   {
     name: 'agent-workflow-builder',
-    displayName: 'Agent and Workflow Builder',
+    displayName: 'Org, Agent, and Workflow Builder',
     category: 'meta',
-    description: 'Design, create, validate, update, and explain Allen agents, teams, skills, and workflows.',
-    triggers: ['create agent', 'build agent', 'create workflow', 'build workflow', 'modify workflow', 'add skill', 'edit skill'],
-    excludes: ['run existing workflow'],
-    priority: 74,
-    allowedRoutes: ['direct_answer', 'spawn_agent', 'delegate_to_agent', 'run_workflow'],
-    relatedAgents: ['agent-builder-agent', 'team-builder-agent', 'workflow-builder-agent'],
-    body: `# Agent and Workflow Builder
+    description: 'Design, create, validate, update, and explain Allen orgs, teams, agents, skills, and workflows. Use whenever the user asks to extend the org chart ("build a marketing team", "add an SRE to engineering"), create/edit agents, or create/edit workflows or skills.',
+    triggers: [
+      // Team / org
+      'create team', 'build team', 'new team', 'add team', 'set up team', 'set up a team',
+      'build org', 'build an org', 'extend the org', 'extend org', 'design org',
+      'marketing team', 'finance team', 'sales team', 'team for',
+      // Agent
+      'create agent', 'build agent', 'add agent', 'new agent', 'add a specialist', 'specialist to',
+      // Workflow / skill
+      'create workflow', 'build workflow', 'modify workflow', 'edit workflow',
+      'add skill', 'edit skill', 'new skill',
+    ],
+    excludes: ['run existing workflow', 'run workflow'],
+    priority: 86,
+    allowedRoutes: ['delegate_to_agent', 'direct_answer', 'spawn_agent', 'run_workflow'],
+    body: `# Org, Agent, and Workflow Builder
 
 ## When to use
-Use when the user asks to design, create, edit, validate, or explain an Allen agent, team, skill, or workflow.
+Use when the user asks to design, create, edit, validate, or explain an Allen **team / org structure**, **agent**, **skill**, or **workflow**. Examples include "build a marketing team", "I want a finance team", "add a tax specialist to the finance team", "I need an SRE in the engineering team", "create a workflow that …", "edit a workflow", and "add/edit a skill for …".
 
 ## When not to use
-Do not use for running existing workflows or normal product feature work unless it changes Allen's org/workflow/skill system.
+Do not use for running an existing workflow, ordinary product feature work, or bug fixes — those route through the matching domain skill (bug-fix-routing, feature-routing, workspace-pr-routing, team-delegation-routing).
 
 ## Evidence
-Inspect existing agents, teams, workflows, skills, schemas, and validation rules first. Do not create duplicate concepts without checking current library state.
+Before proposing any change, inspect what already exists in the current system: list_teams, list_agents, list_workflows, list_skills. Avoid duplicate teams/agents/skills/workflows. Confirm the parent team and lead choice are consistent with the existing org chart.
 
-## Routing
-- Design/explanation only: answer directly with evidence.
-- Simple library record creation through supported tools: use the relevant create/update tool.
-- Code/config changes to Allen itself: route through feature-routing or direct specialist depending on scope.
-- Cross-team org design: delegate to team-builder-agent or agent-builder-agent.
+## Pick the right builder by intent
+The universal "delegate, don't act yourself" rule lives in the operating rules section below. This skill only helps you decide WHICH builder to delegate to — and Allen's builder roster is dynamic, so do not assume any specific agent name exists.
+
+1. Classify the operation from the user's intent:
+   - **Create a new team / org subtree.**
+   - **Add or modify an agent inside an existing team.**
+   - **Create or edit a workflow.**
+   - **Create or edit a skill.**
+   - **Design / explanation only**, no record creation requested.
+2. Discover candidate builders at runtime: run list_agents (and list_teams if helpful), filter by category "meta" or by description text that names the operation (e.g. an agent whose description mentions "creating teams" or "blueprinting org structure" is the right target for new-team work; one whose description mentions "adding agents" fits the agent-add variant; one whose description mentions "workflow" or "skill" authoring fits those variants).
+3. Pick the most specific match by description/mission. If multiple builders look plausible, prefer the one whose category is "meta" and whose mission text most directly names the operation. If only a generic builder exists, use it.
+4. If no matching builder exists at all, ask the user how to proceed — either register a builder agent first (recursive meta-build), or perform the operation directly as a one-off with explicit user confirmation.
+5. For design / explanation only, answer directly with evidence and do not delegate.
+
+## Confirmation forwarding
+Builder agents typically present a blueprint via ask_delegator before creating anything. When wait_for_delegation returns status: "question", forward the **exact** blueprint to the user via ask_user — do not summarize, reorder, or rewrite it. Pass the user's reply back via answer_delegator and keep waiting until the builder reaches a terminal status.
 
 ## Output
-Return proposed design, changed records, validation result, and any follow-up implementation route.`,
+Return: the builder agent you chose (as discovered at runtime), the blueprint preview verbatim from the builder when available, the created record IDs and names, and a clickable link to each new team/agent/workflow/skill when the UI route is known. Never paste raw create_* outputs without context.`,
   },
   {
     name: 'team-delegation-routing',
@@ -530,7 +575,11 @@ export async function seedDefaultSkills(db: Db): Promise<void> {
     const existingLower = existingBody.toLowerCase();
     if (
       existing.createdBy === 'system'
-      && (!existingLower.includes('## clarify and confirm') || !existingLower.includes('## capability discovery'))
+      && (
+        !existingLower.includes('## clarify and confirm')
+        || !existingLower.includes('## capability discovery')
+        || !existingLower.includes('## delegate to specialists')
+      )
     ) {
       await col.updateOne(
         { _id: existing._id },
@@ -546,7 +595,19 @@ export async function seedDefaultSkills(db: Db): Promise<void> {
       continue;
     }
 
-    if (existing.createdBy === 'system' && skill.name === 'capability-routing') {
+    // Skills whose routing metadata AND body we want to keep in lockstep
+    // with the source tree, even when the user hasn't enabled SEED_OVERRIDE.
+    // These contain hard routing rules (which builder/lead to delegate to,
+    // when not to call create_* directly, etc.) — user-side body edits would
+    // silently soften them, so the system body wins on every boot.
+    const ALWAYS_RESYNC = new Set(['capability-routing', 'agent-workflow-builder']);
+    if (existing.createdBy === 'system' && ALWAYS_RESYNC.has(skill.name)) {
+      // capability-routing preserves user body edits for backward compat;
+      // agent-workflow-builder always overwrites body because it carries
+      // the team/agent/workflow-builder delegation contract.
+      const nextBody = skill.name === 'capability-routing'
+        ? withSkillOperatingRules(existingBody || skill.body)
+        : withSkillOperatingRules(skill.body);
       await col.updateOne(
         { _id: existing._id },
         {
@@ -561,7 +622,7 @@ export async function seedDefaultSkills(db: Db): Promise<void> {
             relatedWorkflows: doc.relatedWorkflows,
             relatedAgents: doc.relatedAgents,
             tags: doc.tags,
-            body: withSkillOperatingRules(existingBody || skill.body),
+            body: nextBody,
             updatedAt: now,
           },
           $inc: { version: 1 },

@@ -2516,6 +2516,15 @@ CRITICAL RULES:
       const existing = await conversationService.get(existingConvId);
       if (!existing) return { error: `Conversation "${existingConvId}" not found.` };
 
+      // Flip the conversation back to `active` and anchor it to the current
+      // assistant message before kicking off the background run. Without
+      // this, wait_for_delegation sees the prior turn's `completed` status
+      // and returns the stale response/summary/cost/duration immediately —
+      // the caller thinks the continuation finished instantly with the
+      // previous turn's output. parentMessageIds also lets the UI render
+      // the thread card under every assistant message that touched it.
+      await conversationService.markContinuation(existingConvId, parentMessageId);
+
       await conversationService.addMessage(existingConvId, { agent: fromAgent, type: 'message', content: task, timestamp: new Date() });
       if (onEvent) onEvent('thread_message', { conversationId: existingConvId, agent: fromAgent, type: 'message', content: task.slice(0, 200) });
 
