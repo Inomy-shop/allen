@@ -22,6 +22,8 @@ export interface OrgContextOptions {
   forAgent?: string;
   /** Render the full org chart (all teams + members). Default: true. */
   includeFullChart?: boolean;
+  /** Full member list or compact team/lead summary. Default: full. */
+  chartMode?: 'full' | 'summary';
   /** Include the meta team in the chart. Default: true. */
   includeMeta?: boolean;
 }
@@ -44,6 +46,7 @@ export async function buildOrgContextBlock(
     const agentByName = new Map<string, any>(agents.map((a: any) => [a.name, a]));
     const includeMeta = options.includeMeta !== false;
     const includeChart = options.includeFullChart !== false;
+    const chartMode = options.chartMode ?? 'full';
     const visibleTeams = teams.filter((t: any) => includeMeta || t.name !== 'meta');
 
     const lines: string[] = [];
@@ -64,8 +67,14 @@ export async function buildOrgContextBlock(
 
         const teamLabel = team.displayName ?? team.name;
         const teamDesc = team.description ? ` — ${team.description}` : '';
-        lines.push(`**${teamLabel} team**${teamDesc}`);
+        if (chartMode === 'summary') {
+          const summaryDesc = team.description ? ` — ${String(team.description).replace(/[.;\s]+$/, '')}` : '';
+          const leads = members.filter((m: any) => m.teamRole === 'lead').map((m: any) => m.name).join(', ') || 'none';
+          lines.push(`- ${teamLabel} team${summaryDesc}; lead(s): ${leads}; members: ${members.length}`);
+          continue;
+        }
 
+        lines.push(`**${teamLabel} team**${teamDesc}`);
         for (const m of members) {
           const role = m.teamRole === 'lead' ? ' (lead)' : '';
           const desc = (m.description as string) ?? (m.displayName as string) ?? m.name;

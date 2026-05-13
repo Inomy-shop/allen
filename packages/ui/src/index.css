@@ -48,9 +48,9 @@
     --color-accent-orange:  222 147   0;   /* retry uses warn family    */
 
     /* Graph edges — recede by default */
-    --color-flow-edge-default:     161 165 169;
-    --color-flow-edge-conditional: 161 165 169;
-    --color-flow-edge-retry:       161 165 169;
+    --color-flow-edge-default:      93 102 113;
+    --color-flow-edge-conditional:  42 118 226;
+    --color-flow-edge-retry:       222 147   0;
 
     /* Editor (Monaco) */
     --color-editor-background:    255 255 255;
@@ -117,9 +117,9 @@
     --color-accent-cyan:      0 184 225;
     --color-accent-orange:  242 166  24;
 
-    --color-flow-edge-default:     73  78  84;
-    --color-flow-edge-conditional: 73  78  84;
-    --color-flow-edge-retry:       73  78  84;
+    --color-flow-edge-default:    167 171 177;
+    --color-flow-edge-conditional: 92 164 255;
+    --color-flow-edge-retry:      242 166  24;
 
     --color-editor-background:    22 23 27;
     --color-editor-line-highlight:28 29 34;
@@ -419,6 +419,24 @@
 
   .lib-search input {
     @apply min-w-0 flex-1 bg-transparent text-[12.5px] text-theme-primary outline-none placeholder:text-theme-subtle;
+  }
+
+  .form-field {
+    @apply flex flex-col gap-1.5;
+  }
+
+  .form-field > span {
+    @apply text-[11px] font-medium lowercase text-theme-muted;
+  }
+
+  .form-field input,
+  .form-field textarea,
+  .skill-test-textarea {
+    @apply rounded-md border border-app bg-app-muted px-3 py-2 text-[13px] text-theme-primary outline-none placeholder:text-theme-subtle;
+  }
+
+  .form-field textarea {
+    @apply resize-y leading-relaxed;
   }
 
   .lib-team-body {

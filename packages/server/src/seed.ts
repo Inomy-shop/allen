@@ -6,6 +6,7 @@ import type { Db } from 'mongodb';
 import { loadAgents, validateWorkflow, getBuiltIns } from '@allen/engine';
 import type { WorkflowDef } from '@allen/engine';
 import { isSeedOverrideEnabled } from './services/seed-policy.js';
+import type { SkillInput } from './services/skill.service.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -140,4 +141,435 @@ export async function seedDefaultWorkflows(db: Db): Promise<void> {
   }
 
   console.log(`Seeded ${seeded} new, updated ${updated} default workflows (${files.length} checked)`);
+}
+
+const SKILL_CLARIFY_CONFIRM_SECTION = `## Clarify and confirm
+If the user's intent, target repo/resource, scope, or desired outcome is unclear, ask a concise clarifying question before choosing a route. Do not guess or assume missing intent.
+
+Before starting execution that changes state or consumes a specialist/workflow run, present the selected route, short plan, required inputs, expected outputs, and any risks or unknowns, then ask the user to confirm. Read-only answers and read-only data queries may proceed without confirmation after evidence is checked.`;
+
+const SKILL_CAPABILITY_DISCOVERY_SECTION = `## Capability discovery
+Before choosing an execution route, inspect the available Allen workflows, specialized team leads/agents, and relevant external MCP tools that could do the job. Prefer the most specific workflow or specialized lead/agent that owns the end-to-end task. Use raw external MCP tools directly only for simple tool-native queries/actions or as evidence for the selected route. Keep skill selection internal; do not mention skill names or skill IDs in user-facing responses unless the user explicitly asks.`;
+
+function withSkillOperatingRules(body: string): string {
+  let next = body.trim();
+  const lower = next.toLowerCase();
+  if (!lower.includes('## clarify and confirm')) {
+    next = `${next}\n\n${SKILL_CLARIFY_CONFIRM_SECTION}`;
+  }
+  if (!lower.includes('## capability discovery')) {
+    next = `${next}\n\n${SKILL_CAPABILITY_DISCOVERY_SECTION}`;
+  }
+  return next;
+}
+
+const DEFAULT_SKILLS: SkillInput[] = [
+  {
+    name: 'capability-routing',
+    displayName: 'Capability Routing',
+    category: 'routing',
+    description: 'General routing fallback for Allen-supported work: discover matching workflows, specialized leads/agents, and external MCP tools before choosing a route.',
+    triggers: ['route', 'which agent', 'what will use', 'who should handle', 'handle this', 'do this', 'run this', 'assign this', 'delegate this', 'execute this'],
+    excludes: ['hi', 'hello'],
+    priority: 92,
+    allowedRoutes: ['direct_answer', 'data_query', 'spawn_agent', 'delegate_to_agent', 'run_workflow'],
+    body: `# Capability Routing
+
+## When to use
+Use for any non-trivial Allen-supported request when a more specific skill is not clearly better, especially domain work where an existing workflow, lead, specialist agent, or external MCP tool may already own the task.
+
+## When not to use
+Do not use for simple greetings, casual conversation, or purely general questions that do not require live Allen capability discovery.
+
+## Evidence
+Inspect available Allen workflows, teams, agents, and relevant external MCP tools before selecting a route. For plausible candidates, load details instead of relying only on names. Check specialist descriptions and lead/team ownership before using raw MCP tools.
+
+## Routing
+- If a workflow owns the end-to-end task and required inputs are available or can be clarified, propose that workflow.
+- If a team lead or specialist agent owns the task, propose delegation/spawn through that lead or specialist.
+- If an external MCP tool is the best direct fit for a simple query/action, use or propose that tool.
+- If none fit, explain the gap and ask whether to create/update a workflow, agent, or skill.
+
+## Output
+Return only the selected route, short plan, required inputs, expected output, risks/unknowns, and confirmation question when execution is needed. Do not mention skill name/id unless the user explicitly asks.`,
+  },
+  {
+    name: 'repo-evidence',
+    displayName: 'Repo Evidence',
+    category: 'investigation',
+    description: 'Use before answering repo/module/implementation questions so claims are grounded in code or tool evidence.',
+    triggers: ['how does', 'module', 'repo', 'implementation', 'architecture', 'files involved', 'where is'],
+    excludes: ['fix', 'implement', 'create workflow', 'create agent'],
+    priority: 90,
+    allowedRoutes: ['direct_answer', 'spawn_agent'],
+    relatedAgents: ['codebase-navigator'],
+    body: `# Repo Evidence
+
+## When to use
+Use when the user asks how a specific repository, module, feature, file, dependency, or architecture works.
+
+## When not to use
+Do not use as the final route when the user clearly asks to change code. Use this first for evidence, then route through bug, feature, review, or workspace/PR skills.
+
+## Evidence
+Identify the target repo first. Inspect source files, docs, tests, traces, or spawn a read-only codebase-navigator. Do not claim existing behavior without evidence. Mention the files or tool results checked.
+
+## Routing
+- If the answer can be supported by inspected evidence, answer directly.
+- If the module is broad or unclear, spawn a read-only specialist.
+- If investigation reveals a requested code change, hand off to the relevant routing skill.
+
+## Output
+Return evidence checked, module summary, data/control flow, important dependencies, unknowns, and suggested next step.`,
+  },
+  {
+    name: 'execution-investigation',
+    displayName: 'Execution Investigation',
+    category: 'operations',
+    description: 'Investigate workflow/agent/chat execution state, queueing, pauses, failures, logs, traces, and interventions.',
+    triggers: ['why queued', 'why failed', 'workflow paused', 'execution', 'trace', 'logs', 'conversation', 'what happened'],
+    excludes: ['build feature', 'fix bug in repo'],
+    priority: 88,
+    allowedRoutes: ['direct_answer', 'data_query', 'spawn_agent'],
+    body: `# Execution Investigation
+
+## When to use
+Use when the user asks about a chat, workflow, agent execution, queueing, waiting for input, failure, trace, or log behavior.
+
+## When not to use
+Do not start an implementation workflow unless the user asks to fix the discovered issue.
+
+## Evidence
+Inspect executions, traces, logs, pending interventions, workflow definitions, chat history, and relevant database rows. Use the exact execution id, chat id, PR URL, or workflow name when provided.
+
+## Routing
+- Read execution state directly when enough identifiers are present.
+- Search recent executions when the identifier is missing but context is clear.
+- Spawn a read-only specialist only for deep trace analysis.
+- If the issue requires a product/code fix, escalate to bug-fix-routing or feature-routing.
+
+## Output
+State the observed status, evidence checked, root cause or likely reason, and the next operational action.`,
+  },
+  {
+    name: 'linear-management',
+    displayName: 'Linear Management',
+    category: 'external-data',
+    description: 'Handle Linear issue queries, summaries, creation, updates, assignment, and dispatch decisions.',
+    triggers: ['linear', 'ticket', 'issue', 'sprint', 'closed today', 'assign ticket', 'dispatch ticket'],
+    excludes: ['github pr review'],
+    priority: 86,
+    allowedRoutes: ['direct_answer', 'data_query', 'delegate_to_agent', 'run_workflow'],
+    body: `# Linear Management
+
+## When to use
+Use for Linear issue lookup, reporting, creation, updates, assignment, status changes, and dispatching ticket work.
+
+## When not to use
+Do not use as the final route for code changes described by a ticket. Use it to read the ticket, then route by task shape.
+
+## Evidence
+Discover available Linear or external issue tools at runtime. Query current ticket data before answering. Respect date boundaries and the user's timezone for relative dates.
+
+## Routing
+- Reporting/query requests use direct data query and answer directly.
+- Ticket creation/update uses the available issue-management tool.
+- Ticket asks for implementation: inspect ticket, identify repo, then use bug-fix-routing, feature-routing, review-routing, or team-delegation-routing.
+
+## Output
+Return issue identifiers, titles, state, owner, dates, links, and any assumptions about filtering.`,
+  },
+  {
+    name: 'issue-investigation',
+    displayName: 'Issue Investigation',
+    category: 'investigation',
+    description: 'Read-only investigation and root-cause analysis before deciding whether a bug fix workflow is needed.',
+    triggers: ['investigate', 'debug', 'root cause', 'why failing', 'is this a bug', 'check issue'],
+    excludes: ['add feature', 'create workflow'],
+    priority: 84,
+    allowedRoutes: ['direct_answer', 'data_query', 'spawn_agent', 'delegate_to_agent', 'run_workflow'],
+    relatedAgents: ['bug-investigator', 'codebase-navigator', 'engineering-lead'],
+    relatedWorkflows: ['bug-investigate-and-fix'],
+    body: `# Issue Investigation
+
+## When to use
+Use when the user asks to investigate/debug/check a failure or find root cause without clearly requesting implementation.
+
+## When not to use
+If the user explicitly asks to fix the bug, use bug-fix-routing after any necessary evidence gathering.
+
+## Evidence
+Discover available tools at runtime. Choose evidence categories by issue type: repo/code, execution/log/trace, database/state, infrastructure/deployment, PR/review, ticket, or external service. Never assume a specific MCP tool exists.
+
+## Routing
+- If evidence is enough and no code change was requested, answer directly with findings.
+- If code inspection is needed, spawn a read-only investigator in the correct repo/workspace.
+- If user asks to proceed with a fix, classify with bug-fix-routing.
+- If the issue spans teams or systems, delegate to the relevant lead.
+
+## Output
+Return evidence checked, findings, confidence, unknowns, and recommended route if a fix is needed.`,
+  },
+  {
+    name: 'bug-fix-routing',
+    displayName: 'Bug Fix Routing',
+    category: 'implementation',
+    description: 'Route bug fixes to a direct specialist for small fixes or bug-investigate-and-fix for larger/unclear bugs.',
+    triggers: ['fix bug', 'bug', 'broken', 'regression', 'production issue', 'crash', 'error'],
+    excludes: ['add feature', 'new workflow'],
+    priority: 82,
+    allowedRoutes: ['spawn_agent', 'delegate_to_agent', 'run_workflow'],
+    relatedWorkflows: ['bug-investigate-and-fix'],
+    relatedAgents: ['backend-developer', 'frontend-developer', 'bug-investigator', 'engineering-lead'],
+    body: `# Bug Fix Routing
+
+## When to use
+Use when the user asks to fix broken behavior, a regression, error, crash, or production issue.
+
+## When not to use
+Do not use for planned new functionality unless the feature is only restoring intended behavior.
+
+## Evidence
+Confirm repo, reproduction clues, failing behavior, affected surface, and available tools. If root cause is not clear, investigate before selecting implementation route.
+
+## Routing
+- Small, obvious, low-risk bug with narrow files: create/reuse workspace, spawn the right specialist such as backend-developer or frontend-developer, then continue to PR.
+- Bigger bug, unclear root cause, regression, production issue, multi-file bug, or bug needing investigation/tests/review: run bug-investigate-and-fix.
+- Cross-team operational bug: delegate to engineering-lead or devops-engineer.
+
+## Output
+State selected route, why direct specialist or workflow is appropriate, required inputs, workspace/PR expectation, and any missing context.`,
+  },
+  {
+    name: 'feature-routing',
+    displayName: 'Feature Routing',
+    category: 'implementation',
+    description: 'Route feature requests, enhancements, UI changes, and product changes by scope and risk.',
+    triggers: ['build', 'add', 'implement', 'feature', 'revamp', 'redesign', 'enhance', 'pagination'],
+    excludes: ['fix bug', 'resolve pr comments'],
+    priority: 80,
+    allowedRoutes: ['spawn_agent', 'delegate_to_agent', 'run_workflow', 'direct_answer'],
+    relatedWorkflows: ['feature-plan-and-implement', 'understand-and-plan'],
+    relatedAgents: ['product-manager', 'engineering-lead', 'backend-developer', 'frontend-developer'],
+    body: `# Feature Routing
+
+## When to use
+Use when the user asks to add, build, implement, revamp, redesign, or enhance functionality.
+
+## When not to use
+Do not use for pure explanations, read-only investigations, or bug fixes.
+
+## Evidence
+Identify repo, affected product area, expected behavior, existing implementation, available workflows, agents, and tools before starting execution.
+
+## Routing
+- Tiny low-risk tweak: direct specialist in workspace, then PR.
+- Normal or large feature, cross-cutting change, uncertain design, multiple surfaces, or work needing PRD/HLA/TDD/QA/review/PR: run feature-plan-and-implement.
+- Planning-only request: run understand-and-plan or answer directly if no repo grounding is needed.
+- Product-heavy ambiguity: delegate to product-manager or engineering lead.
+
+## Output
+Return selected route, scope classification, required inputs, and whether human approval gates are expected.`,
+  },
+  {
+    name: 'review-routing',
+    displayName: 'Review Routing',
+    category: 'quality',
+    description: 'Route PR/code reviews and review-comment resolution.',
+    triggers: ['review', 'pr comments', 'coderabbit', 'pull request', 'code quality', 'security review'],
+    excludes: ['build feature from scratch'],
+    priority: 78,
+    allowedRoutes: ['direct_answer', 'spawn_agent', 'delegate_to_agent', 'run_workflow'],
+    relatedWorkflows: ['resolve-pr-reviews'],
+    relatedAgents: ['code-reviewer', 'qa-lead', 'test-planner', 'test-writer', 'pr-review-bot'],
+    body: `# Review Routing
+
+## When to use
+Use for PR review, code review, review bot comments, quality/security/performance review, or resolving PR comments.
+
+## When not to use
+Do not use for unrelated new feature work unless review findings require a separate implementation route.
+
+## Evidence
+Inspect PR URL, diff, comments, existing workspace, tests, and review bot state. For repo-only review, create an isolated workspace before spawning specialists.
+
+## Routing
+- Read-only review: spawn code-reviewer or answer with checked evidence.
+- Resolve review comments on a PR: run resolve-pr-reviews.
+- Review reveals bigger bug/feature work: route through bug-fix-routing or feature-routing.
+
+## Output
+Return findings by severity, evidence checked, route chosen, and PR/workspace links when applicable.`,
+  },
+  {
+    name: 'workspace-pr-routing',
+    displayName: 'Workspace and PR Routing',
+    category: 'implementation',
+    description: 'Cross-cutting rules for isolated workspaces, implementation, validation, commit, push, and PR creation.',
+    triggers: ['workspace', 'open pr', 'create pr', 'code change', 'commit', 'push', 'local-only'],
+    excludes: ['read only', 'explain only'],
+    priority: 76,
+    allowedRoutes: ['spawn_agent', 'run_workflow', 'delegate_to_agent'],
+    relatedAgents: ['pr-creator', 'devops-engineer', 'backend-developer', 'frontend-developer'],
+    body: `# Workspace and PR Routing
+
+## When to use
+Use whenever a route will change code, config, docs tied to code, tests, workflows, or agents.
+
+## When not to use
+Do not use for pure read-only answers.
+
+## Evidence
+Identify target repo and whether a workflow already creates its own workspace. Confirm validation expectations and whether the user explicitly requested local-only/no PR.
+
+## Routing
+- Direct specialist code work requires create_workspace first and repo_path must be the returned worktree path.
+- Workflows with create_workspace nodes receive the registered repo_path and create their own worktree.
+- After implementation, continue to commit, push, and PR unless the user explicitly asked no PR/local-only.
+- If validation cannot run, report the limitation before PR creation.
+
+## Output
+Return workspace path/link, validation result, PR URL or reason PR was skipped.`,
+  },
+  {
+    name: 'agent-workflow-builder',
+    displayName: 'Agent and Workflow Builder',
+    category: 'meta',
+    description: 'Design, create, validate, update, and explain Allen agents, teams, skills, and workflows.',
+    triggers: ['create agent', 'build agent', 'create workflow', 'build workflow', 'modify workflow', 'add skill', 'edit skill'],
+    excludes: ['run existing workflow'],
+    priority: 74,
+    allowedRoutes: ['direct_answer', 'spawn_agent', 'delegate_to_agent', 'run_workflow'],
+    relatedAgents: ['agent-builder-agent', 'team-builder-agent', 'workflow-builder-agent'],
+    body: `# Agent and Workflow Builder
+
+## When to use
+Use when the user asks to design, create, edit, validate, or explain an Allen agent, team, skill, or workflow.
+
+## When not to use
+Do not use for running existing workflows or normal product feature work unless it changes Allen's org/workflow/skill system.
+
+## Evidence
+Inspect existing agents, teams, workflows, skills, schemas, and validation rules first. Do not create duplicate concepts without checking current library state.
+
+## Routing
+- Design/explanation only: answer directly with evidence.
+- Simple library record creation through supported tools: use the relevant create/update tool.
+- Code/config changes to Allen itself: route through feature-routing or direct specialist depending on scope.
+- Cross-team org design: delegate to team-builder-agent or agent-builder-agent.
+
+## Output
+Return proposed design, changed records, validation result, and any follow-up implementation route.`,
+  },
+  {
+    name: 'team-delegation-routing',
+    displayName: 'Team Delegation Routing',
+    category: 'coordination',
+    description: 'Choose between lead/team delegation, specialist spawn, direct answer, and workflow execution.',
+    triggers: ['assign', 'delegate', 'route to', 'lead', 'team', '@agent', 'handoff'],
+    excludes: [],
+    priority: 72,
+    allowedRoutes: ['delegate_to_agent', 'spawn_agent', 'run_workflow', 'direct_answer'],
+    relatedAgents: ['product-manager', 'engineering-lead', 'qa-lead', 'devops-engineer'],
+    body: `# Team Delegation Routing
+
+## When to use
+Use when the user asks to assign, delegate, hand off, route to a team/lead/agent, or mentions an explicit agent.
+
+## When not to use
+Do not override an explicit valid user target unless it cannot perform the task.
+
+## Evidence
+List available teams/agents when needed. Check whether the target is a team lead/coordinator or a hands-on specialist.
+
+## Routing
+- Team lead or coordination request: delegate_to_agent and wait for completion.
+- Technical specialist one-shot: spawn_agent, using workspace rules for code work.
+- Repeatable multi-step process: run the matching workflow.
+- Normal answer with no execution: answer directly.
+
+## Output
+Return target chosen, why, delegation/execution id, status, and final result after waiting.`,
+  },
+];
+
+export async function seedDefaultSkills(db: Db): Promise<void> {
+  const col = db.collection('skills');
+  const override = isSeedOverrideEnabled();
+  let seeded = 0;
+  let updated = 0;
+
+  for (const skill of DEFAULT_SKILLS) {
+    const now = new Date();
+    const existing = await col.findOne({ name: skill.name });
+    const doc = {
+      ...skill,
+      body: withSkillOperatingRules(skill.body),
+      enabled: skill.enabled ?? true,
+      version: (existing?.version as number | undefined) ?? 1,
+      createdBy: 'system',
+      updatedAt: now,
+    };
+
+    if (!existing) {
+      await col.insertOne({ ...doc, createdAt: now });
+      seeded++;
+      continue;
+    }
+
+    if (override) {
+      await col.updateOne(
+        { _id: existing._id },
+        { $set: { ...doc, version: ((existing.version as number | undefined) ?? 1) + 1 } },
+      );
+      updated++;
+      continue;
+    }
+
+    const existingBody = String(existing.body ?? '');
+    const existingLower = existingBody.toLowerCase();
+    if (
+      existing.createdBy === 'system'
+      && (!existingLower.includes('## clarify and confirm') || !existingLower.includes('## capability discovery'))
+    ) {
+      await col.updateOne(
+        { _id: existing._id },
+        {
+          $set: {
+            body: withSkillOperatingRules(existingBody),
+            updatedAt: now,
+          },
+          $inc: { version: 1 },
+        },
+      );
+      updated++;
+      continue;
+    }
+
+    if (existing.createdBy === 'system' && skill.name === 'capability-routing') {
+      await col.updateOne(
+        { _id: existing._id },
+        {
+          $set: {
+            displayName: doc.displayName,
+            description: doc.description,
+            category: doc.category,
+            triggers: doc.triggers,
+            excludes: doc.excludes,
+            priority: doc.priority,
+            allowedRoutes: doc.allowedRoutes,
+            relatedWorkflows: doc.relatedWorkflows,
+            relatedAgents: doc.relatedAgents,
+            tags: doc.tags,
+            body: withSkillOperatingRules(existingBody || skill.body),
+            updatedAt: now,
+          },
+          $inc: { version: 1 },
+        },
+      );
+      updated++;
+    }
+  }
+
+  console.log(`Seeded ${seeded} new, updated ${updated} default skills (${DEFAULT_SKILLS.length} checked)`);
 }

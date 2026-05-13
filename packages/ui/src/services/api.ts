@@ -117,6 +117,51 @@ export const workflows = {
     request<any>('/workflows/import', { method: 'POST', body: JSON.stringify({ yaml }) }),
 };
 
+// ── Skills ────────────────────────────────────────────────────────────────
+export interface SkillRecord {
+  _id?: string;
+  id?: string;
+  name: string;
+  displayName?: string;
+  description?: string;
+  category?: string;
+  triggers?: string[];
+  excludes?: string[];
+  priority?: number;
+  enabled?: boolean;
+  allowedRoutes?: string[];
+  relatedWorkflows?: string[];
+  relatedAgents?: string[];
+  body?: string;
+  tags?: string[];
+  version?: number;
+  createdBy?: string;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
+export const skills = {
+  list: (includeDisabled = true) =>
+    request<SkillRecord[]>(`/skills?includeDisabled=${includeDisabled ? 'true' : 'false'}`),
+  get: (idOrName: string) => request<SkillRecord>(`/skills/${idOrName}`),
+  create: (body: Partial<SkillRecord>) =>
+    request<SkillRecord>('/skills', { method: 'POST', body: JSON.stringify(body) }),
+  update: (id: string, body: Partial<SkillRecord>) =>
+    request<SkillRecord>(`/skills/${id}`, { method: 'PUT', body: JSON.stringify(body) }),
+  delete: (id: string) =>
+    request<void>(`/skills/${id}`, { method: 'DELETE' }),
+  validate: (body: Partial<SkillRecord>) =>
+    request<{ valid: boolean; errors: string[]; warnings: string[] }>('/skills/validate', {
+      method: 'POST',
+      body: JSON.stringify(body),
+    }),
+  search: (body: { query: string; context?: Record<string, unknown>; limit?: number; includeDisabled?: boolean }) =>
+    request<{ query: string; matches: Array<SkillRecord & { score: number; confidence: number; matched: string[] }> }>('/skills/search', {
+      method: 'POST',
+      body: JSON.stringify(body),
+    }),
+};
+
 // ── Executions ─────────────────────────────────────────────────────────────
 
 export type RunPhase =

@@ -5,6 +5,12 @@ export async function ensureIndexes(db: Db): Promise<void> {
   await db.collection('workflows').createIndex({ name: 1 }, { unique: true });
   await db.collection('workflows').createIndex({ tags: 1 });
 
+  // Skills — reusable routing/playbook knowledge used by the chat assistant.
+  await db.collection('skills').createIndex({ name: 1 }, { unique: true });
+  await db.collection('skills').createIndex({ enabled: 1, priority: -1 });
+  await db.collection('skills').createIndex({ category: 1 });
+  await db.collection('skills').createIndex({ triggers: 1 });
+
   // Agents
   await db.collection('agents').createIndex({ name: 1 }, { unique: true });
   // Lookup imported agents by source repo — used by the import preview to
@@ -133,6 +139,12 @@ export async function ensureIndexes(db: Db): Promise<void> {
   // Chat Sessions
   await db.collection('chat_sessions').createIndex({ status: 1, lastMessageAt: -1 });
   await db.collection('chat_sessions').createIndex({ llmSessionId: 1 });
+  // Automation sessions: one persistent thread per cron job (keyed by automationKey).
+  // Sparse so sessions without an automationKey don't consume index space.
+  await db.collection('chat_sessions').createIndex(
+    { automationKey: 1 },
+    { unique: true, sparse: true, name: 'automationKey_unique_sparse' },
+  );
 
   // Chat Messages
   await db.collection('chat_messages').createIndex({ sessionId: 1, createdAt: 1 });

@@ -1,5 +1,6 @@
 import { Router, type Request, type Response } from 'express';
 import { param } from '../types.js';
+import { logger } from '../logger.js';
 import { ChatService, cancelChatSession, type ChatMessageSender } from '../services/chat.service.js';
 import { executeChatTool } from '../services/chat-tools.js';
 import { ExecutionService } from '../services/execution.service.js';
@@ -7,6 +8,30 @@ import { InterventionService } from '../services/intervention.service.js';
 import type { Db } from 'mongodb';
 import { UserService } from '../services/user.service.js';
 import type { AuthedRequest } from '../middleware/requireAuth.js';
+
+// Simple in-memory rate limiter for the automation-message endpoint.
+// Limits each authenticated caller (by sub) to 60 requests per minute.
+const _automationMsgRateLimit = new Map<string, { count: number; windowStart: number }>();
+const AUTOMATION_MSG_RATE_LIMIT = 60;
+const AUTOMATION_MSG_RATE_WINDOW_MS = 60_000;
+
+function checkAutomationMsgRateLimit(userId: string): boolean {
+  const now = Date.now();
+  // Evict stale entries (older than 2× the window) to prevent unbounded growth
+  for (const [key, val] of _automationMsgRateLimit) {
+    if (now - val.windowStart > 2 * AUTOMATION_MSG_RATE_WINDOW_MS) {
+      _automationMsgRateLimit.delete(key);
+    }
+  }
+  const entry = _automationMsgRateLimit.get(userId);
+  if (!entry || now - entry.windowStart > AUTOMATION_MSG_RATE_WINDOW_MS) {
+    _automationMsgRateLimit.set(userId, { count: 1, windowStart: now });
+    return true;
+  }
+  if (entry.count >= AUTOMATION_MSG_RATE_LIMIT) return false;
+  entry.count++;
+  return true;
+}
 
 export function chatRoutes(db: Db): Router {
   const router = Router();
@@ -550,6 +575,45 @@ export function chatRoutes(db: Db): Router {
       res.json({ answered: true, workflowInput });
     } catch (err: unknown) {
       res.status(500).json({ error: (err as Error).message });
+    }
+  });
+
+  // POST /api/chat/sessions/:id/automation-message — Append a message from an
+  // automation agent (e.g. a cron-dispatched agent posting its daily briefing).
+  // Auth is enforced by the global requireAuth middleware registered at
+  // app.use('/api', requireAuth) in app.ts — there is no inline middleware here.
+  router.post('/sessions/:id/automation-message', async (req: Request, res: Response) => {
+    // Rate-limit: 60 req/min per authenticated caller
+    const callerId = (req as AuthedRequest).user?.sub ?? req.ip ?? 'unknown';
+    if (!checkAutomationMsgRateLimit(callerId)) {
+      return res.status(429).json({ error: 'Too many requests' });
+    }
+
+    const id = param(req, 'id');
+    const { role, content } = req.body as { role?: string; content?: string };
+    if (!role || !['user', 'assistant'].includes(role)) {
+      return res.status(400).json({ error: 'role must be one of: user, assistant' });
+    }
+    if (!content || typeof content !== 'string' || content.trim().length === 0) {
+      return res.status(400).json({ error: 'content is required' });
+    }
+    if (content.length > 1_000_000) {
+      return res.status(400).json({ error: 'content exceeds maximum length' });
+    }
+    try {
+      const result = await chatService.appendAutomationMessage(id, role as 'user' | 'assistant', content);
+      return res.json({ inserted: true, messageId: result.messageId });
+    } catch (err: unknown) {
+      const message = (err as Error).message;
+      if (message === 'Session not found') {
+        return res.status(404).json({ error: 'Session not found' });
+      }
+      if (message === 'Not an automation session') {
+        return res.status(403).json({ error: 'Not an automation session' });
+      }
+      // Do not leak internal error details to the client
+      logger.error('automation-message: unexpected error', { sessionId: id, error: (err as Error).message });
+      return res.status(500).json({ error: 'Internal server error' });
     }
   });
 

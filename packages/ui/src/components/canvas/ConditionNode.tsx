@@ -7,8 +7,8 @@ export default function ConditionNode({ data, selected }: NodeProps) {
       {/* Diamond shape — scaled up so the node's bounding width matches
           the other node types (180px). */}
       <div
-        className={`absolute border-2 bg-surface-100/90 backdrop-blur-sm
-          ${selected ? 'border-accent-yellow ring-2 ring-accent-yellow/30' : 'border-accent-yellow/30'}
+        className={`absolute border-2 bg-accent-yellow/10 dark:bg-accent-yellow/15 backdrop-blur-sm shadow-sm
+          ${selected ? 'border-accent-yellow ring-2 ring-accent-yellow/30' : 'border-accent-yellow/60'}
         `}
         style={{ transform: 'rotate(45deg)', borderRadius: 4, width: 130, height: 130, top: 25, left: 25 }}
       />
@@ -21,8 +21,8 @@ export default function ConditionNode({ data, selected }: NodeProps) {
       {/* Content (not rotated) */}
       <div className="relative z-10 flex flex-col items-center text-center pointer-events-none">
         <GitFork className="w-5 h-5 text-accent-yellow mb-1" />
-        <div className="text-xs font-label font-medium text-gray-100">{(data as any).label}</div>
-        <div className="text-[9px] text-accent-yellow/70 font-mono uppercase">condition</div>
+        <div className="text-xs font-label font-semibold text-theme-primary">{(data as any).label}</div>
+        <div className="text-[10px] text-accent-yellow font-mono uppercase">condition</div>
       </div>
 
       <Handle type="source" position={Position.Bottom} id="bottom" className="!bg-accent-yellow !w-2.5 !h-2.5 !border-surface" />

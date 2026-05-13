@@ -94,7 +94,7 @@ Routes (registered in `packages/server/src/app.ts`):
 - `/api/executions` - execution records and SSE streams.
 - `/api/repos` - repo registration.
 - `/api/workspaces` - workspaces, terminals, file watch, preview proxy.
-- `/api/chat` - chat sessions and messages.
+- `/api/chat` - chat sessions and messages. Includes `POST /sessions/:id/automation-message` (JWT-guarded) for automation agents to append a message to a linked automation thread.
 - `/api/mcp` - MCP server registry. Includes `GET /servers/discover/:repoId` (scan a repo for Python and Node MCP entry files) and `POST /servers/:id/reinstall` (bust the install cache and re-run `npm install`; Python MCPs return a skip response instead).
 - `/api/linear` - Linear integration.
 - `/api/slack` - Slack integration (raw body, signature-verified).
@@ -111,7 +111,7 @@ Routes (registered in `packages/server/src/app.ts`):
 Important server files:
 
 - `src/app.ts` - HTTP app, route registration, middleware order, WebSocket server bootstrap.
-- `src/auth/` - JWT issuance, password hashing, refresh tokens, admin bootstrap.
+- `src/auth/jwt.ts` — JWT issuance and verification. `signAccessToken(payload, expiresIn?)` accepts an optional `expiresIn` override so callers can request short-lived tokens (e.g. `'5m'`) without bypassing the `ACCESS_TOKEN_TTL` default for normal user sessions.
 - `src/middleware/requireAuth.ts` and `requireAdmin.ts` - route gating.
 - `src/services/workspace.service.ts` - workspace lifecycle, port allocation, preview wiring.
 - `src/services/workspace-terminal.ts` - shared terminal + file-watch WebSocket on port `4024`.
@@ -119,7 +119,9 @@ Important server files:
 - `src/services/workspace-proxy.ts` - workspace preview proxy.
 - `src/services/github-auth.ts` - GitHub token resolution from `.env`.
 - `src/services/linear.service.ts` - Linear GraphQL client, TTL caches, agent/workflow dispatch, and issue fetching.
-- `src/services/chat.service.ts` `resolveMentions()` - resolves `@ENG-123`-style tokens to Linear ticket context and `@name` tokens to workflow/repo/agent context before the LLM call.
+- `src/services/chat.service.ts` — `resolveMentions()` resolves `@ENG-123`-style tokens to Linear ticket context and `@name` tokens to workflow/repo/agent context before the LLM call. `ChatSession.source` accepts `'ui' | 'slack' | 'automation'`; automation sessions carry an `automationKey` field used as a deduplication key. `appendAutomationMessage(sessionId, role, content)` inserts a message into an automation thread without starting a live LLM session (content capped at 1 MB, `role:admin` rejected, throws `'Not an automation session'` if `session.source !== 'automation'`).
+- `src/services/cron.service.ts` — Scheduler using `node-cron`. For agent-target jobs where `agentName === job.name`, `ensureLinkedSession()` upserts a persistent `chat_sessions` document keyed by `automationKey` (race-safe via `$setOnInsert` + E11000 fallback), then injects an `AUTOMATION_CONTEXT` block into the agent prompt (`LINKED_CHAT_SESSION_ID`, `AUTOMATION_API_TOKEN`, `AUTOMATION_MESSAGE_URL`) so the agent can POST its output back to the linked thread. The `AUTOMATION_API_TOKEN` is minted with a 5-minute TTL (via `signAccessToken(..., '5m')`) to avoid persisting a long-lived credential in the `chat_messages` collection. A stale-pointer recovery path re-links `cron_jobs.linkedChatSessionId` if the session was deleted and recreated.
+- `src/services/cron-seed.service.ts` — Seeds built-in cron jobs. Includes the `daily-status-prep` job (schedule `30 9 * * 1-5`, `America/New_York`) that fires the `daily-status-prep` agent 30 minutes before the 10 AM ET daily call. `linkedChatSessionId` is intentionally excluded from `SEED_OVERRIDE` `$set` to preserve the persistent automation thread across restarts.
 - `services/slack.service.ts`, `services/slack-notifier.ts` - Slack integrations.
 - `src/routes/file.routes.ts` and `routes/artifact.routes.ts` - capability-URL public routes.
 
@@ -146,6 +148,7 @@ Responsibilities:
 Key activity page components:
 
 - `src/pages/ExecutionListPage.tsx` - Activity page. Renders the paginated execution list. Exports the `paginationViewModel({ page, total, pageSize })` pure function that computes UI-state (`visible`, `pageCount`, `currentPageLabel`, `prevDisabled`, `nextDisabled`) with no DOM dependency so it can be tested in isolation.
+The Dashboard shows an **Automations** panel (above in-flight work) that lists configured automation cron jobs. Each card renders the job's last-run status, next-run time, and a `View Report →` link to the linked automation chat thread (only shown once `linkedChatSessionId` is set). The `DailyStatusPrepCard` component (`DashboardPage.tsx`) displays a `glow-running` badge with an animated `Loader2` spinner while `runStatus === 'running'`.
 
 Key chat UI components:
 
@@ -164,7 +167,7 @@ Key domains:
 - Workflow definitions and execution records.
 - Execution logs and state.
 - Repos and workspace metadata.
-- Chat sessions and agent conversation state.
+- Chat sessions and agent conversation state. Automation sessions (`source: 'automation'`) carry a sparse-unique `automationKey` index on `chat_sessions` (one persistent thread per cron job). The linked session's `_id` is stored as `cron_jobs.linkedChatSessionId` and is never overwritten by seed updates.
 - Artifacts and uploaded files.
 - Integration configuration.
 - MCP server records and health state.
@@ -249,6 +252,29 @@ Requires `ALLEN_LINEAR_ACCESS_TOKEN` in `.env`. The `LinearService` (`packages/s
 **Chat @mention resolution:** when a chat message contains a token matching `@[A-Z]+-\d+` (e.g. `@ENG-123`), `resolveMentions()` in `chat.service.ts` fetches the issue from Linear (up to 3 tickets per message, description capped at 800 chars) and injects a context block into the LLM conversation before any workflow/repo/agent mentions are resolved. If Linear is not configured or the identifier is not found, the token is silently skipped.
 
 **Chat @mention autocomplete:** the `ChatInput` component detects when the user types `@linear` and switches `MentionAutocomplete` into linear mode. In linear mode the component fetches the authenticated user's assigned active tickets (`started,unstarted,backlog`, limit 25) via the `/api/linear/issues?assignee=me&state=…&limit=25` endpoint. Selecting a ticket inserts `@ENG-123` into the message text. Each row shows a priority dot, the identifier, the issue title, and a colour-coded state badge.
+
+### Automation Agents
+
+Cron jobs with `target.type === 'agent'` and `target.agentName === job.name` follow the **automation convention**. On every dispatch:
+
+1. `CronService.ensureLinkedSession()` upserts a `chat_sessions` document with `source: 'automation'` and `automationKey: job.name`. The upsert is idempotent (MongoDB `$setOnInsert` + E11000 race fallback). The resulting session `_id` is written to `cron_jobs.linkedChatSessionId` (only on first creation or after stale-pointer recovery).
+2. The cron service mints a **5-minute** admin JWT (`signAccessToken({ role: 'admin', ... }, '5m')`) for the `cron-system` principal and appends an `AUTOMATION_CONTEXT` block to the agent prompt. The short TTL ensures the token stored in `chat_messages` cannot be exploited after the agent finishes:
+
+   ```text
+   LINKED_CHAT_SESSION_ID: <sessionId>
+   AUTOMATION_API_TOKEN: <token>
+   AUTOMATION_MESSAGE_URL: http://localhost:<PORT>/api/chat/sessions/<sessionId>/automation-message
+   ```
+
+3. The agent uses `AUTOMATION_MESSAGE_URL` to `POST` its results back with `{ role: 'assistant', content: '...' }`. The endpoint validates the JWT via the global `requireAuth` middleware, applies an in-memory rate limit of 60 req/min per caller sub (→ 429), restricts `role` to `user` or `assistant` (→ 400), rejects requests targeting non-automation sessions (→ 403), enforces a 1 MB content cap (→ 400), and sanitises unexpected errors to `'Internal server error'` so internal details are not leaked.
+
+The persistent linked chat thread accumulates every run's output in one scrollable session, visible from the Dashboard Automations card or directly at `/chat/<sessionId>`.
+
+**Built-in automation jobs** (seeded by `cron-seed.service.ts`):
+
+| Name | Schedule | Description |
+|------|----------|-------------|
+| `daily-status-prep` | `30 9 * * 1-5` ET | Weekday morning briefing 30 min before the 10 AM ET daily call. |
 
 ## Runtime Ports
 
