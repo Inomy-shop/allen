@@ -441,12 +441,16 @@ export function useChat() {
           }
         }
 
-        // Group threads by parentMessageId so they render inline with messages
+        // Group threads by every anchor message they touched so a continued
+        // delegation renders inline under each turn that issued/continued
+        // it, not only under the original parentMessageId.
+        // Legacy rows without parentMessageIds fall back to parentMessageId.
         const grouped: Record<string, AgentThread[]> = {};
         for (const t of threads) {
-          const key = t.parentMessageId;
-          if (!grouped[key]) grouped[key] = [];
-          grouped[key].push({
+          const keys: string[] = Array.isArray(t.parentMessageIds) && t.parentMessageIds.length
+            ? t.parentMessageIds
+            : [t.parentMessageId];
+          const threadObj: AgentThread = {
             conversationId: t._id,
             fromAgent: t.fromAgent,
             toAgent: t.toAgent,
@@ -460,7 +464,11 @@ export function useChat() {
             depth: t.depth,
             parentConversationId: t.parentConversationId,
             liveActivity: activityById.get(t._id),
-          });
+          };
+          for (const key of keys) {
+            if (!grouped[key]) grouped[key] = [];
+            grouped[key].push(threadObj);
+          }
         }
         setThreadsByMessage(grouped);
 
@@ -980,11 +988,14 @@ export function useChat() {
                   // This replaces the incomplete SSE-only data with the persisted version
                   if (sessionId) {
                     api.getThreads(sessionId).then(threads => {
+                      // Same multi-anchor grouping as the initial-load path
+                      // (see the parentMessageIds comment above).
                       const grouped: Record<string, AgentThread[]> = {};
                       for (const t of threads) {
-                        const key = t.parentMessageId;
-                        if (!grouped[key]) grouped[key] = [];
-                        grouped[key].push({
+                        const keys: string[] = Array.isArray(t.parentMessageIds) && t.parentMessageIds.length
+                          ? t.parentMessageIds
+                          : [t.parentMessageId];
+                        const threadObj: AgentThread = {
                           conversationId: t._id,
                           fromAgent: t.fromAgent,
                           toAgent: t.toAgent,
@@ -997,7 +1008,11 @@ export function useChat() {
                           durationMs: t.durationMs,
                           depth: t.depth,
                           parentConversationId: t.parentConversationId,
-                        });
+                        };
+                        for (const key of keys) {
+                          if (!grouped[key]) grouped[key] = [];
+                          grouped[key].push(threadObj);
+                        }
                       }
                       setThreadsByMessage(grouped);
                     }).catch(() => {});
