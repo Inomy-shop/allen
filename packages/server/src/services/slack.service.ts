@@ -11,12 +11,24 @@
  * read-only (interaction happens via Slack only).
  */
 
+import { existsSync, mkdirSync } from 'node:fs';
+import { writeFile } from 'node:fs/promises';
+import { join, extname } from 'node:path';
+import { randomUUID } from 'node:crypto';
 import type { Db } from 'mongodb';
 import { ChatService, type ChatEventHandler, type ChatMessageSender } from './chat.service.js';
 import type { ChatProvider } from './chat-providers.js';
 import type { ReasoningEffort } from './agent-settings.js';
 
 // ── Types ──
+
+interface SlackFile {
+  id: string;
+  name: string;
+  mimetype: string;
+  url_private: string;
+  size: number;
+}
 
 interface SlackEvent {
   type: string;
@@ -27,6 +39,7 @@ interface SlackEvent {
   thread_ts?: string;
   bot_id?: string;
   subtype?: string;
+  files?: SlackFile[];
 }
 
 interface SlackEventEnvelope {
@@ -42,6 +55,7 @@ interface SlackMessage {
   bot_id?: string;
   ts: string;
   subtype?: string;
+  files?: SlackFile[];
 }
 
 interface SlackThreadMapping {
@@ -60,6 +74,13 @@ const SLACK_API = 'https://slack.com/api';
 const SLACK_PROGRESS_MIN_MS = 5000;
 const SLACK_DEFAULT_PROVIDER: ChatProvider = 'codex';
 const SLACK_DEFAULT_MODEL = 'gpt-5.5';
+
+// ── File attachment constants ──
+const UPLOADS_DIR = process.env.UPLOADS_DIR ?? join(process.cwd(), '..', '..', 'uploads');
+if (!existsSync(UPLOADS_DIR)) mkdirSync(UPLOADS_DIR, { recursive: true });
+
+const MAX_SLACK_FILE_SIZE = 25 * 1024 * 1024; // 25 MB
+const MAX_FILES_PER_MENTION = 10;
 
 // ── Service ──
 
@@ -174,8 +195,9 @@ export class SlackService {
     // If the mention IS a reply in an existing thread, fetch the thread context.
     // If the mention is the top-level message, there's no prior context.
     let combinedMessage: string;
+    let threadMessages: { text: string; author?: string; files?: SlackFile[] }[] = [];
     if (event.thread_ts && event.thread_ts !== event.ts) {
-      const threadMessages = await this.fetchThreadMessages(channelId, threadTs, event.ts);
+      threadMessages = await this.fetchThreadMessages(channelId, threadTs, event.ts);
       if (threadMessages.length > 0) {
         const context = threadMessages
           .map((m, i) => `[Message ${i + 1}${m.author ? ` from ${m.author}` : ''}]: ${m.text}`)
@@ -187,6 +209,26 @@ export class SlackService {
     } else {
       combinedMessage = cleanedText;
     }
+
+    // ── Collect and download file attachments ──
+    // De-duplicate files by Slack file id across event.files and thread message files.
+    const seenFileIds = new Set<string>();
+    const allFiles: SlackFile[] = [];
+    for (const f of (event.files ?? [])) {
+      if (!seenFileIds.has(f.id)) {
+        seenFileIds.add(f.id);
+        allFiles.push(f);
+      }
+    }
+    for (const msg of threadMessages) {
+      for (const f of (msg.files ?? [])) {
+        if (!seenFileIds.has(f.id)) {
+          seenFileIds.add(f.id);
+          allFiles.push(f);
+        }
+      }
+    }
+    combinedMessage = await this.appendFileLinks(combinedMessage, allFiles);
 
     const defaults = this.resolveSlackDefaults(cleanedText);
 
@@ -229,7 +271,91 @@ export class SlackService {
       { $set: { lastActivityAt: new Date() } },
     );
 
-    await this.processAndReply(sessionId, cleanedText, channelId, threadTs, event.ts, this.senderFromSlackEvent(event));
+    // Collect files from the event mention, de-duplicate, and append markdown links.
+    const seenFileIds = new Set<string>();
+    const allFiles: SlackFile[] = [];
+    for (const f of (event.files ?? [])) {
+      if (!seenFileIds.has(f.id)) {
+        seenFileIds.add(f.id);
+        allFiles.push(f);
+      }
+    }
+    const content = await this.appendFileLinks(cleanedText, allFiles);
+
+    await this.processAndReply(sessionId, content, channelId, threadTs, event.ts, this.senderFromSlackEvent(event));
+  }
+
+  // ── File attachment helpers ──
+
+  /**
+   * Download a Slack private file to the shared uploads directory.
+   *
+   * Security notes:
+   *   - Only image/* and application/pdf are accepted (allowlist).
+   *   - Files larger than 25 MB are rejected before any HTTP call.
+   *   - The bot token is NEVER logged — only a warning without the token value
+   *     is emitted on failure.
+   *
+   * @returns Public URL `/api/files/<uuid><ext>` on success, `null` on any error.
+   */
+  private async downloadSlackFileToUploads(file: SlackFile, botToken: string): Promise<string | null> {
+    try {
+      // Mimetype allowlist
+      if (!file.mimetype.startsWith('image/') && file.mimetype !== 'application/pdf') {
+        return null;
+      }
+      // Size cap
+      if (file.size > MAX_SLACK_FILE_SIZE) {
+        return null;
+      }
+
+      const resp = await fetch(file.url_private, {
+        headers: { Authorization: `Bearer ${botToken}` },
+      });
+      if (!resp.ok) {
+        console.warn(`[slack] Failed to download file "${file.name}": HTTP ${resp.status}`);
+        return null;
+      }
+
+      const buffer = Buffer.from(await resp.arrayBuffer());
+      const ext = extname(file.name) || '.bin';
+      const uuid = randomUUID();
+      const storedName = `${uuid}${ext}`;
+      const fullPath = join(UPLOADS_DIR, storedName);
+
+      await writeFile(fullPath, buffer);
+
+      return `/api/files/${storedName}`;
+    } catch (err) {
+      console.warn(`[slack] Error downloading file "${file.name}":`, (err as Error).message);
+      return null;
+    }
+  }
+
+  /**
+   * Download all qualifying files (up to MAX_FILES_PER_MENTION) and append
+   * Markdown image/file links to `message`. Returns the (possibly extended) message.
+   */
+  private async appendFileLinks(message: string, files: SlackFile[]): Promise<string> {
+    if (files.length === 0) return message;
+
+    const botToken = await this.getBotToken();
+    if (!botToken) {
+      console.warn('[slack] Bot token not available; skipping file downloads');
+      return message;
+    }
+
+    const filesToProcess = files.slice(0, MAX_FILES_PER_MENTION);
+    const urls = await Promise.all(
+      filesToProcess.map(f => this.downloadSlackFileToUploads(f, botToken)),
+    );
+
+    const links = urls
+      .map((url, i) => (url ? `[${filesToProcess[i].name}](${url})` : null))
+      .filter((link): link is string => link !== null);
+
+    if (links.length === 0) return message;
+    return `${message}\n\n${links.join('\n')}`;
   }
 
   // ── Run agent and post reply ──
@@ -322,13 +448,14 @@ export class SlackService {
 
   /**
    * Fetch messages from a Slack thread, excluding bot messages and the triggering mention.
-   * Returns up to ~50 messages of context.
+   * Returns up to ~50 messages of context. Image-only messages (no text) are retained
+   * so their file attachments can be forwarded to the LLM.
    */
   private async fetchThreadMessages(
     channelId: string,
     threadTs: string,
     excludeTs: string,
-  ): Promise<{ text: string; author?: string }[]> {
+  ): Promise<{ text: string; author?: string; files?: SlackFile[] }[]> {
     const token = await this.getBotToken();
     if (!token) throw new Error('SLACK_BOT_TOKEN not configured');
     const url = `${SLACK_API}/conversations.replies?channel=${encodeURIComponent(channelId)}&ts=${encodeURIComponent(threadTs)}&limit=50`;
@@ -338,12 +465,13 @@ export class SlackService {
       throw new Error(`Slack conversations.replies failed: ${data.error}`);
     }
     return (data.messages ?? [])
-      .filter(m => !m.bot_id && !m.subtype && m.ts !== excludeTs && m.text)
+      .filter(m => !m.bot_id && !m.subtype && m.ts !== excludeTs && (m.text || (m.files && m.files.length > 0)))
       .map(m => ({
         text: (m.text ?? '').replace(MENTION_REGEX, '').trim(),
         author: m.user,
+        files: m.files,
       }))
-      .filter(m => m.text.length > 0);
+      .filter(m => m.text.length > 0 || (m.files && m.files.length > 0));
   }
 
   /**
