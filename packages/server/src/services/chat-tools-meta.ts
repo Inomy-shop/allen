@@ -24,6 +24,7 @@ import type { ChatTool } from './chat-tools.js';
 import { getAnyActiveSession } from './chat-tools.js';
 import { TeamService } from './team.service.js';
 import { WorkflowService } from './workflow.service.js';
+import { SkillService } from './skill.service.js';
 import type { WorkflowDef } from '@allen/engine';
 import yaml from 'js-yaml';
 
@@ -112,6 +113,65 @@ const getTeamBlueprintTool: ChatTool = {
       agents: blueprint.agents,
       delegationEdges: blueprint.delegationEdges,
     };
+  },
+};
+
+const listSkillsTool: ChatTool = {
+  name: 'list_skills',
+  description: 'List all available assistant routing skills with lightweight metadata only. Use this first for non-trivial Allen-supported requests, choose the best skill from metadata by user intent, then call get_skill for the selected playbook.',
+  inputSchema: {
+    type: 'object',
+    properties: {
+      include_disabled: { type: 'boolean', description: 'Include disabled skills. Default false.' },
+    },
+  },
+  async execute(args, db) {
+    const skills = await new SkillService(db).list(Boolean(args.include_disabled));
+    return { skills };
+  },
+};
+
+const searchSkillsTool: ChatTool = {
+  name: 'search_skills',
+  description: 'Optional ranking hint for assistant routing skills. Do not treat the top score as the final decision; review list_skills metadata and choose by user intent before calling get_skill.',
+  inputSchema: {
+    type: 'object',
+    properties: {
+      query: { type: 'string', description: 'The user request or routing question to match.' },
+      context: { type: 'object', description: 'Optional context such as intent, repo, currentPage, prUrl, ticketId, or executionId.', additionalProperties: true },
+      limit: { type: 'number', description: 'Maximum skills to return. Default 5.' },
+      include_disabled: { type: 'boolean', description: 'Include disabled skills. Default false.' },
+    },
+    required: ['query'],
+  },
+  async execute(args, db) {
+    return new SkillService(db).search({
+      query: String(args.query ?? ''),
+      context: (args.context as Record<string, unknown> | undefined) ?? {},
+      limit: typeof args.limit === 'number' ? args.limit : undefined,
+      includeDisabled: Boolean(args.include_disabled),
+    });
+  },
+};
+
+const getSkillTool: ChatTool = {
+  name: 'get_skill',
+  description: 'Get the full routing/playbook instructions for one assistant skill. Use this after selecting the best skill from list_skills metadata by user intent.',
+  inputSchema: {
+    type: 'object',
+    properties: {
+      name: { type: 'string', description: 'Skill name slug.' },
+      id: { type: 'string', description: 'Skill MongoDB _id.' },
+    },
+  },
+  async execute(args, db) {
+    const service = new SkillService(db);
+    const id = typeof args.id === 'string' ? args.id.trim() : '';
+    const name = typeof args.name === 'string' ? args.name.trim() : '';
+    if (!id && !name) return { error: 'Provide either name or id' };
+    const skill = id ? await service.getById(id) : await service.getByName(name);
+    if (!skill) return { error: 'Skill not found' };
+    return { skill };
   },
 };
 
@@ -701,6 +761,9 @@ export const metaChatTools: ChatTool[] = [
   listTeamsTool,
   listTeamMembersTool,
   getTeamBlueprintTool,
+  listSkillsTool,
+  searchSkillsTool,
+  getSkillTool,
   // Self-introspection (any agent)
   getMySessionHistory,
   getMyDelegationThread,

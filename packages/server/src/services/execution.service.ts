@@ -304,8 +304,11 @@ export class ExecutionService {
     }
     const executionId = randomUUID();
 
-    // Check concurrency limits — queue if exceeded
-    if (workflow.context?.concurrency) {
+    // TEMPORARILY DISABLED: concurrency queueing can leave new chat-started
+    // work stuck behind stale running/waiting executions. Keep the old path
+    // here so it can be re-enabled after stale-run cleanup is fixed.
+    const concurrencyQueueingEnabled = false;
+    if (concurrencyQueueingEnabled && workflow.context?.concurrency) {
       const running = await this.stateManager.countRunningExecutions(workflow.name);
       if (running >= workflow.context.concurrency) {
         // Queue the execution instead of rejecting

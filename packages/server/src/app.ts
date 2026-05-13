@@ -10,6 +10,7 @@ import cors from 'cors';
 import { connectDB } from './database/mongo.js';
 import { ensureIndexes } from './database/indexes.js';
 import { workflowRoutes } from './routes/workflow.routes.js';
+import { skillRoutes } from './routes/skill.routes.js';
 import { executionRoutes } from './routes/execution.routes.js';
 import { agentRoutes } from './routes/agent.routes.js';
 import { teamRoutes } from './routes/team.routes.js';
@@ -30,7 +31,7 @@ import { startTerminalWebSocketServer } from './services/workspace-terminal.js';
 import { createWorkspaceProxy, createWorkspaceUpgradeHandler } from './services/workspace-proxy.js';
 import { startFileWatchServer } from './services/workspace-watcher.js';
 import { WorkspaceManager } from './services/workspace.service.js';
-import { seedDefaultWorkflows } from './seed.js';
+import { seedDefaultSkills, seedDefaultWorkflows } from './seed.js';
 import { setStreamDb } from './services/stream.service.js';
 import { McpService } from './services/mcp.service.js';
 import { startMcpHealthMonitor } from './services/mcp-health.service.js';
@@ -107,6 +108,7 @@ async function main(): Promise<void> {
   // await seedDefaultAgents(db);
   // await new TeamSeedService(db).migrate();
   await seedDefaultWorkflows(db);
+  await seedDefaultSkills(db);
 
   if (isSeedOverrideEnabled()) {
     // Remove orphaned seed teams/agents/workflows from prior schemas only when
@@ -230,6 +232,7 @@ async function main(): Promise<void> {
 
   // Routes
   app.use('/api/workflows', workflowRoutes(db));
+  app.use('/api/skills', skillRoutes(db));
   app.use('/api/executions', executionRoutes(db));
   app.use('/api/agents', agentRoutes(db));
   app.use('/api/teams', teamRoutes(db));

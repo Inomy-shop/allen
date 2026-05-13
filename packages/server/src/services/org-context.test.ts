@@ -72,6 +72,14 @@ describe('server org-context — buildOrgContextBlock', () => {
     expect(result).not.toContain('team-builder-agent');
   });
 
+  it('renders compact summary mode with team leads only', async () => {
+    const db = mockDb(TEAMS, AGENTS);
+    const result = await buildOrgContextBlock(db, { includeFullChart: true, chartMode: 'summary' });
+    expect(result).toContain('- Executive team');
+    expect(result).toContain('lead(s): ceo');
+    expect(result).not.toContain('- ceo (lead) — Top-level orchestrator.');
+  });
+
   it('renders per-agent delegation targets for the requesting agent', async () => {
     const db = mockDb(TEAMS, AGENTS);
     const result = await buildOrgContextBlock(db, {
