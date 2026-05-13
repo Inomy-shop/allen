@@ -135,6 +135,11 @@ function paramJsonType(desc: string): string {
 // ── Tool Definitions ──
 
 const TOOLS = [
+  // ── Assistant routing skills ──
+  { name: 'list_skills', description: 'List all available Allen Library routing skills with lightweight metadata only. Use this first for non-trivial Allen-supported requests, choose the best skill from metadata by user intent, then call get_skill for the selected playbook.', params: { include_disabled: 'boolean — include disabled skills; default false' } },
+  { name: 'search_skills', description: 'Optional ranking hint for Allen Library routing skills. Do not treat the top score as the final decision; review list_skills metadata and choose by user intent before calling get_skill.', params: { query: 'string (required) — user request or routing question', context: 'object — optional context such as intent, repo, currentPage, prUrl, ticketId, executionId', limit: 'number — max skills to return, default 5', include_disabled: 'boolean — include disabled skills; default false' } },
+  { name: 'get_skill', description: 'Get the full routing/playbook instructions for one Allen Library skill. Use after selecting the best skill from list_skills metadata by user intent.', params: { name: 'string — skill slug', id: 'string — skill MongoDB _id; use name OR id' } },
+
   // ── Workflows ──
   { name: 'list_workflows', description: 'List all workflows with name, description, node count, validation status.', params: {} },
   { name: 'get_workflow', description: 'Get full details of a specific workflow: YAML source, parsed nodes, edges, input schema, version.', params: { name: 'string — workflow name', id: 'string — workflow MongoDB _id (use name OR id)' } },
