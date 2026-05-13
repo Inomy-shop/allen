@@ -148,6 +148,12 @@ export async function ensureIndexes(db: Db): Promise<void> {
 
   // Chat Messages
   await db.collection('chat_messages').createIndex({ sessionId: 1, createdAt: 1 });
+  // Sparse compound index to support owner lookups in listSessions() aggregation
+  // (senderUserId is only populated on user-sent messages, sparse avoids indexing nulls)
+  await db.collection('chat_messages').createIndex(
+    { senderUserId: 1, sessionId: 1, createdAt: 1 },
+    { name: 'idx_msg_sender_session_created', sparse: true },
+  );
 
   // Agent Conversations (delegation threads)
   await db.collection('agent_conversations').createIndex({ chatSessionId: 1, startedAt: -1 });

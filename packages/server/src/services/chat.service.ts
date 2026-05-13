@@ -45,6 +45,9 @@ export interface ChatSession {
   repoId?: string;     // ObjectId string referencing repos collection
   repoPath?: string;   // Snapshot of repo.path at session creation time
   repoName?: string;   // Snapshot of repo.name for UI display
+  ownerUserId?: string | null;
+  ownerName?: string | null;
+  ownerEmail?: string | null;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -780,7 +783,36 @@ export class ChatService {
   }
 
   async listSessions(): Promise<ChatSession[]> {
-    return this.sessions.find({}).sort({ lastMessageAt: -1 }).limit(100).toArray() as Promise<ChatSession[]>;
+    const results = await this.sessions.aggregate<ChatSession>([
+      { $sort: { lastMessageAt: -1 } },
+      { $limit: 100 },
+      {
+        $lookup: {
+          from: 'chat_messages',
+          let: { sid: { $toString: '$_id' } },
+          pipeline: [
+            {
+              $match: {
+                $expr: { $eq: ['$sessionId', '$$sid'] },
+                role: 'user',
+              },
+            },
+            { $sort: { createdAt: 1 } },
+            { $limit: 1 },
+          ],
+          as: '_firstUserMsg',
+        },
+      },
+      {
+        $addFields: {
+          ownerUserId: { $arrayElemAt: ['$_firstUserMsg.senderUserId', 0] },
+          ownerName: { $arrayElemAt: ['$_firstUserMsg.senderName', 0] },
+          ownerEmail: { $arrayElemAt: ['$_firstUserMsg.senderEmail', 0] },
+        },
+      },
+      { $project: { _firstUserMsg: 0 } },
+    ]).toArray();
+    return results;
   }
 
   async getSession(id: string): Promise<(ChatSession & { messages: ChatMessage[] }) | null> {
