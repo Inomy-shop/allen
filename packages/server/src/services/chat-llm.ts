@@ -19,6 +19,7 @@ import {
   toClaudeSdkOptions,
   type ResolvedSettings,
 } from './agent-settings.js';
+import { persistentChatRuntimeEnabled, runPersistentChatTurn } from './chat-runtime-manager.js';
 
 // ── Types ──
 
@@ -283,7 +284,14 @@ export async function runChatLLM(db: Db, options: ChatLLMOptions): Promise<ChatL
   log(`━━━ New message [${provider}/${model}] ━━━`);
   const prompt = options.messages.length > 0 ? options.messages[options.messages.length - 1].content : '';
   log(`Prompt: "${prompt.slice(0, 100)}${prompt.length > 100 ? '...' : ''}"`);
-  if (options.resumeSessionId) log(`Resume: ${options.resumeSessionId.slice(0, 8)}...`);
+  const usePersistentRuntime = persistentChatRuntimeEnabled()
+    && options.chatSessionId
+    && (provider === 'codex' || provider === 'claude-cli');
+  if (options.resumeSessionId) {
+    log(usePersistentRuntime
+      ? `Provider session: ${options.resumeSessionId.slice(0, 8)}...`
+      : `Resume: ${options.resumeSessionId.slice(0, 8)}...`);
+  }
 
   const startMs = Date.now();
 
@@ -303,15 +311,33 @@ export async function runChatLLM(db: Db, options: ChatLLMOptions): Promise<ChatL
     log(`Effort=${resolved.reasoningEffort ?? '(default)'} planMode=${resolved.planMode}`);
   }
 
-  switch (provider) {
-    case 'codex':
-      result = await runCodexCLI(db, options.systemPrompt, options.messages, model, callbacks, options.resumeSessionId, options.skipTools, options.cwd, resolved, options.chatSessionId);
-      break;
-    case 'claude-cli':
-      result = await runClaudeCLI(db, options.systemPrompt, options.messages, model, callbacks, options.resumeSessionId, options.skipTools, options.cwd, resolved, options.chatSessionId);
-      break;
-    default:
-      throw new Error(`Unknown provider: ${provider}`);
+  if (
+    usePersistentRuntime
+  ) {
+    result = await runPersistentChatTurn({
+      db,
+      chatSessionId: options.chatSessionId,
+      provider,
+      model,
+      resolvedSettings: resolved,
+      systemPrompt: options.systemPrompt,
+      messages: options.messages,
+      resumeSessionId: options.resumeSessionId,
+      skipTools: options.skipTools,
+      cwd: options.cwd,
+      callbacks,
+    });
+  } else {
+    switch (provider) {
+      case 'codex':
+        result = await runCodexCLI(db, options.systemPrompt, options.messages, model, callbacks, options.resumeSessionId, options.skipTools, options.cwd, resolved, options.chatSessionId);
+        break;
+      case 'claude-cli':
+        result = await runClaudeCLI(db, options.systemPrompt, options.messages, model, callbacks, options.resumeSessionId, options.skipTools, options.cwd, resolved, options.chatSessionId);
+        break;
+      default:
+        throw new Error(`Unknown provider: ${provider}`);
+    }
   }
 
   const durationMs = Date.now() - startMs;

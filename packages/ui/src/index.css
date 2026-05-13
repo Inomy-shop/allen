@@ -421,6 +421,24 @@
     @apply min-w-0 flex-1 bg-transparent text-[12.5px] text-theme-primary outline-none placeholder:text-theme-subtle;
   }
 
+  .form-field {
+    @apply flex flex-col gap-1.5;
+  }
+
+  .form-field > span {
+    @apply text-[11px] font-medium lowercase text-theme-muted;
+  }
+
+  .form-field input,
+  .form-field textarea,
+  .skill-test-textarea {
+    @apply rounded-md border border-app bg-app-muted px-3 py-2 text-[13px] text-theme-primary outline-none placeholder:text-theme-subtle;
+  }
+
+  .form-field textarea {
+    @apply resize-y leading-relaxed;
+  }
+
   .lib-team-body {
     @apply flex min-h-0 flex-1 flex-col gap-px overflow-y-auto p-1.5;
   }

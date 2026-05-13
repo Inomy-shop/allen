@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAgents } from '../hooks/useAgents';
 import { useWorkflows } from '../hooks/useWorkflows';
-import { agents as agentsApi, teams as teamsApi, repos as reposApi, executions as executionsApi } from '../services/api';
+import { agents as agentsApi, teams as teamsApi, repos as reposApi, executions as executionsApi, skills as skillsApi, type SkillRecord } from '../services/api';
 import RoleIcon from '../components/common/RoleIcon';
 import RoleDialog from '../components/common/RoleDialog';
 import DeleteConfirmDialog from '../components/common/DeleteConfirmDialog';
@@ -12,7 +12,7 @@ import {
   RefreshCw, Sparkles, Users, Crown, Search, Play, ArrowRight,
   X, FolderGit2, Plus, Pencil, Trash2, LayoutGrid, Info, Home,
   ChevronRight, GitBranch, CheckCircle, XCircle, ExternalLink, UserRound,
-  Layers, Tag, FileText, Monitor, Download, ScanSearch, Settings,
+  Layers, Tag, FileText, Monitor, Download, ScanSearch, Settings, BookOpen,
 } from 'lucide-react';
 import { DelegationGraph } from '../components/agents/DelegationGraph';
 import McpServerManager from '../components/settings/McpServerManager';
@@ -31,7 +31,7 @@ import { AgentCard } from '../components/agents/AgentCard';
 
 type Agent = Record<string, unknown>;
 type Selection = { kind: 'overview' } | { kind: 'team'; name: string } | { kind: 'unassigned' };
-type LibrarySection = 'workflows' | 'teams-agents' | 'repos' | 'integrations' | 'members';
+type LibrarySection = 'workflows' | 'teams-agents' | 'skills' | 'repos' | 'integrations' | 'members';
 type WorkflowExecStats = { total: number; completed: number; failed: number; running: number; queued: number };
 
 // ── Agent detail panel (markdown viewer) ──────────────────────────────────
@@ -418,6 +418,8 @@ export default function RoleManagerPage() {
   const [allTeams, setAllTeams] = useState<Team[]>([]);
   const [repoList, setRepoList] = useState<any[]>([]);
   const [repoLoading, setRepoLoading] = useState(true);
+  const [skillList, setSkillList] = useState<SkillRecord[]>([]);
+  const [skillsLoading, setSkillsLoading] = useState(true);
   const [librarySection, setLibrarySection] = useState<LibrarySection>('teams-agents');
   const [workflowExecStats, setWorkflowExecStats] = useState<Record<string, WorkflowExecStats>>({});
   // Selection + search
@@ -470,6 +472,22 @@ export default function RoleManagerPage() {
     }
   }, []);
   useEffect(() => { void reloadRepos(); }, [reloadRepos]);
+
+  const reloadSkills = useCallback(async () => {
+    setSkillsLoading(true);
+    try {
+      const list = await skillsApi.list(true);
+      setSkillList((list ?? []).slice().sort((a, b) =>
+        (Number(b.priority ?? 0) - Number(a.priority ?? 0))
+        || String(a.name ?? '').localeCompare(String(b.name ?? '')),
+      ));
+    } catch {
+      setSkillList([]);
+    } finally {
+      setSkillsLoading(false);
+    }
+  }, []);
+  useEffect(() => { void reloadSkills(); }, [reloadSkills]);
 
   const reloadWorkflowExecStats = useCallback(async () => {
     try {
@@ -600,6 +618,26 @@ export default function RoleManagerPage() {
     const prompt =
       "Build me a new team. Tell me what kind of team you want (e.g. 'finance', 'marketing', 'design ops') and I'll research the domain, design the team structure, and create the agents after you approve.";
     navigate(`/chat?${new URLSearchParams({ agent: 'team-builder-agent', prompt }).toString()}`);
+  }
+
+  async function handleSaveSkill(skill: Partial<SkillRecord>) {
+    const id = skill._id ?? skill.id;
+    if (id) {
+      await skillsApi.update(id, skill);
+      toast.success(`Skill "${skill.name}" updated.`);
+    } else {
+      await skillsApi.create(skill);
+      toast.success(`Skill "${skill.name}" created.`);
+    }
+    await reloadSkills();
+  }
+
+  async function handleDeleteSkill(skill: SkillRecord) {
+    const id = skill._id ?? skill.id;
+    if (!id) return;
+    await skillsApi.delete(id);
+    toast.success(`Skill "${skill.name}" deleted.`);
+    await reloadSkills();
   }
 
   // ── Derived data ──────────────────────────────────────────────────────────
@@ -744,6 +782,7 @@ export default function RoleManagerPage() {
   const librarySections: Array<{ k: LibrarySection; label: string; desc: string; count: number | string }> = [
     { k: 'workflows', label: 'workflows', desc: 'how work flows through agents', count: workflows.length },
     { k: 'teams-agents', label: 'teams & agents', desc: 'departments and the agents that live there', count: allTeams.length },
+    { k: 'skills', label: 'skills', desc: 'routing playbooks for the assistant', count: skillList.length },
     { k: 'repos', label: 'repos', desc: 'connected source repositories', count: repoList.length },
     { k: 'integrations', label: 'integrations', desc: 'linear · github · slack · ...', count: 3 },
     { k: 'members', label: 'members', desc: 'people in this org', count: '—' },
@@ -754,7 +793,7 @@ export default function RoleManagerPage() {
       <aside className="lib-rail scroll-hide">
         <div className="lib-rail-head">
           <h1 className="lib-rail-title">library</h1>
-          <p className="lib-rail-sub">workflows, agents, and integrations the org uses</p>
+          <p className="lib-rail-sub">workflows, agents, skills, and integrations the org uses</p>
         </div>
         <nav className="lib-rail-list">
           {librarySections.map(section => (
@@ -812,6 +851,15 @@ export default function RoleManagerPage() {
             onDeleteTeam={setDeletingTeam}
             onAddAgentToTeam={handleAddAgentToTeamWithAi}
             onRefresh={() => { refresh(); void reloadTeams(); void reloadActivity(); }}
+          />
+        )}
+        {librarySection === 'skills' && (
+          <LibrarySkillsPane
+            skills={skillList}
+            loading={skillsLoading}
+            onRefresh={reloadSkills}
+            onSave={handleSaveSkill}
+            onDelete={handleDeleteSkill}
           />
         )}
         {librarySection === 'repos' && (
@@ -980,6 +1028,357 @@ function LibraryWorkflowsPane({
             </button>
           );
         })}
+      </div>
+    </div>
+  );
+}
+
+const ROUTE_OPTIONS = ['direct_answer', 'data_query', 'spawn_agent', 'delegate_to_agent', 'run_workflow'];
+
+function csvToArray(value: string): string[] {
+  return value.split(',').map(part => part.trim()).filter(Boolean);
+}
+
+function arrayToCsv(value: unknown): string {
+  return Array.isArray(value) ? value.join(', ') : '';
+}
+
+function blankSkill(): SkillRecord {
+  return {
+    name: '',
+    displayName: '',
+    description: '',
+    category: 'routing',
+    triggers: [],
+    excludes: [],
+    priority: 50,
+    enabled: true,
+    allowedRoutes: ['direct_answer'],
+    relatedWorkflows: [],
+    relatedAgents: [],
+    tags: [],
+    body: `# New Skill
+
+## When to use
+
+## When not to use
+
+## Evidence
+
+## Routing
+
+## Output
+`,
+  };
+}
+
+function LibrarySkillsPane({
+  skills, loading, onRefresh, onSave, onDelete,
+}: {
+  skills: SkillRecord[];
+  loading: boolean;
+  onRefresh: () => void;
+  onSave: (skill: Partial<SkillRecord>) => Promise<void>;
+  onDelete: (skill: SkillRecord) => Promise<void>;
+}) {
+  const toast = useToast();
+  const [query, setQuery] = useState('');
+  const [activeId, setActiveId] = useState<string>('new');
+  const [draft, setDraft] = useState<SkillRecord>(blankSkill());
+  const [saving, setSaving] = useState(false);
+  const [testerQuery, setTesterQuery] = useState('');
+  const [testerResult, setTesterResult] = useState<any>(null);
+  const [testing, setTesting] = useState(false);
+
+  const filtered = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    if (!q) return skills;
+    return skills.filter(skill =>
+      String(skill.name ?? '').toLowerCase().includes(q)
+      || String(skill.displayName ?? '').toLowerCase().includes(q)
+      || String(skill.description ?? '').toLowerCase().includes(q)
+      || String(skill.category ?? '').toLowerCase().includes(q)
+      || (skill.triggers ?? []).some(t => t.toLowerCase().includes(q)),
+    );
+  }, [query, skills]);
+
+  async function selectSkill(skill: SkillRecord) {
+    const key = skill._id ?? skill.id ?? skill.name;
+    setActiveId(key);
+    try {
+      const full = await skillsApi.get(key);
+      setDraft({
+        ...full,
+        triggers: full.triggers ?? [],
+        excludes: full.excludes ?? [],
+        allowedRoutes: full.allowedRoutes ?? ['direct_answer'],
+        relatedWorkflows: full.relatedWorkflows ?? [],
+        relatedAgents: full.relatedAgents ?? [],
+        tags: full.tags ?? [],
+        body: full.body ?? '',
+      });
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Failed to load skill');
+    }
+  }
+
+  function newSkill() {
+    setActiveId('new');
+    setDraft(blankSkill());
+  }
+
+  function duplicateSkill(skill: SkillRecord) {
+    setActiveId('new');
+    setDraft({
+      ...skill,
+      _id: undefined,
+      id: undefined,
+      name: `${skill.name}-copy`,
+      displayName: `${skill.displayName ?? skill.name} Copy`,
+      createdAt: undefined,
+      updatedAt: undefined,
+      version: undefined,
+    });
+  }
+
+  async function saveDraft() {
+    if (!draft.name.trim()) {
+      toast.error('Skill name is required.');
+      return;
+    }
+    setSaving(true);
+    try {
+      await onSave(draft);
+      if (activeId === 'new') newSkill();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Failed to save skill');
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function deleteActive() {
+    if (!draft._id && !draft.id) return;
+    if (!window.confirm(`Delete skill "${draft.name}"?`)) return;
+    try {
+      await onDelete(draft);
+      newSkill();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Failed to delete skill');
+    }
+  }
+
+  async function runTester() {
+    if (!testerQuery.trim()) return;
+    setTesting(true);
+    try {
+      setTesterResult(await skillsApi.search({ query: testerQuery, limit: 5, includeDisabled: true }));
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Skill search failed');
+    } finally {
+      setTesting(false);
+    }
+  }
+
+  function setArrayField(field: keyof SkillRecord, value: string) {
+    setDraft(prev => ({ ...prev, [field]: csvToArray(value) }));
+  }
+
+  function toggleRoute(route: string) {
+    setDraft(prev => {
+      const current = new Set(prev.allowedRoutes ?? []);
+      if (current.has(route)) current.delete(route);
+      else current.add(route);
+      return { ...prev, allowedRoutes: Array.from(current) };
+    });
+  }
+
+  return (
+    <div className="lib-section">
+      <div className="lib-page-head">
+        <div>
+          <h2>skills</h2>
+          <p>{skills.length} routing playbooks · loaded on demand by the assistant</p>
+        </div>
+        <div className="lib-actions">
+          <button className="btn btn-secondary btn-sm" onClick={onRefresh}><RefreshCw className="w-3 h-3" /></button>
+          <button className="btn btn-primary btn-sm" onClick={newSkill}><Plus className="w-3 h-3" /> new skill</button>
+        </div>
+      </div>
+
+      <div className="grid grid-cols-1 xl:grid-cols-[380px_minmax(0,1fr)] gap-4">
+        <div className="lib-card overflow-hidden">
+          <div className="p-3 border-b border-app">
+            <div className="lib-search">
+              <Search className="w-4 h-4" />
+              <input value={query} onChange={e => setQuery(e.target.value)} placeholder="Search skills" />
+            </div>
+          </div>
+          <div className="max-h-[calc(100vh-260px)] overflow-auto scroll-hide">
+            {loading ? (
+              Array.from({ length: 8 }).map((_, i) => <div key={i} className="lib-row-skel" />)
+            ) : filtered.length === 0 ? (
+              <div className="lib-empty">no skills found</div>
+            ) : filtered.map(skill => {
+              const id = skill._id ?? skill.id ?? skill.name;
+              const active = activeId === id;
+              return (
+                <button
+                  key={id}
+                  className={`w-full text-left px-4 py-3 border-b border-app hover:bg-app-muted transition-colors ${active ? 'bg-app-muted' : ''}`}
+                  onClick={() => { void selectSkill(skill); }}
+                >
+                  <div className="flex items-start gap-3">
+                    <BookOpen className="h-4 w-4 text-accent mt-0.5 shrink-0" />
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-center gap-2">
+                        <span className="font-medium text-theme-primary truncate">{skill.displayName ?? skill.name}</span>
+                        <span className={`badge ${skill.enabled === false ? 'badge-muted' : 'badge-ok'}`}>
+                          {skill.enabled === false ? 'disabled' : 'enabled'}
+                        </span>
+                      </div>
+                      <p className="text-xs text-theme-secondary mt-1 line-clamp-2">{skill.description || 'No description'}</p>
+                      <div className="lib-workflow-meta mt-2">
+                        <span>{skill.category ?? 'routing'}</span>
+                        <span>p{skill.priority ?? 50}</span>
+                        <span>{(skill.triggers ?? []).length} triggers</span>
+                      </div>
+                    </div>
+                  </div>
+                </button>
+              );
+            })}
+          </div>
+        </div>
+
+        <div className="space-y-4 min-w-0">
+          <div className="lib-card p-4">
+            <div className="flex items-center justify-between gap-3 mb-4">
+              <div>
+                <h3 className="text-sm font-semibold text-theme-primary">{activeId === 'new' ? 'new skill' : draft.name}</h3>
+                <p className="text-xs text-theme-secondary">Metadata is used for matching. Body is loaded only after a skill is selected.</p>
+              </div>
+              <div className="lib-actions">
+                {(draft._id || draft.id) && (
+                  <>
+                    <button className="btn btn-secondary btn-sm" onClick={() => duplicateSkill(draft)}>duplicate</button>
+                    <button className="btn btn-danger btn-sm" onClick={deleteActive}><Trash2 className="w-3 h-3" /></button>
+                  </>
+                )}
+                <button className="btn btn-primary btn-sm" onClick={saveDraft} disabled={saving}>
+                  {saving ? 'saving...' : 'save skill'}
+                </button>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+              <label className="form-field">
+                <span>name</span>
+                <input value={draft.name} onChange={e => setDraft(prev => ({ ...prev, name: e.target.value }))} placeholder="bug-fix-routing" />
+              </label>
+              <label className="form-field">
+                <span>display name</span>
+                <input value={draft.displayName ?? ''} onChange={e => setDraft(prev => ({ ...prev, displayName: e.target.value }))} placeholder="Bug Fix Routing" />
+              </label>
+              <label className="form-field">
+                <span>category</span>
+                <input value={draft.category ?? ''} onChange={e => setDraft(prev => ({ ...prev, category: e.target.value }))} placeholder="implementation" />
+              </label>
+              <label className="form-field">
+                <span>priority</span>
+                <input type="number" value={draft.priority ?? 50} onChange={e => setDraft(prev => ({ ...prev, priority: Number(e.target.value) }))} />
+              </label>
+              <label className="form-field md:col-span-2">
+                <span>description</span>
+                <input value={draft.description ?? ''} onChange={e => setDraft(prev => ({ ...prev, description: e.target.value }))} placeholder="What this skill routes or explains" />
+              </label>
+              <label className="form-field">
+                <span>triggers</span>
+                <input value={arrayToCsv(draft.triggers)} onChange={e => setArrayField('triggers', e.target.value)} placeholder="fix bug, regression, error" />
+              </label>
+              <label className="form-field">
+                <span>excludes</span>
+                <input value={arrayToCsv(draft.excludes)} onChange={e => setArrayField('excludes', e.target.value)} placeholder="build feature, create workflow" />
+              </label>
+              <label className="form-field">
+                <span>related workflows</span>
+                <input value={arrayToCsv(draft.relatedWorkflows)} onChange={e => setArrayField('relatedWorkflows', e.target.value)} placeholder="bug-investigate-and-fix" />
+              </label>
+              <label className="form-field">
+                <span>related agents</span>
+                <input value={arrayToCsv(draft.relatedAgents)} onChange={e => setArrayField('relatedAgents', e.target.value)} placeholder="coding-investigator" />
+              </label>
+            </div>
+
+            <div className="mt-4">
+              <div className="text-xs font-medium text-theme-secondary mb-2">allowed routes</div>
+              <div className="flex flex-wrap gap-2">
+                {ROUTE_OPTIONS.map(route => (
+                  <button
+                    key={route}
+                    type="button"
+                    className={`badge ${draft.allowedRoutes?.includes(route) ? 'badge-ok' : 'badge-muted'}`}
+                    onClick={() => toggleRoute(route)}
+                  >
+                    {route}
+                  </button>
+                ))}
+                <button
+                  type="button"
+                  className={`badge ${draft.enabled === false ? 'badge-muted' : 'badge-ok'}`}
+                  onClick={() => setDraft(prev => ({ ...prev, enabled: prev.enabled === false }))}
+                >
+                  {draft.enabled === false ? 'disabled' : 'enabled'}
+                </button>
+              </div>
+            </div>
+
+            <label className="form-field mt-4">
+              <span>skill body</span>
+              <textarea
+                className="font-mono text-xs min-h-[360px]"
+                value={draft.body ?? ''}
+                onChange={e => setDraft(prev => ({ ...prev, body: e.target.value }))}
+              />
+            </label>
+          </div>
+
+          <div className="lib-card p-4">
+            <div className="flex items-center justify-between gap-3 mb-3">
+              <div>
+                <h3 className="text-sm font-semibold text-theme-primary">skill matcher</h3>
+                <p className="text-xs text-theme-secondary">Test the same search endpoint the assistant uses before loading a full skill.</p>
+              </div>
+              <button className="btn btn-secondary btn-sm" onClick={runTester} disabled={testing || !testerQuery.trim()}>
+                {testing ? 'matching...' : 'test'}
+              </button>
+            </div>
+            <textarea
+              className="skill-test-textarea w-full min-h-[88px]"
+              value={testerQuery}
+              onChange={e => setTesterQuery(e.target.value)}
+              placeholder="Investigate why checkout is failing in shop repo"
+            />
+            {testerResult?.matches?.length > 0 && (
+              <div className="mt-3 space-y-2">
+                {testerResult.matches.map((match: any) => (
+                  <div key={match.id ?? match.name} className="rounded-md border border-app p-3">
+                    <div className="flex items-center justify-between gap-3">
+                      <strong className="text-sm text-theme-primary">{match.displayName ?? match.name}</strong>
+                      <span className="mono text-xs text-theme-secondary">score {match.score}</span>
+                    </div>
+                    <p className="text-xs text-theme-secondary mt-1">{match.description}</p>
+                    {match.matched?.length > 0 && (
+                      <div className="lib-workflow-meta mt-2">
+                        {match.matched.slice(0, 5).map((m: string) => <span key={m}>{m}</span>)}
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
       </div>
     </div>
   );
