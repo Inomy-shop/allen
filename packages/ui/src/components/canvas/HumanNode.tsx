@@ -3,8 +3,8 @@ import { User } from 'lucide-react';
 
 export default function HumanNode({ data, selected }: NodeProps) {
   return (
-    <div className={`px-4 py-3 rounded-lg border-2 bg-surface-100/90 backdrop-blur-sm w-[280px] transition-all
-      ${selected ? 'border-accent-orange ring-2 ring-accent-orange/30' : 'border-accent-orange/30 hover:border-accent-orange/50'}
+    <div className={`px-4 py-3 rounded-lg border-2 bg-accent-orange/10 dark:bg-accent-orange/15 backdrop-blur-sm shadow-sm w-[280px] transition-all
+      ${selected ? 'border-accent-orange ring-2 ring-accent-orange/30' : 'border-accent-orange/60 hover:border-accent-orange'}
     `}>
       <Handle type="target" position={Position.Top} id="top" className="!bg-accent-orange !w-2.5 !h-2.5 !border-surface" />
       <Handle type="target" position={Position.Right} id="right" className="!bg-accent-yellow !w-2 !h-2 !border-surface" />
@@ -13,12 +13,12 @@ export default function HumanNode({ data, selected }: NodeProps) {
       <div className="flex items-center gap-2 min-w-0">
         <User className="w-4 h-4 text-accent-orange shrink-0" />
         <div className="min-w-0 flex-1">
-          <div className="text-sm font-label font-medium text-gray-100 truncate">{(data as any).label}</div>
-          <div className="text-[10px] text-accent-orange/70 font-mono uppercase truncate">human input</div>
+          <div className="text-sm font-label font-semibold text-theme-primary truncate">{(data as any).label}</div>
+          <div className="text-[10px] text-accent-orange font-mono uppercase truncate">human input</div>
         </div>
       </div>
       {(data as any).fields?.length > 0 && (
-        <div className="mt-1.5 text-[9px] text-accent-orange/50 font-mono">
+        <div className="mt-1.5 text-[10px] text-accent-orange font-mono">
           {(data as any).fields.length} field{(data as any).fields.length > 1 ? 's' : ''}
         </div>
       )}
