@@ -3,13 +3,15 @@ import { useParams, useNavigate, useBlocker } from 'react-router-dom';
 import yaml from 'js-yaml';
 import type { Node, Edge } from '@xyflow/react';
 import {
-  Save, CheckCircle, Play, Eye, Code2, ArrowLeft, AlertTriangle, XCircle, X, ChevronDown,
+  Save, CheckCircle, Play, Eye, Code2, ArrowLeft, AlertTriangle, XCircle, X, ChevronDown, Trash2,
 } from 'lucide-react';
 import { workflows as wfApi } from '../services/api';
 import Canvas from '../components/canvas/Canvas';
 import YamlEditor from '../components/editor/YamlEditor';
 import MermaidPreview from '../components/editor/MermaidPreview';
 import WorkflowRunDialog from '../components/workflow/WorkflowRunDialog';
+import DeleteConfirmDialog from '../components/common/DeleteConfirmDialog';
+import { useToast } from '../components/common/Toast';
 import { yamlToReactFlow } from '../lib/yaml-to-reactflow';
 import { reactFlowToYaml } from '../lib/reactflow-to-yaml';
 
@@ -18,6 +20,7 @@ type Mode = 'visual' | 'yaml';
 export default function WorkflowBuilderPage() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
+  const toast = useToast();
   const isNew = !id;
 
   const [mode, setMode] = useState<Mode>('visual');
@@ -30,6 +33,8 @@ export default function WorkflowBuilderPage() {
   const [loading, setLoading] = useState(!!id);
   const [dirty, setDirty] = useState(false);
   const [showValidation, setShowValidation] = useState(false);
+  const [confirmDelete, setConfirmDelete] = useState(false);
+  const [deleting, setDeleting] = useState(false);
   const savedYamlRef = useRef('');
 
   // Block navigation when there are unsaved changes
@@ -186,6 +191,22 @@ export default function WorkflowBuilderPage() {
     setRunDialogOpen(true);
   }, [id, dirty]);
 
+  const handleDelete = useCallback(async () => {
+    if (!id) return;
+    setDeleting(true);
+    try {
+      await wfApi.delete(id);
+      toast.success(`Workflow "${workflowMeta.name ?? id}" deleted`);
+      setDirty(false);
+      setConfirmDelete(false);
+      navigate('/workflows');
+    } catch (e: any) {
+      toast.error(e?.message || 'Failed to delete workflow');
+    } finally {
+      setDeleting(false);
+    }
+  }, [id, workflowMeta.name, navigate, toast]);
+
   if (loading) {
     return <div className="flex items-center justify-center h-full text-theme-muted font-mono text-sm">LOADING...</div>;
   }
@@ -302,6 +323,14 @@ export default function WorkflowBuilderPage() {
           >
             <Play className="w-3.5 h-3.5" /> Run
           </button>
+          <button
+            onClick={() => setConfirmDelete(true)}
+            disabled={isNew || deleting}
+            title={isNew ? 'Save the workflow before deleting' : 'Delete workflow'}
+            className="btn btn-ghost btn-sm hover:text-accent-red"
+          >
+            <Trash2 className="w-3.5 h-3.5" /> Delete
+          </button>
         </div>
       </header>
 
@@ -351,6 +380,14 @@ export default function WorkflowBuilderPage() {
           }}
         />
       )}
+
+      <DeleteConfirmDialog
+        open={confirmDelete}
+        resourceType="workflow"
+        resourceName={workflowMeta?.name ?? ''}
+        onConfirm={handleDelete}
+        onCancel={() => setConfirmDelete(false)}
+      />
     </div>
   );
 }

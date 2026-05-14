@@ -1008,7 +1008,7 @@ function LibraryWorkflowsPane({
                   <span>v{wf.version ?? 1}</span>
                   <span>{edgeCount} edges</span>
                   <span>{inputKeys.length > 0 ? `${inputKeys.length} inputs` : 'no inputs'}</span>
-                  {(wf.tags ?? []).slice(0, 2).map((tag: string) => <span key={tag}>{tag}</span>)}
+                  {(Array.isArray(wf.tags) ? wf.tags : []).slice(0, 2).map((tag: string) => <span key={tag}>{tag}</span>)}
                 </span>
               </span>
               <span className="lib-chip"><Layers className="h-3 w-3" /> {nodeCount} nodes</span>

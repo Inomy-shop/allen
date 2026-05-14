@@ -1,0 +1,1158 @@
+name: prd-tdd-design-by-severity
+description: >
+  Graduated PRD+TDD design workflow that classifies the request as small,
+  medium, or large and routes through a proportionate design pipeline.
+
+  Routing by severity:
+    small  → simple_design_and_tdd → validator
+             (one-pass combined PRD+TDD; ~3 LLM calls)
+    medium → 2-angle PRD proposals → prd_finalizer (self-critique)
+             → 2-angle TDD proposals → tdd_finalizer (self-critique)
+             → validator
+    large  → 3-angle PRD proposals → prd_finalizer (adversarial self-critique)
+             → 3-angle TDD proposals → tdd_finalizer (adversarial self-critique)
+             → optional TDD→PRD revision loop (max 1)
+             → validator
+
+  Shared infrastructure for every lane:
+    - codebase_grounding runs FIRST and is required reading for every drafter
+    - codebase_grounding produces the survey AND picks severity in one LLM call (with severity_classification_human fallback when severity is invalid)
+    - prd_human_clarification (product audience) / tdd_human_clarification
+      (engineering+security audience) fire only when finalizer is blocked
+    - validator_failure_human handles ready_for_implementation == false
+    - design_escalation_review catches retry exhaustion (abandon /
+      retry_with_feedback / force_continue)
+
+  Artifact-first: every drafter saves a full markdown artifact and emits
+  only its publicUrl + small routing primitives. Finalizers WebFetch the
+  upstream artifacts when they need full content — prompts stay small.
+
+version: 1
+
+context:
+  concurrency: 4
+
+input:
+  requirement:
+    type: string
+    required: true
+    widget: textarea
+    label: Requirement
+    description: Raw product or engineering request to turn into a PRD + TDD ready for implementation.
+    placeholder: "e.g. Add a 7-day usage-history view to the user dashboard, with weekly CSV export and per-day drill-down."
+  repo_path:
+    type: string
+    required: true
+    widget: repo_picker
+    label: Target repo
+    description: Required. Codebase to ground the design in. The codebase_grounding node surveys this repo first; every drafter must WebFetch the survey before drafting.
+  product_context:
+    type: string
+    required: false
+    widget: textarea
+    label: Product context
+    description: Optional business, user, domain, and constraint context.
+  size_override:
+    type: string
+    required: false
+    widget: select
+    label: Size override
+    description: "Optional manual override of the triage classification. Leave as 'auto' to let triage decide."
+    options: [auto, small, medium, large]
+
+nodes:
+  # ── Shared first stage: ground in the repo, classify the request ───────
+  codebase_grounding:
+    agent: codebase-navigator
+    prompt: |
+      Survey the repository at {{repo_path}} for context relevant to:
+
+      REQUIREMENT:
+      {{requirement}}
+
+      PRODUCT CONTEXT:
+      {{product_context}}
+
+      Produce a focused survey that downstream drafters will read before
+      writing any PRD or TDD content. Cover:
+
+        - Affected modules / directories most likely involved
+        - Existing patterns and conventions in those modules
+          (naming, layering, framework choices, test style)
+        - Prior PRDs / ADRs / design docs (search docs/, design/, .adr/,
+          docs/decisions/, anything markdown)
+        - Recent PRs that touch the same area (titles + short summary)
+        - Stack: languages, frameworks, build/test commands, runtime
+        - Hard constraints visible from the code (DB schema, API contracts,
+          third-party limits, feature-flag config)
+
+      ALSO classify request severity in the SAME response — no second
+      LLM call needed. Severity drives downstream lane selection:
+
+        - small  : trivial / single-file / copy / null-check / one-line
+                   bug-shaped request. No new schema, no new API, no
+                   cross-subsystem concerns. Can be specced + designed
+                   in one pass.
+        - medium : single subsystem, contained blast radius. May need a
+                   couple of file changes and one new endpoint/schema
+                   addition. Two PRD angles + two TDD angles cover it.
+        - large  : cross-subsystem, regression risk, security/privacy
+                   sensitive, data migration, third-party contract, or
+                   unclear root design. Needs full 3-angle PRD + TDD,
+                   adversarial self-critique, and a TDD→PRD revision
+                   loop.
+
+      SIZE OVERRIDE: {{size_override}}
+      If size_override is one of small/medium/large, honor it verbatim
+      (set override_applied=true). Otherwise classify from the survey
+      you just produced + the requirement.
+
+      ARTIFACT + OUTPUT CONTRACT:
+      Save the full survey as a markdown artifact:
+        allen_save_artifact("grounding/00-codebase-survey.md", <markdown>, content_type="markdown", overwrite=true)
+      Copy the returned publicUrl to JSON as `codebase_grounding_artifact_url`.
+
+      End with a fenced JSON block containing EXACTLY:
+
+      ```json
+      {
+        "codebase_grounding_artifact_url": "<publicUrl>",
+        "affected_modules_index": ["path/one", "path/two"],
+        "repo_stack_summary": "one-line stack summary",
+        "prior_design_doc_urls": ["/path/to/doc.md"],
+        "severity": "small | medium | large",
+        "triage_rationale": "one-paragraph explanation of the severity choice",
+        "override_applied": false
+      }
+      ```
+    outputs:
+      codebase_grounding_artifact_url: "Public URL of the full codebase survey markdown. Every downstream drafter must WebFetch this."
+      affected_modules_index: "Short array of repo paths most likely involved — surfaced to downstream drafters for grounding."
+      repo_stack_summary: "One-line stack summary (e.g., 'node/express/mongo/jest')."
+      prior_design_doc_urls: "Array of in-repo design doc paths found during the survey. May be empty."
+      severity: "small | medium | large — drives downstream lane selection."
+      triage_rationale: "One-paragraph rationale for the chosen severity (or for honoring the override)."
+      override_applied: "Boolean — true if size_override was honored verbatim."
+
+  # ── Fallback gate when codebase_grounding emits an invalid severity ────
+  severity_classification_human:
+    type: human
+    fields:
+      - name: severity
+        label: "Pick a severity (triage did not emit a valid value)"
+        type: select
+        options: [small, medium, large]
+        required: true
+    outputs:
+      severity: "small | medium | large — manually classified by human."
+    prompt: |
+      ⚠️ Triage did not return a valid severity classification.
+      Pick one yourself based on the requirement and codebase survey.
+
+      REQUIREMENT:
+      {{requirement}}
+
+      📄 CODEBASE GROUNDING:
+      {{codebase_grounding_artifact_url}}
+
+      Severity guide:
+        - small  : trivial / single-file / one-pass design is enough.
+        - medium : single subsystem, contained blast radius.
+        - large  : cross-subsystem, regression risk, security-sensitive,
+                   or needs PRD↔TDD iteration.
+
+  # ── SMALL lane: one combined design pass ───────────────────────────────
+  simple_design_and_tdd:
+    agent: prd-creator
+    resume_on_retry: true
+    prompt: |
+      Produce a combined PRD + TDD for a SMALL request in one pass.
+      Skip the multi-angle proposals — this is for trivial / single-file /
+      one-line-change scope.
+
+      REQUIREMENT:
+      {{requirement}}
+
+      PRODUCT CONTEXT:
+      {{product_context}}
+
+      📄 CODEBASE GROUNDING (REQUIRED reading — WebFetch first):
+      {{codebase_grounding_artifact_url}}
+
+      AFFECTED MODULES: {{affected_modules_index}}
+      REPO STACK:       {{repo_stack_summary}}
+
+      Produce a single artifact that contains BOTH:
+        # Lightweight PRD
+          - Problem statement (one line)
+          - Functional requirement(s) with stable id(s) REQ-001…
+          - Acceptance criteria with stable id(s) AC-001… (each tied to a REQ id)
+          - Edge cases / non-goals
+        # Lightweight TDD
+          - File(s) to touch with the expected change
+          - Any test changes
+          - Risks (if any)
+          - Implementation steps (numbered)
+
+      SELF-CRITIQUE before saving:
+      Re-read your draft once and ask:
+        - Would an implementer need to guess anything?
+        - Are the acceptance criteria testable?
+        - Is the scope still small (no creep into new modules/APIs)?
+        - If scope creep, set scope_creep_detected=true and recommend
+          re-running through medium severity.
+
+      ARTIFACT + OUTPUT CONTRACT:
+      Save the combined design as:
+        allen_save_artifact("design/small/01-combined-prd-tdd.md", <markdown>, content_type="markdown", overwrite=true)
+      Copy publicUrl to JSON as `simple_design_artifact_url`.
+
+      End with a fenced JSON block containing EXACTLY:
+
+      ```json
+      {
+        "simple_design_artifact_url": "<publicUrl>",
+        "requirements_index": ["REQ-001"],
+        "scope_creep_detected": false
+      }
+      ```
+
+      {{#if retry_context}}
+      RETRY FEEDBACK:
+      {{retry_context}}
+      {{/if}}
+    outputs:
+      simple_design_artifact_url: "Public URL of the combined small-lane PRD+TDD."
+      requirements_index: "Short array of REQ-* ids covered by the combined design."
+      scope_creep_detected: "Boolean — true if drafter found the scope is actually larger than small."
+
+  # ── PRD proposal nodes (MEDIUM and LARGE share these) ──────────────────
+  prd_proposal_user_flow:
+    agent: requirements-analyst
+    prompt: |
+      Draft a PRD proposal from the USER-FLOW and ACCEPTANCE-CRITERIA angle.
+
+      REQUIREMENT:
+      {{requirement}}
+
+      PRODUCT CONTEXT:
+      {{product_context}}
+
+      📄 CODEBASE GROUNDING (REQUIRED reading — WebFetch first):
+      {{codebase_grounding_artifact_url}}
+
+      AFFECTED MODULES: {{affected_modules_index}}
+
+      Focus only on this angle:
+        - Target users / personas
+        - User journeys and user flows
+        - Functional requirements from the user perspective
+        - Acceptance criteria written as testable user outcomes
+        - Edge cases and non-goals
+
+      Required output discipline:
+        - Use stable ids: REQ-UF-001, AC-UF-001, EC-UF-001.
+        - Every acceptance criterion must reference a requirement id.
+        - Do not make technical architecture decisions.
+        - Cite specific UI/flow patterns from the grounding survey where they exist.
+
+      Save the full draft:
+        allen_save_artifact("prd/drafts/02-user-flow-prd-proposal.md", <markdown>, content_type="markdown", overwrite=true)
+      Copy publicUrl to JSON as `prd_user_flow_artifact_url`.
+
+      End with a fenced JSON block:
+
+      ```json
+      {
+        "prd_user_flow_artifact_url": "<publicUrl>",
+        "prd_user_flow_summary": "one-line synopsis of this proposal's stance"
+      }
+      ```
+    outputs:
+      prd_user_flow_artifact_url: "Public URL of the full user-flow PRD proposal."
+      prd_user_flow_summary: "One-line summary of this proposal — surfaced to the finalizer for quick scan."
+
+  prd_proposal_technical_feasibility:
+    agent: solution-architect
+    prompt: |
+      Draft a PRD proposal from the TECHNICAL-FEASIBILITY and NON-FUNCTIONAL-REQUIREMENTS angle.
+
+      REQUIREMENT:
+      {{requirement}}
+
+      PRODUCT CONTEXT:
+      {{product_context}}
+
+      📄 CODEBASE GROUNDING (REQUIRED reading — WebFetch first):
+      {{codebase_grounding_artifact_url}}
+
+      AFFECTED MODULES: {{affected_modules_index}}
+      REPO STACK:       {{repo_stack_summary}}
+
+      Focus only on this angle:
+        - Technical constraints and dependencies derived from the codebase
+        - Non-functional requirements: performance, reliability, security, scalability, operability
+        - Implementation risks and phased delivery implications
+        - Acceptance criteria that make technical quality measurable
+
+      Required output discipline:
+        - Use stable ids: REQ-TF-001, AC-TF-001, NFR-TF-001.
+        - Every acceptance criterion references a requirement or NFR id.
+        - Stay technical — do not duplicate user-flow or business-scope angles.
+        - Cite specific files/services/contracts from the grounding survey.
+
+      Save the full draft:
+        allen_save_artifact("prd/drafts/03-technical-feasibility-prd-proposal.md", <markdown>, content_type="markdown", overwrite=true)
+      Copy publicUrl to JSON as `prd_technical_feasibility_artifact_url`.
+
+      End with a fenced JSON block:
+
+      ```json
+      {
+        "prd_technical_feasibility_artifact_url": "<publicUrl>",
+        "prd_technical_feasibility_summary": "one-line synopsis"
+      }
+      ```
+    outputs:
+      prd_technical_feasibility_artifact_url: "Public URL of the full technical-feasibility PRD proposal."
+      prd_technical_feasibility_summary: "One-line summary."
+
+  prd_proposal_business_scope:
+    agent: product-manager
+    prompt: |
+      Draft a PRD proposal from the BUSINESS-SCOPE and SUCCESS-METRIC angle.
+      (LARGE severity only — this proposal does not run for small or medium.)
+
+      REQUIREMENT:
+      {{requirement}}
+
+      PRODUCT CONTEXT:
+      {{product_context}}
+
+      📄 CODEBASE GROUNDING (REQUIRED reading — WebFetch first):
+      {{codebase_grounding_artifact_url}}
+
+      Focus only on this angle:
+        - Problem statement and business goal
+        - Scope, non-goals, and rollout expectations
+        - Success metrics / KPIs
+        - Business risks and assumptions
+        - Acceptance criteria tied to business outcomes where applicable
+
+      Required output discipline:
+        - Use stable ids: REQ-BS-001, AC-BS-001.
+        - Every acceptance criterion references a requirement id.
+        - Stay business-focused — do not duplicate the technical-feasibility angle.
+
+      Save the full draft:
+        allen_save_artifact("prd/drafts/04-business-scope-prd-proposal.md", <markdown>, content_type="markdown", overwrite=true)
+      Copy publicUrl to JSON as `prd_business_scope_artifact_url`.
+
+      End with a fenced JSON block:
+
+      ```json
+      {
+        "prd_business_scope_artifact_url": "<publicUrl>",
+        "prd_business_scope_summary": "one-line synopsis"
+      }
+      ```
+    outputs:
+      prd_business_scope_artifact_url: "Public URL of the full business-scope PRD proposal."
+      prd_business_scope_summary: "One-line summary."
+
+  # ── PRD finalizer (shared by MEDIUM and LARGE; depth varies by severity)
+  prd_finalizer:
+    agent: prd-creator
+    resume_on_retry: true
+    prompt: |
+      You are the final PRD creator and PRD gatekeeper. Consolidate the
+      upstream proposals into a single PRD, perform a SELF-CRITIQUE pass,
+      decide whether human clarification is required, and produce the
+      final PRD only when the requirement is unambiguous.
+
+      ORIGINAL REQUIREMENT:
+      {{requirement}}
+
+      PRODUCT CONTEXT:
+      {{product_context}}
+
+      SEVERITY: {{severity}} (small never reaches this node)
+
+      📄 CODEBASE GROUNDING:
+      {{codebase_grounding_artifact_url}}
+
+      📄 PRD PROPOSAL ARTIFACTS (WebFetch each before consolidating):
+        1. USER FLOW           : {{prd_user_flow_artifact_url}}
+            summary: {{prd_user_flow_summary}}
+        2. TECHNICAL FEASIBILITY : {{prd_technical_feasibility_artifact_url}}
+            summary: {{prd_technical_feasibility_summary}}
+        {{#if prd_business_scope_artifact_url}}
+        3. BUSINESS SCOPE      : {{prd_business_scope_artifact_url}}
+            summary: {{prd_business_scope_summary}}
+        {{/if}}
+
+      The proposal bodies are NOT inlined. WebFetch each URL above before
+      consolidating.
+
+      HUMAN PRD CLARIFICATION ANSWERS (if a prior round happened):
+      {{prd_clarification_answers}}
+
+      EXTRA PRD NOTES:
+      {{prd_extra_notes}}
+
+      Step 1 — Coverage and gap check:
+        - Check every original requirement statement against all proposals.
+        - Identify missing behavior, contradictions, vague scope,
+          untestable acceptance criteria, open product decisions.
+        - Ask human clarification ONLY if the final PRD would otherwise
+          require guessing. Do not ask cosmetic questions.
+
+      Step 2 — Self-critique pass (intensity scales with severity):
+        - For severity == 'medium': lightly stress-test the consolidated
+          PRD against obvious edge cases, missing AC coverage, untestable
+          requirements.
+        - For severity == 'large': adversarial self-critique — pretend
+          you are a hostile reviewer. Specifically check for:
+            * security/privacy gaps
+            * silent failure modes
+            * rollback / migration concerns
+            * accessibility and operability blind spots
+            * unstated assumptions about user behavior
+          Flag everything that would block a clean implementation.
+
+      Step 3a — If clarification is required:
+        - Set prd_needs_clarification=true.
+        - Output up to 5 focused prd_clarification_questions.
+        - Save the decision report:
+          allen_save_artifact("prd/finalizer/05-prd-finalizer-decision.md", <markdown>, content_type="markdown", overwrite=true)
+        - Leave final_prd_artifact_url empty.
+
+      Step 3b — If no clarification is required:
+        - Set prd_needs_clarification=false.
+        - Generate the final consolidated PRD with sections:
+          Overview · Goals & non-goals · Target users · User flows ·
+          Functional requirements (REQ-001…) · Acceptance criteria
+          (AC-001…, each mapped to a REQ id) · Edge cases ·
+          Non-functional requirements (NFR-001…) · Success metrics ·
+          Risks, assumptions, open questions · Rollout plan
+        - Save the decision report (same filename as 3a, overwrite=true).
+        - Save the final PRD:
+          allen_save_artifact("prd/final/06-final-prd.md", <markdown>, content_type="markdown", overwrite=true)
+
+      End with a fenced JSON block containing EXACTLY:
+
+      ```json
+      {
+        "prd_needs_clarification": false,
+        "prd_clarification_questions": [],
+        "prd_finalizer_gaps": [],
+        "prd_finalizer_conflicts": [],
+        "prd_self_critique_findings": [],
+        "prd_finalizer_decision_artifact_url": "<publicUrl>",
+        "final_prd_artifact_url": "<publicUrl or empty>",
+        "final_prd_requirements_index": ["REQ-001"]
+      }
+      ```
+
+      {{#if retry_context}}
+      RETRY FEEDBACK:
+      {{retry_context}}
+      {{/if}}
+    outputs:
+      prd_needs_clarification: "Boolean — true when human clarification is required before final PRD generation."
+      prd_clarification_questions: "Array of clarification questions; empty when not needed."
+      prd_finalizer_gaps: "PRD gaps found during consolidation."
+      prd_finalizer_conflicts: "Conflicts between proposals."
+      prd_self_critique_findings: "Issues uncovered by the self-critique pass (heavier list for large severity)."
+      prd_finalizer_decision_artifact_url: "Public URL of the finalizer decision report."
+      final_prd_artifact_url: "Public URL of the final PRD; empty until clarification is resolved."
+      final_prd_requirements_index: "Array of final PRD REQ ids — used by TDD proposals."
+
+  prd_human_clarification:
+    type: human
+    fields:
+      - name: prd_clarification_answers
+        label: "Answers to PRD clarification questions (product audience)"
+        type: textarea
+        required: true
+      - name: prd_extra_notes
+        label: "Extra PRD notes"
+        type: textarea
+        required: false
+    outputs:
+      prd_clarification_answers: "Human answers to the PRD finalizer questions."
+      prd_extra_notes: "Optional additional PRD guidance."
+    prompt: |
+      The PRD finalizer needs product clarification before it can produce
+      an implementation-ready PRD. Audience: product / business owner.
+
+      ORIGINAL REQUIREMENT:
+      {{requirement}}
+
+      📄 PRD FINALIZER DECISION REPORT (read this for full context):
+      {{prd_finalizer_decision_artifact_url}}
+
+      PRD QUESTIONS:
+      {{prd_clarification_questions}}
+
+      PRD GAPS:
+      {{prd_finalizer_gaps}}
+
+      PRD CONFLICTS:
+      {{prd_finalizer_conflicts}}
+
+      Please answer each question in order. Add any extra notes for the
+      finalizer in the second field.
+
+  # ── TDD proposal nodes ─────────────────────────────────────────────────
+  tdd_proposal_data_schema:
+    agent: technical-designer
+    prompt: |
+      Draft a TDD proposal from the DATA-FLOW and SCHEMA angle.
+
+      📄 FINAL PRD (WebFetch for full PRD body):
+      {{final_prd_artifact_url}}
+
+      REQUIREMENTS INDEX: {{final_prd_requirements_index}}
+
+      📄 CODEBASE GROUNDING (REQUIRED reading):
+      {{codebase_grounding_artifact_url}}
+
+      AFFECTED MODULES: {{affected_modules_index}}
+      REPO STACK:       {{repo_stack_summary}}
+
+      Focus only on this angle:
+        - End-to-end data flow
+        - Producers, consumers, transport, persistence, state transitions
+        - Tables, collections, indexes, fields, constraints, enums, DTOs
+        - Migrations, backfills, validation, retention
+        - Per-REQ/AC/NFR coverage mapping
+
+      Save the full draft:
+        allen_save_artifact("tdd/drafts/07-data-schema-tdd-proposal.md", <markdown>, content_type="markdown", overwrite=true)
+      Copy publicUrl to JSON as `tdd_data_schema_artifact_url`.
+
+      End with a fenced JSON block:
+
+      ```json
+      {
+        "tdd_data_schema_artifact_url": "<publicUrl>",
+        "tdd_data_schema_summary": "one-line synopsis"
+      }
+      ```
+    outputs:
+      tdd_data_schema_artifact_url: "Public URL of the data-schema TDD proposal."
+      tdd_data_schema_summary: "One-line summary."
+
+  tdd_proposal_system_design:
+    agent: solution-architect
+    prompt: |
+      Draft a TDD proposal from the SYSTEM-DESIGN / API / SECURITY / OPS angle.
+
+      📄 FINAL PRD (WebFetch for full PRD body):
+      {{final_prd_artifact_url}}
+
+      REQUIREMENTS INDEX: {{final_prd_requirements_index}}
+
+      📄 CODEBASE GROUNDING (REQUIRED reading):
+      {{codebase_grounding_artifact_url}}
+
+      AFFECTED MODULES: {{affected_modules_index}}
+      REPO STACK:       {{repo_stack_summary}}
+
+      Focus only on this angle:
+        - Component / service decomposition
+        - APIs, interfaces, contracts, sequence diagrams
+        - Deployment topology, scaling, reliability, security, observability
+        - Tradeoffs and alternatives considered
+        - Per-REQ/AC/NFR coverage mapping
+
+      Save the full draft:
+        allen_save_artifact("tdd/drafts/08-system-design-tdd-proposal.md", <markdown>, content_type="markdown", overwrite=true)
+      Copy publicUrl to JSON as `tdd_system_design_artifact_url`.
+
+      End with a fenced JSON block:
+
+      ```json
+      {
+        "tdd_system_design_artifact_url": "<publicUrl>",
+        "tdd_system_design_summary": "one-line synopsis"
+      }
+      ```
+    outputs:
+      tdd_system_design_artifact_url: "Public URL of the system-design TDD proposal."
+      tdd_system_design_summary: "One-line summary."
+
+  tdd_proposal_files_impact:
+    agent: technical-designer
+    prompt: |
+      Draft a TDD proposal from the FILE-LEVEL IMPACT and IMPLEMENTATION-PLAN angle.
+      (LARGE severity only — this proposal does not run for medium.)
+
+      📄 FINAL PRD (WebFetch for full PRD body):
+      {{final_prd_artifact_url}}
+
+      REQUIREMENTS INDEX: {{final_prd_requirements_index}}
+
+      📄 CODEBASE GROUNDING (REQUIRED reading):
+      {{codebase_grounding_artifact_url}}
+
+      AFFECTED MODULES: {{affected_modules_index}}
+      REPO STACK:       {{repo_stack_summary}}
+
+      Focus only on this angle:
+        - Files to add, modify, or delete
+        - For each file: purpose, expected change, key classes/functions, test impact
+        - Runtime, deployment, config, migration, security, ops impact
+        - Per-REQ/AC/NFR coverage mapping
+
+      Save the full draft:
+        allen_save_artifact("tdd/drafts/09-files-impact-tdd-proposal.md", <markdown>, content_type="markdown", overwrite=true)
+      Copy publicUrl to JSON as `tdd_files_impact_artifact_url`.
+
+      End with a fenced JSON block:
+
+      ```json
+      {
+        "tdd_files_impact_artifact_url": "<publicUrl>",
+        "tdd_files_impact_summary": "one-line synopsis"
+      }
+      ```
+    outputs:
+      tdd_files_impact_artifact_url: "Public URL of the files-impact TDD proposal."
+      tdd_files_impact_summary: "One-line summary."
+
+  # ── TDD finalizer (shared by MEDIUM and LARGE) ─────────────────────────
+  tdd_finalizer:
+    agent: technical-designer
+    resume_on_retry: true
+    prompt: |
+      You are the final TDD generator and TDD gatekeeper. Consolidate the
+      upstream proposals into a single TDD, perform a SELF-CRITIQUE pass,
+      decide whether human clarification is required, and decide whether
+      the TDD discovery requires PRD revision.
+
+      📄 FINAL PRD ARTIFACT:
+      {{final_prd_artifact_url}}
+
+      REQUIREMENTS INDEX: {{final_prd_requirements_index}}
+
+      SEVERITY: {{severity}}
+
+      📄 CODEBASE GROUNDING:
+      {{codebase_grounding_artifact_url}}
+
+      📄 TDD PROPOSAL ARTIFACTS (WebFetch each):
+        1. DATA AND SCHEMA  : {{tdd_data_schema_artifact_url}}
+            summary: {{tdd_data_schema_summary}}
+        2. SYSTEM DESIGN    : {{tdd_system_design_artifact_url}}
+            summary: {{tdd_system_design_summary}}
+        {{#if tdd_files_impact_artifact_url}}
+        3. FILES AND IMPACT : {{tdd_files_impact_artifact_url}}
+            summary: {{tdd_files_impact_summary}}
+        {{/if}}
+
+      HUMAN TDD CLARIFICATION ANSWERS (if any):
+      {{tdd_clarification_answers}}
+
+      EXTRA TDD NOTES:
+      {{tdd_extra_notes}}
+
+      Step 1 — Coverage and gap check:
+        - Map every final PRD requirement + AC to TDD coverage.
+        - Identify missing data flow / schema / file targets / API
+          contracts / security / observability / rollout / test strategy.
+
+      Step 2 — Self-critique pass (intensity scales with severity):
+        - For 'medium': stress-test against obvious edge cases, untested
+          paths, rollback risks.
+        - For 'large': adversarial self-critique covering:
+            * security regressions
+            * performance / load implications
+            * data migration & rollback
+            * blast radius and operability
+            * blast on existing contracts / consumers
+          Flag everything that would block implementation.
+
+      Step 3 — PRD revision check (LARGE only):
+        - If during TDD design you discover the PRD must change for the
+          design to make sense (e.g. requested feature impossible with
+          existing schema, rate limits force UX change, security requires
+          extra user step), set `prd_revision_needed=true` and explain in
+          `prd_revision_reason`.
+        - This routes back to prd_finalizer ONCE (max 1 revision).
+        - Do not use this for cosmetic disagreements — only when
+          implementation under the current PRD would violate intent.
+
+      Step 4a — If clarification is required:
+        - Set tdd_needs_clarification=true.
+        - Up to 5 focused tdd_clarification_questions.
+        - Save the decision report:
+          allen_save_artifact("tdd/finalizer/10-tdd-finalizer-decision.md", <markdown>, content_type="markdown", overwrite=true)
+        - Leave final_tdd_artifact_url empty.
+
+      Step 4b — If no clarification AND no PRD revision needed:
+        - Set tdd_needs_clarification=false.
+        - Generate the final consolidated TDD with sections:
+          Executive summary · Architecture overview · Data flow ·
+          Schema / data model · File-level changes and impact ·
+          APIs / contracts / system design · Security, observability,
+          reliability, rollout · Test strategy · Requirement-to-design
+          coverage matrix (every REQ/AC/NFR) · Risks and mitigations
+        - Save the decision report.
+        - Save the final TDD:
+          allen_save_artifact("tdd/final/11-final-tdd.md", <markdown>, content_type="markdown", overwrite=true)
+
+      End with a fenced JSON block containing EXACTLY:
+
+      ```json
+      {
+        "tdd_needs_clarification": false,
+        "tdd_clarification_questions": [],
+        "tdd_finalizer_gaps": [],
+        "tdd_finalizer_conflicts": [],
+        "tdd_self_critique_findings": [],
+        "prd_revision_needed": false,
+        "prd_revision_reason": "",
+        "tdd_finalizer_decision_artifact_url": "<publicUrl>",
+        "final_tdd_artifact_url": "<publicUrl or empty>",
+        "final_tdd_coverage_matrix": {},
+        "final_tdd_uncovered_requirements": []
+      }
+      ```
+
+      {{#if retry_context}}
+      RETRY FEEDBACK:
+      {{retry_context}}
+      {{/if}}
+    outputs:
+      tdd_needs_clarification: "Boolean — true when human TDD clarification is required."
+      tdd_clarification_questions: "Array of TDD clarification questions; empty when not needed."
+      tdd_finalizer_gaps: "TDD gaps found during consolidation."
+      tdd_finalizer_conflicts: "Conflicts between TDD proposals."
+      tdd_self_critique_findings: "Issues uncovered by the self-critique pass."
+      prd_revision_needed: "Boolean (LARGE only) — true when TDD discovery requires PRD revision. Routes back to prd_finalizer once."
+      prd_revision_reason: "One-paragraph reason when prd_revision_needed=true."
+      tdd_finalizer_decision_artifact_url: "Public URL of the TDD finalizer decision report."
+      final_tdd_artifact_url: "Public URL of the final TDD; empty until ready."
+      final_tdd_coverage_matrix: "Matrix mapping PRD requirements/AC to technical design coverage."
+      final_tdd_uncovered_requirements: "Requirement ids not fully covered."
+
+  tdd_human_clarification:
+    type: human
+    fields:
+      - name: tdd_clarification_answers
+        label: "Answers to TDD clarification questions (engineering / security audience)"
+        type: textarea
+        required: true
+      - name: tdd_extra_notes
+        label: "Extra TDD notes"
+        type: textarea
+        required: false
+    outputs:
+      tdd_clarification_answers: "Human answers to the TDD finalizer questions."
+      tdd_extra_notes: "Optional additional TDD guidance."
+    prompt: |
+      The TDD finalizer needs technical clarification. Audience: engineering / security owner.
+
+      📄 FINAL PRD:
+      {{final_prd_artifact_url}}
+
+      📄 TDD FINALIZER DECISION REPORT:
+      {{tdd_finalizer_decision_artifact_url}}
+
+      TDD QUESTIONS:
+      {{tdd_clarification_questions}}
+
+      TDD GAPS:
+      {{tdd_finalizer_gaps}}
+
+      TDD CONFLICTS:
+      {{tdd_finalizer_conflicts}}
+
+      Please answer each TDD question in order.
+
+  # ── Final readiness gate (all lanes converge here) ─────────────────────
+  implementation_readiness_validator:
+    agent: implementation-validator
+    resume_on_retry: true
+    prompt: |
+      Validate whether the design is ready to hand off to an implementation
+      agent. This is the blocking quality gate.
+
+      ORIGINAL REQUIREMENT:
+      {{requirement}}
+
+      SEVERITY: {{severity}}
+
+      📄 CODEBASE GROUNDING:
+      {{codebase_grounding_artifact_url}}
+
+      For SMALL severity (single combined artifact):
+      📄 COMBINED DESIGN: {{simple_design_artifact_url}}
+
+      For MEDIUM and LARGE severity:
+      📄 FINAL PRD:       {{final_prd_artifact_url}}
+      📄 FINAL TDD:       {{final_tdd_artifact_url}}
+      REQUIREMENTS INDEX: {{final_prd_requirements_index}}
+      COVERAGE MATRIX:    {{final_tdd_coverage_matrix}}
+      UNCOVERED REQS:     {{final_tdd_uncovered_requirements}}
+
+      WebFetch every artifact above before validating. The bodies are not
+      inlined.
+
+      Validate strictly:
+        1. Every original requirement appears in the PRD (or combined design).
+        2. Every PRD requirement has acceptance criteria.
+        3. Every requirement / AC has TDD coverage (or, for small lane,
+           is addressed in the combined artifact).
+        4. The TDD includes data flow, schema, file-level changes, APIs/
+           contracts, security, observability, rollout, test strategy
+           where applicable.
+        5. No implementation agent would need to guess product behavior,
+           schema decisions, API contracts, file targets, or acceptance
+           tests.
+        6. The codebase grounding survey is reflected in the file
+           targets and patterns chosen.
+
+      If anything is missing, set ready_for_implementation=false and
+      list exactly what blocks handoff.
+
+      Produce a handoff document with:
+        - Problem statement
+        - Readiness verdict
+        - Final PRD / TDD / combined-design artifact links
+        - Blocking issues (if any)
+        - Non-blocking risks (if any)
+        - Implementation-agent handoff prompt ready to dispatch
+
+      Save:
+        allen_save_artifact("handoff/12-implementation-readiness-handoff.md", <markdown>, content_type="markdown", overwrite=true)
+      Copy publicUrl to JSON as `implementation_readiness_handoff_artifact_url`.
+
+      End with a fenced JSON block containing EXACTLY:
+
+      ```json
+      {
+        "ready_for_implementation": true,
+        "implementation_readiness_verdict": "ready",
+        "implementation_readiness_blockers": [],
+        "implementation_readiness_risks": [],
+        "implementation_problem_statement": "…",
+        "implementation_final_prd_artifact_url": "<url or empty>",
+        "implementation_final_tdd_artifact_url": "<url or empty>",
+        "implementation_combined_design_artifact_url": "<url or empty>",
+        "implementation_agent_handoff_prompt": "…",
+        "implementation_readiness_handoff_artifact_url": "<publicUrl>"
+      }
+      ```
+
+      {{#if retry_context}}
+      RETRY FEEDBACK from a previous validator pass:
+      {{retry_context}}
+      {{/if}}
+    outputs:
+      ready_for_implementation: "Boolean readiness gate. Drives routing to END or to validator_failure_human."
+      implementation_readiness_verdict: "Concise validator verdict."
+      implementation_readiness_blockers: "Blocking issues that must be fixed before implementation."
+      implementation_readiness_risks: "Non-blocking risks for the implementation agent."
+      implementation_problem_statement: "Problem statement to pass to the implementation agent."
+      implementation_final_prd_artifact_url: "Final PRD artifact URL (medium/large) — empty for small lane."
+      implementation_final_tdd_artifact_url: "Final TDD artifact URL (medium/large) — empty for small lane."
+      implementation_combined_design_artifact_url: "Combined design artifact URL (small lane) — empty for medium/large."
+      implementation_agent_handoff_prompt: "Direct prompt payload for the implementation agent."
+      implementation_readiness_handoff_artifact_url: "Public URL of the validator handoff document."
+
+  # ── Validator-failure human gate ──────────────────────────────────────
+  validator_failure_human:
+    type: human
+    fields:
+      - name: validator_decision
+        label: "Validator says the design is NOT ready. What now?"
+        type: select
+        options: [retry_with_feedback, accept_as_is, abandon]
+        required: true
+      - name: validator_feedback
+        label: "Feedback (required for retry_with_feedback)"
+        type: textarea
+        required: false
+    outputs:
+      validator_decision: "retry_with_feedback | accept_as_is | abandon"
+      validator_feedback: "Free-text feedback passed to TDD finalizer on retry."
+    prompt: |
+      🔴 The readiness validator did NOT approve the design for implementation handoff.
+
+      ORIGINAL REQUIREMENT:
+      {{requirement}}
+
+      📄 VALIDATOR HANDOFF DOCUMENT (read for full blockers list):
+      {{implementation_readiness_handoff_artifact_url}}
+
+      VALIDATOR VERDICT:  {{implementation_readiness_verdict}}
+      BLOCKERS:           {{implementation_readiness_blockers}}
+      NON-BLOCKING RISKS: {{implementation_readiness_risks}}
+
+      📄 ARTIFACTS:
+        FINAL PRD:        {{final_prd_artifact_url}}
+        FINAL TDD:        {{final_tdd_artifact_url}}
+        COMBINED DESIGN:  {{simple_design_artifact_url}}
+
+      Your options:
+        retry_with_feedback → loop back to the TDD finalizer (or simple
+                              design node, for small lane) with your
+                              feedback in retry_context. One retry only.
+        accept_as_is        → mark the run successful despite blockers
+                              (you accept the implementation risk).
+        abandon             → end the run; artifacts so far are preserved.
+
+  # ── Escalation gate (catch-all for retry exhaustion) ──────────────────
+  design_escalation_review:
+    type: human
+    fields:
+      - name: escalation_decision
+        label: "Clarification retries exhausted. What now?"
+        type: select
+        options: [retry_with_feedback, force_continue, abandon]
+        required: true
+      - name: escalation_feedback
+        label: "Feedback or reason"
+        type: textarea
+        required: true
+    outputs:
+      escalation_decision: "retry_with_feedback | force_continue | abandon"
+      escalation_feedback: "Feedback that goes into retry_context on retry."
+    prompt: |
+      🔴 A clarification loop ran out of retries.
+
+      ORIGINAL REQUIREMENT:
+      {{requirement}}
+
+      WHICH LOOP EXHAUSTED:
+      {{__retry_exhausted_from}}
+
+      📄 ARTIFACTS SO FAR:
+        Codebase survey:        {{codebase_grounding_artifact_url}}
+        PRD finalizer decision: {{prd_finalizer_decision_artifact_url}}
+        Final PRD (may be empty): {{final_prd_artifact_url}}
+        TDD finalizer decision: {{tdd_finalizer_decision_artifact_url}}
+        Final TDD (may be empty): {{final_tdd_artifact_url}}
+
+      OPEN GAPS / CONFLICTS:
+        PRD gaps:      {{prd_finalizer_gaps}}
+        PRD conflicts: {{prd_finalizer_conflicts}}
+        TDD gaps:      {{tdd_finalizer_gaps}}
+        TDD conflicts: {{tdd_finalizer_conflicts}}
+
+      OUTSTANDING QUESTIONS:
+        PRD: {{prd_clarification_questions}}
+        TDD: {{tdd_clarification_questions}}
+
+      Options:
+        retry_with_feedback → loop back to the exhausted finalizer with
+                              your feedback. Retry counters reset.
+        force_continue      → skip remaining clarification and proceed.
+                              PRD-exhaust → run TDD proposals; TDD-exhaust
+                              → run validator.
+        abandon             → end the run; artifacts preserved.
+
+edges:
+  # ── Phase 1: ground + classify (single LLM call) ───────────────────────
+  - { from: START, to: codebase_grounding }
+
+  # Grounding → severity routing. Parallel fan-out for medium/large via
+  # `parallel: true` + array `to`. Engine.ts:762 requires this exact shape
+  # to actually run branches concurrently — separate edges would execute
+  # sequentially in a for-await loop.
+  - { from: codebase_grounding, to: simple_design_and_tdd,
+      condition: "severity == 'small'" }
+  - from: codebase_grounding
+    to: [prd_proposal_user_flow, prd_proposal_technical_feasibility]
+    parallel: true
+    condition: "severity == 'medium'"
+  - from: codebase_grounding
+    to: [prd_proposal_user_flow, prd_proposal_technical_feasibility, prd_proposal_business_scope]
+    parallel: true
+    condition: "severity == 'large'"
+  - { from: codebase_grounding, to: severity_classification_human,
+      condition: "severity != 'small' AND severity != 'medium' AND severity != 'large'" }
+
+  # Human fallback fan-out (same routing as grounding, also parallelized).
+  - { from: severity_classification_human, to: simple_design_and_tdd,
+      condition: "severity == 'small'" }
+  - from: severity_classification_human
+    to: [prd_proposal_user_flow, prd_proposal_technical_feasibility]
+    parallel: true
+    condition: "severity == 'medium'"
+  - from: severity_classification_human
+    to: [prd_proposal_user_flow, prd_proposal_technical_feasibility, prd_proposal_business_scope]
+    parallel: true
+    condition: "severity == 'large'"
+
+  # ── SMALL lane: combined design → validator ───────────────────────────
+  - { from: simple_design_and_tdd, to: implementation_readiness_validator }
+
+  # ── PRD finalizer fan-in (medium = 2 proposals, large = 3) ────────────
+  # Two separate join edges so the engine waits for the correct set per severity.
+  - from: [prd_proposal_user_flow, prd_proposal_technical_feasibility]
+    to: prd_finalizer
+    condition: "severity == 'medium'"
+  - from: [prd_proposal_user_flow, prd_proposal_technical_feasibility, prd_proposal_business_scope]
+    to: prd_finalizer
+    condition: "severity == 'large'"
+
+  # PRD finalizer outgoing. Clarification OR parallel fan-out to TDD
+  # proposals. Two parallel edges (medium = 2 proposals, large = 3) so
+  # each severity gets the right fan-out width.
+  - { from: prd_finalizer, to: prd_human_clarification,
+      condition: "prd_needs_clarification == true" }
+  - from: prd_finalizer
+    to: [tdd_proposal_data_schema, tdd_proposal_system_design]
+    parallel: true
+    condition: "prd_needs_clarification != true AND severity == 'medium'"
+  - from: prd_finalizer
+    to: [tdd_proposal_data_schema, tdd_proposal_system_design, tdd_proposal_files_impact]
+    parallel: true
+    condition: "prd_needs_clarification != true AND severity == 'large'"
+
+  # PRD clarification retry (max 2). Exhaustion fallback declared AFTER.
+  - from: prd_human_clarification
+    to: prd_finalizer
+    max_retries: 2
+    retry_context: |
+      The user answered the PRD clarification questions:
+      {{prd_clarification_answers}}
+
+      Extra PRD notes:
+      {{prd_extra_notes}}
+
+      Re-run the finalizer. If the answers resolve the ambiguity, emit
+      prd_needs_clarification=false. Ask follow-up only if still strictly blocked.
+  - { from: prd_human_clarification, to: design_escalation_review,
+      condition: "__retry_exhausted_from == 'prd_human_clarification'" }
+
+  # ── TDD finalizer fan-in (medium = 2 proposals, large = 3) ────────────
+  - from: [tdd_proposal_data_schema, tdd_proposal_system_design]
+    to: tdd_finalizer
+    condition: "severity == 'medium'"
+  - from: [tdd_proposal_data_schema, tdd_proposal_system_design, tdd_proposal_files_impact]
+    to: tdd_finalizer
+    condition: "severity == 'large'"
+
+  # TDD finalizer outgoing. Three branches:
+  #   (a) clarification needed → human
+  #   (b) PRD revision needed (LARGE only) → back to prd_finalizer (retry)
+  #   (c) all clear → validator
+  - { from: tdd_finalizer, to: tdd_human_clarification,
+      condition: "tdd_needs_clarification == true" }
+  - from: tdd_finalizer
+    to: prd_finalizer
+    condition: "severity == 'large' AND prd_revision_needed == true"
+    max_retries: 1
+    retry_context: |
+      TDD discovery requires PRD revision.
+
+      Reason: {{prd_revision_reason}}
+
+      📄 Final TDD (for full context — may be empty if TDD finalizer
+      bailed on revision detection): {{final_tdd_artifact_url}}
+
+      📄 TDD finalizer decision report:
+      {{tdd_finalizer_decision_artifact_url}}
+
+      Re-run the PRD finalizer taking the TDD findings into account.
+      Update REQ/AC/NFR as needed and re-emit final_prd_artifact_url.
+      The TDD finalizer will then re-run downstream.
+  - { from: tdd_finalizer, to: implementation_readiness_validator,
+      condition: "tdd_needs_clarification != true AND prd_revision_needed != true" }
+
+  # TDD clarification retry (max 2). Exhaustion fallback declared AFTER.
+  - from: tdd_human_clarification
+    to: tdd_finalizer
+    max_retries: 2
+    retry_context: |
+      The user answered the TDD clarification questions:
+      {{tdd_clarification_answers}}
+
+      Extra TDD notes:
+      {{tdd_extra_notes}}
+
+      Re-run the TDD finalizer. If the answers resolve the ambiguity,
+      emit tdd_needs_clarification=false. Ask follow-up only if still
+      strictly blocked.
+  - { from: tdd_human_clarification, to: design_escalation_review,
+      condition: "__retry_exhausted_from == 'tdd_human_clarification'" }
+
+  # ── Validator outcome routing ─────────────────────────────────────────
+  - { from: implementation_readiness_validator, to: END,
+      condition: "ready_for_implementation == true" }
+  - { from: implementation_readiness_validator, to: validator_failure_human,
+      condition: "ready_for_implementation != true" }
+
+  # Validator failure routing. Retry routes back to whichever finalizer
+  # produced the artifacts the validator rejected. Small lane → simple
+  # design; otherwise → TDD finalizer.
+  - { from: validator_failure_human, to: END,
+      condition: "validator_decision == 'accept_as_is' OR validator_decision == 'abandon'" }
+  - from: validator_failure_human
+    to: simple_design_and_tdd
+    condition: "validator_decision == 'retry_with_feedback' AND severity == 'small'"
+    max_retries: 1
+    retry_context: |
+      Validator rejected the combined design. Feedback:
+      {{validator_feedback}}
+
+      Blockers from validator:
+      {{implementation_readiness_blockers}}
+
+      Re-run the combined design taking the feedback into account.
+  - from: validator_failure_human
+    to: tdd_finalizer
+    condition: "validator_decision == 'retry_with_feedback' AND severity != 'small'"
+    max_retries: 1
+    retry_context: |
+      Validator rejected the TDD. Feedback:
+      {{validator_feedback}}
+
+      Blockers from validator:
+      {{implementation_readiness_blockers}}
+
+      Re-run the TDD finalizer taking the feedback into account.
+
+  # ── Escalation outgoing (abandon / retry / force_continue) ────────────
+  - { from: design_escalation_review, to: END,
+      condition: "escalation_decision == 'abandon'" }
+
+  # retry_with_feedback: condition-only retry edge → engine clears
+  # __retry_exhausted_from and resets retry counters for the target.
+  - from: design_escalation_review
+    to: prd_finalizer
+    condition: "escalation_decision == 'retry_with_feedback' AND __retry_exhausted_from == 'prd_human_clarification'"
+    retry_context: |
+      Human intervened after PRD clarification retries were exhausted.
+      Feedback: {{escalation_feedback}}
+
+      Re-run prd_finalizer with this feedback. Do NOT ask another round
+      of clarification unless the request is genuinely impossible.
+  - from: design_escalation_review
+    to: tdd_finalizer
+    condition: "escalation_decision == 'retry_with_feedback' AND __retry_exhausted_from == 'tdd_human_clarification'"
+    retry_context: |
+      Human intervened after TDD clarification retries were exhausted.
+      Feedback: {{escalation_feedback}}
+
+      Re-run tdd_finalizer with this feedback. Do NOT ask another round
+      of clarification unless the request is genuinely impossible.
+
+  # force_continue: skip remaining clarification. PRD-exhaust → start TDD
+  # proposals (parallel); TDD-exhaust → straight to validator. Two parallel
+  # edges so each severity dispatches the right fan-out width.
+  - from: design_escalation_review
+    to: [tdd_proposal_data_schema, tdd_proposal_system_design]
+    parallel: true
+    condition: "escalation_decision == 'force_continue' AND __retry_exhausted_from == 'prd_human_clarification' AND severity == 'medium'"
+  - from: design_escalation_review
+    to: [tdd_proposal_data_schema, tdd_proposal_system_design, tdd_proposal_files_impact]
+    parallel: true
+    condition: "escalation_decision == 'force_continue' AND __retry_exhausted_from == 'prd_human_clarification' AND severity == 'large'"
+  - { from: design_escalation_review, to: implementation_readiness_validator,
+      condition: "escalation_decision == 'force_continue' AND __retry_exhausted_from == 'tdd_human_clarification'" }
