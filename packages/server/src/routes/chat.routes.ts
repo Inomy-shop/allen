@@ -5,9 +5,10 @@ import { ChatService, cancelChatSession, type ChatMessageSender } from '../servi
 import { executeChatTool } from '../services/chat-tools.js';
 import { ExecutionService } from '../services/execution.service.js';
 import { InterventionService } from '../services/intervention.service.js';
-import type { Db } from 'mongodb';
+import { ObjectId, type Db } from 'mongodb';
 import { UserService } from '../services/user.service.js';
 import type { AuthedRequest } from '../middleware/requireAuth.js';
+import { listSlashCommands, type SlashCommandProvider } from '../services/slash-commands.js';
 
 // Simple in-memory rate limiter for the automation-message endpoint.
 // Limits each authenticated caller (by sub) to 60 requests per minute.
@@ -289,6 +290,21 @@ export function chatRoutes(db: Db): Router {
   // GET /api/chat/providers — List available LLM providers
   router.get('/providers', (_req: Request, res: Response) => {
     res.json(chatService.getProviders());
+  });
+
+  router.get('/slash-commands', async (req: Request, res: Response) => {
+    try {
+      const provider = String(req.query.provider ?? 'codex') === 'claude-cli' ? 'claude-cli' : 'codex';
+      const sessionId = typeof req.query.sessionId === 'string' ? req.query.sessionId : '';
+      let cwd = typeof req.query.cwd === 'string' ? req.query.cwd : undefined;
+      if (!cwd && sessionId) {
+        const session = await db.collection('chat_sessions').findOne({ _id: new ObjectId(sessionId) });
+        cwd = typeof session?.repoPath === 'string' ? session.repoPath : undefined;
+      }
+      res.json(listSlashCommands(provider as SlashCommandProvider, cwd));
+    } catch (err: unknown) {
+      res.status(500).json({ error: (err as Error).message });
+    }
   });
 
   // POST /api/chat/sessions — Create new session

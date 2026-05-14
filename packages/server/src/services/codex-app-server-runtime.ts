@@ -5,7 +5,7 @@ import { AGENT_FALLBACK_CWD, type ChatProvider } from './chat-providers.js';
 import { toCodexArgs } from './agent-settings.js';
 import { buildControlledMcpConfig } from './chat-controlled-mcp.js';
 import { logRuntimeEvent } from './chat-runtime-logs.js';
-import type { PersistentChatRuntime, RuntimeCreateInput, RuntimeTurnInput, RuntimeTurnResult } from './chat-runtime-types.js';
+import type { PersistentChatRuntime, RuntimeCreateInput, RuntimeSlashCommand, RuntimeTurnInput, RuntimeTurnResult } from './chat-runtime-types.js';
 import type { ChatTraceEvent } from './chat-llm.js';
 
 type RpcPending = {
@@ -23,6 +23,7 @@ type PendingTool = {
 
 type ActiveTurn = {
   input: RuntimeTurnInput;
+  slashCommand?: RuntimeSlashCommand;
   sentAt: number;
   text: string;
   thinking: string;
@@ -30,6 +31,12 @@ type ActiveTurn = {
   pendingTools: Map<string, PendingTool>;
   resolve: (result: RuntimeTurnResult) => void;
   reject: (error: Error) => void;
+};
+
+type ContextUsage = {
+  totalTokens: number;
+  modelContextWindow: number;
+  estimated?: boolean;
 };
 
 export class CodexAppServerRuntime implements PersistentChatRuntime {
@@ -44,6 +51,12 @@ export class CodexAppServerRuntime implements PersistentChatRuntime {
   private pending = new Map<number, RpcPending>();
   private currentTurn?: ActiveTurn;
   private threadId = '';
+  private threadCwd = '';
+  private threadModel = '';
+  private providerSessionId = '';
+  private latestThreadStatus: Record<string, unknown> = { type: 'notLoaded' };
+  private latestTokenUsage?: Record<string, unknown>;
+  private latestRateLimits?: Record<string, unknown>;
   private initialized?: Promise<void>;
   private closed = false;
 
@@ -92,6 +105,48 @@ export class CodexAppServerRuntime implements PersistentChatRuntime {
     return completion;
   }
 
+  async sendSlashCommand(input: RuntimeTurnInput, command: RuntimeSlashCommand): Promise<RuntimeTurnResult> {
+    if (this.currentTurn) throw new Error('Codex runtime already has an active turn');
+    await this.ensureStarted(input);
+
+    const trace: ChatTraceEvent[] = [];
+    let rejectTurn: (error: Error) => void = () => {};
+    const completion = new Promise<RuntimeTurnResult>((resolve, reject) => {
+      rejectTurn = reject;
+      this.currentTurn = {
+        input,
+        slashCommand: command,
+        sentAt: Date.now(),
+        text: '',
+        thinking: '',
+        trace,
+        pendingTools: new Map(),
+        resolve,
+        reject,
+      };
+    });
+
+    logRuntimeEvent({
+      db: input.db,
+      sessionId: input.chatSessionId,
+      provider: this.provider,
+      runtimeId: this.id,
+      eventType: 'lifecycle',
+      event: 'slash_command_send',
+      data: { threadId: this.threadId, command },
+    });
+
+    try {
+      await this.dispatchSlashCommand(input, command);
+    } catch (err) {
+      rejectTurn(err instanceof Error ? err : new Error(String(err)));
+      this.currentTurn = undefined;
+      throw err;
+    }
+
+    return completion;
+  }
+
   async close(reason: string): Promise<void> {
     if (this.closed) return;
     this.closed = true;
@@ -124,6 +179,8 @@ export class CodexAppServerRuntime implements PersistentChatRuntime {
 
   private async start(input: RuntimeTurnInput): Promise<void> {
     const cwd = input.cwd ?? AGENT_FALLBACK_CWD;
+    this.threadCwd = cwd;
+    this.threadModel = input.model;
     mkdirSync(cwd, { recursive: true });
     const mcp = await buildControlledMcpConfig({
       db: input.db,
@@ -182,6 +239,7 @@ export class CodexAppServerRuntime implements PersistentChatRuntime {
       : await this.request('thread/start', threadParams);
     const thread = response.thread as { id?: string; sessionId?: string } | undefined;
     this.threadId = thread?.id ?? input.resumeSessionId ?? '';
+    this.providerSessionId = thread?.sessionId ?? '';
     if (this.threadId) {
       input.callbacks.onSessionId?.(this.threadId);
     }
@@ -208,6 +266,59 @@ export class CodexAppServerRuntime implements PersistentChatRuntime {
       timer.unref();
       this.pending.set(id, { method, resolve, reject, timer });
     });
+  }
+
+  private async dispatchSlashCommand(input: RuntimeTurnInput, command: RuntimeSlashCommand): Promise<void> {
+    if (command.kind === 'skill' && command.path) {
+      const items: Array<Record<string, unknown>> = [
+        { type: 'skill', name: command.name.replace(/^\/+/, ''), path: command.path },
+      ];
+      if (command.args.trim()) {
+        items.push({ type: 'text', text: command.args.trim(), text_elements: [] });
+      }
+      await this.request('turn/start', {
+        threadId: this.threadId,
+        cwd: input.cwd ?? AGENT_FALLBACK_CWD,
+        model: input.model,
+        effort: codexEffort(input),
+        approvalPolicy: 'never',
+        input: items,
+      });
+      return;
+    }
+
+    if (command.name === '/compact') {
+      await this.request('thread/compact/start', { threadId: this.threadId });
+      return;
+    }
+
+    if (command.name === '/review') {
+      await this.request('review/start', {
+        threadId: this.threadId,
+        delivery: 'inline',
+        target: codexReviewTarget(command.args),
+      });
+      return;
+    }
+
+    if (command.name === '/status') {
+      const [readResult, accountResult, rateLimitResult] = await Promise.all([
+        this.request('thread/read', {
+          threadId: this.threadId,
+          includeTurns: true,
+        }).catch((err) => ({ readError: err instanceof Error ? err.message : String(err) })),
+        this.request('account/read', { refreshToken: false })
+          .catch((err) => ({ accountError: err instanceof Error ? err.message : String(err) })),
+        this.request('account/rateLimits/read', null)
+          .catch((err) => ({ rateLimitError: err instanceof Error ? err.message : String(err) })),
+      ]);
+      const contextEstimate = await this.estimateContextUsage(input, readResult);
+      this.handleAgentMessage(this.currentTurn!, this.formatThreadStatus(readResult, accountResult, rateLimitResult, contextEstimate));
+      this.finishSyntheticTurn('slash_status');
+      return;
+    }
+
+    throw new Error(`Unsupported Codex slash command: ${command.name}`);
   }
 
   private handleStdout(chunk: Buffer): void {
@@ -265,6 +376,25 @@ export class CodexAppServerRuntime implements PersistentChatRuntime {
 
   private handleNotification(method: string, params: Record<string, unknown>): void {
     const turn = this.currentTurn;
+    if (method === 'thread/status/changed') {
+      if (!params.threadId || params.threadId === this.threadId) {
+        this.latestThreadStatus = asRecord(params.status);
+      }
+      return;
+    }
+
+    if (method === 'thread/tokenUsage/updated') {
+      if (!params.threadId || params.threadId === this.threadId) {
+        this.latestTokenUsage = asRecord(params.tokenUsage);
+      }
+      return;
+    }
+
+    if (method === 'account/rateLimits/updated') {
+      this.latestRateLimits = asRecord(params.rateLimits);
+      return;
+    }
+
     if (method === 'thread/started') {
       const thread = params.thread as { id?: string } | undefined;
       if (thread?.id) {
@@ -317,6 +447,10 @@ export class CodexAppServerRuntime implements PersistentChatRuntime {
       const done = this.currentTurn;
       if (!done) return;
       this.currentTurn = undefined;
+      if (!done.text.trim()) {
+        const fallback = slashCommandFallback(done.slashCommand);
+        if (fallback) this.handleAgentMessage(done, fallback);
+      }
       done.trace.push({ timestamp: new Date(), type: 'complete', text: 'turn_completed' });
       logRuntimeEvent({
         db: done.input.db,
@@ -333,6 +467,13 @@ export class CodexAppServerRuntime implements PersistentChatRuntime {
         sessionId: this.threadId,
         trace: done.trace,
       });
+    }
+
+    if (method === 'thread/compacted') {
+      const done = this.currentTurn;
+      if (!done) return;
+      this.handleAgentMessage(done, 'Compacted Codex thread context.');
+      this.finishSyntheticTurn('thread_compacted');
     }
   }
 
@@ -491,6 +632,232 @@ export class CodexAppServerRuntime implements PersistentChatRuntime {
     });
     turn.input.callbacks.onThinking?.(turn.thinking);
   }
+
+  private finishSyntheticTurn(reason: string): void {
+    const done = this.currentTurn;
+    if (!done) return;
+    this.currentTurn = undefined;
+    done.trace.push({ timestamp: new Date(), type: 'complete', text: reason });
+    done.resolve({
+      text: done.text,
+      costUsd: 0,
+      sessionId: this.threadId,
+      trace: done.trace,
+    });
+  }
+
+  private async estimateContextUsage(input: RuntimeTurnInput, readResult: Record<string, unknown>): Promise<ContextUsage | undefined> {
+    const window = contextWindowForModel(this.threadModel || input.model);
+    if (!window) return undefined;
+    const thread = asRecord(readResult.thread);
+    const threadText = collectText(thread.turns).trim();
+    let text = threadText;
+    if (!text && input.chatSessionId) {
+      try {
+        const messages = await input.db.collection('chat_messages')
+          .find({ sessionId: input.chatSessionId, status: { $in: ['completed', 'streaming'] } })
+          .sort({ createdAt: 1 })
+          .project({ role: 1, content: 1, thinkingText: 1 })
+          .toArray();
+        text = messages.map((msg) => `${String(msg.role ?? '')}: ${String(msg.content ?? '')}\n${String(msg.thinkingText ?? '')}`).join('\n');
+      } catch {}
+    }
+    const totalTokens = estimateTokens(text);
+    return totalTokens > 0 ? { totalTokens, modelContextWindow: window, estimated: true } : undefined;
+  }
+
+  private formatThreadStatus(readResult: Record<string, unknown>, accountResult: Record<string, unknown>, rateLimitResult: Record<string, unknown>, contextEstimate?: ContextUsage): string {
+    const thread = asRecord(readResult.thread);
+    const account = asRecord(accountResult.account);
+    const status = objectValue(thread.status) ?? this.latestThreadStatus;
+    const tokenUsage = objectValue(thread.tokenUsage) ?? this.latestTokenUsage;
+    const rateLimits = statusRateLimits(rateLimitResult, this.latestRateLimits);
+    const statusType = String(status.type ?? this.latestThreadStatus.type ?? 'unknown');
+    const activeFlags = Array.isArray(status.activeFlags) && status.activeFlags.length
+      ? ` (${status.activeFlags.map(flagLabel).join(', ')})`
+      : '';
+    const session = this.providerSessionId || String(thread.sessionId ?? account.sessionId ?? (this.threadId || 'unknown'));
+    const context = contextLine(tokenUsage, contextEstimate);
+    const lines = [
+      '**Status**',
+      '',
+      `Session: ${session}`,
+      `Context: ${context || 'unknown'}`,
+      `Runtime: ${statusType}${activeFlags}`,
+      `Model: ${this.threadModel || String(thread.model ?? 'unknown')}`,
+      `CWD: ${this.threadCwd || String(thread.cwd ?? 'unknown')}`,
+    ];
+    const limitLines = rateLimitLines(rateLimits);
+    if (limitLines.length) lines.push('', ...limitLines);
+    else if (rateLimitResult.rateLimitError) lines.push('', `Limits: unavailable (${rateLimitResult.rateLimitError})`);
+    if (accountResult.accountError) lines.push('', `Account: unavailable (${accountResult.accountError})`);
+    if (readResult.readError) lines.push(`- Thread read: ${readResult.readError}`);
+    return lines.join('\n');
+  }
+}
+
+function codexReviewTarget(args: string): Record<string, string> {
+  const instructions = args.trim();
+  if (instructions) return { type: 'custom', instructions };
+  return { type: 'uncommittedChanges' };
+}
+
+function slashCommandFallback(command?: RuntimeSlashCommand): string {
+  if (!command) return '';
+  if (command.name === '/compact') return 'Compacted Codex thread context.';
+  if (command.name === '/status') return 'Codex status is ready.';
+  if (command.name === '/review') return 'Codex review completed without a text response.';
+  if (command.kind === 'skill') return `${command.name} completed without a text response.`;
+  return `${command.name} completed.`;
+}
+
+function flagLabel(value: unknown): string {
+  if (typeof value === 'string') return value;
+  if (value && typeof value === 'object') {
+    const rec = value as Record<string, unknown>;
+    return String(rec.type ?? rec.name ?? JSON.stringify(rec));
+  }
+  return String(value);
+}
+
+function tokenUsageLine(tokenUsage: Record<string, unknown> | undefined): string {
+  if (!tokenUsage) return '';
+  const total = asRecord(tokenUsage.total);
+  const last = asRecord(tokenUsage.last);
+  const contextWindow = tokenUsage.modelContextWindow;
+  const totalTokens = tokenCount(total);
+  const lastTokens = tokenCount(last);
+  const parts: string[] = [];
+  if (totalTokens !== undefined) parts.push(`${totalTokens.toLocaleString()} total`);
+  if (lastTokens !== undefined) parts.push(`${lastTokens.toLocaleString()} last turn`);
+  if (typeof contextWindow === 'number') parts.push(`${contextWindow.toLocaleString()} context window`);
+  return parts.join(', ');
+}
+
+function contextLine(tokenUsage: Record<string, unknown> | undefined, estimate?: ContextUsage): string {
+  if (!tokenUsage) return estimate ? contextUsageLine(estimate) : '';
+  const total = tokenCount(objectValue(tokenUsage.total));
+  const window = tokenUsage.modelContextWindow;
+  if (typeof total !== 'number' || typeof window !== 'number' || window <= 0) {
+    return tokenUsageLine(tokenUsage) || (estimate ? contextUsageLine(estimate) : '');
+  }
+  return contextUsageLine({ totalTokens: total, modelContextWindow: window });
+}
+
+function contextUsageLine(usage: ContextUsage): string {
+  const total = usage.totalTokens;
+  const window = usage.modelContextWindow;
+  const usedPercent = Math.min(100, Math.round((total / window) * 100));
+  const leftPercent = Math.max(0, 100 - usedPercent);
+  return `${usedPercent}% used, ${leftPercent}% left (${total.toLocaleString()} used / ${compactNumber(window)})${usage.estimated ? ' estimated' : ''}`;
+}
+
+function statusRateLimits(readResult: Record<string, unknown>, cached: Record<string, unknown> | undefined): Record<string, unknown>[] {
+  const byId = objectValue(readResult.rateLimitsByLimitId);
+  if (byId) return Object.values(byId).filter(isRecord);
+  const primary = objectValue(readResult.rateLimits);
+  if (primary) return [primary];
+  return cached ? [cached] : [];
+}
+
+function rateLimitLines(rateLimits: Record<string, unknown>[]): string[] {
+  return rateLimits.flatMap((snapshot) => {
+    const labelBase = String(snapshot.limitName ?? snapshot.limitId ?? 'usage');
+    const primary = rateWindowLine('5h limit', objectValue(snapshot.primary));
+    const secondary = rateWindowLine('7d limit', objectValue(snapshot.secondary));
+    const lines = [primary, secondary].filter(Boolean) as string[];
+    if (!lines.length) return [];
+    return labelBase === 'usage' || labelBase === 'codex' ? lines : [`${labelBase}:`, ...lines.map(line => `  ${line}`)];
+  });
+}
+
+function rateWindowLine(label: string, window: Record<string, unknown> | undefined): string {
+  if (!window) return '';
+  const usedPercent = numberValue(window.usedPercent);
+  const leftPercent = usedPercent === undefined ? undefined : Math.max(0, 100 - usedPercent);
+  const reset = resetText(numberValue(window.resetsAt));
+  const duration = numberValue(window.windowDurationMins);
+  const finalLabel = duration ? `${Math.round(duration / 60) || duration}h limit` : label;
+  return `${finalLabel}: ${leftPercent ?? '?'}% left${reset ? ` (resets ${reset})` : ''}`;
+}
+
+function resetText(epochSeconds: number | undefined): string {
+  if (!epochSeconds) return '';
+  const ms = epochSeconds > 10_000_000_000 ? epochSeconds : epochSeconds * 1000;
+  const diff = ms - Date.now();
+  if (diff <= 0) return 'soon';
+  const minutes = Math.round(diff / 60_000);
+  const hours = Math.floor(minutes / 60);
+  const mins = minutes % 60;
+  if (hours < 24) return `${hours}:${String(mins).padStart(2, '0')}`;
+  const days = Math.floor(hours / 24);
+  const remHours = hours % 24;
+  return `${days}d ${remHours}h`;
+}
+
+function compactNumber(value: number): string {
+  if (value >= 1_000_000) return `${Math.round(value / 100_000) / 10}M`;
+  if (value >= 1_000) return `${Math.round(value / 1000)}K`;
+  return value.toLocaleString();
+}
+
+function numberValue(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
+}
+
+function estimateTokens(text: string): number {
+  const clean = text.trim();
+  if (!clean) return 0;
+  const wordish = clean.match(/[\p{L}\p{N}_]+|[^\s\p{L}\p{N}_]/gu)?.length ?? 0;
+  return Math.max(1, Math.ceil(Math.max(clean.length / 4, wordish * 0.75)));
+}
+
+function collectText(value: unknown, depth = 0): string {
+  if (depth > 8 || value == null) return '';
+  if (typeof value === 'string') return value;
+  if (typeof value === 'number' || typeof value === 'boolean') return '';
+  if (Array.isArray(value)) return value.map(item => collectText(item, depth + 1)).filter(Boolean).join('\n');
+  if (typeof value === 'object') {
+    const record = value as Record<string, unknown>;
+    const direct = ['text', 'content', 'message', 'summary', 'command', 'aggregatedOutput']
+      .map(key => collectText(record[key], depth + 1))
+      .filter(Boolean);
+    if (direct.length) return direct.join('\n');
+    return Object.entries(record)
+      .filter(([key]) => !/^(id|type|status|createdAt|updatedAt|startedAt|completedAt|durationMs)$/i.test(key))
+      .map(([, item]) => collectText(item, depth + 1))
+      .filter(Boolean)
+      .join('\n');
+  }
+  return '';
+}
+
+function contextWindowForModel(model: string): number {
+  const normalized = model.toLowerCase();
+  if (normalized.includes('gpt-5.5') || normalized.includes('gpt-5.4') || normalized.includes('gpt-5.3') || normalized.includes('gpt-5.2')) return 258_000;
+  return 258_000;
+}
+
+function tokenCount(value: Record<string, unknown> | undefined): number | undefined {
+  if (!value) return undefined;
+  const direct = value.totalTokens ?? value.total_tokens ?? value.tokens;
+  if (typeof direct === 'number') return direct;
+  const input = value.inputTokens ?? value.input_tokens;
+  const output = value.outputTokens ?? value.output_tokens;
+  if (typeof input === 'number' || typeof output === 'number') return (typeof input === 'number' ? input : 0) + (typeof output === 'number' ? output : 0);
+  let sum = 0;
+  for (const item of Object.values(value)) {
+    if (typeof item === 'number') sum += item;
+  }
+  return sum > 0 ? sum : undefined;
+}
+
+function objectValue(value: unknown): Record<string, unknown> | undefined {
+  return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : undefined;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(objectValue(value));
 }
 
 function asRecord(value: unknown): Record<string, unknown> {

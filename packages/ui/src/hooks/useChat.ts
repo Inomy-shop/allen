@@ -969,13 +969,14 @@ export function useChat() {
 
                 case 'message_complete': {
                   const msgId = data.messageId || assistantMsgId;
+                  const finalText = (typeof data.text === 'string' && data.text.trim()) ? data.text : assistantText;
                   setMessages(prev => [
                     ...prev,
                     {
                       _id: msgId,
                       sessionId,
                       role: 'assistant',
-                      content: assistantText,
+                      content: finalText,
                       status: 'completed',
                       costUsd: data.costUsd,
                       durationMs: data.durationMs,

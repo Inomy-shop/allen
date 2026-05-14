@@ -5091,6 +5091,93 @@
     margin: 0 auto;
   }
 
+  .chat-queue-panel {
+    width: 100%;
+    max-width: 820px;
+    margin: 0 auto 8px;
+    color: rgb(var(--color-text-secondary));
+  }
+
+  .chat-queue-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 0 2px 6px;
+    color: rgb(var(--color-text-subtle));
+    font-family: var(--font-mono);
+    font-size: 11px;
+  }
+
+  .chat-queue-list {
+    display: grid;
+    gap: 6px;
+  }
+
+  .chat-queue-item {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    align-items: start;
+    gap: 8px;
+    border-radius: 10px;
+    background: rgb(var(--color-surface-100) / 0.72);
+    padding: 8px 10px;
+  }
+
+  .chat-queue-index {
+    min-width: 18px;
+    color: rgb(var(--color-text-subtle));
+    font-family: var(--font-mono);
+    font-size: 11px;
+    line-height: 1.55;
+  }
+
+  .chat-queue-text {
+    max-height: 58px;
+    overflow: hidden;
+    white-space: pre-wrap;
+    color: rgb(var(--color-text-secondary));
+    font-size: 13px;
+    line-height: 1.45;
+  }
+
+  .chat-queue-edit {
+    width: 100%;
+    min-height: 52px;
+    max-height: 120px;
+    resize: vertical;
+    border: 0;
+    border-radius: 8px;
+    background: rgb(var(--color-surface));
+    padding: 7px 8px;
+    color: rgb(var(--color-text-primary));
+    font-size: 13px;
+    line-height: 1.45;
+    outline: 1px solid rgb(var(--color-border));
+  }
+
+  .chat-queue-actions {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+  }
+
+  .chat-queue-actions button {
+    border: 0;
+    border-radius: 6px;
+    background: transparent;
+    padding: 3px 6px;
+    color: rgb(var(--color-text-subtle));
+    font-family: var(--font-mono);
+    font-size: 10px;
+    transition: background 120ms ease, color 120ms ease;
+  }
+
+  .chat-queue-actions button:hover {
+    background: rgb(var(--color-surface-200) / 0.7);
+    color: rgb(var(--color-text-secondary));
+  }
+
   .chat-composer {
     width: 100%;
     max-width: 820px;

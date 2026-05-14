@@ -611,6 +611,10 @@ export const dashboard = {
 export const chat = {
   listSessions: () => request<any[]>('/chat/sessions'),
   providers: () => request<any[]>('/chat/providers'),
+  slashCommands: (params?: { provider?: string; sessionId?: string; cwd?: string }) => {
+    const qs = params ? '?' + new URLSearchParams(Object.entries(params).filter(([, v]) => Boolean(v)) as Array<[string, string]>).toString() : '';
+    return request<any[]>(`/chat/slash-commands${qs}`);
+  },
   createSession: (provider?: string, model?: string, agentOverrides?: Record<string, unknown>, repoId?: string) =>
     request<any>('/chat/sessions', {
       method: 'POST',

@@ -1,7 +1,7 @@
 import { useEffect, useState, useRef } from 'react';
 import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
 import { useChat } from '../hooks/useChat';
-import ChatInput, { type ReasoningEffortValue, type RepoOption } from '../components/chat/ChatInput';
+import ChatInput, { type ReasoningEffortValue, type RepoOption, type SlashCommandOption } from '../components/chat/ChatInput';
 import ChatMessageList from '../components/chat/ChatMessageList';
 import CommandPalette from '../components/chat/CommandPalette';
 import ConversationLogs from '../components/chat/ConversationLogs';
@@ -10,6 +10,23 @@ import ChatRunSidebar from '../components/chat/ChatRunSidebar';
 import { ToolCallLog } from '../components/common/ToolCallLog';
 import { chat as chatApi, mcp as mcpApi, learnings as learningsApi, agents as agentsApi, repos as reposApi } from '../services/api';
 import ArtifactsDrawer from '../components/artifacts/ArtifactsDrawer';
+
+type QueuedChatMessage = {
+  id: string;
+  content: string;
+  agent?: string | null;
+  cwd?: string | null;
+  sessionId?: string | null;
+  options?: {
+    provider?: string | null;
+    model?: string | null;
+    repoId?: string | null;
+    agentOverrides?: {
+      reasoningEffort?: ReasoningEffortValue | null;
+      planMode?: boolean | null;
+    };
+  };
+};
 
 export default function ChatPage() {
   const { sessionId: urlSessionId } = useParams<{ sessionId?: string }>();
@@ -30,6 +47,10 @@ export default function ChatPage() {
   const [agentsLoading, setAgentsLoading] = useState(true);
   const [selectedRepo, setSelectedRepo] = useState<RepoOption | null>(null);
   const [repos, setRepos] = useState<RepoOption[]>([]);
+  const [slashCommands, setSlashCommands] = useState<SlashCommandOption[]>([]);
+  const [queuedMessages, setQueuedMessages] = useState<QueuedChatMessage[]>([]);
+  const [editingQueuedId, setEditingQueuedId] = useState<string | null>(null);
+  const [editingQueuedValue, setEditingQueuedValue] = useState('');
   // Pending override state for chats that don't have a session yet. Once the
   // first message creates the session, this is merged into createSession().
   const [pendingOverrides, setPendingOverrides] = useState<{
@@ -38,6 +59,9 @@ export default function ChatPage() {
   }>({});
   const chatInputRef = useRef<{ setValue: (v: string) => void; focus: () => void } | null>(null);
   const processedDeepLinkRef = useRef<string | null>(null);
+  const queuedMessagesRef = useRef<QueuedChatMessage[]>([]);
+  const editingQueuedIdRef = useRef<string | null>(null);
+  const queueDispatchingRef = useRef(false);
 
   const {
     sessions, activeSessionId, messages, streaming, streamText,
@@ -47,6 +71,12 @@ export default function ChatPage() {
     sendMessage, createSession, switchSession, cancelStream,
     refresh: refreshSessions,
   } = useChat();
+
+  const activeSession = sessions.find(s => s._id === activeSessionId);
+  const activeProvider = activeSession?.provider ?? selectedProvider;
+
+  useEffect(() => { queuedMessagesRef.current = queuedMessages; }, [queuedMessages]);
+  useEffect(() => { editingQueuedIdRef.current = editingQueuedId; }, [editingQueuedId]);
 
   useEffect(() => {
     chatApi.providers().then(p => {
@@ -68,8 +98,13 @@ export default function ChatPage() {
       .catch(() => {});
   }, []);
 
-  const activeSession = sessions.find(s => s._id === activeSessionId);
-  const activeProvider = activeSession?.provider ?? selectedProvider;
+  useEffect(() => {
+    const provider = activeSession?.provider ?? selectedProvider;
+    const cwd = activeSession?.repoPath ?? selectedRepo?.path ?? undefined;
+    chatApi.slashCommands({ provider, sessionId: activeSessionId ?? undefined, cwd })
+      .then((commands: SlashCommandOption[]) => setSlashCommands(commands ?? []))
+      .catch(() => setSlashCommands([]));
+  }, [activeSessionId, activeSession?.provider, activeSession?.repoPath, selectedProvider, selectedRepo?.path]);
 
   // Reset pending overrides and repo selection whenever the user switches to a
   // different conversation — they only apply to a new chat that hasn't been
@@ -77,6 +112,9 @@ export default function ChatPage() {
   useEffect(() => {
     setPendingOverrides({});
     setSelectedRepo(null);
+    setQueuedMessages([]);
+    setEditingQueuedId(null);
+    setEditingQueuedValue('');
   }, [activeSessionId]);
 
   // The agent doc whose defaults we display as the fallback in the popover.
@@ -145,7 +183,11 @@ export default function ChatPage() {
     }
   }, [activeSessionId]);
 
-  async function handleSend(
+  function enqueueMessage(message: QueuedChatMessage): void {
+    setQueuedMessages(prev => [...prev, message]);
+  }
+
+  async function sendNow(
     content: string,
     agentOverride?: string | null,
     cwdOverride?: string | null,
@@ -158,9 +200,13 @@ export default function ChatPage() {
         planMode?: boolean | null;
       };
     },
+    forcedSessionId?: string | null,
   ) {
     const agentName = agentOverride ?? selectedAgent;
     const agentCwd = cwdOverride ?? selectedAgentCwd;
+    if (forcedSessionId) {
+      return sendMessage(content, forcedSessionId, agentName ?? undefined, agentCwd ?? undefined);
+    }
     if (!activeSessionId) {
       // Only pass pending overrides that are explicitly set (not null/undefined).
       const overrides: Record<string, unknown> = {};
@@ -182,8 +228,41 @@ export default function ChatPage() {
       setTimeout(() => { void refreshSessions(); }, 5000);
       return;
     }
-    sendMessage(content, undefined, agentName ?? undefined, agentCwd ?? undefined);
+    return sendMessage(content, undefined, agentName ?? undefined, agentCwd ?? undefined);
   }
+
+  async function handleSend(
+    content: string,
+    agentOverride?: string | null,
+    cwdOverride?: string | null,
+    options?: QueuedChatMessage['options'],
+  ) {
+    const shouldQueue = streaming || queuedMessagesRef.current.length > 0 || Boolean(editingQueuedIdRef.current);
+    if (shouldQueue) {
+      enqueueMessage({
+        id: `${Date.now()}-${Math.random().toString(36).slice(2)}`,
+        content,
+        agent: agentOverride ?? selectedAgent,
+        cwd: cwdOverride ?? selectedAgentCwd,
+        sessionId: activeSessionId,
+        options,
+      });
+      return;
+    }
+    await sendNow(content, agentOverride, cwdOverride, options);
+  }
+
+  useEffect(() => {
+    if (streaming || editingQueuedId || queueDispatchingRef.current || queuedMessages.length === 0) return;
+    const next = queuedMessages[0];
+    queueDispatchingRef.current = true;
+    setQueuedMessages(prev => prev.slice(1));
+    void sendNow(next.content, next.agent, next.cwd, next.options, next.sessionId)
+      .finally(() => {
+        queueDispatchingRef.current = false;
+        setQueuedMessages(prev => [...prev]);
+      });
+  }, [streaming, editingQueuedId, queuedMessages, activeSessionId, selectedAgent, selectedAgentCwd, selectedProvider, selectedModel, selectedRepo?._id, pendingOverrides]);
 
   // Deep-link support: ?agent=NAME&prompt=PREFILL. Command-center sends use
   // autosend=1 so the user lands in the focused current chat, not a prior
@@ -263,6 +342,21 @@ export default function ChatPage() {
     setCmdPaletteAnchor(null);
   }
 
+  function handleSlashCommand(command: SlashCommandOption, raw: string): boolean {
+    if (command.name === '/clear') {
+      switchSession('');
+      navigate('/chat', { replace: true });
+      return true;
+    }
+    if (command.name === '/help') {
+      setCmdPaletteAnchor(null);
+      setCmdPaletteOpen(true);
+      return command.provider === 'codex';
+    }
+    if (!command.dispatchable) return true;
+    return false;
+  }
+
   async function handleSaveToLearnings(content: string) {
     try {
       await learningsApi.create({
@@ -290,6 +384,85 @@ export default function ChatPage() {
 
       {/* Input */}
       <div className="chat-input-dock">
+        {queuedMessages.length > 0 && (
+          <div className="chat-queue-panel" aria-label="Queued messages">
+            <div className="chat-queue-head">
+              <span>{queuedMessages.length} queued</span>
+              {editingQueuedId && <span>paused while editing</span>}
+            </div>
+            <div className="chat-queue-list">
+              {queuedMessages.map((item, index) => {
+                const editing = editingQueuedId === item.id;
+                return (
+                  <div key={item.id} className="chat-queue-item">
+                    <div className="chat-queue-index">{index + 1}</div>
+                    {editing ? (
+                      <textarea
+                        value={editingQueuedValue}
+                        onChange={(event) => setEditingQueuedValue(event.target.value)}
+                        className="chat-queue-edit"
+                        rows={2}
+                        autoFocus
+                      />
+                    ) : (
+                      <div className="chat-queue-text">{item.content}</div>
+                    )}
+                    <div className="chat-queue-actions">
+                      {editing ? (
+                        <>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              const next = editingQueuedValue.trim();
+                              if (next) {
+                                setQueuedMessages(prev => prev.map(q => q.id === item.id ? { ...q, content: next } : q));
+                              }
+                              setEditingQueuedId(null);
+                              setEditingQueuedValue('');
+                            }}
+                            title="Save queued message"
+                          >
+                            Save
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setEditingQueuedId(null);
+                              setEditingQueuedValue('');
+                            }}
+                            title="Cancel edit"
+                          >
+                            Cancel
+                          </button>
+                        </>
+                      ) : (
+                        <>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setEditingQueuedId(item.id);
+                              setEditingQueuedValue(item.content);
+                            }}
+                            title="Edit queued message"
+                          >
+                            Edit
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setQueuedMessages(prev => prev.filter(q => q.id !== item.id))}
+                            title="Remove queued message"
+                          >
+                            Remove
+                          </button>
+                        </>
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
         <ChatInput
           ref={chatInputRef} onSend={handleSend} onCancel={cancelStream} streaming={streaming}
           disabled={activeSession?.source === 'slack'}
@@ -309,6 +482,8 @@ export default function ChatPage() {
             setCmdPaletteAnchor(anchor.getBoundingClientRect());
             setCmdPaletteOpen(true);
           }}
+          slashCommands={slashCommands}
+          onSlashCommand={handleSlashCommand}
           agentOverrides={effectiveOverrides}
           // When no team agent is selected, the chat talks to the raw
           // assistant. Codex defaults to 'high', other providers to 'medium' —

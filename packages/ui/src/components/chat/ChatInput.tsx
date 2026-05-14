@@ -8,6 +8,17 @@ export type ReasoningEffortValue = 'off' | 'low' | 'medium' | 'high' | 'max';
 
 export interface RepoOption { _id: string; name: string; path: string; }
 
+export interface SlashCommandOption {
+  name: string;
+  description: string;
+  provider: string;
+  source: 'builtin' | 'project' | 'user';
+  kind?: 'builtin' | 'skill' | 'command';
+  path?: string;
+  dispatchable: boolean;
+  unavailableReason?: string;
+}
+
 interface SessionOverrides {
   reasoningEffort?: ReasoningEffortValue | null;
   planMode?: boolean | null;
@@ -49,6 +60,8 @@ interface ChatInputProps {
   repoLocked?: boolean;
   onRepoChange?: (repo: RepoOption | null) => void;
   onOpenQuickCommands?: (anchor: HTMLElement) => void;
+  slashCommands?: SlashCommandOption[];
+  onSlashCommand?: (command: SlashCommandOption, raw: string) => boolean | void;
   extraControls?: ReactNode;
 }
 
@@ -108,6 +121,8 @@ const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function ChatInput
     repoLocked,
     onRepoChange,
     onOpenQuickCommands,
+    slashCommands = [],
+    onSlashCommand,
     extraControls,
   },
   ref,
@@ -115,6 +130,9 @@ const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function ChatInput
   const [value, setValue] = useState('');
   const [mentionVisible, setMentionVisible] = useState(false);
   const [mentionQuery, setMentionQuery] = useState('');
+  const [slashVisible, setSlashVisible] = useState(false);
+  const [slashQuery, setSlashQuery] = useState('');
+  const [slashSelectedIdx, setSlashSelectedIdx] = useState(0);
 
   // ── Linear mention mode ──────────────────────────────────────────────
   const [linearMode, setLinearMode]       = useState(false);
@@ -132,6 +150,12 @@ const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function ChatInput
   const [repoPlacement, setRepoPlacement] = useState<'up' | 'down'>('up');
   const effortPickerRef = useRef<HTMLDivElement>(null);
   const repoPickerRef = useRef<HTMLDivElement>(null);
+
+  const filteredSlashCommands = slashVisible
+    ? slashCommands
+        .filter(command => command.name.toLowerCase().includes(slashQuery.toLowerCase()))
+        .slice(0, 12)
+    : [];
 
   // Effective values: override wins, else inherited agent default
   const effectiveEffort = (agentOverrides?.reasoningEffort ?? inheritedEffort) ?? null;
@@ -307,6 +331,16 @@ const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function ChatInput
     resizeTextarea(e.target);
     const cursorPos = e.target.selectionStart;
     const textBeforeCursor = text.slice(0, cursorPos);
+    const slashMatch = textBeforeCursor.match(/^\/([A-Za-z0-9:_-]*)$/);
+    if (slashMatch) {
+      setSlashVisible(true);
+      setSlashQuery(slashMatch[1]);
+      setSlashSelectedIdx(0);
+      setMentionVisible(false);
+      return;
+    }
+    setSlashVisible(false);
+    setSlashQuery('');
     const lastAt = textBeforeCursor.lastIndexOf('@');
     if (lastAt !== -1) {
       const afterAt = textBeforeCursor.slice(lastAt + 1);
@@ -365,14 +399,58 @@ const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function ChatInput
     setTimeout(() => { if (el) { const np = lastAt + option.name.length + 2; el.focus(); el.selectionStart = np; el.selectionEnd = np; } }, 0);
   }, [value]);
 
+  const handleSlashSelect = useCallback((command: SlashCommandOption) => {
+    const next = command.name + (command.dispatchable ? ' ' : '');
+    setValue(next);
+    setSlashVisible(false);
+    setSlashQuery('');
+    setSlashSelectedIdx(0);
+    setTimeout(() => {
+      const el = textareaRef.current;
+      if (!el) return;
+      el.focus();
+      el.selectionStart = next.length;
+      el.selectionEnd = next.length;
+      resizeTextarea(el);
+    }, 0);
+  }, []);
+
   const handleKeyDown = useCallback((e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (mentionVisible && ['ArrowDown', 'ArrowUp', 'Enter', 'Tab', 'Escape'].includes(e.key)) return;
+    if (slashVisible && ['ArrowDown', 'ArrowUp', 'Enter', 'Tab', 'Escape'].includes(e.key)) {
+      if (e.key === 'ArrowDown') {
+        e.preventDefault();
+        setSlashSelectedIdx(prev => Math.min(prev + 1, filteredSlashCommands.length - 1));
+      } else if (e.key === 'ArrowUp') {
+        e.preventDefault();
+        setSlashSelectedIdx(prev => Math.max(prev - 1, 0));
+      } else if (e.key === 'Enter' || e.key === 'Tab') {
+        const command = filteredSlashCommands[slashSelectedIdx];
+        if (command) {
+          e.preventDefault();
+          handleSlashSelect(command);
+        }
+      } else if (e.key === 'Escape') {
+        e.preventDefault();
+        setSlashVisible(false);
+      }
+      return;
+    }
     if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSend(); }
-  }, [mentionVisible, value, streaming, disabled]);
+  }, [mentionVisible, slashVisible, filteredSlashCommands, slashSelectedIdx, handleSlashSelect, value, streaming, disabled]);
 
   const handleSend = useCallback(() => {
     const trimmed = value.trim();
-    if ((!trimmed && attachments.length === 0) || streaming || disabled) return;
+    if ((!trimmed && attachments.length === 0) || disabled) return;
+    const slashName = trimmed.match(/^\/[^\s]+/)?.[0];
+    const slashCommand = slashName ? slashCommands.find(command => command.name === slashName) : undefined;
+    if (slashCommand && onSlashCommand?.(slashCommand, trimmed)) {
+      setValue('');
+      setSlashVisible(false);
+      setSlashQuery('');
+      return;
+    }
+    if (slashCommand && !slashCommand.dispatchable) return;
     // Append file URLs to message so the agent sees them
     let message = trimmed;
     if (attachments.length > 0) {
@@ -384,6 +462,8 @@ const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function ChatInput
     setAttachments([]);
     setMentionVisible(false);
     setMentionQuery('');
+    setSlashVisible(false);
+    setSlashQuery('');
     setLinearMode(false);
     controllerRef.current?.abort();
     setLinearLoading(false);
@@ -393,7 +473,7 @@ const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function ChatInput
       textareaRef.current.style.height = `${TEXTAREA_MIN_HEIGHT}px`;
       textareaRef.current.style.overflowY = 'hidden';
     }
-  }, [value, attachments, streaming, disabled, onSend]);
+  }, [value, attachments, disabled, onSend, slashCommands, onSlashCommand]);
 
   const currentProvider = providers?.find(p => p.provider === selectedProvider);
 
@@ -417,6 +497,39 @@ const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function ChatInput
         linearLoading={linearLoading}
         linearError={linearError}
       />
+
+      {slashVisible && (
+        <div className="absolute left-0 right-0 bottom-full z-50 mb-2 overflow-hidden rounded-lg border border-app bg-surface-100 shadow-xl">
+          <div className="max-h-72 overflow-y-auto py-1">
+            {filteredSlashCommands.length === 0 ? (
+              <div className="px-3 py-3 text-xs text-theme-subtle">No slash commands found</div>
+            ) : filteredSlashCommands.map((command, index) => {
+              const selected = index === slashSelectedIdx;
+              return (
+                <button
+                  key={`${command.provider}-${command.name}-${command.source}`}
+                  type="button"
+                  disabled={!command.dispatchable}
+                  onMouseEnter={() => setSlashSelectedIdx(index)}
+                  onClick={() => command.dispatchable && handleSlashSelect(command)}
+                  className={`flex w-full items-start gap-3 px-3 py-2 text-left transition-colors ${
+                    selected ? 'bg-app-muted text-theme-primary' : 'text-theme-secondary hover:bg-app-muted/70'
+                  } ${!command.dispatchable ? 'cursor-not-allowed opacity-55' : ''}`}
+                  title={command.unavailableReason}
+                >
+                  <span className="mt-0.5 font-mono text-xs text-accent-blue">{command.name}</span>
+                  <span className="min-w-0 flex-1">
+                    <span className="block truncate text-xs">{command.description}</span>
+                    <span className="mt-0.5 block truncate font-mono text-[10px] text-theme-subtle">
+                      {command.dispatchable ? `${command.source} · ${command.provider}` : command.unavailableReason}
+                    </span>
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      )}
 
       {disabled && disabledReason && (
         <div className="mb-2 px-3 py-2 rounded-md border border-app bg-surface-100/50 text-[11px] font-mono text-theme-secondary">
@@ -460,7 +573,7 @@ const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function ChatInput
           onKeyDown={handleKeyDown}
           onPaste={handlePaste}
           placeholder={CHAT_PLACEHOLDER}
-          disabled={streaming || disabled}
+          disabled={disabled}
           rows={1}
           className="w-full resize-none bg-transparent px-2 py-1.5 text-sm text-theme-primary placeholder-gray-600 font-body focus:outline-none disabled:opacity-50 disabled:cursor-not-allowed"
           style={{ minHeight: `${TEXTAREA_MIN_HEIGHT}px`, maxHeight: `${TEXTAREA_MAX_HEIGHT}px`, overflowY: 'hidden' }}
@@ -700,7 +813,7 @@ const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function ChatInput
           {/* ── Right cluster: send ── */}
           <div className="flex items-center gap-2">
             {/* Send / Stop button */}
-            {streaming ? (
+            {streaming && (
               <button
                 type="button"
                 onClick={onCancel}
@@ -709,7 +822,8 @@ const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function ChatInput
               >
                 <Square className="w-3.5 h-3.5" />
               </button>
-            ) : (
+            )}
+            {(!streaming || value.trim()) && (
               <button
                 type="button"
                 onClick={handleSend}

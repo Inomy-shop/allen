@@ -8,7 +8,7 @@
 import type { Db } from 'mongodb';
 import { ObjectId } from 'mongodb';
 import type { Response } from 'express';
-import { runChatLLM, type ChatLLMMessage, type ChatProvider } from './chat-llm.js';
+import { PROVIDERS, runChatLLM, type ChatLLMMessage, type ChatProvider } from './chat-llm.js';
 import { getDefaultChatProvider, getProvidersInDefaultOrder } from './chat-providers.js';
 import { resolveAgentSettings, type AgentLike, type AgentOverrides, type ResolvedSettings } from './agent-settings.js';
 import { AlertService } from './alert.service.js';
@@ -18,6 +18,9 @@ import { buildOrgContextBlock } from './org-context.js';
 import { MonitoringService } from './self-healing-monitor.service.js';
 import { ExecutionService } from './execution.service.js';
 import { LinearService } from './linear.service.js';
+import { runPersistentCodexSlashCommand } from './chat-runtime-manager.js';
+import { listSlashCommands, type SlashCommandInfo } from './slash-commands.js';
+import type { RuntimeSlashCommand } from './chat-runtime-types.js';
 // Note: embedding.service.ts re-exports from @allen/engine — single implementation shared by engine + server
 
 // ── Types ──
@@ -92,6 +95,27 @@ function senderFields(sender?: ChatMessageSender): Pick<ChatMessage, 'senderUser
     ...(sender.name ? { senderName: sender.name } : {}),
     ...(sender.email ? { senderEmail: sender.email } : {}),
     ...(sender.source ? { senderSource: sender.source } : {}),
+  };
+}
+
+function parseSlashCommandText(content: string): { name: string; args: string; raw: string } | null {
+  const trimmed = content.trim();
+  const match = trimmed.match(/^(\/[^\s]+)(?:\s+([\s\S]*))?$/);
+  if (!match) return null;
+  return { name: match[1], args: match[2] ?? '', raw: trimmed };
+}
+
+function resolveSlashCommand(content: string, commands: SlashCommandInfo[]): RuntimeSlashCommand | null {
+  const parsed = parseSlashCommandText(content);
+  if (!parsed) return null;
+  const command = commands.find(item => item.name === parsed.name);
+  if (!command || !command.dispatchable) return null;
+  return {
+    name: command.name,
+    raw: parsed.raw,
+    args: parsed.args,
+    kind: command.kind,
+    path: command.path,
   };
 }
 
@@ -1242,32 +1266,21 @@ User: ${userMessage.slice(0, 500)}`;
         console.warn(`[chat] resolveAgentSettings failed: ${(err as Error).message}`);
       }
 
-      const result = await runChatLLM(this.db, {
-        provider: (resolvedSettings?.provider as ChatProvider) ?? provider,
-        model: resolvedSettings?.model || model,
-        resolvedSettings,
-        systemPrompt,
-        messages: llmMessages,
-        resumeSessionId: hasSessionResume ? resumeSessionId : undefined,
-        cwd: workspaceCwd,
-        // Forwarded down to the Allen MCP subprocess as
-        // ALLEN_ARTIFACT_ROOT_TYPE=chat / ALLEN_ARTIFACT_ROOT_ID=<sessionId>
-        // so allen_save_artifact files under this chat session.
-        chatSessionId: sessionId,
+      const callbacks = {
         signal: entry.abortController.signal,
-        onText: (fullText) => {
+        onText: (fullText: string) => {
           entry.currentText = fullText;
           broadcastToListeners(entry, 'message_delta', { text: fullText, messageId: assistantMsgId });
         },
-        onThinking: (thinking) => {
+        onThinking: (thinking: string) => {
           entry.currentThinking = thinking;
           broadcastToListeners(entry, 'thinking', { text: thinking, messageId: assistantMsgId });
         },
-        onToolStart: (tool, args, toolUseId) => {
+        onToolStart: (tool: string, args: Record<string, unknown>, toolUseId: string) => {
           entry.pendingToolCalls.set(toolUseId, { tool, args, startMs: Date.now() });
           broadcastToListeners(entry, 'tool_start', { tool, args, toolUseId, tool_use_id: toolUseId });
         },
-        onToolResult: (tool, resultData, toolUseId, durationMs) => {
+        onToolResult: (tool: string, resultData: Record<string, unknown>, toolUseId: string, durationMs: number) => {
           const pending = entry.pendingToolCalls.get(toolUseId);
           const record: ToolCallRecord = {
             tool,
@@ -1303,14 +1316,54 @@ User: ${userMessage.slice(0, 500)}`;
             }).catch(() => {});
           }
         },
-        onSessionId: (sid) => {
+        onSessionId: (sid: string) => {
           // Save session ID to DB immediately so auto-retry can resume even if the process times out
           this.sessions.updateOne(
             { _id: new ObjectId(sessionId) },
             { $set: { llmSessionId: sid } },
           ).catch(() => {});
         },
-      });
+      };
+
+      const effectiveProvider = (resolvedSettings?.provider as ChatProvider) ?? provider;
+      const effectiveModel = resolvedSettings?.model || model || PROVIDERS.find(p => p.provider === effectiveProvider)?.defaultModel || 'gpt-5.5';
+      const codexSlashCommand = effectiveProvider === 'codex'
+        ? resolveSlashCommand(content, listSlashCommands('codex', workspaceCwd))
+        : null;
+
+      const result = codexSlashCommand
+        ? {
+            ...(await runPersistentCodexSlashCommand({
+              db: this.db,
+              chatSessionId: sessionId,
+              provider: 'codex',
+              model: effectiveModel,
+              resolvedSettings,
+              systemPrompt,
+              messages: llmMessages,
+              resumeSessionId: hasSessionResume ? resumeSessionId : undefined,
+              skipTools: undefined,
+              cwd: workspaceCwd,
+              callbacks,
+            }, codexSlashCommand)),
+            durationMs: Date.now() - startMs,
+            model: effectiveModel,
+            provider: effectiveProvider,
+          }
+        : await runChatLLM(this.db, {
+            provider: effectiveProvider,
+            model: effectiveModel,
+            resolvedSettings,
+            systemPrompt,
+            messages: llmMessages,
+            resumeSessionId: hasSessionResume ? resumeSessionId : undefined,
+            cwd: workspaceCwd,
+            // Forwarded down to the Allen MCP subprocess as
+            // ALLEN_ARTIFACT_ROOT_TYPE=chat / ALLEN_ARTIFACT_ROOT_ID=<sessionId>
+            // so allen_save_artifact files under this chat session.
+            chatSessionId: sessionId,
+            ...callbacks,
+          });
 
       clearInterval(saveInterval);
       const durationMs = Date.now() - startMs;
