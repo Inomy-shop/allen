@@ -4,8 +4,9 @@ import type { NodeState } from '../hooks/useExecution';
  * Backfill running state for nodes that are currently executing (in
  * `currentNodes`) but whose traces still show a prior terminal state.
  *
- * The guard uses `status === 'completed'` (not `map.has(name)`) so a node
- * with a prior failed trace is correctly promoted to 'running' on rerun.
+ * `currentNodes` is authoritative for live executions. A node may already
+ * have a completed trace from an earlier loop/retry, so completed traces must
+ * still be promoted to `running` when the engine reports a new active attempt.
  *
  * Mutates `map` in place.
  */
@@ -16,7 +17,7 @@ export function applyCurrentNodesBackfill(
 ): void {
   if (!Array.isArray(currentNodes)) return;
   for (const name of currentNodes) {
-    if (name === 'END' || map.get(name)?.status === 'completed') continue;
+    if (name === 'END') continue;
     const priorAttempts = (completedNodes ?? []).filter((n: string) => n === name).length;
     map.set(name, {
       name,
