@@ -160,7 +160,10 @@ export class CodexAppServerRuntime implements PersistentChatRuntime {
 
     await this.request('initialize', {
       clientInfo: { name: 'allen-chat', title: 'Allen Chat', version: '0.1.0' },
-      capabilities: { experimentalApi: true },
+      capabilities: {
+        experimentalApi: true,
+        optOutNotificationMethods: [],
+      },
     });
 
     const config = codexConfig(input);
@@ -289,18 +292,12 @@ export class CodexAppServerRuntime implements PersistentChatRuntime {
     }
 
     if (method === 'item/reasoning/textDelta' || method === 'item/reasoning/summaryTextDelta') {
-      turn.thinking += String(params.delta ?? '');
-      turn.trace.push({ timestamp: new Date(), type: 'thinking', text: turn.thinking });
-      logRuntimeEvent({
-        db: turn.input.db,
-        sessionId: turn.input.chatSessionId,
-        provider: this.provider,
-        runtimeId: this.id,
-        eventType: 'normalized',
-        event: 'thinking',
-        data: { text: turn.thinking },
-      });
-      turn.input.callbacks.onThinking?.(turn.thinking);
+      this.appendThinking(turn, String(params.delta ?? ''));
+      return;
+    }
+
+    if (method === 'item/reasoning/summaryPartAdded') {
+      this.appendThinking(turn, reasoningPartText(params));
       return;
     }
 
@@ -342,6 +339,16 @@ export class CodexAppServerRuntime implements PersistentChatRuntime {
   private handleItemStarted(turn: ActiveTurn, item: Record<string, unknown>): void {
     const type = String(item.type ?? '');
     const id = String(item.id ?? '');
+    if (isAgentMessageItemType(type)) {
+      const text = agentMessageText(item);
+      if (text) this.handleAgentMessage(turn, text);
+      return;
+    }
+    if (isReasoningItemType(type)) {
+      const text = reasoningItemText(item);
+      if (text) this.mergeThinking(turn, text);
+      return;
+    }
     if (type === 'mcpToolCall') {
       const server = String(item.server ?? '');
       const tool = String(item.tool ?? '');
@@ -381,6 +388,16 @@ export class CodexAppServerRuntime implements PersistentChatRuntime {
   private handleItemCompleted(turn: ActiveTurn, item: Record<string, unknown>): void {
     const type = String(item.type ?? '');
     const id = String(item.id ?? '');
+    if (isAgentMessageItemType(type)) {
+      const text = agentMessageText(item);
+      if (text) this.handleAgentMessage(turn, text);
+      return;
+    }
+    if (isReasoningItemType(type)) {
+      const text = reasoningItemText(item);
+      if (text) this.mergeThinking(turn, text);
+      return;
+    }
     if (type === 'mcpToolCall') {
       const started = turn.pendingTools.get(id);
       const server = String(item.server ?? '');
@@ -421,10 +438,115 @@ export class CodexAppServerRuntime implements PersistentChatRuntime {
       turn.pendingTools.delete(id);
     }
   }
+
+  private handleAgentMessage(turn: ActiveTurn, text: string): void {
+    const clean = text.trim();
+    if (!clean) return;
+    if (clean === turn.text.trim()) return;
+    turn.text = text;
+    logRuntimeEvent({
+      db: turn.input.db,
+      sessionId: turn.input.chatSessionId,
+      provider: this.provider,
+      runtimeId: this.id,
+      eventType: 'normalized',
+      event: 'message_delta',
+      data: { text: turn.text },
+    });
+    turn.input.callbacks.onText(turn.text);
+  }
+
+  private appendThinking(turn: ActiveTurn, delta: string): void {
+    if (!delta) return;
+    this.replaceThinking(turn, `${turn.thinking}${delta}`);
+  }
+
+  private mergeThinking(turn: ActiveTurn, text: string): void {
+    const clean = text.trim();
+    if (!clean) return;
+    if (!turn.thinking) {
+      this.replaceThinking(turn, clean);
+      return;
+    }
+    if (turn.thinking.includes(clean)) return;
+    if (clean.startsWith(turn.thinking)) {
+      this.replaceThinking(turn, clean);
+      return;
+    }
+    this.replaceThinking(turn, `${turn.thinking}\n\n${clean}`);
+  }
+
+  private replaceThinking(turn: ActiveTurn, text: string): void {
+    if (!text || text === turn.thinking) return;
+    turn.thinking = text;
+    turn.trace.push({ timestamp: new Date(), type: 'thinking', text: turn.thinking });
+    logRuntimeEvent({
+      db: turn.input.db,
+      sessionId: turn.input.chatSessionId,
+      provider: this.provider,
+      runtimeId: this.id,
+      eventType: 'normalized',
+      event: 'thinking',
+      data: { text: turn.thinking },
+    });
+    turn.input.callbacks.onThinking?.(turn.thinking);
+  }
 }
 
 function asRecord(value: unknown): Record<string, unknown> {
   return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {};
+}
+
+function isReasoningItemType(type: string): boolean {
+  return type === 'reasoning' || type === 'agentReasoning' || type === 'agent_reasoning';
+}
+
+function isAgentMessageItemType(type: string): boolean {
+  return type === 'agentMessage' || type === 'agent_message';
+}
+
+function agentMessageText(item: Record<string, unknown>): string {
+  const direct = item.text ?? item.message;
+  if (typeof direct === 'string') return direct;
+  const content = item.content;
+  if (Array.isArray(content)) {
+    return content.map((part) => {
+      if (typeof part === 'string') return part;
+      if (part && typeof part === 'object') {
+        const rec = part as Record<string, unknown>;
+        return String(rec.text ?? rec.content ?? rec.message ?? '');
+      }
+      return '';
+    }).join('');
+  }
+  return '';
+}
+
+function reasoningPartText(params: Record<string, unknown>): string {
+  const part = params.part ?? params.summaryPart ?? params.delta;
+  if (typeof part === 'string') return part;
+  if (part && typeof part === 'object') {
+    const rec = part as Record<string, unknown>;
+    return String(rec.text ?? rec.summary ?? rec.content ?? '');
+  }
+  return '';
+}
+
+function reasoningItemText(item: Record<string, unknown>): string {
+  const direct = item.text ?? item.summary ?? item.content;
+  if (typeof direct === 'string') return direct;
+  const parts = item.summaryParts ?? item.summary ?? item.parts ?? item.content;
+  if (Array.isArray(parts)) {
+    return parts.map((part) => {
+      if (typeof part === 'string') return part;
+      if (part && typeof part === 'object') {
+        const rec = part as Record<string, unknown>;
+        return String(rec.text ?? rec.summary ?? rec.content ?? '');
+      }
+      return '';
+    }).join('');
+  }
+  return '';
 }
 
 function mcpResult(item: Record<string, unknown>): Record<string, unknown> {
@@ -443,11 +565,18 @@ function codexEffort(input: RuntimeTurnInput): string | undefined {
   return input.resolvedSettings?.reasoningEffort === 'max' ? 'high' : input.resolvedSettings?.reasoningEffort;
 }
 
+function codexReasoningSummary(): string {
+  const value = process.env.CODEX_REASONING_SUMMARY;
+  if (value === 'none' || value === 'concise' || value === 'detailed' || value === 'auto') return value;
+  return 'auto';
+}
+
 function codexConfig(input: RuntimeTurnInput): Record<string, unknown> {
   const args = input.resolvedSettings ? toCodexArgs(input.resolvedSettings) : [];
   const config: Record<string, unknown> = {
     model: input.model,
     ...(codexEffort(input) ? { model_reasoning_effort: codexEffort(input) } : {}),
+    model_reasoning_summary: codexReasoningSummary(),
   };
   for (let i = 0; i < args.length; i += 2) {
     const kv = args[i + 1] ?? '';

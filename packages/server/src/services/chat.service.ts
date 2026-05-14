@@ -64,6 +64,7 @@ export interface ChatMessage {
   numTurns?: number;
   error?: string;
   toolCalls?: ToolCallRecord[];
+  thinkingText?: string;
   createdAt: Date;
   completedAt?: Date;
 }
@@ -74,6 +75,7 @@ export interface ToolCallRecord {
   result: Record<string, unknown>;
   durationMs: number;
   timestamp: Date;
+  toolUseId?: string;
 }
 
 export interface ChatMessageSender {
@@ -402,7 +404,9 @@ interface ActiveQuery {
   sessionId: string;
   messageId: string;
   currentText: string;
+  currentThinking: string;
   toolCalls: ToolCallRecord[];
+  pendingToolCalls: Map<string, { tool: string; args: Record<string, unknown>; startMs: number }>;
   listeners: Set<Response>;
   eventHandlers?: Set<ChatEventHandler>;
   aborted: boolean;
@@ -828,7 +832,10 @@ export class ChatService {
 
     res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', Connection: 'keep-alive', 'X-Accel-Buffering': 'no' });
 
-    const entry: ActiveQuery = { sessionId, messageId: assistantMsgId, currentText: '', toolCalls: [], listeners: new Set([res]), aborted: false, abortController: new AbortController() };
+    const entry: ActiveQuery = {
+      sessionId, messageId: assistantMsgId, currentText: '', currentThinking: '', toolCalls: [],
+      pendingToolCalls: new Map(), listeners: new Set([res]), aborted: false, abortController: new AbortController(),
+    };
     activeQueries.set(sessionId, entry);
     attachHeartbeat(res);
     res.on('close', () => { detachHeartbeat(res); entry.listeners.delete(res); });
@@ -871,7 +878,8 @@ export class ChatService {
 
     // ActiveQuery with no SSE listeners — UI can still subscribe via GET /stream
     const entry: ActiveQuery = {
-      sessionId, messageId: assistantMsgId, currentText: '', toolCalls: [],
+      sessionId, messageId: assistantMsgId, currentText: '', currentThinking: '', toolCalls: [],
+      pendingToolCalls: new Map(),
       listeners: new Set(), aborted: false, abortController: new AbortController(),
       ...(onEvent ? { eventHandlers: new Set([onEvent]) } : {}),
     };
@@ -897,7 +905,11 @@ export class ChatService {
     res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', Connection: 'keep-alive', 'X-Accel-Buffering': 'no' });
     const entry = activeQueries.get(sessionId);
     if (entry) {
+      if (entry.currentThinking) sendSSE(res, 'thinking', { text: entry.currentThinking, messageId: entry.messageId });
       if (entry.currentText) sendSSE(res, 'message_delta', { text: entry.currentText, messageId: entry.messageId });
+      for (const [toolUseId, pending] of entry.pendingToolCalls) {
+        sendSSE(res, 'tool_start', { tool: pending.tool, args: pending.args, toolUseId, tool_use_id: toolUseId, messageId: entry.messageId });
+      }
       entry.listeners.add(res);
       attachHeartbeat(res);
       res.on('close', () => { detachHeartbeat(res); entry.listeners.delete(res); });
@@ -1088,7 +1100,7 @@ User: ${userMessage.slice(0, 500)}`;
       if (entry.currentText) {
         this.messages.updateOne(
           { _id: new ObjectId(assistantMsgId) },
-          { $set: { content: entry.currentText, toolCalls: entry.toolCalls } },
+          { $set: { content: entry.currentText, thinkingText: entry.currentThinking, toolCalls: entry.toolCalls } },
         ).catch(() => {});
       }
     }, 5000);
@@ -1248,15 +1260,26 @@ User: ${userMessage.slice(0, 500)}`;
           broadcastToListeners(entry, 'message_delta', { text: fullText, messageId: assistantMsgId });
         },
         onThinking: (thinking) => {
+          entry.currentThinking = thinking;
           broadcastToListeners(entry, 'thinking', { text: thinking, messageId: assistantMsgId });
         },
         onToolStart: (tool, args, toolUseId) => {
-          broadcastToListeners(entry, 'tool_start', { tool, args, tool_use_id: toolUseId });
+          entry.pendingToolCalls.set(toolUseId, { tool, args, startMs: Date.now() });
+          broadcastToListeners(entry, 'tool_start', { tool, args, toolUseId, tool_use_id: toolUseId });
         },
         onToolResult: (tool, resultData, toolUseId, durationMs) => {
-          const record: ToolCallRecord = { tool, args: {}, result: resultData, durationMs, timestamp: new Date() };
+          const pending = entry.pendingToolCalls.get(toolUseId);
+          const record: ToolCallRecord = {
+            tool,
+            args: pending?.args ?? {},
+            result: resultData,
+            durationMs,
+            timestamp: new Date(),
+            toolUseId,
+          };
           entry.toolCalls.push(record);
-          broadcastToListeners(entry, 'tool_result', { tool, result: resultData, tool_use_id: toolUseId, durationMs });
+          entry.pendingToolCalls.delete(toolUseId);
+          broadcastToListeners(entry, 'tool_result', { tool, args: record.args, result: resultData, toolUseId, tool_use_id: toolUseId, durationMs });
           const userReport = isReportToUserTool(tool) ? reportToUserPayload(resultData) : null;
           if (userReport) {
             broadcastToListeners(entry, 'agent_report', {
@@ -1295,7 +1318,7 @@ User: ${userMessage.slice(0, 500)}`;
 
       await this.messages.updateOne(
         { _id: new ObjectId(assistantMsgId) },
-        { $set: { content: result.text, status: 'completed', costUsd, durationMs, toolCalls: entry.toolCalls, completedAt: new Date() } },
+        { $set: { content: result.text, status: 'completed', costUsd, durationMs, toolCalls: entry.toolCalls, thinkingText: entry.currentThinking, completedAt: new Date() } },
       );
 
       // Save execution trace to chat_logs (fire-and-forget)
@@ -1324,7 +1347,7 @@ User: ${userMessage.slice(0, 500)}`;
       );
 
       broadcastToListeners(entry, 'message_complete', {
-        messageId: assistantMsgId, text: result.text, costUsd, durationMs, toolCalls: entry.toolCalls,
+        messageId: assistantMsgId, text: result.text, costUsd, durationMs, toolCalls: entry.toolCalls, thinkingText: entry.currentThinking,
       });
 
       // Auto-title strategy: fire exactly once on turn 1, using only the
@@ -1427,11 +1450,20 @@ User: ${userMessage.slice(0, 500)}`;
             // mid-retry allen_save_artifact still files under this chat.
             chatSessionId: sessionId,
             onText: (fullText) => { entry.currentText = fullText; broadcastToListeners(entry, 'message_delta', { text: fullText, messageId: assistantMsgId }); },
-            onThinking: (thinking) => { broadcastToListeners(entry, 'thinking', { text: thinking, messageId: assistantMsgId }); },
-            onToolStart: (tool, args, toolUseId) => { broadcastToListeners(entry, 'tool_start', { tool, args, tool_use_id: toolUseId }); },
+            onThinking: (thinking) => {
+              entry.currentThinking = thinking;
+              broadcastToListeners(entry, 'thinking', { text: thinking, messageId: assistantMsgId });
+            },
+            onToolStart: (tool, args, toolUseId) => {
+              entry.pendingToolCalls.set(toolUseId, { tool, args, startMs: Date.now() });
+              broadcastToListeners(entry, 'tool_start', { tool, args, toolUseId, tool_use_id: toolUseId });
+            },
             onToolResult: (tool, resultData, toolUseId, durationMs) => {
-              entry.toolCalls.push({ tool, args: {}, result: resultData, durationMs, timestamp: new Date() });
-              broadcastToListeners(entry, 'tool_result', { tool, result: resultData, tool_use_id: toolUseId, durationMs });
+              const pending = entry.pendingToolCalls.get(toolUseId);
+              const record = { tool, args: pending?.args ?? {}, result: resultData, durationMs, timestamp: new Date(), toolUseId };
+              entry.toolCalls.push(record);
+              entry.pendingToolCalls.delete(toolUseId);
+              broadcastToListeners(entry, 'tool_result', { tool, args: record.args, result: resultData, toolUseId, tool_use_id: toolUseId, durationMs });
               const userReport = isReportToUserTool(tool) ? reportToUserPayload(resultData) : null;
               if (userReport) {
                 broadcastToListeners(entry, 'agent_report', {
@@ -1464,12 +1496,12 @@ User: ${userMessage.slice(0, 500)}`;
           const durationMs = Date.now() - startMs;
           await this.messages.updateOne(
             { _id: new ObjectId(assistantMsgId) },
-            { $set: { content: retryResult.text, status: 'completed', costUsd: retryResult.costUsd, durationMs, toolCalls: entry.toolCalls, completedAt: new Date() } },
+            { $set: { content: retryResult.text, status: 'completed', costUsd: retryResult.costUsd, durationMs, toolCalls: entry.toolCalls, thinkingText: entry.currentThinking, completedAt: new Date() } },
           );
           if (retryResult.sessionId) {
             await this.sessions.updateOne({ _id: new ObjectId(sessionId) }, { $set: { llmSessionId: retryResult.sessionId } });
           }
-          broadcastToListeners(entry, 'message_complete', { messageId: assistantMsgId, text: retryResult.text, costUsd: retryResult.costUsd, durationMs, toolCalls: entry.toolCalls });
+          broadcastToListeners(entry, 'message_complete', { messageId: assistantMsgId, text: retryResult.text, costUsd: retryResult.costUsd, durationMs, toolCalls: entry.toolCalls, thinkingText: entry.currentThinking });
           return; // success — skip error handling below
         } catch (retryErr) {
           console.error('Auto-retry also failed:', retryErr instanceof Error ? retryErr.message : retryErr);
@@ -1479,7 +1511,7 @@ User: ${userMessage.slice(0, 500)}`;
 
       await this.messages.updateOne(
         { _id: new ObjectId(assistantMsgId) },
-        { $set: { content: entry.currentText || '', status: 'failed', error: errorMsg, toolCalls: entry.toolCalls, completedAt: new Date() } },
+        { $set: { content: entry.currentText || '', status: 'failed', error: errorMsg, toolCalls: entry.toolCalls, thinkingText: entry.currentThinking, completedAt: new Date() } },
       );
 
       this.db.collection('chat_logs').insertOne({

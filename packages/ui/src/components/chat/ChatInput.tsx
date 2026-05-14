@@ -1,5 +1,5 @@
 import { useState, useRef, useCallback, useEffect, forwardRef, useImperativeHandle, type ReactNode } from 'react';
-import { Send, Square, ChevronDown, Paperclip, Loader2, X, Sparkles, ShieldCheck } from 'lucide-react';
+import { ArrowUp, Square, ChevronDown, Paperclip, Loader2, X, Sparkles, ShieldCheck, Plus } from 'lucide-react';
 import MentionAutocomplete, { type MentionOption } from './MentionAutocomplete';
 import { authHeaders, linear, type LinearIssueSummary } from '../../services/api';
 import { CHAT_PLACEHOLDER } from '../../lib/brand';
@@ -48,6 +48,7 @@ interface ChatInputProps {
   selectedRepoName?: string | null;
   repoLocked?: boolean;
   onRepoChange?: (repo: RepoOption | null) => void;
+  onOpenQuickCommands?: (anchor: HTMLElement) => void;
   extraControls?: ReactNode;
 }
 
@@ -64,8 +65,8 @@ const EFFORT_OPTIONS: Array<{ value: ReasoningEffortValue; label: string; descri
   { value: 'max', label: 'Max', description: 'Opus only' },
 ];
 
-const TEXTAREA_MIN_HEIGHT = 82; // 3 text lines.
-const TEXTAREA_MAX_HEIGHT = TEXTAREA_MIN_HEIGHT; // Fixed at 3 lines; longer input scrolls.
+const TEXTAREA_MIN_HEIGHT = 40;
+const TEXTAREA_MAX_HEIGHT = 150;
 
 function capitalize(s: string): string {
   return s.charAt(0).toUpperCase() + s.slice(1);
@@ -106,6 +107,7 @@ const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function ChatInput
     selectedRepoName,
     repoLocked,
     onRepoChange,
+    onOpenQuickCommands,
     extraControls,
   },
   ref,
@@ -229,6 +231,13 @@ const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function ChatInput
   const pickerRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
+  function resizeTextarea(el: HTMLTextAreaElement): void {
+    el.style.height = 'auto';
+    const nextHeight = Math.min(Math.max(el.scrollHeight, TEXTAREA_MIN_HEIGHT), TEXTAREA_MAX_HEIGHT);
+    el.style.height = `${nextHeight}px`;
+    el.style.overflowY = el.scrollHeight > TEXTAREA_MAX_HEIGHT ? 'auto' : 'hidden';
+  }
+
   useImperativeHandle(ref, () => ({
     setValue: (v: string) => {
       setValue(v);
@@ -289,13 +298,13 @@ const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function ChatInput
   useEffect(() => {
     const el = textareaRef.current;
     if (!el) return;
-    el.style.height = `${TEXTAREA_MIN_HEIGHT}px`;
-    el.style.overflowY = el.scrollHeight > TEXTAREA_MAX_HEIGHT ? 'auto' : 'hidden';
+    resizeTextarea(el);
   }, [value]);
 
   const handleChange = useCallback((e: React.ChangeEvent<HTMLTextAreaElement>) => {
     const text = e.target.value;
     setValue(text);
+    resizeTextarea(e.target);
     const cursorPos = e.target.selectionStart;
     const textBeforeCursor = text.slice(0, cursorPos);
     const lastAt = textBeforeCursor.lastIndexOf('@');
@@ -452,8 +461,8 @@ const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function ChatInput
           onPaste={handlePaste}
           placeholder={CHAT_PLACEHOLDER}
           disabled={streaming || disabled}
-          rows={3}
-          className="w-full resize-none bg-transparent px-3 pt-2.5 pb-2 text-sm text-theme-primary placeholder-gray-600 font-body focus:outline-none disabled:opacity-50 disabled:cursor-not-allowed"
+          rows={1}
+          className="w-full resize-none bg-transparent px-2 py-1.5 text-sm text-theme-primary placeholder-gray-600 font-body focus:outline-none disabled:opacity-50 disabled:cursor-not-allowed"
           style={{ minHeight: `${TEXTAREA_MIN_HEIGHT}px`, maxHeight: `${TEXTAREA_MAX_HEIGHT}px`, overflowY: 'hidden' }}
         />
 
@@ -461,6 +470,18 @@ const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function ChatInput
         <div className="chat-input-controls cc-foot">
           {/* ── Left cluster: model, effort, plan, attach ── */}
           <div className="flex flex-wrap items-center gap-1">
+            {onOpenQuickCommands && (
+              <button
+                type="button"
+                onClick={(event) => onOpenQuickCommands(event.currentTarget)}
+                disabled={disabled}
+                className="flex h-6 w-6 items-center justify-center rounded-md text-theme-muted transition-colors hover:bg-surface-100/50 hover:text-theme-secondary disabled:cursor-not-allowed disabled:opacity-30"
+                title="Quick commands"
+                aria-label="Quick commands"
+              >
+                <Plus className="h-3.5 w-3.5" />
+              </button>
+            )}
             {extraControls}
 
           {/* Model selector */}
@@ -676,20 +697,27 @@ const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function ChatInput
           </div>
           {/* ── /Left cluster ── */}
 
-          {/* ── Right cluster: hint + send ── */}
+          {/* ── Right cluster: send ── */}
           <div className="flex items-center gap-2">
-            {/* Hint */}
-            <span className="text-[10px] text-theme-subtle font-mono hidden sm:inline">shift+enter for new line</span>
-
             {/* Send / Stop button */}
             {streaming ? (
-              <button onClick={onCancel} className="shrink-0 w-8 h-8 flex items-center justify-center rounded-md bg-red-500/20 text-accent-red hover:bg-red-500/30 transition-colors" title="Stop">
+              <button
+                type="button"
+                onClick={onCancel}
+                className="shrink-0 w-8 h-8 flex items-center justify-center rounded-full bg-red-500/20 text-accent-red hover:bg-red-500/30 transition-colors"
+                title="Stop"
+              >
                 <Square className="w-3.5 h-3.5" />
               </button>
             ) : (
-              <button onClick={handleSend} disabled={!value.trim() || disabled}
-                className="shrink-0 w-8 h-8 flex items-center justify-center rounded-md bg-accent-blue/20 text-accent-blue hover:bg-accent-blue/30 transition-colors disabled:opacity-30 disabled:cursor-not-allowed" title="Send">
-                <Send className="w-3.5 h-3.5" />
+              <button
+                type="button"
+                onClick={handleSend}
+                disabled={!value.trim() || disabled}
+                className="shrink-0 w-8 h-8 flex items-center justify-center rounded-full bg-accent-blue text-white shadow-sm transition-colors hover:bg-accent-hover disabled:bg-surface-200 disabled:text-theme-subtle disabled:opacity-100 disabled:cursor-not-allowed"
+                title="Send"
+              >
+                <ArrowUp className="w-4 h-4" />
               </button>
             )}
           </div>

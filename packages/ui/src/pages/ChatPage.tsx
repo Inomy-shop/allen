@@ -8,33 +8,15 @@ import ConversationLogs from '../components/chat/ConversationLogs';
 import AgentChatDropdown from '../components/chat/AgentChatDropdown';
 import ChatRunSidebar from '../components/chat/ChatRunSidebar';
 import { ToolCallLog } from '../components/common/ToolCallLog';
-import { BRAND_NAME } from '../lib/brand';
 import { chat as chatApi, mcp as mcpApi, learnings as learningsApi, agents as agentsApi, repos as reposApi } from '../services/api';
 import ArtifactsDrawer from '../components/artifacts/ArtifactsDrawer';
-import { MessageSquare, MoreHorizontal, FolderGit2, GitBranch } from 'lucide-react';
-
-const PROVIDER_DISPLAY: Record<string, { label: string; color: string }> = {
-  codex: { label: 'Codex', color: 'text-accent-green' },
-  'claude-cli': { label: 'Claude CLI', color: 'text-accent' },
-};
-
-function timeAgo(dateStr?: string): string {
-  if (!dateStr) return 'now';
-  const ms = Date.now() - new Date(dateStr).getTime();
-  const min = Math.floor(ms / 60_000);
-  if (min < 1) return 'now';
-  if (min < 60) return `${min}m`;
-  const hr = Math.floor(min / 60);
-  if (hr < 24) return `${hr}h`;
-  const day = Math.floor(hr / 24);
-  return `${day}d`;
-}
 
 export default function ChatPage() {
   const { sessionId: urlSessionId } = useParams<{ sessionId?: string }>();
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
   const [cmdPaletteOpen, setCmdPaletteOpen] = useState(false);
+  const [cmdPaletteAnchor, setCmdPaletteAnchor] = useState<DOMRect | null>(null);
   const [logsOpen, setLogsOpen] = useState(false);
   const [toolLogOpen, setToolLogOpen] = useState(false);
   const [artifactsOpen, setArtifactsOpen] = useState(false);
@@ -63,7 +45,7 @@ export default function ChatPage() {
     spawnedAgents, pendingUserQuestion, answerUserQuestion, answerWorkflowIntervention,
     loadingMessages,
     sendMessage, createSession, switchSession, cancelStream,
-    updateSessionTitle, refresh: refreshSessions,
+    refresh: refreshSessions,
   } = useChat();
 
   useEffect(() => {
@@ -134,7 +116,13 @@ export default function ChatPage() {
   }, [activeSessionId, activeSession?.activeAgent]);
 
   useEffect(() => {
-    const handler = (e: KeyboardEvent) => { if ((e.metaKey || e.ctrlKey) && e.key === 'k') { e.preventDefault(); setCmdPaletteOpen(prev => !prev); } };
+    const handler = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key === 'k') {
+        e.preventDefault();
+        setCmdPaletteAnchor(null);
+        setCmdPaletteOpen(prev => !prev);
+      }
+    };
     window.addEventListener('keydown', handler);
     return () => window.removeEventListener('keydown', handler);
   }, []);
@@ -272,6 +260,7 @@ export default function ChatPage() {
     if (partial) { chatInputRef.current?.setValue(prompt); chatInputRef.current?.focus(); }
     else handleSend(prompt);
     setCmdPaletteOpen(false);
+    setCmdPaletteAnchor(null);
   }
 
   async function handleSaveToLearnings(content: string) {
@@ -285,88 +274,11 @@ export default function ChatPage() {
     } catch {}
   }
 
-  const sessionTitle = activeSessionId ? activeSession?.title ?? 'Chat' : 'New Conversation';
-  const titleTicket = sessionTitle.match(/\b[A-Z][A-Z0-9]+-\d+\b/)?.[0] ?? null;
-  const linkedRepoName = activeSession?.repoName ?? selectedRepo?.name ?? null;
   const showRunSidebar = spawnedAgents.length > 0;
-
-  // Inline title edit. Persists via useChat.updateSessionTitle which
-  // does an optimistic local update so the sidebar reflects the new
-  // title immediately. Only enabled when there's an active session.
-  const [titleDraft, setTitleDraft] = useState<string | null>(null);
-  const [savingTitle, setSavingTitle] = useState(false);
-  async function commitTitle() {
-    const next = (titleDraft ?? '').trim();
-    setTitleDraft(null);
-    if (!activeSessionId || !next || next === sessionTitle) return;
-    setSavingTitle(true);
-    try {
-      // Optimistic — sidebar updates immediately via setSessions.
-      await updateSessionTitle(activeSessionId, next);
-    } finally {
-      setSavingTitle(false);
-    }
-  }
 
   return (
     <div className={`chat-page-shell ${showRunSidebar ? 'with-run-sidebar' : ''}`}>
       <div className="chat-main-shell">
-      {/* Header — matches handoff/pages/chat.jsx ChatV2 */}
-      <div className="chat-page-head">
-        <div className="flex items-center justify-between gap-3">
-          <div className="chat-conv-titlebar">
-            <MessageSquare className="h-4 w-4 text-theme-muted" />
-            <div className="min-w-0">
-            {activeSessionId && titleDraft !== null ? (
-              <input
-                autoFocus
-                value={titleDraft}
-                onChange={(e) => setTitleDraft(e.target.value)}
-                onBlur={commitTitle}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter') (e.target as HTMLInputElement).blur();
-                  if (e.key === 'Escape') setTitleDraft(null);
-                }}
-                className="chat-title-edit"
-                disabled={savingTitle}
-              />
-            ) : (
-              <h1
-                className={`truncate ${activeSessionId ? 'cursor-text hover:text-accent transition-colors' : ''}`}
-                onClick={() => activeSessionId && setTitleDraft(sessionTitle)}
-                title={activeSessionId ? 'Click to rename' : undefined}
-              >
-                {sessionTitle}
-              </h1>
-            )}
-              <div className="chat-linked-row">
-                <span>linked:</span>
-                {titleTicket ? <span className="chat-linked-chip"><GitBranch className="h-2.5 w-2.5" /> {titleTicket}</span> : <span className="chat-linked-chip muted">auto</span>}
-                {linkedRepoName && <span className="chat-linked-chip"><FolderGit2 className="h-2.5 w-2.5" /> {linkedRepoName}</span>}
-                {(activeSessionId ? activeProvider : selectedProvider) && (
-                  <span className={`chat-linked-chip ${PROVIDER_DISPLAY[activeSessionId ? activeProvider : selectedProvider]?.color ?? 'text-theme-muted'}`}>
-                    {PROVIDER_DISPLAY[activeSessionId ? activeProvider : selectedProvider]?.label ?? BRAND_NAME}
-                  </span>
-                )}
-              </div>
-            </div>
-            {selectedAgent && (() => {
-              const agentInfo = allAgents.find((a: any) => a.name === selectedAgent);
-              return (
-                <span className="badge" style={{ background: 'rgb(var(--color-accent-soft))', color: 'rgb(var(--color-accent))' }}>
-                  @{agentInfo?.displayName ?? selectedAgent}
-                </span>
-              );
-            })()}
-          </div>
-          <div className="flex items-center gap-2 shrink-0">
-            <button onClick={() => setCmdPaletteOpen(true)} className="p-1.5 rounded-md text-theme-muted hover:text-theme-primary hover:bg-app-muted transition-colors" title="Commands">
-              <MoreHorizontal className="w-3.5 h-3.5" />
-            </button>
-          </div>
-        </div>
-      </div>
-
       {/* Messages */}
       {loadingMessages && messages.length === 0 && !streaming ? (
         <div className="flex-1 flex items-center justify-center"><div className="text-xs text-theme-subtle animate-pulse">Loading...</div></div>
@@ -392,6 +304,10 @@ export default function ChatPage() {
           repoLocked={!!activeSessionId}
           onRepoChange={(repo: RepoOption | null) => {
             if (!activeSessionId) setSelectedRepo(repo);
+          }}
+          onOpenQuickCommands={(anchor) => {
+            setCmdPaletteAnchor(anchor.getBoundingClientRect());
+            setCmdPaletteOpen(true);
           }}
           agentOverrides={effectiveOverrides}
           // When no team agent is selected, the chat talks to the raw
@@ -419,7 +335,15 @@ export default function ChatPage() {
         />
       </div>
 
-      <CommandPalette open={cmdPaletteOpen} onClose={() => setCmdPaletteOpen(false)} onSelect={handleCommandSelect} />
+      <CommandPalette
+        open={cmdPaletteOpen}
+        anchorRect={cmdPaletteAnchor}
+        onClose={() => {
+          setCmdPaletteOpen(false);
+          setCmdPaletteAnchor(null);
+        }}
+        onSelect={handleCommandSelect}
+      />
       {activeSessionId && (
         <ArtifactsDrawer
           rootType="chat"

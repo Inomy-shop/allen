@@ -111,29 +111,48 @@ function CopyButton({ text }: { text: string }) {
   );
 }
 
-/* ── Thinking block ──────────────────────────────────────────────────────── */
-function ThinkingBlock({ text }: { text: string }) {
-  const [expanded, setExpanded] = useState(false);
-  const preview = text.length > 120 ? text.slice(0, 120) + '...' : text;
+function MessageCopyButton({ text }: { text: string }) {
+  const [copied, setCopied] = useState(false);
+  const handleCopy = async () => {
+    await navigator.clipboard.writeText(text).catch(() => {});
+    setCopied(true);
+    setTimeout(() => setCopied(false), 1600);
+  };
 
   return (
-    <div className="mb-2">
+    <button
+      type="button"
+      onClick={handleCopy}
+      title="Copy message"
+      aria-label="Copy message"
+    >
+      {copied ? <Check className="w-3 h-3 text-accent-green" /> : <Copy className="w-3 h-3" />}
+    </button>
+  );
+}
+
+/* ── Thinking block ──────────────────────────────────────────────────────── */
+function ThinkingBlock({ text, durationMs, active }: { text: string; durationMs?: number; active?: boolean }) {
+  const [expanded, setExpanded] = useState(Boolean(active));
+  const label = active ? 'Thinking' : durationMs ? `Worked for ${formatDuration(durationMs)}` : 'Thinking';
+
+  return (
+    <div className="mb-5">
       <button
         onClick={() => setExpanded(!expanded)}
-        className="flex items-center gap-1.5 text-[11px] text-accent-purple/70 hover:text-accent-purple transition-colors font-mono"
+        className="group flex w-full items-center gap-2 border-b border-app pb-2 text-left text-sm text-theme-subtle transition-colors hover:text-theme-secondary"
         title={expanded ? 'Collapse thinking' : 'Expand thinking'}
       >
-        <Brain className="w-3 h-3 animate-pulse" />
-        <span>Thinking</span>
-        <span className="text-theme-subtle">{expanded ? '(collapse)' : '(expand)'}</span>
+        <span>{label}</span>
+        {expanded ? (
+          <ChevronDown className="h-4 w-4 text-theme-subtle transition-colors group-hover:text-theme-secondary" />
+        ) : (
+          <ChevronRight className="h-4 w-4 text-theme-subtle transition-colors group-hover:text-theme-secondary" />
+        )}
       </button>
-      {expanded ? (
-        <div className="mt-1.5 px-3 py-2 rounded-md bg-purple-500/5 border border-purple-500/10 text-xs text-theme-muted font-body leading-relaxed whitespace-pre-wrap max-h-48 overflow-auto">
-          {text}
-        </div>
-      ) : (
-        <div className="mt-1 text-[11px] text-theme-subtle font-body italic truncate max-w-[400px]">
-          {preview}
+      {expanded && (
+        <div className="mt-4">
+          {renderMarkdown(text)}
         </div>
       )}
     </div>
@@ -919,63 +938,132 @@ const TOOL_LABELS: Record<string, { label: string; color: string }> = {
   submit_execution_input: { label: 'Submit Input', color: 'text-accent-green' },
 };
 
+function toolBaseName(tool: string): string {
+  const parts = tool.split('__');
+  return parts[parts.length - 1] || tool;
+}
+
+function humanizeToolName(tool: string): string {
+  const base = toolBaseName(tool);
+  return TOOL_LABELS[base]?.label
+    ?? TOOL_LABELS[tool]?.label
+    ?? base
+      .replace(/[_-]+/g, ' ')
+      .replace(/\b\w/g, ch => ch.toUpperCase());
+}
+
+function toolColor(tool: string): string {
+  const base = toolBaseName(tool);
+  return TOOL_LABELS[base]?.color ?? TOOL_LABELS[tool]?.color ?? 'text-theme-secondary';
+}
+
+function compactValue(value: unknown): string {
+  if (value == null) return String(value);
+  if (typeof value === 'string') return value.length > 80 ? `${value.slice(0, 77)}...` : value;
+  if (typeof value === 'number' || typeof value === 'boolean') return String(value);
+  if (Array.isArray(value)) return `${value.length} item${value.length === 1 ? '' : 's'}`;
+  if (typeof value === 'object') {
+    const keys = Object.keys(value as Record<string, unknown>);
+    return keys.length ? `{ ${keys.slice(0, 3).join(', ')}${keys.length > 3 ? ', ...' : ''} }` : '{}';
+  }
+  return String(value);
+}
+
+function argsSummary(args?: Record<string, unknown>): string {
+  const entries = Object.entries(args ?? {}).filter(([, v]) => v !== undefined && v !== '');
+  if (entries.length === 0) return '';
+  return entries.slice(0, 3).map(([k, v]) => `${k.replace(/_/g, ' ')}: ${compactValue(v)}`).join(' · ');
+}
+
+function resultSummary(result?: Record<string, unknown>): string {
+  if (!result) return '';
+  if (result.error) return `Error: ${compactValue(result.error)}`;
+  const preferred = ['message', 'summary', 'status', 'title', 'name', 'execution_id', 'conversation_id'];
+  for (const key of preferred) {
+    if (result[key] !== undefined) return `${key.replace(/_/g, ' ')}: ${compactValue(result[key])}`;
+  }
+  const entries = Object.entries(result);
+  if (entries.length === 0) return 'No output';
+  return entries.slice(0, 2).map(([k, v]) => `${k.replace(/_/g, ' ')}: ${compactValue(v)}`).join(' · ');
+}
+
+function prettyJson(value: unknown): string {
+  return JSON.stringify(value, null, 2);
+}
+
 function ToolCallCard({ call, active }: { call: ToolCallRecord | ActiveToolCall; active?: boolean }) {
-  const [expanded, setExpanded] = useState(false);
-  const meta = TOOL_LABELS[call.tool] ?? { label: call.tool, color: 'text-theme-secondary' };
   const isRunning = active && (call as ActiveToolCall).status === 'running';
+  const [expanded, setExpanded] = useState(false);
+  const label = humanizeToolName(call.tool);
+  const color = toolColor(call.tool);
   const result = 'result' in call ? call.result : undefined;
   const duration = 'durationMs' in call ? call.durationMs : undefined;
+  const hasArgs = call.args && Object.keys(call.args).length > 0;
+  const inputSummary = argsSummary(call.args);
+  const outputSummary = resultSummary(result);
+  const providerPrefix = call.tool.includes('__') ? call.tool.split('__').slice(0, -1).join(' / ').replace(/^mcp \/ /, '') : '';
 
   // Check if result has an execution_id (for link to execution page)
   const executionId = result?.execution_id as string | undefined;
 
   return (
-    <div className="border border-app rounded-lg bg-app-muted/50 overflow-hidden">
+    <div className="relative">
       <button
         onClick={() => setExpanded(!expanded)}
-        className="w-full flex items-center gap-2 px-3 py-2 hover:bg-app-muted transition-colors text-left"
+        className="group/tool grid w-full grid-cols-[auto_auto_minmax(0,1fr)_auto] items-center gap-2 rounded-sm px-1 py-1.5 text-left transition-colors hover:bg-app-muted/35"
         title={expanded ? 'Collapse tool result' : 'Expand tool result'}
       >
         {isRunning ? (
-          <Loader2 className={`w-3.5 h-3.5 ${meta.color} animate-spin`} />
+          <Loader2 className={`h-3.5 w-3.5 ${color} animate-spin`} />
         ) : result?.error ? (
-          <AlertCircle className="w-3.5 h-3.5 text-accent-red" />
+          <AlertCircle className="h-3.5 w-3.5 text-accent-red" />
         ) : (
-          <CheckCircle className="w-3.5 h-3.5 text-accent-green/70" />
+          <CheckCircle className="h-3.5 w-3.5 text-accent-green/70" />
         )}
-        <Wrench className={`w-3 h-3 ${meta.color}`} />
-        <span className={`text-xs font-mono ${meta.color}`}>{meta.label}</span>
-
-        {/* Key args summary */}
-        {call.args && Object.keys(call.args).length > 0 && (
-          <span className="text-[10px] text-theme-subtle font-mono truncate max-w-[200px]">
-            {Object.entries(call.args).slice(0, 2).map(([k, v]) => `${k}=${typeof v === 'string' ? v : JSON.stringify(v)}`).join(', ')}
+        <Wrench className={`h-3 w-3 ${color}`} />
+        <span className="min-w-0">
+          <span className={`block text-[12px] font-medium leading-4 ${color}`}>{label}</span>
+          <span className="block truncate text-[11px] leading-4 text-theme-subtle">
+            {inputSummary || outputSummary || (isRunning ? 'Running...' : providerPrefix || call.tool)}
           </span>
-        )}
+        </span>
 
-        <span className="flex-1" />
-
-        {duration != null && (
-          <span className="text-[10px] text-theme-subtle font-mono">{duration}ms</span>
-        )}
-
-        {executionId && (
-          <a
-            href={`/executions/${executionId}`}
-            onClick={e => e.stopPropagation()}
-            className="text-accent-blue hover:text-accent-blue/80 transition-colors"
-            title="View execution"
-          >
-            <ExternalLink className="w-3 h-3" />
-          </a>
-        )}
+        <span className="flex items-center gap-2 justify-end">
+          {providerPrefix && <span className="hidden sm:inline text-[10px] text-theme-subtle">{providerPrefix}</span>}
+          {duration != null && (
+            <span className="text-[10px] text-theme-subtle font-mono">{formatDuration(duration)}</span>
+          )}
+          {executionId && (
+            <a
+              href={`/executions/${executionId}`}
+              onClick={e => e.stopPropagation()}
+              className="text-accent-blue hover:text-accent-blue/80 transition-colors"
+              title="View execution"
+            >
+              <ExternalLink className="w-3 h-3" />
+            </a>
+          )}
+          {expanded ? <ChevronDown className="h-3 w-3 text-theme-subtle" /> : <ChevronRight className="h-3 w-3 text-theme-subtle" />}
+        </span>
       </button>
 
-      {expanded && result && (
-        <div className="border-t border-app px-3 py-2 bg-[rgb(var(--color-editor-background))] max-h-48 overflow-auto">
-          <pre className="text-[11px] font-mono text-theme-secondary whitespace-pre-wrap">
-            {JSON.stringify(result, null, 2)}
-          </pre>
+      {expanded && (
+        <div className="ml-6 mt-1 max-h-72 overflow-auto border-l border-border/10 pl-3 text-[11px] text-theme-secondary">
+          {hasArgs && (
+            <div className="mb-2">
+              <div className="mb-1 text-[10px] uppercase tracking-wide text-theme-subtle">Input</div>
+              <pre className="whitespace-pre-wrap font-mono leading-relaxed text-theme-secondary">{prettyJson(call.args)}</pre>
+            </div>
+          )}
+          {result && (
+            <div>
+              <div className="mb-1 text-[10px] uppercase tracking-wide text-theme-subtle">Output</div>
+              <pre className="whitespace-pre-wrap font-mono leading-relaxed text-theme-secondary">{prettyJson(result)}</pre>
+            </div>
+          )}
+          {!hasArgs && !result && (
+            <div className="text-[11px] text-theme-subtle">Waiting for tool input/output details...</div>
+          )}
         </div>
       )}
     </div>
@@ -995,27 +1083,22 @@ function ToolCallsSection({ calls, threads, agentMap }: { calls?: ToolCallRecord
   const hasErrors = calls.some(c => (c.result as Record<string, unknown>)?.error);
 
   return (
-    <div className="mt-2 space-y-1">
+    <div className="mt-3 space-y-1">
       {/* Threads — nested tree, primary content */}
       {rootThreads.map(thread => (
         <AgentThread key={thread.conversationId} thread={thread} agents={agentMap} />
       ))}
 
-      {/* Tool calls — only show if no threads (threads already show the conversation) */}
-      {rootThreads.length === 0 && (
-        <>
-          <button onClick={() => setShowTools(!showTools)} className="flex items-center gap-1.5 text-[10px] font-mono text-theme-subtle hover:text-theme-secondary transition-colors py-0.5">
-            {showTools ? <ChevronDown className="w-3 h-3" /> : <ChevronRight className="w-3 h-3" />}
-            <Wrench className="w-2.5 h-2.5" />
-            <span>{calls.length} tool call{calls.length !== 1 ? 's' : ''}</span>
-            {hasErrors && <span className="text-accent-red">· errors</span>}
-          </button>
-          {showTools && (
-            <div className="ml-4 pl-3 border-l border-border/10 space-y-1.5 max-h-[400px] overflow-y-auto py-1">
-              {calls.map((call, i) => <ToolCallCard key={`${call.tool}-${i}`} call={call} />)}
-            </div>
-          )}
-        </>
+      <button onClick={() => setShowTools(!showTools)} className="flex items-center gap-1.5 py-0.5 text-[11px] text-theme-subtle transition-colors hover:text-theme-secondary">
+        {showTools ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronRight className="h-3.5 w-3.5" />}
+        <Wrench className="h-3 w-3" />
+        <span>{calls.length} tool call{calls.length !== 1 ? 's' : ''}</span>
+        {hasErrors && <span className="text-accent-red">· errors</span>}
+      </button>
+      {showTools && (
+        <div className="ml-4 max-h-[400px] space-y-0.5 overflow-y-auto border-l border-border/10 py-1 pl-3">
+          {calls.map((call, i) => <ToolCallCard key={`${call.toolUseId ?? call.tool}-${i}`} call={call} />)}
+        </div>
       )}
     </div>
   );
@@ -1032,19 +1115,25 @@ function ActiveToolCallsSection({ calls, liveThreads, agentMap }: { calls: Activ
   const completedCount = calls.filter(c => (c as ActiveToolCall).status !== 'running').length;
 
   return (
-    <div className="mt-2 space-y-1">
+    <div className="mt-3 space-y-1">
       {/* Live threads */}
       {rootThreads.map(thread => (
         <AgentThread key={thread.conversationId} thread={thread} agents={agentMap} />
       ))}
 
-      {/* Running tool indicator */}
       {runningTool && (
         <div className="flex items-center gap-1.5 text-[10px] font-mono text-theme-subtle py-0.5">
           <Loader2 className="w-2.5 h-2.5 text-accent-yellow animate-spin shrink-0" />
           <Wrench className="w-2.5 h-2.5 text-accent-yellow shrink-0" />
           <span className="text-accent-yellow/70">{TOOL_LABELS[runningTool.tool]?.label ?? runningTool.tool.replace('mcp__allen__', 'al:')}</span>
           {completedCount > 0 && <span className="text-theme-subtle">· {completedCount} done</span>}
+        </div>
+      )}
+      {calls.length > 0 && (
+        <div className="ml-4 max-h-[420px] space-y-0.5 overflow-y-auto border-l border-border/10 py-1 pl-3">
+          {calls.map((call, i) => (
+            <ToolCallCard key={`${call.toolUseId ?? call.tool}-${i}`} call={call} active />
+          ))}
         </div>
       )}
     </div>
@@ -1943,20 +2032,16 @@ export default function ChatMessageList({ messages, streamText, thinkingText, st
             </div>
 
             <div className={`ch-msg-text ${msg.status === 'failed' ? 'failed' : ''}`}>
+              {msg.role === 'assistant' && msg.thinkingText && (
+                <ThinkingBlock text={msg.thinkingText} durationMs={msg.durationMs} />
+              )}
               {diffSplit.text && (
                 <div>
                   {renderMarkdown(diffSplit.text)}
                 </div>
               )}
-              {msg.role !== 'user' && msg.content && onSaveToLearnings && (
-                <div className="chat-save-row">
-                  <button
-                    onClick={() => onSaveToLearnings(msg.content)}
-                    title="Save to learnings"
-                  >
-                    <Bookmark className="w-3 h-3" /> Save
-                  </button>
-                </div>
+              {msg.role === 'assistant' && (
+                <ToolCallsSection calls={msg.toolCalls} threads={msgThreads} agentMap={agentMap} />
               )}
               {msg.error && (
                 <div className="chat-msg-error">
@@ -1965,6 +2050,20 @@ export default function ChatMessageList({ messages, streamText, thinkingText, st
                 </div>
               )}
             </div>
+            {(msg.content || msg.error) && (
+              <div className="chat-save-row">
+                <MessageCopyButton text={msg.content || msg.error || ''} />
+                {msg.role !== 'user' && msg.content && onSaveToLearnings && (
+                  <button
+                    onClick={() => onSaveToLearnings(msg.content)}
+                    title="Save to learnings"
+                    aria-label="Save to learnings"
+                  >
+                    <Bookmark className="w-3 h-3" />
+                  </button>
+                )}
+              </div>
+            )}
           </div>
         </div>
 
@@ -2010,9 +2109,9 @@ export default function ChatMessageList({ messages, streamText, thinkingText, st
                 <span className="ch-msg-ts">generating</span>
               </div>
               <div className="ch-msg-text">
-              {thinkingText && !streamText && <ThinkingBlock text={thinkingText} />}
+              {thinkingText && <ThinkingBlock text={thinkingText} active />}
               <ActiveToolCallsSection calls={activeToolCalls} liveThreads={agentThreads} agentMap={agentMap} />
-              <div className={activeToolCalls.length > 0 || (thinkingText && !streamText) ? 'mt-2' : undefined}>
+              <div className={activeToolCalls.length > 0 || thinkingText ? 'mt-2' : undefined}>
                 {streamText ? (
                   <>
                     {renderMarkdown(streamText)}

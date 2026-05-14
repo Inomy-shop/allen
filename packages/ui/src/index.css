@@ -2805,6 +2805,16 @@
     font-weight: 600;
   }
 
+  .crumb .detail {
+    min-width: 0;
+    max-width: min(420px, 32vw);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: rgb(var(--color-text-primary));
+    font-weight: 600;
+  }
+
   .topbar .spacer {
     flex: 1;
   }
@@ -3570,72 +3580,6 @@
     overflow: hidden;
   }
 
-  .chat-page-head {
-    flex-shrink: 0;
-    border-bottom: 1px solid rgb(var(--color-border));
-    padding: 14px 28px;
-    background: rgb(var(--color-surface-100));
-  }
-
-  .chat-conv-titlebar {
-    display: flex;
-    align-items: center;
-    min-width: 0;
-    gap: 12px;
-  }
-
-  .chat-page-head h1 {
-    color: rgb(var(--color-text-primary));
-    font-size: 14px;
-    font-weight: 600;
-    line-height: 1.25;
-    letter-spacing: 0;
-  }
-
-  .chat-linked-row {
-    display: flex;
-    min-width: 0;
-    flex-wrap: wrap;
-    align-items: center;
-    gap: 6px;
-    margin-top: 3px;
-    color: rgb(var(--color-text-muted));
-    font-size: 12px;
-  }
-
-  .chat-linked-chip {
-    display: inline-flex;
-    align-items: center;
-    gap: 4px;
-    border: 1px solid rgb(var(--color-border));
-    border-radius: 999px;
-    background: rgb(var(--color-surface-200));
-    padding: 1px 7px;
-    color: rgb(var(--color-text-secondary));
-    font-family: var(--font-mono);
-    font-size: 10.5px;
-  }
-
-  .chat-linked-chip.muted {
-    color: rgb(var(--color-text-subtle));
-  }
-
-  .chat-title-edit {
-    width: min(40rem, 100%);
-    border: 1px solid rgb(var(--color-border));
-    border-radius: 6px;
-    background: transparent;
-    padding: 1px 7px;
-    color: rgb(var(--color-text-primary));
-    font-size: 14px;
-    font-weight: 600;
-    outline: none;
-  }
-
-  .chat-title-edit:focus {
-    border-color: rgb(var(--color-accent));
-  }
-
   .chat-empty-stream {
     min-height: 0;
     flex: 1;
@@ -4163,15 +4107,13 @@
   .chat-stream-v2 {
     flex: 1;
     width: 100%;
-    max-width: 820px;
     min-height: 0;
-    margin: 0 auto;
     box-sizing: border-box;
     overflow-y: auto;
     display: flex;
     flex-direction: column;
     gap: 22px;
-    padding: 12px 40px 200px;
+    padding: 12px 40px 18px;
     background: rgb(var(--color-surface));
   }
 
@@ -4183,13 +4125,16 @@
 
   .ch-msg {
     display: grid;
-    grid-template-columns: 30px minmax(0, 1fr);
-    gap: 14px;
+    grid-template-columns: minmax(0, 1fr);
+    width: min(820px, 100%);
+    margin: 0 auto;
+    gap: 0;
     align-items: start;
+    padding: 5px 0;
   }
 
   .ch-avatar {
-    display: flex;
+    display: none;
     width: 28px;
     height: 28px;
     flex-shrink: 0;
@@ -4217,12 +4162,49 @@
     color: rgb(var(--color-accent-purple));
   }
 
+  .ch-msg.you {
+    justify-items: end;
+    border: 0;
+    background: transparent;
+  }
+
+  .ch-msg.allen {
+    border: 0;
+    background: transparent;
+  }
+
+  .ch-msg.you:hover {
+    background: transparent;
+  }
+
+  .ch-msg.allen:hover {
+    background: transparent;
+  }
+
   .ch-msg-body {
     min-width: 0;
   }
 
+  .ch-msg.you .ch-msg-body {
+    max-width: min(760px, 82%);
+  }
+
+  .ch-msg.you .ch-msg-text {
+    border-radius: 16px;
+    background: color-mix(in oklch, rgb(var(--color-surface-200)) 68%, rgb(var(--color-text-primary)) 12%);
+    padding: 12px 16px;
+  }
+
+  .ch-msg.you:hover .ch-msg-text {
+    background: color-mix(in oklch, rgb(var(--color-surface-200)) 62%, rgb(var(--color-text-primary)) 15%);
+  }
+
+  .ch-msg.allen .ch-msg-body {
+    width: 100%;
+  }
+
   .ch-msg-head {
-    display: flex;
+    display: none;
     align-items: baseline;
     gap: 10px;
     margin-bottom: 4px;
@@ -4269,8 +4251,12 @@
     display: flex;
     align-items: center;
     gap: 8px;
-    margin-top: 4px;
+    margin-top: 6px;
     padding-bottom: 2px;
+  }
+
+  .ch-msg.you .chat-save-row {
+    justify-content: flex-end;
   }
 
   .chat-save-row button {
@@ -4279,6 +4265,7 @@
     gap: 4px;
     color: rgb(var(--color-text-subtle));
     font-size: 10px;
+    line-height: 1;
     opacity: 0;
     transition: color 120ms ease, opacity 120ms ease;
   }
@@ -5110,7 +5097,7 @@
     border: 1px solid rgb(var(--color-border));
     border-radius: 14px;
     background: rgb(var(--color-surface-100));
-    padding: 12px 14px 8px;
+    padding: 10px 12px 8px;
     box-shadow: 0 12px 30px -16px rgb(0 0 0 / 0.18), 0 1px 2px rgb(0 0 0 / 0.04);
     transition: border-color 150ms ease, box-shadow 150ms ease;
   }
@@ -5155,8 +5142,8 @@
     align-items: center;
     justify-content: space-between;
     gap: 12px;
-    margin-top: 6px;
-    padding-top: 6px;
+    margin-top: 4px;
+    padding-top: 4px;
     border-top: 0;
   }
 

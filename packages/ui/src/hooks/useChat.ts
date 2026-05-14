@@ -62,6 +62,7 @@ export interface ToolCallRecord {
   result: Record<string, unknown>;
   durationMs: number;
   timestamp: string;
+  toolUseId?: string;
 }
 
 export interface ChatMessage {
@@ -78,6 +79,7 @@ export interface ChatMessage {
   durationMs?: number;
   error?: string;
   toolCalls?: ToolCallRecord[];
+  thinkingText?: string;
   createdAt: string;
 }
 
@@ -98,6 +100,7 @@ export interface ActiveToolCall {
   status: 'running' | 'completed';
   result?: Record<string, unknown>;
   durationMs?: number;
+  toolUseId?: string;
 }
 
 /** Live activity entry for an agent thread */
@@ -554,7 +557,6 @@ export function useChat() {
     switch (event) {
       case 'message_delta':
         setStreamText(data.text ?? '');
-        setThinkingText(''); // clear thinking once text arrives
         break;
 
       case 'thinking':
@@ -564,15 +566,15 @@ export function useChat() {
       case 'tool_start':
         setActiveToolCalls(prev => [
           ...prev,
-          { tool: data.tool, args: data.args ?? {}, status: 'running' },
+          { tool: data.tool, args: data.args ?? {}, status: 'running', toolUseId: data.toolUseId ?? data.tool_use_id },
         ]);
         break;
 
       case 'tool_result':
         setActiveToolCalls(prev =>
           prev.map(tc =>
-            tc.tool === data.tool && tc.status === 'running'
-              ? { ...tc, status: 'completed' as const, result: data.result, durationMs: data.durationMs }
+            ((data.toolUseId ?? data.tool_use_id) ? tc.toolUseId === (data.toolUseId ?? data.tool_use_id) : tc.tool === data.tool && tc.status === 'running')
+              ? { ...tc, status: 'completed' as const, args: data.args ?? tc.args, result: data.result, durationMs: data.durationMs }
               : tc,
           ),
         );
@@ -593,6 +595,7 @@ export function useChat() {
             costUsd: data.costUsd,
             durationMs: data.durationMs,
             toolCalls: data.toolCalls,
+            thinkingText: data.thinkingText ?? thinkingText,
             createdAt: new Date().toISOString(),
           },
         ]);
@@ -775,6 +778,7 @@ export function useChat() {
             content: streamText || `Error: ${data.error}`,
             status: 'failed',
             error: data.error,
+            thinkingText,
             createdAt: new Date().toISOString(),
           },
         ]);
@@ -783,7 +787,7 @@ export function useChat() {
         setStreaming(false);
         break;
     }
-  }, [streamText]);
+  }, [streamText, thinkingText]);
 
   const createSession = useCallback(
     async (provider?: string, model?: string, agentOverrides?: Record<string, unknown>, repoId?: string) => {
@@ -899,7 +903,9 @@ export function useChat() {
       let currentEvent = '';
       let assistantText = '';
       let assistantMsgId = '';
+      let assistantThinking = '';
       let collectedToolCalls: ToolCallRecord[] = [];
+      const activeToolArgs = new Map<string, Record<string, unknown>>();
 
       while (true) {
         const { done, value } = await reader.read();
@@ -920,33 +926,39 @@ export function useChat() {
                   assistantText = data.text;
                   assistantMsgId = data.messageId || assistantMsgId;
                   setStreamText(assistantText);
-                  setThinkingText('');
                   break;
 
                 case 'thinking':
-                  setThinkingText(data.text ?? '');
+                  assistantThinking = data.text ?? '';
+                  setThinkingText(assistantThinking);
                   break;
 
                 case 'tool_start':
+                  if (data.toolUseId ?? data.tool_use_id) {
+                    activeToolArgs.set(data.toolUseId ?? data.tool_use_id, data.args ?? {});
+                  }
                   setActiveToolCalls(prev => [
                     ...prev,
-                    { tool: data.tool, args: data.args ?? {}, status: 'running' },
+                    { tool: data.tool, args: data.args ?? {}, status: 'running', toolUseId: data.toolUseId ?? data.tool_use_id },
                   ]);
                   break;
 
                 case 'tool_result': {
+                  const toolUseId = data.toolUseId ?? data.tool_use_id;
                   const toolRecord: ToolCallRecord = {
                     tool: data.tool,
-                    args: {},
+                    args: data.args ?? (toolUseId ? activeToolArgs.get(toolUseId) : undefined) ?? {},
                     result: data.result,
                     durationMs: data.durationMs,
                     timestamp: new Date().toISOString(),
+                    toolUseId,
                   };
                   collectedToolCalls.push(toolRecord);
+                  if (toolUseId) activeToolArgs.delete(toolUseId);
                   setActiveToolCalls(prev =>
                     prev.map(tc =>
-                      tc.tool === data.tool && tc.status === 'running'
-                        ? { ...tc, status: 'completed' as const, result: data.result, durationMs: data.durationMs }
+                      (toolUseId ? tc.toolUseId === toolUseId : tc.tool === data.tool && tc.status === 'running')
+                        ? { ...tc, status: 'completed' as const, args: data.args ?? tc.args, result: data.result, durationMs: data.durationMs }
                       : tc,
                     ),
                   );
@@ -968,6 +980,7 @@ export function useChat() {
                       costUsd: data.costUsd,
                       durationMs: data.durationMs,
                       toolCalls: data.toolCalls || collectedToolCalls,
+                      thinkingText: data.thinkingText ?? assistantThinking,
                       createdAt: new Date().toISOString(),
                     },
                   ]);

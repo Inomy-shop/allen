@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback } from 'react';
+import { useState, useEffect, useRef, useCallback, type CSSProperties } from 'react';
 import { Search, Zap, GitBranch, Bot, BarChart3, AlertCircle, FolderOpen, Brain, Terminal } from 'lucide-react';
 
 interface CommandItem {
@@ -42,9 +42,10 @@ interface CommandPaletteProps {
   open: boolean;
   onClose: () => void;
   onSelect: (prompt: string, partial?: boolean) => void;
+  anchorRect?: DOMRect | null;
 }
 
-export default function CommandPalette({ open, onClose, onSelect }: CommandPaletteProps) {
+export default function CommandPalette({ open, onClose, onSelect, anchorRect = null }: CommandPaletteProps) {
   const [query, setQuery] = useState('');
   const [selectedIdx, setSelectedIdx] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -97,12 +98,25 @@ export default function CommandPalette({ open, onClose, onSelect }: CommandPalet
   if (!open) return null;
 
   let itemCounter = 0;
+  const isAnchored = !!anchorRect;
+  const popoverWidth = 380;
+  const anchoredStyle: CSSProperties | undefined = anchorRect
+    ? {
+        position: 'fixed',
+        left: `${Math.min(Math.max(anchorRect.left - 8, 12), window.innerWidth - popoverWidth - 12)}px`,
+        bottom: `${Math.max(window.innerHeight - anchorRect.top + 8, 12)}px`,
+        width: `min(${popoverWidth}px, calc(100vw - 24px))`,
+      }
+    : undefined;
 
   return (
-    <div className="fixed inset-0 z-50 flex items-start justify-center pt-[15vh]" onClick={onClose}>
-      <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" />
+    <div className={`fixed inset-0 z-50 ${isAnchored ? '' : 'flex items-start justify-center pt-[15vh]'}`} onClick={onClose}>
+      {!isAnchored && <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" />}
       <div
-        className="relative w-full max-w-lg bg-surface-100 border border-app rounded-lg shadow-2xl overflow-hidden"
+        className={`relative bg-surface-100 border border-app rounded-lg shadow-2xl overflow-hidden ${
+          isAnchored ? '' : 'w-full max-w-lg'
+        }`}
+        style={anchoredStyle}
         onClick={e => e.stopPropagation()}
       >
         {/* Search input */}
