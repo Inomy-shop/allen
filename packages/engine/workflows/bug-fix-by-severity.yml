@@ -18,6 +18,13 @@ description: >
   Additional escalation touches happen when QA can't triage a failure, when
   validation fails repeatedly, when review blocks, or when PR creation fails.
 
+  Artifact-read convention: artifact URLs in this workflow are
+  http://.../api/artifacts/<id>/content. To read an artifact, use
+  mcp__allen__allen_get_artifact(artifact_id=<id>) — extract <id> from the
+  URL (segment between /artifacts/ and /content), or use the
+  upstream-artifacts index the engine auto-injects into every agent's
+  context. Agents save with mcp__allen__allen_save_artifact.
+
 version: 1
 
 context:
@@ -111,7 +118,7 @@ nodes:
       ARTIFACT + OUTPUT CONTRACT:
       Write the full investigation report as a markdown artifact BEFORE
       emitting JSON. The artifact is the single source of truth — every
-      downstream node WebFetches this URL. Include all of:
+      downstream node reads this artifact via mcp__allen__allen_get_artifact. Include all of:
 
         # Investigation report
         ## Root cause
@@ -123,7 +130,7 @@ nodes:
         ## Security implications   ← one of none | low | medium | high, with explanation
 
       Save it via:
-        allen_save_artifact("investigation/report.md", <markdown>, content_type="markdown", overwrite=true)
+        mcp__allen__allen_save_artifact("investigation/report.md", <markdown>, content_type="markdown", overwrite=true)
       The tool returns { artifactId, url, publicUrl, ... }. Copy the
       `publicUrl` field into JSON as `investigation_artifact_url`.
       Do NOT use `url` (relative) or `artifactId` (opaque).
@@ -137,13 +144,13 @@ nodes:
 
       ```json
       {
-        "investigation_artifact_url": "<publicUrl from allen_save_artifact>",
+        "investigation_artifact_url": "<publicUrl from mcp__allen__allen_save_artifact>",
         "severity": "small | medium | large",
         "confidence": 0.0
       }
       ```
     outputs:
-      investigation_artifact_url: "Public URL of the full investigation report (markdown). Contains root_cause, fix_description, reproduction_steps, files_to_touch, affected_components, security_implications, and call-stack detail. Every downstream node WebFetches this URL."
+      investigation_artifact_url: "Public URL of the full investigation report (markdown). Contains root_cause, fix_description, reproduction_steps, files_to_touch, affected_components, security_implications, and call-stack detail. Every downstream node reads this artifact via mcp__allen__allen_get_artifact."
       severity: "small | medium | large — drives downstream node routing."
       confidence: "Float 0-1 confidence in the diagnosed severity / root cause."
 
@@ -240,7 +247,7 @@ nodes:
       results. You DO NOT write code.
 
       BUG REPORT: {{bug_report}}
-      📄 INVESTIGATION REPORT (single source of truth — WebFetch this for
+      📄 INVESTIGATION REPORT (single source of truth — fetch via mcp__allen__allen_get_artifact for
         root_cause, fix_description, reproduction_steps, files_to_touch,
         affected_components, and security_implications):
         {{investigation_artifact_url}}
@@ -258,7 +265,7 @@ nodes:
       Step-by-step:
         1. DO NOT call create_workspace. The worktree above already
            exists — all specialists must work inside {{worktree_path}}.
-        2. WebFetch the investigation report URL above. Extract from it:
+        2. fetch the investigation report via mcp__allen__allen_get_artifact above. Extract from it:
            root cause, fix description, reproduction steps, files to touch,
            affected components, and security implications. These are NOT
            inlined in state — the artifact is the single source of truth.
@@ -281,7 +288,7 @@ nodes:
         5. For each specialist, spawn_agent with repo_path={{worktree_path}}
            and a prompt that PASSES THE INVESTIGATION ARTIFACT URL plus the
            specialist's specific plan_items, acceptance_criteria, target
-           files, and approval_feedback. Sub-agents WebFetch the artifact
+           files, and approval_feedback. Sub-agents fetch the artifact via mcp__allen__allen_get_artifact
            themselves to get root cause, fix description, reproduction
            steps, and security implications.
         6. Wait for each spawn via wait_for_execution. On failure, retry
@@ -296,7 +303,7 @@ nodes:
       plan_completion_checklist, specialists_used, failure_details, test
       strategy, risk checks) as a markdown artifact BEFORE emitting your
       JSON output:
-        allen_save_artifact("implementation/plan.md", <markdown>, content_type="markdown", overwrite=true)
+        mcp__allen__allen_save_artifact("implementation/plan.md", <markdown>, content_type="markdown", overwrite=true)
       Copy the returned `publicUrl` into JSON as `implementation_plan_artifact_url`.
 
       End your response with a fenced JSON block containing EXACTLY these
@@ -328,7 +335,7 @@ nodes:
       {{retry_context}}
       {{/if}}
     outputs:
-      implementation_plan_artifact_url: "Public URL of the full implementation plan markdown (acceptance_criteria, plan_items, plan_completion_checklist, specialists_used, failure_details). Fetch via WebFetch / allen_get_artifact for detail."
+      implementation_plan_artifact_url: "Public URL of the full implementation plan markdown (acceptance_criteria, plan_items, plan_completion_checklist, specialists_used, failure_details). Fetch via mcp__allen__allen_get_artifact for detail."
       self_judge_verdict: "pass | fail — engineering-lead's self-check that all plan items and acceptance criteria were implemented."
       files_changed: "List of files changed by the fix — short string array."
       any_failures: "Boolean — true if any specialist returned a non-recoverable failure (drives implement→escalation_review routing)."
@@ -357,7 +364,7 @@ nodes:
         TEST POLICY:          unit_and_integration_acceptance_only
 
       Follow your five-rule contract:
-        1. WebFetch the implementation plan artifact above to read the
+        1. fetch the implementation plan artifact via mcp__allen__allen_get_artifact above to read the
            full acceptance_criteria and plan_completion_checklist before
            writing tests.
         2. Spawn test-writer with the bug context, the artifact URLs, and
@@ -385,7 +392,7 @@ nodes:
         ## Failure target (engineering-lead | test-writer | null — useful for the human reviewer on escalation)
 
       Save it via:
-        allen_save_artifact("qa/report.md", <markdown>, content_type="markdown", overwrite=true)
+        mcp__allen__allen_save_artifact("qa/report.md", <markdown>, content_type="markdown", overwrite=true)
       Copy the returned `publicUrl` into JSON as `qa_artifact_url`.
 
       End your response with a fenced JSON block containing EXACTLY:
@@ -432,7 +439,7 @@ nodes:
         FILES CHANGED:        {{files_changed}}
         QA VERDICT:           {{qa_verdict}}
 
-      WebFetch each artifact URL above before running your checks — the
+      fetch each artifact via mcp__allen__allen_get_artifact above before running your checks — the
       full content (root cause, plan items, test list, coverage) is in
       those reports, not inlined here.
 
@@ -457,7 +464,7 @@ nodes:
         ## Validator confidence (0-1) with brief justification
 
       Save it via:
-        allen_save_artifact("validator/report.md", <markdown>, content_type="markdown", overwrite=true)
+        mcp__allen__allen_save_artifact("validator/report.md", <markdown>, content_type="markdown", overwrite=true)
       Copy the returned `publicUrl` into JSON as `validator_artifact_url`.
 
       End with a fenced JSON block containing EXACTLY:
@@ -510,7 +517,7 @@ nodes:
         VALIDATOR VERDICT:    {{default prd_satisfied "(validator skipped)"}}
         VALIDATOR BLOCKERS:   {{default blocking_violations_count "n/a"}}
 
-      WebFetch each artifact URL you need before running your rubric.
+      fetch each artifact via mcp__allen__allen_get_artifact you need before running your rubric.
       Full prose lives in the artifacts; this prompt only carries routing
       primitives.
 
@@ -534,7 +541,7 @@ nodes:
       ARTIFACT + OUTPUT CONTRACT:
       Save the full review (review_feedback markdown, security_findings list,
       doc_drift_findings list) as a markdown artifact BEFORE emitting JSON:
-        allen_save_artifact("review/code-review.md", <markdown>, content_type="markdown", overwrite=true)
+        mcp__allen__allen_save_artifact("review/code-review.md", <markdown>, content_type="markdown", overwrite=true)
       Copy the returned `publicUrl` into JSON as `code_review_artifact_url`.
 
       End with a fenced JSON block containing EXACTLY:
@@ -570,7 +577,7 @@ nodes:
       SEVERITY:      {{severity}}
       FILES CHANGED: {{files_changed}}
 
-      📄 ARTIFACTS (WebFetch any you need to populate the PR body):
+      📄 ARTIFACTS (mcp__allen__allen_get_artifact any you need to populate the PR body):
         INVESTIGATION:        {{investigation_artifact_url}}
         IMPLEMENTATION PLAN:  {{implementation_plan_artifact_url}}
         QA REPORT:            {{default qa_artifact_url "(qa skipped by severity policy)"}}
@@ -590,7 +597,7 @@ nodes:
       PR BODY CONTENT:
       Pull the full root cause, fix description, acceptance criteria,
       test evidence, and security findings from the artifact URLs above
-      (WebFetch them). Embed prose excerpts in the PR body AND include
+      (fetch them via mcp__allen__allen_get_artifact). Embed prose excerpts in the PR body AND include
       the artifact links so reviewers can click through to the
       full reports.
     outputs:
@@ -663,7 +670,7 @@ nodes:
       WORKTREE PATH: {{worktree_path}}
       FILES CHANGED: {{files_changed}}
 
-      📄 UPSTREAM ARTIFACTS (WebFetch each one you need to weave into the summary):
+      📄 UPSTREAM ARTIFACTS (fetch each one via mcp__allen__allen_get_artifact you need to weave into the summary):
         INVESTIGATION:       {{investigation_artifact_url}}
         IMPLEMENTATION PLAN: {{implementation_plan_artifact_url}}
         QA REPORT:           {{default qa_artifact_url "(qa skipped by severity policy)"}}
@@ -686,7 +693,7 @@ nodes:
       ARTIFACT + OUTPUT CONTRACT:
       Save the rendered final summary as a markdown artifact BEFORE
       emitting JSON:
-        allen_save_artifact("summary/run-summary.md", <markdown>, content_type="markdown", overwrite=true)
+        mcp__allen__allen_save_artifact("summary/run-summary.md", <markdown>, content_type="markdown", overwrite=true)
       Copy the returned `publicUrl` into JSON as `summary_artifact_url`.
 
       End with a fenced JSON block containing EXACTLY:

@@ -24,8 +24,16 @@ description: >
       retry_with_feedback / force_continue)
 
   Artifact-first: every drafter saves a full markdown artifact and emits
-  only its publicUrl + small routing primitives. Finalizers WebFetch the
-  upstream artifacts when they need full content — prompts stay small.
+  only its publicUrl + small routing primitives. Finalizers fetch the
+  upstream artifacts via mcp__allen__allen_get_artifact when they need
+  full content — prompts stay small.
+
+  Artifact-read convention: artifact URLs in this workflow are
+  http://.../api/artifacts/<id>/content. To read an artifact, use
+  mcp__allen__allen_get_artifact(artifact_id=<id>) — extract <id> from the
+  URL (segment between /artifacts/ and /content), or use the
+  upstream-artifacts index the engine auto-injects into every agent's
+  context. Agents save with mcp__allen__allen_save_artifact.
 
 version: 1
 
@@ -45,7 +53,7 @@ input:
     required: true
     widget: repo_picker
     label: Target repo
-    description: Required. Codebase to ground the design in. The codebase_grounding node surveys this repo first; every drafter must WebFetch the survey before drafting.
+    description: Required. Codebase to ground the design in. The codebase_grounding node surveys this repo first; every drafter must fetch the survey via mcp__allen__allen_get_artifact before drafting.
   product_context:
     type: string
     required: false
@@ -109,7 +117,7 @@ nodes:
 
       ARTIFACT + OUTPUT CONTRACT:
       Save the full survey as a markdown artifact:
-        allen_save_artifact("grounding/00-codebase-survey.md", <markdown>, content_type="markdown", overwrite=true)
+        mcp__allen__allen_save_artifact("grounding/00-codebase-survey.md", <markdown>, content_type="markdown", overwrite=true)
       Copy the returned publicUrl to JSON as `codebase_grounding_artifact_url`.
 
       End with a fenced JSON block containing EXACTLY:
@@ -126,7 +134,7 @@ nodes:
       }
       ```
     outputs:
-      codebase_grounding_artifact_url: "Public URL of the full codebase survey markdown. Every downstream drafter must WebFetch this."
+      codebase_grounding_artifact_url: "Public URL of the full codebase survey markdown. Every downstream drafter must fetch this via mcp__allen__allen_get_artifact."
       affected_modules_index: "Short array of repo paths most likely involved — surfaced to downstream drafters for grounding."
       repo_stack_summary: "One-line stack summary (e.g., 'node/express/mongo/jest')."
       prior_design_doc_urls: "Array of in-repo design doc paths found during the survey. May be empty."
@@ -176,18 +184,54 @@ nodes:
       PRODUCT CONTEXT:
       {{product_context}}
 
-      📄 CODEBASE GROUNDING (REQUIRED reading — WebFetch first):
+      📄 CODEBASE GROUNDING (REQUIRED reading — fetch first via mcp__allen__allen_get_artifact):
       {{codebase_grounding_artifact_url}}
 
       AFFECTED MODULES: {{affected_modules_index}}
       REPO STACK:       {{repo_stack_summary}}
 
+      SCOPE DISCIPLINE (read before drafting anything):
+        - Stick STRICTLY to what the requirement literally asks for,
+          PLUS the minimum work strictly necessary to make that thing
+          actually function in this codebase.
+        - Two tests for whether a REQ/AC is in scope:
+            (a) It traces to a literal phrase in the requirement, OR
+            (b) It is a NECESSARY precondition for (a) to work
+                (e.g., an endpoint to load the data the page must show;
+                empty/error states the page must render; following the
+                existing auth pattern the codebase already enforces).
+          If neither, it's out of scope.
+        - Do NOT design adjacent features that are independently useful
+          but not required by the literal request.
+          Example: requirement = "page that lists all products" → do NOT
+          add product detail page, search, filters, sorting, pagination,
+          edit/delete actions, admin views, exports unless the
+          requirement names them. DO include the read endpoint, the
+          empty/error/loading states, and conformance to existing app
+          patterns (auth, layout, routing) — those are necessary.
+        - List the adjacent features you considered and rejected in an
+          explicit "Out of scope" section so reviewers can see what was
+          deliberately excluded. Do NOT list necessary supporting work
+          there — that belongs in the main requirements.
+        - If the requirement is genuinely ambiguous about whether a
+          capability is included, set scope_creep_detected=true and
+          recommend re-running through medium severity — do NOT silently
+          expand scope.
+
       Produce a single artifact that contains BOTH:
         # Lightweight PRD
           - Problem statement (one line)
           - Functional requirement(s) with stable id(s) REQ-001…
+            (each must trace to a literal phrase in the requirement OR
+            be a necessary precondition for one — e.g. the read
+            endpoint that powers a requested page IS necessary)
           - Acceptance criteria with stable id(s) AC-001… (each tied to a REQ id)
           - Edge cases / non-goals
+          - Out of scope: explicit list of ADJACENT features considered
+            and rejected (e.g. "detail view: not requested", "search:
+            not requested"). Do NOT list necessary supporting work
+            (loading state, error state, auth conformance) here —
+            that belongs in the requirements above.
         # Lightweight TDD
           - File(s) to touch with the expected change
           - Any test changes
@@ -204,7 +248,7 @@ nodes:
 
       ARTIFACT + OUTPUT CONTRACT:
       Save the combined design as:
-        allen_save_artifact("design/small/01-combined-prd-tdd.md", <markdown>, content_type="markdown", overwrite=true)
+        mcp__allen__allen_save_artifact("design/small/01-combined-prd-tdd.md", <markdown>, content_type="markdown", overwrite=true)
       Copy publicUrl to JSON as `simple_design_artifact_url`.
 
       End with a fenced JSON block containing EXACTLY:
@@ -238,17 +282,44 @@ nodes:
       PRODUCT CONTEXT:
       {{product_context}}
 
-      📄 CODEBASE GROUNDING (REQUIRED reading — WebFetch first):
+      📄 CODEBASE GROUNDING (REQUIRED reading — fetch first via mcp__allen__allen_get_artifact):
       {{codebase_grounding_artifact_url}}
 
       AFFECTED MODULES: {{affected_modules_index}}
+
+      SCOPE DISCIPLINE (read before drafting):
+        - Stick STRICTLY to what the requirement literally asks for,
+          PLUS the minimum flow steps necessary to make that thing
+          actually usable.
+        - A REQ-UF-* / AC-UF-* / EC-UF-* is in scope if it either:
+            (a) traces to a literal phrase in the requirement, OR
+            (b) is a necessary step for (a) to work in the existing app
+                (e.g., the user must be able to NAVIGATE to the page,
+                the page must show a loading state and an empty state,
+                the page must conform to existing auth/layout patterns).
+          If neither, it's out of scope.
+        - Do NOT invent independently useful adjacent flows that the
+          requirement does not name.
+          Example: requirement = "page that lists all products" → DO NOT
+          design a product detail flow, search flow, filter flow,
+          edit/delete flow, or admin flow. DO include: how the user
+          gets to this page, what they see while loading, what they see
+          when the list is empty or errors, how the page fits the
+          existing nav/auth.
+        - List the adjacent flows you considered and rejected in a
+          "Non-goals / out of scope" section so the finalizer can see
+          what was deliberately excluded. Do NOT list necessary
+          supporting flow steps there.
+        - If the requirement is genuinely ambiguous about whether a flow
+          is included, raise it as something the finalizer should clarify
+          — do not silently include it.
 
       Focus only on this angle:
         - Target users / personas
         - User journeys and user flows
         - Functional requirements from the user perspective
         - Acceptance criteria written as testable user outcomes
-        - Edge cases and non-goals
+        - Edge cases and non-goals (including the rejected adjacent flows)
 
       Required output discipline:
         - Use stable ids: REQ-UF-001, AC-UF-001, EC-UF-001.
@@ -257,7 +328,7 @@ nodes:
         - Cite specific UI/flow patterns from the grounding survey where they exist.
 
       Save the full draft:
-        allen_save_artifact("prd/drafts/02-user-flow-prd-proposal.md", <markdown>, content_type="markdown", overwrite=true)
+        mcp__allen__allen_save_artifact("prd/drafts/02-user-flow-prd-proposal.md", <markdown>, content_type="markdown", overwrite=true)
       Copy publicUrl to JSON as `prd_user_flow_artifact_url`.
 
       End with a fenced JSON block:
@@ -283,11 +354,38 @@ nodes:
       PRODUCT CONTEXT:
       {{product_context}}
 
-      📄 CODEBASE GROUNDING (REQUIRED reading — WebFetch first):
+      📄 CODEBASE GROUNDING (REQUIRED reading — fetch first via mcp__allen__allen_get_artifact):
       {{codebase_grounding_artifact_url}}
 
       AFFECTED MODULES: {{affected_modules_index}}
       REPO STACK:       {{repo_stack_summary}}
+
+      SCOPE DISCIPLINE (read before drafting):
+        - Stick to NFRs and technical constraints that the requirement
+          actually triggers, PLUS the baselines this codebase already
+          enforces on similar features. Do NOT add NFRs the requirement
+          does not imply AND the codebase does not already enforce.
+          Example: a "list products" page does not justify dedicated
+          NFRs for write throughput, multi-region replication, real-time
+          sync, AI ranking, or analytics pipelines unless the requirement
+          names them.
+        - Default NFR baselines (reasonable read latency, basic error
+          handling, the existing auth/authorization model, accessibility
+          parity with neighboring pages, baseline observability the
+          codebase already uses) ARE in scope — they are necessary for
+          the feature to work in this app, not scope creep.
+        - Speculative NFRs (new caching tiers, queues, microservices,
+          custom infra) are out of scope unless the requirement forces
+          them OR the codebase grounding survey shows the existing
+          system cannot satisfy the literal requirement without them.
+        - Every REQ-TF-* / AC-TF-* / NFR-TF-* must justify itself
+          against a literal phrase in the requirement OR a concrete
+          constraint from the codebase grounding survey OR existing
+          baselines this codebase already enforces.
+        - List the technical extensions you considered and rejected
+          (e.g. "added caching layer: not required at current scale")
+          so the finalizer can see deliberate exclusions. Do NOT list
+          necessary baselines there.
 
       Focus only on this angle:
         - Technical constraints and dependencies derived from the codebase
@@ -302,7 +400,7 @@ nodes:
         - Cite specific files/services/contracts from the grounding survey.
 
       Save the full draft:
-        allen_save_artifact("prd/drafts/03-technical-feasibility-prd-proposal.md", <markdown>, content_type="markdown", overwrite=true)
+        mcp__allen__allen_save_artifact("prd/drafts/03-technical-feasibility-prd-proposal.md", <markdown>, content_type="markdown", overwrite=true)
       Copy publicUrl to JSON as `prd_technical_feasibility_artifact_url`.
 
       End with a fenced JSON block:
@@ -329,8 +427,34 @@ nodes:
       PRODUCT CONTEXT:
       {{product_context}}
 
-      📄 CODEBASE GROUNDING (REQUIRED reading — WebFetch first):
+      📄 CODEBASE GROUNDING (REQUIRED reading — fetch first via mcp__allen__allen_get_artifact):
       {{codebase_grounding_artifact_url}}
+
+      SCOPE DISCIPLINE (read before drafting):
+        - Frame the business goal around what the user literally asked
+          for, not the larger product opportunity that surrounds it.
+          Example: if the requirement is "page listing all products",
+          the business goal is "users can see all products"; it is NOT
+          "users can discover, evaluate, and act on products" — that
+          implies detail, compare, purchase flows the user did not ask
+          for.
+        - Success metrics must be measurable against the literal
+          requirement. If you cannot measure the metric using only the
+          behavior the requirement names, drop it. (Baseline metrics
+          this product already tracks — page-load success, error rate
+          — are fine to keep if they apply.)
+        - Use the "Non-goals" section aggressively. List adjacent
+          capabilities and explicitly mark them out of scope so the
+          finalizer can see what was rejected (e.g. "discovery / search:
+          out of scope", "purchase flow: out of scope"). Do NOT list
+          necessary supporting items (empty/error states, baseline
+          observability) there — those are in scope.
+        - Do not invent rollout phases for unstated future features.
+          Rollout details that this product NORMALLY requires (e.g. the
+          existing feature-flag pattern, the standard release notes)
+          stay in scope.
+        - Every REQ-BS-* / AC-BS-* must trace to a literal phrase in
+          the requirement OR be a necessary precondition for one.
 
       Focus only on this angle:
         - Problem statement and business goal
@@ -345,7 +469,7 @@ nodes:
         - Stay business-focused — do not duplicate the technical-feasibility angle.
 
       Save the full draft:
-        allen_save_artifact("prd/drafts/04-business-scope-prd-proposal.md", <markdown>, content_type="markdown", overwrite=true)
+        mcp__allen__allen_save_artifact("prd/drafts/04-business-scope-prd-proposal.md", <markdown>, content_type="markdown", overwrite=true)
       Copy publicUrl to JSON as `prd_business_scope_artifact_url`.
 
       End with a fenced JSON block:
@@ -381,7 +505,7 @@ nodes:
       📄 CODEBASE GROUNDING:
       {{codebase_grounding_artifact_url}}
 
-      📄 PRD PROPOSAL ARTIFACTS (WebFetch each before consolidating):
+      📄 PRD PROPOSAL ARTIFACTS (fetch each via mcp__allen__allen_get_artifact before consolidating):
         1. USER FLOW           : {{prd_user_flow_artifact_url}}
             summary: {{prd_user_flow_summary}}
         2. TECHNICAL FEASIBILITY : {{prd_technical_feasibility_artifact_url}}
@@ -391,7 +515,7 @@ nodes:
             summary: {{prd_business_scope_summary}}
         {{/if}}
 
-      The proposal bodies are NOT inlined. WebFetch each URL above before
+      The proposal bodies are NOT inlined. fetch each via mcp__allen__allen_get_artifact above before
       consolidating.
 
       HUMAN PRD CLARIFICATION ANSWERS (if a prior round happened):
@@ -406,6 +530,49 @@ nodes:
           untestable acceptance criteria, open product decisions.
         - Ask human clarification ONLY if the final PRD would otherwise
           require guessing. Do not ask cosmetic questions.
+
+      Step 1b — Scope discipline (mandatory, but do not strip necessary work):
+        - For EVERY REQ-* and AC-* across all upstream proposals, it must
+          be justified by ONE of:
+            (a) a literal phrase in the ORIGINAL REQUIREMENT, OR
+            (b) a necessary precondition for (a) to actually function
+                in this codebase (e.g., the read endpoint that powers
+                the page, empty/loading/error states, conformance to
+                existing auth, accessibility parity with neighboring
+                pages, baseline observability this codebase already
+                uses).
+          If neither (a) nor (b), CUT the item to the "Out of scope"
+          section. If (b), KEEP it — necessary supporting work is in
+          scope and stripping it would produce a non-functional design.
+        - Common scope-creep patterns to actively reject (these are
+          adjacent capabilities, not necessary supporting work):
+            * adjacent CRUD operations (detail / edit / delete pages
+              when only list was requested)
+            * search, filter, sort, pagination when not requested
+            * admin / management views when only end-user view was asked
+            * exports, sharing, notifications, real-time updates when
+              not requested
+            * speculative NFRs / new infra (caching tiers, queues,
+              multi-region) when the existing system already meets the
+              literal requirement
+            * future-proofing requirements ("…so we can later add X")
+        - Things that LOOK like scope creep but are NOT (do not cut):
+            * the API endpoint that returns the data the requested page
+              shows
+            * empty state, error state, loading state for the requested
+              page
+            * authn/authz when the rest of the app already requires it
+            * accessibility, i18n, observability at the level the
+              codebase already enforces
+            * the test coverage required to verify the literal AC
+        - The final PRD MUST contain an explicit "Out of scope" section
+          listing the rejected ADJACENT features by name. Do not list
+          necessary supporting work there.
+        - If the proposals collectively over-scoped, surface this in
+          prd_scope_creep_findings AND trim before finalizing.
+        - If the proposals UNDER-scoped (missed necessary supporting
+          work), add it back — surface this in prd_self_critique_findings
+          and include the item in the final PRD.
 
       Step 2 — Self-critique pass (intensity scales with severity):
         - For severity == 'medium': lightly stress-test the consolidated
@@ -424,20 +591,23 @@ nodes:
         - Set prd_needs_clarification=true.
         - Output up to 5 focused prd_clarification_questions.
         - Save the decision report:
-          allen_save_artifact("prd/finalizer/05-prd-finalizer-decision.md", <markdown>, content_type="markdown", overwrite=true)
+          mcp__allen__allen_save_artifact("prd/finalizer/05-prd-finalizer-decision.md", <markdown>, content_type="markdown", overwrite=true)
         - Leave final_prd_artifact_url empty.
 
       Step 3b — If no clarification is required:
         - Set prd_needs_clarification=false.
         - Generate the final consolidated PRD with sections:
           Overview · Goals & non-goals · Target users · User flows ·
-          Functional requirements (REQ-001…) · Acceptance criteria
+          Functional requirements (REQ-001…, each annotated with the
+          literal requirement phrase it traces to) · Acceptance criteria
           (AC-001…, each mapped to a REQ id) · Edge cases ·
+          Out of scope (explicit list of adjacent features that were
+          considered and REJECTED, by name, with a one-line reason) ·
           Non-functional requirements (NFR-001…) · Success metrics ·
           Risks, assumptions, open questions · Rollout plan
         - Save the decision report (same filename as 3a, overwrite=true).
         - Save the final PRD:
-          allen_save_artifact("prd/final/06-final-prd.md", <markdown>, content_type="markdown", overwrite=true)
+          mcp__allen__allen_save_artifact("prd/final/06-final-prd.md", <markdown>, content_type="markdown", overwrite=true)
 
       End with a fenced JSON block containing EXACTLY:
 
@@ -448,6 +618,7 @@ nodes:
         "prd_finalizer_gaps": [],
         "prd_finalizer_conflicts": [],
         "prd_self_critique_findings": [],
+        "prd_scope_creep_findings": [],
         "prd_finalizer_decision_artifact_url": "<publicUrl>",
         "final_prd_artifact_url": "<publicUrl or empty>",
         "final_prd_requirements_index": ["REQ-001"]
@@ -464,6 +635,7 @@ nodes:
       prd_finalizer_gaps: "PRD gaps found during consolidation."
       prd_finalizer_conflicts: "Conflicts between proposals."
       prd_self_critique_findings: "Issues uncovered by the self-critique pass (heavier list for large severity)."
+      prd_scope_creep_findings: "Adjacent features the upstream proposals introduced but the finalizer cut as out-of-scope (by name, with reason)."
       prd_finalizer_decision_artifact_url: "Public URL of the finalizer decision report."
       final_prd_artifact_url: "Public URL of the final PRD; empty until clarification is resolved."
       final_prd_requirements_index: "Array of final PRD REQ ids — used by TDD proposals."
@@ -510,7 +682,7 @@ nodes:
     prompt: |
       Draft a TDD proposal from the DATA-FLOW and SCHEMA angle.
 
-      📄 FINAL PRD (WebFetch for full PRD body):
+      📄 FINAL PRD (fetch via mcp__allen__allen_get_artifact for full PRD body):
       {{final_prd_artifact_url}}
 
       REQUIREMENTS INDEX: {{final_prd_requirements_index}}
@@ -521,6 +693,23 @@ nodes:
       AFFECTED MODULES: {{affected_modules_index}}
       REPO STACK:       {{repo_stack_summary}}
 
+      SCOPE DISCIPLINE:
+        - Design the data flow and schema that the final PRD's
+          REQ/AC/NFR ids require, PLUS any minimally-necessary schema
+          plumbing those requirements depend on (an index needed for
+          the page to load at a reasonable latency IS necessary; a
+          second index for a search feature the PRD does not request
+          is NOT).
+        - Do NOT add tables, columns, indexes, or pipelines that
+          neither a PRD requirement nor a necessary precondition
+          justifies. If a column would be "nice to have for the future"
+          but no PRD requirement reads or writes it, drop it.
+        - Reuse existing schema and patterns from the codebase grounding
+          survey before proposing new ones. New schema must be justified
+          by a specific REQ/AC the existing schema cannot satisfy.
+        - List rejected schema extensions in a "Considered and rejected"
+          subsection. Do NOT list necessary plumbing there.
+
       Focus only on this angle:
         - End-to-end data flow
         - Producers, consumers, transport, persistence, state transitions
@@ -529,7 +718,7 @@ nodes:
         - Per-REQ/AC/NFR coverage mapping
 
       Save the full draft:
-        allen_save_artifact("tdd/drafts/07-data-schema-tdd-proposal.md", <markdown>, content_type="markdown", overwrite=true)
+        mcp__allen__allen_save_artifact("tdd/drafts/07-data-schema-tdd-proposal.md", <markdown>, content_type="markdown", overwrite=true)
       Copy publicUrl to JSON as `tdd_data_schema_artifact_url`.
 
       End with a fenced JSON block:
@@ -549,7 +738,7 @@ nodes:
     prompt: |
       Draft a TDD proposal from the SYSTEM-DESIGN / API / SECURITY / OPS angle.
 
-      📄 FINAL PRD (WebFetch for full PRD body):
+      📄 FINAL PRD (fetch via mcp__allen__allen_get_artifact for full PRD body):
       {{final_prd_artifact_url}}
 
       REQUIREMENTS INDEX: {{final_prd_requirements_index}}
@@ -560,6 +749,29 @@ nodes:
       AFFECTED MODULES: {{affected_modules_index}}
       REPO STACK:       {{repo_stack_summary}}
 
+      SCOPE DISCIPLINE:
+        - Design the components, APIs, and infrastructure that the
+          final PRD's REQ/AC/NFR ids require, PLUS minimally-necessary
+          supporting work (the endpoint that returns the data the page
+          shows, route registration, error/empty-state contracts,
+          baseline observability that the codebase already enforces).
+        - Do NOT add services, queues, caches, microservices, or
+          abstractions that neither a PRD requirement nor a necessary
+          precondition justifies.
+          Example: a "list products" page needs ONE read endpoint and
+          standard routing/auth wiring — NOT a service bus, search
+          index, or caching tier unless the PRD's NFRs explicitly
+          trigger them.
+        - Prefer extending the existing architecture from the codebase
+          grounding survey over introducing new components. New
+          components must trace to a specific REQ/AC/NFR or be a
+          necessary precondition for one.
+        - Tradeoffs are about the design decision itself, not an excuse
+          to discuss future capabilities the PRD does not request.
+        - List rejected architectural extensions in a "Considered and
+          rejected" subsection. Do NOT list necessary supporting
+          components there.
+
       Focus only on this angle:
         - Component / service decomposition
         - APIs, interfaces, contracts, sequence diagrams
@@ -568,7 +780,7 @@ nodes:
         - Per-REQ/AC/NFR coverage mapping
 
       Save the full draft:
-        allen_save_artifact("tdd/drafts/08-system-design-tdd-proposal.md", <markdown>, content_type="markdown", overwrite=true)
+        mcp__allen__allen_save_artifact("tdd/drafts/08-system-design-tdd-proposal.md", <markdown>, content_type="markdown", overwrite=true)
       Copy publicUrl to JSON as `tdd_system_design_artifact_url`.
 
       End with a fenced JSON block:
@@ -589,7 +801,7 @@ nodes:
       Draft a TDD proposal from the FILE-LEVEL IMPACT and IMPLEMENTATION-PLAN angle.
       (LARGE severity only — this proposal does not run for medium.)
 
-      📄 FINAL PRD (WebFetch for full PRD body):
+      📄 FINAL PRD (fetch via mcp__allen__allen_get_artifact for full PRD body):
       {{final_prd_artifact_url}}
 
       REQUIREMENTS INDEX: {{final_prd_requirements_index}}
@@ -600,6 +812,22 @@ nodes:
       AFFECTED MODULES: {{affected_modules_index}}
       REPO STACK:       {{repo_stack_summary}}
 
+      SCOPE DISCIPLINE:
+        - Every file you list to add / modify must EITHER trace to a
+          specific REQ/AC/NFR id from the final PRD OR be a necessary
+          precondition (route registration, types/DTOs the new code
+          requires, a test file for the literal ACs, a thin wiring file
+          the framework needs). No speculative new modules.
+        - Prefer modifying existing files over adding new ones when
+          the existing structure can host the change.
+        - Do not add config, migration, or ops impact items that the
+          PRD does not require AND that are not needed for the feature
+          to function (e.g. a one-line env var the new endpoint needs
+          is fine; a brand-new feature-flag system is not).
+        - Test impact must cover the literal acceptance criteria —
+          not adjacent flows the PRD did not request — but DO include
+          the unit/integration tests needed to verify the stated ACs.
+
       Focus only on this angle:
         - Files to add, modify, or delete
         - For each file: purpose, expected change, key classes/functions, test impact
@@ -607,7 +835,7 @@ nodes:
         - Per-REQ/AC/NFR coverage mapping
 
       Save the full draft:
-        allen_save_artifact("tdd/drafts/09-files-impact-tdd-proposal.md", <markdown>, content_type="markdown", overwrite=true)
+        mcp__allen__allen_save_artifact("tdd/drafts/09-files-impact-tdd-proposal.md", <markdown>, content_type="markdown", overwrite=true)
       Copy publicUrl to JSON as `tdd_files_impact_artifact_url`.
 
       End with a fenced JSON block:
@@ -642,7 +870,7 @@ nodes:
       📄 CODEBASE GROUNDING:
       {{codebase_grounding_artifact_url}}
 
-      📄 TDD PROPOSAL ARTIFACTS (WebFetch each):
+      📄 TDD PROPOSAL ARTIFACTS (fetch each via mcp__allen__allen_get_artifact):
         1. DATA AND SCHEMA  : {{tdd_data_schema_artifact_url}}
             summary: {{tdd_data_schema_summary}}
         2. SYSTEM DESIGN    : {{tdd_system_design_artifact_url}}
@@ -688,7 +916,7 @@ nodes:
         - Set tdd_needs_clarification=true.
         - Up to 5 focused tdd_clarification_questions.
         - Save the decision report:
-          allen_save_artifact("tdd/finalizer/10-tdd-finalizer-decision.md", <markdown>, content_type="markdown", overwrite=true)
+          mcp__allen__allen_save_artifact("tdd/finalizer/10-tdd-finalizer-decision.md", <markdown>, content_type="markdown", overwrite=true)
         - Leave final_tdd_artifact_url empty.
 
       Step 4b — If no clarification AND no PRD revision needed:
@@ -701,7 +929,7 @@ nodes:
           coverage matrix (every REQ/AC/NFR) · Risks and mitigations
         - Save the decision report.
         - Save the final TDD:
-          allen_save_artifact("tdd/final/11-final-tdd.md", <markdown>, content_type="markdown", overwrite=true)
+          mcp__allen__allen_save_artifact("tdd/final/11-final-tdd.md", <markdown>, content_type="markdown", overwrite=true)
 
       End with a fenced JSON block containing EXACTLY:
 
@@ -798,7 +1026,7 @@ nodes:
       COVERAGE MATRIX:    {{final_tdd_coverage_matrix}}
       UNCOVERED REQS:     {{final_tdd_uncovered_requirements}}
 
-      WebFetch every artifact above before validating. The bodies are not
+      Fetch every artifact above via mcp__allen__allen_get_artifact before validating. The bodies are not
       inlined.
 
       Validate strictly:
@@ -814,9 +1042,49 @@ nodes:
            tests.
         6. The codebase grounding survey is reflected in the file
            targets and patterns chosen.
+        7. SCOPE DISCIPLINE (without stripping necessary work): every
+           REQ-* and AC-* in the PRD must be justified by either:
+             (a) a literal phrase in the ORIGINAL REQUIREMENT, OR
+             (b) a necessary precondition for (a) to function in this
+                 codebase (read endpoint, loading/empty/error states,
+                 conformance to existing auth/accessibility/observability
+                 baselines, test coverage for the literal AC).
+           Reject (ready_for_implementation=false) ONLY if you find
+           REQ/AC that fits NEITHER (a) nor (b) — i.e. designs adjacent
+           features the user did not ask for AND that are not necessary
+           supporting work. Example red flags for "list all products":
+             - detail / edit / delete views in the PRD
+             - search / filter / sort / pagination requirements not
+               mentioned by the user
+             - admin views, exports, notifications, analytics
+             - speculative NFRs (new caching tiers, queues) at small scale
+           NOT red flags (these are necessary, keep them):
+             - the read endpoint that powers the page
+             - loading / empty / error states
+             - conformance to existing auth and layout patterns
+             - baseline observability/accessibility the codebase
+               already enforces
+             - tests that verify the stated acceptance criteria
+           The PRD MUST contain an explicit "Out of scope" section
+           naming the adjacent features that were considered and
+           rejected. If the section is missing, reject. If the "Out of
+           scope" section lists items that are actually necessary
+           supporting work (e.g. "loading state: out of scope"), also
+           reject — those should not have been excluded.
+        8. SCOPE DISCIPLINE on the TDD side: every file / schema /
+           component in the TDD must trace to a REQ/AC/NFR id from
+           the PRD OR be a necessary precondition (e.g. routing wiring,
+           a thin DTO, a test file). Reject if the TDD introduces
+           architecture the PRD does not justify AND that is not
+           necessary supporting work. Do NOT reject for thin glue files
+           (route registration, types, test scaffolding) that the
+           feature obviously needs.
 
-      If anything is missing, set ready_for_implementation=false and
-      list exactly what blocks handoff.
+      If anything is missing OR scope-creep is detected, set
+      ready_for_implementation=false and list exactly what blocks
+      handoff (including the specific REQ/AC/file/component that is
+      out of scope). Also reject if necessary supporting work was
+      stripped — under-scoping is just as blocking as over-scoping.
 
       Produce a handoff document with:
         - Problem statement
@@ -827,7 +1095,7 @@ nodes:
         - Implementation-agent handoff prompt ready to dispatch
 
       Save:
-        allen_save_artifact("handoff/12-implementation-readiness-handoff.md", <markdown>, content_type="markdown", overwrite=true)
+        mcp__allen__allen_save_artifact("handoff/12-implementation-readiness-handoff.md", <markdown>, content_type="markdown", overwrite=true)
       Copy publicUrl to JSON as `implementation_readiness_handoff_artifact_url`.
 
       End with a fenced JSON block containing EXACTLY:
@@ -838,6 +1106,7 @@ nodes:
         "implementation_readiness_verdict": "ready",
         "implementation_readiness_blockers": [],
         "implementation_readiness_risks": [],
+        "implementation_readiness_scope_findings": [],
         "implementation_problem_statement": "…",
         "implementation_final_prd_artifact_url": "<url or empty>",
         "implementation_final_tdd_artifact_url": "<url or empty>",
@@ -856,6 +1125,7 @@ nodes:
       implementation_readiness_verdict: "Concise validator verdict."
       implementation_readiness_blockers: "Blocking issues that must be fixed before implementation."
       implementation_readiness_risks: "Non-blocking risks for the implementation agent."
+      implementation_readiness_scope_findings: "Scope-discipline findings — adjacent features in the PRD/TDD that the validator flagged as not traceable to the original requirement (empty when clean)."
       implementation_problem_statement: "Problem statement to pass to the implementation agent."
       implementation_final_prd_artifact_url: "Final PRD artifact URL (medium/large) — empty for small lane."
       implementation_final_tdd_artifact_url: "Final TDD artifact URL (medium/large) — empty for small lane."

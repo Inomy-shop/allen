@@ -1226,9 +1226,12 @@ ${lines.join('\n')}
         delete exec.state.__retry_source;
       }
 
-      // Track session for resume
+      // Track session for resume. Use the resolved session_key when the
+      // node declared one (per-iteration isolation, e.g. per-milestone);
+      // otherwise fall back to nodeName so existing workflows behave
+      // exactly as before.
       if (result.sessionId) {
-        exec.sessions[nodeName] = result.sessionId;
+        exec.sessions[result.sessionKey ?? nodeName] = result.sessionId;
       }
 
       // Update cost (sequential — no race condition)
@@ -1701,9 +1704,10 @@ ${lines.join('\n')}
           throw new Error('Branch cancelled by join policy');
         }
 
-        // Track session (safe — different keys per branch)
+        // Track session (safe — different keys per branch).
+        // Uses resolved session_key when declared; falls back to nodeName.
         if (result.sessionId) {
-          exec.sessions[nodeName] = result.sessionId;
+          exec.sessions[result.sessionKey ?? nodeName] = result.sessionId;
         }
 
         return { node: nodeName, outputs: result.outputs, result, traceStart, injectedLearningIds: branchLearningIds };
