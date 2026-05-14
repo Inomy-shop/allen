@@ -20,6 +20,10 @@ const SEVERITY: Record<string, { icon: React.ElementType; color: string; bg: str
   info: { icon: Info, color: 'text-accent-blue', bg: 'bg-accent-blue/5 border-accent-blue/20' },
 };
 
+const DROPDOWN_WIDTH = 320;
+const DROPDOWN_MAX_HEIGHT = 360;
+const VIEWPORT_GAP = 12;
+
 function timeAgo(dateStr: string): string {
   const diff = Date.now() - new Date(dateStr).getTime();
   const mins = Math.floor(diff / 60000);
@@ -59,6 +63,19 @@ export default function NotificationBell() {
 
   // Get button position for portal dropdown
   const rect = buttonRef.current?.getBoundingClientRect();
+  const dropdownStyle = rect
+    ? {
+        left: Math.min(
+          Math.max(rect.right - DROPDOWN_WIDTH, VIEWPORT_GAP),
+          window.innerWidth - DROPDOWN_WIDTH - VIEWPORT_GAP,
+        ),
+        top: Math.min(
+          rect.bottom + 8,
+          window.innerHeight - DROPDOWN_MAX_HEIGHT - VIEWPORT_GAP,
+        ),
+        maxHeight: DROPDOWN_MAX_HEIGHT,
+      }
+    : undefined;
 
   return (
     <>
@@ -78,7 +95,7 @@ export default function NotificationBell() {
         )}
       </button>
 
-      {open && rect && createPortal(
+      {open && rect && dropdownStyle && createPortal(
         <>
           {/* Backdrop */}
           <div className="fixed inset-0 z-40" onClick={() => setOpen(false)} />
@@ -86,7 +103,7 @@ export default function NotificationBell() {
           {/* Dropdown */}
           <div
             className="fixed z-50 w-80 bg-surface-100 border border-app rounded-lg shadow-2xl overflow-hidden"
-            style={{ left: rect.right + 8, bottom: window.innerHeight - rect.bottom }}
+            style={dropdownStyle}
           >
             {/* Header */}
             <div className="flex items-center justify-between px-4 py-2.5 border-b border-app bg-surface-50">

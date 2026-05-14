@@ -1703,15 +1703,15 @@ function RunProgressFeed({ runs }: { runs: SpawnedAgent[] }) {
   });
 
   return (
-    <div className="ml-6 max-w-[760px] space-y-1.5 border-l-[3px] border-accent/35 pl-3">
-      <div className="flex items-center gap-2 font-mono text-[10px] text-theme-subtle">
-        <Loader2 className="h-3 w-3 animate-spin text-accent" />
-        live progress
+    <div className="run-progress-feed">
+      <div className="run-progress-head">
+        <Loader2 className="h-3 w-3 animate-spin" />
+        <span>live progress</span>
       </div>
       {uniqueRows.map(row => (
-        <div key={row.key} className="rounded-md border border-app bg-app-card px-3 py-2 text-[12px] text-theme-secondary shadow-sm">
-          <span className="font-mono text-theme-muted">{formatTime(typeof row.at === 'string' ? row.at : new Date(row.at).toISOString())}</span>
-          <span className="ml-2">{row.text}</span>
+        <div key={row.key} className="run-progress-row">
+          <span className="run-progress-time">{formatTime(typeof row.at === 'string' ? row.at : new Date(row.at).toISOString())}</span>
+          <span className="run-progress-text">{row.text}</span>
         </div>
       ))}
     </div>

@@ -3744,6 +3744,51 @@
     gap: 6px;
   }
 
+  .run-progress-feed {
+    width: min(760px, 100%);
+    margin: 2px auto 0;
+    padding: 0 0 0 14px;
+    color: rgb(var(--color-text-secondary));
+  }
+
+  .run-progress-head {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    margin-bottom: 6px;
+    color: rgb(var(--color-text-subtle));
+    font-family: var(--font-mono);
+    font-size: 11px;
+  }
+
+  .run-progress-head svg {
+    color: rgb(var(--color-accent));
+  }
+
+  .run-progress-row {
+    display: grid;
+    grid-template-columns: 48px minmax(0, 1fr);
+    gap: 10px;
+    padding: 3px 0;
+    color: rgb(var(--color-text-secondary));
+    font-size: 12.5px;
+    line-height: 1.45;
+  }
+
+  .run-progress-time {
+    color: rgb(var(--color-text-subtle));
+    font-family: var(--font-mono);
+    font-size: 11px;
+    white-space: nowrap;
+  }
+
+  .run-progress-text {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
   .chat-diff-card {
     width: min(760px, 100%);
     margin: 14px auto 28px;
