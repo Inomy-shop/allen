@@ -26,9 +26,11 @@ export type McpServerSource =
 export interface McpServerRecord {
   _id?: ObjectId;
   /**
-   * Owning user. `null`/absent means "implicit admin" — shows up only in
-   * admin's MCP list. New records are always stamped. Admin has no visibility
-   * override for this collection (strictest scoping).
+   * Owner attribution. Reads are shared across all authenticated users —
+   * all mcp_servers documents are visible regardless of ownerId. This field
+   * identifies who created the MCP server and is used for display grouping
+   * in the UI. `null`/absent means "implicit admin-created". New records are
+   * always stamped with the creating user's id.
    */
   ownerId?: ObjectId | null;
   name: string;
