@@ -1,7 +1,9 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { chat as chatApi } from '../services/api';
+import { useAuthStore } from '../stores/authStore';
 
+// TASK-IMPL-001: added `source` field
 interface ChatSessionItem {
   _id: string;
   title: string;
@@ -10,12 +12,47 @@ interface ChatSessionItem {
   lastMessageAt?: string;
   provider?: string;
   model?: string;
+  source?: 'ui' | 'slack' | 'automation';
 }
 
 type ThreadItem =
-  { id: string; title: string; subtitle: string; status: string; href: string; startedAt?: string; provider?: string };
+  { id: string; title: string; subtitle: string; status: string; href: string; startedAt?: string; provider?: string; source?: string };
 
 type Tab = 'ongoing' | 'recent' | 'history';
+
+// TASK-IMPL-002
+export type UserFilterOption = 'all' | 'ui' | 'slack' | 'automation' | 'unknown';
+
+// TASK-IMPL-003
+/**
+ * Derives the display label for a session source value.
+ * Exported so it can be unit-tested independently.
+ */
+export function deriveUserLabel(
+  source: string | undefined,
+  currentUserName: string | null | undefined
+): string {
+  switch (source) {
+    case 'ui':
+      return currentUserName ?? 'UI';
+    case 'slack':
+      return 'Slack';
+    case 'automation':
+      return 'Automation';
+    default:
+      return 'Unknown';
+  }
+}
+
+// TASK-IMPL-004
+/**
+ * Resolves a session's source to a UserFilterOption key.
+ * Exported so it can be unit-tested independently.
+ */
+export function resolveFilterKey(source: string | undefined): UserFilterOption {
+  if (source === 'ui' || source === 'slack' || source === 'automation') return source;
+  return 'unknown';
+}
 
 function timeAgo(dateStr?: string): string {
   if (!dateStr) return 'recently';
@@ -34,6 +71,11 @@ export default function ThreadsPage() {
   const [tab, setTab] = useState<Tab>('ongoing');
   const [query, setQuery] = useState('');
   const [loading, setLoading] = useState(true);
+  // TASK-IMPL-006
+  const [userFilter, setUserFilter] = useState<UserFilterOption>('all');
+
+  // TASK-IMPL-005
+  const currentUser = useAuthStore((s) => s.user);
 
   async function load() {
     setLoading(true);
@@ -51,6 +93,7 @@ export default function ThreadsPage() {
     return () => clearInterval(interval);
   }, []);
 
+  // TASK-IMPL-008: extended with user-filter predicate; userFilter added to deps
   const buckets = useMemo(() => {
     const chatItems: ThreadItem[] = chatSessions.map((session) => ({
       id: session._id,
@@ -61,15 +104,25 @@ export default function ThreadsPage() {
       href: `/chat/${session._id}`,
       startedAt: session.lastMessageAt,
       provider: session.provider,
+      source: session.source,
     }));
 
     const q = query.trim().toLowerCase();
     const matched = chatItems.filter((item) => {
-      if (!q) return true;
-      return item.id.toLowerCase().includes(q)
-        || item.title.toLowerCase().includes(q)
-        || item.subtitle.toLowerCase().includes(q)
-        || item.status.toLowerCase().includes(q);
+      // Free-text predicate
+      if (q) {
+        const textOk =
+          item.id.toLowerCase().includes(q) ||
+          item.title.toLowerCase().includes(q) ||
+          item.subtitle.toLowerCase().includes(q) ||
+          item.status.toLowerCase().includes(q);
+        if (!textOk) return false;
+      }
+      // NEW: user-filter predicate — add after the existing q check
+      if (userFilter !== 'all') {
+        return resolveFilterKey(item.source) === userFilter;
+      }
+      return true;
     }).sort((a, b) => new Date(b.startedAt ?? 0).getTime() - new Date(a.startedAt ?? 0).getTime());
 
     const active = matched.filter((item) => item.status === 'active');
@@ -80,7 +133,16 @@ export default function ThreadsPage() {
       recent: matched.slice(0, 80),
       history: archived.length > 0 ? archived : matched.slice(80),
     };
-  }, [chatSessions, query]);
+  }, [chatSessions, query, userFilter]);
+
+  // TASK-IMPL-007: derives present sources from raw chatSessions; stable order
+  const userFilterOptions = useMemo<UserFilterOption[]>(() => {
+    const present = new Set<UserFilterOption>();
+    chatSessions.forEach((s) => present.add(resolveFilterKey(s.source)));
+    // Stable display order: ui → slack → automation → unknown
+    const order: UserFilterOption[] = ['ui', 'slack', 'automation', 'unknown'];
+    return order.filter((opt) => present.has(opt));
+  }, [chatSessions]);
 
   const tabs: Array<{ key: Tab; label: string; count: number }> = [
     { key: 'ongoing', label: 'ongoing', count: buckets.ongoing.length },
@@ -119,6 +181,24 @@ export default function ThreadsPage() {
           placeholder="search threads / tickets..."
         />
       </div>
+
+      {/* TASK-IMPL-009: user-source filter control — between search bar and thread list */}
+      {userFilterOptions.length > 0 && (
+        <div className="flex items-center gap-2 px-3 pb-2">
+          <select
+            className="input py-1.5 text-[12px] w-auto"
+            value={userFilter}
+            onChange={(e) => setUserFilter(e.target.value as UserFilterOption)}
+          >
+            <option value="all">All Users</option>
+            {userFilterOptions.map((opt) => (
+              <option key={opt} value={opt}>
+                {deriveUserLabel(opt, currentUser?.name)}
+              </option>
+            ))}
+          </select>
+        </div>
+      )}
 
       <div className="th-list">
         {loading && items.length === 0 && <div className="task-empty">loading threads...</div>}
