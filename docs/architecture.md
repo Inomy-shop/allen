@@ -73,7 +73,7 @@ The API, persistence, orchestration, and integration layer.
 Responsibilities:
 
 - Connect to MongoDB and ensure indexes.
-- Bootstrap the first admin user from `.env`.
+- Expose first-run UI bootstrap for the first admin user.
 - Seed default teams, agents, and workflows.
 - Expose authenticated API routes.
 - Manage users, auth, JWTs, password reset, and admin gating.

@@ -64,8 +64,6 @@ Required for boot:
 
 - `JWT_ACCESS_SECRET`
 - `JWT_REFRESH_SECRET`
-- `ADMIN_EMAIL`
-- `ADMIN_PASSWORD`
 
 Optional — set only the integrations you use:
 
@@ -122,9 +120,9 @@ Allen is invite/admin controlled. There is no public signup.
 
 On first boot:
 
-1. Server reads `ADMIN_EMAIL` and `ADMIN_PASSWORD`.
-2. It creates the bootstrap admin if no admin exists.
-3. The admin must reset password on first login.
+1. The UI detects that no users exist.
+2. The first operator creates the admin account at `/onboarding/account`.
+3. The public bootstrap endpoint closes as soon as any user exists.
 
 JWT settings:
 

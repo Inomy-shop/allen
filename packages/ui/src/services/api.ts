@@ -69,7 +69,10 @@ async function doFetch(path: string, options: RequestInit, token: string | null,
 
 async function request<T>(path: string, options: RequestInit = {}, signal?: AbortSignal): Promise<T> {
   // Don't attach tokens to /auth/login or /auth/refresh themselves.
-  const isPublicAuth = path.startsWith('/auth/login') || path.startsWith('/auth/refresh');
+  const isPublicAuth = path.startsWith('/auth/login')
+    || path.startsWith('/auth/refresh')
+    || path.startsWith('/auth/bootstrap')
+    || path.startsWith('/system/onboarding-status');
   const token = isPublicAuth ? null : useAuthStore.getState().accessToken;
 
   let res = await doFetch(path, options, token, signal);
@@ -946,6 +949,11 @@ export const auth = {
       method: 'POST',
       body: JSON.stringify({ email, password }),
     }),
+  bootstrap: (body: { name: string; email: string; password: string }) =>
+    request<SessionResponse>('/auth/bootstrap', {
+      method: 'POST',
+      body: JSON.stringify(body),
+    }),
   logout: (refreshToken: string) =>
     request<{ ok: true }>('/auth/logout', {
       method: 'POST',
@@ -957,6 +965,18 @@ export const auth = {
       body: JSON.stringify({ currentPassword, newPassword }),
     }),
   me: () => request<{ user: AuthUser }>('/auth/me'),
+};
+
+// ── System ────────────────────────────────────────────────────────────────
+export const system = {
+  onboardingStatus: () =>
+    request<{
+      isFirstRun: boolean;
+      userCount: number;
+      adminCount: number;
+      complete: boolean;
+      step: 'account' | 'complete';
+    }>('/system/onboarding-status'),
 };
 
 // ── Linear Types ──────────────────────────────────────────────────────────

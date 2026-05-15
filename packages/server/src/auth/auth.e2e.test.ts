@@ -5,7 +5,7 @@ import { makeTestApp, type TestContext } from './testHarness.js';
 const BOOT_EMAIL = 'admin@test.local';
 const BOOT_PW = 'BootAdmin!234';
 
-describe('auth e2e: bootstrap + login', () => {
+describe('auth e2e: seeded admin + login', () => {
   let ctx: TestContext;
 
   beforeAll(async () => {
@@ -15,7 +15,7 @@ describe('auth e2e: bootstrap + login', () => {
     await ctx.stop();
   });
 
-  it('bootstraps an admin user flagged mustResetPassword', async () => {
+  it('has a seeded admin user flagged mustResetPassword', async () => {
     const doc = await ctx.db.collection('users').findOne({ email: BOOT_EMAIL });
     expect(doc).toBeTruthy();
     expect(doc?.role).toBe('admin');
@@ -52,6 +52,65 @@ describe('auth e2e: bootstrap + login', () => {
     expect(res.body.user.email).toBe(BOOT_EMAIL);
     expect(res.body.user.role).toBe('admin');
     expect(res.body.user.mustResetPassword).toBe(true);
+  });
+});
+
+describe('auth e2e: UI first-admin bootstrap', () => {
+  let ctx: TestContext;
+
+  beforeAll(async () => {
+    ctx = await makeTestApp({ seedAdmin: false });
+  });
+  afterAll(async () => {
+    await ctx.stop();
+  });
+
+  it('reports first-run status before any user exists', async () => {
+    const res = await request(ctx.app).get('/api/system/onboarding-status');
+    expect(res.status).toBe(200);
+    expect(res.body.isFirstRun).toBe(true);
+    expect(res.body.step).toBe('account');
+    expect(res.body.userCount).toBe(0);
+    expect(res.body.adminCount).toBe(0);
+  });
+
+  it('creates the first admin through the public bootstrap endpoint and returns a session', async () => {
+    const res = await request(ctx.app)
+      .post('/api/auth/bootstrap')
+      .send({
+        name: 'First Admin',
+        email: 'first-admin@test.local',
+        password: 'FirstAdmin!234',
+      });
+
+    expect(res.status).toBe(201);
+    expect(res.body.accessToken).toBeTruthy();
+    expect(res.body.refreshToken).toBeTruthy();
+    expect(res.body.user.email).toBe('first-admin@test.local');
+    expect(res.body.user.role).toBe('admin');
+    expect(res.body.user.mustResetPassword).toBe(false);
+
+    const doc = await ctx.db.collection('users').findOne({ email: 'first-admin@test.local' });
+    expect(doc?.role).toBe('admin');
+    expect(doc?.mustResetPassword).toBe(false);
+  });
+
+  it('closes bootstrap after the first user exists', async () => {
+    const res = await request(ctx.app)
+      .post('/api/auth/bootstrap')
+      .send({
+        name: 'Second Admin',
+        email: 'second-admin@test.local',
+        password: 'SecondAdmin!234',
+      });
+    expect(res.status).toBe(409);
+    expect(res.body.error).toBe('bootstrap_closed');
+
+    const status = await request(ctx.app).get('/api/system/onboarding-status');
+    expect(status.body.isFirstRun).toBe(false);
+    expect(status.body.step).toBe('complete');
+    expect(status.body.userCount).toBe(1);
+    expect(status.body.adminCount).toBe(1);
   });
 });
 

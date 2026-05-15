@@ -1,6 +1,6 @@
 import { Router, type Request, type Response } from 'express';
 import type { Db } from 'mongodb';
-import { ObjectId } from 'mongodb';
+import { ObjectId, MongoServerError } from 'mongodb';
 import { UserService, toPublicUser } from '../services/user.service.js';
 import { RefreshTokenService } from '../services/refreshToken.service.js';
 import {
@@ -37,6 +37,80 @@ export function authRoutes(db: Db): Router {
     });
     return { accessToken, refreshToken: refresh.token };
   }
+
+  // POST /api/auth/bootstrap
+  //
+  // Public first-run endpoint. It is only valid while the users collection is
+  // empty; after any user exists, this route is permanently closed for that
+  // instance. The database unique email index is the final race guard.
+  router.post('/bootstrap', async (req: Request, res: Response) => {
+    try {
+      const userCount = await users.countUsers();
+      if (userCount > 0) {
+        return res.status(409).json({ error: 'bootstrap_closed' });
+      }
+
+      const { name, email, password } = req.body ?? {};
+      if (typeof name !== 'string' || typeof email !== 'string' || typeof password !== 'string') {
+        return res.status(400).json({ error: 'name, email and password required' });
+      }
+
+      const cleanName = name.trim();
+      const cleanEmail = email.trim().toLowerCase();
+      if (!cleanName) return res.status(400).json({ error: 'name is required' });
+      if (!cleanEmail.includes('@')) return res.status(400).json({ error: 'valid email is required' });
+
+      const strength = validatePasswordStrength(password);
+      if (!strength.valid) return res.status(400).json({ error: strength.error });
+
+      let lockAcquired = false;
+      try {
+        const bootstrapLocks = db.collection<{ _id: string; createdAt: Date }>('bootstrap_locks');
+        await bootstrapLocks.insertOne({
+          _id: 'first-admin',
+          createdAt: new Date(),
+        });
+        lockAcquired = true;
+
+        const lockedUserCount = await users.countUsers();
+        if (lockedUserCount > 0) {
+          return res.status(409).json({ error: 'bootstrap_closed' });
+        }
+
+        const user = await users.createUser({
+          email: cleanEmail,
+          name: cleanName,
+          plainPassword: password,
+          role: 'admin',
+          mustResetPassword: false,
+          createdBy: 'system',
+        });
+        await users.touchLastLogin(user._id);
+        const fresh = { ...user, lastLoginAt: new Date() };
+        const session = await issueSession(fresh, req.headers['user-agent'] ?? '');
+        return res.status(201).json({
+          ...session,
+          user: toPublicUser(fresh),
+        });
+      } catch (err) {
+        if (err instanceof MongoServerError && err.code === 11000) {
+          return res.status(409).json({ error: 'bootstrap_closed' });
+        }
+        if (lockAcquired) {
+          await db.collection<{ _id: string }>('bootstrap_locks').deleteOne({ _id: 'first-admin' }).catch(() => {});
+        }
+        throw err;
+      }
+    } catch (err) {
+      const status = (err as { status?: number }).status ?? 500;
+      const message = (err as Error).message;
+      if (status === 409 || message.includes('already exists')) {
+        return res.status(409).json({ error: 'bootstrap_closed' });
+      }
+      console.error('[auth/bootstrap]', err);
+      return res.status(500).json({ error: 'bootstrap_failed' });
+    }
+  });
 
   // POST /api/auth/login
   router.post('/login', async (req: Request, res: Response) => {

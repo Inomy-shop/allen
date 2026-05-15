@@ -115,13 +115,11 @@ If the API is on a different port, make sure the UI configuration and API calls 
 Check `.env`:
 
 ```bash
-ADMIN_EMAIL=admin@example.com
-ADMIN_PASSWORD=ChangeMe!123
 JWT_ACCESS_SECRET=<set>
 JWT_REFRESH_SECRET=<set>
 ```
 
-The bootstrap admin is created only when no admin exists yet. If you changed `ADMIN_EMAIL` after the first boot, the existing admin in MongoDB may still be the old account.
+If no users exist yet, open the UI and create the first admin account from the onboarding screen. After any user exists, the first-admin bootstrap endpoint is closed.
 
 If the user is forced to reset password, only auth reset routes are allowed until the reset is completed.
 

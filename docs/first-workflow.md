@@ -77,8 +77,8 @@ curl http://localhost:4000/api/health
 
 Open `http://localhost:5173`.
 
-1. Sign in with `ADMIN_EMAIL` and `ADMIN_PASSWORD`.
-2. Set a new password when prompted.
+1. If this is a fresh instance, create the first admin account in the onboarding screen.
+2. If an admin already exists, sign in with that account.
 3. You should land in the Allen UI.
 
 ## 6. Add a Repository
