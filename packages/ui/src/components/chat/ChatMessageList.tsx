@@ -11,7 +11,7 @@ import { AgentQuestionPrompt } from './AgentQuestionPrompt';
 import RoleIcon from '../common/RoleIcon';
 import MermaidChatBlock from './MermaidChatBlock';
 import { agents as agentsApi, artifacts as artifactsApi, type ArtifactDoc } from '../../services/api';
-import { workspaces as workspacesApi } from '../../services/workspaceService';
+import { chatCodeDiffs, pullRequests as pullRequestsApi, workspaces as workspacesApi } from '../../services/workspaceService';
 
 const AGENT_ICONS: Record<string, React.ElementType> = {
   bot: Bot, brain: Brain, sparkles: Sparkles, zap: Zap, cpu: Cpu, atom: Atom,
@@ -38,6 +38,8 @@ interface ChatMessageListProps {
   onAnswerWorkflowIntervention?: (input: WorkflowInterventionAnswer) => Promise<void> | void;
   onSuggestionClick?: (text: string) => void;
   onSaveToLearnings?: (content: string) => void;
+  onOpenExecutionsPanel?: () => void;
+  onOpenFilesPanel?: () => void;
 }
 
 type WorkflowInterventionField = {
@@ -76,10 +78,26 @@ type ChatDiffFile = {
   key?: string;
 };
 
+function diffLineCounts(diff?: string): { additions: number; deletions: number } {
+  if (!diff) return { additions: 0, deletions: 0 };
+  return diff.split('\n').reduce((acc, line) => {
+    if (line.startsWith('+++') || line.startsWith('---')) return acc;
+    if (line.startsWith('+')) acc.additions += 1;
+    else if (line.startsWith('-')) acc.deletions += 1;
+    return acc;
+  }, { additions: 0, deletions: 0 });
+}
+
 type ChatDiffBundle = {
   workspaceId: string;
   workspaceName?: string | null;
   files: ChatDiffFile[];
+};
+
+type ChatDiffSnapshot = {
+  workspaceId: string;
+  workspaceName?: string | null;
+  files?: ChatDiffFile[];
 };
 
 /* ── Copy button for code blocks ─────────────────────────────────────────── */
@@ -111,29 +129,48 @@ function CopyButton({ text }: { text: string }) {
   );
 }
 
-/* ── Thinking block ──────────────────────────────────────────────────────── */
-function ThinkingBlock({ text }: { text: string }) {
-  const [expanded, setExpanded] = useState(false);
-  const preview = text.length > 120 ? text.slice(0, 120) + '...' : text;
+function MessageCopyButton({ text }: { text: string }) {
+  const [copied, setCopied] = useState(false);
+  const handleCopy = async () => {
+    await navigator.clipboard.writeText(text).catch(() => {});
+    setCopied(true);
+    setTimeout(() => setCopied(false), 1600);
+  };
 
   return (
-    <div className="mb-2">
+    <button
+      type="button"
+      onClick={handleCopy}
+      title="Copy message"
+      aria-label="Copy message"
+    >
+      {copied ? <Check className="w-3 h-3 text-accent-green" /> : <Copy className="w-3 h-3" />}
+    </button>
+  );
+}
+
+/* ── Thinking block ──────────────────────────────────────────────────────── */
+function ThinkingBlock({ text, durationMs, active }: { text: string; durationMs?: number; active?: boolean }) {
+  const [expanded, setExpanded] = useState(Boolean(active));
+  const label = active ? 'Thinking' : durationMs ? `Worked for ${formatDuration(durationMs)}` : 'Thinking';
+
+  return (
+    <div className="mb-5">
       <button
         onClick={() => setExpanded(!expanded)}
-        className="flex items-center gap-1.5 text-[11px] text-accent-purple/70 hover:text-accent-purple transition-colors font-mono"
+        className="group flex w-full items-center gap-2 border-b border-app pb-2 text-left text-sm text-theme-subtle transition-colors hover:text-theme-secondary"
         title={expanded ? 'Collapse thinking' : 'Expand thinking'}
       >
-        <Brain className="w-3 h-3 animate-pulse" />
-        <span>Thinking</span>
-        <span className="text-theme-subtle">{expanded ? '(collapse)' : '(expand)'}</span>
+        <span>{label}</span>
+        {expanded ? (
+          <ChevronDown className="h-4 w-4 text-theme-subtle transition-colors group-hover:text-theme-secondary" />
+        ) : (
+          <ChevronRight className="h-4 w-4 text-theme-subtle transition-colors group-hover:text-theme-secondary" />
+        )}
       </button>
-      {expanded ? (
-        <div className="mt-1.5 px-3 py-2 rounded-md bg-purple-500/5 border border-purple-500/10 text-xs text-theme-muted font-body leading-relaxed whitespace-pre-wrap max-h-48 overflow-auto">
-          {text}
-        </div>
-      ) : (
-        <div className="mt-1 text-[11px] text-theme-subtle font-body italic truncate max-w-[400px]">
-          {preview}
+      {expanded && (
+        <div className="mt-4">
+          {renderMarkdown(text)}
         </div>
       )}
     </div>
@@ -296,10 +333,12 @@ function ChatCodeDiffCard({
   files,
   title,
   state,
+  onOpenAllFiles,
 }: {
   files: ChatDiffFile[];
   title: string;
   state?: React.ReactNode;
+  onOpenAllFiles?: () => void;
 }) {
   const normalized = files.map((file, index) => ({
     ...file,
@@ -332,6 +371,11 @@ function ChatCodeDiffCard({
           <span className="cf-p">+{totalAdditions}</span>
           <span className="cf-m">-{totalDeletions}</span>
           {state && <span className="chat-diff-status">{state}</span>}
+          {onOpenAllFiles && (
+            <button type="button" className="cc-icon-action" onClick={onOpenAllFiles} title="Show all modified files">
+              <Code className="h-3.5 w-3.5" />
+            </button>
+          )}
         </span>
       </div>
       <div className="ch-card-b">
@@ -919,63 +963,132 @@ const TOOL_LABELS: Record<string, { label: string; color: string }> = {
   submit_execution_input: { label: 'Submit Input', color: 'text-accent-green' },
 };
 
+function toolBaseName(tool: string): string {
+  const parts = tool.split('__');
+  return parts[parts.length - 1] || tool;
+}
+
+function humanizeToolName(tool: string): string {
+  const base = toolBaseName(tool);
+  return TOOL_LABELS[base]?.label
+    ?? TOOL_LABELS[tool]?.label
+    ?? base
+      .replace(/[_-]+/g, ' ')
+      .replace(/\b\w/g, ch => ch.toUpperCase());
+}
+
+function toolColor(tool: string): string {
+  const base = toolBaseName(tool);
+  return TOOL_LABELS[base]?.color ?? TOOL_LABELS[tool]?.color ?? 'text-theme-secondary';
+}
+
+function compactValue(value: unknown): string {
+  if (value == null) return String(value);
+  if (typeof value === 'string') return value.length > 80 ? `${value.slice(0, 77)}...` : value;
+  if (typeof value === 'number' || typeof value === 'boolean') return String(value);
+  if (Array.isArray(value)) return `${value.length} item${value.length === 1 ? '' : 's'}`;
+  if (typeof value === 'object') {
+    const keys = Object.keys(value as Record<string, unknown>);
+    return keys.length ? `{ ${keys.slice(0, 3).join(', ')}${keys.length > 3 ? ', ...' : ''} }` : '{}';
+  }
+  return String(value);
+}
+
+function argsSummary(args?: Record<string, unknown>): string {
+  const entries = Object.entries(args ?? {}).filter(([, v]) => v !== undefined && v !== '');
+  if (entries.length === 0) return '';
+  return entries.slice(0, 3).map(([k, v]) => `${k.replace(/_/g, ' ')}: ${compactValue(v)}`).join(' · ');
+}
+
+function resultSummary(result?: Record<string, unknown>): string {
+  if (!result) return '';
+  if (result.error) return `Error: ${compactValue(result.error)}`;
+  const preferred = ['message', 'summary', 'status', 'title', 'name', 'execution_id', 'conversation_id'];
+  for (const key of preferred) {
+    if (result[key] !== undefined) return `${key.replace(/_/g, ' ')}: ${compactValue(result[key])}`;
+  }
+  const entries = Object.entries(result);
+  if (entries.length === 0) return 'No output';
+  return entries.slice(0, 2).map(([k, v]) => `${k.replace(/_/g, ' ')}: ${compactValue(v)}`).join(' · ');
+}
+
+function prettyJson(value: unknown): string {
+  return JSON.stringify(value, null, 2);
+}
+
 function ToolCallCard({ call, active }: { call: ToolCallRecord | ActiveToolCall; active?: boolean }) {
-  const [expanded, setExpanded] = useState(false);
-  const meta = TOOL_LABELS[call.tool] ?? { label: call.tool, color: 'text-theme-secondary' };
   const isRunning = active && (call as ActiveToolCall).status === 'running';
+  const [expanded, setExpanded] = useState(false);
+  const label = humanizeToolName(call.tool);
+  const color = toolColor(call.tool);
   const result = 'result' in call ? call.result : undefined;
   const duration = 'durationMs' in call ? call.durationMs : undefined;
+  const hasArgs = call.args && Object.keys(call.args).length > 0;
+  const inputSummary = argsSummary(call.args);
+  const outputSummary = resultSummary(result);
+  const providerPrefix = call.tool.includes('__') ? call.tool.split('__').slice(0, -1).join(' / ').replace(/^mcp \/ /, '') : '';
 
   // Check if result has an execution_id (for link to execution page)
   const executionId = result?.execution_id as string | undefined;
 
   return (
-    <div className="border border-app rounded-lg bg-app-muted/50 overflow-hidden">
+    <div className="relative">
       <button
         onClick={() => setExpanded(!expanded)}
-        className="w-full flex items-center gap-2 px-3 py-2 hover:bg-app-muted transition-colors text-left"
+        className="group/tool grid w-full grid-cols-[auto_auto_minmax(0,1fr)_auto] items-center gap-2 rounded-sm px-1 py-1.5 text-left transition-colors hover:bg-app-muted/35"
         title={expanded ? 'Collapse tool result' : 'Expand tool result'}
       >
         {isRunning ? (
-          <Loader2 className={`w-3.5 h-3.5 ${meta.color} animate-spin`} />
+          <Loader2 className={`h-3.5 w-3.5 ${color} animate-spin`} />
         ) : result?.error ? (
-          <AlertCircle className="w-3.5 h-3.5 text-accent-red" />
+          <AlertCircle className="h-3.5 w-3.5 text-accent-red" />
         ) : (
-          <CheckCircle className="w-3.5 h-3.5 text-accent-green/70" />
+          <CheckCircle className="h-3.5 w-3.5 text-accent-green/70" />
         )}
-        <Wrench className={`w-3 h-3 ${meta.color}`} />
-        <span className={`text-xs font-mono ${meta.color}`}>{meta.label}</span>
-
-        {/* Key args summary */}
-        {call.args && Object.keys(call.args).length > 0 && (
-          <span className="text-[10px] text-theme-subtle font-mono truncate max-w-[200px]">
-            {Object.entries(call.args).slice(0, 2).map(([k, v]) => `${k}=${typeof v === 'string' ? v : JSON.stringify(v)}`).join(', ')}
+        <Wrench className={`h-3 w-3 ${color}`} />
+        <span className="min-w-0">
+          <span className={`block text-[12px] font-medium leading-4 ${color}`}>{label}</span>
+          <span className="block truncate text-[11px] leading-4 text-theme-subtle">
+            {inputSummary || outputSummary || (isRunning ? 'Running...' : providerPrefix || call.tool)}
           </span>
-        )}
+        </span>
 
-        <span className="flex-1" />
-
-        {duration != null && (
-          <span className="text-[10px] text-theme-subtle font-mono">{duration}ms</span>
-        )}
-
-        {executionId && (
-          <a
-            href={`/executions/${executionId}`}
-            onClick={e => e.stopPropagation()}
-            className="text-accent-blue hover:text-accent-blue/80 transition-colors"
-            title="View execution"
-          >
-            <ExternalLink className="w-3 h-3" />
-          </a>
-        )}
+        <span className="flex items-center gap-2 justify-end">
+          {providerPrefix && <span className="hidden sm:inline text-[10px] text-theme-subtle">{providerPrefix}</span>}
+          {duration != null && (
+            <span className="text-[10px] text-theme-subtle font-mono">{formatDuration(duration)}</span>
+          )}
+          {executionId && (
+            <a
+              href={`/executions/${executionId}`}
+              onClick={e => e.stopPropagation()}
+              className="text-accent-blue hover:text-accent-blue/80 transition-colors"
+              title="View execution"
+            >
+              <ExternalLink className="w-3 h-3" />
+            </a>
+          )}
+          {expanded ? <ChevronDown className="h-3 w-3 text-theme-subtle" /> : <ChevronRight className="h-3 w-3 text-theme-subtle" />}
+        </span>
       </button>
 
-      {expanded && result && (
-        <div className="border-t border-app px-3 py-2 bg-[rgb(var(--color-editor-background))] max-h-48 overflow-auto">
-          <pre className="text-[11px] font-mono text-theme-secondary whitespace-pre-wrap">
-            {JSON.stringify(result, null, 2)}
-          </pre>
+      {expanded && (
+        <div className="ml-6 mt-1 max-h-72 overflow-auto border-l border-border/10 pl-3 text-[11px] text-theme-secondary">
+          {hasArgs && (
+            <div className="mb-2">
+              <div className="mb-1 text-[10px] uppercase tracking-wide text-theme-subtle">Input</div>
+              <pre className="whitespace-pre-wrap font-mono leading-relaxed text-theme-secondary">{prettyJson(call.args)}</pre>
+            </div>
+          )}
+          {result && (
+            <div>
+              <div className="mb-1 text-[10px] uppercase tracking-wide text-theme-subtle">Output</div>
+              <pre className="whitespace-pre-wrap font-mono leading-relaxed text-theme-secondary">{prettyJson(result)}</pre>
+            </div>
+          )}
+          {!hasArgs && !result && (
+            <div className="text-[11px] text-theme-subtle">Waiting for tool input/output details...</div>
+          )}
         </div>
       )}
     </div>
@@ -995,27 +1108,22 @@ function ToolCallsSection({ calls, threads, agentMap }: { calls?: ToolCallRecord
   const hasErrors = calls.some(c => (c.result as Record<string, unknown>)?.error);
 
   return (
-    <div className="mt-2 space-y-1">
+    <div className="mt-3 space-y-1">
       {/* Threads — nested tree, primary content */}
       {rootThreads.map(thread => (
         <AgentThread key={thread.conversationId} thread={thread} agents={agentMap} />
       ))}
 
-      {/* Tool calls — only show if no threads (threads already show the conversation) */}
-      {rootThreads.length === 0 && (
-        <>
-          <button onClick={() => setShowTools(!showTools)} className="flex items-center gap-1.5 text-[10px] font-mono text-theme-subtle hover:text-theme-secondary transition-colors py-0.5">
-            {showTools ? <ChevronDown className="w-3 h-3" /> : <ChevronRight className="w-3 h-3" />}
-            <Wrench className="w-2.5 h-2.5" />
-            <span>{calls.length} tool call{calls.length !== 1 ? 's' : ''}</span>
-            {hasErrors && <span className="text-accent-red">· errors</span>}
-          </button>
-          {showTools && (
-            <div className="ml-4 pl-3 border-l border-border/10 space-y-1.5 max-h-[400px] overflow-y-auto py-1">
-              {calls.map((call, i) => <ToolCallCard key={`${call.tool}-${i}`} call={call} />)}
-            </div>
-          )}
-        </>
+      <button onClick={() => setShowTools(!showTools)} className="flex items-center gap-1.5 py-0.5 text-[11px] text-theme-subtle transition-colors hover:text-theme-secondary">
+        {showTools ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronRight className="h-3.5 w-3.5" />}
+        <Wrench className="h-3 w-3" />
+        <span>{calls.length} tool call{calls.length !== 1 ? 's' : ''}</span>
+        {hasErrors && <span className="text-accent-red">· errors</span>}
+      </button>
+      {showTools && (
+        <div className="ml-4 max-h-[400px] space-y-0.5 overflow-y-auto border-l border-border/10 py-1 pl-3">
+          {calls.map((call, i) => <ToolCallCard key={`${call.toolUseId ?? call.tool}-${i}`} call={call} />)}
+        </div>
       )}
     </div>
   );
@@ -1032,13 +1140,12 @@ function ActiveToolCallsSection({ calls, liveThreads, agentMap }: { calls: Activ
   const completedCount = calls.filter(c => (c as ActiveToolCall).status !== 'running').length;
 
   return (
-    <div className="mt-2 space-y-1">
+    <div className="mt-3 space-y-1">
       {/* Live threads */}
       {rootThreads.map(thread => (
         <AgentThread key={thread.conversationId} thread={thread} agents={agentMap} />
       ))}
 
-      {/* Running tool indicator */}
       {runningTool && (
         <div className="flex items-center gap-1.5 text-[10px] font-mono text-theme-subtle py-0.5">
           <Loader2 className="w-2.5 h-2.5 text-accent-yellow animate-spin shrink-0" />
@@ -1047,15 +1154,35 @@ function ActiveToolCallsSection({ calls, liveThreads, agentMap }: { calls: Activ
           {completedCount > 0 && <span className="text-theme-subtle">· {completedCount} done</span>}
         </div>
       )}
+      {calls.length > 0 && (
+        <div className="ml-4 max-h-[420px] space-y-0.5 overflow-y-auto border-l border-border/10 py-1 pl-3">
+          {calls.map((call, i) => (
+            <ToolCallCard key={`${call.toolUseId ?? call.tool}-${i}`} call={call} active />
+          ))}
+        </div>
+      )}
     </div>
   );
 }
 
-function ChatCodeDiffPreview({ runs, onReady }: { runs: SpawnedAgent[]; onReady?: () => void }) {
+function ChatCodeDiffPreview({
+  runs,
+  sessionId,
+  messageId,
+  onReady,
+  onOpenAllFiles,
+}: {
+  runs: SpawnedAgent[];
+  sessionId?: string;
+  messageId?: string;
+  onReady?: () => void;
+  onOpenAllFiles?: () => void;
+}) {
   const [bundles, setBundles] = useState<ChatDiffBundle[]>([]);
   const [loading, setLoading] = useState(false);
 
   const workspaceRefs: Array<{ id: string; name?: string | null }> = [];
+  const pullRequestRefs: Array<{ id: string; name?: string | null }> = [];
   const allTerminal = runs.length > 0 && runs.every(run => TERMINAL_RUN_STATUSES.has(run.runContext?.status ?? run.status));
   for (const run of runs) {
     const id = run.runContext?.workspace?.id;
@@ -1065,37 +1192,104 @@ function ChatCodeDiffPreview({ runs, onReady }: { runs: SpawnedAgent[]; onReady?
         name: run.runContext?.workspace?.name ?? run.runContext?.workspace?.repoName,
       });
     }
+    const prId = run.runContext?.pullRequest?.id;
+    if (typeof prId === 'string' && prId.length > 0) {
+      pullRequestRefs.push({
+        id: prId,
+        name: run.runContext?.pullRequest?.title ?? (run.runContext?.pullRequest?.number ? `PR #${run.runContext.pullRequest.number}` : 'pull request'),
+      });
+    }
   }
   const workspaceSignature = [...new Set(workspaceRefs.map(ref => ref.id))].join('|');
+  const pullRequestSignature = [...new Set(pullRequestRefs.map(ref => ref.id))].join('|');
+  const sourceSignature = [workspaceSignature, pullRequestSignature].filter(Boolean).join('::');
+  const runSignature = runs
+    .map(run => `${run.executionId}:${run.status}:${run.runContext?.status ?? ''}:${run.runContext?.progress?.percent ?? ''}`)
+    .join('|');
 
   useEffect(() => {
-    if (!workspaceSignature) {
+    if (!sourceSignature) {
       setBundles([]);
       return;
     }
     let cancelled = false;
     const uniqueRefs = workspaceRefs.filter((ref, index, arr) => arr.findIndex(item => item.id === ref.id) === index);
+    const uniquePrRefs = pullRequestRefs.filter((ref, index, arr) => arr.findIndex(item => item.id === ref.id) === index);
+    const snapshotBundles = (snapshots: ChatDiffSnapshot[]): ChatDiffBundle[] => snapshots
+      .map(snapshot => ({
+        workspaceId: snapshot.workspaceId,
+        workspaceName: snapshot.workspaceName,
+        files: ((snapshot.files ?? []) as ChatDiffFile[]).filter(file => file.diff?.trim() || file.modifiedContent?.trim()),
+      }))
+      .filter(bundle => bundle.files.length > 0);
     setLoading(true);
-    Promise.all(uniqueRefs.map(async (ref) => {
-      try {
-        const result = await workspacesApi.getDiff(ref.id);
-        const files = ((result.files ?? []) as ChatDiffFile[]).filter(file => file.diff?.trim() || file.modifiedContent?.trim());
-        return { workspaceId: ref.id, workspaceName: ref.name, files };
-      } catch {
-        return { workspaceId: ref.id, workspaceName: ref.name, files: [] };
+    (async () => {
+      if (sessionId && messageId) {
+        try {
+          const saved = await chatCodeDiffs.list(sessionId, messageId);
+          const frozen = snapshotBundles(saved.snapshots as ChatDiffSnapshot[]);
+          if (frozen.length > 0) return frozen;
+        } catch {}
       }
-    })).then(next => {
+
+      const live = await Promise.all(uniqueRefs.map(async (ref) => {
+        try {
+          const result = await workspacesApi.getDiff(ref.id);
+          const files = ((result.files ?? []) as ChatDiffFile[]).filter(file => file.diff?.trim() || file.modifiedContent?.trim());
+          return { workspaceId: ref.id, workspaceName: ref.name, files };
+        } catch {
+          return { workspaceId: ref.id, workspaceName: ref.name, files: [] };
+        }
+      }));
+
+      const populatedLive = live.filter(bundle => bundle.files.length > 0);
+      if (sessionId && messageId && allTerminal && populatedLive.length > 0) {
+        try {
+          const captured = await chatCodeDiffs.capture(sessionId, {
+            messageId,
+            executionIds: runs.map(run => run.executionId).filter(Boolean),
+            workspaces: uniqueRefs,
+            mode: 'auto',
+          });
+          const frozen = snapshotBundles(captured.snapshots as ChatDiffSnapshot[]);
+          if (frozen.length > 0) return frozen;
+        } catch {}
+      }
+
+      if (populatedLive.length > 0) return populatedLive;
+
+      const prBundles = await Promise.all(uniquePrRefs.map(async (ref) => {
+        try {
+          const result = await pullRequestsApi.getDiff(ref.id);
+          const files = ((result.files ?? []) as Array<{ path: string; diff?: string; originalContent?: string; modifiedContent?: string }>)
+            .filter(file => file.diff?.trim() || file.modifiedContent?.trim())
+            .map(file => {
+              const counts = diffLineCounts(file.diff);
+              return {
+                ...file,
+                status: file.diff?.includes('new file mode') ? 'added' : file.diff?.includes('deleted file mode') ? 'deleted' : 'modified',
+                additions: counts.additions,
+                deletions: counts.deletions,
+              } as ChatDiffFile;
+            });
+          return { workspaceId: `pr:${ref.id}`, workspaceName: ref.name, files };
+        } catch {
+          return { workspaceId: `pr:${ref.id}`, workspaceName: ref.name, files: [] };
+        }
+      }));
+
+      return prBundles.filter(bundle => bundle.files.length > 0);
+    })().then(next => {
       if (cancelled) return;
-      const populated = next.filter(bundle => bundle.files.length > 0);
-      setBundles(populated);
-      if (populated.length > 0) window.setTimeout(() => onReady?.(), 0);
+      setBundles(next);
+      if (next.length > 0) window.setTimeout(() => onReady?.(), 0);
     }).finally(() => {
       if (!cancelled) setLoading(false);
     });
     return () => { cancelled = true; };
-  }, [workspaceSignature, onReady]);
+  }, [sourceSignature, runSignature, sessionId, messageId, allTerminal, onReady]);
 
-  if (!workspaceSignature) return null;
+  if (!sourceSignature) return null;
   const totalFiles = bundles.reduce((sum, bundle) => sum + bundle.files.length, 0);
   const visibleFiles = bundles.flatMap(bundle => bundle.files.map((file, index) => ({
     ...file,
@@ -1127,6 +1321,7 @@ function ChatCodeDiffPreview({ runs, onReady }: { runs: SpawnedAgent[]; onReady?
             files={visibleFiles}
             title={`${totalFiles} file${totalFiles === 1 ? '' : 's'} modified`}
             state={allTerminal ? 'completed' : <><span className="dot pulse accent" /> live</>}
+            onOpenAllFiles={onOpenAllFiles}
           />
         )}
       </div>
@@ -1614,17 +1809,90 @@ function RunProgressFeed({ runs }: { runs: SpawnedAgent[] }) {
   });
 
   return (
-    <div className="ml-6 max-w-[760px] space-y-1.5 border-l-[3px] border-accent/35 pl-3">
-      <div className="flex items-center gap-2 font-mono text-[10px] text-theme-subtle">
-        <Loader2 className="h-3 w-3 animate-spin text-accent" />
-        live progress
+    <div className="run-progress-feed">
+      <div className="run-progress-head">
+        <Loader2 className="h-3 w-3 animate-spin" />
+        <span>live progress</span>
       </div>
       {uniqueRows.map(row => (
-        <div key={row.key} className="rounded-md border border-app bg-app-card px-3 py-2 text-[12px] text-theme-secondary shadow-sm">
-          <span className="font-mono text-theme-muted">{formatTime(typeof row.at === 'string' ? row.at : new Date(row.at).toISOString())}</span>
-          <span className="ml-2">{row.text}</span>
+        <div key={row.key} className="run-progress-row">
+          <span className="run-progress-time">{formatTime(typeof row.at === 'string' ? row.at : new Date(row.at).toISOString())}</span>
+          <span className="run-progress-text">{row.text}</span>
         </div>
       ))}
+    </div>
+  );
+}
+
+function SubagentExecutionsDropdown({
+  runs,
+  onOpenExecutionsPanel,
+}: {
+  runs: SpawnedAgent[];
+  onOpenExecutionsPanel?: () => void;
+}) {
+  const [expanded, setExpanded] = useState(false);
+  if (runs.length === 0) return null;
+
+  const childCount = runs.reduce((sum, run) => sum + (run.runContext?.childAgents.length ?? 0), 0);
+  const activeCount = runs.filter(run => !TERMINAL_RUN_STATUSES.has(run.runContext?.status ?? run.status)).length;
+
+  return (
+    <div className="chat-exec-summary">
+      <div className="chat-exec-summary-head">
+        <button type="button" onClick={() => setExpanded(value => !value)}>
+          {expanded ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronRight className="h-3.5 w-3.5" />}
+          <span>{runs.length + childCount} agent execution{runs.length + childCount === 1 ? '' : 's'}</span>
+          {activeCount > 0 && <span className="chat-exec-live">{activeCount} running</span>}
+        </button>
+        <div className="chat-exec-actions">
+          <button type="button" onClick={onOpenExecutionsPanel} title="Open executions side panel">
+            <ExternalLink className="h-3.5 w-3.5" />
+          </button>
+        </div>
+      </div>
+      {expanded && (
+        <div className="chat-exec-list">
+          {runs.map((run, index) => {
+            const context = run.runContext;
+            const status = context?.status ?? run.status;
+            const childAgents = context?.childAgents ?? [];
+            const input = context?.io?.input ?? run.prompt;
+            const output = context?.io?.output ?? run.response;
+            return (
+              <div key={run.executionId} className="chat-exec-item">
+                <a href={`/executions/${run.executionId}`} target="_blank" rel="noopener noreferrer">
+                  <span>Execution {index + 1}</span>
+                  <span>{context?.title ?? run.agent}</span>
+                  <span>{humanLabel(status)}</span>
+                </a>
+                {childAgents.length > 0 && (
+                  <div className="chat-exec-children">
+                    {childAgents.map(child => (
+                      <a key={child.executionId} href={`/executions/${child.executionId}`} target="_blank" rel="noopener noreferrer">
+                        <span>{child.agentName}</span>
+                        <span>{humanLabel(child.status)}</span>
+                      </a>
+                    ))}
+                  </div>
+                )}
+                {expanded && (
+                  <div className="chat-exec-io-inline">
+                    <details open={Boolean(input)}>
+                      <summary>Input</summary>
+                      {input ? <pre>{input}</pre> : <span>No input captured.</span>}
+                    </details>
+                    <details open={Boolean(output)}>
+                      <summary>Output</summary>
+                      {output ? <pre>{output}</pre> : <span>No output captured yet.</span>}
+                    </details>
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
     </div>
   );
 }
@@ -1880,7 +2148,7 @@ function WorkflowInterventionPrompt({
   );
 }
 
-export default function ChatMessageList({ messages, streamText, thinkingText, streaming, activeToolCalls = [], agentThreads = [], agentReports = [], threadsByMessage = {}, pendingUserQuestion, onAnswerUserQuestion, activeAgent, spawnedAgents = [], onAnswerWorkflowIntervention, onSaveToLearnings }: ChatMessageListProps) {
+export default function ChatMessageList({ messages, streamText, thinkingText, streaming, activeToolCalls = [], agentThreads = [], agentReports = [], threadsByMessage = {}, pendingUserQuestion, onAnswerUserQuestion, activeAgent, spawnedAgents = [], onAnswerWorkflowIntervention, onSaveToLearnings, onOpenExecutionsPanel, onOpenFilesPanel }: ChatMessageListProps) {
   const [agentMap, setAgentMap] = useState<Record<string, { displayName?: string; icon?: string; color?: string }>>({});
   const pendingWorkflowIntervention = onAnswerWorkflowIntervention ? workflowInterventionFromRuns(spawnedAgents) : null;
 
@@ -1929,6 +2197,9 @@ export default function ChatMessageList({ messages, streamText, thinkingText, st
         const msgThreads = msg._id ? threadsByMessage[msg._id] : undefined;
         const senderLabel = msg.role === 'user' ? userDisplayName(msg) : '';
         const diffSplit = msg.role === 'assistant' ? splitFirstDiffFence(msg.content) : { text: msg.content, diff: null };
+        const messageRuns = msg.role === 'assistant' && msg._id
+          ? spawnedAgents.filter(run => run.sourceMessageId === msg._id)
+          : [];
         return (<React.Fragment key={msg._id || i}>
         <div className={`ch-msg ${msg.role === 'user' ? 'you' : 'allen'} group/msg al-msg-enter`}>
           <div className="ch-avatar">{msg.role === 'user' ? senderInitial(senderLabel) : 'a'}</div>
@@ -1943,20 +2214,16 @@ export default function ChatMessageList({ messages, streamText, thinkingText, st
             </div>
 
             <div className={`ch-msg-text ${msg.status === 'failed' ? 'failed' : ''}`}>
+              {msg.role === 'assistant' && msg.thinkingText && (
+                <ThinkingBlock text={msg.thinkingText} durationMs={msg.durationMs} />
+              )}
               {diffSplit.text && (
                 <div>
                   {renderMarkdown(diffSplit.text)}
                 </div>
               )}
-              {msg.role !== 'user' && msg.content && onSaveToLearnings && (
-                <div className="chat-save-row">
-                  <button
-                    onClick={() => onSaveToLearnings(msg.content)}
-                    title="Save to learnings"
-                  >
-                    <Bookmark className="w-3 h-3" /> Save
-                  </button>
-                </div>
+              {msg.role === 'assistant' && (
+                <ToolCallsSection calls={msg.toolCalls} threads={msgThreads} agentMap={agentMap} />
               )}
               {msg.error && (
                 <div className="chat-msg-error">
@@ -1965,6 +2232,20 @@ export default function ChatMessageList({ messages, streamText, thinkingText, st
                 </div>
               )}
             </div>
+            {(msg.content || msg.error) && (
+              <div className="chat-save-row">
+                <MessageCopyButton text={msg.content || msg.error || ''} />
+                {msg.role !== 'user' && msg.content && onSaveToLearnings && (
+                  <button
+                    onClick={() => onSaveToLearnings(msg.content)}
+                    title="Save to learnings"
+                    aria-label="Save to learnings"
+                  >
+                    <Bookmark className="w-3 h-3" />
+                  </button>
+                )}
+              </div>
+            )}
           </div>
         </div>
 
@@ -1975,6 +2256,22 @@ export default function ChatMessageList({ messages, streamText, thinkingText, st
               <InlineCodeDiffCard code={diffSplit.diff} />
             </div>
           </div>
+        )}
+
+        {messageRuns.length > 0 && (
+          <>
+            <SubagentExecutionsDropdown
+              runs={messageRuns}
+              onOpenExecutionsPanel={onOpenExecutionsPanel}
+            />
+            <ChatCodeDiffPreview
+              runs={messageRuns}
+              sessionId={msg.sessionId}
+              messageId={msg._id}
+              onReady={scrollToBottomIfPinned}
+              onOpenAllFiles={onOpenFilesPanel}
+            />
+          </>
         )}
 
         {/* Threads not linked to a tool call (fallback — render below message) */}
@@ -2010,9 +2307,9 @@ export default function ChatMessageList({ messages, streamText, thinkingText, st
                 <span className="ch-msg-ts">generating</span>
               </div>
               <div className="ch-msg-text">
-              {thinkingText && !streamText && <ThinkingBlock text={thinkingText} />}
+              {thinkingText && <ThinkingBlock text={thinkingText} active />}
               <ActiveToolCallsSection calls={activeToolCalls} liveThreads={agentThreads} agentMap={agentMap} />
-              <div className={activeToolCalls.length > 0 || (thinkingText && !streamText) ? 'mt-2' : undefined}>
+              <div className={activeToolCalls.length > 0 || thinkingText ? 'mt-2' : undefined}>
                 {streamText ? (
                   <>
                     {renderMarkdown(streamText)}
@@ -2052,9 +2349,6 @@ export default function ChatMessageList({ messages, streamText, thinkingText, st
           })}
         </div>
       )}
-
-      <ChatCodeDiffPreview runs={spawnedAgents} onReady={scrollToBottomIfPinned} />
-      <ChatPullRequestCards runs={spawnedAgents} />
 
       {/* Agent threads — only render orphans not already shown inline with tool calls */}
       {agentThreads.length > 0 && !streaming && (() => {

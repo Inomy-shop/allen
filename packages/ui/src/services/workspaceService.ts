@@ -18,7 +18,12 @@ export const workspaces = {
   create: (body: any) => request<any>('/workspaces', { method: 'POST', body: JSON.stringify(body) }),
   createFromPr: (body: any) => request<any>('/workspaces/from-pr', { method: 'POST', body: JSON.stringify(body) }),
   archive: (id: string) => request<any>(`/workspaces/${id}`, { method: 'DELETE' }),
-  getDiff: (id: string) => request<any>(`/workspaces/${id}/diff`),
+  getDiff: (id: string, options?: { mode?: 'auto' | 'working' | 'branch' | 'workspace' }) => {
+    const params = new URLSearchParams();
+    if (options?.mode) params.set('mode', options.mode);
+    const qs = params.toString();
+    return request<any>(`/workspaces/${id}/diff${qs ? `?${qs}` : ''}`);
+  },
   getFiles: (id: string) => request<any[]>(`/workspaces/${id}/files`),
   getAllFiles: (id: string) => request<any[]>(`/workspaces/${id}/all-files`),
   getFile: (id: string, path: string) => request<any>(`/workspaces/${id}/file/${path}`),
@@ -46,6 +51,26 @@ export const workspaces = {
   bulkArchive: (ids: string[]) => request<any>('/workspaces/bulk-archive', { method: 'POST', body: JSON.stringify({ ids }) }),
   // Activity
   getActivity: (id: string) => request<any[]>(`/workspaces/${id}/activity`),
+};
+
+export const chatCodeDiffs = {
+  listAll: (sessionId: string) => request<{ snapshots: any[] }>(`/chat/sessions/${sessionId}/code-diffs`),
+  list: (sessionId: string, messageId: string) => {
+    const params = new URLSearchParams({ messageId });
+    return request<{ snapshots: any[] }>(`/chat/sessions/${sessionId}/code-diffs?${params}`);
+  },
+  capture: (
+    sessionId: string,
+    body: {
+      messageId: string;
+      executionIds?: string[];
+      workspaces: Array<{ id: string; name?: string | null }>;
+      mode?: 'auto' | 'working' | 'branch' | 'workspace';
+    },
+  ) => request<{ snapshots: any[] }>(`/chat/sessions/${sessionId}/code-diffs`, {
+    method: 'POST',
+    body: JSON.stringify(body),
+  }),
 };
 
 // ── Pull Requests ──

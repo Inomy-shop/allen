@@ -2,6 +2,76 @@ import { Router, type Request, type Response } from 'express';
 import { RepoService } from '../services/repo.service.js';
 import { param } from '../types.js';
 import type { Db } from 'mongodb';
+import { execFile } from 'node:child_process';
+import { existsSync, readFileSync, statSync } from 'node:fs';
+import { extname, resolve, sep } from 'node:path';
+import { promisify } from 'node:util';
+
+const exec = promisify(execFile);
+
+function safeRepoPath(repoPath: string, rawPath: string): string | null {
+  const root = resolve(repoPath);
+  const fullPath = resolve(root, rawPath);
+  return fullPath === root || fullPath.startsWith(`${root}${sep}`) ? fullPath : null;
+}
+
+async function listRepoFiles(repoPath: string): Promise<Array<{ path: string; isDir: boolean }>> {
+  const [tracked, untracked] = await Promise.all([
+    exec('git', ['ls-files'], { cwd: repoPath }).catch(() => ({ stdout: '' })),
+    exec('git', ['ls-files', '--others', '--exclude-standard'], { cwd: repoPath }).catch(() => ({ stdout: '' })),
+  ]);
+  const ignored = ['.git', 'node_modules/', '.DS_Store', 'dist/', '.turbo/', 'coverage/', '.next/'];
+  return Array.from(new Set([
+    ...tracked.stdout.trim().split('\n').filter(Boolean),
+    ...untracked.stdout.trim().split('\n').filter(Boolean),
+  ]))
+    .filter(file => !ignored.some(ig => file.startsWith(ig) || file.includes(`/${ig}`)))
+    .sort()
+    .map(path => ({ path, isDir: false }));
+}
+
+function readRepoFile(repoPath: string, rawFilePath: string): Record<string, unknown> {
+  const fullPath = safeRepoPath(repoPath, rawFilePath);
+  if (!fullPath) {
+    const err = new Error('Path traversal blocked') as Error & { status?: number };
+    err.status = 403;
+    throw err;
+  }
+  if (!existsSync(fullPath)) {
+    const err = new Error('File not found') as Error & { status?: number };
+    err.status = 404;
+    throw err;
+  }
+  const stats = statSync(fullPath);
+  if (!stats.isFile()) {
+    const err = new Error('Path is not a file') as Error & { status?: number };
+    err.status = 400;
+    throw err;
+  }
+  const ext = extname(rawFilePath).slice(1).toLowerCase();
+  const imageExtensions = ['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg'];
+  if (imageExtensions.includes(ext)) {
+    const maxImageSize = 50 * 1024 * 1024;
+    if (stats.size > maxImageSize) {
+      const err = new Error('Image file too large (max 50MB)') as Error & { status?: number };
+      err.status = 413;
+      throw err;
+    }
+    return {
+      path: rawFilePath,
+      content: readFileSync(fullPath).toString('base64'),
+      isImage: true,
+      mimeType: `image/${ext === 'jpg' ? 'jpeg' : ext === 'svg' ? 'svg+xml' : ext}`,
+    };
+  }
+  const maxTextSize = 10 * 1024 * 1024;
+  if (stats.size > maxTextSize) {
+    const err = new Error('Text file too large (max 10MB)') as Error & { status?: number };
+    err.status = 413;
+    throw err;
+  }
+  return { path: rawFilePath, content: readFileSync(fullPath, 'utf-8'), isImage: false };
+}
 
 export function repoRoutes(db: Db): Router {
   const router = Router();
@@ -69,6 +139,30 @@ export function repoRoutes(db: Db): Router {
       res.json(repo);
     } catch (err: unknown) {
       res.status(500).json({ error: (err as Error).message });
+    }
+  });
+
+  // GET /api/repos/:id/all-files — browse registered repository files.
+  router.get('/:id/all-files', async (req: Request, res: Response) => {
+    try {
+      const repo = await service.getById(param(req, 'id'));
+      if (!repo?.path || typeof repo.path !== 'string') return res.status(404).json({ error: 'Repo not found' });
+      res.json(await listRepoFiles(repo.path));
+    } catch (err: unknown) {
+      res.status(500).json({ error: (err as Error).message });
+    }
+  });
+
+  // GET /api/repos/:id/file/* — read a file from a registered repository.
+  router.get('/:id/file/*', async (req: Request, res: Response) => {
+    try {
+      const repo = await service.getById(param(req, 'id'));
+      if (!repo?.path || typeof repo.path !== 'string') return res.status(404).json({ error: 'Repo not found' });
+      const rawFilePath = (req.params as Record<string, string>)[0] ?? '';
+      res.json(readRepoFile(repo.path, rawFilePath));
+    } catch (err: unknown) {
+      const status = typeof (err as { status?: unknown }).status === 'number' ? (err as { status: number }).status : 500;
+      res.status(status).json({ error: (err as Error).message });
     }
   });
 

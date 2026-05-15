@@ -3,7 +3,7 @@ import { AGENT_FALLBACK_CWD, type ChatProvider } from './chat-providers.js';
 import { ClaudePersistentRuntime } from './claude-persistent-runtime.js';
 import { CodexAppServerRuntime } from './codex-app-server-runtime.js';
 import { logRuntimeEvent } from './chat-runtime-logs.js';
-import type { PersistentChatRuntime, RuntimeCreateInput, RuntimeTurnInput, RuntimeTurnResult } from './chat-runtime-types.js';
+import type { PersistentChatRuntime, RuntimeCreateInput, RuntimeSlashCommand, RuntimeTurnInput, RuntimeTurnResult } from './chat-runtime-types.js';
 
 type RuntimeEntry = {
   runtime: PersistentChatRuntime;
@@ -42,6 +42,47 @@ export async function runPersistentChatTurn(input: RuntimeTurnInput): Promise<Ru
       return await entry.runtime.sendTurn(input);
     } catch (err) {
       await closeRuntime(key, `turn_error:${err instanceof Error ? err.message : String(err)}`);
+      throw err;
+    } finally {
+      input.callbacks.signal?.removeEventListener('abort', onAbort);
+      armIdleTimer(key, entry, input.db, input.chatSessionId, input.provider);
+    }
+  };
+
+  const turn = entry.chain.then(run, run);
+  entry.chain = turn.catch(() => {});
+  return turn;
+}
+
+export async function runPersistentCodexSlashCommand(input: RuntimeTurnInput, command: RuntimeSlashCommand): Promise<RuntimeTurnResult> {
+  if (!input.chatSessionId) throw new Error('Persistent chat runtime requires chatSessionId');
+  if (input.provider !== 'codex') throw new Error('Codex slash commands require the Codex provider');
+  const key = runtimeKey(input);
+  const entry = getOrCreateRuntime(key, input);
+  clearIdleTimer(entry);
+
+  const run = async () => {
+    const onAbort = () => {
+      void closeRuntime(key, 'abort');
+    };
+    if (input.callbacks.signal?.aborted) onAbort();
+    else input.callbacks.signal?.addEventListener('abort', onAbort, { once: true });
+    try {
+      if (!(entry.runtime instanceof CodexAppServerRuntime)) {
+        throw new Error('Codex slash commands require the Codex app-server runtime');
+      }
+      logRuntimeEvent({
+        db: input.db,
+        sessionId: input.chatSessionId,
+        provider: input.provider,
+        runtimeId: entry.runtime.id,
+        eventType: 'lifecycle',
+        event: 'runtime_reuse_for_slash',
+        data: { key, command },
+      });
+      return await entry.runtime.sendSlashCommand(input, command);
+    } catch (err) {
+      await closeRuntime(key, `slash_error:${err instanceof Error ? err.message : String(err)}`);
       throw err;
     } finally {
       input.callbacks.signal?.removeEventListener('abort', onAbort);
