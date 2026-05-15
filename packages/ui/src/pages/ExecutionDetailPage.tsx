@@ -441,6 +441,8 @@ function AgentExecutionView({ execution, agentName, traces, id, liveToolCalls, r
   const [resumeBusy, setResumeBusy] = useState(false);
   const [agentArtifactsOpen, setAgentArtifactsOpen] = useState(false);
   const logsEndRef = useRef<HTMLDivElement>(null);
+  // Live elapsed timer state — only non-null while the execution is running.
+  const [liveElapsedMs, setLiveElapsedMs] = useState<number | null>(null);
 
   const prompt = trace?.renderedPrompt ?? execution.input?.prompt ?? '';
   const response = trace?.rawResponse ?? '';
@@ -461,8 +463,18 @@ function AgentExecutionView({ execution, agentName, traces, id, liveToolCalls, r
     merged.sort((a, b) => new Date(a.startedAt).getTime() - new Date(b.startedAt).getTime());
     return merged;
   })();
-  const durationMs = trace?.durationMs ?? execution.durationMs ?? 0;
+  const finalDurationMs = trace?.durationMs ?? execution.durationMs ?? 0;
   const meta = execution.meta ?? {};
+
+  // Effective started timestamp — prefer the selected trace's startedAt so that
+  // switching to a historical attempt shows that attempt's start time.
+  const effectiveStartedAt: string | undefined = trace?.startedAt ?? execution.startedAt ?? undefined;
+  // Only activate the live timer when we're viewing the currently-running (latest) attempt.
+  const latestAttemptNumber = sortedTraces.length > 0 ? (sortedTraces[sortedTraces.length - 1].attempt ?? 1) : 1;
+  const isViewingLatest = sortedTraces.length <= 1 || selectedAttempt === latestAttemptNumber;
+  const showLiveTimer = execution.status === 'running' && isViewingLatest;
+  // Effective duration: live elapsed while running, otherwise the persisted final duration.
+  const effectiveDurationMs = showLiveTimer && liveElapsedMs != null ? liveElapsedMs : finalDurationMs;
 
   // Session ID for resume — stored on the execution row at sessions.<agentName>
   // and also in trace.output.session_id. Either source works.
@@ -504,6 +516,20 @@ function AgentExecutionView({ execution, agentName, traces, id, liveToolCalls, r
       setResumeBusy(false);
     }
   };
+
+  // Live elapsed timer — fires ~once per second while the agent is running.
+  // Avoids any re-render overhead when the execution is not running (interval is
+  // never created) and clears itself cleanly on status change or unmount.
+  useEffect(() => {
+    if (!showLiveTimer || !effectiveStartedAt) {
+      setLiveElapsedMs(null);
+      return;
+    }
+    const tick = () => setLiveElapsedMs(Date.now() - new Date(effectiveStartedAt).getTime());
+    tick(); // fire immediately so the value is visible on first render
+    const timerId = window.setInterval(tick, 1000);
+    return () => window.clearInterval(timerId);
+  }, [showLiveTimer, effectiveStartedAt]);
 
   // Poll live logs for running executions, merge with trace activity for completed.
   //
@@ -622,9 +648,9 @@ function AgentExecutionView({ execution, agentName, traces, id, liveToolCalls, r
             <StatusBadge status={execution.status} />
             {meta.spawnedBy && <span className="text-[11px] text-theme-muted font-mono">by {meta.spawnedBy}</span>}
             {execution.status === 'running' && <span className="w-2 h-2 rounded-full bg-accent animate-pulse" />}
-            {durationMs > 0 && (
+            {(effectiveDurationMs > 0 || showLiveTimer) && (
               <span className="flex items-center gap-1 text-[12px] text-theme-muted font-mono">
-                <Clock className="w-3 h-3" /> {formatDuration(durationMs)}
+                <Clock className="w-3 h-3" /> {formatDuration(effectiveDurationMs)}
               </span>
             )}
             <CostDisplay cost={cost} />
@@ -695,7 +721,7 @@ function AgentExecutionView({ execution, agentName, traces, id, liveToolCalls, r
 
       {/* Content */}
       <div className="flex-1 overflow-y-auto p-6 space-y-4">
-        {/* Metadata cards — 2 rows */}
+        {/* Metadata cards */}
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
           <div className="card p-3">
             <span className="overline">Status</span>
@@ -703,7 +729,19 @@ function AgentExecutionView({ execution, agentName, traces, id, liveToolCalls, r
           </div>
           <div className="card p-3">
             <span className="overline">Duration</span>
-            <div className="mt-1 text-sm text-theme-primary font-mono">{durationMs > 0 ? `${formatDuration(durationMs)}` : execution.status === 'running' ? '...' : '—'}</div>
+            <div className="mt-1 text-sm text-theme-primary font-mono">
+              {showLiveTimer
+                ? <span className="text-accent">{formatDuration(liveElapsedMs ?? 0)}</span>
+                : effectiveDurationMs > 0 ? formatDuration(effectiveDurationMs) : '—'}
+            </div>
+          </div>
+          <div className="card p-3">
+            <span className="overline">Started</span>
+            <div className="mt-1 text-sm text-theme-primary font-mono">
+              {effectiveStartedAt
+                ? new Date(effectiveStartedAt).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })
+                : '—'}
+            </div>
           </div>
           <div className="card p-3">
             <span className="overline">Cost</span>
