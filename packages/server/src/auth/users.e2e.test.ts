@@ -48,7 +48,11 @@ describe('users e2e: RBAC', () => {
     expect(res.status).toBe(401);
   });
 
-  it('non-admin (regular user) hits 403 on /api/users', async () => {
+  it('non-admin (regular user) can list users but cannot mutate', async () => {
+    // GET /api/users is open to any authenticated user (needed for client
+    // dropdowns like the Threads page owner filter). Write endpoints
+    // (POST/PATCH/DELETE) remain admin-only.
+
     // Create a regular user first.
     const create = await request(ctx.app)
       .post('/api/users')
@@ -70,14 +74,14 @@ describe('users e2e: RBAC', () => {
     expect(reset.body.user.role).toBe('user');
     const aliceToken = reset.body.accessToken;
 
-    // Alice cannot list users.
+    // Alice can list users.
     const list = await request(ctx.app)
       .get('/api/users')
       .set('Authorization', `Bearer ${aliceToken}`);
-    expect(list.status).toBe(403);
-    expect(list.body.error).toBe('admin_only');
+    expect(list.status).toBe(200);
+    expect(Array.isArray(list.body)).toBe(true);
 
-    // Alice also cannot create users.
+    // Alice cannot create users.
     const create2 = await request(ctx.app)
       .post('/api/users')
       .set('Authorization', `Bearer ${aliceToken}`)
@@ -162,9 +166,7 @@ describe('users e2e: admin operations', () => {
     expect(res.status).toBe(200);
     expect(res.body.tempPassword).toMatch(/.{12}/);
 
-    // Old sessions (none in this test, but shouldn't error)
-    const doc = await ctx.db.collection('users').findOne({ _id: res.body.user?._id ?? undefined });
-    // Re-query by id via list instead (no raw _id exposed).
+    // Re-query by id via list (no raw _id exposed by the API).
     const list = await request(ctx.app)
       .get('/api/users')
       .set('Authorization', `Bearer ${adminToken}`);

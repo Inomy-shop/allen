@@ -19,6 +19,7 @@ import { dashboardRoutes } from './routes/dashboard.routes.js';
 import { repoRoutes } from './routes/repo.routes.js';
 import { learningRoutes, executionLearningsRoute } from './routes/learning.routes.js';
 import { chatRoutes } from './routes/chat.routes.js';
+import { backfillSessionOwners } from './services/chat.service.js';
 import { mcpRoutes } from './routes/mcp.routes.js';
 import { alertRoutes } from './routes/alert.routes.js';
 import { workspaceRoutes, publicWorkspaceRoutes } from './routes/workspace.routes.js';
@@ -130,6 +131,14 @@ async function main(): Promise<void> {
     );
   }
   await seedCronJobs(db);
+  try {
+    const { scanned, updated } = await backfillSessionOwners(db);
+    if (scanned > 0) {
+      logger.info('[chat] Backfilled session owners', { component: 'chat', scanned, updated });
+    }
+  } catch (err) {
+    logger.error('[chat] Session owner backfill failed', { component: 'chat', error: (err as Error).message });
+  }
   setStreamDb(db);
 
   // Boot the cron scheduler + register system actions

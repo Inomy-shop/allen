@@ -643,7 +643,12 @@ export interface ChatSession {
 }
 
 export const chat = {
-  listSessions: () => request<ChatSession[]>('/chat/sessions'),
+  listSessions: (params?: { ownerUserId?: string | 'none' }) => {
+    const qs = params?.ownerUserId
+      ? `?ownerUserId=${encodeURIComponent(params.ownerUserId)}`
+      : '';
+    return request<ChatSession[]>(`/chat/sessions${qs}`);
+  },
   providers: () => request<any[]>('/chat/providers'),
   createSession: (provider?: string, model?: string, agentOverrides?: Record<string, unknown>, repoId?: string) =>
     request<any>('/chat/sessions', {
