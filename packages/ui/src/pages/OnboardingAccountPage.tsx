@@ -70,7 +70,7 @@ export default function OnboardingAccountPage() {
         password,
       });
       setSession(session);
-      navigate('/', { replace: true });
+      navigate('/onboarding/health', { replace: true });
     } catch (err) {
       const msg = (err as Error).message;
       if (msg === 'bootstrap_closed') {
@@ -118,9 +118,9 @@ export default function OnboardingAccountPage() {
               </div>
               <div className="rounded-md border border-app bg-surface-100 p-4">
                 <ShieldCheck className="mb-3 h-5 w-5 text-accent-blue" />
-                <p className="text-sm font-medium text-theme-primary">No env password</p>
+                <p className="text-sm font-medium text-theme-primary">Local admin credentials</p>
                 <p className="mt-1 text-xs leading-5 text-theme-muted">
-                  The password you set here is the admin password.
+                  Use this account to sign in and manage this Allen instance.
                 </p>
               </div>
             </div>

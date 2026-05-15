@@ -227,8 +227,9 @@ cat <<EOF
   Next steps:
     1. Authenticate Claude Code once if you haven't: ${C_BOLD}claude${C_RESET}
     2. Authenticate Codex once if you haven't:       ${C_BOLD}codex${C_RESET}
-    3. Start Allen:                                  ${C_BOLD}npm start${C_RESET}
-    4. Open the UI and create the first admin account.
+    3. Check local readiness:                        ${C_BOLD}npm run health${C_RESET}
+    4. Start Allen:                                  ${C_BOLD}npm start${C_RESET}
+    5. Open the UI and create the first admin account.
 
   Allen will be available at:
     API: http://localhost:4000

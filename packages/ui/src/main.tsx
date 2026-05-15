@@ -24,6 +24,7 @@ import TicketsPage from './pages/TicketsPage';
 import MonitoringPage from './pages/MonitoringPage';
 import LoginPage from './pages/LoginPage';
 import OnboardingAccountPage from './pages/OnboardingAccountPage';
+import OnboardingHealthPage from './pages/OnboardingHealthPage';
 import ResetPasswordPage from './pages/ResetPasswordPage';
 import ForbiddenPage from './pages/ForbiddenPage';
 import ProtectedRoute from './components/auth/ProtectedRoute';
@@ -32,6 +33,7 @@ import { ToastProvider } from './components/common/Toast';
 const router = createBrowserRouter([
   { path: '/onboarding', element: <Navigate to="/onboarding/account" replace /> },
   { path: '/onboarding/account', element: <OnboardingAccountPage /> },
+  { path: '/onboarding/health', element: <OnboardingHealthPage /> },
   { path: '/login', element: <LoginPage /> },
   { path: '/reset-password', element: <ResetPasswordPage /> },
   { path: '/403', element: <ForbiddenPage /> },

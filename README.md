@@ -71,6 +71,12 @@ This starts the API server on `http://localhost:4000` and the UI on `http://loca
 
 Open `http://localhost:5173`. On a fresh instance, Allen opens the onboarding screen so you can create the first admin account in the UI. After any user exists, sign in with that account.
 
+Allen will run the same prerequisite checks in the browser that are available from the terminal:
+
+```bash
+npm run health
+```
+
 ## First Workflow
 
 Allen ships with workflow definitions in `packages/engine/workflows/`:

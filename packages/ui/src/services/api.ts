@@ -72,7 +72,8 @@ async function request<T>(path: string, options: RequestInit = {}, signal?: Abor
   const isPublicAuth = path.startsWith('/auth/login')
     || path.startsWith('/auth/refresh')
     || path.startsWith('/auth/bootstrap')
-    || path.startsWith('/system/onboarding-status');
+    || path.startsWith('/system/onboarding-status')
+    || path.startsWith('/system/health');
   const token = isPublicAuth ? null : useAuthStore.getState().accessToken;
 
   let res = await doFetch(path, options, token, signal);
@@ -977,6 +978,25 @@ export const system = {
       complete: boolean;
       step: 'account' | 'complete';
     }>('/system/onboarding-status'),
+  health: () =>
+    request<{
+      status: 'pass' | 'warn' | 'fail';
+      generatedAt: string;
+      requiredPassed: boolean;
+      checks: Array<{
+        id: string;
+        label: string;
+        required: boolean;
+        status: 'pass' | 'warn' | 'fail';
+        version?: string;
+        detail: string;
+        fix?: {
+          summary: string;
+          commands?: string[];
+          docsPath?: string;
+        };
+      }>;
+    }>('/system/health'),
 };
 
 // ── Linear Types ──────────────────────────────────────────────────────────

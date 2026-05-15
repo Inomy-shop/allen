@@ -123,6 +123,16 @@ If no users exist yet, open the UI and create the first admin account from the o
 
 If the user is forced to reset password, only auth reset routes are allowed until the reset is completed.
 
+## Setup Health
+
+Run the local readiness checks from the terminal:
+
+```bash
+npm run health
+```
+
+The command exits non-zero when required checks fail. Optional Codex checks may warn without blocking first workflow setup.
+
 ## Missing JWT Secret Error
 
 Generate two secrets:

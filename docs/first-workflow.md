@@ -73,6 +73,12 @@ Check server health:
 curl http://localhost:4000/api/health
 ```
 
+Check setup readiness:
+
+```bash
+npm run health
+```
+
 ## 5. Sign In
 
 Open `http://localhost:5173`.
