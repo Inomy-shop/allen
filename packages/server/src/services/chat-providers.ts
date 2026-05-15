@@ -315,7 +315,7 @@ export async function runCodexCLI(
               // Session marker — Allen MCP forwards this as
               // x-allen-chat-session-id on outbound /api/chat/* calls so
               // the server-side tool dispatcher can resolve the right
-              // chat context instead of probing getAnyActiveSession().
+              // chat context.
               ALLEN_CHAT_SESSION_ID: chatSessionId,
             }
           : {}),
@@ -496,4 +496,3 @@ export async function runCodexCLI(
     });
   });
 }
-

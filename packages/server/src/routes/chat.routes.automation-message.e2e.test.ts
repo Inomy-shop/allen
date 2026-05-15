@@ -46,7 +46,7 @@ vi.mock('../services/chat.service.js', () => ({
 
 vi.mock('../services/chat-tools.js', () => ({
   executeChatTool: vi.fn().mockResolvedValue({}),
-  getAnyActiveSession: vi.fn().mockReturnValue(null),
+  resolveActiveSession: vi.fn().mockReturnValue(null),
 }));
 
 vi.mock('../services/execution.service.js', () => ({

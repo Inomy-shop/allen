@@ -38,7 +38,17 @@ export default function LoginPage() {
       if (data.user.mustResetPassword) {
         navigate(`/reset-password?from=${encodeURIComponent(from)}`, { replace: true });
       } else {
-        navigate(from, { replace: true });
+        const progress = await system.onboardingProgress().catch(() => null);
+        if (progress && !progress.complete) {
+          const path = progress.step === 'repository'
+            ? '/onboarding/repository'
+            : progress.step === 'first_workflow'
+              ? '/onboarding/first-workflow'
+              : '/onboarding/health';
+          navigate(path, { replace: true });
+        } else {
+          navigate(from, { replace: true });
+        }
       }
     } catch (err) {
       const msg = (err as Error).message;

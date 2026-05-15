@@ -21,7 +21,7 @@
 
 import type { Db } from 'mongodb';
 import type { ChatTool } from './chat-tools.js';
-import { getAnyActiveSession } from './chat-tools.js';
+import { resolveActiveSession } from './chat-tools.js';
 import { TeamService } from './team.service.js';
 import { WorkflowService } from './workflow.service.js';
 import { SkillService } from './skill.service.js';
@@ -663,8 +663,8 @@ Returns up to 'limit' messages (default 30). Each message has role, content (tru
       limit: { type: 'number', description: 'Max messages to return (default: 30, max: 100)' },
     },
   },
-  async execute(args, db) {
-    const ctx = getAnyActiveSession();
+  async execute(args, db, context) {
+    const ctx = resolveActiveSession(context);
     if (!ctx?.chatSessionId) {
       return { error: 'No active chat session context — this tool only works inside an agent run' };
     }
@@ -710,8 +710,8 @@ const getMyDelegationThread: ChatTool = {
 
 Returns the conversation metadata (caller, task, status, depth) and the full message log including tool calls. Only useful for delegated agents — returns an error if called from a top-level chat.`,
   inputSchema: { type: 'object', properties: {} },
-  async execute(_args, db) {
-    const ctx = getAnyActiveSession();
+  async execute(_args, db, context) {
+    const ctx = resolveActiveSession(context);
     if (!ctx?.currentConversationId) {
       return { error: 'No active delegation conversation — this tool only works for delegated agents (not top-level chat)' };
     }

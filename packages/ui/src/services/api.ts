@@ -119,6 +119,8 @@ export const workflows = {
     fetch(`${BASE}/workflows/${id}/export`, { headers: authHeaders() }).then(r => r.text()),
   importYaml: (yaml: string) =>
     request<any>('/workflows/import', { method: 'POST', body: JSON.stringify({ yaml }) }),
+  ensureDefaults: (names: string[]) =>
+    request<any[]>('/workflows/ensure-defaults', { method: 'POST', body: JSON.stringify({ names }) }),
 };
 
 // ── Skills ────────────────────────────────────────────────────────────────
@@ -378,8 +380,15 @@ export const executions = {
     runContext?: RunStatus | null;
   }>>(`/executions/chat/${sessionId}`),
   context: (id: string) => request<RunStatus>(`/executions/${id}/context`),
-  start: (workflowId: string, input: Record<string, unknown>) =>
-    request<any>('/executions', { method: 'POST', body: JSON.stringify({ workflowId, input }) }),
+  start: (
+    workflowId: string,
+    input: Record<string, unknown>,
+    options?: { agentProvider?: 'claude-cli' | 'codex' },
+  ) =>
+    request<any>('/executions', {
+      method: 'POST',
+      body: JSON.stringify({ workflowId, input, ...(options?.agentProvider ? { agentProvider: options.agentProvider } : {}) }),
+    }),
   cancel: (id: string) =>
     request<any>(`/executions/${id}/cancel`, { method: 'POST' }),
   /**
@@ -1010,6 +1019,28 @@ export const system = {
     }>('/system/verify-ssh', {
       method: 'POST',
       body: JSON.stringify({ host }),
+    }),
+  onboardingProgress: () =>
+    request<{
+      complete: boolean;
+      skipped: boolean;
+      step: 'health' | 'repository' | 'first_workflow' | 'complete';
+      completedAt: string | null;
+      skippedAt: string | null;
+    }>('/system/onboarding-progress'),
+  updateOnboardingProgress: (body: {
+    step?: 'health' | 'repository' | 'first_workflow' | 'complete';
+    action?: 'complete' | 'skip';
+  }) =>
+    request<{
+      complete: boolean;
+      skipped: boolean;
+      step: 'health' | 'repository' | 'first_workflow' | 'complete';
+      completedAt: string | null;
+      skippedAt: string | null;
+    }>('/system/onboarding-progress', {
+      method: 'PATCH',
+      body: JSON.stringify(body),
     }),
 };
 

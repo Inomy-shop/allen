@@ -1,6 +1,13 @@
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import { Navigate, Outlet, useLocation } from 'react-router-dom';
 import { useAuthStore } from '../../stores/authStore';
+import { system } from '../../services/api';
+
+const ONBOARDING_STEP_PATHS: Record<string, string> = {
+  health: '/onboarding/health',
+  repository: '/onboarding/repository',
+  first_workflow: '/onboarding/first-workflow',
+};
 
 /**
  * Guard for authenticated routes.
@@ -16,10 +23,44 @@ export default function ProtectedRoute({ adminOnly = false }: { adminOnly?: bool
   const user = useAuthStore((s) => s.user);
   const refreshToken = useAuthStore((s) => s.refreshToken);
   const location = useLocation();
+  const [onboardingPath, setOnboardingPath] = useState<string | null>(null);
+  const [checkingOnboarding, setCheckingOnboarding] = useState(true);
 
   useEffect(() => {
     if (!hydrated) hydrate();
   }, [hydrated, hydrate]);
+
+  useEffect(() => {
+    const eligible = hydrated
+      && Boolean(refreshToken)
+      && Boolean(user)
+      && !user?.mustResetPassword
+      && (!adminOnly || user?.role === 'admin');
+    if (!eligible) {
+      setCheckingOnboarding(false);
+      setOnboardingPath(null);
+      return;
+    }
+
+    let cancelled = false;
+    setCheckingOnboarding(true);
+    system.onboardingProgress()
+      .then(progress => {
+        if (cancelled) return;
+        if (progress.complete) {
+          setOnboardingPath(null);
+          return;
+        }
+        setOnboardingPath(ONBOARDING_STEP_PATHS[progress.step] ?? '/onboarding/health');
+      })
+      .catch(() => {
+        if (!cancelled) setOnboardingPath(null);
+      })
+      .finally(() => {
+        if (!cancelled) setCheckingOnboarding(false);
+      });
+    return () => { cancelled = true; };
+  }, [adminOnly, hydrated, location.pathname, refreshToken, user]);
 
   if (!hydrated) return null;
 
@@ -35,6 +76,12 @@ export default function ProtectedRoute({ adminOnly = false }: { adminOnly?: bool
 
   if (adminOnly && user.role !== 'admin') {
     return <Navigate to="/403" replace />;
+  }
+
+  if (checkingOnboarding) return null;
+
+  if (onboardingPath) {
+    return <Navigate to={onboardingPath} replace />;
   }
 
   return <Outlet />;

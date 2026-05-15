@@ -632,23 +632,15 @@ ${context}
     // to full replacement (previous behavior).
     const systemPromptMode = process.env.ALLEN_SYSTEM_PROMPT_MODE === 'custom' ? 'custom' : 'append';
 
-    // Execution mode. Auto-picks based on cwd: real repo/workspace → CLI
-    // (file-based agent spawn via `claude --agent allen-<name>`, best when
-    // the agent has filesystem access), ephemeral /tmp → SDK. Explicit
-    // ALLEN_AGENT_EXECUTION_MODE=cli|sdk overrides. Both modes yield the
-    // same SDKMessage stream so the consumer loop below is identical.
+    // Execution mode. Claude-provider nodes default to CLI mode. Explicit
+    // ALLEN_AGENT_EXECUTION_MODE=sdk is the only way to force the in-process
+    // SDK path. Both modes yield the same SDKMessage stream so the consumer
+    // loop below is identical.
     const explicitMode = process.env.ALLEN_AGENT_EXECUTION_MODE;
-    const isEphemeral = (() => {
-      if (!cwd) return false;
-      const n = cwd.replace(/\/+$/, '');
-      return n === '/tmp' || n.startsWith('/tmp/') ||
-        n === '/var/tmp' || n.startsWith('/var/tmp/') ||
-        n === '/private/tmp' || n.startsWith('/private/tmp/');
-    })();
     const executionMode: 'sdk' | 'cli' =
       explicitMode === 'cli' ? 'cli' :
       explicitMode === 'sdk' ? 'sdk' :
-      isEphemeral ? 'sdk' : 'cli';
+      'cli';
 
     let conv: AsyncIterable<any>;
     if (executionMode === 'cli') {
@@ -1100,17 +1092,10 @@ Use auto-gate only if the original prompt's workflow context explicitly allowed 
   const systemPromptMode2: 'append' | 'custom' =
     process.env.ALLEN_SYSTEM_PROMPT_MODE === 'custom' ? 'custom' : 'append';
   const explicitMode = process.env.ALLEN_AGENT_EXECUTION_MODE;
-  const isEphemeral2 = (() => {
-    if (!cwd) return false;
-    const n = cwd.replace(/\/+$/, '');
-    return n === '/tmp' || n.startsWith('/tmp/') ||
-      n === '/var/tmp' || n.startsWith('/var/tmp/') ||
-      n === '/private/tmp' || n.startsWith('/private/tmp/');
-  })();
   const executionMode2: 'sdk' | 'cli' =
     explicitMode === 'cli' ? 'cli' :
     explicitMode === 'sdk' ? 'sdk' :
-    isEphemeral2 ? 'sdk' : 'cli';
+    'cli';
 
   const overrideSources: Partial<Record<'model' | 'reasoningEffort' | 'planMode', 'node' | 'agent-default'>> = {};
   if (override2.model !== undefined) overrideSources.model = 'node';

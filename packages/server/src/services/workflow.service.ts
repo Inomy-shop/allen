@@ -1,7 +1,12 @@
 import yaml from 'js-yaml';
+import { existsSync, readdirSync, readFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import type { Collection, Db } from 'mongodb';
 import { validateWorkflow, loadAgents, getBuiltIns, generateMermaid } from '@allen/engine';
 import type { WorkflowDef, ValidationResult } from '@allen/engine';
+
+const __dirname = dirname(fileURLToPath(import.meta.url));
 
 export class WorkflowService {
   private col: Collection;
@@ -15,6 +20,56 @@ export class WorkflowService {
   async list(includeArchived = false): Promise<Record<string, unknown>[]> {
     const filter = includeArchived ? {} : { archived: { $ne: true } };
     return this.col.find(filter, {
+      projection: { name: 1, description: 1, version: 1, tags: 1, validation: 1, updatedAt: 1, archived: 1 },
+    }).sort({ updatedAt: -1 }).toArray();
+  }
+
+  async ensureDefaultWorkflows(names: string[]): Promise<Record<string, unknown>[]> {
+    const wanted = new Set(names.filter(Boolean));
+    if (wanted.size === 0) return [];
+
+    const yamlAgents = loadAgents();
+    const builtInNames = Object.keys(getBuiltIns());
+    const dbAgents = await this.db.collection('agents').find({}, { projection: { name: 1, system: 1 } }).toArray();
+    const agents: Record<string, { system: string }> = { ...yamlAgents };
+    for (const a of dbAgents) {
+      agents[a.name as string] = { system: (a.system as string) ?? '' };
+    }
+
+    const possiblePaths = [
+      join(__dirname, '..', '..', '..', 'engine', 'workflows'),
+      join(__dirname, '..', '..', '..', '..', 'engine', 'workflows'),
+      join(process.cwd(), '..', 'engine', 'workflows'),
+    ];
+    const workflowDir = possiblePaths.find(path => existsSync(path));
+    if (!workflowDir) throw new Error('Default workflows directory not found');
+
+    const files = readdirSync(workflowDir).filter(file => file.endsWith('.yml') || file.endsWith('.yaml'));
+    for (const file of files) {
+      const content = readFileSync(join(workflowDir, file), 'utf-8');
+      const parsed = yaml.load(content) as WorkflowDef;
+      if (!wanted.has(parsed.name)) continue;
+
+      const existing = await this.col.findOne({ name: parsed.name });
+      if (existing) continue;
+
+      const validation = validateWorkflow(parsed, agents, builtInNames);
+      await this.col.insertOne({
+        name: parsed.name,
+        description: parsed.description ?? '',
+        version: 1,
+        yaml: content,
+        parsed,
+        reactFlowData: null,
+        validation,
+        tags: ['default'],
+        createdBy: 'system',
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      });
+    }
+
+    return this.col.find({ name: { $in: [...wanted] } }, {
       projection: { name: 1, description: 1, version: 1, tags: 1, validation: 1, updatedAt: 1, archived: 1 },
     }).sort({ updatedAt: -1 }).toArray();
   }

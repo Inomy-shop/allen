@@ -144,9 +144,9 @@ export function chatRoutes(db: Db): Router {
   // Helper — pull the Allen MCP's x-allen-* context headers off an
   // incoming tool-dispatch request. The MCP subprocess sets these from
   // its own env (ALLEN_CHAT_SESSION_ID, etc.) so the server can route
-  // tool calls to the exact chat / spawn context that spawned this MCP,
-  // instead of probing a global "any active" map. Missing headers are
-  // fine; tools fall back to their historic lookup behaviour.
+  // tool calls to the exact chat / spawn context that spawned this MCP.
+  // Missing headers are left unbound; chat-scoped tools must not borrow
+  // another active chat's context.
   const readToolContext = (req: Request) => {
     const hdr = (name: string) => {
       const v = req.header(name);
@@ -722,8 +722,8 @@ export function chatRoutes(db: Db): Router {
       if (!question) return res.status(400).json({ error: 'question is required' });
       // Just store the question — don't block. The in-process ask_user tool handles blocking.
       // For MCP calls, the MCP handler polls /api/chat/ask-user/status
-      const { getAnyActiveSession } = await import('../services/chat-tools.js');
-      const activeCtx = getAnyActiveSession();
+      const { resolveActiveSession } = await import('../services/chat-tools.js');
+      const activeCtx = resolveActiveSession(readToolContext(req));
       if (!activeCtx) return res.status(400).json({ error: 'No active session' });
       const fromAgent = activeCtx.currentAgent ?? 'assistant';
       const sessionId = activeCtx.chatSessionId;
@@ -740,10 +740,10 @@ export function chatRoutes(db: Db): Router {
   });
 
   // GET /api/chat/ask-user/status — Poll for user's answer
-  router.get('/ask-user/status', async (_req: Request, res: Response) => {
+  router.get('/ask-user/status', async (req: Request, res: Response) => {
     try {
-      const { getAnyActiveSession } = await import('../services/chat-tools.js');
-      const activeCtx = getAnyActiveSession();
+      const { resolveActiveSession } = await import('../services/chat-tools.js');
+      const activeCtx = resolveActiveSession(readToolContext(req));
       if (!activeCtx) return res.json({ status: 'no_session' });
       const sessionId = activeCtx.chatSessionId;
       const { ObjectId } = await import('mongodb');

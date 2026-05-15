@@ -185,8 +185,10 @@ export class RepoContextScannerService {
       };
       liveLog({ type: 'started', content: `Repo scan for ${repoName} in ${repoPath}` });
 
-      // Run the agent headlessly via Claude SDK — no chat session, no broadcast
+      // Run the agent headlessly through the Claude CLI by default. Operators
+      // can force SDK mode with ALLEN_AGENT_EXECUTION_MODE=sdk.
       const { query } = await import('@anthropic-ai/claude-code');
+      const { queryViaCli } = await import('@allen/engine');
       const abortController = new AbortController();
       const timer = setTimeout(() => abortController.abort(), SCAN_TIMEOUT_MS);
 
@@ -202,11 +204,29 @@ export class RepoContextScannerService {
         customSystemPrompt: withNonInteractiveGuidance(withArtifactsGuidance(agent.system as string)),
         abortController,
       };
+      const executionMode = process.env.ALLEN_AGENT_EXECUTION_MODE === 'sdk' ? 'sdk' : 'cli';
+      const messageStream = executionMode === 'cli'
+        ? queryViaCli({
+            agent: {
+              name: 'repo-scanner',
+              description: agent.description as string | undefined,
+              system: withNonInteractiveGuidance(withArtifactsGuidance(agent.system as string)),
+              model,
+              tools: Array.isArray(agent.tools) ? agent.tools as string[] : undefined,
+            },
+            prompt,
+            cwd: repoPath,
+            model,
+            permissionMode: 'bypassPermissions',
+            abortSignal: abortController.signal,
+            stderr: (chunk) => liveLog({ type: 'tool_start', tool: 'claude-cli stderr', content: chunk.slice(0, 4000) }),
+          })
+        : query({ prompt, options: sdkOptions as any });
 
       let finalText = '';
       toolCalls = [];
       try {
-        for await (const msg of query({ prompt, options: sdkOptions as any })) {
+        for await (const msg of messageStream) {
           if (msg.type === 'assistant') {
             const blocks = (msg as any).message?.content as Array<{ type: string; text?: string; name?: string; input?: unknown }> ?? [];
             const text = blocks.filter((b) => b.type === 'text').map((b) => b.text ?? '').join('');

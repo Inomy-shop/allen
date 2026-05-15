@@ -5,8 +5,8 @@ description: >
   bugs while large bugs run the full pipeline.
 
   Routing by severity:
-    small  → implement → code_review → open_pr → summary
-             (skips qa and implementation_validator)
+    small  → implement → open_pr
+             (skips qa, implementation_validator, code_review, and summary)
     medium → implement → qa → code_review → open_pr → summary
              (skips implementation_validator)
     large  → full pipeline (implement → qa → implementation_validator → code_review → open_pr → summary)
@@ -582,13 +582,13 @@ nodes:
         IMPLEMENTATION PLAN:  {{implementation_plan_artifact_url}}
         QA REPORT:            {{default qa_artifact_url "(qa skipped by severity policy)"}}
         VALIDATOR REPORT:     {{default validator_artifact_url "(validator skipped by severity policy)"}}
-        CODE REVIEW:          {{code_review_artifact_url}}
+        CODE REVIEW:          {{default code_review_artifact_url "(code review skipped by severity policy)"}}
 
       ROUTING PRIMITIVES:
         QA VERDICT:       {{default qa_verdict "(qa skipped)"}}
         VALIDATOR VERDICT: {{default prd_satisfied "(validator skipped)"}}
-        REVIEW VERDICT:   {{review_verdict}}
-        SECURITY FINDINGS: {{security_findings_count}} (count; full list in code_review_artifact_url)
+        REVIEW VERDICT:   {{default review_verdict "(code review skipped)"}}
+        SECURITY FINDINGS: {{default security_findings_count "n/a"}} (count; full list in code_review_artifact_url when code review ran)
 
       Follow your PR-creation contract: stage, commit with `fix: ...`
       message, push, gh pr create, handle errors at each step, and
@@ -596,10 +596,13 @@ nodes:
 
       PR BODY CONTENT:
       Pull the full root cause, fix description, acceptance criteria,
-      test evidence, and security findings from the artifact URLs above
+      test evidence when present, and security findings when present from the artifact URLs above
       (fetch them via mcp__allen__allen_get_artifact). Embed prose excerpts in the PR body AND include
       the artifact links so reviewers can click through to the
-      full reports.
+      full reports. For severity == 'small', do not invent skipped QA,
+      validator, or code-review evidence; state that the onboarding small-bug
+      lane intentionally implemented the fix and opened the PR without
+      downstream summary.
     outputs:
       pr_url: "The created (or reused) PR URL, or null on failure."
       status: "created | reused_existing | failed — drives open_pr→next routing."
@@ -754,12 +757,12 @@ edges:
     }
 
   # Severity-based fast paths after implement:
-  #   small  → skip qa + implementation_validator, go straight to code_review
+  #   small  → skip qa + implementation_validator + code_review, go straight to PR
   #   medium → run qa, skip implementation_validator
   #   large  → full pipeline (qa → implementation_validator → code_review)
   - {
       from: implement,
-      to: code_review,
+      to: open_pr,
       condition: "any_failures == false AND severity == 'small'",
     }
   - {
@@ -847,7 +850,12 @@ edges:
   - {
       from: open_pr,
       to: summary,
-      condition: "status == 'created' OR status == 'reused_existing'",
+      condition: "(status == 'created' OR status == 'reused_existing') AND severity != 'small'",
+    }
+  - {
+      from: open_pr,
+      to: END,
+      condition: "(status == 'created' OR status == 'reused_existing') AND severity == 'small'",
     }
   - { from: open_pr, to: escalation_review, condition: "status == 'failed'" }
   - { from: summary, to: END }

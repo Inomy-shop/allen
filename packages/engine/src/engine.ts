@@ -145,12 +145,14 @@ export class AllenEngine {
       exec.status = 'completed';
       exec.completedAt = new Date();
       exec.durationMs = Date.now() - exec.startedAt.getTime();
+      exec.currentNodes = [];
       await this.stateManager.updateExecution(executionId, {
         status: 'completed',
         completedAt: exec.completedAt,
         durationMs: exec.durationMs,
         state: exec.state,
         cost: exec.cost,
+        currentNodes: [],
         completedNodes: exec.completedNodes,
       });
 
@@ -249,12 +251,14 @@ export class AllenEngine {
       exec.status = 'completed';
       exec.completedAt = new Date();
       exec.durationMs = Date.now() - exec.startedAt.getTime();
+      exec.currentNodes = [];
       await this.stateManager.updateExecution(executionId, {
         status: 'completed',
         completedAt: exec.completedAt,
         durationMs: exec.durationMs,
         state: exec.state,
         cost: exec.cost,
+        currentNodes: [],
         completedNodes: exec.completedNodes,
       });
 
@@ -360,12 +364,14 @@ export class AllenEngine {
       exec.status = 'completed';
       exec.completedAt = new Date();
       exec.durationMs = Date.now() - exec.startedAt.getTime();
+      exec.currentNodes = [];
       await this.stateManager.updateExecution(executionId, {
         status: 'completed',
         completedAt: exec.completedAt,
         durationMs: exec.durationMs,
         state: exec.state,
         cost: exec.cost,
+        currentNodes: [],
         completedNodes: exec.completedNodes,
       });
       this.emit({
@@ -460,12 +466,14 @@ export class AllenEngine {
       exec.status = 'completed';
       exec.completedAt = new Date();
       exec.durationMs = Date.now() - exec.startedAt.getTime();
+      exec.currentNodes = [];
       await this.stateManager.updateExecution(executionId, {
         status: 'completed',
         completedAt: exec.completedAt,
         durationMs: exec.durationMs,
         state: exec.state,
         cost: exec.cost,
+        currentNodes: [],
         completedNodes: exec.completedNodes,
       });
       this.emit({
@@ -549,12 +557,14 @@ export class AllenEngine {
       exec.status = 'completed';
       exec.completedAt = new Date();
       exec.durationMs = Date.now() - exec.startedAt.getTime();
+      exec.currentNodes = [];
       await this.stateManager.updateExecution(newExecutionId, {
         status: 'completed',
         completedAt: exec.completedAt,
         durationMs: exec.durationMs,
         state: exec.state,
         cost: exec.cost,
+        currentNodes: [],
         completedNodes: exec.completedNodes,
       });
       this.emit({

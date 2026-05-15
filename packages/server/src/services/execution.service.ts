@@ -245,8 +245,40 @@ function executionDisplayTitle(input: Record<string, unknown>, meta: Record<stri
     ?? fallback;
 }
 
+function applyWorkflowAgentProvider(workflow: WorkflowDef, provider?: WorkflowAgentProvider): WorkflowDef {
+  if (!provider) return workflow;
+
+  const copy = JSON.parse(JSON.stringify(workflow)) as WorkflowDef;
+  const nodes = (copy.nodes ?? {}) as Record<string, Record<string, unknown>>;
+
+  for (const node of Object.values(nodes)) {
+    if (typeof node.agent !== 'string' || !node.agent) continue;
+
+    const existing = (
+      node.agentOverrides
+      && typeof node.agentOverrides === 'object'
+      && !Array.isArray(node.agentOverrides)
+    )
+      ? node.agentOverrides as Record<string, unknown>
+      : {};
+    const next: Record<string, unknown> = { ...existing, provider };
+
+    if (provider === 'codex' && next.model === undefined) {
+      next.model = 'default';
+    }
+    if (provider === 'claude-cli' && next.model === 'default') {
+      delete next.model;
+    }
+
+    node.agentOverrides = next;
+  }
+
+  return copy;
+}
+
 export type RunOrigin = 'chat' | 'linear' | 'workflow' | 'direct_agent';
 export type RunType = 'workflow' | 'agent';
+export type WorkflowAgentProvider = 'claude-cli' | 'codex';
 export type RunPhase =
   | 'queued'
   | 'planning'
@@ -262,6 +294,14 @@ export type RunPhase =
   | 'cancelled';
 
 const CANCELLED_STATUSES = new Set(['cancelled', 'canceled']);
+const TERMINAL_STATUSES = new Set(['completed', 'failed', 'cancelled', 'canceled']);
+
+function normalizeTerminalCurrentNodes<T extends { status?: unknown; currentNodes?: unknown }>(row: T): T {
+  const status = String(row.status ?? '').toLowerCase();
+  if (!TERMINAL_STATUSES.has(status)) return row;
+  if (!Array.isArray(row.currentNodes) || row.currentNodes.length === 0) return row;
+  return { ...row, currentNodes: [] };
+}
 
 export interface RunStatus {
   origin: RunOrigin;
@@ -305,12 +345,16 @@ export class ExecutionService {
     this.stateManager = new StateManager(db);
   }
 
-  async start(workflowId: string, input: Record<string, unknown>): Promise<Record<string, unknown>> {
+  async start(
+    workflowId: string,
+    input: Record<string, unknown>,
+    options: { agentProvider?: WorkflowAgentProvider } = {},
+  ): Promise<Record<string, unknown>> {
     const { ObjectId } = await import('mongodb');
     const workflowDoc = await this.db.collection('workflows').findOne({ _id: new ObjectId(workflowId) });
     if (!workflowDoc) throw new Error('Workflow not found');
 
-    const workflow = workflowDoc.parsed as WorkflowDef;
+    const workflow = applyWorkflowAgentProvider(workflowDoc.parsed as WorkflowDef, options.agentProvider);
     this.validateWorkflowInput(workflow, input);
     if (isSelfHealingWorkflowName(workflow.name)) {
       const config = assertSelfHealingLinearConfig();
@@ -509,7 +553,7 @@ export class ExecutionService {
     if (filter.workflowName) query.workflowName = filter.workflowName;
 
     const results = await this.stateManager.listExecutions(query);
-    return results as unknown as Record<string, unknown>[];
+    return (results as unknown as Record<string, unknown>[]).map(normalizeTerminalCurrentNodes);
   }
 
   /**
@@ -564,9 +608,10 @@ export class ExecutionService {
       skip: opts.skip,
       limit: opts.limit,
     });
-    await this.attachChatMetadataFromMessages(items as unknown as Record<string, unknown>[]);
+    const normalizedItems = (items as unknown as Record<string, unknown>[]).map(normalizeTerminalCurrentNodes);
+    await this.attachChatMetadataFromMessages(normalizedItems);
     const enriched = await Promise.all(
-      (items as unknown as Record<string, unknown>[]).map((item) => this.listItemContext(item)),
+      normalizedItems.map((item) => this.listItemContext(item)),
     );
     return { items: enriched, total };
   }
@@ -601,7 +646,13 @@ export class ExecutionService {
     }
 
     const messageExecutionIds = [...messageLinks.keys()];
-    const directRows = await this.db.collection('executions')
+    const belongsToChatSession = (row: Record<string, unknown>): boolean => {
+      const meta = ((row.meta ?? {}) as Record<string, unknown>) ?? {};
+      const rowSessionId = stringValue(meta.chatSessionId);
+      return !rowSessionId || rowSessionId === sessionId;
+    };
+
+    const directRows = (await this.db.collection('executions')
       .find({
         $or: [
           { 'meta.chatSessionId': sessionId },
@@ -611,9 +662,40 @@ export class ExecutionService {
       .sort({ startedAt: 1, createdAt: 1 })
       .limit(200)
       .toArray()
-      .catch(() => []);
+      .catch(() => []))
+      .filter((row) => belongsToChatSession(row as Record<string, unknown>)) as Record<string, unknown>[];
 
-    await this.attachChatMetadataFromMessages(directRows as unknown as Record<string, unknown>[]);
+    const metadataUpdates = [];
+    for (const row of directRows) {
+      const id = stringValue(row.id);
+      if (!id) continue;
+      const meta = ((row.meta ?? {}) as Record<string, unknown>) ?? {};
+      const link = messageLinks.get(id);
+      if (stringValue(meta.chatSessionId) || !link) continue;
+      row.source = row.source ?? 'chat';
+      row.meta = {
+        ...meta,
+        origin: stringValue(meta.origin) ?? 'chat',
+        chatSessionId: sessionId,
+        parentMessageId: stringValue(meta.parentMessageId) ?? link.parentMessageId,
+      };
+      metadataUpdates.push({
+        updateOne: {
+          filter: { id, 'meta.chatSessionId': { $exists: false } },
+          update: {
+            $set: {
+              source: 'chat',
+              'meta.origin': 'chat',
+              'meta.chatSessionId': sessionId,
+              'meta.parentMessageId': link.parentMessageId,
+            },
+          },
+        },
+      });
+    }
+    if (metadataUpdates.length > 0) {
+      await this.db.collection('executions').bulkWrite(metadataUpdates, { ordered: false }).catch(() => {});
+    }
 
     const rootIds = [...new Set(directRows
       .map(row => stringValue(row.id))
@@ -628,7 +710,7 @@ export class ExecutionService {
     }
 
     const descendants = rootIds.length
-      ? await this.db.collection('executions')
+      ? (await this.db.collection('executions')
         .find({
           id: { $nin: rootIds },
           $or: [
@@ -639,7 +721,8 @@ export class ExecutionService {
         .sort({ startedAt: 1, createdAt: 1 })
         .limit(300)
         .toArray()
-        .catch(() => [])
+        .catch(() => []))
+        .filter((row) => belongsToChatSession(row as Record<string, unknown>)) as Record<string, unknown>[]
       : [];
 
     const byId = new Map<string, Record<string, unknown>>();
@@ -704,12 +787,13 @@ export class ExecutionService {
 
   async getById(id: string): Promise<Record<string, unknown> | null> {
     const result = await this.stateManager.getExecution(id);
-    return result as unknown as Record<string, unknown> | null;
+    return result ? normalizeTerminalCurrentNodes(result as unknown as Record<string, unknown>) : null;
   }
 
   async getContext(id: string): Promise<RunStatus> {
-    const exec = await this.stateManager.getExecution(id);
-    if (!exec) throw new Error('Execution not found');
+    const rawExec = await this.stateManager.getExecution(id);
+    if (!rawExec) throw new Error('Execution not found');
+    const exec = normalizeTerminalCurrentNodes(rawExec) as ExecutionState;
 
     const row = exec as unknown as Record<string, unknown>;
     const input = (exec.input ?? {}) as Record<string, unknown>;

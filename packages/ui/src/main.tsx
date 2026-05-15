@@ -26,6 +26,7 @@ import LoginPage from './pages/LoginPage';
 import OnboardingAccountPage from './pages/OnboardingAccountPage';
 import OnboardingHealthPage from './pages/OnboardingHealthPage';
 import OnboardingRepositoryPage from './pages/OnboardingRepositoryPage';
+import OnboardingFirstWorkflowPage from './pages/OnboardingFirstWorkflowPage';
 import ResetPasswordPage from './pages/ResetPasswordPage';
 import ForbiddenPage from './pages/ForbiddenPage';
 import ProtectedRoute from './components/auth/ProtectedRoute';
@@ -36,6 +37,7 @@ const router = createBrowserRouter([
   { path: '/onboarding/account', element: <OnboardingAccountPage /> },
   { path: '/onboarding/health', element: <OnboardingHealthPage /> },
   { path: '/onboarding/repository', element: <OnboardingRepositoryPage /> },
+  { path: '/onboarding/first-workflow', element: <OnboardingFirstWorkflowPage /> },
   { path: '/login', element: <LoginPage /> },
   { path: '/reset-password', element: <ResetPasswordPage /> },
   { path: '/403', element: <ForbiddenPage /> },

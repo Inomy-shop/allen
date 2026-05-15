@@ -91,15 +91,14 @@ function isEphemeralCwd(path: string | undefined): boolean {
  * Decide whether Claude agent execution uses the CLI (file-materialized)
  * path or the in-process SDK path. Resolution order:
  *   1. Explicit ALLEN_AGENT_EXECUTION_MODE=cli|sdk wins.
- *   2. Otherwise auto: CLI when cwd is a real repo/workspace path (agent has
- *      filesystem access; file-based --agent flow is ideal), SDK when cwd is
- *      ephemeral /tmp (no repo files on disk anyway).
+ *   2. Otherwise CLI. This keeps Claude-provider execution on the globally
+ *      installed Claude Code CLI everywhere by default.
  */
-function resolveExecutionMode(cwd: string | undefined): 'sdk' | 'cli' {
+function resolveExecutionMode(_cwd: string | undefined): 'sdk' | 'cli' {
   const explicit = process.env.ALLEN_AGENT_EXECUTION_MODE;
   if (explicit === 'cli') return 'cli';
   if (explicit === 'sdk') return 'sdk';
-  return isEphemeralCwd(cwd) ? 'sdk' : 'cli';
+  return 'cli';
 }
 
 // ── Active Session Registry ──────────────────────────────────────────────────
@@ -143,37 +142,14 @@ export function getActiveSession(sessionId: string): ActiveSessionContext | unde
 }
 
 /**
- * Legacy helper kept as a fallback for callers that don't yet thread an
- * explicit context. Safe only when ≤1 chat is active at a time — with
- * multiple concurrent chats it returns whichever Map entry iterates
- * first, which can bleed SSE / artifact / ask_user state across
- * sessions. New code should call `resolveActiveSession(context)`
- * instead, supplying the context plumbed through from the MCP header.
+ * Resolve the active session for a tool call from explicit context only.
+ * The context is threaded through from the MCP subprocess's
+ * `x-allen-chat-session-id` header. Missing context intentionally returns
+ * undefined instead of probing the global active-session map.
  */
-export function getAnyActiveSession(): ActiveSessionContext | undefined {
-  if (activeSessions.size > 1) {
-    const keys = Array.from(activeSessions.keys()).map(k => k.slice(0, 8)).join(', ');
-    logger.warn('[chat-tools] getAnyActiveSession() called with multiple active sessions', { component: 'chat-tools', activeSessions: activeSessions.size, keys });
-  }
-  for (const ctx of activeSessions.values()) return ctx;
-  return undefined;
-}
-
-/**
- * Resolve the active session for a tool call. Prefers the explicit
- * `context.chatSessionId` threaded through from the MCP subprocess's
- * `x-allen-chat-session-id` header; falls back to the legacy "any
- * active" probe only when the caller didn't supply a context (direct
- * in-process callers that haven't been migrated yet). This is the
- * seam that unblocks parallel-chat isolation — every site that used
- * to call `getAnyActiveSession()` should call this instead.
- */
-function resolveActiveSession(context?: ChatToolContext): ActiveSessionContext | undefined {
-  if (context?.chatSessionId) {
-    const match = getActiveSession(context.chatSessionId);
-    if (match) return match;
-  }
-  return getAnyActiveSession();
+export function resolveActiveSession(context?: ChatToolContext): ActiveSessionContext | undefined {
+  if (!context?.chatSessionId) return undefined;
+  return getActiveSession(context.chatSessionId);
 }
 
 // ── Process Registry — track PIDs for agent executions so they can be killed on cancel ──
@@ -254,8 +230,7 @@ export async function waitForBackgroundTasks(sessionId: string, maxWaitMs = 3_60
 
 /**
  * Context threaded through to every tool execution so tools can look up
- * the exact chat / spawn-execution they belong to — instead of probing
- * `getAnyActiveSession()` which grabs whichever Map entry iterates first.
+ * the exact chat / spawn-execution they belong to.
  *
  * The MCP subprocess sets env vars (ALLEN_CHAT_SESSION_ID,
  * ALLEN_PARENT_EXECUTION_ID, ALLEN_ROOT_EXECUTION_ID) and forwards them
@@ -264,7 +239,8 @@ export async function waitForBackgroundTasks(sessionId: string, maxWaitMs = 3_60
  *
  * All fields optional to stay backwards-compatible with direct callers
  * (linear.service, internal tests) that don't have the MCP header
- * context. When absent, tools fall back to their historic behaviour.
+ * context. When absent, chat-scoped tools leave the run unbound or return
+ * a local context error; they must not infer another active chat.
  */
 export interface ChatToolContext {
   chatSessionId?: string;
@@ -878,7 +854,8 @@ const spawnAgent: ChatTool = {
     let repoPath = args.repo_path as string | undefined;
     if (!repoPath) {
       const activeCtx = resolveActiveSession(context);
-      repoPath = activeCtx?.resolvedCwd ?? await resolveWorkspacePath(db, activeCtx?.chatSessionId) ?? undefined;
+      const sessionId = activeCtx?.chatSessionId ?? context?.chatSessionId;
+      repoPath = activeCtx?.resolvedCwd ?? await resolveWorkspacePath(db, sessionId) ?? undefined;
     }
     if (!repoPath && typeof role.sourceRepoPath === 'string' && role.sourceRepoPath) {
       repoPath = role.sourceRepoPath;
@@ -980,9 +957,9 @@ const spawnAgent: ChatTool = {
     let artifactRootType: string | undefined = providedArtifactRootType;
     let artifactRootId: string | undefined = providedArtifactRootId;
     if (!artifactRootType || !artifactRootId) {
-      if (activeCtxForMeta?.chatSessionId) {
+      if (chatSessionIdForMeta) {
         artifactRootType = 'chat';
-        artifactRootId = activeCtxForMeta.chatSessionId;
+        artifactRootId = chatSessionIdForMeta;
       } else if (providedRoot) {
         // A workflow-initiated spawn has a root execution id. Default
         // artifact root to that — it's the top of the workflow run.
@@ -1044,10 +1021,11 @@ async function runSpawnInBackground(
   /** Tool-call context forwarded from the caller. When the spawn is
    *  initiated via the MCP dispatcher, this carries the x-allen-chat-
    *  session-id header so we attach SSE / artifact state to the right
-   *  chat instead of probing the global "any active" map. */
+   *  chat. */
   context?: ChatToolContext,
 ): Promise<void> {
   const activeCtx = resolveActiveSession(context);
+  const contextChatSessionId = activeCtx?.chatSessionId ?? context?.chatSessionId;
   if (activeCtx) activeCtx.pendingBackgroundTasks++;
   const onEvent = activeCtx?.broadcastEvent;
   const startMs = Date.now();
@@ -1074,7 +1052,7 @@ async function runSpawnInBackground(
     void activityService.record({
       scope: 'execution',
       refId: executionId,
-      chatSessionId: activeCtx?.chatSessionId,
+      chatSessionId: contextChatSessionId,
       agent: agentName,
       type,
       tool: data.tool,
@@ -1222,7 +1200,7 @@ async function runSpawnInBackground(
         // Only set when the spawn tree is rooted in a chat; omitted for
         // workflow-initiated spawns so the server doesn't mis-route
         // them to a chat context.
-        ...(activeCtx?.chatSessionId ? { ALLEN_CHAT_SESSION_ID: activeCtx.chatSessionId } : {}),
+        ...(contextChatSessionId ? { ALLEN_CHAT_SESSION_ID: contextChatSessionId } : {}),
       };
 
       // Per-call MCP env overrides — codex doesn't forward parent env
@@ -1450,7 +1428,7 @@ async function runSpawnInBackground(
         ALLEN_ARTIFACT_AGENT_EXECUTION_ID: executionId,
         ALLEN_ARTIFACT_PARENT_ID: executionId,
         // Session marker — see codex spawn path above for rationale.
-        ...(activeCtx?.chatSessionId ? { ALLEN_CHAT_SESSION_ID: activeCtx.chatSessionId } : {}),
+        ...(contextChatSessionId ? { ALLEN_CHAT_SESSION_ID: contextChatSessionId } : {}),
       };
 
       // Pass the spawn context directly into the MCP config loader so the
@@ -1487,9 +1465,7 @@ async function runSpawnInBackground(
       sdkOptions.abortController = abortController;
       registerExecutionProcess(executionId, process.pid, () => abortController.abort());
 
-      // Execution mode. Auto-picks based on cwd: real repo/workspace → CLI
-      // (file-based agent spawn, best when the agent has filesystem access);
-      // /tmp → SDK (no benefit from the file detour). Explicit
+      // Execution mode. Claude-provider spawns default to CLI mode. Explicit
       // ALLEN_AGENT_EXECUTION_MODE=cli|sdk overrides. See cli-runner.ts.
       const useCliMode = resolveExecutionMode(sdkOptions.cwd as string | undefined) === 'cli';
       let msgStream: AsyncIterable<any>;
@@ -2483,7 +2459,10 @@ CRITICAL RULES:
     }
 
     const activeCtx = resolveActiveSession(toolContext);
-    const chatSessionId = activeCtx?.chatSessionId ?? 'unknown';
+    const chatSessionId = activeCtx?.chatSessionId ?? toolContext?.chatSessionId;
+    if (!chatSessionId) {
+      return { error: 'Missing chat session context. Delegation must be started from a chat session.' };
+    }
     const parentMessageId = activeCtx?.parentMessageId ?? 'unknown';
     const fromAgent = activeCtx?.currentAgent ?? 'assistant';
     const currentDepth = (activeCtx?.delegationDepth ?? 0) + 1;
@@ -2495,7 +2474,7 @@ CRITICAL RULES:
     // without every caller having to look up their source repo.
     let delegationCwd = context.repo_path as string | undefined;
     if (!delegationCwd) {
-      delegationCwd = activeCtx?.resolvedCwd ?? await resolveWorkspacePath(db, activeCtx?.chatSessionId) ?? undefined;
+      delegationCwd = activeCtx?.resolvedCwd ?? await resolveWorkspacePath(db, chatSessionId) ?? undefined;
     }
     if (!delegationCwd && typeof targetAgent.sourceRepoPath === 'string' && targetAgent.sourceRepoPath) {
       delegationCwd = targetAgent.sourceRepoPath;
@@ -2532,7 +2511,7 @@ CRITICAL RULES:
       const targetSessionId = existing.sessions?.[targetName];
 
       // Run in background — return immediately
-      runDelegationInBackground(db, targetAgent, task, existingConvId, targetSessionId, conversationService, onEvent, activeCtx, currentDepth, fromAgent, targetName, delegationCwd).catch(() => {});
+      runDelegationInBackground(db, targetAgent, task, existingConvId, targetSessionId, conversationService, onEvent, activeCtx, currentDepth, fromAgent, targetName, delegationCwd, chatSessionId).catch(() => {});
 
       return { conversation_id: existingConvId, status: 'started', turn: 'continue', message: `Message sent to ${targetName}. Use wait_for_delegation to check the response.` };
     }
@@ -2555,7 +2534,7 @@ CRITICAL RULES:
 
     // Auto-inject workspace context
     if (!context.repo_path) {
-      const wsPath = await resolveWorkspacePath(db, activeCtx?.chatSessionId);
+      const wsPath = await resolveWorkspacePath(db, chatSessionId);
       if (wsPath) {
         context.repo_path = wsPath;
         try {
@@ -2569,7 +2548,7 @@ CRITICAL RULES:
     if (Object.keys(context).length > 0) fullPrompt = `CONTEXT:\n${JSON.stringify(context, null, 2)}\n\nTASK:\n${task}`;
 
     // Run in background — return immediately so MCP doesn't timeout
-    runDelegationInBackground(db, targetAgent, fullPrompt, convId, undefined, conversationService, onEvent, activeCtx, currentDepth, fromAgent, targetName, delegationCwd).catch(() => {});
+    runDelegationInBackground(db, targetAgent, fullPrompt, convId, undefined, conversationService, onEvent, activeCtx, currentDepth, fromAgent, targetName, delegationCwd, chatSessionId).catch(() => {});
 
     return { conversation_id: convId, status: 'started', agent: targetName, depth: currentDepth, message: `Delegation started. Use wait_for_delegation(conversation_id="${convId}") to get the response.` };
   },
@@ -2581,12 +2560,12 @@ async function runDelegationInBackground(
   resumeSessionId: string | undefined, conversationService: AgentConversationService,
   onEvent: ((event: string, data: Record<string, unknown>) => void) | undefined,
   activeCtx: ActiveSessionContext | undefined, currentDepth: number,
-  fromAgent: string, targetName: string, cwd?: string,
+  fromAgent: string, targetName: string, cwd?: string, chatSessionId?: string,
 ): Promise<void> {
   if (activeCtx) activeCtx.pendingBackgroundTasks++;
   const startMs = Date.now();
   try {
-    const result = await runAgentTurn(db, targetAgent, prompt, convId, resumeSessionId, conversationService, onEvent, activeCtx, currentDepth, cwd);
+    const result = await runAgentTurn(db, targetAgent, prompt, convId, resumeSessionId, conversationService, onEvent, activeCtx, currentDepth, cwd, chatSessionId);
     logger.info('[delegation] completed', { convId, targetName, responseLen: result.responseText.length, toolCalls: result.toolCalls.length });
     await conversationService.addMessage(convId, { agent: targetName, type: 'message', content: result.responseText, toolCalls: result.toolCalls, timestamp: new Date() });
     await conversationService.addCost(convId, result.costUsd);
@@ -2611,7 +2590,7 @@ async function runDelegationInBackground(
       failureMode: 'delegation_failed',
       relatedIds: {
         conversationId: convId,
-        chatSessionId: activeCtx?.chatSessionId,
+        chatSessionId,
         fromAgent,
         toAgent: targetName,
       },
@@ -2876,6 +2855,7 @@ async function runAgentTurn(
   activeCtx: ActiveSessionContext | undefined,
   currentDepth: number,
   cwd?: string,
+  chatSessionId?: string,
 ): Promise<{ responseText: string; costUsd: number; sessionId?: string; toolCalls: { tool: string; args: Record<string, unknown> }[] }> {
   const targetName = targetAgent.name as string;
   const provider = targetAgent.provider ?? 'claude';
@@ -2928,7 +2908,7 @@ async function runAgentTurn(
     void activityService.record({
       scope: 'delegation',
       refId: convId,
-      chatSessionId: activeCtx?.chatSessionId,
+      chatSessionId,
       agent: targetName,
       type: activityType,
       tool: typeof data.tool === 'string' ? (data.tool as string) : undefined,
@@ -3008,13 +2988,13 @@ async function runAgentTurn(
       // "ALLEN_ARTIFACT_ROOT_TYPE / ROOT_ID env vars not set" — same
       // mechanism as the codex chat provider in chat-providers.ts.
       const mcpEnvOverrides: string[] = [];
-      if (activeCtx?.chatSessionId) {
+      if (chatSessionId) {
         mcpEnvOverrides.push(
           '-c', `mcp_servers.${MCP_SERVER_NAME}.env.ALLEN_ARTIFACT_ROOT_TYPE="chat"`,
-          '-c', `mcp_servers.${MCP_SERVER_NAME}.env.ALLEN_ARTIFACT_ROOT_ID="${activeCtx.chatSessionId}"`,
+          '-c', `mcp_servers.${MCP_SERVER_NAME}.env.ALLEN_ARTIFACT_ROOT_ID="${chatSessionId}"`,
           '-c', `mcp_servers.${MCP_SERVER_NAME}.env.ALLEN_ARTIFACT_AGENT_NAME="${targetName}"`,
           '-c', `mcp_servers.${MCP_SERVER_NAME}.env.ALLEN_ARTIFACT_PARENT_ID="${convId}"`,
-          '-c', `mcp_servers.${MCP_SERVER_NAME}.env.ALLEN_CHAT_SESSION_ID="${activeCtx.chatSessionId}"`,
+          '-c', `mcp_servers.${MCP_SERVER_NAME}.env.ALLEN_CHAT_SESSION_ID="${chatSessionId}"`,
           '-c', `mcp_servers.${MCP_SERVER_NAME}.env.ALLEN_API_URL="http://localhost:${process.env.PORT ?? '4023'}"`,
           '-c', `mcp_servers.${MCP_SERVER_NAME}.env.JWT_ACCESS_SECRET="${process.env.JWT_ACCESS_SECRET ?? ''}"`,
           '-c', `mcp_servers.${MCP_SERVER_NAME}.env.ALLEN_PUBLIC_URL="${process.env.ALLEN_PUBLIC_URL ?? `http://localhost:${process.env.PORT ?? '4023'}`}"`,
@@ -3042,17 +3022,16 @@ async function runAgentTurn(
         // spawn_agent spawns.
         const cleanEnv: NodeJS.ProcessEnv = { ...process.env };
         delete cleanEnv.PORT; // Don't leak host server port
-        if (activeCtx?.chatSessionId) {
+        if (chatSessionId) {
           cleanEnv.ALLEN_ARTIFACT_ROOT_TYPE = 'chat';
-          cleanEnv.ALLEN_ARTIFACT_ROOT_ID = activeCtx.chatSessionId;
+          cleanEnv.ALLEN_ARTIFACT_ROOT_ID = chatSessionId;
           cleanEnv.ALLEN_ARTIFACT_AGENT_NAME = targetName;
           cleanEnv.ALLEN_ARTIFACT_PARENT_ID = convId;
           // Session marker so the delegated agent's MCP subprocess
           // forwards x-allen-chat-session-id on outbound chat-tool
           // calls. Without it, tools called by this delegated agent
-          // would fall back to getAnyActiveSession() and could attach
-          // to the wrong chat when multiple chats run concurrently.
-          cleanEnv.ALLEN_CHAT_SESSION_ID = activeCtx.chatSessionId;
+          // cannot be attached to a chat session.
+          cleanEnv.ALLEN_CHAT_SESSION_ID = chatSessionId;
         }
         const proc = spawn('codex', args, { cwd: resolveAgentCwd(cwd), env: cleanEnv, stdio: ['pipe', 'pipe', 'pipe'] });
         const spawnStartMs = Date.now();
@@ -3199,7 +3178,7 @@ async function runAgentTurn(
       costUsd = result.costUsd;
 
     } else {
-      // ── Claude CLI with MCP — full streaming ──
+      // ── Claude provider with MCP — full streaming ──
       const { query } = await import('@anthropic-ai/claude-code');
       const { resolve, dirname } = await import('node:path');
 
@@ -3219,14 +3198,14 @@ async function runAgentTurn(
           // SDK passes this object verbatim to the MCP subprocess — it
           // does NOT inherit from the host Node env — so these MUST be
           // listed here.
-          ...(activeCtx?.chatSessionId
+          ...(chatSessionId
             ? {
                 ALLEN_ARTIFACT_ROOT_TYPE: 'chat',
-                ALLEN_ARTIFACT_ROOT_ID: activeCtx.chatSessionId,
+                ALLEN_ARTIFACT_ROOT_ID: chatSessionId,
                 ALLEN_ARTIFACT_AGENT_NAME: targetName,
                 ALLEN_ARTIFACT_PARENT_ID: convId,
                 // Session marker — see Codex delegation path above.
-                ALLEN_CHAT_SESSION_ID: activeCtx.chatSessionId,
+                ALLEN_CHAT_SESSION_ID: chatSessionId,
               }
             : {}),
         },
@@ -3241,7 +3220,47 @@ async function runAgentTurn(
       else sdkOptions.appendSystemPrompt = systemPrompt;
       registerExecutionProcess(convId, process.pid, () => abortController.abort());
 
-      for await (const message of query({ prompt, options: sdkOptions as any })) {
+      const useCliMode = resolveExecutionMode(sdkOptions.cwd as string | undefined) === 'cli';
+      let messageStream: AsyncIterable<any>;
+      if (useCliMode) {
+        const { queryViaCli } = await import('@allen/engine');
+        let discoveredMcpTools: string[] = [];
+        try {
+          const { loadMcpTools } = await import('./chat-mcp-client.js');
+          discoveredMcpTools = (await loadMcpTools(db)).map(t => t.fullName);
+        } catch (err) {
+          logger.warn('[delegation] MCP tool discovery failed (allowlist will lack mcp__* entries)', { convId, targetName, error: (err as Error).message });
+        }
+        messageStream = queryViaCli({
+          agent: {
+            name: targetName,
+            description: targetAgent.description as string | undefined,
+            system: systemPrompt ?? String(targetAgent.system ?? ''),
+            model,
+            tools: Array.isArray(targetAgent.tools) ? targetAgent.tools as string[] : undefined,
+            mcpToolNames: discoveredMcpTools,
+          },
+          prompt,
+          cwd: sdkOptions.cwd as string | undefined,
+          model,
+          resume: sdkOptions.resume as string | undefined,
+          permissionMode: 'bypassPermissions',
+          env: sdkOptions.env as NodeJS.ProcessEnv | undefined,
+          mcpServers: sdkOptions.mcpServers as Record<string, unknown> | undefined,
+          abortSignal: abortController.signal,
+          stderr: (chunk) => emit('tool_call', { tool: 'claude-cli stderr', content: chunk.slice(0, 4000) }),
+          onPid: (pid: number) => {
+            db.collection('agent_conversations').updateOne(
+              { _id: new ObjectId(convId) },
+              { $set: { 'meta.pid': pid } },
+            ).catch(() => {});
+          },
+        });
+      } else {
+        messageStream = query({ prompt, options: sdkOptions as any });
+      }
+
+      for await (const message of messageStream) {
         if ('session_id' in message && message.session_id) sessionId = message.session_id as string;
         if (message.type === 'assistant') {
           const blocks = (message as any).message.content as Array<{ type: string; text?: string; thinking?: string; name?: string; input?: unknown; id?: string }>;
@@ -3409,10 +3428,11 @@ const createPullRequest: ChatTool = {
   },
   async execute(args, db, context) {
     const activeCtx = resolveActiveSession(context);
+    const chatSessionId = activeCtx?.chatSessionId ?? context?.chatSessionId;
 
     // Find workspace linked to this session only
-    const ws = activeCtx?.chatSessionId
-      ? await db.collection('workspaces').findOne({ chatSessionId: activeCtx.chatSessionId, status: { $nin: ['archived', 'failed'] } })
+    const ws = chatSessionId
+      ? await db.collection('workspaces').findOne({ chatSessionId, status: { $nin: ['archived', 'failed'] } })
       : null;
     if (!ws) return { error: 'No workspace linked to this chat session. Open this chat from a workspace first.' };
 
@@ -3466,7 +3486,7 @@ const createPullRequest: ChatTool = {
         status: 'open', author: 'allen-agent',
         url: result.url, additions: 0, deletions: 0, changedFiles: 0, labels: [],
         createdByAgent: activeCtx?.currentAgent ?? 'assistant',
-        chatSessionId: activeCtx?.chatSessionId,
+        chatSessionId,
         workspaceId: ws._id?.toString(),
         createdAt: new Date(), updatedAt: new Date(),
       });

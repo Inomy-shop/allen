@@ -32,8 +32,7 @@ const SPAWN_PARENT_CALLER = process.env.ALLEN_PARENT_CALLER || undefined;
 const SPAWN_ROOT_EXECUTION_ID = process.env.ALLEN_ROOT_EXECUTION_ID || undefined;
 // Session-scope markers. These are attached as headers on outbound
 // /api/chat/* calls so the server can route tools to the correct chat /
-// spawn-execution context instead of guessing from a global "any active"
-// map. Set by whoever spawned this MCP subprocess:
+// spawn-execution context. Set by whoever spawned this MCP subprocess:
 //   chat-llm.ts        → ALLEN_CHAT_SESSION_ID for main-chat agents
 //   chat-tools.ts      → same for delegation / spawn subprocesses rooted
 //                        in a chat (omitted for workflow-rooted spawns)
@@ -97,8 +96,7 @@ globalThis.fetch = async (input: FetchInput, init?: RequestInit): Promise<Respon
   }
   // Attach context markers so the server-side tool dispatcher can match
   // this MCP's calls to the exact chat session / spawn execution that
-  // owns this subprocess — replaces the legacy getAnyActiveSession()
-  // probe. These are always safe to include (server ignores them for
+  // owns this subprocess. These are always safe to include (server ignores them for
   // non-chat routes) and only one will be truthy at a time in practice.
   if (SPAWN_CHAT_SESSION_ID && !mergedHeaders.has('x-allen-chat-session-id')) {
     mergedHeaders.set('x-allen-chat-session-id', SPAWN_CHAT_SESSION_ID);

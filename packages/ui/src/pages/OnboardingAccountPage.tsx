@@ -70,6 +70,7 @@ export default function OnboardingAccountPage() {
         password,
       });
       setSession(session);
+      await system.updateOnboardingProgress({ step: 'health' }).catch(() => {});
       navigate('/onboarding/health', { replace: true });
     } catch (err) {
       const msg = (err as Error).message;

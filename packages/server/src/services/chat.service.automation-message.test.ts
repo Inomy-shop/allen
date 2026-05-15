@@ -39,7 +39,7 @@ vi.mock('./chat-tools.js', () => ({
   unregisterActiveSession: vi.fn(),
   waitForBackgroundTasks: vi.fn().mockResolvedValue(undefined),
   executeChatTool: vi.fn().mockResolvedValue({}),
-  getAnyActiveSession: vi.fn().mockReturnValue(null),
+  resolveActiveSession: vi.fn().mockReturnValue(null),
 }));
 
 vi.mock('./embedding.service.js', () => ({
