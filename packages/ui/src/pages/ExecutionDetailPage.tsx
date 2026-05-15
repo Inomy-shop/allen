@@ -482,7 +482,10 @@ function AgentExecutionView({ execution, agentName, traces, id, liveToolCalls, r
 
   const handleResume = async () => {
     const trimmed = resumePrompt.trim();
-    if (!trimmed || !sessionId) return;
+    // sessionId is not required here: canResume already enforces that sessionId is only
+    // needed for completed runs. For failed/cancelled runs the backend (chat-tools.ts
+    // resumeAgentExecution) explicitly starts a fresh session when sessionId is absent.
+    if (!trimmed) return;
     setResumeBusy(true);
     try {
       // Append a new attempt to this same execution — preserves the
