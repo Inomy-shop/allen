@@ -1,11 +1,37 @@
 import { Router, type Request, type Response } from 'express';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import type { Db } from 'mongodb';
+import { ObjectId, type Db } from 'mongodb';
 import { UserService } from '../services/user.service.js';
 import { runSystemHealth } from '../services/system-health.service.js';
+import { requireAuth, type AuthedRequest } from '../middleware/requireAuth.js';
 
 const exec = promisify(execFile);
+const ONBOARDING_STEPS = new Set(['health', 'repository', 'first_workflow', 'complete']);
+
+function dateIso(value: unknown): string | null {
+  if (value instanceof Date) return value.toISOString();
+  if (typeof value === 'string' && value) {
+    const parsed = new Date(value);
+    return Number.isNaN(parsed.getTime()) ? null : parsed.toISOString();
+  }
+  return null;
+}
+
+function onboardingProgressPayload(onboarding: Record<string, unknown>) {
+  const completedAt = dateIso(onboarding.completedAt);
+  const skippedAt = dateIso(onboarding.skippedAt);
+  const rawStep = typeof onboarding.step === 'string' ? onboarding.step : 'health';
+  const step = ONBOARDING_STEPS.has(rawStep) ? rawStep : 'health';
+  const complete = Boolean(completedAt || skippedAt);
+  return {
+    complete,
+    skipped: Boolean(skippedAt),
+    step: complete ? 'complete' : step,
+    completedAt,
+    skippedAt,
+  };
+}
 
 type ExecErrorWithOutput = Error & {
   stdout?: string;
@@ -82,6 +108,79 @@ export function systemRoutes(db: Db): Router {
     } catch (err) {
       console.error('[system/health]', err);
       return res.status(500).json({ error: 'system_health_failed' });
+    }
+  });
+
+  router.get('/onboarding-progress', requireAuth, async (req: AuthedRequest, res: Response) => {
+    try {
+      const userId = req.user?.sub;
+      if (!userId) return res.status(401).json({ error: 'unauthorized' });
+      const user = await db.collection('users').findOne(
+        { _id: new ObjectId(userId) },
+        { projection: { onboarding: 1 } },
+      );
+      const onboarding = (user?.onboarding ?? {}) as Record<string, unknown>;
+      return res.json(onboardingProgressPayload(onboarding));
+    } catch (err) {
+      console.error('[system/onboarding-progress]', err);
+      return res.status(500).json({ error: 'onboarding_progress_failed' });
+    }
+  });
+
+  router.patch('/onboarding-progress', requireAuth, async (req: AuthedRequest, res: Response) => {
+    try {
+      const userId = req.user?.sub;
+      if (!userId) return res.status(401).json({ error: 'unauthorized' });
+
+      const step = typeof req.body?.step === 'string' ? req.body.step : undefined;
+      const action = typeof req.body?.action === 'string' ? req.body.action : undefined;
+      if (step && !ONBOARDING_STEPS.has(step)) {
+        return res.status(400).json({ error: 'invalid_onboarding_step' });
+      }
+      if (action && action !== 'complete' && action !== 'skip') {
+        return res.status(400).json({ error: 'invalid_onboarding_action' });
+      }
+
+      const now = new Date();
+      const currentUser = await db.collection('users').findOne(
+        { _id: new ObjectId(userId) },
+        { projection: { onboarding: 1 } },
+      );
+      const currentOnboarding = (currentUser?.onboarding ?? {}) as Record<string, unknown>;
+      const currentProgress = onboardingProgressPayload(currentOnboarding);
+      if (!action && currentProgress.complete) {
+        return res.json(currentProgress);
+      }
+
+      const set: Record<string, unknown> = {
+        'onboarding.updatedAt': now,
+      };
+      const unset: Record<string, ''> = {};
+      if (step) set['onboarding.step'] = step;
+      if (action === 'complete') {
+        set['onboarding.step'] = 'complete';
+        set['onboarding.completedAt'] = now;
+        unset['onboarding.skippedAt'] = '';
+      }
+      if (action === 'skip') {
+        set['onboarding.step'] = 'complete';
+        set['onboarding.skippedAt'] = now;
+        unset['onboarding.completedAt'] = '';
+      }
+
+      const update: Record<string, unknown> = { $set: set };
+      if (Object.keys(unset).length > 0) update.$unset = unset;
+      await db.collection('users').updateOne({ _id: new ObjectId(userId) }, update);
+      return res.json(onboardingProgressPayload({
+        ...currentOnboarding,
+        ...(step ? { step } : {}),
+        ...(action === 'complete' ? { step: 'complete', completedAt: now, skippedAt: undefined } : {}),
+        ...(action === 'skip' ? { step: 'complete', skippedAt: now, completedAt: undefined } : {}),
+        updatedAt: now,
+      }));
+    } catch (err) {
+      console.error('[system/onboarding-progress]', err);
+      return res.status(500).json({ error: 'onboarding_progress_failed' });
     }
   });
 

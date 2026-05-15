@@ -12,6 +12,7 @@ import {
 } from 'lucide-react';
 import { system } from '../services/api';
 import { BRAND_NAME } from '../lib/brand';
+import { useOnboardingGate } from '../hooks/useOnboardingGate';
 
 type HealthStatus = 'pass' | 'warn' | 'fail';
 
@@ -90,6 +91,7 @@ function CheckRow({ check }: { check: HealthCheck }) {
 
 export default function OnboardingHealthPage() {
   const navigate = useNavigate();
+  const checkingOnboarding = useOnboardingGate('health');
   const [summary, setSummary] = useState<HealthSummary | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -98,11 +100,6 @@ export default function OnboardingHealthPage() {
     setLoading(true);
     setError(null);
     try {
-      const status = await system.onboardingStatus();
-      if (status.isFirstRun) {
-        navigate('/onboarding/account', { replace: true });
-        return;
-      }
       const health = await system.health();
       setSummary(health);
     } catch (err) {
@@ -113,9 +110,10 @@ export default function OnboardingHealthPage() {
   }
 
   useEffect(() => {
+    if (checkingOnboarding) return;
     void loadHealth();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [checkingOnboarding]);
 
   const counts = useMemo(() => {
     const checks = summary?.checks ?? [];
@@ -209,7 +207,10 @@ export default function OnboardingHealthPage() {
               <button
                 type="button"
                 disabled={!summary?.requiredPassed}
-                onClick={() => navigate('/onboarding/repository', { replace: true })}
+                onClick={async () => {
+                  await system.updateOnboardingProgress({ step: 'repository' }).catch(() => {});
+                  navigate('/onboarding/repository', { replace: true });
+                }}
                 className="btn-primary mt-5 inline-flex w-full items-center justify-center gap-2"
               >
                 Continue

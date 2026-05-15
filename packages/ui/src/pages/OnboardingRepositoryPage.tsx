@@ -15,6 +15,7 @@ import {
 } from 'lucide-react';
 import { repos, system } from '../services/api';
 import { BRAND_NAME } from '../lib/brand';
+import { useOnboardingGate } from '../hooks/useOnboardingGate';
 
 type Mode = 'local' | 'clone';
 type CheckStatus = 'pass' | 'warn' | 'fail';
@@ -160,6 +161,7 @@ function SshPanel({ result, loading, onVerify }: { result: SshResult | null; loa
 
 export default function OnboardingRepositoryPage() {
   const navigate = useNavigate();
+  const checkingOnboarding = useOnboardingGate('repository');
   const [mode, setMode] = useState<Mode>('local');
   const [localPath, setLocalPath] = useState('');
   const [cloneUrl, setCloneUrl] = useState('');
@@ -171,16 +173,6 @@ export default function OnboardingRepositoryPage() {
   const [saving, setSaving] = useState(false);
   const [sshLoading, setSshLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-
-  useEffect(() => {
-    let cancelled = false;
-    system.onboardingStatus()
-      .then(status => {
-        if (!cancelled && status.isFirstRun) navigate('/onboarding/account', { replace: true });
-      })
-      .catch(() => {});
-    return () => { cancelled = true; };
-  }, [navigate]);
 
   useEffect(() => {
     setValidation(null);
@@ -240,12 +232,27 @@ export default function OnboardingRepositoryPage() {
           name: name.trim() || undefined,
         });
       }
-      navigate('/', { replace: true });
+      await system.updateOnboardingProgress({ step: 'first_workflow' }).catch(() => {});
+      navigate('/onboarding/first-workflow', { replace: true });
     } catch (err) {
       setError((err as Error).message || 'Could not connect repository');
     } finally {
       setSaving(false);
     }
+  }
+
+  async function skipOnboarding() {
+    await system.updateOnboardingProgress({ action: 'skip' }).catch(() => {});
+    navigate('/', { replace: true });
+  }
+
+  if (checkingOnboarding) {
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-surface-50 text-sm text-theme-muted">
+        <Loader2 className="mr-2 h-4 w-4 animate-spin text-accent-blue" />
+        Loading onboarding
+      </div>
+    );
   }
 
   return (
@@ -359,7 +366,7 @@ export default function OnboardingRepositoryPage() {
               <p className="mt-2 text-xs leading-5 text-theme-secondary">
                 Validation confirms git access, duplicate registration, branch state, and basic project metadata before Allen stores the repo.
               </p>
-              <button type="button" onClick={() => navigate('/', { replace: true })} className="btn-ghost mt-4 w-full">
+              <button type="button" onClick={skipOnboarding} className="btn-ghost mt-4 w-full">
                 Skip for now
               </button>
             </div>
