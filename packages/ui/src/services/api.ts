@@ -233,6 +233,7 @@ export interface RunStatus {
     id?: string;
     name?: string | null;
     status?: string | null;
+    repoId?: string | null;
     repoName?: string | null;
     branch?: string | null;
     baseBranch?: string | null;
@@ -275,6 +276,10 @@ export interface RunStatus {
     durationMs?: number | null;
     cost?: { actual: number | null; estimated: number } | null;
     error?: string | null;
+    io?: {
+      input?: string | null;
+      output?: string | null;
+    } | null;
   }>;
   interventions: Record<string, unknown>[];
   artifacts: Array<{
@@ -359,6 +364,15 @@ export const executions = {
     return request<{ items: any[]; total: number }>(`/executions?${qs.toString()}`);
   },
   get: (id: string) => request<any>(`/executions/${id}`),
+  forChat: (sessionId: string) => request<Array<{
+    executionId: string;
+    sourceMessageId?: string | null;
+    agent?: string | null;
+    prompt?: string | null;
+    status?: string | null;
+    kind?: 'agent' | 'lead' | 'workflow';
+    runContext?: RunStatus | null;
+  }>>(`/executions/chat/${sessionId}`),
   context: (id: string) => request<RunStatus>(`/executions/${id}/context`),
   start: (workflowId: string, input: Record<string, unknown>) =>
     request<any>('/executions', { method: 'POST', body: JSON.stringify({ workflowId, input }) }),
@@ -603,6 +617,8 @@ export const repos = {
     request<any>(`/repos/${id}/scan`, { method: 'POST' }),
   pull: (id: string, rescan = false) =>
     request<any>(`/repos/${id}/pull`, { method: 'POST', body: JSON.stringify({ rescan }) }),
+  getAllFiles: (id: string) => request<any[]>(`/repos/${id}/all-files`),
+  getFile: (id: string, path: string) => request<any>(`/repos/${id}/file/${path}`),
   context: (id: string) =>
     request<any>(`/repos/${id}/context`),
   rescanContext: (id: string) =>
@@ -636,6 +652,19 @@ export interface ChatSession {
   repoId?: string;
   repoPath?: string;
   repoName?: string;
+  workspaceId?: string;
+  archivedWorkspace?: {
+    id: string;
+    name?: string;
+    repoId?: string;
+    repoName?: string;
+    repoPath?: string;
+    branch?: string;
+    baseBranch?: string;
+    prNumber?: number;
+    prUrl?: string;
+    archivedAt?: string;
+  };
   source?: 'ui' | 'slack';
   slackContext?: {
     channelId: string;
@@ -648,6 +677,19 @@ export interface ChatSession {
   ownerUserId?: string | null;
   ownerName?: string | null;
   ownerEmail?: string | null;
+}
+
+export interface ChatQueueItem {
+  _id?: string;
+  id: string;
+  sessionId: string;
+  content: string;
+  agent?: string | null;
+  cwd?: string | null;
+  status: 'queued' | 'editing' | 'running' | 'sent' | 'failed' | 'cancelled';
+  error?: string;
+  createdAt: string;
+  updatedAt: string;
 }
 
 export const chat = {
@@ -680,6 +722,13 @@ export const chat = {
   sendMessageUrl: (id: string) => `${BASE}/chat/sessions/${id}/messages`,
   streamUrl: (id: string) => `${BASE}/chat/sessions/${id}/stream`,
   isStreaming: (id: string) => request<{ streaming: boolean }>(`/chat/sessions/${id}/streaming`),
+  getQueue: (id: string) => request<ChatQueueItem[]>(`/chat/sessions/${id}/queue`),
+  enqueueMessage: (id: string, body: { content: string; agent?: string | null; cwd?: string | null }) =>
+    request<ChatQueueItem>(`/chat/sessions/${id}/queue`, { method: 'POST', body: JSON.stringify(body) }),
+  updateQueuedMessage: (id: string, queueId: string, body: { content?: string; status?: 'queued' | 'editing' }) =>
+    request<ChatQueueItem>(`/chat/sessions/${id}/queue/${queueId}`, { method: 'PATCH', body: JSON.stringify(body) }),
+  deleteQueuedMessage: (id: string, queueId: string) =>
+    request<void>(`/chat/sessions/${id}/queue/${queueId}`, { method: 'DELETE' }),
   updateSession: (id: string, body: any) =>
     request<any>(`/chat/sessions/${id}`, { method: 'PATCH', body: JSON.stringify(body) }),
   generateTitle: (id: string) =>

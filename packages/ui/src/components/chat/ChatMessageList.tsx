@@ -11,7 +11,7 @@ import { AgentQuestionPrompt } from './AgentQuestionPrompt';
 import RoleIcon from '../common/RoleIcon';
 import MermaidChatBlock from './MermaidChatBlock';
 import { agents as agentsApi, artifacts as artifactsApi, type ArtifactDoc } from '../../services/api';
-import { chatCodeDiffs, workspaces as workspacesApi } from '../../services/workspaceService';
+import { chatCodeDiffs, pullRequests as pullRequestsApi, workspaces as workspacesApi } from '../../services/workspaceService';
 
 const AGENT_ICONS: Record<string, React.ElementType> = {
   bot: Bot, brain: Brain, sparkles: Sparkles, zap: Zap, cpu: Cpu, atom: Atom,
@@ -77,6 +77,16 @@ type ChatDiffFile = {
   workspaceName?: string | null;
   key?: string;
 };
+
+function diffLineCounts(diff?: string): { additions: number; deletions: number } {
+  if (!diff) return { additions: 0, deletions: 0 };
+  return diff.split('\n').reduce((acc, line) => {
+    if (line.startsWith('+++') || line.startsWith('---')) return acc;
+    if (line.startsWith('+')) acc.additions += 1;
+    else if (line.startsWith('-')) acc.deletions += 1;
+    return acc;
+  }, { additions: 0, deletions: 0 });
+}
 
 type ChatDiffBundle = {
   workspaceId: string;
@@ -1172,6 +1182,7 @@ function ChatCodeDiffPreview({
   const [loading, setLoading] = useState(false);
 
   const workspaceRefs: Array<{ id: string; name?: string | null }> = [];
+  const pullRequestRefs: Array<{ id: string; name?: string | null }> = [];
   const allTerminal = runs.length > 0 && runs.every(run => TERMINAL_RUN_STATUSES.has(run.runContext?.status ?? run.status));
   for (const run of runs) {
     const id = run.runContext?.workspace?.id;
@@ -1181,19 +1192,29 @@ function ChatCodeDiffPreview({
         name: run.runContext?.workspace?.name ?? run.runContext?.workspace?.repoName,
       });
     }
+    const prId = run.runContext?.pullRequest?.id;
+    if (typeof prId === 'string' && prId.length > 0) {
+      pullRequestRefs.push({
+        id: prId,
+        name: run.runContext?.pullRequest?.title ?? (run.runContext?.pullRequest?.number ? `PR #${run.runContext.pullRequest.number}` : 'pull request'),
+      });
+    }
   }
   const workspaceSignature = [...new Set(workspaceRefs.map(ref => ref.id))].join('|');
+  const pullRequestSignature = [...new Set(pullRequestRefs.map(ref => ref.id))].join('|');
+  const sourceSignature = [workspaceSignature, pullRequestSignature].filter(Boolean).join('::');
   const runSignature = runs
     .map(run => `${run.executionId}:${run.status}:${run.runContext?.status ?? ''}:${run.runContext?.progress?.percent ?? ''}`)
     .join('|');
 
   useEffect(() => {
-    if (!workspaceSignature) {
+    if (!sourceSignature) {
       setBundles([]);
       return;
     }
     let cancelled = false;
     const uniqueRefs = workspaceRefs.filter((ref, index, arr) => arr.findIndex(item => item.id === ref.id) === index);
+    const uniquePrRefs = pullRequestRefs.filter((ref, index, arr) => arr.findIndex(item => item.id === ref.id) === index);
     const snapshotBundles = (snapshots: ChatDiffSnapshot[]): ChatDiffBundle[] => snapshots
       .map(snapshot => ({
         workspaceId: snapshot.workspaceId,
@@ -1235,7 +1256,29 @@ function ChatCodeDiffPreview({
         } catch {}
       }
 
-      return populatedLive;
+      if (populatedLive.length > 0) return populatedLive;
+
+      const prBundles = await Promise.all(uniquePrRefs.map(async (ref) => {
+        try {
+          const result = await pullRequestsApi.getDiff(ref.id);
+          const files = ((result.files ?? []) as Array<{ path: string; diff?: string; originalContent?: string; modifiedContent?: string }>)
+            .filter(file => file.diff?.trim() || file.modifiedContent?.trim())
+            .map(file => {
+              const counts = diffLineCounts(file.diff);
+              return {
+                ...file,
+                status: file.diff?.includes('new file mode') ? 'added' : file.diff?.includes('deleted file mode') ? 'deleted' : 'modified',
+                additions: counts.additions,
+                deletions: counts.deletions,
+              } as ChatDiffFile;
+            });
+          return { workspaceId: `pr:${ref.id}`, workspaceName: ref.name, files };
+        } catch {
+          return { workspaceId: `pr:${ref.id}`, workspaceName: ref.name, files: [] };
+        }
+      }));
+
+      return prBundles.filter(bundle => bundle.files.length > 0);
     })().then(next => {
       if (cancelled) return;
       setBundles(next);
@@ -1244,9 +1287,9 @@ function ChatCodeDiffPreview({
       if (!cancelled) setLoading(false);
     });
     return () => { cancelled = true; };
-  }, [workspaceSignature, runSignature, sessionId, messageId, allTerminal, onReady]);
+  }, [sourceSignature, runSignature, sessionId, messageId, allTerminal, onReady]);
 
-  if (!workspaceSignature) return null;
+  if (!sourceSignature) return null;
   const totalFiles = bundles.reduce((sum, bundle) => sum + bundle.files.length, 0);
   const visibleFiles = bundles.flatMap(bundle => bundle.files.map((file, index) => ({
     ...file,
@@ -2306,8 +2349,6 @@ export default function ChatMessageList({ messages, streamText, thinkingText, st
           })}
         </div>
       )}
-
-      <ChatPullRequestCards runs={spawnedAgents} />
 
       {/* Agent threads — only render orphans not already shown inline with tool calls */}
       {agentThreads.length > 0 && !streaming && (() => {

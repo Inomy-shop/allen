@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState, type MouseEvent as ReactMouseEvent, type ReactNode } from 'react';
 import { Link } from 'react-router-dom';
+import Editor from '@monaco-editor/react';
 import {
   Activity,
   AlertTriangle,
@@ -15,24 +16,35 @@ import {
   FolderGit2,
   GitBranch,
   Loader2,
+  ListTree,
   Maximize2,
   Minimize2,
   PanelRightClose,
   PlayCircle,
+  Route,
   Rows3,
   StopCircle,
   Timer,
+  Code2,
   X,
 } from 'lucide-react';
 import type { SpawnedAgent } from '../../hooks/useChat';
-import { artifacts as artifactsApi, type ArtifactDoc, type RunStatus } from '../../services/api';
-import { workspaces as workspacesApi } from '../../services/workspaceService';
+import { artifacts as artifactsApi, repos as reposApi, type ArtifactDoc, type RunStatus } from '../../services/api';
+import { chatCodeDiffs, pullRequests as pullRequestsApi, workspaces as workspacesApi } from '../../services/workspaceService';
+import { getMonacoTheme, setupMonaco } from '../../lib/monaco-theme';
 import ArtifactViewer from '../artifacts/ArtifactViewer';
+import { renderMarkdown } from './ChatMessageList';
 
 const FAILED_STATUSES = new Set(['failed', 'failure', 'error', 'errored']);
 const CANCELLED_STATUSES = new Set(['cancelled', 'canceled']);
 
 export type ChatRunPanelTab = 'tasks' | 'artifacts' | 'executions' | 'files';
+
+type RepoBrowseSource = {
+  id?: string | null;
+  name?: string | null;
+  path?: string | null;
+};
 
 function humanLabel(value?: string | null): string {
   if (!value) return '';
@@ -132,6 +144,40 @@ function runKindLabel(context: RunStatus | null, fallback?: SpawnedAgent | null)
   if (context?.childAgents.length) return 'Lead Agent Run';
   if (fallback?.kind === 'lead') return 'Lead Agent Run';
   return 'Agent Run';
+}
+
+function safeRunName(value?: string | null): string | null {
+  const text = value?.replace(/\s+/g, ' ').trim();
+  if (!text) return null;
+  if (text.length > 72) return null;
+  if (/^(you are|your task|task:|fix the|please|implement the)\b/i.test(text)) return null;
+  if (/[{}]/.test(text)) return null;
+  return text;
+}
+
+function runDisplayName(context: RunStatus | null, fallback?: SpawnedAgent | null): string {
+  const safeTitle = safeRunName(context?.title);
+  const safeAgent = safeRunName(fallback?.agent);
+  const safeWorkflow = safeRunName(context?.execution.workflowName);
+  const safeProgress = safeRunName(context?.progress.label);
+  if (context?.runType === 'workflow') {
+    return safeWorkflow || safeProgress || safeTitle || safeAgent || 'workflow';
+  }
+  if (context?.runType === 'agent') {
+    return safeAgent || safeWorkflow || safeProgress || safeTitle || 'agent execution';
+  }
+  if (context?.childAgents.length || fallback?.kind === 'lead') {
+    return safeAgent || safeTitle || 'lead agent';
+  }
+  return safeAgent || safeProgress || safeTitle || 'execution';
+}
+
+function runTypeName(context: RunStatus | null, fallback?: SpawnedAgent | null): string {
+  const name = runDisplayName(context, fallback);
+  if (context?.runType === 'workflow') return `Workflow · ${name}`;
+  if (context?.runType === 'agent') return `Agent · ${name}`;
+  if (context?.childAgents.length || fallback?.kind === 'lead') return `Lead agent · ${name}`;
+  return `Execution · ${name}`;
 }
 
 function expectedOutcome(context: RunStatus | null): string {
@@ -255,11 +301,23 @@ function StepDot({ state }: { state: 'ok' | 'run' | 'wait-you' | 'fail' | 'wait'
 
 function nodeStepState(status?: string | null): 'ok' | 'run' | 'wait-you' | 'fail' | 'wait' {
   const normalized = (status ?? '').toLowerCase();
-  if (normalized === 'completed' || normalized === 'skipped') return 'ok';
+  if (normalized === 'completed') return 'ok';
   if (normalized === 'running') return 'run';
   if (normalized === 'waiting_for_input' || normalized === 'waiting') return 'wait-you';
   if (FAILED_STATUSES.has(normalized) || CANCELLED_STATUSES.has(normalized)) return 'fail';
   return 'wait';
+}
+
+function nodeDisplayMeta(step: NonNullable<RunStatus['workflowSteps']>[number]): string {
+  const normalized = (step.status ?? '').toLowerCase();
+  const didNotRun = normalized === 'pending' || normalized === 'skipped' || normalized === 'not_started';
+  const actor = step.agent || humanLabel(step.type ?? 'node');
+  if (didNotRun) return `${actor} · cancelled`;
+  return [
+    actor,
+    formatDuration(step.durationMs),
+    formatCost(step.cost),
+  ].filter(Boolean).join(' · ');
 }
 
 function RailSection({ title, count, children }: { title: string; count?: string; children: ReactNode }) {
@@ -274,19 +332,34 @@ function RailSection({ title, count, children }: { title: string; count?: string
   );
 }
 
-function WorkflowNodeStep({ step, isLast }: { step: NonNullable<RunStatus['workflowSteps']>[number]; isLast: boolean }) {
+function WorkflowNodeStep({
+  step,
+  isLast,
+  onOpenDetails,
+}: {
+  step: NonNullable<RunStatus['workflowSteps']>[number];
+  isLast: boolean;
+  onOpenDetails?: (nodeId: string) => void;
+}) {
   const state = nodeStepState(step.status);
+  const canOpenDetails = Boolean(onOpenDetails) && (step.status ?? '').toLowerCase() === 'completed';
   const attempts = Math.max(0, step.attempts ?? 0);
-  const meta = [
-    step.agent || humanLabel(step.type ?? 'node'),
-    formatDuration(step.durationMs),
-    formatCost(step.cost),
-  ].filter(Boolean).join(' · ');
+  const meta = nodeDisplayMeta(step);
   const sub = [
     attempts > 1 ? `${attempts} attempts` : null,
     step.model ? String(step.model).replace(/^claude-/, '') : null,
     step.error ? 'error' : null,
   ].filter(Boolean).join(' · ');
+  const content = (
+    <>
+      <span className="step-copy">
+        <span className="step-name">{humanLabel(step.name)}</span>
+        <span className="step-meta">{meta}</span>
+      </span>
+      {sub && <span className="step-sub">{sub}</span>}
+      {canOpenDetails && <ChevronRight className="step-open-chevron h-3.5 w-3.5" />}
+    </>
+  );
 
   return (
     <div className={`step ${state}`}>
@@ -297,11 +370,18 @@ function WorkflowNodeStep({ step, isLast }: { step: NonNullable<RunStatus['workf
         {state === 'wait-you' && '?'}
         {state === 'fail' && '✕'}
       </div>
-      <div className="step-body">
-        <div className="step-name">{humanLabel(step.name)}</div>
-        <div className="step-meta">{meta}</div>
-        {sub && <div className="step-sub">{sub}</div>}
-      </div>
+      {canOpenDetails ? (
+        <button
+          type="button"
+          className="step-body clickable"
+          onClick={() => onOpenDetails?.(step.id)}
+          title="Open node input and output"
+        >
+          {content}
+        </button>
+      ) : (
+        <div className="step-body">{content}</div>
+      )}
     </div>
   );
 }
@@ -316,58 +396,85 @@ function workflowAttemptFailureLabel(run: SpawnedAgent): string {
   return 'Failed';
 }
 
-function AttemptRow({ run, index }: { run: SpawnedAgent; index: number }) {
+function AttemptRow({
+  run,
+  index,
+  onOpenNode,
+  onOpenExecution,
+}: {
+  run: SpawnedAgent;
+  index: number;
+  onOpenNode: (executionId: string, nodeId: string) => void;
+  onOpenExecution: (executionId: string) => void;
+}) {
+  const [expanded, setExpanded] = useState(false);
   const context = run.runContext ?? null;
   const state = runState(context, run);
   const status = context?.status ?? run.status;
   const cost = formatCost(context?.execution.cost);
   const percent = Math.max(0, Math.min(100, context?.progress.percent ?? (state === 'ok' ? 100 : 0)));
-  const kind = runKindLabel(context, run).replace(' Run', '');
+  const kind = runDisplayName(context, run);
   const workflowSteps = context?.runType === 'workflow' ? context.workflowSteps ?? [] : [];
+  const isWorkflow = context?.runType === 'workflow';
   const summary =
-    state === 'fail' ? workflowAttemptFailureLabel(run)
-      : state === 'ok' ? 'Passed'
-        : context?.progress.currentStep ? `Running ${humanLabel(context.progress.currentStep)}`
-          : humanLabel(context?.progress.phase ?? status);
+    !isWorkflow ? humanLabel(status)
+      : state === 'fail' ? workflowAttemptFailureLabel(run)
+        : state === 'ok' ? 'Passed'
+          : context?.progress.currentStep ? `Running ${humanLabel(context.progress.currentStep)}`
+            : humanLabel(context?.progress.phase ?? status);
+  const executionKind = isWorkflow ? 'Workflow' : context?.runType === 'agent' ? 'Agent' : 'Execution';
   return (
-    <div className={`step ${state}`}>
-      <div className="step-dot">
-        {state === 'ok' && '✓'}
-        {state === 'run' && <span className="spin">●</span>}
-        {state === 'wait' && '○'}
-        {state === 'wait-you' && '?'}
-        {state === 'fail' && '✕'}
-      </div>
-      <div className="step-body">
-        <div className="step-name-row">
-          <div className="step-name">Attempt {index + 1}</div>
-          <Link to={`/executions/${run.executionId}`} className="step-link-icon" title="Open execution">
-            <ExternalLink className="h-3.5 w-3.5" />
-          </Link>
-        </div>
-        <div className="step-meta">{kind} · {summary} · {cost}</div>
-        <div className="attempt-bar" aria-label={`Attempt ${index + 1} progress ${percent}%`}>
+    <div className={`step attempt-step ${state}`}>
+      <button
+        type="button"
+        className="attempt-row"
+        onClick={() => {
+          if (isWorkflow) setExpanded(value => !value);
+          else onOpenExecution(run.executionId);
+        }}
+      >
+        <span className="attempt-row-status">
+          <span className="step-dot">
+            {state === 'ok' && '✓'}
+            {state === 'run' && <span className="spin">●</span>}
+            {state === 'wait' && '○'}
+            {state === 'wait-you' && '?'}
+            {state === 'fail' && '✕'}
+          </span>
+        </span>
+        <span className="attempt-row-main">
+          <span className="step-name">Execution {index + 1}: {kind}</span>
+          <span className="step-meta">{executionKind} · {summary} · {cost}</span>
+        </span>
+        <span className="attempt-row-progress" aria-label={`Execution ${index + 1} progress ${percent}%`}>
           <span style={{ width: `${percent}%` }} />
-        </div>
-        {workflowSteps.length > 0 && (
-          <div className="attempt-workflow-steps">
-            {workflowSteps.map((step, stepIndex) => (
+        </span>
+        {isWorkflow && expanded ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronRight className="h-3.5 w-3.5" />}
+      </button>
+      <div className="attempt-row-actions">
+        <Link to={`/executions/${run.executionId}`} className="step-link-icon" title="Open execution">
+          <ExternalLink className="h-3.5 w-3.5" />
+        </Link>
+      </div>
+      {expanded && workflowSteps.length > 0 && (
+        <div className="attempt-workflow-steps">
+          {workflowSteps.map((step, stepIndex) => (
               <WorkflowNodeStep
                 key={step.id}
                 step={step}
                 isLast={stepIndex === workflowSteps.length - 1}
+                onOpenDetails={(nodeId) => onOpenNode(run.executionId, nodeId)}
               />
-            ))}
-          </div>
-        )}
-      </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
 
 function ReferenceLinks({ run, context }: { run: SpawnedAgent; context: RunStatus | null }) {
   const pr = context?.pullRequest;
-  const hasReferences = Boolean(context?.linear || context?.workspace || pr?.number || run.executionId);
+  const hasReferences = Boolean(context?.linear || context?.workspace);
   if (!hasReferences) return null;
 
   return (
@@ -382,16 +489,6 @@ function ReferenceLinks({ run, context }: { run: SpawnedAgent; context: RunStatu
           {context.linear.url && <ExternalLink className="h-3.5 w-3.5 text-theme-subtle" />}
         </a>
       )}
-      {pr?.number && (
-        <a href={pr.url ?? '#'} target={pr.url ? '_blank' : undefined} rel="noreferrer" className="cr-ref">
-          <span className="cr-ref-ic gh">⌥</span>
-          <span className="cr-ref-body">
-            <span className="cr-ref-id">#{pr.number} <span className={`cr-ref-tag ${pr.status === 'draft' ? 'draft' : pr.status === 'open' ? 'open' : ''}`}>{pr.status ?? 'open'}</span></span>
-            <span className="cr-ref-sub">{pr.branch ?? 'pull request'} · {timeAgo(pr.mergedAt ?? pr.updatedAt ?? pr.createdAt)}</span>
-          </span>
-          {pr.url && <ExternalLink className="h-3.5 w-3.5 text-theme-subtle" />}
-        </a>
-      )}
       {context?.workspace && (
         <Link to={context.workspace.id ? `/workspaces/${context.workspace.id}` : `/executions/${run.executionId}`} className="cr-ref">
           <span className="cr-ref-ic repo">⎇</span>
@@ -402,15 +499,31 @@ function ReferenceLinks({ run, context }: { run: SpawnedAgent; context: RunStatu
           <ExternalLink className="h-3.5 w-3.5 text-theme-subtle" />
         </Link>
       )}
-      <Link to={`/executions/${run.executionId}`} className="cr-ref" title={`Open ${runExecutionLabel(context).toLowerCase()}`}>
-        <span className="cr-ref-ic repo">⎇</span>
-        <span className="cr-ref-body">
-          <span className="cr-ref-id">{run.executionId.slice(0, 8)}</span>
-          <span className="cr-ref-sub">{runExecutionLabel(context)} · {humanLabel(context?.status ?? run.status)}</span>
-        </span>
-        <ExternalLink className="h-3.5 w-3.5 text-theme-subtle" />
-      </Link>
     </>
+  );
+}
+
+function PullRequestTaskCard({ pr }: { pr: NonNullable<RunStatus['pullRequest']> }) {
+  const age = timeAgo(pr.mergedAt ?? pr.updatedAt ?? pr.createdAt);
+  return (
+    <div className="cr-pr-task-card">
+      <div className="cr-pr-task-main">
+        <span className="cr-pr-task-tag">Pull request</span>
+        <span className="cr-pr-task-title">PR {pr.number ? `#${pr.number}` : ''} {humanLabel(pr.status ?? 'open')}</span>
+        <span className="cr-pr-task-age">{age}</span>
+        {pr.branch && <code className="cr-pr-task-branch">{pr.branch}</code>}
+        <div className="cr-pr-task-actions">
+          {pr.url && (
+            <a href={pr.url} target="_blank" rel="noreferrer" title="Review on GitHub" aria-label="Review on GitHub">
+              <ExternalLink className="h-3.5 w-3.5" />
+            </a>
+          )}
+          <Link to="/pull-requests" title="Open pull requests" aria-label="Open pull requests">
+            <GitBranch className="h-3.5 w-3.5" />
+          </Link>
+        </div>
+      </div>
+    </div>
   );
 }
 
@@ -607,6 +720,31 @@ function changedFileStatus(file: PanelDiffFile): FileTreeStatus {
   return normalizeFileStatus(file.status) ?? (file.diff?.includes('new file mode') ? 'added' : 'modified');
 }
 
+function diffLineCounts(diff?: string): { additions: number; deletions: number } {
+  if (!diff) return { additions: 0, deletions: 0 };
+  return diff.split('\n').reduce((acc, line) => {
+    if (line.startsWith('+++') || line.startsWith('---')) return acc;
+    if (line.startsWith('+')) acc.additions += 1;
+    else if (line.startsWith('-')) acc.deletions += 1;
+    return acc;
+  }, { additions: 0, deletions: 0 });
+}
+
+function getLanguage(filePath: string): string {
+  const ext = filePath.split('.').pop()?.toLowerCase() ?? '';
+  const map: Record<string, string> = {
+    ts: 'typescript', tsx: 'typescript', js: 'javascript', jsx: 'javascript',
+    mjs: 'javascript', cjs: 'javascript', json: 'json', md: 'markdown', mdx: 'markdown',
+    css: 'css', scss: 'scss', less: 'less', html: 'html', xml: 'xml',
+    yml: 'yaml', yaml: 'yaml', toml: 'ini', py: 'python', rb: 'ruby',
+    go: 'go', rs: 'rust', java: 'java', kt: 'kotlin', swift: 'swift',
+    c: 'c', cpp: 'cpp', h: 'c', sh: 'shell', bash: 'shell', zsh: 'shell',
+    sql: 'sql', graphql: 'graphql', tf: 'hcl', env: 'ini', txt: 'plaintext',
+    log: 'plaintext', prisma: 'graphql', dockerfile: 'dockerfile',
+  };
+  return map[ext] ?? 'plaintext';
+}
+
 function buildFileTree(files: WorkspaceFileEntry[], changedStatuses: ReadonlyMap<string, FileTreeStatus>): FileTreeNode[] {
   const root: FileTreeNode = { name: '', path: '', isDir: true, children: [] };
   const byPath = new Map<string, FileTreeNode>([['', root]]);
@@ -642,17 +780,20 @@ function buildFileTree(files: WorkspaceFileEntry[], changedStatuses: ReadonlyMap
 }
 
 type DiffRow = {
-  kind: 'context' | 'add' | 'del' | 'hunk';
+  kind: 'context' | 'add' | 'del' | 'hunk' | 'hidden';
   oldLine?: number;
   newLine?: number;
   oldText?: string;
   newText?: string;
   text?: string;
+  hiddenKey?: string;
+  hiddenCount?: number;
 };
 
 type SplitCellKind = 'context' | 'add' | 'del' | 'empty';
 type SplitDisplayRow =
-  | { kind: 'hunk'; text: string }
+  | { kind: 'hunk'; text: string; hiddenKey?: string; hiddenCount?: number }
+  | { kind: 'hidden'; hiddenKey?: string; hiddenCount?: number; oldLine?: number; newLine?: number }
   | {
       kind: 'row';
       oldLine?: number;
@@ -663,10 +804,11 @@ type SplitDisplayRow =
       newKind: SplitCellKind;
     };
 
-function parseDiffRows(file: PanelDiffFile): DiffRow[] {
+function parseDiffRows(file: PanelDiffFile, expandedHidden = new Set<string>()): DiffRow[] {
+  const oldLines = (file.originalContent ?? '').split('\n');
+  const newLines = (file.modifiedContent ?? '').split('\n');
+
   if (!file.diff?.trim()) {
-    const oldLines = (file.originalContent ?? '').split('\n');
-    const newLines = (file.modifiedContent ?? '').split('\n');
     if (file.originalContent && file.modifiedContent) {
       return [
         ...oldLines.map((line, index) => ({ kind: 'del' as const, oldLine: index + 1, oldText: line })),
@@ -679,13 +821,57 @@ function parseDiffRows(file: PanelDiffFile): DiffRow[] {
   const rows: DiffRow[] = [];
   let oldLine = 0;
   let newLine = 0;
+  let sawHunk = false;
+
+  const addContextRange = (oldStart: number, newStart: number, count: number) => {
+    for (let i = 0; i < count; i += 1) {
+      const oldNo = oldStart + i;
+      const newNo = newStart + i;
+      const text = newLines[newNo - 1] ?? oldLines[oldNo - 1] ?? '';
+      rows.push({ kind: 'context', oldLine: oldNo, newLine: newNo, oldText: text, newText: text });
+    }
+  };
+
+  const addHiddenRange = (oldStart: number, newStart: number, count: number, key: string) => {
+    if (count <= 0) return;
+    if (expandedHidden.has(key)) {
+      addContextRange(oldStart, newStart, count);
+    } else {
+      rows.push({ kind: 'hidden', oldLine: oldStart, newLine: newStart, hiddenCount: count, hiddenKey: key });
+    }
+  };
+
   for (const raw of file.diff.split('\n')) {
     if (raw.startsWith('+++') || raw.startsWith('---') || raw.startsWith('diff --git') || raw.startsWith('index ')) continue;
     const hunk = raw.match(/^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@(.*)$/);
     if (hunk) {
+      const nextOldLine = Number(hunk[1]);
+      const nextNewLine = Number(hunk[2]);
+      let hiddenKey: string | undefined;
+      let hiddenCount = 0;
+      if (!sawHunk) {
+        const initialHidden = Math.min(Math.max(nextOldLine - 1, 0), Math.max(nextNewLine - 1, 0));
+        const key = `head:${nextOldLine}:${nextNewLine}`;
+        if (expandedHidden.has(key)) {
+          addContextRange(1, 1, initialHidden);
+        } else if (initialHidden > 0) {
+          hiddenKey = key;
+          hiddenCount = initialHidden;
+        }
+        sawHunk = true;
+      } else {
+        const hidden = Math.min(Math.max(nextOldLine - oldLine, 0), Math.max(nextNewLine - newLine, 0));
+        const key = `gap:${oldLine}:${newLine}:${nextOldLine}:${nextNewLine}`;
+        if (expandedHidden.has(key)) {
+          addContextRange(oldLine, newLine, hidden);
+        } else if (hidden > 0) {
+          hiddenKey = key;
+          hiddenCount = hidden;
+        }
+      }
       oldLine = Number(hunk[1]);
       newLine = Number(hunk[2]);
-      rows.push({ kind: 'hunk', text: raw });
+      rows.push({ kind: 'hunk', text: raw, hiddenKey, hiddenCount });
       continue;
     }
     if (raw.startsWith('+')) {
@@ -703,6 +889,10 @@ function parseDiffRows(file: PanelDiffFile): DiffRow[] {
     oldLine += 1;
     newLine += 1;
   }
+  if (sawHunk) {
+    const remaining = Math.min(Math.max(oldLines.length - oldLine + 1, 0), Math.max(newLines.length - newLine + 1, 0));
+    addHiddenRange(oldLine, newLine, remaining, `tail:${oldLine}:${newLine}`);
+  }
   return rows;
 }
 
@@ -711,7 +901,18 @@ function buildSplitRows(rows: DiffRow[]): SplitDisplayRow[] {
   for (let i = 0; i < rows.length;) {
     const row = rows[i];
     if (row.kind === 'hunk') {
-      out.push({ kind: 'hunk', text: row.text ?? '' });
+      out.push({ kind: 'hunk', text: row.text ?? '', hiddenKey: row.hiddenKey, hiddenCount: row.hiddenCount });
+      i += 1;
+      continue;
+    }
+    if (row.kind === 'hidden') {
+      out.push({
+        kind: 'hidden',
+        hiddenKey: row.hiddenKey,
+        hiddenCount: row.hiddenCount,
+        oldLine: row.oldLine,
+        newLine: row.newLine,
+      });
       i += 1;
       continue;
     }
@@ -755,29 +956,108 @@ function buildSplitRows(rows: DiffRow[]): SplitDisplayRow[] {
 }
 
 function UnifiedDiffView({ file }: { file: PanelDiffFile }) {
-  const rows = parseDiffRows(file);
+  const [expandedHidden, setExpandedHidden] = useState<Set<string>>(() => new Set());
+  const rows = parseDiffRows(file, expandedHidden);
+  const toggleHidden = (key?: string) => {
+    if (!key) return;
+    setExpandedHidden(prev => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  };
   return (
     <div className="cr-diff-code unified">
-      {rows.map((row, index) => (
-        <div key={index} className={`cr-diff-row ${row.kind}`}>
-          <span className="ln">{row.oldLine ?? row.newLine ?? ''}</span>
-          <code>{row.kind === 'add' ? '+' : row.kind === 'del' ? '-' : row.kind === 'hunk' ? '' : ' '}{row.text ?? row.newText ?? row.oldText ?? ''}</code>
-        </div>
-      ))}
+      {rows.map((row, index) => {
+        if (row.kind === 'hidden') {
+          return (
+            <button
+              key={row.hiddenKey ?? index}
+              type="button"
+              className="cr-diff-row hidden"
+              onClick={() => toggleHidden(row.hiddenKey)}
+              title="Expand unchanged lines"
+            >
+              <span className="ln">⋯</span>
+              <code>{row.hiddenCount ?? 0} unchanged lines</code>
+            </button>
+          );
+        }
+        if (row.kind === 'hunk' && row.hiddenKey && row.hiddenCount) {
+          return (
+            <button
+              key={`${row.hiddenKey}:${index}`}
+              type="button"
+              className="cr-diff-row hunk expandable"
+              onClick={() => toggleHidden(row.hiddenKey)}
+              title="Expand hidden context"
+            >
+              <span className="ln">↕</span>
+              <code>{row.hiddenCount} hidden lines | {row.text ?? ''}</code>
+            </button>
+          );
+        }
+        return (
+          <div key={index} className={`cr-diff-row ${row.kind}`}>
+            <span className="ln">{row.oldLine ?? row.newLine ?? ''}</span>
+            <code>{row.kind === 'add' ? '+' : row.kind === 'del' ? '-' : row.kind === 'hunk' ? '' : ' '}{row.text ?? row.newText ?? row.oldText ?? ''}</code>
+          </div>
+        );
+      })}
     </div>
   );
 }
 
 function SplitDiffView({ file }: { file: PanelDiffFile }) {
-  const rows = buildSplitRows(parseDiffRows(file));
+  const [expandedHidden, setExpandedHidden] = useState<Set<string>>(() => new Set());
+  const rows = buildSplitRows(parseDiffRows(file, expandedHidden));
+  const toggleHidden = (key?: string) => {
+    if (!key) return;
+    setExpandedHidden(prev => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  };
   return (
     <div className="cr-diff-code split">
       {rows.map((row, index) => {
         if (row.kind === 'hunk') {
+          if (row.hiddenKey && row.hiddenCount) {
+            return (
+              <button
+                key={`${row.hiddenKey}:${index}`}
+                type="button"
+                className="cr-split-row hunk expandable"
+                onClick={() => toggleHidden(row.hiddenKey)}
+                title="Expand hidden context"
+              >
+                <span className="cr-split-hunk">{row.hiddenCount} hidden lines | {row.text}</span>
+              </button>
+            );
+          }
           return (
             <div key={index} className="cr-split-row hunk">
               <span className="cr-split-hunk">{row.text}</span>
             </div>
+          );
+        }
+        if (row.kind === 'hidden') {
+          return (
+            <button
+              key={row.hiddenKey ?? index}
+              type="button"
+              className="cr-split-row hidden"
+              onClick={() => toggleHidden(row.hiddenKey)}
+              title="Expand unchanged lines"
+            >
+              <span className="ln old">{row.oldLine ?? ''}</span>
+              <code>{row.hiddenCount ?? 0} unchanged lines</code>
+              <span className="ln new">{row.newLine ?? ''}</span>
+              <code>{row.hiddenCount ?? 0} unchanged lines</code>
+            </button>
           );
         }
         return (
@@ -802,25 +1082,40 @@ function PanelTabs({
   onTabChange: (tab: ChatRunPanelTab) => void;
   counts: Partial<Record<ChatRunPanelTab, number>>;
 }) {
-  const tabs: Array<{ id: ChatRunPanelTab; label: string }> = [
-    { id: 'tasks', label: 'Tasks' },
-    { id: 'executions', label: 'Executions' },
-    { id: 'artifacts', label: 'Artifacts' },
-    { id: 'files', label: 'Files' },
+  const tabs: Array<{ id: ChatRunPanelTab; label: string; icon: React.ElementType }> = [
+    { id: 'tasks', label: 'Tasks', icon: ListTree },
+    { id: 'executions', label: 'Executions', icon: Route },
+    { id: 'artifacts', label: 'Artifacts', icon: FileText },
+    { id: 'files', label: 'Files', icon: Code2 },
   ];
   return (
-    <div className="cr-tabs" role="tablist" aria-label="Chat resources">
-      {tabs.map(tab => (
-        <button
-          key={tab.id}
-          type="button"
-          className={activeTab === tab.id ? 'active' : ''}
-          onClick={() => onTabChange(tab.id)}
-        >
-          <span>{tab.label}</span>
-          {counts[tab.id] != null && counts[tab.id]! > 0 && <span className="cr-ct">{counts[tab.id]}</span>}
-        </button>
-      ))}
+    <div className="inline-flex min-w-0 flex-1 items-center gap-1 overflow-x-auto" role="tablist" aria-label="Chat resources">
+      {tabs.map(tab => {
+        const Icon = tab.icon;
+        const isActive = activeTab === tab.id;
+        return (
+          <button
+            key={tab.id}
+            type="button"
+            className={`inline-flex min-w-max items-center justify-center gap-1.5 rounded-lg px-2 py-1.5 text-[13px] leading-none transition-colors ${
+              isActive
+                ? 'border border-app-strong bg-app-card text-theme-primary shadow-sm'
+                : 'border border-transparent text-theme-secondary hover:bg-app-muted hover:text-theme-primary'
+            }`}
+            onClick={() => onTabChange(tab.id)}
+          >
+            <span className={`grid h-5 w-5 place-items-center rounded-md border transition-colors ${
+              isActive
+                ? 'border-app-strong bg-app-muted text-theme-primary'
+                : 'border-app bg-app-muted text-theme-muted'
+            }`}>
+              <Icon className="h-3.5 w-3.5" />
+            </span>
+            <span>{tab.label}</span>
+            {counts[tab.id] != null && counts[tab.id]! > 0 && <span className="font-mono text-[11px] opacity-70">{counts[tab.id]}</span>}
+          </button>
+        );
+      })}
     </div>
   );
 }
@@ -955,13 +1250,111 @@ function ChatArtifactsPanel({
   );
 }
 
-function CodeBlockPanel({ title, text }: { title: string; text?: string | null }) {
-  const content = text?.trim();
+function tryParseJson(text: string): unknown | null {
+  const trimmed = text.trim();
+  if (!trimmed || (!trimmed.startsWith('{') && !trimmed.startsWith('['))) return null;
+  try {
+    return JSON.parse(trimmed);
+  } catch {
+    return null;
+  }
+}
+
+function JsonScalar({ value }: { value: unknown }) {
+  if (value === null) return <span className="cr-json-null">null</span>;
+  if (typeof value === 'boolean') return <span className="cr-json-bool">{String(value)}</span>;
+  if (typeof value === 'number') return <span className="cr-json-number">{value}</span>;
+  if (typeof value === 'string') {
+    const isLong = value.length > 140 || value.includes('\n');
+    if (isLong) {
+      return <div className="cr-json-markdown prose-allen">{renderMarkdown(value) as React.ReactNode}</div>;
+    }
+    return <span className="cr-json-string">{value}</span>;
+  }
+  return <span className="cr-json-string">{String(value)}</span>;
+}
+
+function JsonValueView({ value, depth = 0 }: { value: unknown; depth?: number }) {
+  if (Array.isArray(value)) {
+    if (value.length === 0) return <span className="cr-json-empty">[]</span>;
+    const complex = value.some(item => item && typeof item === 'object');
+    return (
+      <div className={`cr-json-array ${complex ? 'complex' : ''}`}>
+        {value.map((item, index) => (
+          <div key={index} className="cr-json-array-item">
+            <span className="cr-json-index">{index}</span>
+            <JsonValueView value={item} depth={depth + 1} />
+          </div>
+        ))}
+      </div>
+    );
+  }
+  if (value && typeof value === 'object') {
+    const entries = Object.entries(value as Record<string, unknown>);
+    if (entries.length === 0) return <span className="cr-json-empty">{'{}'}</span>;
+    return (
+      <div className={`cr-json-object depth-${Math.min(depth, 3)}`}>
+        {entries.map(([key, item]) => {
+          const complex = item !== null && typeof item === 'object';
+          return (
+            <div key={key} className={`cr-json-row ${complex ? 'complex' : ''}`}>
+              <div className="cr-json-key">{key}</div>
+              <div className="cr-json-value">
+                <JsonValueView value={item} depth={depth + 1} />
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    );
+  }
+  return <JsonScalar value={value} />;
+}
+
+function IoContent({ content }: { content: string }) {
+  const parsed = tryParseJson(content);
+  if (parsed !== null) {
+    return (
+      <div className="cr-json-view">
+        <JsonValueView value={parsed} />
+      </div>
+    );
+  }
+  return <div className="cr-io-markdown prose-allen">{renderMarkdown(content) as React.ReactNode}</div>;
+}
+
+function IOTabs({ input, output }: { input?: string | null; output?: string | null }) {
+  const inputContent = input?.trim() ?? '';
+  const outputContent = output?.trim() ?? '';
+  const [activeTab, setActiveTab] = useState<'input' | 'output'>(inputContent ? 'input' : 'output');
+  const activeContent = activeTab === 'input' ? inputContent : outputContent;
+  const label = activeTab === 'input' ? 'input' : 'output';
   return (
-    <details className="cr-io-block" open={Boolean(content)}>
-      <summary>{title}</summary>
-      {content ? <pre>{content}</pre> : <div className="cr-empty small">No {title.toLowerCase()} captured for this execution.</div>}
-    </details>
+    <div className="cr-io-tabs">
+      <div className="cr-io-tabbar" role="tablist" aria-label="Execution input and output">
+        <button
+          type="button"
+          className={`cr-io-tab ${activeTab === 'input' ? 'active' : ''}`}
+          onClick={() => setActiveTab('input')}
+          role="tab"
+          aria-selected={activeTab === 'input'}
+        >
+          Input
+        </button>
+        <button
+          type="button"
+          className={`cr-io-tab ${activeTab === 'output' ? 'active' : ''}`}
+          onClick={() => setActiveTab('output')}
+          role="tab"
+          aria-selected={activeTab === 'output'}
+        >
+          Output
+        </button>
+      </div>
+      <div className="cr-io-pane" role="tabpanel">
+        {activeContent ? <IoContent content={activeContent} /> : <div className="cr-empty small">No {label} captured for this execution.</div>}
+      </div>
+    </div>
   );
 }
 
@@ -971,8 +1364,33 @@ function ExecutionIO({ run }: { run: SpawnedAgent }) {
   const output = context?.io?.output ?? run.response;
   return (
     <div className="cr-exec-io">
-      <CodeBlockPanel title="Input" text={input} />
-      <CodeBlockPanel title="Output" text={output} />
+      <IOTabs input={input} output={output} />
+    </div>
+  );
+}
+
+function WorkflowNodeIOList({ context, selectedNodeId }: { context: RunStatus | null; selectedNodeId?: string | null }) {
+  const steps = (context?.workflowSteps ?? []).filter(step => step.status !== 'pending' || step.io?.input || step.io?.output);
+  if (context?.runType !== 'workflow' || steps.length === 0) return null;
+  return (
+    <div className="cr-workflow-node-ios">
+      <div className="cr-inline-label">Node details</div>
+      {steps.map((step) => {
+        const selected = selectedNodeId === step.id;
+        return (
+          <details key={`${step.id}:${selectedNodeId ?? ''}`} className="cr-node-io" open={selected || undefined}>
+            <summary>
+              <ChevronRight className="cr-disclosure-icon h-3.5 w-3.5" />
+              <span>{humanLabel(step.name)}</span>
+              <StatusBadge status={step.status} />
+              {step.agent && <em>{step.agent}</em>}
+            </summary>
+            <div className="cr-exec-io">
+              <IOTabs input={step.io?.input} output={step.io?.output} />
+            </div>
+          </details>
+        );
+      })}
     </div>
   );
 }
@@ -986,28 +1404,43 @@ function ChildExecutionRow({ child }: { child: NonNullable<RunStatus['childAgent
   );
 }
 
-function ExecutionDetailInline({ run, index }: { run: SpawnedAgent; index: number }) {
+function ExecutionDetailInline({
+  run,
+  index,
+  selectedExecutionId,
+  selectedNodeId,
+}: {
+  run: SpawnedAgent;
+  index: number;
+  selectedExecutionId?: string | null;
+  selectedNodeId?: string | null;
+}) {
   const context = run.runContext ?? null;
   const status = context?.status ?? run.status;
   const childAgents = context?.childAgents ?? [];
-  const agentName = run.agent || context?.title || 'agent';
+  const executionName = runDisplayName(context, run);
+  const selected = selectedExecutionId === run.executionId;
 
   return (
-    <details className="cr-exec-detail" open={index === 0}>
+    <details className="cr-exec-detail" open={selected || undefined}>
       <summary>
         <ChevronRight className="cr-disclosure-icon h-3.5 w-3.5" />
         <span className="cr-ref-ic repo"><RunExecutionIcon context={context} /></span>
         <span className="cr-list-body">
-          <span className="cr-list-title">Execution {index + 1}: {agentName}</span>
-          <span className="cr-list-sub">{runExecutionLabel(context)} · {humanLabel(status)} · {formatCost(context?.execution.cost)}</span>
-          {context?.title && context.title !== agentName && <span className="cr-list-sub">{context.title}</span>}
+          <span className="cr-list-title">Execution {index + 1}: {executionName}</span>
+          <span className="cr-list-sub">{runTypeName(context, run)} · {humanLabel(status)} · {formatCost(context?.execution.cost)}</span>
+          {context?.title && context.title !== executionName && <span className="cr-list-sub">{context.title}</span>}
         </span>
         <Link to={`/executions/${run.executionId}`} className="cr-detail-link" title="Open full execution page" onClick={(event) => event.stopPropagation()}>
           <span>See detailed execution</span>
           <ExternalLink className="h-3.5 w-3.5" />
         </Link>
       </summary>
-      <ExecutionIO run={run} />
+      {context?.runType === 'workflow' ? (
+        <WorkflowNodeIOList context={context} selectedNodeId={selected ? selectedNodeId : null} />
+      ) : (
+        <ExecutionIO run={run} />
+      )}
       {childAgents.length > 0 && (
         <div className="cr-child-list inline">
           {childAgents.map(child => <ChildExecutionRow key={child.executionId} child={child} />)}
@@ -1017,12 +1450,26 @@ function ExecutionDetailInline({ run, index }: { run: SpawnedAgent; index: numbe
   );
 }
 
-function ExecutionsPanel({ runs }: { runs: SpawnedAgent[] }) {
+function ExecutionsPanel({
+  runs,
+  selectedExecutionId,
+  selectedNodeId,
+}: {
+  runs: SpawnedAgent[];
+  selectedExecutionId?: string | null;
+  selectedNodeId?: string | null;
+}) {
   if (runs.length === 0) return <div className="cr-empty">No agent executions are linked to this chat yet.</div>;
   return (
     <div className="cr-exec-list">
       {runs.map((run, index) => (
-        <ExecutionDetailInline key={run.executionId} run={run} index={index} />
+        <ExecutionDetailInline
+          key={run.executionId}
+          run={run}
+          index={index}
+          selectedExecutionId={selectedExecutionId}
+          selectedNodeId={selectedNodeId}
+        />
       ))}
     </div>
   );
@@ -1042,8 +1489,8 @@ function FileTreeNodeView({
   if (node.isDir) {
     return (
       <details className={`cr-tree-dir ${node.status ?? ''}`}>
-        <summary style={{ paddingLeft: 8 + depth * 12 }}>
-          <ChevronRight className="cr-disclosure-icon h-3.5 w-3.5" />
+        <summary className="ws-tree-node" style={{ paddingLeft: 8 + depth * 12 }}>
+          <ChevronRight className="h-3 w-3" />
           <FolderOpen className="h-3.5 w-3.5" />
           <span>{node.name}</span>
         </summary>
@@ -1064,40 +1511,53 @@ function FileTreeNodeView({
   return (
     <button
       type="button"
-      className={`cr-tree-file ${node.status ?? ''} ${activePath === node.path ? 'active' : ''}`}
+      className={`ws-tree-node file ${node.status ?? ''} ${activePath === node.path ? 'active' : ''}`}
       style={{ paddingLeft: 20 + depth * 12 }}
       onClick={() => onOpenFile(node.path)}
     >
       <FileText className="h-3.5 w-3.5" />
       <span className="truncate">{node.name}</span>
-      {node.entry?.status && <span className="cr-tree-status">{node.entry.status}</span>}
+      {node.entry?.status && <em>{node.entry.status}</em>}
     </button>
   );
 }
 
-function FileChangesPanel({ runs }: { runs: SpawnedAgent[] }) {
+function FileChangesPanel({
+  runs,
+  rootType,
+  rootId,
+  repoBrowseSource,
+}: {
+  runs: SpawnedAgent[];
+  rootType?: 'chat' | 'workflow' | 'agent';
+  rootId?: string | null;
+  repoBrowseSource?: RepoBrowseSource | null;
+}) {
   const [files, setFiles] = useState<PanelDiffFile[]>([]);
+  const [activeDiffPath, setActiveDiffPath] = useState('');
   const [diffMode, setDiffMode] = useState<'split' | 'unified'>('unified');
   const [view, setView] = useState<'changes' | 'browser'>('changes');
   const [workspaceFiles, setWorkspaceFiles] = useState<WorkspaceFileEntry[]>([]);
   const [browserPath, setBrowserPath] = useState('');
   const [browserContent, setBrowserContent] = useState('');
+  const [browserSource, setBrowserSource] = useState<{ kind: 'workspace' | 'repo'; id: string; name?: string | null } | null>(null);
   const [fileLoading, setFileLoading] = useState(false);
   const [browserLoading, setBrowserLoading] = useState(false);
   const [loading, setLoading] = useState(false);
 
   const workspaceRefs = useMemo(() => {
-    const refs: Array<{ id: string; name?: string | null; mode: 'auto' | 'branch' }> = [];
+    const refs: Array<{ id: string; name?: string | null; repoId?: string | null; mode: 'auto' | 'branch' }> = [];
     for (const run of runs) {
       const id = run.runContext?.workspace?.id;
       if (!id) continue;
       refs.push({
         id,
         name: run.runContext?.workspace?.name ?? run.runContext?.workspace?.repoName,
+        repoId: run.runContext?.workspace?.repoId ?? null,
         mode: run.runContext?.pullRequest ? 'branch' : 'auto',
       });
     }
-    return refs.reduce<Array<{ id: string; name?: string | null; mode: 'auto' | 'branch' }>>((acc, ref) => {
+    return refs.reduce<Array<{ id: string; name?: string | null; repoId?: string | null; mode: 'auto' | 'branch' }>>((acc, ref) => {
       const existing = acc.find(item => item.id === ref.id);
       if (!existing) acc.push(ref);
       else if (ref.mode === 'branch') existing.mode = 'branch';
@@ -1105,7 +1565,24 @@ function FileChangesPanel({ runs }: { runs: SpawnedAgent[] }) {
     }, []);
   }, [runs]);
 
-  const signature = workspaceRefs.map(ref => `${ref.id}:${ref.mode}`).join('|');
+  const pullRequestRefs = useMemo(() => {
+    const refs: Array<{ id: string; name?: string | null }> = [];
+    for (const run of runs) {
+      const id = run.runContext?.pullRequest?.id;
+      if (!id) continue;
+      refs.push({
+        id,
+        name: run.runContext?.pullRequest?.title ?? (run.runContext?.pullRequest?.number ? `PR #${run.runContext.pullRequest.number}` : 'pull request'),
+      });
+    }
+    return refs.filter((ref, index, arr) => arr.findIndex(item => item.id === ref.id) === index);
+  }, [runs]);
+
+  const signature = [
+    rootType === 'chat' && rootId ? `chat:${rootId}` : '',
+    workspaceRefs.map(ref => `${ref.id}:${ref.mode}`).join('|'),
+    pullRequestRefs.map(ref => ref.id).join('|'),
+  ].filter(Boolean).join('::');
 
   useEffect(() => {
     if (!signature) {
@@ -1114,7 +1591,29 @@ function FileChangesPanel({ runs }: { runs: SpawnedAgent[] }) {
     }
     let cancelled = false;
     setLoading(true);
-    Promise.all(workspaceRefs.map(async ref => {
+    const byKey = new Map<string, PanelDiffFile>();
+    const addFiles = (incoming: PanelDiffFile[]) => {
+      for (const file of incoming) {
+        const key = file.path;
+        if (!byKey.has(key)) byKey.set(key, file);
+      }
+    };
+
+    (async () => {
+      if (rootType === 'chat' && rootId) {
+        try {
+          const result = await chatCodeDiffs.listAll(rootId);
+          addFiles((result.snapshots ?? []).flatMap((snapshot: any) => {
+            const sourceId = String(snapshot.workspaceId ?? snapshot._id ?? 'snapshot');
+            const sourceName = snapshot.workspaceName ?? snapshot.baseBranch ?? 'saved diff';
+            return ((snapshot.files ?? []) as Array<Omit<PanelDiffFile, 'workspaceId' | 'workspaceName'>>)
+              .filter(file => file.diff?.trim() || file.modifiedContent?.trim())
+              .map(file => ({ ...file, workspaceId: sourceId, workspaceName: sourceName }));
+          }));
+        } catch {}
+      }
+
+      const workspaceGroups = await Promise.all(workspaceRefs.map(async ref => {
       try {
         const result = await workspacesApi.getDiff(ref.id, { mode: ref.mode });
         return ((result.files ?? []) as Array<Omit<PanelDiffFile, 'workspaceId' | 'workspaceName'>>)
@@ -1123,43 +1622,109 @@ function FileChangesPanel({ runs }: { runs: SpawnedAgent[] }) {
       } catch {
         return [];
       }
-    })).then(groups => {
-      if (!cancelled) setFiles(groups.flat());
-    }).finally(() => {
+      }));
+      addFiles(workspaceGroups.flat());
+
+      const prGroups = await Promise.all(pullRequestRefs.map(async ref => {
+        try {
+          const result = await pullRequestsApi.getDiff(ref.id);
+          return ((result.files ?? []) as Array<{ path: string; diff?: string; originalContent?: string; modifiedContent?: string }>)
+            .filter(file => file.diff?.trim() || file.modifiedContent?.trim())
+            .map(file => {
+              const counts = diffLineCounts(file.diff);
+              return {
+                ...file,
+                status: file.diff?.includes('new file mode') ? 'added' : file.diff?.includes('deleted file mode') ? 'deleted' : 'modified',
+                additions: counts.additions,
+                deletions: counts.deletions,
+                workspaceId: `pr:${ref.id}`,
+                workspaceName: ref.name,
+              };
+            });
+        } catch {
+          return [];
+        }
+      }));
+      addFiles(prGroups.flat());
+
+      if (!cancelled) setFiles(Array.from(byKey.values()));
+    })().finally(() => {
       if (!cancelled) setLoading(false);
     });
     return () => { cancelled = true; };
-  }, [signature, workspaceRefs]);
+  }, [signature, workspaceRefs, pullRequestRefs, rootType, rootId]);
 
   const additions = files.reduce((sum, file) => sum + (file.additions ?? 0), 0);
   const deletions = files.reduce((sum, file) => sum + (file.deletions ?? 0), 0);
   const activeWorkspace = workspaceRefs[0] ?? null;
+  const activeDiff = files.find(file => file.path === activeDiffPath) ?? files[0] ?? null;
   const changedStatuses = useMemo(() => new Map(files.map(file => [file.path, changedFileStatus(file)])), [files]);
   const fileTree = useMemo(() => buildFileTree(workspaceFiles, changedStatuses), [workspaceFiles, changedStatuses]);
   const browserDiffFile = files.find(file => file.path === browserPath) ?? null;
 
   useEffect(() => {
-    if (!activeWorkspace?.id || view !== 'browser') return;
+    if (files.length === 0) {
+      setActiveDiffPath('');
+      return;
+    }
+    if (!files.some(file => file.path === activeDiffPath)) {
+      setActiveDiffPath(files[0].path);
+    }
+  }, [files, activeDiffPath]);
+
+  useEffect(() => {
+    if (view !== 'browser') return;
     let cancelled = false;
+    const nextRepoId = repoBrowseSource?.id ?? null;
     setBrowserLoading(true);
-    workspacesApi.getAllFiles(activeWorkspace.id)
-      .then(result => {
-        if (!cancelled) setWorkspaceFiles((result ?? []) as WorkspaceFileEntry[]);
-      })
-      .catch(() => {
-        if (!cancelled) setWorkspaceFiles([]);
-      })
-      .finally(() => {
-        if (!cancelled) setBrowserLoading(false);
-      });
+    (async () => {
+      let result: WorkspaceFileEntry[] = [];
+      let source: { kind: 'workspace' | 'repo'; id: string; name?: string | null } | null = null;
+
+      if (activeWorkspace?.id) {
+        try {
+          result = (await workspacesApi.getAllFiles(activeWorkspace.id) ?? []) as WorkspaceFileEntry[];
+          source = { kind: 'workspace', id: activeWorkspace.id, name: activeWorkspace.name };
+        } catch {}
+      }
+
+      if (!source && nextRepoId) {
+        try {
+          result = (await reposApi.getAllFiles(nextRepoId) ?? []) as WorkspaceFileEntry[];
+          source = { kind: 'repo', id: nextRepoId, name: repoBrowseSource?.name ?? repoBrowseSource?.path ?? 'repository' };
+        } catch {}
+      }
+
+      if (!cancelled) {
+        setWorkspaceFiles(result);
+        setBrowserSource(source);
+        setBrowserPath(current => {
+          if (current && !result.some(file => file.path === current)) {
+            setBrowserContent('');
+            return '';
+          }
+          return current;
+        });
+        if (!source) {
+          setBrowserContent('');
+        }
+      }
+    })().finally(() => {
+      if (!cancelled) setBrowserLoading(false);
+    });
     return () => {
       cancelled = true;
       setBrowserLoading(false);
     };
-  }, [activeWorkspace?.id, view]);
+  }, [activeWorkspace?.id, activeWorkspace?.name, repoBrowseSource?.id, repoBrowseSource?.name, repoBrowseSource?.path, view]);
 
   async function openBrowserFile(path: string) {
-    if (!activeWorkspace?.id) return;
+    const source = browserSource ?? (activeWorkspace?.id
+      ? { kind: 'workspace' as const, id: activeWorkspace.id, name: activeWorkspace.name }
+      : repoBrowseSource?.id
+        ? { kind: 'repo' as const, id: repoBrowseSource.id, name: repoBrowseSource.name }
+        : null);
+    if (!source) return;
     setBrowserPath(path);
     if (changedStatuses.has(path)) {
       setBrowserContent('');
@@ -1167,8 +1732,10 @@ function FileChangesPanel({ runs }: { runs: SpawnedAgent[] }) {
     }
     setFileLoading(true);
     try {
-      const file = await workspacesApi.getFile(activeWorkspace.id, path);
-      setBrowserContent(file.isImage ? '[binary image preview is available in the workspace editor]' : file.content ?? '');
+      const file = source.kind === 'workspace'
+        ? await workspacesApi.getFile(source.id, path)
+        : await reposApi.getFile(source.id, path);
+      setBrowserContent(file.isImage ? '[binary image preview is available in the dedicated editor]' : file.content ?? '');
     } catch (err) {
       setBrowserContent(`Failed to load ${path}: ${(err as Error).message}`);
     } finally {
@@ -1177,7 +1744,9 @@ function FileChangesPanel({ runs }: { runs: SpawnedAgent[] }) {
   }
 
   if (loading) return <div className="cr-empty">Checking workspace changes...</div>;
-  if (files.length === 0 && workspaceRefs.length === 0) return <div className="cr-empty">No file changes are linked to this chat yet.</div>;
+  if (files.length === 0 && workspaceRefs.length === 0 && pullRequestRefs.length === 0 && !repoBrowseSource?.id) {
+    return <div className="cr-empty">No file changes are linked to this chat yet.</div>;
+  }
 
   return (
     <div className="cr-files-panel">
@@ -1186,7 +1755,7 @@ function FileChangesPanel({ runs }: { runs: SpawnedAgent[] }) {
           <FileText className="h-3.5 w-3.5" />
           <span>{files.length} changed</span>
         </button>
-        <button type="button" className={view === 'browser' ? 'active' : ''} onClick={() => setView('browser')} disabled={!activeWorkspace}>
+        <button type="button" className={view === 'browser' ? 'active' : ''} onClick={() => setView('browser')} disabled={!activeWorkspace && !repoBrowseSource?.id}>
           <FolderOpen className="h-3.5 w-3.5" />
           <span>Browse</span>
         </button>
@@ -1206,32 +1775,69 @@ function FileChangesPanel({ runs }: { runs: SpawnedAgent[] }) {
       </div>
 
       {view === 'changes' ? (
-        <div className="cr-file-stack">
-          {files.map((file, index) => (
-            <details key={`${file.workspaceId}:${file.path}:${index}`} className="cr-file-detail cr-diff-file" open={index === 0}>
-              <summary>
-                <ChevronRight className="cr-disclosure-icon h-3.5 w-3.5" />
-                <span className="cr-file-main">
-                  <span className="cr-file-name">{file.path}</span>
-                  <span className="cr-file-dir">{dirname(file.path) || file.workspaceName || 'workspace'}</span>
-                </span>
-                <span className="cr-file-counts">
-                  <span className="add">+{file.additions ?? 0}</span>
-                  <span className="del">-{file.deletions ?? 0}</span>
-                </span>
-              </summary>
-              <div className="cr-file-detail-diff">
-                {diffMode === 'split' ? <SplitDiffView file={file} /> : <UnifiedDiffView file={file} />}
+        <div className="ws-main ws-panel cr-workspace-view">
+          <aside className="ws-tree scroll-hide">
+            <div className="ws-tree-h">
+              <span>files changed</span>
+              <span className="mono ws-tree-ct">{files.length}</span>
+            </div>
+            <div className="ws-tree-list">
+              {files.length === 0 ? (
+                <div className="ws-tree-empty">No changed files were found in the linked workspaces.</div>
+              ) : files.map(file => (
+                <button
+                  key={`${file.workspaceId}:${file.path}`}
+                  className={`ws-file ${activeDiff?.path === file.path ? 'active' : ''}`}
+                  onClick={() => setActiveDiffPath(file.path)}
+                  type="button"
+                >
+                  <span className={`ws-file-tag ${file.status ?? 'modified'}`}>{file.status === 'added' ? 'A' : file.status === 'deleted' ? 'D' : 'M'}</span>
+                  <span className="ws-file-p">{file.path}</span>
+                  <span className="ws-file-d mono">
+                    {file.additions ? <span className="pos">+{file.additions}</span> : null}
+                    {file.deletions ? <span className="neg">-{file.deletions}</span> : null}
+                  </span>
+                </button>
+              ))}
+            </div>
+          </aside>
+
+          <section className="ws-diff scroll-hide">
+            <div className="ws-diff-h">
+              <FileText className="h-3.5 w-3.5 text-theme-muted" />
+              <span className="mono truncate">{activeDiff?.path ?? 'workspace preview'}</span>
+              <div className="ws-diff-h-r">
+                <div className="ws-diff-mode" role="group" aria-label="Diff view mode">
+                  <button className={diffMode === 'unified' ? 'active' : ''} onClick={() => setDiffMode('unified')} type="button">
+                    unified
+                  </button>
+                  <button className={diffMode === 'split' ? 'active' : ''} onClick={() => setDiffMode('split')} type="button">
+                    split
+                  </button>
+                </div>
               </div>
-            </details>
-          ))}
-          {files.length === 0 && (
-            <div className="cr-empty">No changed files were found in the linked workspaces.</div>
-          )}
+            </div>
+            <div className="ws-diff-body">
+              {activeDiff ? (
+                <div className="cr-file-detail-diff browse-diff">
+                  {diffMode === 'split'
+                    ? <SplitDiffView key={`${activeDiff.path}:split`} file={activeDiff} />
+                    : <UnifiedDiffView key={`${activeDiff.path}:unified`} file={activeDiff} />}
+                </div>
+              ) : (
+                <div className="ws-diff-empty">No changed file selected.</div>
+              )}
+            </div>
+          </section>
         </div>
       ) : (
-        <div className="cr-split-workspace files browse">
-          <div className="cr-file-list cr-side-list">
+        <div className="ws-files-body ws-panel cr-workspace-view">
+          <aside className="ws-files-list scroll-hide">
+            <div className="ws-tree-h">
+              <span>file explorer</span>
+              <span className="mono ws-tree-ct">{workspaceFiles.length}</span>
+            </div>
+            <div className="ws-tree-list">
             {browserLoading ? (
               <div className="cr-loading-state small">
                 <Loader2 className="h-3.5 w-3.5 animate-spin" />
@@ -1250,10 +1856,12 @@ function FileChangesPanel({ runs }: { runs: SpawnedAgent[] }) {
                 {workspaceFiles.length === 0 && <div className="cr-empty small">No files found for this workspace.</div>}
               </>
             )}
-          </div>
-          <div className="cr-file-viewer">
-            <div className="cr-file-viewer-head">
-              <span className="truncate">{browserPath || activeWorkspace?.name || 'Workspace files'}</span>
+            </div>
+          </aside>
+          <section className="ws-file-editor">
+            <div className="ws-diff-h">
+              <FileText className="h-3.5 w-3.5 text-theme-muted" />
+              <span className="truncate">{browserPath || browserSource?.name || activeWorkspace?.name || repoBrowseSource?.name || 'Repository files'}</span>
               {browserDiffFile && (
                 <>
                   <span className="add">+{browserDiffFile.additions ?? 0}</span>
@@ -1273,12 +1881,36 @@ function FileChangesPanel({ runs }: { runs: SpawnedAgent[] }) {
               </div>
             ) : browserDiffFile ? (
               <div className="cr-file-detail-diff browse-diff">
-                {diffMode === 'split' ? <SplitDiffView file={browserDiffFile} /> : <UnifiedDiffView file={browserDiffFile} />}
+                {diffMode === 'split'
+                  ? <SplitDiffView key={`${browserDiffFile.path}:split`} file={browserDiffFile} />
+                  : <UnifiedDiffView key={`${browserDiffFile.path}:unified`} file={browserDiffFile} />}
+              </div>
+            ) : browserPath ? (
+              <div className="ws-monaco-wrap">
+                <Editor
+                  path={browserPath}
+                  value={browserContent}
+                  language={getLanguage(browserPath)}
+                  theme={getMonacoTheme()}
+                  beforeMount={setupMonaco}
+                  options={{
+                    readOnly: true,
+                    minimap: { enabled: true },
+                    fontSize: 12,
+                    fontFamily: "'JetBrains Mono', 'Geist Mono', ui-monospace, monospace",
+                    lineNumbers: 'on',
+                    wordWrap: 'on',
+                    scrollBeyondLastLine: false,
+                    automaticLayout: true,
+                    tabSize: 2,
+                    insertSpaces: true,
+                  }}
+                />
               </div>
             ) : (
-              <pre className="cr-file-content">{browserContent || 'Select a file to preview it here.'}</pre>
+              <div className="ws-diff-empty">Select a file to preview it here.</div>
             )}
-          </div>
+          </section>
         </div>
       )}
     </div>
@@ -1289,53 +1921,70 @@ function TasksPanel({
   activeRun,
   activeContext,
   sortedRuns,
+  expanded,
+  onOpenNode,
+  onOpenExecution,
 }: {
   activeRun: SpawnedAgent;
   activeContext: RunStatus | null;
   sortedRuns: SpawnedAgent[];
+  expanded: boolean;
+  onOpenNode: (executionId: string, nodeId: string) => void;
+  onOpenExecution: (executionId: string) => void;
 }) {
   const attemptRuns = sortedRuns;
   const showAttempts = attemptRuns.length > 1;
   const showWorkflowNodes = !showAttempts && activeContext?.runType === 'workflow' && (activeContext.workflowSteps?.length ?? 0) > 0;
+  const pullRequests = useMemo(() => {
+    const prs = new Map<string, NonNullable<RunStatus['pullRequest']>>();
+    for (const run of sortedRuns) {
+      const pr = run.runContext?.pullRequest;
+      const key = pr?.id ?? pr?.url ?? (pr?.number != null ? String(pr.number) : '');
+      if (pr && key) prs.set(key, pr);
+    }
+    return [...prs.values()];
+  }, [sortedRuns]);
 
   const percent = Math.max(0, Math.min(100, activeContext?.progress.percent ?? 0));
   const activeCost = showAttempts ? formatRunSequenceCost(attemptRuns) : formatCost(activeContext?.execution.cost);
+  const statusText = humanLabel(activeContext?.status ?? activeRun.status);
+  const currentText = activeContext?.progress.currentStep ?? activeContext?.progress.label ?? null;
 
   return (
-    <>
+    <div className={`cr-task-panel ${expanded ? 'expanded' : 'compact'}`}>
       <section className="cr-progress">
-        <div className="cr-prog-row">
-          <span>progress</span>
-          <span className="mono">{percent}%</span>
-        </div>
         <div className="bar">
           <span style={{ width: `${percent}%` }} />
         </div>
-        <div className="cr-prog-row sub">
-          <span>status</span>
-          <span className="mono">{humanLabel(activeContext?.status ?? activeRun.status)}</span>
-        </div>
-        <div className="cr-prog-row sub">
-          <span>current</span>
-          <span className="mono">{activeContext?.progress.currentStep ?? activeContext?.progress.label ?? 'done'}</span>
-        </div>
-        <div className="cr-prog-row sub">
-          <span>cost</span>
-          <span className="mono">{activeCost}</span>
+        <div className="cr-task-summary">
+          <span>{statusText}</span>
+          <span>{percent}%</span>
+          <span>{activeCost}</span>
+          {currentText && <span className="current">{humanLabel(currentText)}</span>}
         </div>
       </section>
 
-      <ArtifactLinks run={activeRun} context={activeContext} />
-
-      <RailSection title="references">
-        <ReferenceLinks run={activeRun} context={activeContext} />
-      </RailSection>
+      {pullRequests.length > 0 && (
+        <RailSection title="pull requests" count={`${pullRequests.length}`}>
+          <div className="space-y-2">
+            {pullRequests.map(pr => (
+              <PullRequestTaskCard key={pr.id ?? pr.url ?? pr.number ?? pr.title ?? 'pr'} pr={pr} />
+            ))}
+          </div>
+        </RailSection>
+      )}
 
       {showAttempts && (
-        <RailSection title="attempts" count={`${attemptRuns.length}`}>
+        <RailSection title="executions" count={`${attemptRuns.length}`}>
           <div className="cr-steps">
             {attemptRuns.map((run, index) => (
-              <AttemptRow key={run.executionId} run={run} index={index} />
+              <AttemptRow
+                key={run.executionId}
+                run={run}
+                index={index}
+                onOpenNode={onOpenNode}
+                onOpenExecution={onOpenExecution}
+              />
             ))}
           </div>
         </RailSection>
@@ -1346,7 +1995,12 @@ function TasksPanel({
           <RailSection title="steps" count={`${activeContext?.progress.completed ?? 0}/${activeContext?.progress.total ?? activeContext?.workflowSteps.length}`}>
             <div className="cr-steps">
               {activeContext!.workflowSteps.map((step, index) => (
-                <WorkflowNodeStep key={step.id} step={step} isLast={index === activeContext!.workflowSteps.length - 1} />
+                <WorkflowNodeStep
+                  key={step.id}
+                  step={step}
+                  isLast={index === activeContext!.workflowSteps.length - 1}
+                  onOpenDetails={(nodeId) => onOpenNode(activeRun.executionId, nodeId)}
+                />
               ))}
             </div>
           </RailSection>
@@ -1382,25 +2036,17 @@ function TasksPanel({
         </RailSection>
       )}
 
-      {(activeContext?.humanInput.required || activeContext?.pullRequest?.url) && (
+      {activeContext?.humanInput.required && (
         <RailSection title="actions">
           <div className="cr-acts">
-            {activeContext?.humanInput.required && (
-              <Link to={activeContext.humanInput.interventionId ? `/interventions/${activeContext.humanInput.interventionId}` : '/interventions'} className="btn-primary justify-center gap-1.5 text-[12px]">
-                Resolve Input
-                <ExternalLink className="h-3.5 w-3.5" />
-              </Link>
-            )}
-            {activeContext?.pullRequest?.url && (
-              <a href={activeContext.pullRequest.url} target="_blank" rel="noreferrer" className="btn-secondary justify-center gap-1.5 text-[12px]">
-                Review PR
-                <ExternalLink className="h-3.5 w-3.5" />
-              </a>
-            )}
+            <Link to={activeContext.humanInput.interventionId ? `/interventions/${activeContext.humanInput.interventionId}` : '/interventions'} className="btn-primary justify-center gap-1.5 text-[12px]">
+              Resolve Input
+              <ExternalLink className="h-3.5 w-3.5" />
+            </Link>
           </div>
         </RailSection>
       )}
-    </>
+    </div>
   );
 }
 
@@ -1408,6 +2054,7 @@ export default function ChatRunSidebar({
   runs,
   rootType,
   rootId,
+  repoBrowseSource,
   open,
   activeTab,
   onTabChange,
@@ -1416,6 +2063,7 @@ export default function ChatRunSidebar({
   runs: SpawnedAgent[];
   rootType?: 'chat' | 'workflow' | 'agent';
   rootId?: string | null;
+  repoBrowseSource?: RepoBrowseSource | null;
   open: boolean;
   activeTab: ChatRunPanelTab;
   onTabChange: (tab: ChatRunPanelTab) => void;
@@ -1427,20 +2075,50 @@ export default function ChatRunSidebar({
     return Math.max(520, Math.min(760, Math.round(window.innerWidth * 0.42)));
   });
   const [fullScreen, setFullScreen] = useState(false);
+  const [selectedExecutionId, setSelectedExecutionId] = useState<string | null>(null);
+  const [selectedWorkflowNodeId, setSelectedWorkflowNodeId] = useState<string | null>(null);
+  const [tabSlide, setTabSlide] = useState<'tasks-to-executions' | null>(null);
   const activeRun = sortedRuns.find(run => {
     const status = (run.runContext?.status ?? run.status ?? '').toLowerCase();
     return !['completed', 'failed', 'cancelled', 'canceled'].includes(status);
   }) ?? sortedRuns[sortedRuns.length - 1] ?? null;
   const activeContext = activeRun?.runContext ?? null;
   const runtimeArtifactCount = sortedRuns.reduce((sum, run) => sum + artifactsForRun(run, run.runContext ?? null).length, 0);
-  const childExecutionCount = sortedRuns.reduce((sum, run) => sum + (run.runContext?.childAgents.length ?? 0), 0);
+  const visibleExecutionIds = new Set(sortedRuns.map(run => run.executionId));
+  const childExecutionCount = sortedRuns.reduce(
+    (sum, run) => sum + (run.runContext?.childAgents ?? []).filter(child => !visibleExecutionIds.has(child.executionId)).length,
+    0,
+  );
   const workspaceCount = new Set(sortedRuns.map(run => run.runContext?.workspace?.id).filter(Boolean)).size;
+  const pullRequestCount = new Set(sortedRuns.map(run => run.runContext?.pullRequest?.id).filter(Boolean)).size;
+  const repoBrowseCount = repoBrowseSource?.id ? 1 : 0;
   const counts: Partial<Record<ChatRunPanelTab, number>> = {
     tasks: sortedRuns.length,
     executions: sortedRuns.length + childExecutionCount,
     artifacts: runtimeArtifactCount,
-    files: workspaceCount,
+    files: Math.max(workspaceCount, pullRequestCount, repoBrowseCount),
   };
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    if (!open) return;
+    const frame = window.requestAnimationFrame(() => {
+      window.dispatchEvent(new Event('resize'));
+    });
+    const timeout = window.setTimeout(() => {
+      window.dispatchEvent(new Event('resize'));
+    }, 120);
+    return () => {
+      window.cancelAnimationFrame(frame);
+      window.clearTimeout(timeout);
+    };
+  }, [open, fullScreen, activeTab]);
+
+  useEffect(() => {
+    if (!tabSlide) return;
+    const timeout = window.setTimeout(() => setTabSlide(null), 520);
+    return () => window.clearTimeout(timeout);
+  }, [tabSlide]);
 
   if (!open) return null;
 
@@ -1462,32 +2140,78 @@ export default function ChatRunSidebar({
     window.addEventListener('mouseup', onUp);
   }
 
+  function openExecutionNode(executionId: string, nodeId: string) {
+    setSelectedExecutionId(executionId);
+    setSelectedWorkflowNodeId(nodeId);
+    setTabSlide('tasks-to-executions');
+    onTabChange('executions');
+  }
+
+  function openExecution(executionId: string) {
+    setSelectedExecutionId(executionId);
+    setSelectedWorkflowNodeId(null);
+    setTabSlide('tasks-to-executions');
+    onTabChange('executions');
+  }
+
   return (
-    <aside className={`chat-rail ${fullScreen ? 'fullscreen' : ''}`} style={fullScreen ? undefined : { width }}>
+    <aside
+      className={`chat-rail relative flex h-full flex-none flex-col gap-3 overflow-hidden border-l border-app bg-app-muted px-3.5 pb-8 pt-2.5 ${
+        fullScreen ? 'fullscreen absolute inset-0 z-[80] h-full w-full max-w-none border-l-0 px-5' : ''
+      }`}
+      style={fullScreen ? undefined : { width }}
+    >
       {!fullScreen && <div className="chat-rail-resize" onMouseDown={startResize} title="Drag to resize" />}
-      <div className="cr-head">
-        <h5>Chat resources</h5>
-        <div className="cr-head-actions">
-          <button type="button" className="cr-close" onClick={() => setFullScreen(value => !value)} title={fullScreen ? 'Exit full screen' : 'Expand side panel'}>
+      <div className="sticky top-0 z-20 flex shrink-0 items-center justify-between gap-2 border-b border-app-strong bg-app-muted pb-2">
+        <PanelTabs activeTab={activeTab} onTabChange={onTabChange} counts={counts} />
+        <div className="inline-flex shrink-0 items-center gap-1">
+          <button type="button" className="rounded-md p-1.5 text-theme-muted transition-colors hover:bg-app-card hover:text-theme-primary" onClick={() => setFullScreen(value => !value)} title={fullScreen ? 'Exit full screen' : 'Expand side panel'} aria-label={fullScreen ? 'Exit full screen' : 'Expand side panel'}>
             {fullScreen ? <Minimize2 className="h-3.5 w-3.5" /> : <Maximize2 className="h-3.5 w-3.5" />}
           </button>
-          <button type="button" className="cr-close" onClick={onClose} title="Close side panel">
+          <button type="button" className="rounded-md p-1.5 text-theme-muted transition-colors hover:bg-app-card hover:text-theme-primary" onClick={onClose} title="Close side panel" aria-label="Close side panel">
             <PanelRightClose className="h-3.5 w-3.5" />
           </button>
         </div>
       </div>
 
-      <PanelTabs activeTab={activeTab} onTabChange={onTabChange} counts={counts} />
-
-      <div className={`cr-panel-body ${activeTab}`}>
+      <div className="relative min-h-0 w-full flex-1 overflow-hidden">
+        {tabSlide === 'tasks-to-executions' && activeTab === 'executions' && activeRun && (
+          <div className="cr-tab-ghost cr-tab-exit-left" aria-hidden="true">
+            <TasksPanel
+              activeRun={activeRun}
+              activeContext={activeContext}
+              sortedRuns={sortedRuns}
+              expanded={fullScreen}
+              onOpenNode={() => undefined}
+              onOpenExecution={() => undefined}
+            />
+          </div>
+        )}
+        <div className={`h-full w-full min-h-0 ${activeTab === 'files' || activeTab === 'artifacts' ? 'flex flex-col overflow-hidden' : 'overflow-y-auto overflow-x-hidden pr-1'} ${activeTab} ${tabSlide === 'tasks-to-executions' && activeTab === 'executions' ? 'cr-tab-enter-right' : ''}`}>
         {activeTab === 'tasks' && (
           activeRun
-            ? <TasksPanel activeRun={activeRun} activeContext={activeContext} sortedRuns={sortedRuns} />
+            ? (
+              <TasksPanel
+                activeRun={activeRun}
+                activeContext={activeContext}
+                sortedRuns={sortedRuns}
+                expanded={fullScreen}
+                onOpenNode={openExecutionNode}
+                onOpenExecution={openExecution}
+              />
+            )
             : <div className="cr-empty">No task sequence is linked to this chat yet.</div>
         )}
-        {activeTab === 'executions' && <ExecutionsPanel runs={sortedRuns} />}
+        {activeTab === 'executions' && (
+          <ExecutionsPanel
+            runs={sortedRuns}
+            selectedExecutionId={selectedExecutionId}
+            selectedNodeId={selectedWorkflowNodeId}
+          />
+        )}
         {activeTab === 'artifacts' && <ChatArtifactsPanel rootType={rootType} rootId={rootId} runs={sortedRuns} />}
-        {activeTab === 'files' && <FileChangesPanel runs={sortedRuns} />}
+        {activeTab === 'files' && <FileChangesPanel runs={sortedRuns} rootType={rootType} rootId={rootId} repoBrowseSource={repoBrowseSource} />}
+        </div>
       </div>
     </aside>
   );

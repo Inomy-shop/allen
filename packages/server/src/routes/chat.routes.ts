@@ -5,6 +5,7 @@ import { ChatService, cancelChatSession, type ChatMessageSender } from '../servi
 import { executeChatTool } from '../services/chat-tools.js';
 import { ExecutionService } from '../services/execution.service.js';
 import { InterventionService } from '../services/intervention.service.js';
+import { PullRequestService } from '../services/pull-request.service.js';
 import { WorkspaceManager, type WorkspaceDiffMode } from '../services/workspace.service.js';
 import { ObjectId, type Db } from 'mongodb';
 import { UserService } from '../services/user.service.js';
@@ -360,12 +361,92 @@ export function chatRoutes(db: Db): Router {
     try {
       const sessionId = param(req, 'id');
       const messageId = typeof req.query.messageId === 'string' ? req.query.messageId : '';
-      if (!messageId) return res.status(400).json({ error: 'messageId is required' });
+      const filter: Record<string, unknown> = { chatSessionId: sessionId };
+      if (messageId) filter.parentMessageId = messageId;
       const snapshots = await db.collection('chat_code_diff_snapshots')
-        .find({ chatSessionId: sessionId, parentMessageId: messageId })
+        .find(filter)
         .sort({ createdAt: 1 })
         .toArray();
-      res.json({ snapshots });
+      const responseSnapshots: Record<string, unknown>[] = snapshots.map(snapshot => ({ ...snapshot }));
+      if (!messageId && ObjectId.isValid(sessionId)) {
+        const session = await db.collection('chat_sessions').findOne(
+          { _id: new ObjectId(sessionId) },
+          { projection: { archivedWorkspace: 1 } },
+        );
+        let archivedWorkspace = (session?.archivedWorkspace && typeof session.archivedWorkspace === 'object'
+          ? session.archivedWorkspace
+          : null) as Record<string, unknown> | null;
+        if (!archivedWorkspace) {
+          const execution = await db.collection('executions').findOne(
+            { 'meta.chatSessionId': sessionId, 'meta.workspaceId': { $type: 'string' } },
+            { sort: { updatedAt: -1, completedAt: -1, startedAt: -1 }, projection: { meta: 1 } },
+          );
+          const workspaceId = typeof execution?.meta?.workspaceId === 'string' ? execution.meta.workspaceId : '';
+          const workspace = ObjectId.isValid(workspaceId)
+            ? await db.collection('workspaces').findOne({ _id: new ObjectId(workspaceId) })
+            : null;
+          if (workspace) {
+            archivedWorkspace = {
+              id: String(workspace._id),
+              name: workspace.name,
+              repoId: workspace.repoId,
+              repoName: workspace.repoName,
+              repoPath: workspace.repoPath,
+              branch: workspace.branch,
+              baseBranch: workspace.baseBranch,
+              prNumber: workspace.prNumber,
+              prUrl: workspace.prUrl,
+              archivedAt: workspace.updatedAt,
+            };
+          }
+        }
+        const prClauses: Record<string, unknown>[] = [];
+        if (typeof archivedWorkspace?.prUrl === 'string') prClauses.push({ url: archivedWorkspace.prUrl });
+        if (typeof archivedWorkspace?.id === 'string') prClauses.push({ workspaceId: archivedWorkspace.id });
+        if (typeof archivedWorkspace?.repoId === 'string' && typeof archivedWorkspace?.prNumber === 'number') {
+          prClauses.push({ repoId: archivedWorkspace.repoId, number: archivedWorkspace.prNumber });
+        }
+        const pr = prClauses.length > 0
+          ? await db.collection('pull_requests').findOne({ $or: prClauses }, { sort: { updatedAt: -1 } })
+          : null;
+        const diffRepoPath = pr?.repoPath ?? archivedWorkspace?.repoPath;
+        const diffBranch = pr?.branch ?? archivedWorkspace?.branch;
+        const diffBaseBranch = pr?.baseBranch ?? archivedWorkspace?.baseBranch;
+        if (diffRepoPath && diffBranch && diffBaseBranch) {
+          const prDiff = await new PullRequestService(db).getDiff(String(diffRepoPath), String(diffBranch), String(diffBaseBranch));
+          const files = (prDiff.files ?? [])
+            .filter(file => file.diff?.trim() || file.modifiedContent?.trim())
+            .map(file => {
+              const counts = file.diff.split('\n').reduce((acc, line) => {
+                if (line.startsWith('+++') || line.startsWith('---')) return acc;
+                if (line.startsWith('+')) acc.additions += 1;
+                else if (line.startsWith('-')) acc.deletions += 1;
+                return acc;
+              }, { additions: 0, deletions: 0 });
+              return {
+                ...file,
+                status: file.diff.includes('new file mode') ? 'added' : file.diff.includes('deleted file mode') ? 'deleted' : 'modified',
+                additions: counts.additions,
+                deletions: counts.deletions,
+              };
+            });
+          if (files.length > 0) {
+            responseSnapshots.push({
+              chatSessionId: sessionId,
+              parentMessageId: null,
+              workspaceId: String(pr?.workspaceId ?? archivedWorkspace?.id ?? pr?._id ?? 'archived-workspace'),
+              workspaceName: archivedWorkspace?.name ?? pr?.title ?? (pr?.number ? `PR #${pr.number}` : 'archived workspace'),
+              baseBranch: diffBaseBranch,
+              mode: 'branch',
+              source: 'pull_request_archive_fallback',
+              files,
+              createdAt: pr?.updatedAt ?? new Date(),
+              updatedAt: new Date(),
+            });
+          }
+        }
+      }
+      res.json({ snapshots: responseSnapshots });
     } catch (err: unknown) {
       res.status(500).json({ error: (err as Error).message });
     }
@@ -376,7 +457,7 @@ export function chatRoutes(db: Db): Router {
       const sessionId = param(req, 'id');
       const parentMessageId = typeof req.body.messageId === 'string' ? req.body.messageId : '';
       const executionIds = Array.isArray(req.body.executionIds) ? req.body.executionIds.map(String).filter(Boolean) : [];
-      const requestedMode = req.body.mode === 'branch' || req.body.mode === 'working' || req.body.mode === 'auto'
+      const requestedMode = req.body.mode === 'branch' || req.body.mode === 'working' || req.body.mode === 'auto' || req.body.mode === 'workspace'
         ? req.body.mode as WorkspaceDiffMode
         : 'auto';
       const workspaceRefs = Array.isArray(req.body.workspaces)
@@ -441,6 +522,68 @@ export function chatRoutes(db: Db): Router {
       if (!res.headersSent) {
         res.status(500).json({ error: (err as Error).message });
       }
+    }
+  });
+
+  // GET /api/chat/sessions/:id/queue — Server-side queued chat messages
+  router.get('/sessions/:id/queue', async (req: Request, res: Response) => {
+    try {
+      const sessionId = param(req, 'id');
+      res.json(await chatService.listQueuedMessages(sessionId));
+    } catch (err: unknown) {
+      res.status(500).json({ error: (err as Error).message });
+    }
+  });
+
+  // POST /api/chat/sessions/:id/queue — Queue a message after the current turn
+  router.post('/sessions/:id/queue', async (req: Request, res: Response) => {
+    try {
+      const sessionId = param(req, 'id');
+      const { content, agent } = req.body;
+      const cwd = typeof req.body.cwd === 'string' ? req.body.cwd : undefined;
+      if (!content || typeof content !== 'string') {
+        return res.status(400).json({ error: 'content is required' });
+      }
+      const sender = await readSender(req as AuthedRequest);
+      const item = await chatService.enqueueQueuedMessage(sessionId, {
+        content,
+        agent: typeof agent === 'string' ? agent : undefined,
+        cwd,
+      }, sender);
+      res.status(201).json(item);
+    } catch (err: unknown) {
+      const message = (err as Error).message;
+      res.status(message.includes('Queue limit') ? 409 : 500).json({ error: message });
+    }
+  });
+
+  // PATCH /api/chat/sessions/:id/queue/:queueId — Edit/pause/resume a queued message
+  router.patch('/sessions/:id/queue/:queueId', async (req: Request, res: Response) => {
+    try {
+      const sessionId = param(req, 'id');
+      const queueId = param(req, 'queueId');
+      const body: { content?: string; status?: 'queued' | 'editing' } = {};
+      if (typeof req.body.content === 'string') body.content = req.body.content;
+      if (req.body.status === 'queued' || req.body.status === 'editing') body.status = req.body.status;
+      if (!body.content && !body.status) {
+        return res.status(400).json({ error: 'content or status is required' });
+      }
+      res.json(await chatService.updateQueuedMessage(sessionId, queueId, body));
+    } catch (err: unknown) {
+      const message = (err as Error).message;
+      res.status(message.includes('not found') ? 404 : 500).json({ error: message });
+    }
+  });
+
+  // DELETE /api/chat/sessions/:id/queue/:queueId — Remove a queued message
+  router.delete('/sessions/:id/queue/:queueId', async (req: Request, res: Response) => {
+    try {
+      const sessionId = param(req, 'id');
+      const queueId = param(req, 'queueId');
+      await chatService.deleteQueuedMessage(sessionId, queueId);
+      res.status(204).end();
+    } catch (err: unknown) {
+      res.status(500).json({ error: (err as Error).message });
     }
   });
 

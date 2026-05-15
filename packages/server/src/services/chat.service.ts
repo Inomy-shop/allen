@@ -31,6 +31,19 @@ export interface SlackContext {
   teamId: string;
 }
 
+export interface ArchivedWorkspaceSnapshot {
+  id: string;
+  name?: string;
+  repoId?: string;
+  repoName?: string;
+  repoPath?: string;
+  branch?: string;
+  baseBranch?: string;
+  prNumber?: number;
+  prUrl?: string;
+  archivedAt?: Date;
+}
+
 export interface ChatSession {
   _id?: ObjectId;
   title: string;
@@ -48,6 +61,8 @@ export interface ChatSession {
   repoId?: string;     // ObjectId string referencing repos collection
   repoPath?: string;   // Snapshot of repo.path at session creation time
   repoName?: string;   // Snapshot of repo.name for UI display
+  workspaceId?: string;
+  archivedWorkspace?: ArchivedWorkspaceSnapshot;
   ownerUserId?: string | null;
   ownerName?: string | null;
   ownerEmail?: string | null;
@@ -75,6 +90,21 @@ export interface ChatMessage {
   completedAt?: Date;
 }
 
+function archivedWorkspaceSnapshot(workspace: Record<string, unknown>): ArchivedWorkspaceSnapshot {
+  return {
+    id: String(workspace._id ?? workspace.id ?? ''),
+    name: typeof workspace.name === 'string' ? workspace.name : undefined,
+    repoId: typeof workspace.repoId === 'string' ? workspace.repoId : undefined,
+    repoName: typeof workspace.repoName === 'string' ? workspace.repoName : undefined,
+    repoPath: typeof workspace.repoPath === 'string' ? workspace.repoPath : undefined,
+    branch: typeof workspace.branch === 'string' ? workspace.branch : undefined,
+    baseBranch: typeof workspace.baseBranch === 'string' ? workspace.baseBranch : undefined,
+    prNumber: typeof workspace.prNumber === 'number' ? workspace.prNumber : undefined,
+    prUrl: typeof workspace.prUrl === 'string' ? workspace.prUrl : undefined,
+    archivedAt: workspace.updatedAt instanceof Date ? workspace.updatedAt : undefined,
+  };
+}
+
 export interface ToolCallRecord {
   tool: string;
   args: Record<string, unknown>;
@@ -89,6 +119,24 @@ export interface ChatMessageSender {
   name?: string;
   email?: string;
   source?: 'ui' | 'slack' | 'system';
+}
+
+export type ChatQueueStatus = 'queued' | 'editing' | 'running' | 'sent' | 'failed' | 'cancelled';
+
+export interface ChatQueueItem {
+  _id?: ObjectId;
+  id?: string;
+  sessionId: string;
+  content: string;
+  agent?: string | null;
+  cwd?: string | null;
+  status: ChatQueueStatus;
+  sender?: ChatMessageSender;
+  error?: string;
+  createdAt: Date;
+  updatedAt: Date;
+  startedAt?: Date;
+  completedAt?: Date;
 }
 
 function senderFields(sender?: ChatMessageSender): Pick<ChatMessage, 'senderUserId' | 'senderName' | 'senderEmail' | 'senderSource'> {
@@ -446,6 +494,9 @@ interface ActiveQuery {
 
 const activeQueries = new Map<string, ActiveQuery>();
 const ACTIVE_EXECUTION_STATUSES = ['running', 'queued', 'waiting_for_input'];
+const drainingQueues = new Set<string>();
+const ACTIVE_QUEUE_STATUSES: ChatQueueStatus[] = ['queued', 'editing', 'running'];
+const MAX_CHAT_QUEUE_ITEMS = 3;
 
 // ── SSE Heartbeat ──
 // Emits `: keepalive\n\n` every 15 s to every active SSE listener.
@@ -775,6 +826,7 @@ export class ChatService {
 
   private get sessions() { return this.db.collection('chat_sessions'); }
   private get messages() { return this.db.collection('chat_messages'); }
+  private get messageQueue() { return this.db.collection('chat_message_queue'); }
 
   getProviders() { return getProvidersInDefaultOrder(); }
 
@@ -832,7 +884,7 @@ export class ChatService {
       .sort({ lastMessageAt: -1 })
       .limit(100)
       .toArray() as unknown as ChatSession[];
-    return sessions;
+    return this.hydrateArchivedWorkspaceSnapshots(sessions);
   }
 
   async getSession(id: string): Promise<(ChatSession & { messages: ChatMessage[] }) | null> {
@@ -840,7 +892,70 @@ export class ChatService {
     if (!session) return null;
     const msgs = await this.messages.find({ sessionId: id }).sort({ createdAt: -1 }).limit(50).toArray() as ChatMessage[];
     msgs.reverse();
-    return { ...(session as unknown as ChatSession), messages: msgs };
+    const [hydrated] = await this.hydrateArchivedWorkspaceSnapshots([session as unknown as ChatSession]);
+    return { ...hydrated, messages: msgs };
+  }
+
+  private async hydrateArchivedWorkspaceSnapshots<T extends ChatSession>(sessions: T[]): Promise<T[]> {
+    const missing = sessions.filter(session => {
+      const id = session._id?.toString();
+      return id && !session.archivedWorkspace;
+    });
+    if (missing.length === 0) return sessions;
+
+    const sessionIds = missing.map(session => session._id!.toString());
+    const executionLinks = await this.db.collection('executions')
+      .find(
+        {
+          'meta.chatSessionId': { $in: sessionIds },
+          'meta.workspaceId': { $type: 'string' },
+        },
+        { projection: { 'meta.chatSessionId': 1, 'meta.workspaceId': 1, startedAt: 1, createdAt: 1 } },
+      )
+      .sort({ startedAt: -1, createdAt: -1 })
+      .toArray();
+
+    const workspaceIdBySession = new Map<string, string>();
+    for (const link of executionLinks) {
+      const chatSessionId = typeof link.meta?.chatSessionId === 'string' ? link.meta.chatSessionId : '';
+      const workspaceId = typeof link.meta?.workspaceId === 'string' ? link.meta.workspaceId : '';
+      if (chatSessionId && ObjectId.isValid(workspaceId) && !workspaceIdBySession.has(chatSessionId)) {
+        workspaceIdBySession.set(chatSessionId, workspaceId);
+      }
+    }
+
+    const workspaceIds = Array.from(new Set([...workspaceIdBySession.values()]))
+      .filter(ObjectId.isValid)
+      .map(id => new ObjectId(id));
+    if (workspaceIds.length === 0) return sessions;
+
+    const archivedWorkspaces = await this.db.collection('workspaces')
+      .find({ _id: { $in: workspaceIds }, status: 'archived' })
+      .toArray();
+    const snapshotByWorkspaceId = new Map(
+      archivedWorkspaces.map(workspace => [workspace._id.toString(), archivedWorkspaceSnapshot(workspace)]),
+    );
+    if (snapshotByWorkspaceId.size === 0) return sessions;
+
+    await Promise.all(sessionIds.map(async sessionId => {
+      const workspaceId = workspaceIdBySession.get(sessionId);
+      const snapshot = workspaceId ? snapshotByWorkspaceId.get(workspaceId) : undefined;
+      if (!snapshot || !ObjectId.isValid(sessionId)) return;
+      await this.sessions.updateOne(
+        { _id: new ObjectId(sessionId), archivedWorkspace: { $exists: false } },
+        {
+          $set: { archivedWorkspace: snapshot, updatedAt: new Date() },
+          $unset: { workspaceId: '' },
+        },
+      ).catch(() => {});
+    }));
+
+    return sessions.map(session => {
+      const sessionId = session._id?.toString() ?? '';
+      const workspaceId = workspaceIdBySession.get(sessionId);
+      const snapshot = workspaceId ? snapshotByWorkspaceId.get(workspaceId) : undefined;
+      return snapshot ? { ...session, archivedWorkspace: snapshot, workspaceId: undefined } : session;
+    }) as T[];
   }
 
   async getMessages(sessionId: string, before?: string, limit = 50): Promise<{ data: ChatMessage[]; hasMore: boolean }> {
@@ -854,6 +969,145 @@ export class ChatService {
     if (hasMore) data.pop();
     data.reverse();
     return { data, hasMore };
+  }
+
+  private serializeQueueItem(doc: Record<string, unknown>): ChatQueueItem {
+    return {
+      ...(doc as unknown as ChatQueueItem),
+      id: doc._id instanceof ObjectId ? doc._id.toString() : String(doc._id ?? ''),
+    };
+  }
+
+  async listQueuedMessages(sessionId: string): Promise<ChatQueueItem[]> {
+    const rows = await this.messageQueue
+      .find({ sessionId, status: { $in: ACTIVE_QUEUE_STATUSES } })
+      .sort({ createdAt: 1 })
+      .toArray();
+    return rows.map(row => this.serializeQueueItem(row));
+  }
+
+  async enqueueQueuedMessage(
+    sessionId: string,
+    input: { content: string; agent?: string | null; cwd?: string | null },
+    sender?: ChatMessageSender,
+  ): Promise<ChatQueueItem> {
+    if (!ObjectId.isValid(sessionId)) throw new Error('Invalid session id');
+    const session = await this.sessions.findOne({ _id: new ObjectId(sessionId) });
+    if (!session) throw new Error('Session not found');
+
+    const activeCount = await this.messageQueue.countDocuments({
+      sessionId,
+      status: { $in: ACTIVE_QUEUE_STATUSES },
+    });
+    if (activeCount >= MAX_CHAT_QUEUE_ITEMS) {
+      throw new Error(`Queue limit reached. Keep at most ${MAX_CHAT_QUEUE_ITEMS} queued messages per chat.`);
+    }
+
+    const now = new Date();
+    const doc: ChatQueueItem = {
+      sessionId,
+      content: input.content,
+      agent: input.agent ?? null,
+      cwd: input.cwd ?? null,
+      status: 'queued',
+      sender,
+      createdAt: now,
+      updatedAt: now,
+    };
+    const result = await this.messageQueue.insertOne(doc as unknown as Record<string, unknown>);
+    const item = { ...doc, _id: result.insertedId, id: result.insertedId.toString() };
+    if (!activeQueries.has(sessionId)) {
+      void this.drainQueuedMessages(sessionId).catch(err => console.warn('[chat_queue] drain failed:', err.message));
+    }
+    return item;
+  }
+
+  async updateQueuedMessage(
+    sessionId: string,
+    queueId: string,
+    input: { content?: string; status?: 'queued' | 'editing' },
+  ): Promise<ChatQueueItem> {
+    if (!ObjectId.isValid(queueId)) throw new Error('Invalid queue item id');
+    const set: Record<string, unknown> = { updatedAt: new Date() };
+    if (typeof input.content === 'string') set.content = input.content;
+    if (input.status) set.status = input.status;
+    const result = await this.messageQueue.findOneAndUpdate(
+      {
+        _id: new ObjectId(queueId),
+        sessionId,
+        status: { $in: ['queued', 'editing'] },
+      },
+      { $set: set },
+      { returnDocument: 'after' },
+    );
+    if (!result) throw new Error('Queued message not found');
+    if (input.status === 'queued' && !activeQueries.has(sessionId)) {
+      void this.drainQueuedMessages(sessionId).catch(err => console.warn('[chat_queue] drain failed:', err.message));
+    }
+    return this.serializeQueueItem(result);
+  }
+
+  async deleteQueuedMessage(sessionId: string, queueId: string): Promise<void> {
+    if (!ObjectId.isValid(queueId)) throw new Error('Invalid queue item id');
+    await this.messageQueue.deleteOne({
+      _id: new ObjectId(queueId),
+      sessionId,
+      status: { $in: ['queued', 'editing'] },
+    });
+  }
+
+  async drainQueuedMessages(sessionId: string): Promise<void> {
+    if (drainingQueues.has(sessionId)) return;
+    drainingQueues.add(sessionId);
+    try {
+      while (!activeQueries.has(sessionId)) {
+        const next = await this.messageQueue
+          .find({ sessionId, status: { $in: ACTIVE_QUEUE_STATUSES } })
+          .sort({ createdAt: 1 })
+          .limit(1)
+          .next() as ChatQueueItem | null;
+        if (!next || next.status !== 'queued' || !next._id) break;
+
+        const startedAt = new Date();
+        const claimed = await this.messageQueue.updateOne(
+          { _id: next._id, status: 'queued' },
+          { $set: { status: 'running', startedAt, updatedAt: startedAt } },
+        );
+        if (claimed.modifiedCount === 0) continue;
+
+        try {
+          await this.sendMessageForSlack(
+            sessionId,
+            next.content,
+            next.agent ?? undefined,
+            next.sender,
+            undefined,
+            next.cwd ?? undefined,
+          );
+          const completedAt = new Date();
+          await this.messageQueue.updateOne(
+            { _id: next._id },
+            { $set: { status: 'sent', completedAt, updatedAt: completedAt } },
+          );
+        } catch (err) {
+          const message = err instanceof Error ? err.message : String(err);
+          if (/session busy/i.test(message)) {
+            await this.messageQueue.updateOne(
+              { _id: next._id },
+              { $set: { status: 'queued', updatedAt: new Date() }, $unset: { startedAt: '' } },
+            );
+            break;
+          }
+          const completedAt = new Date();
+          await this.messageQueue.updateOne(
+            { _id: next._id },
+            { $set: { status: 'failed', error: message, completedAt, updatedAt: completedAt } },
+          );
+        }
+      }
+    } finally {
+      drainingQueues.delete(sessionId);
+    }
   }
 
   async sendMessage(sessionId: string, content: string, res: Response, agent?: string, cwd?: string, sender?: ChatMessageSender): Promise<void> {
@@ -903,6 +1157,7 @@ export class ChatService {
     agent?: string,
     sender?: ChatMessageSender,
     onEvent?: ChatEventHandler,
+    cwd?: string,
   ): Promise<{ text: string; costUsd: number; durationMs: number }> {
     const session = await this.sessions.findOne({ _id: new ObjectId(sessionId) });
     if (!session) throw new Error('Session not found');
@@ -934,7 +1189,7 @@ export class ChatService {
     activeQueries.set(sessionId, entry);
 
     // runLLM handles all DB updates, error logging, and active session cleanup
-    await this.runLLM(sessionId, assistantMsgId, content, entry, agent);
+    await this.runLLM(sessionId, assistantMsgId, content, entry, agent, 0, cwd);
 
     // Read the final result from DB (runLLM has already saved it)
     const msg = await this.messages.findOne({ _id: new ObjectId(assistantMsgId) });
@@ -1618,6 +1873,7 @@ User: ${userMessage.slice(0, 500)}`;
       unregisterActiveSession(sessionId);
       for (const listener of entry.listeners) { try { detachHeartbeat(listener); listener.end(); } catch {} }
       activeQueries.delete(sessionId);
+      void this.drainQueuedMessages(sessionId).catch(err => console.warn('[chat_queue] drain failed:', err.message));
     }
   }
 

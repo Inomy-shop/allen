@@ -46,6 +46,19 @@ export interface ChatSession {
   repoId?: string;
   repoPath?: string;
   repoName?: string;
+  workspaceId?: string;
+  archivedWorkspace?: {
+    id: string;
+    name?: string;
+    repoId?: string;
+    repoName?: string;
+    repoPath?: string;
+    branch?: string;
+    baseBranch?: string;
+    prNumber?: number;
+    prUrl?: string;
+    archivedAt?: string;
+  };
   /** Where the session was created from. Slack-sourced sessions are read-only in the UI. */
   source?: 'ui' | 'slack';
   /** Slack thread metadata for sessions sourced from Slack. */
@@ -294,6 +307,38 @@ function runsFromMessages(messages: ChatMessage[]): SpawnedAgent[] {
   return runs;
 }
 
+function mergeSpawnedRuns(primary: SpawnedAgent[], secondary: SpawnedAgent[]): SpawnedAgent[] {
+  const byId = new Map<string, SpawnedAgent>();
+  for (const run of [...primary, ...secondary]) {
+    const existing = byId.get(run.executionId);
+    byId.set(run.executionId, existing ? { ...existing, ...run, activity: run.activity ?? existing.activity } : run);
+  }
+  return [...byId.values()];
+}
+
+function runsFromPersistedExecutions(items: Array<{
+  executionId: string;
+  sourceMessageId?: string | null;
+  agent?: string | null;
+  prompt?: string | null;
+  status?: string | null;
+  kind?: SpawnedAgent['kind'];
+  runContext?: RunStatus | null;
+}>): SpawnedAgent[] {
+  return items
+    .filter(item => item.executionId)
+    .map(item => ({
+      executionId: item.executionId,
+      sourceMessageId: item.sourceMessageId ?? item.runContext?.chat?.parentMessageId ?? undefined,
+      agent: item.agent ?? item.runContext?.title ?? 'Routed run',
+      prompt: item.prompt ?? item.runContext?.io?.input ?? '',
+      status: (item.runContext?.status ?? item.status ?? 'running') as SpawnedAgent['status'],
+      activity: [],
+      kind: item.kind ?? item.runContext?.runType ?? 'agent',
+      runContext: item.runContext ?? undefined,
+    }));
+}
+
 export function useChat() {
   const [sessions, setSessions] = useState<ChatSession[]>([]);
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
@@ -391,14 +436,22 @@ export function useChat() {
     (async () => {
       try {
         setLoadingMessages(true);
-        const [session, threads] = await Promise.all([
+        const [session, threads, persistedRuns] = await Promise.all([
           api.getSession(activeSessionId),
           api.getThreads(activeSessionId).catch(() => []),
+          executionsApi.forChat(activeSessionId).catch(() => []),
         ]);
         if (cancelled) return;
         const loadedMessages = (session.messages || []) as ChatMessage[];
+        const { messages: _messages, ...sessionMeta } = session as ChatSession & { messages?: ChatMessage[] };
+        void _messages;
+        setSessions(prev =>
+          prev.some(item => item._id === activeSessionId)
+            ? prev.map(item => item._id === activeSessionId ? { ...item, ...sessionMeta } : item)
+            : [sessionMeta, ...prev],
+        );
         setMessages(loadedMessages);
-        setSpawnedAgents(runsFromMessages(loadedMessages));
+        setSpawnedAgents(mergeSpawnedRuns(runsFromMessages(loadedMessages), runsFromPersistedExecutions(persistedRuns)));
 
         // Re-surface a pending ask_user question on refresh. The tool
         // persists the question on chat_sessions.pendingUserQuestion while

@@ -86,6 +86,15 @@ export function executionRoutes(db: Db): Router {
     }
   });
 
+  router.get('/chat/:sessionId', async (req: Request, res: Response) => {
+    try {
+      const rows = await service.listForChatSession(param(req, 'sessionId'));
+      res.json(rows);
+    } catch (err: unknown) {
+      res.status(500).json({ error: (err as Error).message });
+    }
+  });
+
   // GET /api/executions/:id/context
   // Aggregated context for status cards: progress, human gates,
   // linked workspace, Linear ticket, PR, artifacts, and child agents.

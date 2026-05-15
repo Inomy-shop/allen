@@ -105,7 +105,17 @@ export interface WorkspaceConfig {
   updatedAt: Date;
 }
 
-export type WorkspaceDiffMode = 'auto' | 'working' | 'branch';
+export type WorkspaceDiffMode = 'auto' | 'working' | 'branch' | 'workspace';
+
+type WorkspaceDiffFile = {
+  path: string;
+  status: string;
+  additions: number;
+  deletions: number;
+  diff: string;
+  originalContent: string;
+  modifiedContent: string;
+};
 
 // ── Service ──
 
@@ -456,9 +466,37 @@ export class WorkspaceManager {
   }
 
   async archive(id: string): Promise<void> {
-    const { ObjectId } = await import('mongodb');
     const ws = await this.get(id);
     if (!ws) return;
+    const archivedAt = new Date();
+    const linkedChatObjectIds = Array.from(new Set([
+      ...(ws.chatSessionIds ?? []),
+      ...(ws.chatSessionId ? [ws.chatSessionId] : []),
+    ].filter((chatId): chatId is string => typeof chatId === 'string' && ObjectId.isValid(chatId))))
+      .map(chatId => new ObjectId(chatId));
+    const executionChatIds = await this.db.collection('executions').distinct('meta.chatSessionId', {
+      'meta.workspaceId': id,
+    });
+    for (const chatId of executionChatIds) {
+      if (typeof chatId === 'string' && ObjectId.isValid(chatId)) {
+        const oid = new ObjectId(chatId);
+        if (!linkedChatObjectIds.some(existing => existing.equals(oid))) linkedChatObjectIds.push(oid);
+      }
+    }
+    const archivedWorkspace = {
+      id,
+      name: ws.name,
+      repoId: ws.repoId,
+      repoName: ws.repoName,
+      repoPath: ws.repoPath,
+      branch: ws.branch,
+      baseBranch: ws.baseBranch,
+      prNumber: ws.prNumber,
+      prUrl: ws.prUrl,
+      archivedAt,
+    };
+
+    await this.captureArchiveChatDiffSnapshots(ws, linkedChatObjectIds).catch(() => {});
 
     await this.col.updateOne({ _id: new ObjectId(id) }, { $set: { status: 'archiving' } });
 
@@ -497,7 +535,100 @@ export class WorkspaceManager {
       serviceLogs.delete(key);
     }
 
-    await this.col.updateOne({ _id: new ObjectId(id) }, { $set: { status: 'archived', updatedAt: new Date() } });
+    if (linkedChatObjectIds.length > 0) {
+      await this.db.collection('chat_sessions').updateMany(
+        {
+          $or: [
+            { workspaceId: id },
+            { _id: { $in: linkedChatObjectIds }, workspaceId: { $exists: false } },
+          ],
+        },
+        {
+          $set: { archivedWorkspace, updatedAt: archivedAt },
+          $unset: { workspaceId: '' },
+        },
+      );
+    } else {
+      await this.db.collection('chat_sessions').updateMany(
+        { workspaceId: id },
+        {
+          $set: { archivedWorkspace, updatedAt: archivedAt },
+          $unset: { workspaceId: '' },
+        },
+      );
+    }
+
+    await this.col.updateOne({ _id: new ObjectId(id) }, { $set: { status: 'archived', updatedAt: archivedAt } });
+  }
+
+  private async captureArchiveChatDiffSnapshots(ws: Workspace, linkedChatObjectIds: ObjectId[]): Promise<void> {
+    if (!ws._id) return;
+    const workspaceId = String(ws._id);
+    let diff: Awaited<ReturnType<WorkspaceManager['getDiff']>> | null = null;
+    try {
+      diff = await this.getDiff(workspaceId, { mode: 'workspace' });
+    } catch {
+      try { diff = await this.getDiff(workspaceId, { mode: 'branch' }); } catch { diff = null; }
+    }
+    const files = ((diff?.files ?? []) as WorkspaceDiffFile[]).filter(file => file.diff?.trim() || file.modifiedContent?.trim());
+    if (!diff || files.length === 0) return;
+
+    const linkedChatIds = new Set(linkedChatObjectIds.map(id => id.toHexString()));
+    const executions = await this.db.collection('executions')
+      .find({ 'meta.workspaceId': workspaceId }, { projection: { id: 1, meta: 1 } })
+      .toArray()
+      .catch(() => []);
+
+    type SnapshotGroup = {
+      chatSessionId: string;
+      parentMessageId: string | null;
+      executionIds: string[];
+    };
+    const groups = new Map<string, SnapshotGroup>();
+    for (const execution of executions) {
+      const meta = (execution.meta && typeof execution.meta === 'object' ? execution.meta : {}) as Record<string, unknown>;
+      const chatSessionId = typeof meta.chatSessionId === 'string' ? meta.chatSessionId : '';
+      if (!chatSessionId) continue;
+      linkedChatIds.add(chatSessionId);
+      const parentMessageId = typeof meta.parentMessageId === 'string' ? meta.parentMessageId : null;
+      const key = `${chatSessionId}:${parentMessageId ?? 'workspace-archive'}`;
+      const existing = groups.get(key) ?? { chatSessionId, parentMessageId, executionIds: [] };
+      const executionId = typeof execution.id === 'string' ? execution.id : '';
+      if (executionId && !existing.executionIds.includes(executionId)) existing.executionIds.push(executionId);
+      groups.set(key, existing);
+    }
+
+    for (const chatSessionId of linkedChatIds) {
+      const key = `${chatSessionId}:workspace-archive`;
+      if (!groups.has(key)) groups.set(key, { chatSessionId, parentMessageId: null, executionIds: [] });
+    }
+
+    const now = new Date();
+    const collection = this.db.collection('chat_code_diff_snapshots');
+    for (const group of groups.values()) {
+      if (!ObjectId.isValid(group.chatSessionId)) continue;
+      const filter: Record<string, unknown> = {
+        chatSessionId: group.chatSessionId,
+        workspaceId,
+      };
+      if (group.parentMessageId) filter.parentMessageId = group.parentMessageId;
+      else filter.source = 'workspace_archive';
+      const existing = await collection.findOne(filter, { projection: { _id: 1 } }).catch(() => null);
+      if (existing) continue;
+      await collection.insertOne({
+        chatSessionId: group.chatSessionId,
+        parentMessageId: group.parentMessageId,
+        executionIds: group.executionIds,
+        workspaceId,
+        workspaceName: ws.name ?? ws.repoName ?? null,
+        baseBranch: diff.baseBranch,
+        mode: diff.mode,
+        source: 'workspace_archive',
+        files,
+        createdAt: now,
+        updatedAt: now,
+      });
+    }
   }
 
   // ── Git Operations ──
@@ -530,7 +661,9 @@ export class WorkspaceManager {
 
     // Prefer current uncommitted changes. If the workspace branch has already
     // committed the implementation, fall back to branch-vs-base so chat and
-    // workspace views can still show the completed code diff.
+    // workspace views can still show the completed code diff. The workspace
+    // mode compares the base branch directly against the current worktree, so
+    // it includes both committed PR changes and unsaved/uncommitted edits.
     const mode = options.mode ?? 'auto';
     let diffRange = 'HEAD';
     let baseRef = 'HEAD';
@@ -538,21 +671,27 @@ export class WorkspaceManager {
     let nameStatus = '';
     let numstat = '';
 
-    if (mode !== 'branch') {
+    if (mode !== 'branch' && mode !== 'workspace') {
       nameStatus = (await exec('git', ['diff', '--name-status', diffRange], { cwd: ws.worktreePath }).catch(() => ({ stdout: '' }))).stdout;
       numstat = (await exec('git', ['diff', '--numstat', diffRange], { cwd: ws.worktreePath }).catch(() => ({ stdout: '' }))).stdout;
     }
 
-    if ((mode === 'branch' || (mode === 'auto' && !nameStatus.trim())) && ws.baseBranch) {
+    if ((mode === 'workspace' || mode === 'branch' || (mode === 'auto' && !nameStatus.trim())) && ws.baseBranch) {
       const candidates = [`origin/${ws.baseBranch}...HEAD`, `${ws.baseBranch}...HEAD`];
       for (const range of candidates) {
-        const status = await exec('git', ['diff', '--name-status', range], { cwd: ws.worktreePath }).catch(() => ({ stdout: '' }));
+        const statusArgs = mode === 'workspace'
+          ? ['diff', '--name-status', range.split('...')[0] ?? range]
+          : ['diff', '--name-status', range];
+        const numstatArgs = mode === 'workspace'
+          ? ['diff', '--numstat', range.split('...')[0] ?? range]
+          : ['diff', '--numstat', range];
+        const status = await exec('git', statusArgs, { cwd: ws.worktreePath }).catch(() => ({ stdout: '' }));
         if (!status.stdout.trim()) continue;
         nameStatus = status.stdout;
-        numstat = (await exec('git', ['diff', '--numstat', range], { cwd: ws.worktreePath }).catch(() => ({ stdout: '' }))).stdout;
-        diffRange = range;
+        numstat = (await exec('git', numstatArgs, { cwd: ws.worktreePath }).catch(() => ({ stdout: '' }))).stdout;
+        diffRange = mode === 'workspace' ? (range.split('...')[0] ?? range) : range;
         baseRef = range.split('...')[0] ?? 'HEAD';
-        includeUntracked = false;
+        includeUntracked = mode === 'workspace';
         break;
       }
     }

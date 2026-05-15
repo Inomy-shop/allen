@@ -1,9 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import {
-  ChevronDown, ChevronRight, ExternalLink, FileText, FolderGit2, GitBranch, GitCommit,
+  ChevronDown, ChevronRight, ExternalLink, FileText, FolderGit2, GitBranch,
   GitPullRequest, Loader2, MessageSquare, Play, Plus, RefreshCw, RotateCw,
-  Save, Settings, Square, Terminal, Upload, X,
+  Save, Settings, Square, Terminal, Trash2, X,
 } from 'lucide-react';
 import Editor, { DiffEditor } from '@monaco-editor/react';
 import { workspaces } from '../services/workspaceService';
@@ -335,12 +335,10 @@ export default function WorkspaceListPage() {
   const [configRepoId, setConfigRepoId] = useState<string | null>(null);
 
   const active = useMemo(
-    () => workspaceList.find(ws => ws._id === activeId) ?? workspaceList[0] ?? null,
+    () => workspaceList.find(ws => ws._id === activeId) ?? null,
     [workspaceList, activeId],
   );
   const activeDiff = diffFiles.find(file => file.path === activeFile) ?? diffFiles[0] ?? null;
-  const totalPlus = diffFiles.reduce((sum, file) => sum + (file.additions || 0), 0);
-  const totalMinus = diffFiles.reduce((sum, file) => sum + (file.deletions || 0), 0);
   const fileTree = useMemo(() => buildFileTree(allFiles), [allFiles]);
   const repoById = useMemo(() => new Map(repos.map(repo => [repo._id, repo])), [repos]);
   const workspaceGroups = useMemo(() => {
@@ -428,8 +426,9 @@ export default function WorkspaceListPage() {
       setWorkspaceList(wsList);
       setActiveId(prev => {
         if (routeWorkspaceId && wsList.some((ws: Workspace) => ws._id === routeWorkspaceId)) return routeWorkspaceId;
+        if (!routeWorkspaceId) return '';
         if (prev && wsList.some((ws: Workspace) => ws._id === prev)) return prev;
-        return (wsList[0]?._id ?? '');
+        return '';
       });
     } finally {
       setLoading(false);
@@ -454,7 +453,7 @@ export default function WorkspaceListPage() {
     }
     let cancelled = false;
     Promise.all([
-      workspaces.getDiff(activeId).catch(() => ({ files: [] })),
+      workspaces.getDiff(activeId, { mode: 'workspace' }).catch(() => ({ files: [] })),
       workspaces.listChats(activeId).catch(() => []),
       workspaces.getAllFiles(activeId).catch(() => []),
     ]).then(([diffResult, chats, filesResult]) => {
@@ -531,7 +530,7 @@ export default function WorkspaceListPage() {
   function focusTerminal() {
     if (!activeId) return;
     setMountedTerminalIds(prev => prev.includes(activeId) ? prev : [...prev, activeId]);
-    document.querySelector('.ws-ide-terminal')?.scrollIntoView({ block: 'end', behavior: 'smooth' });
+    document.querySelector('.ws-terminal-body')?.scrollIntoView({ block: 'end', behavior: 'smooth' });
   }
 
   function closeChat(sessionId: string) {
@@ -574,7 +573,7 @@ export default function WorkspaceListPage() {
       setFileDirty(false);
       patchWorkspaceUi(activeId, { explorerFile, fileContent, fileDirty: false });
       const [diffResult, filesResult] = await Promise.all([
-        workspaces.getDiff(activeId).catch(() => ({ files: [] })),
+        workspaces.getDiff(activeId, { mode: 'workspace' }).catch(() => ({ files: [] })),
         workspaces.getAllFiles(activeId).catch(() => []),
       ]);
       setDiffFiles((diffResult.files ?? []) as DiffFile[]);
@@ -626,6 +625,24 @@ export default function WorkspaceListPage() {
     }
   }
 
+  async function deleteWorkspace(workspaceId: string, workspaceName?: string) {
+    const label = workspaceName || 'this workspace';
+    if (!window.confirm(`Delete ${label}? This removes the worktree and archives the workspace.`)) return;
+    setGitBusy(`delete:${workspaceId}`);
+    try {
+      await workspaces.archive(workspaceId);
+      setWorkspaceList(prev => prev.filter(ws => ws._id !== workspaceId));
+      if (activeId === workspaceId || routeWorkspaceId === workspaceId) {
+        setActiveId('');
+        navigate('/workspaces');
+      }
+    } catch (err: any) {
+      alert(err.message);
+    } finally {
+      setGitBusy(null);
+    }
+  }
+
   function handleLinkedChat(tempId: string, realId: string) {
     const nextOpenChatIds = openChatIds.map(id => id === tempId ? realId : id);
     setOpenChatIds(nextOpenChatIds);
@@ -637,16 +654,14 @@ export default function WorkspaceListPage() {
 
   const activeChatId = activeTab.startsWith('chat:') ? activeTab.slice(5) : null;
   const availablePreviousChats = workspaceChats.filter(chat => !openChatIds.includes(chat._id));
-  const activeStatus = (active?.status ?? 'idle').toLowerCase();
-  const totalChanged = active?.changedFiles || diffFiles.length;
-  const showWorkspaceDetail = true;
+  const showWorkspaceDetail = Boolean(routeWorkspaceId) || creating;
 
   const listContent = (
     <div className="ws-list-content scroll-hide">
       <div className="ws-list-head">
         <div>
           <h1>Workspaces</h1>
-          <div className="sub">{workspaceList.length} active · isolated agent code environments</div>
+          <div className="sub">Isolated agent code environments</div>
         </div>
         <div className="ws-list-actions">
           <button className="btn btn-secondary btn-sm" onClick={loadWorkspaces} type="button" title="Refresh workspaces">
@@ -669,10 +684,6 @@ export default function WorkspaceListPage() {
           <div className="ws-list-card-head">
             <FolderGit2 className="h-3.5 w-3.5 text-theme-muted" />
             <h2>{group.label}</h2>
-            <span>{group.items.length} workspaces</span>
-            <button className="btn btn-ghost btn-sm" type="button" onClick={() => setConfigRepoId(group.items[0]?.repoId ?? null)} disabled={!group.items[0]?.repoId}>
-              <Settings className="h-3 w-3" /> Config
-            </button>
           </div>
           <div className="ws-list-rows">
             {group.items.map((ws, index) => {
@@ -680,23 +691,41 @@ export default function WorkspaceListPage() {
               const changed = ws.changedFiles ?? 0;
               return (
                 <div key={ws._id} className="ws-list-row" data-first={index === 0 ? 'true' : undefined}>
-                  <input type="checkbox" aria-label={`Select ${ws.name}`} />
                   <div className="ws-list-row-main">
                     <div className="ws-list-row-title">
                       <FolderGit2 className="h-3 w-3 text-accent" />
                       <span>{ws.name}</span>
                       <span className={`ws-workspace-state ${status}`}>{ws.status ?? 'active'}</span>
-                      {changed > 0 ? <span className="ws-workspace-state changed">{changed} changed</span> : null}
+                      {changed > 0 ? <span className="ws-list-change">{changed} changed</span> : null}
+                      {ws.prNumber ? <span className="ws-list-change">PR #{ws.prNumber}</span> : null}
                     </div>
                     <div className="ws-list-row-meta">
                       <span>{ws.branch ?? 'branch unknown'}</span>
+                      <span>→</span>
+                      <span>{ws.baseBranch ?? 'base unknown'}</span>
                       {ws.basePort ? <><span>·</span><span>port {ws.basePort}</span></> : null}
                       {ws.updatedAt ? <><span>·</span><span>{new Date(ws.updatedAt).toLocaleDateString()}</span></> : null}
                     </div>
                   </div>
-                  <button className="btn btn-ghost btn-sm" type="button" onClick={() => openWorkspace(ws._id)} title="Open workspace">
-                    <ExternalLink className="h-3.5 w-3.5" />
-                  </button>
+                  <div className="ws-list-row-actions">
+                    {ws.prUrl ? (
+                      <a className="btn btn-ghost btn-sm" href={ws.prUrl} target="_blank" rel="noreferrer" title="Open pull request">
+                        <GitPullRequest className="h-3.5 w-3.5" />
+                      </a>
+                    ) : null}
+                    <button className="btn btn-ghost btn-sm" type="button" onClick={() => openWorkspace(ws._id)} title="Open workspace">
+                      <ExternalLink className="h-3.5 w-3.5" />
+                    </button>
+                    <button
+                      className="btn btn-ghost btn-sm ws-danger-action"
+                      type="button"
+                      onClick={() => deleteWorkspace(ws._id, ws.name)}
+                      title="Delete workspace"
+                      disabled={gitBusy === `delete:${ws._id}`}
+                    >
+                      {gitBusy === `delete:${ws._id}` ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Trash2 className="h-3.5 w-3.5" />}
+                    </button>
+                  </div>
                 </div>
               );
             })}
@@ -714,7 +743,7 @@ export default function WorkspaceListPage() {
         {pendingWsId && (
           <SetupProgressDialog
             workspaceId={pendingWsId}
-            onComplete={(ws) => { setPendingWsId(null); setActiveId(ws._id); loadWorkspaces(); }}
+            onComplete={(ws) => { setPendingWsId(null); setActiveId(ws._id); loadWorkspaces(); navigate(`/workspaces/${ws._id}`); }}
             onFailed={() => { setPendingWsId(null); loadWorkspaces(); }}
           />
         )}
@@ -727,21 +756,12 @@ export default function WorkspaceListPage() {
       <div className="ws-detail-layout">
         <div className="ws-stage">
           <header className="ws-ide-topbar">
-            <div className="ws-ide-select">
+            <button className="ws-ide-back" type="button" onClick={() => navigate('/workspaces')} title="Back to workspaces">
               <FolderGit2 className="h-3.5 w-3.5 text-theme-muted" />
-              <select
-                value={activeId}
-                onChange={(event) => switchWorkspace(event.target.value)}
-                disabled={workspaceList.length === 0}
-                aria-label="Select workspace"
-              >
-                {workspaceList.map(ws => (
-                  <option key={ws._id} value={ws._id}>{ws.name}</option>
-                ))}
-              </select>
-              <ChevronDown className="h-3.5 w-3.5 text-theme-subtle" />
-            </div>
+              <span>all workspaces</span>
+            </button>
             <div className="ws-ide-meta">
+              <strong>{creating ? 'new workspace' : active?.name ?? 'workspace not found'}</strong>
               <GitBranch className="h-3 w-3" />
               <span>{active?.branch ?? 'branch unknown'}</span>
               <span>→</span>
@@ -752,51 +772,44 @@ export default function WorkspaceListPage() {
             </div>
             <div className="ws-ide-actions">
               {loading && <Loader2 className="h-3.5 w-3.5 animate-spin text-theme-muted" />}
-              <span className={`ws-workspace-state ${activeStatus}`}>{active?.status ?? 'idle'}</span>
-              <span className="ws-workspace-state changed">{totalChanged} changed</span>
-              <span className="ws-workspace-state active">+{totalPlus}</span>
-              <span className="ws-workspace-state failed">-{totalMinus}</span>
-              <button className="btn btn-ghost btn-sm" onClick={() => showWorkspaceTab('diff')} type="button">
-                <FileText className="h-3.5 w-3.5" /> open
-              </button>
-              <button onClick={() => runGitAction('pull')} className="btn btn-ghost btn-sm" title="Pull latest" type="button" disabled={!active || gitBusy === 'pull'}>
-                <RefreshCw className={`h-3.5 w-3.5 ${gitBusy === 'pull' ? 'animate-spin' : ''}`} />
-              </button>
-              <button onClick={() => runGitAction('commit')} className="btn btn-ghost btn-sm" title="Commit changes" type="button" disabled={!active || gitBusy === 'commit'}>
-                {gitBusy === 'commit' ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <GitCommit className="h-3.5 w-3.5" />}
-              </button>
-              <button onClick={() => runGitAction('push')} className="btn btn-ghost btn-sm" title="Push branch" type="button" disabled={!active || gitBusy === 'push'}>
-                {gitBusy === 'push' ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Upload className="h-3.5 w-3.5" />}
+              <button onClick={loadWorkspaces} className="btn btn-ghost btn-sm" title="Refresh workspace" type="button">
+                <RefreshCw className={`h-3.5 w-3.5 ${loading ? 'animate-spin' : ''}`} />
               </button>
               {active?.prUrl ? (
                 <a href={active.prUrl} target="_blank" rel="noreferrer" className="btn btn-primary btn-sm">
                   <GitPullRequest className="h-3.5 w-3.5" /> open PR
                 </a>
-              ) : (
+              ) : active ? (
                 <button onClick={() => runGitAction('pr')} disabled={!active || gitBusy === 'pr'} className="btn btn-primary btn-sm" type="button">
                   {gitBusy === 'pr' ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <GitPullRequest className="h-3.5 w-3.5" />} open PR
                 </button>
-              )}
+              ) : null}
+              {active ? (
+                <button
+                  onClick={() => deleteWorkspace(active._id, active.name)}
+                  className="btn btn-ghost btn-sm ws-danger-action"
+                  title="Delete workspace"
+                  type="button"
+                  disabled={gitBusy === `delete:${active._id}`}
+                >
+                  {gitBusy === `delete:${active._id}` ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Trash2 className="h-3.5 w-3.5" />}
+                </button>
+              ) : null}
             </div>
           </header>
 
           <div className="ws-ide-filebar">
             <div className="ws-ide-filetitle">
               <FileText className="h-3.5 w-3.5" />
-              <span>{activeDiff?.path ?? 'workspace preview'}</span>
+              <span>{activeTab === 'diff' ? 'base branch to current workspace diff' : activeDiff?.path ?? 'workspace preview'}</span>
             </div>
             <div className="ws-ide-fileactions">
-              <div className="ws-diff-mode" role="group" aria-label="Diff view mode">
-                <button className={diffMode === 'unified' ? 'active' : ''} onClick={() => changeDiffMode('unified')} type="button">
-                  unified
-                </button>
-                <button className={diffMode === 'split' ? 'active' : ''} onClick={() => changeDiffMode('split')} type="button">
-                  split
-                </button>
-              </div>
-              <button className="btn btn-ghost btn-sm" onClick={() => showWorkspaceTab('files')} type="button">files</button>
-              <button className="btn btn-ghost btn-sm" onClick={() => showWorkspaceTab('services')} type="button">services</button>
-              <button className="btn btn-ghost btn-sm" onClick={openWorkspaceChat} type="button">
+              <button className={`btn btn-ghost btn-sm ${activeTab === 'diff' ? 'active' : ''}`} onClick={() => showWorkspaceTab('diff')} type="button">diff</button>
+              <button className={`btn btn-ghost btn-sm ${activeTab === 'files' ? 'active' : ''}`} onClick={() => showWorkspaceTab('files')} type="button">files</button>
+              {(active?.services ?? []).length > 0 ? (
+                <button className={`btn btn-ghost btn-sm ${activeTab === 'services' ? 'active' : ''}`} onClick={() => showWorkspaceTab('services')} type="button">services</button>
+              ) : null}
+              <button className={`btn btn-ghost btn-sm ${activeTab.startsWith('chat:') ? 'active' : ''}`} onClick={openWorkspaceChat} type="button">
                 <MessageSquare className="h-3.5 w-3.5" /> chat
               </button>
               <button className="btn btn-ghost btn-sm" onClick={openNewChat} type="button">
@@ -812,7 +825,7 @@ export default function WorkspaceListPage() {
                 <option value="">previous chats</option>
                 {availablePreviousChats.map(chat => <option key={chat._id} value={chat._id}>{chatLabel(chat)}</option>)}
               </select>
-              <button className="btn btn-ghost btn-sm" onClick={focusTerminal} type="button">
+              <button className={`btn btn-ghost btn-sm ${activeTab === 'terminal' ? 'active' : ''}`} onClick={focusTerminal} type="button">
                 <Terminal className="h-3.5 w-3.5" /> terminal
               </button>
             </div>
@@ -827,7 +840,7 @@ export default function WorkspaceListPage() {
                 <div className="ws-tree-list">
                   {diffFiles.length === 0 ? (
                     <div className="ws-tree-empty">
-                      {active ? 'no working tree changes yet.' : 'create or select a workspace.'}
+                      {active ? 'no changes against the base branch yet.' : 'create or select a workspace.'}
                     </div>
                   ) : diffFiles.map(file => (
                     <button key={file.path} className={`ws-file ${activeFile === file.path ? 'active' : ''}`} onClick={() => { setActiveFile(file.path); if (activeId) patchWorkspaceUi(activeId, { activeFile: file.path }); }} type="button">
@@ -929,7 +942,7 @@ export default function WorkspaceListPage() {
                   ) : (
                     <div className="ws-diff-empty">
                       <FolderGit2 className="mx-auto mb-3 h-8 w-8 text-theme-subtle" />
-                      <div>{active ? 'no diff for this workspace yet.' : 'no workspace selected.'}</div>
+                      <div>{active ? 'no base-branch diff for this workspace yet.' : 'no workspace selected.'}</div>
                       <button onClick={() => setCreating(true)} className="btn btn-primary btn-sm mt-4" type="button">
                         <Plus className="h-3.5 w-3.5" /> new workspace
                       </button>
@@ -1059,15 +1072,6 @@ export default function WorkspaceListPage() {
             </div>
           )}
 
-          {activeId && !creating && (
-            <section className="ws-ide-terminal">
-              <div className="ws-ide-terminal-head">
-                <span><Terminal className="h-3.5 w-3.5" /> terminal · agent activity 20 lines</span>
-                <span className="ws-ide-live"><span /> live</span>
-              </div>
-              <XTerminal workspaceId={activeId} terminalId="default" className="ws-ide-terminal-body" />
-            </section>
-          )}
         </div>
       </div>
 
@@ -1075,7 +1079,7 @@ export default function WorkspaceListPage() {
       {pendingWsId && (
         <SetupProgressDialog
           workspaceId={pendingWsId}
-          onComplete={(ws) => { setPendingWsId(null); setActiveId(ws._id); loadWorkspaces(); }}
+          onComplete={(ws) => { setPendingWsId(null); setActiveId(ws._id); loadWorkspaces(); navigate(`/workspaces/${ws._id}`); }}
           onFailed={() => { setPendingWsId(null); loadWorkspaces(); }}
         />
       )}

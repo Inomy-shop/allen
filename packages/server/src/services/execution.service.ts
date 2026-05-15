@@ -178,6 +178,17 @@ function stringValue(v: unknown): string | undefined {
   return typeof v === 'string' && v.trim() ? v.trim() : undefined;
 }
 
+function compactJsonValue(v: unknown): string | undefined {
+  if (v == null) return undefined;
+  if (typeof v === 'string') return v.trim() || undefined;
+  try {
+    const text = JSON.stringify(v, null, 2);
+    return text && text !== '{}' && text !== '[]' ? text : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 function firstUrl(values: unknown[], pattern?: RegExp): string | undefined {
   for (const value of values) {
     const s = stringValue(value);
@@ -558,6 +569,137 @@ export class ExecutionService {
       (items as unknown as Record<string, unknown>[]).map((item) => this.listItemContext(item)),
     );
     return { items: enriched, total };
+  }
+
+  async listForChatSession(sessionId: string): Promise<Record<string, unknown>[]> {
+    const messageLinks = new Map<string, { parentMessageId: string }>();
+    const messages = await this.db.collection('chat_messages')
+      .find({
+        sessionId,
+        role: 'assistant',
+        $or: [
+          { 'toolCalls.result.id': { $type: 'string' } },
+          { 'toolCalls.result.execution_id': { $type: 'string' } },
+        ],
+      }, {
+        projection: { _id: 1, toolCalls: 1, createdAt: 1 },
+      })
+      .sort({ createdAt: 1 })
+      .limit(300)
+      .toArray()
+      .catch(() => []);
+
+    for (const message of messages) {
+      const parentMessageId = String(message._id ?? '');
+      for (const call of ((message.toolCalls ?? []) as Array<Record<string, unknown>>)) {
+        const result = ((call.result ?? {}) as Record<string, unknown>) ?? {};
+        const executionId = stringValue(result.id) ?? stringValue(result.execution_id);
+        if (executionId && parentMessageId && !messageLinks.has(executionId)) {
+          messageLinks.set(executionId, { parentMessageId });
+        }
+      }
+    }
+
+    const messageExecutionIds = [...messageLinks.keys()];
+    const directRows = await this.db.collection('executions')
+      .find({
+        $or: [
+          { 'meta.chatSessionId': sessionId },
+          ...(messageExecutionIds.length ? [{ id: { $in: messageExecutionIds } }] : []),
+        ],
+      })
+      .sort({ startedAt: 1, createdAt: 1 })
+      .limit(200)
+      .toArray()
+      .catch(() => []);
+
+    await this.attachChatMetadataFromMessages(directRows as unknown as Record<string, unknown>[]);
+
+    const rootIds = [...new Set(directRows
+      .map(row => stringValue(row.id))
+      .filter((id): id is string => Boolean(id)))];
+    const rootParentByExecution = new Map<string, string>();
+    for (const row of directRows) {
+      const id = stringValue(row.id);
+      if (!id) continue;
+      const meta = ((row.meta ?? {}) as Record<string, unknown>) ?? {};
+      const parentMessageId = stringValue(meta.parentMessageId) ?? messageLinks.get(id)?.parentMessageId;
+      if (parentMessageId) rootParentByExecution.set(id, parentMessageId);
+    }
+
+    const descendants = rootIds.length
+      ? await this.db.collection('executions')
+        .find({
+          id: { $nin: rootIds },
+          $or: [
+            { rootExecutionId: { $in: rootIds } },
+            { parentExecutionId: { $in: rootIds } },
+          ],
+        })
+        .sort({ startedAt: 1, createdAt: 1 })
+        .limit(300)
+        .toArray()
+        .catch(() => [])
+      : [];
+
+    const byId = new Map<string, Record<string, unknown>>();
+    for (const row of [...directRows, ...descendants] as Record<string, unknown>[]) {
+      const id = stringValue(row.id);
+      if (!id || byId.has(id)) continue;
+      const meta = ((row.meta ?? {}) as Record<string, unknown>) ?? {};
+      const rootId = stringValue(row.rootExecutionId);
+      const parentMessageId =
+        stringValue(meta.parentMessageId)
+        ?? (rootId ? rootParentByExecution.get(rootId) : undefined)
+        ?? rootParentByExecution.get(id)
+        ?? messageLinks.get(id)?.parentMessageId
+        ?? null;
+      byId.set(id, {
+        ...row,
+        source: row.source ?? 'chat',
+        meta: {
+          ...meta,
+          origin: stringValue(meta.origin) ?? 'chat',
+          chatSessionId: stringValue(meta.chatSessionId) ?? sessionId,
+          ...(parentMessageId ? { parentMessageId } : {}),
+        },
+      });
+    }
+
+    const contexts = await Promise.all([...byId.values()].map(async (row) => {
+      const id = stringValue(row.id) ?? '';
+      try {
+        const context = await this.getContext(id);
+        return { row, context };
+      } catch {
+        return { row, context: null };
+      }
+    }));
+
+    return contexts
+      .sort((a, b) => {
+        const aTime = new Date(String(a.row.startedAt ?? a.row.createdAt ?? 0)).getTime();
+        const bTime = new Date(String(b.row.startedAt ?? b.row.createdAt ?? 0)).getTime();
+        return aTime - bTime;
+      })
+      .map(({ row, context }) => {
+        const id = stringValue(row.id) ?? '';
+        const input = ((row.input ?? {}) as Record<string, unknown>) ?? {};
+        const meta = ((row.meta ?? {}) as Record<string, unknown>) ?? {};
+        const workflowName = stringValue(row.workflowName) ?? '';
+        const isAgentExecution = workflowName.includes(':spawn_agent/')
+          || row.source === 'spawn'
+          || (!row.workflowId && row.source === 'chat');
+        return {
+          executionId: id,
+          sourceMessageId: stringValue(meta.parentMessageId) ?? null,
+          agent: context?.title ?? this.executionTitle(workflowName, input, meta),
+          prompt: stringValue(input.prompt) ?? stringValue(input.task) ?? stringValue(input.request) ?? stringValue(meta.requestText) ?? '',
+          status: row.status,
+          kind: context?.runType === 'workflow' ? 'workflow' : isAgentExecution ? 'agent' : 'lead',
+          runContext: context,
+        };
+      });
   }
 
   async getById(id: string): Promise<Record<string, unknown> | null> {
@@ -1627,6 +1769,21 @@ export class ExecutionService {
         if (!Number.isFinite(endMs) || endMs < startMs) return null;
         return endMs - startMs;
       })();
+      const outputObject = (lastTrace?.output && typeof lastTrace.output === 'object'
+        ? lastTrace.output
+        : {}) as Record<string, unknown>;
+      const stepInput = lastTrace
+        ? stringValue(lastTrace.renderedPrompt)
+          ?? stringValue((lastTrace.inputState as Record<string, unknown> | undefined)?.prompt)
+          ?? compactJsonValue(lastTrace.inputState)
+          ?? compactJsonValue(nodeDef)
+        : undefined;
+      const stepOutput = lastTrace
+        ? stringValue(outputObject.response)
+          ?? stringValue(outputObject.error)
+          ?? stringValue(lastTrace.rawResponse)
+          ?? compactJsonValue(lastTrace.output)
+        : undefined;
       return {
         id: nodeName,
         name: nodeName,
@@ -1642,6 +1799,10 @@ export class ExecutionService {
         durationMs: tracedDurationMs > 0 ? tracedDurationMs : elapsedDurationMs,
         cost: cost.estimated > 0 || cost.actual != null ? cost : null,
         error: lastTrace?.error ?? (failedNode === nodeName ? exec.errorMessage : null),
+        io: {
+          input: stepInput ?? null,
+          output: stepOutput ?? null,
+        },
       };
     });
   }

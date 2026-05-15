@@ -73,7 +73,7 @@ export function workspaceRoutes(db: Db): Router {
 
   router.get('/:id/diff', async (req: Request, res: Response) => {
     try {
-      const mode = req.query.mode === 'branch' || req.query.mode === 'working' || req.query.mode === 'auto'
+      const mode = req.query.mode === 'branch' || req.query.mode === 'working' || req.query.mode === 'auto' || req.query.mode === 'workspace'
         ? req.query.mode
         : undefined;
       res.json(await manager.getDiff(p(req, 'id'), { mode }));

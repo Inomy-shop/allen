@@ -1,6 +1,6 @@
 import { useEffect, useState, useRef } from 'react';
 import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
-import { useChat } from '../hooks/useChat';
+import { useChat, type SpawnedAgent } from '../hooks/useChat';
 import ChatInput, { type ReasoningEffortValue, type RepoOption, type SlashCommandOption } from '../components/chat/ChatInput';
 import ChatMessageList from '../components/chat/ChatMessageList';
 import CommandPalette from '../components/chat/CommandPalette';
@@ -8,26 +8,88 @@ import ConversationLogs from '../components/chat/ConversationLogs';
 import AgentChatDropdown from '../components/chat/AgentChatDropdown';
 import ChatRunSidebar, { type ChatRunPanelTab } from '../components/chat/ChatRunSidebar';
 import { ToolCallLog } from '../components/common/ToolCallLog';
-import { chat as chatApi, mcp as mcpApi, learnings as learningsApi, agents as agentsApi, repos as reposApi } from '../services/api';
-import { workspaces as workspacesApi } from '../services/workspaceService';
-import { Code2, FileText, ListTree, PanelRightOpen, Route, X } from 'lucide-react';
+import { chat as chatApi, mcp as mcpApi, learnings as learningsApi, agents as agentsApi, repos as reposApi, type ChatQueueItem } from '../services/api';
+import { chatCodeDiffs, pullRequests as pullRequestsApi, workspaces as workspacesApi } from '../services/workspaceService';
+import { Code2, ExternalLink, FileText, GitPullRequest, ListTree, PanelRightOpen, Route, X } from 'lucide-react';
 
-type QueuedChatMessage = {
-  id: string;
-  content: string;
-  agent?: string | null;
-  cwd?: string | null;
-  sessionId?: string | null;
-  options?: {
-    provider?: string | null;
-    model?: string | null;
-    repoId?: string | null;
-    agentOverrides?: {
-      reasoningEffort?: ReasoningEffortValue | null;
-      planMode?: boolean | null;
-    };
+type PendingSendOptions = {
+  provider?: string | null;
+  model?: string | null;
+  repoId?: string | null;
+  agentOverrides?: {
+    reasoningEffort?: ReasoningEffortValue | null;
+    planMode?: boolean | null;
   };
 };
+
+type ChatPullRequest = NonNullable<NonNullable<SpawnedAgent['runContext']>['pullRequest']>;
+
+function humanLabel(value?: string | null): string {
+  if (!value) return '';
+  return value.replace(/[_-]+/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+}
+
+function timeAgo(dateStr?: string | null): string {
+  if (!dateStr) return 'recently';
+  const ms = Date.now() - new Date(dateStr).getTime();
+  const min = Math.floor(ms / 60_000);
+  if (min < 1) return 'just now';
+  if (min < 60) return `${min}m ago`;
+  const hr = Math.floor(min / 60);
+  if (hr < 24) return `${hr}h ago`;
+  return `${Math.floor(hr / 24)}d ago`;
+}
+
+function collectPullRequests(runs: SpawnedAgent[]): ChatPullRequest[] {
+  const prs = new Map<string, ChatPullRequest>();
+  for (const run of runs) {
+    const pr = run.runContext?.pullRequest;
+    const key = pr?.id ?? pr?.url ?? (pr?.number != null ? String(pr.number) : '');
+    if (pr && key) prs.set(key, pr);
+  }
+  return [...prs.values()].sort((a, b) => {
+    const at = new Date(a.updatedAt ?? a.createdAt ?? 0).getTime();
+    const bt = new Date(b.updatedAt ?? b.createdAt ?? 0).getTime();
+    return bt - at;
+  });
+}
+
+function FloatingPullRequestCard({ pullRequest }: { pullRequest: ChatPullRequest }) {
+  const status = humanLabel(pullRequest.status ?? 'open');
+  const age = timeAgo(pullRequest.mergedAt ?? pullRequest.updatedAt ?? pullRequest.createdAt);
+  return (
+    <aside className="chat-pr-float" aria-label="Pull request ready" title={pullRequest.title ?? 'Pull request ready'}>
+      <div className="chat-pr-float-main">
+        <span className="chat-pr-float-tag">
+          <GitPullRequest className="h-3.5 w-3.5" />
+          PR
+        </span>
+        <span className="chat-pr-float-title">#{pullRequest.number ?? ''} {status}</span>
+        <span className="chat-pr-float-age">{age}</span>
+        <div className="chat-pr-float-actions">
+          {pullRequest.url && (
+            <a href={pullRequest.url} target="_blank" rel="noopener noreferrer" title="Review on GitHub" aria-label="Review on GitHub">
+              <ExternalLink className="h-3.5 w-3.5" />
+            </a>
+          )}
+          <a href="/pull-requests" title="Open pull requests" aria-label="Open pull requests">
+            <GitPullRequest className="h-3.5 w-3.5" />
+          </a>
+        </div>
+      </div>
+    </aside>
+  );
+}
+
+function diffLineCounts(diff?: string): { additions: number; deletions: number } {
+  if (!diff) return { additions: 0, deletions: 0 };
+  return diff.split('\n').reduce((acc, line) => {
+    if (line.startsWith('+++') || line.startsWith('---')) return acc;
+    if (line.startsWith('+')) acc.additions += 1;
+    else if (line.startsWith('-')) acc.deletions += 1;
+    return acc;
+  }, { additions: 0, deletions: 0 });
+}
 
 export default function ChatPage() {
   const { sessionId: urlSessionId } = useParams<{ sessionId?: string }>();
@@ -50,7 +112,7 @@ export default function ChatPage() {
   const [selectedRepo, setSelectedRepo] = useState<RepoOption | null>(null);
   const [repos, setRepos] = useState<RepoOption[]>([]);
   const [slashCommands, setSlashCommands] = useState<SlashCommandOption[]>([]);
-  const [queuedMessages, setQueuedMessages] = useState<QueuedChatMessage[]>([]);
+  const [queuedMessages, setQueuedMessages] = useState<ChatQueueItem[]>([]);
   const [editingQueuedId, setEditingQueuedId] = useState<string | null>(null);
   const [editingQueuedValue, setEditingQueuedValue] = useState('');
   const [chatDiffSummary, setChatDiffSummary] = useState<{ files: number; additions: number; deletions: number } | null>(null);
@@ -63,9 +125,8 @@ export default function ChatPage() {
   }>({});
   const chatInputRef = useRef<{ setValue: (v: string) => void; focus: () => void } | null>(null);
   const processedDeepLinkRef = useRef<string | null>(null);
-  const queuedMessagesRef = useRef<QueuedChatMessage[]>([]);
+  const queuedMessagesRef = useRef<ChatQueueItem[]>([]);
   const editingQueuedIdRef = useRef<string | null>(null);
-  const queueDispatchingRef = useRef(false);
   const chatDiffSignatureRef = useRef('');
 
   const {
@@ -79,6 +140,8 @@ export default function ChatPage() {
 
   const activeSession = sessions.find(s => s._id === activeSessionId);
   const activeProvider = activeSession?.provider ?? selectedProvider;
+  const pullRequests = collectPullRequests(spawnedAgents);
+  const floatingPullRequest = !sidePanelOpen ? pullRequests[0] ?? null : null;
 
   useEffect(() => { queuedMessagesRef.current = queuedMessages; }, [queuedMessages]);
   useEffect(() => { editingQueuedIdRef.current = editingQueuedId; }, [editingQueuedId]);
@@ -190,23 +253,24 @@ export default function ChatPage() {
     }
   }, [activeSessionId]);
 
-  function enqueueMessage(message: QueuedChatMessage): void {
-    setQueuedMessages(prev => [...prev, message]);
+  async function refreshQueue(sessionId = activeSessionId): Promise<void> {
+    if (!sessionId) {
+      setQueuedMessages([]);
+      return;
+    }
+    try {
+      const items = await chatApi.getQueue(sessionId);
+      setQueuedMessages(items ?? []);
+    } catch (err) {
+      console.warn('Failed to load chat queue:', err);
+    }
   }
 
   async function sendNow(
     content: string,
     agentOverride?: string | null,
     cwdOverride?: string | null,
-    options?: {
-      provider?: string | null;
-      model?: string | null;
-      repoId?: string | null;
-      agentOverrides?: {
-        reasoningEffort?: ReasoningEffortValue | null;
-        planMode?: boolean | null;
-      };
-    },
+    options?: PendingSendOptions,
     forcedSessionId?: string | null,
   ) {
     const agentName = agentOverride ?? selectedAgent;
@@ -242,34 +306,41 @@ export default function ChatPage() {
     content: string,
     agentOverride?: string | null,
     cwdOverride?: string | null,
-    options?: QueuedChatMessage['options'],
+    options?: PendingSendOptions,
   ) {
-    const shouldQueue = streaming || queuedMessagesRef.current.length > 0 || Boolean(editingQueuedIdRef.current);
+    const shouldQueue = Boolean(activeSessionId) && (
+      streaming || queuedMessagesRef.current.length > 0 || Boolean(editingQueuedIdRef.current)
+    );
     if (shouldQueue) {
-      enqueueMessage({
-        id: `${Date.now()}-${Math.random().toString(36).slice(2)}`,
-        content,
-        agent: agentOverride ?? selectedAgent,
-        cwd: cwdOverride ?? selectedAgentCwd,
-        sessionId: activeSessionId,
-        options,
-      });
+      if (!activeSessionId) return;
+      if (queuedMessagesRef.current.length >= 3) {
+        window.alert('This chat already has 3 queued messages. Send or remove one before adding another.');
+        return;
+      }
+      try {
+        const item = await chatApi.enqueueMessage(activeSessionId, {
+          content,
+          agent: agentOverride ?? selectedAgent,
+          cwd: cwdOverride ?? selectedAgentCwd,
+        });
+        setQueuedMessages(prev => [...prev, item]);
+      } catch (err) {
+        window.alert(err instanceof Error ? err.message : 'Failed to queue message');
+        await refreshQueue(activeSessionId);
+      }
       return;
     }
     await sendNow(content, agentOverride, cwdOverride, options);
   }
 
   useEffect(() => {
-    if (streaming || editingQueuedId || queueDispatchingRef.current || queuedMessages.length === 0) return;
-    const next = queuedMessages[0];
-    queueDispatchingRef.current = true;
-    setQueuedMessages(prev => prev.slice(1));
-    void sendNow(next.content, next.agent, next.cwd, next.options, next.sessionId)
-      .finally(() => {
-        queueDispatchingRef.current = false;
-        setQueuedMessages(prev => [...prev]);
-      });
-  }, [streaming, editingQueuedId, queuedMessages, activeSessionId, selectedAgent, selectedAgentCwd, selectedProvider, selectedModel, selectedRepo?._id, pendingOverrides]);
+    void refreshQueue(activeSessionId);
+    if (!activeSessionId) return;
+    const timer = window.setInterval(() => {
+      void refreshQueue(activeSessionId);
+    }, queuedMessagesRef.current.length > 0 || streaming ? 2000 : 6000);
+    return () => window.clearInterval(timer);
+  }, [activeSessionId, streaming]);
 
   // Deep-link support: ?agent=NAME&prompt=PREFILL. Command-center sends use
   // autosend=1 so the user lands in the focused current chat, not a prior
@@ -389,7 +460,14 @@ export default function ChatPage() {
     else if (mode === 'branch') existing.mode = 'branch';
     return acc;
   }, []);
+  const pullRequestDiffRefs = spawnedAgents.reduce<Array<{ id: string }>>((acc, run) => {
+    const id = run.runContext?.pullRequest?.id;
+    if (id && !acc.some(item => item.id === id)) acc.push({ id });
+    return acc;
+  }, []);
   const workspaceSignature = workspaceDiffRefs.map(ref => `${ref.id}:${ref.mode}`).join('|');
+  const pullRequestSignature = pullRequestDiffRefs.map(ref => ref.id).join('|');
+  const diffSourceSignature = [activeSessionId ?? '', workspaceSignature, pullRequestSignature].filter(Boolean).join('::');
   const diffRefreshSignature = spawnedAgents
     .map(run => [
       run.executionId,
@@ -402,7 +480,7 @@ export default function ChatPage() {
     .join('|');
 
   useEffect(() => {
-    if (!workspaceSignature) {
+    if (!diffSourceSignature) {
       chatDiffSignatureRef.current = '';
       setChatDiffSummary(null);
       setHiddenDiffSignature(null);
@@ -410,7 +488,21 @@ export default function ChatPage() {
     }
     let cancelled = false;
     const workspaceRefs = workspaceDiffRefs;
+    const pullRequestRefs = pullRequestDiffRefs;
     const refreshDiffSummary = async () => {
+      const snapshotPart = activeSessionId
+        ? await chatCodeDiffs.listAll(activeSessionId)
+          .then(result => {
+            const files = (result.snapshots ?? []).flatMap((snapshot: any) => snapshot.files ?? [])
+              .filter((file: any) => file.diff?.trim() || file.modifiedContent?.trim());
+            return {
+              files: files.length,
+              additions: files.reduce((sum: number, file: any) => sum + (file.additions ?? 0), 0),
+              deletions: files.reduce((sum: number, file: any) => sum + (file.deletions ?? 0), 0),
+            };
+          })
+          .catch(() => ({ files: 0, additions: 0, deletions: 0 }))
+        : { files: 0, additions: 0, deletions: 0 };
       const parts = await Promise.all(workspaceRefs.map(async ref => {
         try {
           const result = await workspacesApi.getDiff(ref.id, { mode: ref.mode });
@@ -425,12 +517,27 @@ export default function ChatPage() {
           return { files: 0, additions: 0, deletions: 0 };
         }
       }));
+      const prParts = await Promise.all(pullRequestRefs.map(async ref => {
+        try {
+          const result = await pullRequestsApi.getDiff(ref.id);
+          const files = ((result.files ?? []) as Array<{ diff?: string; modifiedContent?: string }>)
+            .filter(file => file.diff?.trim() || file.modifiedContent?.trim());
+          return {
+            files: files.length,
+            additions: files.reduce((sum, file) => sum + diffLineCounts(file.diff).additions, 0),
+            deletions: files.reduce((sum, file) => sum + diffLineCounts(file.diff).deletions, 0),
+          };
+        } catch {
+          return { files: 0, additions: 0, deletions: 0 };
+        }
+      }));
       if (cancelled) return;
-      const summary = parts.reduce((acc, item) => ({
+      const liveSummary = [...parts, ...prParts].reduce((acc, item) => ({
         files: acc.files + item.files,
         additions: acc.additions + item.additions,
         deletions: acc.deletions + item.deletions,
       }), { files: 0, additions: 0, deletions: 0 });
+      const summary = liveSummary.files > 0 ? liveSummary : snapshotPart;
       const next = summary.files > 0 ? summary : null;
       const nextSignature = next ? `${next.files}:${next.additions}:${next.deletions}` : '';
       if (chatDiffSignatureRef.current !== nextSignature) {
@@ -448,9 +555,17 @@ export default function ChatPage() {
       cancelled = true;
       window.clearInterval(timer);
     };
-  }, [workspaceSignature, diffRefreshSignature, streaming, spawnedAgents]);
+  }, [diffSourceSignature, diffRefreshSignature, streaming, spawnedAgents, activeSessionId]);
 
   const showResourceRail = Boolean(activeSessionId) || spawnedAgents.length > 0;
+  const archivedWorkspace = activeSession?.archivedWorkspace;
+  const repoBrowseSource = archivedWorkspace?.repoId
+    ? { id: archivedWorkspace.repoId, name: archivedWorkspace.repoName ?? archivedWorkspace.name, path: archivedWorkspace.repoPath }
+    : activeSession?.repoId
+      ? { id: activeSession.repoId, name: activeSession.repoName, path: activeSession.repoPath }
+      : selectedRepo?._id
+        ? { id: selectedRepo._id, name: selectedRepo.name, path: selectedRepo.path }
+        : null;
 
   return (
     <div className={`chat-page-shell ${sidePanelOpen ? 'with-run-sidebar' : ''}`}>
@@ -463,10 +578,29 @@ export default function ChatPage() {
       ) : (
         <ChatMessageList messages={messages} streamText={streamText} thinkingText={thinkingText} streaming={streaming} activeToolCalls={activeToolCalls} agentThreads={agentThreads} agentReports={agentReports} threadsByMessage={threadsByMessage} spawnedAgents={spawnedAgents} pendingUserQuestion={pendingUserQuestion} onAnswerUserQuestion={answerUserQuestion} onAnswerWorkflowIntervention={answerWorkflowIntervention} activeAgent={activeSession?.activeAgent} onSuggestionClick={handleSuggestionClick} onSaveToLearnings={handleSaveToLearnings} onOpenExecutionsPanel={() => openSidePanel('executions')} onOpenFilesPanel={() => openSidePanel('files')} />
       )}
+      {floatingPullRequest && <FloatingPullRequestCard pullRequest={floatingPullRequest} />}
 
       {/* Input */}
       <div className="chat-input-dock">
-        {chatDiffSummary && hiddenDiffSignature !== workspaceSignature && (
+        {archivedWorkspace && (
+          <div className="chat-archived-workspace-note">
+            <div>
+              <span>Workspace deleted</span>
+              <strong>{archivedWorkspace.name ?? archivedWorkspace.branch ?? 'Deleted workspace'}</strong>
+              <em>
+                {[archivedWorkspace.repoName, archivedWorkspace.branch, archivedWorkspace.baseBranch ? `base ${archivedWorkspace.baseBranch}` : null]
+                  .filter(Boolean)
+                  .join(' · ')}
+              </em>
+            </div>
+            {archivedWorkspace.prUrl && (
+              <a href={archivedWorkspace.prUrl} target="_blank" rel="noreferrer">
+                open PR
+              </a>
+            )}
+          </div>
+        )}
+        {chatDiffSummary && hiddenDiffSignature !== diffSourceSignature && (
           <div className="chat-code-summary-wrap">
             <button
               type="button"
@@ -482,7 +616,7 @@ export default function ChatPage() {
             <button
               type="button"
               className="chat-code-summary-close"
-              onClick={() => setHiddenDiffSignature(workspaceSignature)}
+              onClick={() => setHiddenDiffSignature(diffSourceSignature)}
               title="Hide changed files summary"
             >
               <X className="h-3 w-3" />
@@ -498,6 +632,7 @@ export default function ChatPage() {
             <div className="chat-queue-list">
               {queuedMessages.map((item, index) => {
                 const editing = editingQueuedId === item.id;
+                const running = item.status === 'running';
                 return (
                   <div key={item.id} className="chat-queue-item">
                     <div className="chat-queue-index">{index + 1}</div>
@@ -513,17 +648,26 @@ export default function ChatPage() {
                       <div className="chat-queue-text">{item.content}</div>
                     )}
                     <div className="chat-queue-actions">
-                      {editing ? (
+                      {running ? (
+                        <span>sending</span>
+                      ) : editing ? (
                         <>
                           <button
                             type="button"
                             onClick={() => {
-                              const next = editingQueuedValue.trim();
-                              if (next) {
-                                setQueuedMessages(prev => prev.map(q => q.id === item.id ? { ...q, content: next } : q));
-                              }
-                              setEditingQueuedId(null);
-                              setEditingQueuedValue('');
+                              void (async () => {
+                                if (!activeSessionId) return;
+                                const next = editingQueuedValue.trim();
+                                if (next) {
+                                  const updated = await chatApi.updateQueuedMessage(activeSessionId, item.id, { content: next, status: 'queued' });
+                                  setQueuedMessages(prev => prev.map(q => q.id === item.id ? updated : q));
+                                } else {
+                                  const updated = await chatApi.updateQueuedMessage(activeSessionId, item.id, { status: 'queued' });
+                                  setQueuedMessages(prev => prev.map(q => q.id === item.id ? updated : q));
+                                }
+                                setEditingQueuedId(null);
+                                setEditingQueuedValue('');
+                              })().catch(err => window.alert(err instanceof Error ? err.message : 'Failed to save queued message'));
                             }}
                             title="Save queued message"
                           >
@@ -532,8 +676,14 @@ export default function ChatPage() {
                           <button
                             type="button"
                             onClick={() => {
-                              setEditingQueuedId(null);
-                              setEditingQueuedValue('');
+                              void (async () => {
+                                if (activeSessionId) {
+                                  const updated = await chatApi.updateQueuedMessage(activeSessionId, item.id, { status: 'queued' });
+                                  setQueuedMessages(prev => prev.map(q => q.id === item.id ? updated : q));
+                                }
+                                setEditingQueuedId(null);
+                                setEditingQueuedValue('');
+                              })().catch(err => window.alert(err instanceof Error ? err.message : 'Failed to resume queued message'));
                             }}
                             title="Cancel edit"
                           >
@@ -545,8 +695,13 @@ export default function ChatPage() {
                           <button
                             type="button"
                             onClick={() => {
-                              setEditingQueuedId(item.id);
-                              setEditingQueuedValue(item.content);
+                              void (async () => {
+                                if (!activeSessionId) return;
+                                const updated = await chatApi.updateQueuedMessage(activeSessionId, item.id, { status: 'editing' });
+                                setQueuedMessages(prev => prev.map(q => q.id === item.id ? updated : q));
+                                setEditingQueuedId(item.id);
+                                setEditingQueuedValue(item.content);
+                              })().catch(err => window.alert(err instanceof Error ? err.message : 'Failed to edit queued message'));
                             }}
                             title="Edit queued message"
                           >
@@ -554,7 +709,13 @@ export default function ChatPage() {
                           </button>
                           <button
                             type="button"
-                            onClick={() => setQueuedMessages(prev => prev.filter(q => q.id !== item.id))}
+                            onClick={() => {
+                              void (async () => {
+                                if (!activeSessionId) return;
+                                await chatApi.deleteQueuedMessage(activeSessionId, item.id);
+                                setQueuedMessages(prev => prev.filter(q => q.id !== item.id));
+                              })().catch(err => window.alert(err instanceof Error ? err.message : 'Failed to remove queued message'));
+                            }}
                             title="Remove queued message"
                           >
                             Remove
@@ -578,7 +739,7 @@ export default function ChatPage() {
           modelLocked={!!activeSessionId}
           onProviderChange={(p, m) => { setSelectedProvider(p); setSelectedModel(m); }}
           repos={repos}
-          selectedRepoName={activeSession?.repoName ?? selectedRepo?.name ?? null}
+          selectedRepoName={archivedWorkspace ? `${archivedWorkspace.name ?? 'Workspace'} deleted` : activeSession?.repoName ?? selectedRepo?.name ?? null}
           repoLocked={!!activeSessionId}
           onRepoChange={(repo: RepoOption | null) => {
             if (!activeSessionId) setSelectedRepo(repo);
@@ -640,7 +801,7 @@ export default function ChatPage() {
         </div>
       )}
       </div>
-      {showResourceRail && (
+      {showResourceRail && !sidePanelOpen && (
         <nav className="chat-resource-rail" aria-label="Chat resources">
           <button
             type="button"
@@ -668,6 +829,7 @@ export default function ChatPage() {
         runs={spawnedAgents}
         rootType="chat"
         rootId={activeSessionId}
+        repoBrowseSource={repoBrowseSource}
         open={sidePanelOpen}
         activeTab={sidePanelTab}
         onTabChange={setSidePanelTab}
