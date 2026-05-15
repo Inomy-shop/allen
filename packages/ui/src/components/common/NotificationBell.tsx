@@ -86,7 +86,7 @@ export default function NotificationBell() {
           {/* Dropdown */}
           <div
             className="fixed z-50 w-80 bg-surface-100 border border-app rounded-lg shadow-2xl overflow-hidden"
-            style={{ left: rect.right + 8, bottom: window.innerHeight - rect.bottom }}
+            style={{ right: window.innerWidth - rect.right, top: rect.bottom + 8 }}
           >
             {/* Header */}
             <div className="flex items-center justify-between px-4 py-2.5 border-b border-app bg-surface-50">
