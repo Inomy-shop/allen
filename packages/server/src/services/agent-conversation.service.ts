@@ -27,6 +27,13 @@ export interface AgentConversation {
   _id?: ObjectId;
   chatSessionId: string;
   parentMessageId: string;
+  /**
+   * Every assistant message that issued or continued this delegation, in order.
+   * Populated on create and via $addToSet on every continue, so the UI can
+   * render the thread card under each turn that touched it instead of only
+   * the original anchor. Legacy rows have just `parentMessageId`.
+   */
+  parentMessageIds?: string[];
   fromAgent: string;
   toAgent: string;
   task: string;
@@ -89,6 +96,7 @@ export class AgentConversationService {
     const doc: AgentConversation = {
       chatSessionId: params.chatSessionId,
       parentMessageId: params.parentMessageId,
+      parentMessageIds: [params.parentMessageId],
       fromAgent: params.fromAgent,
       toAgent: params.toAgent,
       task: params.task,
@@ -109,6 +117,23 @@ export class AgentConversationService {
 
   async get(conversationId: string): Promise<AgentConversation | null> {
     return this.col.findOne({ _id: await this.oid(conversationId) }) as Promise<AgentConversation | null>;
+  }
+
+  /**
+   * Reset a completed/failed conversation back to `active` for a continuation turn.
+   * Clears the prior turn's terminal fields (response/summary/cost/duration) so
+   * wait_for_delegation can't short-circuit on stale data, and anchors the thread
+   * to the current assistant message via parentMessageIds.
+   */
+  async markContinuation(conversationId: string, parentMessageId: string): Promise<void> {
+    await this.col.updateOne(
+      { _id: await this.oid(conversationId) },
+      {
+        $set: { status: 'active' },
+        $unset: { response: '', summary: '', completedAt: '' },
+        $addToSet: { parentMessageIds: parentMessageId },
+      },
+    );
   }
 
   async addMessage(conversationId: string, message: AgentMessage): Promise<void> {
