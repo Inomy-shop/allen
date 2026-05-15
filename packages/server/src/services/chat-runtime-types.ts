@@ -24,6 +24,14 @@ export interface RuntimeTurnResult {
   trace: ChatTraceEvent[];
 }
 
+export interface RuntimeSlashCommand {
+  name: string;
+  raw: string;
+  args: string;
+  kind?: 'builtin' | 'skill' | 'command';
+  path?: string;
+}
+
 export interface PersistentChatRuntime {
   readonly id: string;
   readonly provider: ChatProvider;

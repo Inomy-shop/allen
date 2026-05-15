@@ -117,6 +117,7 @@ function routeTitle(pathname: string): string {
 
 function AppTopbar({
   title,
+  detail,
   liveCount,
   healthy,
   commandOpen,
@@ -127,6 +128,7 @@ function AppTopbar({
   onColorModeToggle,
 }: {
   title: string;
+  detail?: string | null;
   liveCount: number;
   healthy: boolean;
   commandOpen: boolean;
@@ -152,6 +154,12 @@ function AppTopbar({
         <span>allen</span>
         <span className="sep">/</span>
         <span className="now">{title}</span>
+        {detail && (
+          <>
+            <span className="sep">/</span>
+            <span className="detail" title={detail}>{detail}</span>
+          </>
+        )}
       </div>
 
       <div className="spacer" />
@@ -339,6 +347,7 @@ export default function App() {
   const location = useLocation();
   const navigate = useNavigate();
   const title = routeTitle(location.pathname);
+  const [chatTopbarTitle, setChatTopbarTitle] = useState<string | null>(null);
   const [commandOpen, setCommandOpen] = useState(false);
   const [liveCount, setLiveCount] = useState(0);
   const [healthKnown, setHealthKnown] = useState(false);
@@ -393,6 +402,33 @@ export default function App() {
       clearInterval(interval);
     };
   }, []);
+
+  useEffect(() => {
+    const match = location.pathname.match(/^\/chat\/([^/]+)/);
+    if (!match) {
+      setChatTopbarTitle(null);
+      return;
+    }
+    let cancelled = false;
+    const sessionId = match[1];
+    const loadTitle = () => {
+      chatApi.getSession(sessionId)
+        .then((session) => {
+          if (!cancelled) setChatTopbarTitle(session?.title ?? null);
+        })
+        .catch(() => {
+          if (!cancelled) setChatTopbarTitle(null);
+        });
+    };
+    loadTitle();
+    const refreshSoon = window.setTimeout(loadTitle, 2000);
+    const refreshLater = window.setTimeout(loadTitle, 6000);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(refreshSoon);
+      window.clearTimeout(refreshLater);
+    };
+  }, [location.pathname]);
 
   useEffect(() => {
     let cancelled = false;
@@ -594,6 +630,7 @@ export default function App() {
       <main className="flex-1 min-w-0 bg-app relative flex flex-col overflow-hidden">
         <AppTopbar
           title={title}
+          detail={chatTopbarTitle}
           liveCount={liveCount}
           healthy={healthKnown}
           commandOpen={commandOpen}
