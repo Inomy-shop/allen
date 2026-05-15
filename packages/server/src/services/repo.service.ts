@@ -1,4 +1,4 @@
-import { existsSync, rmSync, statSync } from 'node:fs';
+import { accessSync, constants as fsConstants, existsSync, rmSync, statSync } from 'node:fs';
 import { basename, join } from 'node:path';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
@@ -8,6 +8,31 @@ import { scanRepo } from './repo-scanner.js';
 import { RepoContextScannerService } from './repo-context-scanner.service.js';
 
 const exec = promisify(execFile);
+
+export interface RepoValidationCheck {
+  id: string;
+  label: string;
+  status: 'pass' | 'warn' | 'fail';
+  detail: string;
+}
+
+export interface RepoValidationResult {
+  ok: boolean;
+  source: 'local' | 'clone';
+  name?: string;
+  path?: string;
+  clonePath?: string;
+  sshUrl?: string;
+  branch?: string;
+  detected?: {
+    language: string[];
+    framework: string[];
+    packageManager: string;
+    defaultBranch: string;
+    remoteUrl?: string;
+  };
+  checks: RepoValidationCheck[];
+}
 
 /**
  * Parse a GitHub URL (HTTPS or SSH) into { sshUrl, repoName }.
@@ -35,6 +60,11 @@ function parseGitHubUrl(input: string): { sshUrl: string; repoName: string } {
   }
 
   throw new Error(`Invalid repository URL: "${input}". Expected GitHub HTTPS or SSH URL.`);
+}
+
+async function runGit(repoPath: string, args: string[], timeout = 5000): Promise<string> {
+  const { stdout } = await exec('git', args, { cwd: repoPath, timeout });
+  return stdout.trim();
 }
 
 export class RepoService {
@@ -107,6 +137,179 @@ export class RepoService {
     });
 
     return { ...doc, _id: result.insertedId };
+  }
+
+  async validateLocalPath(repoPathRaw: string): Promise<RepoValidationResult> {
+    const repoPath = String(repoPathRaw ?? '').trim();
+    const checks: RepoValidationCheck[] = [];
+
+    if (!repoPath) {
+      return {
+        ok: false,
+        source: 'local',
+        checks: [{
+          id: 'path',
+          label: 'Path',
+          status: 'fail',
+          detail: 'Enter a local repository path.',
+        }],
+      };
+    }
+
+    const add = (check: RepoValidationCheck) => checks.push(check);
+
+    if (!existsSync(repoPath)) {
+      add({ id: 'exists', label: 'Path exists', status: 'fail', detail: 'Path does not exist.' });
+      return { ok: false, source: 'local', path: repoPath, checks };
+    }
+    add({ id: 'exists', label: 'Path exists', status: 'pass', detail: 'Path exists.' });
+
+    if (!statSync(repoPath).isDirectory()) {
+      add({ id: 'directory', label: 'Directory', status: 'fail', detail: 'Path is not a directory.' });
+      return { ok: false, source: 'local', path: repoPath, checks };
+    }
+    add({ id: 'directory', label: 'Directory', status: 'pass', detail: 'Path is a directory.' });
+
+    try {
+      accessSync(repoPath, fsConstants.R_OK | fsConstants.W_OK);
+      add({ id: 'access', label: 'Read/write access', status: 'pass', detail: 'Allen can read and write this path.' });
+    } catch {
+      add({ id: 'access', label: 'Read/write access', status: 'fail', detail: 'Allen needs read/write access to create workspaces.' });
+    }
+
+    let isGit = false;
+    try {
+      const inside = await runGit(repoPath, ['rev-parse', '--is-inside-work-tree']);
+      isGit = inside === 'true';
+    } catch {
+      isGit = false;
+    }
+    add({
+      id: 'git',
+      label: 'Git repository',
+      status: isGit ? 'pass' : 'fail',
+      detail: isGit ? 'Path is a git repository.' : 'Path is not a git repository.',
+    });
+
+    const existing = await this.col.findOne({ path: repoPath });
+    add({
+      id: 'unique',
+      label: 'Not already registered',
+      status: existing ? 'fail' : 'pass',
+      detail: existing ? 'This repository is already registered in Allen.' : 'Repository is not registered yet.',
+    });
+
+    let branch = '';
+    if (isGit) {
+      try {
+        branch = await runGit(repoPath, ['rev-parse', '--abbrev-ref', 'HEAD']);
+      } catch {
+        branch = '';
+      }
+      add({
+        id: 'branch',
+        label: 'Current branch',
+        status: branch && branch !== 'HEAD' ? 'pass' : 'warn',
+        detail: branch && branch !== 'HEAD' ? `Current branch is ${branch}.` : 'Repository appears to be in detached HEAD state.',
+      });
+
+      try {
+        const dirty = await runGit(repoPath, ['status', '--porcelain']);
+        add({
+          id: 'dirty',
+          label: 'Working tree',
+          status: dirty ? 'warn' : 'pass',
+          detail: dirty ? 'Repository has uncommitted changes. Allen will create separate workspaces, but review local work first.' : 'Working tree is clean.',
+        });
+      } catch {
+        add({ id: 'dirty', label: 'Working tree', status: 'warn', detail: 'Could not inspect working tree status.' });
+      }
+    }
+
+    let scanResult: Awaited<ReturnType<typeof scanRepo>> | null = null;
+    if (checks.every(check => check.status !== 'fail')) {
+      scanResult = await scanRepo(repoPath);
+    }
+
+    return {
+      ok: checks.every(check => check.status !== 'fail'),
+      source: 'local',
+      name: basename(repoPath),
+      path: repoPath,
+      branch: branch || scanResult?.defaultBranch,
+      detected: scanResult ? {
+        language: scanResult.language,
+        framework: scanResult.framework,
+        packageManager: scanResult.packageManager,
+        defaultBranch: scanResult.defaultBranch,
+        remoteUrl: scanResult.remoteUrl,
+      } : undefined,
+      checks,
+    };
+  }
+
+  async validateCloneUrl(body: {
+    url: string;
+    branch?: string;
+    name?: string;
+  }): Promise<RepoValidationResult> {
+    const checks: RepoValidationCheck[] = [];
+    const url = String(body.url ?? '').trim();
+    if (!url) {
+      return {
+        ok: false,
+        source: 'clone',
+        checks: [{ id: 'url', label: 'Repository URL', status: 'fail', detail: 'Enter a GitHub repository URL.' }],
+      };
+    }
+
+    let parsed: { sshUrl: string; repoName: string };
+    try {
+      parsed = parseGitHubUrl(url);
+      checks.push({ id: 'url', label: 'Repository URL', status: 'pass', detail: `Will clone ${parsed.sshUrl}.` });
+    } catch (err) {
+      checks.push({ id: 'url', label: 'Repository URL', status: 'fail', detail: (err as Error).message });
+      return { ok: false, source: 'clone', checks };
+    }
+
+    const repoName = body.name?.trim() || parsed.repoName;
+    const clonePath = join(resolveRepositoriesDir(), repoName);
+
+    const existingByName = await this.col.findOne({ name: repoName });
+    checks.push({
+      id: 'name',
+      label: 'Repository name',
+      status: existingByName ? 'fail' : 'pass',
+      detail: existingByName ? `A repo named "${repoName}" is already registered.` : `Repository will be named "${repoName}".`,
+    });
+
+    const existingByPath = await this.col.findOne({ path: clonePath });
+    checks.push({
+      id: 'path',
+      label: 'Clone path',
+      status: existingByPath || existsSync(clonePath) ? 'fail' : 'pass',
+      detail: existingByPath || existsSync(clonePath)
+        ? `Clone path already exists: ${clonePath}`
+        : `Clone path is available.`,
+    });
+
+    const branch = body.branch?.trim() || 'main';
+    checks.push({
+      id: 'branch',
+      label: 'Branch',
+      status: 'pass',
+      detail: `Allen will check out ${branch} after cloning.`,
+    });
+
+    return {
+      ok: checks.every(check => check.status !== 'fail'),
+      source: 'clone',
+      name: repoName,
+      sshUrl: parsed.sshUrl,
+      clonePath,
+      branch,
+      checks,
+    };
   }
 
   /**

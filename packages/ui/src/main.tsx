@@ -25,6 +25,7 @@ import MonitoringPage from './pages/MonitoringPage';
 import LoginPage from './pages/LoginPage';
 import OnboardingAccountPage from './pages/OnboardingAccountPage';
 import OnboardingHealthPage from './pages/OnboardingHealthPage';
+import OnboardingRepositoryPage from './pages/OnboardingRepositoryPage';
 import ResetPasswordPage from './pages/ResetPasswordPage';
 import ForbiddenPage from './pages/ForbiddenPage';
 import ProtectedRoute from './components/auth/ProtectedRoute';
@@ -34,6 +35,7 @@ const router = createBrowserRouter([
   { path: '/onboarding', element: <Navigate to="/onboarding/account" replace /> },
   { path: '/onboarding/account', element: <OnboardingAccountPage /> },
   { path: '/onboarding/health', element: <OnboardingHealthPage /> },
+  { path: '/onboarding/repository', element: <OnboardingRepositoryPage /> },
   { path: '/login', element: <LoginPage /> },
   { path: '/reset-password', element: <ResetPasswordPage /> },
   { path: '/403', element: <ForbiddenPage /> },

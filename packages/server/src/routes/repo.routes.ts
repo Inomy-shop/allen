@@ -97,6 +97,27 @@ export function repoRoutes(db: Db): Router {
     }
   });
 
+  // POST /api/repos/validate-local — preflight local repo connection
+  router.post('/validate-local', async (req: Request, res: Response) => {
+    try {
+      const { path } = req.body ?? {};
+      const result = await service.validateLocalPath(String(path ?? ''));
+      res.json(result);
+    } catch (err: unknown) {
+      res.status(500).json({ error: (err as Error).message });
+    }
+  });
+
+  // POST /api/repos/validate-clone — preflight GitHub clone connection
+  router.post('/validate-clone', async (req: Request, res: Response) => {
+    try {
+      const result = await service.validateCloneUrl(req.body ?? {});
+      res.json(result);
+    } catch (err: unknown) {
+      res.status(500).json({ error: (err as Error).message });
+    }
+  });
+
   // POST /api/repos/clone — clone from GitHub URL and register
   router.post('/clone', async (req: Request, res: Response) => {
     try {

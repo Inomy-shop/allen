@@ -611,6 +611,10 @@ export const repos = {
   get: (id: string) => request<any>(`/repos/${id}`),
   create: (body: any) =>
     request<any>('/repos', { method: 'POST', body: JSON.stringify(body) }),
+  validateLocal: (path: string) =>
+    request<any>('/repos/validate-local', { method: 'POST', body: JSON.stringify({ path }) }),
+  validateClone: (body: { url: string; branch?: string; name?: string }) =>
+    request<any>('/repos/validate-clone', { method: 'POST', body: JSON.stringify(body) }),
   clone: (body: { url: string; branch?: string; name?: string; description?: string; tags?: string[] }) =>
     request<any>('/repos/clone', { method: 'POST', body: JSON.stringify(body) }),
   update: (id: string, body: any) =>
@@ -997,6 +1001,16 @@ export const system = {
         };
       }>;
     }>('/system/health'),
+  verifySsh: (host = 'github.com') =>
+    request<{
+      ok: boolean;
+      host: string;
+      detail: string;
+      fix?: { summary: string; commands?: string[]; docsPath?: string };
+    }>('/system/verify-ssh', {
+      method: 'POST',
+      body: JSON.stringify({ host }),
+    }),
 };
 
 // ── Linear Types ──────────────────────────────────────────────────────────

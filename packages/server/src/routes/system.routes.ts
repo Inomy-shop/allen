@@ -1,7 +1,45 @@
 import { Router, type Request, type Response } from 'express';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
 import type { Db } from 'mongodb';
 import { UserService } from '../services/user.service.js';
 import { runSystemHealth } from '../services/system-health.service.js';
+
+const exec = promisify(execFile);
+
+type ExecErrorWithOutput = Error & {
+  stdout?: string;
+  stderr?: string;
+  killed?: boolean;
+  signal?: string;
+};
+
+function sanitizeSshHost(input: unknown): string {
+  const host = String(input ?? 'github.com').trim().toLowerCase();
+  if (!/^[a-z0-9.-]+$/.test(host)) {
+    throw new Error('Invalid SSH host');
+  }
+  return host;
+}
+
+async function runSshAuthCheck(host: string): Promise<{ stdout: string; stderr: string; timedOut: boolean }> {
+  try {
+    const { stdout, stderr } = await exec('ssh', [
+      '-T',
+      '-o', 'BatchMode=yes',
+      '-o', 'StrictHostKeyChecking=accept-new',
+      `git@${host}`,
+    ], { timeout: 8000 });
+    return { stdout, stderr, timedOut: false };
+  } catch (err) {
+    const output = err as ExecErrorWithOutput;
+    return {
+      stdout: output.stdout ?? '',
+      stderr: output.stderr ?? '',
+      timedOut: output.killed === true || output.signal === 'SIGTERM',
+    };
+  }
+}
 
 export function systemRoutes(db: Db): Router {
   const router = Router();
@@ -44,6 +82,49 @@ export function systemRoutes(db: Db): Router {
     } catch (err) {
       console.error('[system/health]', err);
       return res.status(500).json({ error: 'system_health_failed' });
+    }
+  });
+
+  // POST /api/system/verify-ssh
+  //
+  // Verifies SSH auth for Git hosting without exposing raw command output.
+  router.post('/verify-ssh', async (req: Request, res: Response) => {
+    try {
+      const host = sanitizeSshHost(req.body?.host);
+      const { stdout, stderr, timedOut } = await runSshAuthCheck(host);
+      const text = `${stdout}\n${stderr}`;
+      const ok = /successfully authenticated|authenticated/i.test(text);
+      return res.json({
+        ok,
+        host,
+        detail: ok
+          ? `SSH authentication to ${host} is working.`
+          : timedOut
+            ? `SSH authentication to ${host} timed out.`
+            : `SSH did not confirm authentication to ${host}.`,
+        fix: ok ? undefined : {
+          summary: `Add an SSH key to ${host}, then retry.`,
+          commands: [`ssh -T git@${host}`],
+          docsPath: 'docs/first-workflow.md',
+        },
+      });
+    } catch (err) {
+      const message = (err as Error).message;
+      const host = (() => {
+        try { return sanitizeSshHost(req.body?.host); } catch { return 'github.com'; }
+      })();
+      return res.json({
+        ok: false,
+        host,
+        detail: message === 'Invalid SSH host'
+          ? message
+          : `SSH authentication to ${host} failed or timed out.`,
+        fix: {
+          summary: `Add an SSH key to ${host}, then retry.`,
+          commands: [`ssh -T git@${host}`],
+          docsPath: 'docs/first-workflow.md',
+        },
+      });
     }
   });
 

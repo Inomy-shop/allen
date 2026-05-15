@@ -209,7 +209,7 @@ export default function OnboardingHealthPage() {
               <button
                 type="button"
                 disabled={!summary?.requiredPassed}
-                onClick={() => navigate('/', { replace: true })}
+                onClick={() => navigate('/onboarding/repository', { replace: true })}
                 className="btn-primary mt-5 inline-flex w-full items-center justify-center gap-2"
               >
                 Continue
