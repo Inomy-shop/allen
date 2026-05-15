@@ -72,7 +72,12 @@ export function workspaceRoutes(db: Db): Router {
   // ── Git Operations ──
 
   router.get('/:id/diff', async (req: Request, res: Response) => {
-    try { res.json(await manager.getDiff(p(req, 'id'))); }
+    try {
+      const mode = req.query.mode === 'branch' || req.query.mode === 'working' || req.query.mode === 'auto'
+        ? req.query.mode
+        : undefined;
+      res.json(await manager.getDiff(p(req, 'id'), { mode }));
+    }
     catch (err: unknown) { res.status(500).json({ error: (err as Error).message }); }
   });
 

@@ -141,6 +141,7 @@ export interface AgentThread {
 /** Spawned agent execution — live tracking */
 export interface SpawnedAgent {
   executionId: string;
+  sourceMessageId?: string;
   agent: string;
   prompt: string;
   status: 'queued' | 'running' | 'waiting_for_input' | 'completed' | 'failed' | 'cancelled';
@@ -210,6 +211,7 @@ function upsertSpawnedRun(prev: SpawnedAgent[], run: Omit<Partial<SpawnedAgent>,
   if (!existing) {
     return [...prev, {
       executionId: run.executionId,
+      sourceMessageId: run.sourceMessageId,
       agent: run.agent ?? 'Routed run',
       prompt: run.prompt ?? '',
       status: run.status ?? 'running',
@@ -270,6 +272,7 @@ function runsFromMessages(messages: ChatMessage[]): SpawnedAgent[] {
       const run = toolRunFromResult(call.tool, call.result);
       if (!run || seen.has(run.executionId)) continue;
       seen.add(run.executionId);
+      run.sourceMessageId = message._id;
       runs.push(run);
     }
     if (!message.content) continue;
@@ -280,6 +283,7 @@ function runsFromMessages(messages: ChatMessage[]): SpawnedAgent[] {
       seen.add(executionId);
       runs.push({
         executionId,
+        sourceMessageId: message._id,
         agent: 'Routed run',
         prompt: message.content.split('\n').find(Boolean) ?? '',
         status: 'running',
@@ -337,6 +341,7 @@ export function useChat() {
             ...run,
             status: update.context.status as SpawnedAgent['status'],
             runContext: update.context,
+            sourceMessageId: update.context.chat?.parentMessageId ?? run.sourceMessageId,
           };
         });
         return changed ? next : prev;
@@ -580,7 +585,10 @@ export function useChat() {
         );
         {
           const run = toolRunFromResult(data.tool, data.result);
-          if (run) setSpawnedAgents(prev => upsertSpawnedRun(prev, run));
+          if (run) {
+            run.sourceMessageId = data.messageId;
+            setSpawnedAgents(prev => upsertSpawnedRun(prev, run));
+          }
         }
         break;
 
@@ -729,6 +737,7 @@ export function useChat() {
       case 'spawn_started':
         setSpawnedAgents(prev => upsertSpawnedRun(prev, {
           executionId: data.executionId as string,
+          sourceMessageId: data.messageId as string | undefined,
           agent: data.agent as string,
           prompt: (data.prompt as string) ?? '',
           status: 'running',
@@ -740,6 +749,7 @@ export function useChat() {
       case 'routed_run_started':
         setSpawnedAgents(prev => upsertSpawnedRun(prev, {
           executionId: data.executionId as string,
+          sourceMessageId: data.messageId as string | undefined,
           agent: (data.name as string) ?? (data.agent as string) ?? (data.workflowName as string) ?? 'Routed run',
           prompt: (data.reason as string) ?? '',
           status: 'running',
@@ -963,7 +973,10 @@ export function useChat() {
                     ),
                   );
                   const run = toolRunFromResult(data.tool, data.result);
-                  if (run) setSpawnedAgents(prev => upsertSpawnedRun(prev, run));
+                  if (run) {
+                    run.sourceMessageId = data.messageId || assistantMsgId;
+                    setSpawnedAgents(prev => upsertSpawnedRun(prev, run));
+                  }
                   break;
                 }
 
@@ -1133,6 +1146,7 @@ export function useChat() {
                 case 'spawn_started':
                   setSpawnedAgents(prev => upsertSpawnedRun(prev, {
                     executionId: data.executionId as string,
+                    sourceMessageId: (data.messageId || assistantMsgId) as string | undefined,
                     agent: data.agent as string,
                     prompt: (data.prompt as string) ?? '',
                     status: 'running',
@@ -1144,6 +1158,7 @@ export function useChat() {
                 case 'routed_run_started':
                   setSpawnedAgents(prev => upsertSpawnedRun(prev, {
                     executionId: data.executionId as string,
+                    sourceMessageId: (data.messageId || assistantMsgId) as string | undefined,
                     agent: (data.name as string) ?? (data.agent as string) ?? (data.workflowName as string) ?? 'Routed run',
                     prompt: (data.reason as string) ?? '',
                     status: 'running',

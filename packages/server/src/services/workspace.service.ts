@@ -105,6 +105,8 @@ export interface WorkspaceConfig {
   updatedAt: Date;
 }
 
+export type WorkspaceDiffMode = 'auto' | 'working' | 'branch';
+
 // ── Service ──
 
 // Process and log state must be shared across every WorkspaceManager
@@ -522,20 +524,26 @@ export class WorkspaceManager {
     }
   }
 
-  async getDiff(id: string): Promise<{ baseBranch: string; files: { path: string; status: string; additions: number; deletions: number; diff: string; originalContent: string; modifiedContent: string }[] }> {
+  async getDiff(id: string, options: { mode?: WorkspaceDiffMode } = {}): Promise<{ baseBranch: string; mode: WorkspaceDiffMode; files: { path: string; status: string; additions: number; deletions: number; diff: string; originalContent: string; modifiedContent: string }[] }> {
     const ws = await this.get(id);
     if (!ws) throw new Error('Workspace not found');
 
     // Prefer current uncommitted changes. If the workspace branch has already
     // committed the implementation, fall back to branch-vs-base so chat and
     // workspace views can still show the completed code diff.
+    const mode = options.mode ?? 'auto';
     let diffRange = 'HEAD';
     let baseRef = 'HEAD';
     let includeUntracked = true;
-    let { stdout: nameStatus } = await exec('git', ['diff', '--name-status', diffRange], { cwd: ws.worktreePath }).catch(() => ({ stdout: '' }));
-    let { stdout: numstat } = await exec('git', ['diff', '--numstat', diffRange], { cwd: ws.worktreePath }).catch(() => ({ stdout: '' }));
+    let nameStatus = '';
+    let numstat = '';
 
-    if (!nameStatus.trim() && ws.baseBranch) {
+    if (mode !== 'branch') {
+      nameStatus = (await exec('git', ['diff', '--name-status', diffRange], { cwd: ws.worktreePath }).catch(() => ({ stdout: '' }))).stdout;
+      numstat = (await exec('git', ['diff', '--numstat', diffRange], { cwd: ws.worktreePath }).catch(() => ({ stdout: '' }))).stdout;
+    }
+
+    if ((mode === 'branch' || (mode === 'auto' && !nameStatus.trim())) && ws.baseBranch) {
       const candidates = [`origin/${ws.baseBranch}...HEAD`, `${ws.baseBranch}...HEAD`];
       for (const range of candidates) {
         const status = await exec('git', ['diff', '--name-status', range], { cwd: ws.worktreePath }).catch(() => ({ stdout: '' }));
@@ -603,7 +611,7 @@ export class WorkspaceManager {
       } catch {}
     }));
 
-    return { baseBranch: ws.baseBranch, files };
+    return { baseBranch: ws.baseBranch, mode, files };
   }
 
   async listFiles(id: string): Promise<{ path: string; isDir: boolean; status?: string }[]> {

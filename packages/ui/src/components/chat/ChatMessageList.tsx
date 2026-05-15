@@ -11,7 +11,7 @@ import { AgentQuestionPrompt } from './AgentQuestionPrompt';
 import RoleIcon from '../common/RoleIcon';
 import MermaidChatBlock from './MermaidChatBlock';
 import { agents as agentsApi, artifacts as artifactsApi, type ArtifactDoc } from '../../services/api';
-import { workspaces as workspacesApi } from '../../services/workspaceService';
+import { chatCodeDiffs, workspaces as workspacesApi } from '../../services/workspaceService';
 
 const AGENT_ICONS: Record<string, React.ElementType> = {
   bot: Bot, brain: Brain, sparkles: Sparkles, zap: Zap, cpu: Cpu, atom: Atom,
@@ -38,6 +38,8 @@ interface ChatMessageListProps {
   onAnswerWorkflowIntervention?: (input: WorkflowInterventionAnswer) => Promise<void> | void;
   onSuggestionClick?: (text: string) => void;
   onSaveToLearnings?: (content: string) => void;
+  onOpenExecutionsPanel?: () => void;
+  onOpenFilesPanel?: () => void;
 }
 
 type WorkflowInterventionField = {
@@ -80,6 +82,12 @@ type ChatDiffBundle = {
   workspaceId: string;
   workspaceName?: string | null;
   files: ChatDiffFile[];
+};
+
+type ChatDiffSnapshot = {
+  workspaceId: string;
+  workspaceName?: string | null;
+  files?: ChatDiffFile[];
 };
 
 /* ── Copy button for code blocks ─────────────────────────────────────────── */
@@ -315,10 +323,12 @@ function ChatCodeDiffCard({
   files,
   title,
   state,
+  onOpenAllFiles,
 }: {
   files: ChatDiffFile[];
   title: string;
   state?: React.ReactNode;
+  onOpenAllFiles?: () => void;
 }) {
   const normalized = files.map((file, index) => ({
     ...file,
@@ -351,6 +361,11 @@ function ChatCodeDiffCard({
           <span className="cf-p">+{totalAdditions}</span>
           <span className="cf-m">-{totalDeletions}</span>
           {state && <span className="chat-diff-status">{state}</span>}
+          {onOpenAllFiles && (
+            <button type="button" className="cc-icon-action" onClick={onOpenAllFiles} title="Show all modified files">
+              <Code className="h-3.5 w-3.5" />
+            </button>
+          )}
         </span>
       </div>
       <div className="ch-card-b">
@@ -1140,7 +1155,19 @@ function ActiveToolCallsSection({ calls, liveThreads, agentMap }: { calls: Activ
   );
 }
 
-function ChatCodeDiffPreview({ runs, onReady }: { runs: SpawnedAgent[]; onReady?: () => void }) {
+function ChatCodeDiffPreview({
+  runs,
+  sessionId,
+  messageId,
+  onReady,
+  onOpenAllFiles,
+}: {
+  runs: SpawnedAgent[];
+  sessionId?: string;
+  messageId?: string;
+  onReady?: () => void;
+  onOpenAllFiles?: () => void;
+}) {
   const [bundles, setBundles] = useState<ChatDiffBundle[]>([]);
   const [loading, setLoading] = useState(false);
 
@@ -1156,6 +1183,9 @@ function ChatCodeDiffPreview({ runs, onReady }: { runs: SpawnedAgent[]; onReady?
     }
   }
   const workspaceSignature = [...new Set(workspaceRefs.map(ref => ref.id))].join('|');
+  const runSignature = runs
+    .map(run => `${run.executionId}:${run.status}:${run.runContext?.status ?? ''}:${run.runContext?.progress?.percent ?? ''}`)
+    .join('|');
 
   useEffect(() => {
     if (!workspaceSignature) {
@@ -1164,25 +1194,57 @@ function ChatCodeDiffPreview({ runs, onReady }: { runs: SpawnedAgent[]; onReady?
     }
     let cancelled = false;
     const uniqueRefs = workspaceRefs.filter((ref, index, arr) => arr.findIndex(item => item.id === ref.id) === index);
+    const snapshotBundles = (snapshots: ChatDiffSnapshot[]): ChatDiffBundle[] => snapshots
+      .map(snapshot => ({
+        workspaceId: snapshot.workspaceId,
+        workspaceName: snapshot.workspaceName,
+        files: ((snapshot.files ?? []) as ChatDiffFile[]).filter(file => file.diff?.trim() || file.modifiedContent?.trim()),
+      }))
+      .filter(bundle => bundle.files.length > 0);
     setLoading(true);
-    Promise.all(uniqueRefs.map(async (ref) => {
-      try {
-        const result = await workspacesApi.getDiff(ref.id);
-        const files = ((result.files ?? []) as ChatDiffFile[]).filter(file => file.diff?.trim() || file.modifiedContent?.trim());
-        return { workspaceId: ref.id, workspaceName: ref.name, files };
-      } catch {
-        return { workspaceId: ref.id, workspaceName: ref.name, files: [] };
+    (async () => {
+      if (sessionId && messageId) {
+        try {
+          const saved = await chatCodeDiffs.list(sessionId, messageId);
+          const frozen = snapshotBundles(saved.snapshots as ChatDiffSnapshot[]);
+          if (frozen.length > 0) return frozen;
+        } catch {}
       }
-    })).then(next => {
+
+      const live = await Promise.all(uniqueRefs.map(async (ref) => {
+        try {
+          const result = await workspacesApi.getDiff(ref.id);
+          const files = ((result.files ?? []) as ChatDiffFile[]).filter(file => file.diff?.trim() || file.modifiedContent?.trim());
+          return { workspaceId: ref.id, workspaceName: ref.name, files };
+        } catch {
+          return { workspaceId: ref.id, workspaceName: ref.name, files: [] };
+        }
+      }));
+
+      const populatedLive = live.filter(bundle => bundle.files.length > 0);
+      if (sessionId && messageId && allTerminal && populatedLive.length > 0) {
+        try {
+          const captured = await chatCodeDiffs.capture(sessionId, {
+            messageId,
+            executionIds: runs.map(run => run.executionId).filter(Boolean),
+            workspaces: uniqueRefs,
+            mode: 'auto',
+          });
+          const frozen = snapshotBundles(captured.snapshots as ChatDiffSnapshot[]);
+          if (frozen.length > 0) return frozen;
+        } catch {}
+      }
+
+      return populatedLive;
+    })().then(next => {
       if (cancelled) return;
-      const populated = next.filter(bundle => bundle.files.length > 0);
-      setBundles(populated);
-      if (populated.length > 0) window.setTimeout(() => onReady?.(), 0);
+      setBundles(next);
+      if (next.length > 0) window.setTimeout(() => onReady?.(), 0);
     }).finally(() => {
       if (!cancelled) setLoading(false);
     });
     return () => { cancelled = true; };
-  }, [workspaceSignature, onReady]);
+  }, [workspaceSignature, runSignature, sessionId, messageId, allTerminal, onReady]);
 
   if (!workspaceSignature) return null;
   const totalFiles = bundles.reduce((sum, bundle) => sum + bundle.files.length, 0);
@@ -1216,6 +1278,7 @@ function ChatCodeDiffPreview({ runs, onReady }: { runs: SpawnedAgent[]; onReady?
             files={visibleFiles}
             title={`${totalFiles} file${totalFiles === 1 ? '' : 's'} modified`}
             state={allTerminal ? 'completed' : <><span className="dot pulse accent" /> live</>}
+            onOpenAllFiles={onOpenAllFiles}
           />
         )}
       </div>
@@ -1718,6 +1781,79 @@ function RunProgressFeed({ runs }: { runs: SpawnedAgent[] }) {
   );
 }
 
+function SubagentExecutionsDropdown({
+  runs,
+  onOpenExecutionsPanel,
+}: {
+  runs: SpawnedAgent[];
+  onOpenExecutionsPanel?: () => void;
+}) {
+  const [expanded, setExpanded] = useState(false);
+  if (runs.length === 0) return null;
+
+  const childCount = runs.reduce((sum, run) => sum + (run.runContext?.childAgents.length ?? 0), 0);
+  const activeCount = runs.filter(run => !TERMINAL_RUN_STATUSES.has(run.runContext?.status ?? run.status)).length;
+
+  return (
+    <div className="chat-exec-summary">
+      <div className="chat-exec-summary-head">
+        <button type="button" onClick={() => setExpanded(value => !value)}>
+          {expanded ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronRight className="h-3.5 w-3.5" />}
+          <span>{runs.length + childCount} agent execution{runs.length + childCount === 1 ? '' : 's'}</span>
+          {activeCount > 0 && <span className="chat-exec-live">{activeCount} running</span>}
+        </button>
+        <div className="chat-exec-actions">
+          <button type="button" onClick={onOpenExecutionsPanel} title="Open executions side panel">
+            <ExternalLink className="h-3.5 w-3.5" />
+          </button>
+        </div>
+      </div>
+      {expanded && (
+        <div className="chat-exec-list">
+          {runs.map((run, index) => {
+            const context = run.runContext;
+            const status = context?.status ?? run.status;
+            const childAgents = context?.childAgents ?? [];
+            const input = context?.io?.input ?? run.prompt;
+            const output = context?.io?.output ?? run.response;
+            return (
+              <div key={run.executionId} className="chat-exec-item">
+                <a href={`/executions/${run.executionId}`} target="_blank" rel="noopener noreferrer">
+                  <span>Execution {index + 1}</span>
+                  <span>{context?.title ?? run.agent}</span>
+                  <span>{humanLabel(status)}</span>
+                </a>
+                {childAgents.length > 0 && (
+                  <div className="chat-exec-children">
+                    {childAgents.map(child => (
+                      <a key={child.executionId} href={`/executions/${child.executionId}`} target="_blank" rel="noopener noreferrer">
+                        <span>{child.agentName}</span>
+                        <span>{humanLabel(child.status)}</span>
+                      </a>
+                    ))}
+                  </div>
+                )}
+                {expanded && (
+                  <div className="chat-exec-io-inline">
+                    <details open={Boolean(input)}>
+                      <summary>Input</summary>
+                      {input ? <pre>{input}</pre> : <span>No input captured.</span>}
+                    </details>
+                    <details open={Boolean(output)}>
+                      <summary>Output</summary>
+                      {output ? <pre>{output}</pre> : <span>No output captured yet.</span>}
+                    </details>
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function workflowInterventionFromRuns(runs: SpawnedAgent[]): { run: SpawnedAgent; intervention: WorkflowIntervention } | null {
   for (const run of runs) {
     const context = run.runContext;
@@ -1969,7 +2105,7 @@ function WorkflowInterventionPrompt({
   );
 }
 
-export default function ChatMessageList({ messages, streamText, thinkingText, streaming, activeToolCalls = [], agentThreads = [], agentReports = [], threadsByMessage = {}, pendingUserQuestion, onAnswerUserQuestion, activeAgent, spawnedAgents = [], onAnswerWorkflowIntervention, onSaveToLearnings }: ChatMessageListProps) {
+export default function ChatMessageList({ messages, streamText, thinkingText, streaming, activeToolCalls = [], agentThreads = [], agentReports = [], threadsByMessage = {}, pendingUserQuestion, onAnswerUserQuestion, activeAgent, spawnedAgents = [], onAnswerWorkflowIntervention, onSaveToLearnings, onOpenExecutionsPanel, onOpenFilesPanel }: ChatMessageListProps) {
   const [agentMap, setAgentMap] = useState<Record<string, { displayName?: string; icon?: string; color?: string }>>({});
   const pendingWorkflowIntervention = onAnswerWorkflowIntervention ? workflowInterventionFromRuns(spawnedAgents) : null;
 
@@ -2018,6 +2154,9 @@ export default function ChatMessageList({ messages, streamText, thinkingText, st
         const msgThreads = msg._id ? threadsByMessage[msg._id] : undefined;
         const senderLabel = msg.role === 'user' ? userDisplayName(msg) : '';
         const diffSplit = msg.role === 'assistant' ? splitFirstDiffFence(msg.content) : { text: msg.content, diff: null };
+        const messageRuns = msg.role === 'assistant' && msg._id
+          ? spawnedAgents.filter(run => run.sourceMessageId === msg._id)
+          : [];
         return (<React.Fragment key={msg._id || i}>
         <div className={`ch-msg ${msg.role === 'user' ? 'you' : 'allen'} group/msg al-msg-enter`}>
           <div className="ch-avatar">{msg.role === 'user' ? senderInitial(senderLabel) : 'a'}</div>
@@ -2074,6 +2213,22 @@ export default function ChatMessageList({ messages, streamText, thinkingText, st
               <InlineCodeDiffCard code={diffSplit.diff} />
             </div>
           </div>
+        )}
+
+        {messageRuns.length > 0 && (
+          <>
+            <SubagentExecutionsDropdown
+              runs={messageRuns}
+              onOpenExecutionsPanel={onOpenExecutionsPanel}
+            />
+            <ChatCodeDiffPreview
+              runs={messageRuns}
+              sessionId={msg.sessionId}
+              messageId={msg._id}
+              onReady={scrollToBottomIfPinned}
+              onOpenAllFiles={onOpenFilesPanel}
+            />
+          </>
         )}
 
         {/* Threads not linked to a tool call (fallback — render below message) */}
@@ -2152,7 +2307,6 @@ export default function ChatMessageList({ messages, streamText, thinkingText, st
         </div>
       )}
 
-      <ChatCodeDiffPreview runs={spawnedAgents} onReady={scrollToBottomIfPinned} />
       <ChatPullRequestCards runs={spawnedAgents} />
 
       {/* Agent threads — only render orphans not already shown inline with tool calls */}

@@ -5,6 +5,7 @@ import { ChatService, cancelChatSession, type ChatMessageSender } from '../servi
 import { executeChatTool } from '../services/chat-tools.js';
 import { ExecutionService } from '../services/execution.service.js';
 import { InterventionService } from '../services/intervention.service.js';
+import { WorkspaceManager, type WorkspaceDiffMode } from '../services/workspace.service.js';
 import { ObjectId, type Db } from 'mongodb';
 import { UserService } from '../services/user.service.js';
 import type { AuthedRequest } from '../middleware/requireAuth.js';
@@ -40,6 +41,7 @@ export function chatRoutes(db: Db): Router {
   const users = new UserService(db);
   const executionService = new ExecutionService(db);
   const interventionService = new InterventionService(db);
+  const workspaceManager = new WorkspaceManager(db);
 
   const readSender = async (req: AuthedRequest): Promise<ChatMessageSender | undefined> => {
     const authUser = req.user;
@@ -339,6 +341,73 @@ export function chatRoutes(db: Db): Router {
       const limit = req.query.limit ? parseInt(req.query.limit as string, 10) : 50;
       const result = await chatService.getMessages(sessionId, before, limit);
       res.json(result);
+    } catch (err: unknown) {
+      res.status(500).json({ error: (err as Error).message });
+    }
+  });
+
+  router.get('/sessions/:id/code-diffs', async (req: Request, res: Response) => {
+    try {
+      const sessionId = param(req, 'id');
+      const messageId = typeof req.query.messageId === 'string' ? req.query.messageId : '';
+      if (!messageId) return res.status(400).json({ error: 'messageId is required' });
+      const snapshots = await db.collection('chat_code_diff_snapshots')
+        .find({ chatSessionId: sessionId, parentMessageId: messageId })
+        .sort({ createdAt: 1 })
+        .toArray();
+      res.json({ snapshots });
+    } catch (err: unknown) {
+      res.status(500).json({ error: (err as Error).message });
+    }
+  });
+
+  router.post('/sessions/:id/code-diffs', async (req: Request, res: Response) => {
+    try {
+      const sessionId = param(req, 'id');
+      const parentMessageId = typeof req.body.messageId === 'string' ? req.body.messageId : '';
+      const executionIds = Array.isArray(req.body.executionIds) ? req.body.executionIds.map(String).filter(Boolean) : [];
+      const requestedMode = req.body.mode === 'branch' || req.body.mode === 'working' || req.body.mode === 'auto'
+        ? req.body.mode as WorkspaceDiffMode
+        : 'auto';
+      const workspaceRefs = Array.isArray(req.body.workspaces)
+        ? req.body.workspaces
+          .map((item: Record<string, unknown>) => ({
+            id: typeof item?.id === 'string' ? item.id : '',
+            name: typeof item?.name === 'string' ? item.name : null,
+          }))
+          .filter((item: { id: string }) => item.id)
+        : [];
+      if (!parentMessageId) return res.status(400).json({ error: 'messageId is required' });
+      if (workspaceRefs.length === 0) return res.status(400).json({ error: 'workspaces are required' });
+
+      const collection = db.collection('chat_code_diff_snapshots');
+      const snapshots: Record<string, unknown>[] = [];
+      for (const ref of workspaceRefs) {
+        const existing = await collection.findOne({ chatSessionId: sessionId, parentMessageId, workspaceId: ref.id });
+        if (existing) {
+          snapshots.push(existing);
+          continue;
+        }
+        const diff = await workspaceManager.getDiff(ref.id, { mode: requestedMode });
+        const files = diff.files.filter(file => file.diff?.trim() || file.modifiedContent?.trim());
+        if (files.length === 0) continue;
+        const now = new Date();
+        const snapshot = {
+          chatSessionId: sessionId,
+          parentMessageId,
+          executionIds,
+          workspaceId: ref.id,
+          workspaceName: ref.name,
+          baseBranch: diff.baseBranch,
+          mode: diff.mode,
+          files,
+          createdAt: now,
+          updatedAt: now,
+        };
+        const result = await collection.insertOne(snapshot);
+        snapshots.push({ ...snapshot, _id: result.insertedId });
+      }
+      res.json({ snapshots });
     } catch (err: unknown) {
       res.status(500).json({ error: (err as Error).message });
     }

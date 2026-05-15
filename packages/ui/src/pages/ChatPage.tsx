@@ -6,10 +6,11 @@ import ChatMessageList from '../components/chat/ChatMessageList';
 import CommandPalette from '../components/chat/CommandPalette';
 import ConversationLogs from '../components/chat/ConversationLogs';
 import AgentChatDropdown from '../components/chat/AgentChatDropdown';
-import ChatRunSidebar from '../components/chat/ChatRunSidebar';
+import ChatRunSidebar, { type ChatRunPanelTab } from '../components/chat/ChatRunSidebar';
 import { ToolCallLog } from '../components/common/ToolCallLog';
 import { chat as chatApi, mcp as mcpApi, learnings as learningsApi, agents as agentsApi, repos as reposApi } from '../services/api';
-import ArtifactsDrawer from '../components/artifacts/ArtifactsDrawer';
+import { workspaces as workspacesApi } from '../services/workspaceService';
+import { Code2, FileText, ListTree, PanelRightOpen, Route, X } from 'lucide-react';
 
 type QueuedChatMessage = {
   id: string;
@@ -36,7 +37,8 @@ export default function ChatPage() {
   const [cmdPaletteAnchor, setCmdPaletteAnchor] = useState<DOMRect | null>(null);
   const [logsOpen, setLogsOpen] = useState(false);
   const [toolLogOpen, setToolLogOpen] = useState(false);
-  const [artifactsOpen, setArtifactsOpen] = useState(false);
+  const [sidePanelOpen, setSidePanelOpen] = useState(false);
+  const [sidePanelTab, setSidePanelTab] = useState<ChatRunPanelTab>('tasks');
   const [mcpCount, setMcpCount] = useState<{ enabled: number; connected: number }>({ enabled: 0, connected: 0 });
   const [providers, setProviders] = useState<any[]>([]);
   const [selectedProvider, setSelectedProvider] = useState('codex');
@@ -51,6 +53,8 @@ export default function ChatPage() {
   const [queuedMessages, setQueuedMessages] = useState<QueuedChatMessage[]>([]);
   const [editingQueuedId, setEditingQueuedId] = useState<string | null>(null);
   const [editingQueuedValue, setEditingQueuedValue] = useState('');
+  const [chatDiffSummary, setChatDiffSummary] = useState<{ files: number; additions: number; deletions: number } | null>(null);
+  const [hiddenDiffSignature, setHiddenDiffSignature] = useState<string | null>(null);
   // Pending override state for chats that don't have a session yet. Once the
   // first message creates the session, this is merged into createSession().
   const [pendingOverrides, setPendingOverrides] = useState<{
@@ -62,6 +66,7 @@ export default function ChatPage() {
   const queuedMessagesRef = useRef<QueuedChatMessage[]>([]);
   const editingQueuedIdRef = useRef<string | null>(null);
   const queueDispatchingRef = useRef(false);
+  const chatDiffSignatureRef = useRef('');
 
   const {
     sessions, activeSessionId, messages, streaming, streamText,
@@ -115,6 +120,8 @@ export default function ChatPage() {
     setQueuedMessages([]);
     setEditingQueuedId(null);
     setEditingQueuedValue('');
+    setSidePanelOpen(false);
+    setSidePanelTab('tasks');
   }, [activeSessionId]);
 
   // The agent doc whose defaults we display as the fallback in the popover.
@@ -368,10 +375,85 @@ export default function ChatPage() {
     } catch {}
   }
 
-  const showRunSidebar = spawnedAgents.length > 0;
+  function openSidePanel(tab: ChatRunPanelTab) {
+    setSidePanelTab(tab);
+    setSidePanelOpen(true);
+  }
+
+  const workspaceDiffRefs = spawnedAgents.reduce<Array<{ id: string; mode: 'auto' | 'branch' }>>((acc, run) => {
+    const id = run.runContext?.workspace?.id;
+    if (!id) return acc;
+    const mode = run.runContext?.pullRequest ? 'branch' : 'auto';
+    const existing = acc.find(item => item.id === id);
+    if (!existing) acc.push({ id, mode });
+    else if (mode === 'branch') existing.mode = 'branch';
+    return acc;
+  }, []);
+  const workspaceSignature = workspaceDiffRefs.map(ref => `${ref.id}:${ref.mode}`).join('|');
+  const diffRefreshSignature = spawnedAgents
+    .map(run => [
+      run.executionId,
+      run.sourceMessageId ?? '',
+      run.status,
+      run.runContext?.status ?? '',
+      run.runContext?.progress?.percent ?? '',
+      run.runContext?.workspace?.id ?? '',
+    ].join(':'))
+    .join('|');
+
+  useEffect(() => {
+    if (!workspaceSignature) {
+      chatDiffSignatureRef.current = '';
+      setChatDiffSummary(null);
+      setHiddenDiffSignature(null);
+      return;
+    }
+    let cancelled = false;
+    const workspaceRefs = workspaceDiffRefs;
+    const refreshDiffSummary = async () => {
+      const parts = await Promise.all(workspaceRefs.map(async ref => {
+        try {
+          const result = await workspacesApi.getDiff(ref.id, { mode: ref.mode });
+          const files = ((result.files ?? []) as Array<{ additions?: number; deletions?: number; diff?: string; modifiedContent?: string }>)
+            .filter(file => file.diff?.trim() || file.modifiedContent?.trim());
+          return {
+            files: files.length,
+            additions: files.reduce((sum, file) => sum + (file.additions ?? 0), 0),
+            deletions: files.reduce((sum, file) => sum + (file.deletions ?? 0), 0),
+          };
+        } catch {
+          return { files: 0, additions: 0, deletions: 0 };
+        }
+      }));
+      if (cancelled) return;
+      const summary = parts.reduce((acc, item) => ({
+        files: acc.files + item.files,
+        additions: acc.additions + item.additions,
+        deletions: acc.deletions + item.deletions,
+      }), { files: 0, additions: 0, deletions: 0 });
+      const next = summary.files > 0 ? summary : null;
+      const nextSignature = next ? `${next.files}:${next.additions}:${next.deletions}` : '';
+      if (chatDiffSignatureRef.current !== nextSignature) {
+        chatDiffSignatureRef.current = nextSignature;
+        setHiddenDiffSignature(null);
+      }
+      setChatDiffSummary(next);
+    };
+
+    void refreshDiffSummary();
+    const hasActiveRun = spawnedAgents.some(run => !['completed', 'failed', 'cancelled', 'canceled'].includes((run.runContext?.status ?? run.status ?? '').toLowerCase()));
+    if (!hasActiveRun && !streaming) return () => { cancelled = true; };
+    const timer = window.setInterval(refreshDiffSummary, 3000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [workspaceSignature, diffRefreshSignature, streaming, spawnedAgents]);
+
+  const showResourceRail = Boolean(activeSessionId) || spawnedAgents.length > 0;
 
   return (
-    <div className={`chat-page-shell ${showRunSidebar ? 'with-run-sidebar' : ''}`}>
+    <div className={`chat-page-shell ${sidePanelOpen ? 'with-run-sidebar' : ''}`}>
       <div className="chat-main-shell">
       {/* Messages */}
       {loadingMessages && messages.length === 0 && !streaming ? (
@@ -379,11 +461,34 @@ export default function ChatPage() {
       ) : messages.length === 0 && !activeSessionId && !streaming ? (
         <div className="chat-empty-stream" aria-label="New conversation" />
       ) : (
-        <ChatMessageList messages={messages} streamText={streamText} thinkingText={thinkingText} streaming={streaming} activeToolCalls={activeToolCalls} agentThreads={agentThreads} agentReports={agentReports} threadsByMessage={threadsByMessage} spawnedAgents={spawnedAgents} pendingUserQuestion={pendingUserQuestion} onAnswerUserQuestion={answerUserQuestion} onAnswerWorkflowIntervention={answerWorkflowIntervention} activeAgent={activeSession?.activeAgent} onSuggestionClick={handleSuggestionClick} onSaveToLearnings={handleSaveToLearnings} />
+        <ChatMessageList messages={messages} streamText={streamText} thinkingText={thinkingText} streaming={streaming} activeToolCalls={activeToolCalls} agentThreads={agentThreads} agentReports={agentReports} threadsByMessage={threadsByMessage} spawnedAgents={spawnedAgents} pendingUserQuestion={pendingUserQuestion} onAnswerUserQuestion={answerUserQuestion} onAnswerWorkflowIntervention={answerWorkflowIntervention} activeAgent={activeSession?.activeAgent} onSuggestionClick={handleSuggestionClick} onSaveToLearnings={handleSaveToLearnings} onOpenExecutionsPanel={() => openSidePanel('executions')} onOpenFilesPanel={() => openSidePanel('files')} />
       )}
 
       {/* Input */}
       <div className="chat-input-dock">
+        {chatDiffSummary && hiddenDiffSignature !== workspaceSignature && (
+          <div className="chat-code-summary-wrap">
+            <button
+              type="button"
+              className="chat-code-summary-pill"
+              onClick={() => openSidePanel('files')}
+              title="Open all code changes in this chat"
+            >
+              <Code2 className="h-3 w-3" />
+              <span>{chatDiffSummary.files} changed</span>
+              <span className="add">+{chatDiffSummary.additions}</span>
+              <span className="del">-{chatDiffSummary.deletions}</span>
+            </button>
+            <button
+              type="button"
+              className="chat-code-summary-close"
+              onClick={() => setHiddenDiffSignature(workspaceSignature)}
+              title="Hide changed files summary"
+            >
+              <X className="h-3 w-3" />
+            </button>
+          </div>
+        )}
         {queuedMessages.length > 0 && (
           <div className="chat-queue-panel" aria-label="Queued messages">
             <div className="chat-queue-head">
@@ -519,14 +624,6 @@ export default function ChatPage() {
         }}
         onSelect={handleCommandSelect}
       />
-      {activeSessionId && (
-        <ArtifactsDrawer
-          rootType="chat"
-          rootId={activeSessionId}
-          open={artifactsOpen}
-          onClose={() => setArtifactsOpen(false)}
-        />
-      )}
       {logsOpen && activeSessionId && <ConversationLogs sessionId={activeSessionId} onClose={() => setLogsOpen(false)} />}
       {toolLogOpen && activeSessionId && (
         <div className="fixed inset-y-0 right-0 w-full max-w-xl border-l border-app bg-app-card shadow-popover flex flex-col z-40">
@@ -543,7 +640,39 @@ export default function ChatPage() {
         </div>
       )}
       </div>
-      {showRunSidebar && <ChatRunSidebar runs={spawnedAgents} />}
+      {showResourceRail && (
+        <nav className="chat-resource-rail" aria-label="Chat resources">
+          <button
+            type="button"
+            className={sidePanelOpen ? 'active' : ''}
+            onClick={() => setSidePanelOpen(value => !value)}
+            title={sidePanelOpen ? 'Close resources' : 'Open resources'}
+          >
+            <PanelRightOpen className="h-4 w-4" />
+          </button>
+          <button type="button" className={sidePanelOpen && sidePanelTab === 'tasks' ? 'active' : ''} onClick={() => openSidePanel('tasks')} title="Task sequence">
+            <ListTree className="h-4 w-4" />
+          </button>
+          <button type="button" className={sidePanelOpen && sidePanelTab === 'executions' ? 'active' : ''} onClick={() => openSidePanel('executions')} title="Agent executions">
+            <Route className="h-4 w-4" />
+          </button>
+          <button type="button" className={sidePanelOpen && sidePanelTab === 'artifacts' ? 'active' : ''} onClick={() => openSidePanel('artifacts')} title="Artifacts">
+            <FileText className="h-4 w-4" />
+          </button>
+          <button type="button" className={sidePanelOpen && sidePanelTab === 'files' ? 'active' : ''} onClick={() => openSidePanel('files')} title="File changes">
+            <Code2 className="h-4 w-4" />
+          </button>
+        </nav>
+      )}
+      <ChatRunSidebar
+        runs={spawnedAgents}
+        rootType="chat"
+        rootId={activeSessionId}
+        open={sidePanelOpen}
+        activeTab={sidePanelTab}
+        onTabChange={setSidePanelTab}
+        onClose={() => setSidePanelOpen(false)}
+      />
     </div>
   );
 }

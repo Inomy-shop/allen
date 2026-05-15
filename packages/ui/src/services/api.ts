@@ -183,6 +183,14 @@ export interface RunStatus {
   runType: 'workflow' | 'agent';
   title: string;
   status: string;
+  chat?: {
+    sessionId?: string | null;
+    parentMessageId?: string | null;
+  } | null;
+  io?: {
+    input?: string | null;
+    output?: string | null;
+  } | null;
   execution: {
     id: string;
     workflowId?: string | null;

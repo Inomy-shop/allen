@@ -749,12 +749,15 @@ export async function cancelChatSession(sessionId: string, db?: Db): Promise<Cha
 }
 
 function broadcastToListeners(entry: ActiveQuery, event: string, data: unknown): void {
+  const payload = data && typeof data === 'object' && !Array.isArray(data) && !('messageId' in data)
+    ? { ...(data as Record<string, unknown>), messageId: entry.messageId }
+    : data;
   for (const listener of entry.listeners) {
-    try { listener.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`); }
+    try { listener.write(`event: ${event}\ndata: ${JSON.stringify(payload)}\n\n`); }
     catch { entry.listeners.delete(listener); }
   }
   for (const handler of entry.eventHandlers ?? []) {
-    try { handler(event, data); } catch { entry.eventHandlers?.delete(handler); }
+    try { handler(event, payload); } catch { entry.eventHandlers?.delete(handler); }
   }
 }
 
