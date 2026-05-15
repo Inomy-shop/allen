@@ -12,16 +12,23 @@ export function userRoutes(db: Db): Router {
   const tokens = new RefreshTokenService(db);
 
   // The global requireAuth at app.ts sets req.user for all /api/* routes.
-  // requireAdmin checks req.user.role. If req.user is somehow missing
-  // (Express quirk with router-level vs app-level middleware), re-run
-  // requireAuth as a safety net.
-  router.use(requireAuth, requireAdmin);
+  // GET /api/users is open to any authenticated user so non-admins can
+  // populate dropdowns (e.g. the Threads page owner filter). The full
+  // PublicUser shape (role, lastLoginAt) is intentionally exposed — this
+  // is an internal app, not a multi-tenant one.
+  router.use(requireAuth);
 
-  // GET /api/users
+  // GET /api/users — any authenticated user
   router.get('/', async (_req: AuthedRequest, res: Response) => {
     const list = await users.list();
     res.json(list.map(toPublicUser));
   });
+
+  // Write operations below this line require admin. requireAdmin checks
+  // req.user.role. If req.user is somehow missing (Express quirk with
+  // router-level vs app-level middleware), the leading requireAuth above
+  // is a safety net.
+  router.use(requireAdmin);
 
   // POST /api/users  { email, name }
   router.post('/', async (req: AuthedRequest, res: Response) => {

@@ -766,13 +766,31 @@ export default function McpServerManager() {
               Click <span className="font-semibold text-theme-secondary">Add</span> to register one from a preset or from a repo.
             </div>
           </div>
-        ) : (
-          <div className="space-y-2">
-            {servers.map((s) => (
-              <ServerCard key={s._id} server={s} onChange={refresh} />
-            ))}
-          </div>
-        )}
+        ) : (() => {
+          // Group servers by owner display name
+          const grouped = servers.reduce((acc, srv) => {
+            const ownerLabel = srv.ownerName ?? srv.ownerEmail ?? '(unknown)';
+            if (!acc[ownerLabel]) acc[ownerLabel] = [];
+            acc[ownerLabel].push(srv);
+            return acc;
+          }, {} as Record<string, McpServer[]>);
+          const ownerKeys = Object.keys(grouped).sort();
+
+          return (
+            <div className="space-y-4">
+              {ownerKeys.map(ownerLabel => (
+                <div key={ownerLabel}>
+                  <h3 className="overline text-theme-muted mb-2 px-1">{ownerLabel}</h3>
+                  <div className="space-y-2">
+                    {grouped[ownerLabel].map((s) => (
+                      <ServerCard key={s._id} server={s} onChange={refresh} />
+                    ))}
+                  </div>
+                </div>
+              ))}
+            </div>
+          );
+        })()}
       </div>
 
       {adding && <AddServerModal onClose={() => setAdding(false)} onAdded={refresh} />}

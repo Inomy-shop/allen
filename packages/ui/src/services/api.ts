@@ -616,8 +616,47 @@ export const dashboard = {
 };
 
 // ── Chat ──────────────────────────────────────────────────────────────────
+export interface ChatSession {
+  _id: string;
+  title: string;
+  status: 'active' | 'archived';
+  messageCount: number;
+  lastMessageAt: string;
+  totalCostUsd: number;
+  provider: string;
+  model?: string;
+  llmSessionId?: string;
+  activeAgent?: string | null;
+  agentOverrides?: {
+    provider?: 'claude-cli' | 'codex' | null;
+    model?: string | null;
+    reasoningEffort?: 'off' | 'low' | 'medium' | 'high' | 'max' | null;
+    planMode?: boolean | null;
+  };
+  repoId?: string;
+  repoPath?: string;
+  repoName?: string;
+  source?: 'ui' | 'slack';
+  slackContext?: {
+    channelId: string;
+    threadTs: string;
+    teamId: string;
+  };
+  automationKey?: string;
+  createdAt?: string;
+  updatedAt?: string;
+  ownerUserId?: string | null;
+  ownerName?: string | null;
+  ownerEmail?: string | null;
+}
+
 export const chat = {
-  listSessions: () => request<any[]>('/chat/sessions'),
+  listSessions: (params?: { ownerUserId?: string | 'none' }) => {
+    const qs = params?.ownerUserId
+      ? `?ownerUserId=${encodeURIComponent(params.ownerUserId)}`
+      : '';
+    return request<ChatSession[]>(`/chat/sessions${qs}`);
+  },
   providers: () => request<any[]>('/chat/providers'),
   slashCommands: (params?: { provider?: string; sessionId?: string; cwd?: string }) => {
     const qs = params ? '?' + new URLSearchParams(Object.entries(params).filter(([, v]) => Boolean(v)) as Array<[string, string]>).toString() : '';
@@ -689,6 +728,8 @@ export type McpServerSource =
 export interface McpServer {
   _id: string;
   ownerId?: string;
+  ownerName?: string;
+  ownerEmail?: string;
   name: string;
   description: string;
   type: 'stdio' | 'sse' | 'http';

@@ -279,10 +279,16 @@ export function chatRoutes(db: Db): Router {
     }
   });
 
-  // GET /api/chat/sessions — List all sessions
-  router.get('/sessions', async (_req: Request, res: Response) => {
+  // GET /api/chat/sessions — List all sessions. Optional ?ownerUserId=<id>
+  // to filter by owner, or ?ownerUserId=none for unowned/legacy sessions.
+  router.get('/sessions', async (req: Request, res: Response) => {
     try {
-      const sessions = await chatService.listSessions();
+      const raw = req.query.ownerUserId;
+      const ownerParam = typeof raw === 'string' ? raw : undefined;
+      const filter = ownerParam === undefined
+        ? undefined
+        : { ownerUserId: ownerParam === 'none' ? null : ownerParam };
+      const sessions = await chatService.listSessions(filter);
       res.json(sessions);
     } catch (err: unknown) {
       res.status(500).json({ error: (err as Error).message });
@@ -310,11 +316,15 @@ export function chatRoutes(db: Db): Router {
   });
 
   // POST /api/chat/sessions — Create new session
-  router.post('/sessions', async (req: Request, res: Response) => {
+  router.post('/sessions', async (req: AuthedRequest, res: Response) => {
     try {
       const { provider, model, agentOverrides } = req.body ?? {};
       const repoId = typeof req.body?.repoId === 'string' ? req.body.repoId : undefined;
-      const session = await chatService.createSession(provider, model, 'ui', undefined, agentOverrides, repoId);
+      const sender = await readSender(req);
+      const owner = sender
+        ? { userId: sender.userId, name: sender.name, email: sender.email }
+        : undefined;
+      const session = await chatService.createSession(provider, model, 'ui', undefined, agentOverrides, repoId, owner);
       res.status(201).json(session);
     } catch (err: unknown) {
       res.status(500).json({ error: (err as Error).message });

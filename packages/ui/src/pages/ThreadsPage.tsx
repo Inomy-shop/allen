@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { chat as chatApi } from '../services/api';
+import { chat as chatApi, users as usersApi } from '../services/api';
+import { useAuthStore, type AuthUser } from '../stores/authStore';
 
 interface ChatSessionItem {
   _id: string;
@@ -10,6 +11,9 @@ interface ChatSessionItem {
   lastMessageAt?: string;
   provider?: string;
   model?: string;
+  ownerUserId?: string | null;
+  ownerName?: string | null;
+  ownerEmail?: string | null;
 }
 
 type ThreadItem =
@@ -30,29 +34,62 @@ function timeAgo(dateStr?: string): string {
 }
 
 export default function ThreadsPage() {
+  const currentUser = useAuthStore((s) => s.user);
   const [chatSessions, setChatSessions] = useState<ChatSessionItem[]>([]);
+  const [allUsers, setAllUsers] = useState<AuthUser[]>([]);
   const [tab, setTab] = useState<Tab>('ongoing');
   const [query, setQuery] = useState('');
   const [loading, setLoading] = useState(true);
-
-  async function load() {
-    setLoading(true);
-    try {
-      const sessions = await chatApi.listSessions().catch(() => []);
-      setChatSessions(sessions ?? []);
-    } finally {
-      setLoading(false);
-    }
-  }
+  // Sentinel values: 'all' = no filter, 'none' = unowned, otherwise userId.
+  // Defaults to the current logged-in user so people land on their own threads.
+  const [selectedOwner, setSelectedOwner] = useState<string>(() => currentUser?.id ?? 'all');
 
   useEffect(() => {
-    void load();
-    const interval = setInterval(load, 10000);
-    return () => clearInterval(interval);
+    // If the user hydrates from localStorage after mount, snap the filter to them.
+    if (currentUser?.id && selectedOwner === 'all') setSelectedOwner(currentUser.id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentUser?.id]);
+
+  useEffect(() => {
+    usersApi.list().then(setAllUsers).catch(() => setAllUsers([]));
   }, []);
 
+  useEffect(() => {
+    let cancelled = false;
+    async function load() {
+      setLoading(true);
+      try {
+        const params = selectedOwner === 'all' ? undefined : { ownerUserId: selectedOwner as 'none' | string };
+        const sessions = await chatApi.listSessions(params).catch(() => []);
+        if (!cancelled) setChatSessions(sessions ?? []);
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    }
+    void load();
+    const interval = setInterval(load, 10000);
+    return () => { cancelled = true; clearInterval(interval); };
+  }, [selectedOwner]);
+
+  const filteredSessions = useMemo(() => {
+    // Owner filter is applied server-side; only do client-side text search here.
+    return chatSessions.filter((s) => {
+      if (!query.trim()) return true;
+      const q = query.toLowerCase();
+      return (
+        s._id.toLowerCase().includes(q) ||
+        (s.title?.toLowerCase().includes(q) ?? false) ||
+        (s.status?.toLowerCase().includes(q) ?? false) ||
+        (s.provider?.toLowerCase().includes(q) ?? false) ||
+        (s.model?.toLowerCase().includes(q) ?? false) ||
+        (s.ownerName?.toLowerCase().includes(q) ?? false) ||
+        (s.ownerEmail?.toLowerCase().includes(q) ?? false)
+      );
+    });
+  }, [chatSessions, query]);
+
   const buckets = useMemo(() => {
-    const chatItems: ThreadItem[] = chatSessions.map((session) => ({
+    const chatItems: ThreadItem[] = filteredSessions.map((session) => ({
       id: session._id,
       title: session.title || 'Untitled conversation',
       subtitle: `${session.messageCount ?? 0} messages · ${session.provider ?? 'assistant'} · ${timeAgo(session.lastMessageAt)}`,
@@ -63,24 +100,17 @@ export default function ThreadsPage() {
       provider: session.provider,
     }));
 
-    const q = query.trim().toLowerCase();
-    const matched = chatItems.filter((item) => {
-      if (!q) return true;
-      return item.id.toLowerCase().includes(q)
-        || item.title.toLowerCase().includes(q)
-        || item.subtitle.toLowerCase().includes(q)
-        || item.status.toLowerCase().includes(q);
-    }).sort((a, b) => new Date(b.startedAt ?? 0).getTime() - new Date(a.startedAt ?? 0).getTime());
+    const sorted = chatItems.sort((a, b) => new Date(b.startedAt ?? 0).getTime() - new Date(a.startedAt ?? 0).getTime());
 
-    const active = matched.filter((item) => item.status === 'active');
-    const archived = matched.filter((item) => item.status === 'archived');
+    const active = sorted.filter((item) => item.status === 'active');
+    const archived = sorted.filter((item) => item.status === 'archived');
 
     return {
       ongoing: active,
-      recent: matched.slice(0, 80),
-      history: archived.length > 0 ? archived : matched.slice(80),
+      recent: sorted.slice(0, 80),
+      history: archived.length > 0 ? archived : sorted.slice(80),
     };
-  }, [chatSessions, query]);
+  }, [filteredSessions]);
 
   const tabs: Array<{ key: Tab; label: string; count: number }> = [
     { key: 'ongoing', label: 'ongoing', count: buckets.ongoing.length },
@@ -112,12 +142,27 @@ export default function ThreadsPage() {
         </nav>
       </div>
 
-      <div className="th-search">
+      <div className="th-search flex items-center gap-2 flex-wrap">
         <input
           value={query}
           onChange={(event) => setQuery(event.target.value)}
           placeholder="search threads / tickets..."
+          className="!flex-1 !max-w-[480px]"
         />
+        <select
+          value={selectedOwner}
+          onChange={(e) => setSelectedOwner(e.target.value)}
+          className="input !w-auto !min-w-[200px] !flex-none"
+          aria-label="Filter by owner"
+        >
+          <option value="all">All users</option>
+          <option value="none">Automation / Unknown</option>
+          {allUsers.map((u) => (
+            <option key={u.id} value={u.id}>
+              {u.name || u.email}{currentUser?.id === u.id ? ' (me)' : ''}
+            </option>
+          ))}
+        </select>
       </div>
 
       <div className="th-list">

@@ -55,6 +55,23 @@ export interface NodeDef {
   output_extraction?: Record<string, string>;
   /** Resume the agent's prior session on retry. Default: true. Set to false for stateless nodes (e.g. reviewers) that should start fresh each run. */
   resume_on_retry?: boolean;
+  /**
+   * Per-instance session key for node-loop workflows.
+   *
+   * Default behavior (no session_key set): the engine tracks one session
+   * per node name. If a node runs in a loop (e.g. per-milestone), all
+   * iterations share the same agent session — the agent sees prior
+   * iterations' transcripts on resume.
+   *
+   * With session_key: the engine renders this template against state
+   * before each run. Each distinct rendered value gets its own isolated
+   * agent session. Example: `session_key: "milestone_implementer:{{current_milestone_id}}"`
+   * gives every milestone a fresh implementer session.
+   *
+   * Backwards compatible — workflows without session_key behave exactly
+   * as before.
+   */
+  session_key?: string;
   timeout?: number;              // seconds
 
   // code nodes
