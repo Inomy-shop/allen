@@ -98,17 +98,25 @@ function makeService() {
 describe('SlackService file attachment handling', () => {
   let fetchSpy: ReturnType<typeof vi.spyOn>;
 
+  // Capture the original value before any test sets it.
+  const originalPublicUrl = process.env.ALLEN_PUBLIC_URL;
+
   beforeEach(() => {
     fetchSpy = vi.spyOn(global, 'fetch');
+    // Set a predictable public base for all tests in this describe block.
+    process.env.ALLEN_PUBLIC_URL = 'https://allen.inomy.test';
   });
 
   afterEach(() => {
     vi.restoreAllMocks();
+    // Restore ALLEN_PUBLIC_URL to whatever it was before the test suite ran.
+    if (originalPublicUrl === undefined) delete process.env.ALLEN_PUBLIC_URL;
+    else process.env.ALLEN_PUBLIC_URL = originalPublicUrl;
   });
 
   // ── Test 1: image-on-mention ──
 
-  it('image-on-mention: appends markdown link when event.files contains an image', async () => {
+  it('image-on-mention: appends markdown link and absolute public URL when event.files contains an image', async () => {
     const { service } = makeService();
     const imageBytes = Buffer.from('fake-image-data').buffer as ArrayBuffer;
 
@@ -145,12 +153,24 @@ describe('SlackService file attachment handling', () => {
     const sendCalls = vi.mocked(service.chatService.sendMessageForSlack).mock.calls;
     expect(sendCalls.length).toBeGreaterThan(0);
     const messageArg: string = sendCalls[0][1];
+
+    // Existing relative Markdown link must be preserved (for UI rendering).
     expect(messageArg).toContain('[photo.jpg](/api/files/');
+
+    // Absolute public URL must be present so agent runtimes can fetch the file.
+    expect(messageArg).toContain('https://allen.inomy.test/api/files/');
+    expect(messageArg).toContain('Uploaded files / images available at public URLs:');
+    expect(messageArg).toContain('If the user asks about an image, fetch/read the relevant URL above directly.');
+
+    // Security: Slack url_private and bot token must NOT appear in the prompt.
+    expect(messageArg).not.toContain('url_private');
+    expect(messageArg).not.toContain('xoxb-');
+    expect(messageArg).not.toContain('files.slack.com');
   });
 
   // ── Test 2: image-in-thread ──
 
-  it('image-in-thread: appends markdown link from a thread message with files', async () => {
+  it('image-in-thread: appends markdown link and absolute public URL from a thread message with files', async () => {
     const { service } = makeService();
     const imageBytes = Buffer.from('fake-thread-image').buffer as ArrayBuffer;
 
@@ -203,7 +223,17 @@ describe('SlackService file attachment handling', () => {
     const sendCalls = vi.mocked(service.chatService.sendMessageForSlack).mock.calls;
     expect(sendCalls.length).toBeGreaterThan(0);
     const messageArg: string = sendCalls[0][1];
+
+    // Existing relative Markdown link must be preserved.
     expect(messageArg).toContain('[screenshot.png](/api/files/');
+
+    // Absolute public URL must be present.
+    expect(messageArg).toContain('https://allen.inomy.test/api/files/');
+    expect(messageArg).toContain('Uploaded files / images available at public URLs:');
+
+    // Security: no Slack private metadata in prompt.
+    expect(messageArg).not.toContain('url_private');
+    expect(messageArg).not.toContain('xoxb-');
   });
 
   // ── Test 3: size-cap-exceeded ──
@@ -245,5 +275,129 @@ describe('SlackService file attachment handling', () => {
 
     expect(result).toBeNull();
     expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  // ── Test 5: follow-up mention with image ──
+
+  it('follow-up: image attachment injects absolute public URL into the prompt via handleFollowUp', async () => {
+    const { service } = makeService();
+    const imageBytes = Buffer.from('fake-followup-image').buffer as ArrayBuffer;
+
+    fetchSpy.mockImplementation((input: RequestInfo | URL) => {
+      const url = typeof input === 'string' ? input : (input as URL).toString();
+      if (url.includes('files.slack.com')) {
+        return Promise.resolve(fakeResponse(imageBytes));
+      }
+      // reactions.add / reactions.remove / chat.postMessage
+      return Promise.resolve(fakeResponse({ ok: true }));
+    });
+
+    const event = {
+      type: 'app_mention',
+      text: '<@U123> what is in this image',
+      user: 'U456',
+      channel: 'C789',
+      ts: '200.002',
+      thread_ts: '200.000',
+      files: [
+        {
+          id: 'F5',
+          name: 'followup.png',
+          mimetype: 'image/png',
+          url_private: 'https://files.slack.com/files-pri/aaa/followup.png',
+          size: 512,
+        },
+      ],
+    };
+
+    // Call handleFollowUp directly (simulating a second mention in the same thread).
+    await service.handleFollowUp('session-456', event, 'C789', '200.000');
+
+    const sendCalls = vi.mocked(service.chatService.sendMessageForSlack).mock.calls;
+    expect(sendCalls.length).toBeGreaterThan(0);
+    const messageArg: string = sendCalls[0][1];
+
+    // Relative Markdown link preserved.
+    expect(messageArg).toContain('[followup.png](/api/files/');
+
+    // Absolute public URL injected for agent runtimes.
+    expect(messageArg).toContain('https://allen.inomy.test/api/files/');
+    expect(messageArg).toContain('Uploaded files / images available at public URLs:');
+    expect(messageArg).toContain('If the user asks about an image, fetch/read the relevant URL above directly.');
+
+    // Security: no Slack private metadata in prompt.
+    expect(messageArg).not.toContain('url_private');
+    expect(messageArg).not.toContain('xoxb-');
+    expect(messageArg).not.toContain('files.slack.com');
+  });
+});
+
+// ── Fallback: ALLEN_PUBLIC_URL unset → localhost form ──
+
+describe('SlackService file attachment — ALLEN_PUBLIC_URL fallback', () => {
+  let fetchSpy: ReturnType<typeof vi.spyOn>;
+
+  const originalPublicUrl = process.env.ALLEN_PUBLIC_URL;
+  const originalPort = process.env.PORT;
+
+  beforeEach(() => {
+    fetchSpy = vi.spyOn(global, 'fetch');
+    // Ensure ALLEN_PUBLIC_URL is unset so the fallback path is exercised.
+    delete process.env.ALLEN_PUBLIC_URL;
+    // Ensure PORT is unset so the default 4023 is used.
+    delete process.env.PORT;
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    if (originalPublicUrl === undefined) delete process.env.ALLEN_PUBLIC_URL;
+    else process.env.ALLEN_PUBLIC_URL = originalPublicUrl;
+    if (originalPort === undefined) delete process.env.PORT;
+    else process.env.PORT = originalPort;
+  });
+
+  it('fallback: uses http://localhost:4023 when ALLEN_PUBLIC_URL is unset', async () => {
+    const { service } = makeService();
+    const imageBytes = Buffer.from('fake-fallback-image').buffer as ArrayBuffer;
+
+    fetchSpy.mockImplementation((input: RequestInfo | URL) => {
+      const url = typeof input === 'string' ? input : (input as URL).toString();
+      if (url.includes('files.slack.com')) {
+        return Promise.resolve(fakeResponse(imageBytes));
+      }
+      return Promise.resolve(fakeResponse({ ok: true, messages: [] }));
+    });
+
+    const event = {
+      type: 'app_mention',
+      text: '<@U123> describe this',
+      user: 'U789',
+      channel: 'C789',
+      ts: '300.001',
+      // No thread_ts → top-level mention
+      files: [
+        {
+          id: 'F6',
+          name: 'fallback.jpg',
+          mimetype: 'image/jpeg',
+          url_private: 'https://files.slack.com/files-pri/bbb/fallback.jpg',
+          size: 256,
+        },
+      ],
+    };
+
+    await service.handleNewThread('T001', 'C789', '300.001', event);
+
+    const sendCalls = vi.mocked(service.chatService.sendMessageForSlack).mock.calls;
+    expect(sendCalls.length).toBeGreaterThan(0);
+    const messageArg: string = sendCalls[0][1];
+
+    // Fallback: absolute URL must start with http://localhost:4023
+    expect(messageArg).toContain('http://localhost:4023/api/files/');
+    expect(messageArg).toContain('Uploaded files / images available at public URLs:');
+
+    // Security: no Slack private metadata.
+    expect(messageArg).not.toContain('url_private');
+    expect(messageArg).not.toContain('xoxb-');
   });
 });

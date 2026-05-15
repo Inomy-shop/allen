@@ -82,6 +82,14 @@ if (!existsSync(UPLOADS_DIR)) mkdirSync(UPLOADS_DIR, { recursive: true });
 const MAX_SLACK_FILE_SIZE = 25 * 1024 * 1024; // 25 MB
 const MAX_FILES_PER_MENTION = 10;
 
+/**
+ * Returns the absolute public base URL used to build agent-readable file links.
+ * Matches the canonical pattern used in allen-mcp-server.ts:20.
+ */
+function resolvePublicBase(): string {
+  return process.env.ALLEN_PUBLIC_URL ?? `http://localhost:${process.env.PORT ?? '4023'}`;
+}
+
 // ── Service ──
 
 export class SlackService {
@@ -335,6 +343,11 @@ export class SlackService {
   /**
    * Download all qualifying files (up to MAX_FILES_PER_MENTION) and append
    * Markdown image/file links to `message`. Returns the (possibly extended) message.
+   *
+   * Appends two blocks:
+   *  1. Relative Markdown links (`[name](/api/files/...)`) for UI rendering.
+   *  2. An absolute-URL block so agent runtimes (Codex / Claude CLI) can fetch
+   *     the files directly using `ALLEN_PUBLIC_URL` (or localhost fallback).
    */
   private async appendFileLinks(message: string, files: SlackFile[]): Promise<string> {
     if (files.length === 0) return message;
@@ -350,12 +363,27 @@ export class SlackService {
       filesToProcess.map(f => this.downloadSlackFileToUploads(f, botToken)),
     );
 
-    const links = urls
-      .map((url, i) => (url ? `[${filesToProcess[i].name}](${url})` : null))
-      .filter((link): link is string => link !== null);
+    const keptFiles: Array<{ name: string; relativeUrl: string }> = [];
+    urls.forEach((url, i) => {
+      if (url) keptFiles.push({ name: filesToProcess[i].name, relativeUrl: url });
+    });
 
-    if (links.length === 0) return message;
-    return `${message}\n\n${links.join('\n')}`;
+    if (keptFiles.length === 0) return message;
+
+    // 1. Existing relative Markdown links (preserved so the Allen UI renders them).
+    const links = keptFiles.map(f => `[${f.name}](${f.relativeUrl})`);
+
+    // 2. Absolute public URLs so agent runtimes can fetch the files directly.
+    //    Strip a trailing slash from the base to avoid double-slash paths.
+    const publicBase = resolvePublicBase().replace(/\/$/, '');
+    const absoluteLines = keptFiles.map(f => `- ${f.name}: ${publicBase}${f.relativeUrl}`);
+    const absoluteBlock = [
+      'Uploaded files / images available at public URLs:',
+      ...absoluteLines,
+      'If the user asks about an image, fetch/read the relevant URL above directly.',
+    ].join('\n');
+
+    return `${message}\n\n${links.join('\n')}\n\n${absoluteBlock}`;
   }
 
   // ── Run agent and post reply ──
