@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { chat as chatApi } from '../services/api';
+import { chat as chatApi, users as usersApi } from '../services/api';
+import { useAuthStore, type AuthUser } from '../stores/authStore';
 
 interface ChatSessionItem {
   _id: string;
@@ -33,61 +34,59 @@ function timeAgo(dateStr?: string): string {
 }
 
 export default function ThreadsPage() {
+  const currentUser = useAuthStore((s) => s.user);
   const [chatSessions, setChatSessions] = useState<ChatSessionItem[]>([]);
+  const [allUsers, setAllUsers] = useState<AuthUser[]>([]);
   const [tab, setTab] = useState<Tab>('ongoing');
   const [query, setQuery] = useState('');
   const [loading, setLoading] = useState(true);
-  const [selectedOwner, setSelectedOwner] = useState<string>('all');
-
-  async function load() {
-    setLoading(true);
-    try {
-      const sessions = await chatApi.listSessions().catch(() => []);
-      setChatSessions(sessions ?? []);
-    } finally {
-      setLoading(false);
-    }
-  }
+  // Sentinel values: 'all' = no filter, 'none' = unowned, otherwise userId.
+  // Defaults to the current logged-in user so people land on their own threads.
+  const [selectedOwner, setSelectedOwner] = useState<string>(() => currentUser?.id ?? 'all');
 
   useEffect(() => {
-    void load();
-    const interval = setInterval(load, 10000);
-    return () => clearInterval(interval);
+    // If the user hydrates from localStorage after mount, snap the filter to them.
+    if (currentUser?.id && selectedOwner === 'all') setSelectedOwner(currentUser.id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentUser?.id]);
+
+  useEffect(() => {
+    usersApi.list().then(setAllUsers).catch(() => setAllUsers([]));
   }, []);
 
-  const owners = useMemo(() => {
-    const map = new Map<string, { label: string; email: string | null }>();
-    chatSessions.forEach((s) => {
-      const key = s.ownerUserId ?? '__none__';
-      if (!map.has(key)) {
-        const label = s.ownerName || s.ownerEmail || 'Automation / Unknown';
-        map.set(key, { label, email: s.ownerEmail ?? null });
+  useEffect(() => {
+    let cancelled = false;
+    async function load() {
+      setLoading(true);
+      try {
+        const params = selectedOwner === 'all' ? undefined : { ownerUserId: selectedOwner as 'none' | string };
+        const sessions = await chatApi.listSessions(params).catch(() => []);
+        if (!cancelled) setChatSessions(sessions ?? []);
+      } finally {
+        if (!cancelled) setLoading(false);
       }
-    });
-    return Array.from(map.entries()).map(([key, val]) => ({ key, ...val }));
-  }, [chatSessions]);
+    }
+    void load();
+    const interval = setInterval(load, 10000);
+    return () => { cancelled = true; clearInterval(interval); };
+  }, [selectedOwner]);
 
   const filteredSessions = useMemo(() => {
-    return chatSessions
-      .filter((s) => {
-        if (selectedOwner === 'all') return true;
-        if (selectedOwner === '__none__') return !s.ownerUserId;
-        return s.ownerUserId === selectedOwner;
-      })
-      .filter((s) => {
-        if (!query.trim()) return true;
-        const q = query.toLowerCase();
-        return (
-          s._id.toLowerCase().includes(q) ||
-          (s.title?.toLowerCase().includes(q) ?? false) ||
-          (s.status?.toLowerCase().includes(q) ?? false) ||
-          (s.provider?.toLowerCase().includes(q) ?? false) ||
-          (s.model?.toLowerCase().includes(q) ?? false) ||
-          (s.ownerName?.toLowerCase().includes(q) ?? false) ||
-          (s.ownerEmail?.toLowerCase().includes(q) ?? false)
-        );
-      });
-  }, [chatSessions, query, selectedOwner]);
+    // Owner filter is applied server-side; only do client-side text search here.
+    return chatSessions.filter((s) => {
+      if (!query.trim()) return true;
+      const q = query.toLowerCase();
+      return (
+        s._id.toLowerCase().includes(q) ||
+        (s.title?.toLowerCase().includes(q) ?? false) ||
+        (s.status?.toLowerCase().includes(q) ?? false) ||
+        (s.provider?.toLowerCase().includes(q) ?? false) ||
+        (s.model?.toLowerCase().includes(q) ?? false) ||
+        (s.ownerName?.toLowerCase().includes(q) ?? false) ||
+        (s.ownerEmail?.toLowerCase().includes(q) ?? false)
+      );
+    });
+  }, [chatSessions, query]);
 
   const buckets = useMemo(() => {
     const chatItems: ThreadItem[] = filteredSessions.map((session) => ({
@@ -135,7 +134,7 @@ export default function ThreadsPage() {
               key={item.key}
               type="button"
               className={`tft ${tab === item.key ? 'active' : ''}`}
-              onClick={() => { setTab(item.key); setSelectedOwner('all'); }}
+              onClick={() => setTab(item.key)}
             >
               {item.label} <span className="tft-ct">{item.count}</span>
             </button>
@@ -143,28 +142,27 @@ export default function ThreadsPage() {
         </nav>
       </div>
 
-      <div className="th-search">
+      <div className="th-search flex items-center gap-2 flex-wrap">
         <input
           value={query}
           onChange={(event) => setQuery(event.target.value)}
           placeholder="search threads / tickets..."
+          className="!flex-1 !max-w-[480px]"
         />
-        {owners.length > 1 && (
-          <select
-            value={selectedOwner}
-            onChange={(e) => setSelectedOwner(e.target.value)}
-            className="owner-filter-select"
-            aria-label="Filter by owner"
-            style={{ marginLeft: '8px', padding: '4px 8px', borderRadius: '4px', border: '1px solid var(--border, #e2e8f0)', background: 'var(--surface, #fff)', color: 'var(--text, inherit)', fontSize: 'inherit', cursor: 'pointer' }}
-          >
-            <option value="all">All owners</option>
-            {owners.map((o) => (
-              <option key={o.key} value={o.key}>
-                {o.label}
-              </option>
-            ))}
-          </select>
-        )}
+        <select
+          value={selectedOwner}
+          onChange={(e) => setSelectedOwner(e.target.value)}
+          className="input !w-auto !min-w-[200px] !flex-none"
+          aria-label="Filter by owner"
+        >
+          <option value="all">All users</option>
+          <option value="none">Automation / Unknown</option>
+          {allUsers.map((u) => (
+            <option key={u.id} value={u.id}>
+              {u.name || u.email}{currentUser?.id === u.id ? ' (me)' : ''}
+            </option>
+          ))}
+        </select>
       </div>
 
       <div className="th-list">

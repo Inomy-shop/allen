@@ -754,6 +754,7 @@ export class ChatService {
     slackContext?: SlackContext,
     agentOverrides?: Record<string, unknown>,
     repoId?: string,
+    owner?: { userId?: string; name?: string; email?: string },
   ): Promise<ChatSession> {
     const now = new Date();
     let repoPath: string | undefined;
@@ -776,43 +777,31 @@ export class ChatService {
       ...(slackContext ? { slackContext } : {}),
       ...(repoId && repoPath ? { repoId, repoPath, repoName } : {}),
       ...(agentOverrides ? { agentOverrides } : {}),
+      ...(owner?.userId ? { ownerUserId: owner.userId } : {}),
+      ...(owner?.name ? { ownerName: owner.name } : {}),
+      ...(owner?.email ? { ownerEmail: owner.email } : {}),
       createdAt: now, updatedAt: now,
     };
     const result = await this.sessions.insertOne(doc);
     return { ...doc, _id: result.insertedId };
   }
 
-  async listSessions(): Promise<ChatSession[]> {
-    const results = await this.sessions.aggregate<ChatSession>([
-      { $sort: { lastMessageAt: -1 } },
-      { $limit: 100 },
-      {
-        $lookup: {
-          from: 'chat_messages',
-          let: { sid: { $toString: '$_id' } },
-          pipeline: [
-            {
-              $match: {
-                $expr: { $eq: ['$sessionId', '$$sid'] },
-                role: 'user',
-              },
-            },
-            { $sort: { createdAt: 1 } },
-            { $limit: 1 },
-          ],
-          as: '_firstUserMsg',
-        },
-      },
-      {
-        $addFields: {
-          ownerUserId: { $arrayElemAt: ['$_firstUserMsg.senderUserId', 0] },
-          ownerName: { $arrayElemAt: ['$_firstUserMsg.senderName', 0] },
-          ownerEmail: { $arrayElemAt: ['$_firstUserMsg.senderEmail', 0] },
-        },
-      },
-      { $project: { _firstUserMsg: 0 } },
-    ]).toArray();
-    return results;
+  async listSessions(filter?: { ownerUserId?: string | null }): Promise<ChatSession[]> {
+    // Owner info is denormalized onto the session at creation time (and
+    // backfilled at startup for legacy sessions), so this is a plain find().
+    // Pass ownerUserId=null to filter for unowned sessions (automation / legacy
+    // rows that the backfill couldn't resolve).
+    const query: Record<string, unknown> = {};
+    if (filter && 'ownerUserId' in filter) {
+      // MongoDB: { field: null } matches both null and missing values.
+      query.ownerUserId = filter.ownerUserId;
+    }
+    const sessions = await this.sessions
+      .find(query)
+      .sort({ lastMessageAt: -1 })
+      .limit(100)
+      .toArray() as unknown as ChatSession[];
+    return sessions;
   }
 
   async getSession(id: string): Promise<(ChatSession & { messages: ChatMessage[] }) | null> {
@@ -1777,4 +1766,40 @@ RULES:
     await this.messages.deleteMany({ sessionId: id });
     await this.sessions.deleteOne({ _id: new ObjectId(id) });
   }
+}
+
+/**
+ * Idempotent startup migration. For sessions missing ownerUserId, derive the
+ * owner from the session's earliest user message (the same heuristic the old
+ * read-side $lookup used). Run once at boot — sessions created after this
+ * change get ownerUserId set inline in createSession().
+ *
+ * Uses only plain find/update calls so it works on Amazon DocumentDB, which
+ * doesn't support $lookup with let+pipeline combining $expr and a field match.
+ */
+export async function backfillSessionOwners(db: Db): Promise<{ scanned: number; updated: number }> {
+  const sessions = db.collection('chat_sessions');
+  const messages = db.collection('chat_messages');
+  const cursor = sessions.find(
+    { ownerUserId: { $exists: false } },
+    { projection: { _id: 1 } },
+  );
+  let scanned = 0;
+  let updated = 0;
+  for await (const s of cursor) {
+    scanned++;
+    const sid = String(s._id);
+    const firstUserMsg = await messages.findOne(
+      { sessionId: sid, role: 'user' },
+      { sort: { createdAt: 1 }, projection: { senderUserId: 1, senderName: 1, senderEmail: 1 } },
+    );
+    const set: Record<string, unknown> = {
+      ownerUserId: firstUserMsg?.senderUserId ?? null,
+      ownerName: firstUserMsg?.senderName ?? null,
+      ownerEmail: firstUserMsg?.senderEmail ?? null,
+    };
+    await sessions.updateOne({ _id: s._id }, { $set: set });
+    updated++;
+  }
+  return { scanned, updated };
 }
