@@ -15,12 +15,13 @@ describe('applyCurrentNodesBackfill', () => {
     expect(map.get('node_a')?.status).toBe('running');
   });
 
-  it('uses status === completed guard — does NOT override a completed node', () => {
+  it('overrides a completed trace when the node is currently running again', () => {
     const map = makeMap([
       { name: 'node_a', status: 'completed', attempt: 1, streamText: '', activity: [] },
     ]);
-    applyCurrentNodesBackfill(map, ['node_a'], []);
-    expect(map.get('node_a')?.status).toBe('completed');
+    applyCurrentNodesBackfill(map, ['node_a'], ['node_a']);
+    expect(map.get('node_a')?.status).toBe('running');
+    expect(map.get('node_a')?.attempt).toBe(2);
   });
 
   it('adds a running entry for a node not yet in the map', () => {
