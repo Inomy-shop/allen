@@ -711,6 +711,8 @@ export type McpServerSource =
 export interface McpServer {
   _id: string;
   ownerId?: string;
+  ownerName?: string;
+  ownerEmail?: string;
   name: string;
   description: string;
   type: 'stdio' | 'sse' | 'http';

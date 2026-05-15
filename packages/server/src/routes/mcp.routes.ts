@@ -42,14 +42,10 @@ function ownerIdOf(req: AuthedRequest): ObjectId {
   return new ObjectId(sub);
 }
 
-/** True if the authenticated user is admin. Used only to gate the "all records
- * in Codex sync" admin path — MCP CRUD is strict user-scoped regardless. */
-function isAdmin(req: AuthedRequest): boolean {
-  return req.user?.role === 'admin';
-}
-
-/** Build a Mongo filter scoped to the request's user. MCP has ZERO admin
- * override — even admins see and manage only their own MCP servers. */
+/** Build a Mongo filter scoped to the request's user. Used internally for
+ * write operations and Codex sync. Note: GET /servers reads are now shared
+ * across all authenticated users — all mcp_servers documents are returned
+ * regardless of ownerId. */
 function userScopedFilter(req: AuthedRequest, extra: Record<string, unknown> = {}): Record<string, unknown> {
   return { ownerId: ownerIdOf(req), ...extra };
 }
@@ -222,14 +218,51 @@ export function mcpRoutes(db: Db): Router {
     res.status(204).send();
   });
 
-  // ── MCP CRUD (user-scoped, strict) ──
+  // ── MCP CRUD ──
 
-  // GET /api/mcp/servers — List caller's own MCP servers
+  // GET /api/mcp/servers — List all MCP servers (shared read model) with owner display info
   router.get('/servers', async (req: AuthedRequest, res: Response) => {
     try {
-      const filter = userScopedFilter(req);
-      const servers = await db.collection('mcp_servers').find(filter).sort({ name: 1 }).toArray();
-      res.json(servers);
+      const servers = await db.collection('mcp_servers').find({}).sort({ name: 1 }).toArray();
+
+      // Collect unique ownerIds for a single batch user lookup
+      const ownerIds: ObjectId[] = [];
+      const seen = new Set<string>();
+      for (const s of servers) {
+        if (s.ownerId == null) continue;
+        const key = String(s.ownerId);
+        if (!seen.has(key)) {
+          seen.add(key);
+          ownerIds.push(s.ownerId instanceof ObjectId ? s.ownerId : new ObjectId(key));
+        }
+      }
+
+      // Batch-fetch only name + email — never expose password hashes or tokens
+      const ownerMap = new Map<string, { name: string | null; email: string | null }>();
+      if (ownerIds.length > 0) {
+        const users = await db
+          .collection('users')
+          .find({ _id: { $in: ownerIds } }, { projection: { name: 1, email: 1 } })
+          .toArray();
+        for (const u of users) {
+          ownerMap.set(String(u._id), {
+            name: (u.name as string) ?? null,
+            email: (u.email as string) ?? null,
+          });
+        }
+      }
+
+      // Attach ownerName / ownerEmail to every record
+      const enriched = servers.map((s: Record<string, unknown>) => {
+        const owner = s.ownerId != null ? ownerMap.get(String(s.ownerId)) : undefined;
+        return {
+          ...s,
+          ownerName: owner?.name ?? null,
+          ownerEmail: owner?.email ?? null,
+        };
+      });
+
+      res.json(enriched);
     } catch (err: unknown) {
       res.status(500).json({ error: (err as Error).message });
     }
@@ -402,15 +435,12 @@ export function mcpRoutes(db: Db): Router {
     }
   });
 
-  // PUT /api/mcp/servers/:id — Update (owner-only)
+  // PUT /api/mcp/servers/:id — Update
   router.put('/servers/:id', async (req: AuthedRequest, res: Response) => {
     try {
       const id = param(req, 'id');
       const existing = await service.getById(id);
       if (!existing) return res.status(404).json({ error: 'MCP server not found' });
-      if (String(existing.ownerId ?? '') !== String(ownerIdOf(req)) && !(isAdmin(req) && !existing.ownerId)) {
-        return res.status(403).json({ error: 'you can only edit your own MCP servers' });
-      }
 
       const update: Partial<McpServerRecord> = { ...req.body };
       // Strip fields that should never be mutated via PUT
@@ -443,9 +473,6 @@ export function mcpRoutes(db: Db): Router {
       const id = param(req, 'id');
       const existing = await service.getById(id);
       if (!existing) return res.status(404).json({ error: 'MCP server not found' });
-      if (String(existing.ownerId ?? '') !== String(ownerIdOf(req)) && !(isAdmin(req) && !existing.ownerId)) {
-        return res.status(403).json({ error: 'you can only toggle your own MCP servers' });
-      }
       const server = await service.toggle(id);
       syncUserToCodex(service, req).catch(() => {});
       res.json(server);
@@ -460,9 +487,6 @@ export function mcpRoutes(db: Db): Router {
       const id = param(req, 'id');
       const existing = await service.getById(id);
       if (!existing) return res.status(404).json({ error: 'MCP server not found' });
-      if (String(existing.ownerId ?? '') !== String(ownerIdOf(req)) && !(isAdmin(req) && !existing.ownerId)) {
-        return res.status(403).json({ error: 'you can only delete your own MCP servers' });
-      }
       await service.delete(id);
       evictMcpConnection(existing.name);
       // Synchronously remove from Codex before the fire-and-forget sync so
@@ -488,9 +512,6 @@ export function mcpRoutes(db: Db): Router {
     try {
       const server = await service.getById(id);
       if (!server) return res.status(404).json({ error: 'MCP server not found' });
-      if (String(server.ownerId ?? '') !== String(ownerIdOf(req)) && !(isAdmin(req) && !server.ownerId)) {
-        return res.status(403).json({ error: 'you can only test your own MCP servers' });
-      }
 
       const result = await healthCheckMcpServer(server, db);
 
@@ -522,9 +543,6 @@ export function mcpRoutes(db: Db): Router {
       const id = param(req, 'id');
       const server = await service.getById(id);
       if (!server) return res.status(404).json({ error: 'MCP server not found' });
-      if (String(server.ownerId ?? '') !== String(ownerIdOf(req)) && !(isAdmin(req) && !server.ownerId)) {
-        return res.status(403).json({ error: 'you can only reinstall your own MCP servers' });
-      }
 
       if (server.source?.kind !== 'repo') {
         return res.status(400).json({ error: 'reinstall only applies to repo-sourced MCP servers' });

@@ -14,6 +14,7 @@ import request from 'supertest';
 import { McpService } from '../services/mcp.service.js';
 import { ensureInstalled, ensurePythonVenv, deletePythonVenv } from '@allen/engine';
 import { evictMcpConnection } from '../services/chat-mcp-client.js';
+import { healthCheckMcpServer } from '../services/mcp-health.service.js';
 
 // ── Module-level mocks (hoisted before imports by vitest) ────────────────────
 
@@ -51,6 +52,10 @@ vi.mock('../services/chat-mcp-client.js', () => ({
   executeMcpTool: vi.fn(),
   isMcpTool: vi.fn().mockReturnValue(false),
   disconnectAll: vi.fn(),
+}));
+
+vi.mock('../services/mcp-health.service.js', () => ({
+  healthCheckMcpServer: vi.fn(),
 }));
 
 describe('discoverMcpEntries', () => {
@@ -434,6 +439,42 @@ describe('POST /api/mcp/servers/:id/reinstall', () => {
     expect(res.body.packageManager).toBe('npm');
     expect(res.body.skipped).toBe(false);
   });
+
+  // ── AC-7: cross-owner reinstall ──────────────────────────────────────────────
+
+  it('AC-7: cross-owner reinstall (200): any authenticated user can reinstall another user\'s server', async () => {
+    // existsSync → false (no package.json, no requirements.txt) — Python MCP path
+    vi.mocked(existsSync).mockReturnValue(false);
+    vi.mocked(ensurePythonVenv).mockResolvedValue({
+      venvPath: '/tmp/venvs/other-srv-1',
+      pythonBin: '/tmp/venvs/other-srv-1/bin/python',
+      durationMs: 500,
+      skipped: false,
+      created: true,
+      installed: false,
+      stdout: '',
+      stderr: '',
+    });
+
+    // Server owned by a DIFFERENT user (000000000000000000000099), not FAKE_OWNER_OID
+    const server = {
+      ownerId: '000000000000000000000099',
+      source: {
+        kind: 'repo',
+        repoId: FAKE_REPO_OID,
+        entryPath: 'server.py',
+      },
+    };
+    const repo = { path: '/tmp/other-user-repo' };
+
+    const app = buildApp(server, repo);
+    const res = await request(app).post('/api/mcp/servers/other-srv-1/reinstall');
+
+    // Any authenticated user must get 200 — no 403 for cross-owner
+    expect(res.status).toBe(200);
+    expect(res.body.packageManager).toBe('pip');
+    expect(deletePythonVenv).toHaveBeenCalledWith('other-srv-1');
+  });
 });
 
 // ── DELETE /api/mcp/servers/:id ───────────────────────────────────────────────
@@ -513,20 +554,20 @@ describe('DELETE /api/mcp/servers/:id', () => {
     expect(vi.mocked(evictMcpConnection)).not.toHaveBeenCalled();
   });
 
-  it('wrong owner (403): returns 403 and does not call service.delete for another user\'s server', async () => {
+  it('cross-owner delete (204): any authenticated user can delete another user\'s server', async () => {
     const mockGetById = vi.fn().mockResolvedValue({
       _id: '507f1f77bcf86cd799439011',
       name: 'their-server',
       ownerId: OTHER_OWNER_OID,
     });
-    const mockDelete = vi.fn();
+    const mockDelete = vi.fn().mockResolvedValue(undefined);
 
     const app = buildDeleteApp(mockGetById, mockDelete);
     const res = await request(app).delete('/api/mcp/servers/507f1f77bcf86cd799439011');
 
-    expect(res.status).toBe(403);
-    expect(mockDelete).not.toHaveBeenCalled();
-    expect(vi.mocked(evictMcpConnection)).not.toHaveBeenCalled();
+    expect(res.status).toBe(204);
+    expect(mockDelete).toHaveBeenCalledWith('507f1f77bcf86cd799439011');
+    expect(vi.mocked(evictMcpConnection)).toHaveBeenCalledWith('their-server');
   });
 
   it('service.delete called exactly once on successful deletion', async () => {
@@ -544,6 +585,320 @@ describe('DELETE /api/mcp/servers/:id', () => {
     expect(mockDelete).toHaveBeenCalledTimes(1);
     // syncUserToCodex is fired-and-forgotten; confirm the delete path completed
     expect(vi.mocked(evictMcpConnection)).toHaveBeenCalledWith('codex-tracked-server');
+  });
+});
+
+// ── GET /api/mcp/servers — cross-owner visibility and owner enrichment ────────
+
+describe('GET /api/mcp/servers — cross-owner visibility and owner enrichment', () => {
+  const FAKE_OWNER_OID = '000000000000000000000001';
+  const USER1_OID = '000000000000000000000001';
+  const USER2_OID = '000000000000000000000002';
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(existsSync).mockReturnValue(true);
+  });
+
+  it('returns all servers across owners and enriches with ownerName/ownerEmail', async () => {
+    const server1 = {
+      _id: '507f1f77bcf86cd799439011',
+      name: 'alice-server',
+      ownerId: USER1_OID,
+      type: 'stdio',
+      enabled: true,
+    };
+    const server2 = {
+      _id: '507f1f77bcf86cd799439022',
+      name: 'bob-server',
+      ownerId: USER2_OID,
+      type: 'stdio',
+      enabled: true,
+    };
+
+    const user1 = { _id: USER1_OID, name: 'Alice', email: 'alice@example.com' };
+    const user2 = { _id: USER2_OID, name: 'Bob', email: 'bob@example.com' };
+
+    vi.mocked(McpService).mockImplementation(() => ({
+      getById: vi.fn(),
+      list: vi.fn().mockResolvedValue([]),
+      updateStatus: vi.fn(),
+    } as unknown as McpService));
+
+    const mcpServersFind = vi.fn().mockReturnValue({
+      sort: vi.fn().mockReturnValue({
+        toArray: vi.fn().mockResolvedValue([server1, server2]),
+      }),
+    });
+
+    const usersFind = vi.fn().mockReturnValue({
+      toArray: vi.fn().mockResolvedValue([user1, user2]),
+    });
+
+    const mockDb = {
+      collection: vi.fn().mockImplementation((name: string) => {
+        if (name === 'users') {
+          return {
+            find: usersFind,
+            findOne: vi.fn(),
+            insertOne: vi.fn(),
+            findOneAndUpdate: vi.fn(),
+            updateOne: vi.fn(),
+            deleteOne: vi.fn(),
+          };
+        }
+        return {
+          find: mcpServersFind,
+          findOne: vi.fn(),
+          insertOne: vi.fn(),
+          findOneAndUpdate: vi.fn(),
+          updateOne: vi.fn(),
+          deleteOne: vi.fn(),
+        };
+      }),
+    };
+
+    const app = express();
+    app.use(express.json());
+    app.use((req: express.Request & { user?: unknown }, _res, next) => {
+      req.user = {
+        sub: FAKE_OWNER_OID,
+        email: 'alice@example.com',
+        role: 'user',
+        mustResetPassword: false,
+      };
+      next();
+    });
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    app.use('/api/mcp', mcpRoutes(mockDb as any));
+
+    const res = await request(app).get('/api/mcp/servers');
+
+    expect(res.status).toBe(200);
+    expect(res.body).toHaveLength(2);
+
+    const aliceServer = res.body.find((s: { name: string }) => s.name === 'alice-server');
+    const bobServer = res.body.find((s: { name: string }) => s.name === 'bob-server');
+
+    expect(aliceServer).toBeDefined();
+    expect(bobServer).toBeDefined();
+
+    // Cross-owner visibility: both servers are returned regardless of who is logged in
+    expect(res.body.map((s: { name: string }) => s.name)).toContain('alice-server');
+    expect(res.body.map((s: { name: string }) => s.name)).toContain('bob-server');
+
+    // Owner enrichment: ownerName and ownerEmail are populated from the users lookup
+    expect(aliceServer.ownerName).toBe('Alice');
+    expect(aliceServer.ownerEmail).toBe('alice@example.com');
+    expect(bobServer.ownerName).toBe('Bob');
+    expect(bobServer.ownerEmail).toBe('bob@example.com');
+  });
+});
+
+// ── PUT /api/mcp/servers/:id — cross-owner access (AC-3) ─────────────────────
+
+describe('PUT /api/mcp/servers/:id — cross-owner access (AC-3)', () => {
+  const FAKE_OWNER_OID = '000000000000000000000001';
+  const OTHER_OWNER_OID = '000000000000000000000099';
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(existsSync).mockReturnValue(true);
+  });
+
+  it('AC-3: cross-owner update (200): any authenticated user can update another user\'s server', async () => {
+    const existingServer = {
+      _id: '507f1f77bcf86cd799439011',
+      name: 'other-server',
+      ownerId: OTHER_OWNER_OID,
+      type: 'stdio',
+      enabled: true,
+    };
+    const updatedServer = { ...existingServer, description: 'updated' };
+
+    const mockGetById = vi.fn().mockResolvedValue(existingServer);
+    const mockUpdate = vi.fn().mockResolvedValue(updatedServer);
+
+    vi.mocked(McpService).mockImplementation(() => ({
+      getById: mockGetById,
+      update: mockUpdate,
+      list: vi.fn().mockResolvedValue([]),
+      updateStatus: vi.fn(),
+    } as unknown as McpService));
+
+    const mockDb = {
+      collection: vi.fn().mockReturnValue({
+        findOne: vi.fn().mockResolvedValue(null),
+        find: vi.fn().mockReturnValue({
+          sort: vi.fn().mockReturnValue({ toArray: vi.fn().mockResolvedValue([]) }),
+        }),
+        insertOne: vi.fn(),
+        findOneAndUpdate: vi.fn(),
+        updateOne: vi.fn(),
+        deleteOne: vi.fn(),
+      }),
+    };
+
+    const app = express();
+    app.use(express.json());
+    app.use((req: express.Request & { user?: unknown }, _res, next) => {
+      req.user = {
+        sub: FAKE_OWNER_OID,
+        email: 'test@example.com',
+        role: 'user',
+        mustResetPassword: false,
+      };
+      next();
+    });
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    app.use('/api/mcp', mcpRoutes(mockDb as any));
+
+    const res = await request(app)
+      .put('/api/mcp/servers/507f1f77bcf86cd799439011')
+      .send({ description: 'updated' });
+
+    expect(res.status).toBe(200);
+    expect(mockUpdate).toHaveBeenCalledWith(
+      '507f1f77bcf86cd799439011',
+      expect.objectContaining({ description: 'updated' }),
+    );
+  });
+});
+
+// ── PATCH /api/mcp/servers/:id/toggle — cross-owner access (AC-4) ────────────
+
+describe('PATCH /api/mcp/servers/:id/toggle — cross-owner access (AC-4)', () => {
+  const FAKE_OWNER_OID = '000000000000000000000001';
+  const OTHER_OWNER_OID = '000000000000000000000099';
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(existsSync).mockReturnValue(true);
+  });
+
+  it('AC-4: cross-owner toggle (200): any authenticated user can toggle another user\'s server', async () => {
+    const existingServer = {
+      _id: '507f1f77bcf86cd799439011',
+      name: 'other-server',
+      ownerId: OTHER_OWNER_OID,
+      type: 'stdio',
+      enabled: true,
+    };
+    const toggledServer = { ...existingServer, enabled: false };
+
+    const mockGetById = vi.fn().mockResolvedValue(existingServer);
+    const mockToggle = vi.fn().mockResolvedValue(toggledServer);
+
+    vi.mocked(McpService).mockImplementation(() => ({
+      getById: mockGetById,
+      toggle: mockToggle,
+      list: vi.fn().mockResolvedValue([]),
+      updateStatus: vi.fn(),
+    } as unknown as McpService));
+
+    const mockDb = {
+      collection: vi.fn().mockReturnValue({
+        findOne: vi.fn().mockResolvedValue(null),
+        find: vi.fn().mockReturnValue({
+          sort: vi.fn().mockReturnValue({ toArray: vi.fn().mockResolvedValue([]) }),
+        }),
+        insertOne: vi.fn(),
+        findOneAndUpdate: vi.fn(),
+        updateOne: vi.fn(),
+        deleteOne: vi.fn(),
+      }),
+    };
+
+    const app = express();
+    app.use(express.json());
+    app.use((req: express.Request & { user?: unknown }, _res, next) => {
+      req.user = {
+        sub: FAKE_OWNER_OID,
+        email: 'test@example.com',
+        role: 'user',
+        mustResetPassword: false,
+      };
+      next();
+    });
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    app.use('/api/mcp', mcpRoutes(mockDb as any));
+
+    const res = await request(app).patch('/api/mcp/servers/507f1f77bcf86cd799439011/toggle');
+
+    expect(res.status).toBe(200);
+    expect(mockToggle).toHaveBeenCalledWith('507f1f77bcf86cd799439011');
+    expect(res.body.enabled).toBe(false);
+  });
+});
+
+// ── POST /api/mcp/servers/:id/test — cross-owner access (AC-6) ───────────────
+
+describe('POST /api/mcp/servers/:id/test — cross-owner access (AC-6)', () => {
+  const FAKE_OWNER_OID = '000000000000000000000001';
+  const OTHER_OWNER_OID = '000000000000000000000099';
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(existsSync).mockReturnValue(true);
+  });
+
+  it('AC-6: cross-owner test (200): any authenticated user can test another user\'s server', async () => {
+    const existingServer = {
+      _id: '507f1f77bcf86cd799439011',
+      name: 'other-server',
+      ownerId: OTHER_OWNER_OID,
+      type: 'stdio',
+      enabled: true,
+    };
+
+    vi.mocked(McpService).mockImplementation(() => ({
+      getById: vi.fn().mockResolvedValue(existingServer),
+      list: vi.fn().mockResolvedValue([]),
+      updateStatus: vi.fn().mockResolvedValue(undefined),
+    } as unknown as McpService));
+
+    vi.mocked(healthCheckMcpServer).mockResolvedValue({
+      ok: true,
+      serverInfo: { name: 'other-server', version: '1.0' },
+      toolCount: 2,
+      durationMs: 150,
+    });
+
+    const mockDb = {
+      collection: vi.fn().mockReturnValue({
+        findOne: vi.fn().mockResolvedValue(null),
+        find: vi.fn().mockReturnValue({
+          sort: vi.fn().mockReturnValue({ toArray: vi.fn().mockResolvedValue([]) }),
+        }),
+        insertOne: vi.fn(),
+        findOneAndUpdate: vi.fn(),
+        updateOne: vi.fn(),
+        deleteOne: vi.fn(),
+      }),
+    };
+
+    const app = express();
+    app.use(express.json());
+    app.use((req: express.Request & { user?: unknown }, _res, next) => {
+      req.user = {
+        sub: FAKE_OWNER_OID,
+        email: 'test@example.com',
+        role: 'user',
+        mustResetPassword: false,
+      };
+      next();
+    });
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    app.use('/api/mcp', mcpRoutes(mockDb as any));
+
+    const res = await request(app).post('/api/mcp/servers/507f1f77bcf86cd799439011/test');
+
+    expect(res.status).toBe(200);
+    expect(res.body.status).toBe('connected');
+    expect(vi.mocked(healthCheckMcpServer)).toHaveBeenCalledWith(
+      existingServer,
+      expect.anything(),
+    );
   });
 });
 
