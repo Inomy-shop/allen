@@ -318,7 +318,7 @@ export default function WorkflowListPage() {
                       {/* Tags */}
                       <div>
                         <p className="overline mb-2">Tags</p>
-                        {wf.tags?.length > 0 ? (
+                        {Array.isArray(wf.tags) && wf.tags.length > 0 ? (
                           <div className="flex flex-wrap gap-1.5">
                             {wf.tags.map((tag: string) => (
                               <span key={tag} className="badge badge-human">

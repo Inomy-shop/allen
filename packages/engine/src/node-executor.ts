@@ -23,6 +23,32 @@ import { statSync, mkdirSync } from 'node:fs';
  * that's the server's source tree. */
 const AGENT_FALLBACK_CWD = '/tmp/allen';
 
+/**
+ * Resolve the session key for a node.
+ *
+ * Default: one session per node name, shared across all iterations of a
+ * loop. Workflows that want per-iteration isolation (e.g. per-milestone)
+ * declare `session_key: <template>` on the node; this renders against
+ * state to produce a distinct key per iteration.
+ *
+ * Backwards-compatible: when `session_key` is absent (the common case),
+ * returns `nodeName` exactly as before, so no existing workflow's session
+ * behavior changes.
+ */
+export function resolveSessionKey(
+  nodeName: string,
+  nodeDef: NodeDef,
+  state: Record<string, unknown>,
+): string {
+  if (!nodeDef.session_key) return nodeName;
+  try {
+    const rendered = renderTemplate(nodeDef.session_key, state).trim();
+    return rendered || nodeName;
+  } catch {
+    return nodeName;
+  }
+}
+
 function emitLog(
   deps: NodeExecutorDeps,
   nodeName: string,
@@ -80,6 +106,14 @@ export interface NodeResult {
   outputs: Record<string, unknown>;
   rawResponse?: string;
   sessionId?: string;
+  /**
+   * Resolved session key used to track this run's SDK session in
+   * `exec.sessions`. Equal to nodeName for nodes without `session_key`;
+   * a rendered template (e.g. "milestone_implementer:m2") otherwise.
+   * Engine uses this when persisting sessionId so per-iteration nodes
+   * get isolated sessions.
+   */
+  sessionKey?: string;
   cost: CostInfo;
   durationMs: number;
   /** Per-tool-call log captured during the node's agent turn(s). Empty
@@ -160,7 +194,7 @@ export async function executeNode(
             ? 'codex'
             : 'claude';
       if (effectiveProvider === 'codex') {
-        const existingSession = sessions[nodeName];
+        const existingSession = sessions[resolveSessionKey(nodeName, nodeDef, state)];
         return executeCodexNode(
           nodeName,
           nodeDef,
@@ -251,7 +285,8 @@ async function executeAgentNode(
     mkdirSync(AGENT_FALLBACK_CWD, { recursive: true });
     cwd = AGENT_FALLBACK_CWD;
   }
-  const existingSession = sessions[nodeName];
+  const sessionKey = resolveSessionKey(nodeName, nodeDef, state);
+  const existingSession = sessions[sessionKey];
   // A node re-enters the executor in two distinct shapes, and the prompt
   // we send is different for each. In BOTH cases we resume the prior
   // session — the resumed conversation already carries the agent's role,
@@ -1124,6 +1159,7 @@ Use auto-gate only if the original prompt's workflow context explicitly allowed 
     outputs,
     rawResponse,
     sessionId,
+    sessionKey,
     cost: {
       actual: actualCost,
       estimated: (COST_PER_TURN[model] ?? 0.05) * turns,

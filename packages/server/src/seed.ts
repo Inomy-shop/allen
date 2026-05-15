@@ -339,12 +339,12 @@ Return evidence checked, findings, confidence, unknowns, and recommended route i
     name: 'bug-fix-routing',
     displayName: 'Bug Fix Routing',
     category: 'implementation',
-    description: 'Route bug fixes to a direct specialist for small fixes or bug-investigate-and-fix for larger/unclear bugs.',
+    description: 'Route bug fixes to a direct specialist for small fixes, bug-fix-by-severity for severity-gated full pipelines, or bug-investigate-and-fix for the legacy always-full pipeline.',
     triggers: ['fix bug', 'bug', 'broken', 'regression', 'production issue', 'crash', 'error'],
     excludes: ['add feature', 'new workflow'],
     priority: 82,
     allowedRoutes: ['spawn_agent', 'delegate_to_agent', 'run_workflow'],
-    relatedWorkflows: ['bug-investigate-and-fix'],
+    relatedWorkflows: ['bug-fix-by-severity', 'bug-investigate-and-fix'],
     relatedAgents: ['backend-developer', 'frontend-developer', 'bug-investigator', 'engineering-lead'],
     body: `# Bug Fix Routing
 
@@ -359,7 +359,8 @@ Confirm repo, reproduction clues, failing behavior, affected surface, and availa
 
 ## Routing
 - Small, obvious, low-risk bug with narrow files: create/reuse workspace, spawn the right specialist such as backend-developer or frontend-developer, then continue to PR.
-- Bigger bug, unclear root cause, regression, production issue, multi-file bug, or bug needing investigation/tests/review: run bug-investigate-and-fix.
+- Bug needing investigation but where severity is unknown up front (default lane): run bug-fix-by-severity. The investigator classifies severity as small | medium | large and the workflow auto-skips heavier gates for smaller bugs (small skips qa + implementation_validator; medium skips implementation_validator; large runs the full pipeline).
+- Bug where you explicitly want the full pipeline regardless of size (high-risk surface, security-sensitive, or for parity with historical runs): run bug-investigate-and-fix.
 - Cross-team operational bug: delegate to engineering-lead or devops-engineer.
 
 ## Output
