@@ -608,8 +608,42 @@ export const dashboard = {
 };
 
 // ── Chat ──────────────────────────────────────────────────────────────────
+export interface ChatSession {
+  _id: string;
+  title: string;
+  status: 'active' | 'archived';
+  messageCount: number;
+  lastMessageAt: string;
+  totalCostUsd: number;
+  provider: string;
+  model?: string;
+  llmSessionId?: string;
+  activeAgent?: string | null;
+  agentOverrides?: {
+    provider?: 'claude-cli' | 'codex' | null;
+    model?: string | null;
+    reasoningEffort?: 'off' | 'low' | 'medium' | 'high' | 'max' | null;
+    planMode?: boolean | null;
+  };
+  repoId?: string;
+  repoPath?: string;
+  repoName?: string;
+  source?: 'ui' | 'slack';
+  slackContext?: {
+    channelId: string;
+    threadTs: string;
+    teamId: string;
+  };
+  automationKey?: string;
+  createdAt?: string;
+  updatedAt?: string;
+  ownerUserId?: string | null;
+  ownerName?: string | null;
+  ownerEmail?: string | null;
+}
+
 export const chat = {
-  listSessions: () => request<any[]>('/chat/sessions'),
+  listSessions: () => request<ChatSession[]>('/chat/sessions'),
   providers: () => request<any[]>('/chat/providers'),
   createSession: (provider?: string, model?: string, agentOverrides?: Record<string, unknown>, repoId?: string) =>
     request<any>('/chat/sessions', {
@@ -677,6 +711,8 @@ export type McpServerSource =
 export interface McpServer {
   _id: string;
   ownerId?: string;
+  ownerName?: string;
+  ownerEmail?: string;
   name: string;
   description: string;
   type: 'stdio' | 'sse' | 'http';

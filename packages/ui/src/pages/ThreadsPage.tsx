@@ -10,6 +10,9 @@ interface ChatSessionItem {
   lastMessageAt?: string;
   provider?: string;
   model?: string;
+  ownerUserId?: string | null;
+  ownerName?: string | null;
+  ownerEmail?: string | null;
 }
 
 type ThreadItem =
@@ -34,6 +37,7 @@ export default function ThreadsPage() {
   const [tab, setTab] = useState<Tab>('ongoing');
   const [query, setQuery] = useState('');
   const [loading, setLoading] = useState(true);
+  const [selectedOwner, setSelectedOwner] = useState<string>('all');
 
   async function load() {
     setLoading(true);
@@ -51,8 +55,42 @@ export default function ThreadsPage() {
     return () => clearInterval(interval);
   }, []);
 
+  const owners = useMemo(() => {
+    const map = new Map<string, { label: string; email: string | null }>();
+    chatSessions.forEach((s) => {
+      const key = s.ownerUserId ?? '__none__';
+      if (!map.has(key)) {
+        const label = s.ownerName || s.ownerEmail || 'Automation / Unknown';
+        map.set(key, { label, email: s.ownerEmail ?? null });
+      }
+    });
+    return Array.from(map.entries()).map(([key, val]) => ({ key, ...val }));
+  }, [chatSessions]);
+
+  const filteredSessions = useMemo(() => {
+    return chatSessions
+      .filter((s) => {
+        if (selectedOwner === 'all') return true;
+        if (selectedOwner === '__none__') return !s.ownerUserId;
+        return s.ownerUserId === selectedOwner;
+      })
+      .filter((s) => {
+        if (!query.trim()) return true;
+        const q = query.toLowerCase();
+        return (
+          s._id.toLowerCase().includes(q) ||
+          (s.title?.toLowerCase().includes(q) ?? false) ||
+          (s.status?.toLowerCase().includes(q) ?? false) ||
+          (s.provider?.toLowerCase().includes(q) ?? false) ||
+          (s.model?.toLowerCase().includes(q) ?? false) ||
+          (s.ownerName?.toLowerCase().includes(q) ?? false) ||
+          (s.ownerEmail?.toLowerCase().includes(q) ?? false)
+        );
+      });
+  }, [chatSessions, query, selectedOwner]);
+
   const buckets = useMemo(() => {
-    const chatItems: ThreadItem[] = chatSessions.map((session) => ({
+    const chatItems: ThreadItem[] = filteredSessions.map((session) => ({
       id: session._id,
       title: session.title || 'Untitled conversation',
       subtitle: `${session.messageCount ?? 0} messages · ${session.provider ?? 'assistant'} · ${timeAgo(session.lastMessageAt)}`,
@@ -63,24 +101,17 @@ export default function ThreadsPage() {
       provider: session.provider,
     }));
 
-    const q = query.trim().toLowerCase();
-    const matched = chatItems.filter((item) => {
-      if (!q) return true;
-      return item.id.toLowerCase().includes(q)
-        || item.title.toLowerCase().includes(q)
-        || item.subtitle.toLowerCase().includes(q)
-        || item.status.toLowerCase().includes(q);
-    }).sort((a, b) => new Date(b.startedAt ?? 0).getTime() - new Date(a.startedAt ?? 0).getTime());
+    const sorted = chatItems.sort((a, b) => new Date(b.startedAt ?? 0).getTime() - new Date(a.startedAt ?? 0).getTime());
 
-    const active = matched.filter((item) => item.status === 'active');
-    const archived = matched.filter((item) => item.status === 'archived');
+    const active = sorted.filter((item) => item.status === 'active');
+    const archived = sorted.filter((item) => item.status === 'archived');
 
     return {
       ongoing: active,
-      recent: matched.slice(0, 80),
-      history: archived.length > 0 ? archived : matched.slice(80),
+      recent: sorted.slice(0, 80),
+      history: archived.length > 0 ? archived : sorted.slice(80),
     };
-  }, [chatSessions, query]);
+  }, [filteredSessions]);
 
   const tabs: Array<{ key: Tab; label: string; count: number }> = [
     { key: 'ongoing', label: 'ongoing', count: buckets.ongoing.length },
@@ -104,7 +135,7 @@ export default function ThreadsPage() {
               key={item.key}
               type="button"
               className={`tft ${tab === item.key ? 'active' : ''}`}
-              onClick={() => setTab(item.key)}
+              onClick={() => { setTab(item.key); setSelectedOwner('all'); }}
             >
               {item.label} <span className="tft-ct">{item.count}</span>
             </button>
@@ -118,6 +149,22 @@ export default function ThreadsPage() {
           onChange={(event) => setQuery(event.target.value)}
           placeholder="search threads / tickets..."
         />
+        {owners.length > 1 && (
+          <select
+            value={selectedOwner}
+            onChange={(e) => setSelectedOwner(e.target.value)}
+            className="owner-filter-select"
+            aria-label="Filter by owner"
+            style={{ marginLeft: '8px', padding: '4px 8px', borderRadius: '4px', border: '1px solid var(--border, #e2e8f0)', background: 'var(--surface, #fff)', color: 'var(--text, inherit)', fontSize: 'inherit', cursor: 'pointer' }}
+          >
+            <option value="all">All owners</option>
+            {owners.map((o) => (
+              <option key={o.key} value={o.key}>
+                {o.label}
+              </option>
+            ))}
+          </select>
+        )}
       </div>
 
       <div className="th-list">
