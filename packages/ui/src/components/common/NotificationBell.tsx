@@ -60,6 +60,13 @@ export default function NotificationBell() {
   // Get button position for portal dropdown
   const rect = buttonRef.current?.getBoundingClientRect();
 
+  const PANEL_WIDTH = 320; // matches Tailwind w-80
+  const GUTTER = 8;
+  const top = rect ? rect.bottom + GUTTER : 0;
+  const preferredLeft = rect ? rect.right - PANEL_WIDTH : 0;
+  const maxLeft = window.innerWidth - PANEL_WIDTH - GUTTER;
+  const left = Math.max(GUTTER, Math.min(preferredLeft, maxLeft));
+
   return (
     <>
       <button
@@ -86,7 +93,7 @@ export default function NotificationBell() {
           {/* Dropdown */}
           <div
             className="fixed z-50 w-80 bg-surface-100 border border-app rounded-lg shadow-2xl overflow-hidden"
-            style={{ left: rect.right + 8, bottom: window.innerHeight - rect.bottom }}
+            style={{ top, left }}
           >
             {/* Header */}
             <div className="flex items-center justify-between px-4 py-2.5 border-b border-app bg-surface-50">
