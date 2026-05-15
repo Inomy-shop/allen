@@ -58,6 +58,10 @@ export class UserService {
     return this.col.find({}, { sort: { createdAt: -1 } }).toArray();
   }
 
+  async countUsers(): Promise<number> {
+    return this.col.countDocuments({});
+  }
+
   async createUser(params: {
     email: string;
     name: string;

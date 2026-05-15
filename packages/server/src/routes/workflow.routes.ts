@@ -27,6 +27,18 @@ export function workflowRoutes(db: Db): Router {
     }
   });
 
+  router.post('/ensure-defaults', async (req: Request, res: Response) => {
+    try {
+      const names = Array.isArray(req.body?.names)
+        ? req.body.names.filter((name: unknown): name is string => typeof name === 'string')
+        : [];
+      const ensured = await service.ensureDefaultWorkflows(names);
+      res.json(ensured);
+    } catch (err: unknown) {
+      res.status(500).json({ error: (err as Error).message });
+    }
+  });
+
   // GET /api/workflows/:id
   router.get('/:id', async (req: Request, res: Response) => {
     try {

@@ -107,6 +107,35 @@ describe('createWorkspace built-in', () => {
       expect(result.worktree_path).toBe('/home/ubuntu/.allen/workspaces/ws-new-id');
       expect(result.status).toBe('active');
     });
+
+    it('includes workspace setup errors when creation fails', async () => {
+      const createdWs = {
+        _id: 'ws-failed-id',
+        status: 'creating',
+        worktreePath: '/home/ubuntu/.allen/workspaces/ws-failed-id',
+        basePort: 15000,
+      };
+      const ctx = makeCtx({
+        reposFindOne: async (filter: any) => {
+          if (filter.path === FAKE_REPO.path) return FAKE_REPO;
+          return null;
+        },
+        wsCreate: async () => createdWs,
+        wsGet: async () => ({
+          ...createdWs,
+          status: 'failed',
+          setupError: "git fetch origin failed: 'origin' does not appear to be a git repository",
+        }),
+      });
+
+      await expect(
+        createWorkspace(
+          { repo_path: FAKE_REPO.path, wait_for_setup: true, timeout_sec: 30 },
+          {},
+          ctx,
+        ),
+      ).rejects.toThrow("git fetch origin failed: 'origin' does not appear to be a git repository");
+    });
   });
 
   // ── AC2: worktree path — returns existing workspace without creating a new one ──

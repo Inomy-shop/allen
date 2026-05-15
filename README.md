@@ -67,9 +67,15 @@ npm start
 
 This starts the API server on `http://localhost:4000` and the UI on `http://localhost:5173`.
 
-### 5. Sign in
+### 5. Create the first admin
 
-Open `http://localhost:5173`, sign in with the admin credentials from `.env` (default `admin@example.com` / `ChangeMe!123`), then set a new password when prompted.
+Open `http://localhost:5173`. On a fresh instance, Allen opens the onboarding screen so you can create the first admin account in the UI. After any user exists, sign in with that account.
+
+Allen will run the same prerequisite checks in the browser that are available from the terminal:
+
+```bash
+npm run health
+```
 
 ## First Workflow
 

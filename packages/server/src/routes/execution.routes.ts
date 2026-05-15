@@ -12,9 +12,12 @@ export function executionRoutes(db: Db): Router {
   // POST /api/executions
   router.post('/', async (req: Request, res: Response) => {
     try {
-      const { workflowId, input } = req.body;
+      const { workflowId, input, agentProvider } = req.body;
       if (!workflowId) return res.status(400).json({ error: 'workflowId is required' });
-      const execution = await service.start(workflowId, input ?? {});
+      const provider = agentProvider === 'claude-cli' || agentProvider === 'codex'
+        ? agentProvider
+        : undefined;
+      const execution = await service.start(workflowId, input ?? {}, { agentProvider: provider });
       const chatSessionId = req.header('x-allen-chat-session-id');
       if (chatSessionId) {
         const chatMeta: Record<string, unknown> = {

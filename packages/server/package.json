@@ -6,6 +6,7 @@
   "scripts": {
     "build": "tsc",
     "dev": "tsx watch src/app.ts",
+    "health": "tsx src/scripts/health.ts",
     "start": "node dist/app.js",
     "lint": "tsc --noEmit",
     "test": "vitest run",

@@ -69,7 +69,11 @@ async function doFetch(path: string, options: RequestInit, token: string | null,
 
 async function request<T>(path: string, options: RequestInit = {}, signal?: AbortSignal): Promise<T> {
   // Don't attach tokens to /auth/login or /auth/refresh themselves.
-  const isPublicAuth = path.startsWith('/auth/login') || path.startsWith('/auth/refresh');
+  const isPublicAuth = path.startsWith('/auth/login')
+    || path.startsWith('/auth/refresh')
+    || path.startsWith('/auth/bootstrap')
+    || path.startsWith('/system/onboarding-status')
+    || path.startsWith('/system/health');
   const token = isPublicAuth ? null : useAuthStore.getState().accessToken;
 
   let res = await doFetch(path, options, token, signal);
@@ -115,6 +119,8 @@ export const workflows = {
     fetch(`${BASE}/workflows/${id}/export`, { headers: authHeaders() }).then(r => r.text()),
   importYaml: (yaml: string) =>
     request<any>('/workflows/import', { method: 'POST', body: JSON.stringify({ yaml }) }),
+  ensureDefaults: (names: string[]) =>
+    request<any[]>('/workflows/ensure-defaults', { method: 'POST', body: JSON.stringify({ names }) }),
 };
 
 // ── Skills ────────────────────────────────────────────────────────────────
@@ -374,8 +380,15 @@ export const executions = {
     runContext?: RunStatus | null;
   }>>(`/executions/chat/${sessionId}`),
   context: (id: string) => request<RunStatus>(`/executions/${id}/context`),
-  start: (workflowId: string, input: Record<string, unknown>) =>
-    request<any>('/executions', { method: 'POST', body: JSON.stringify({ workflowId, input }) }),
+  start: (
+    workflowId: string,
+    input: Record<string, unknown>,
+    options?: { agentProvider?: 'claude-cli' | 'codex' },
+  ) =>
+    request<any>('/executions', {
+      method: 'POST',
+      body: JSON.stringify({ workflowId, input, ...(options?.agentProvider ? { agentProvider: options.agentProvider } : {}) }),
+    }),
   cancel: (id: string) =>
     request<any>(`/executions/${id}/cancel`, { method: 'POST' }),
   /**
@@ -607,6 +620,10 @@ export const repos = {
   get: (id: string) => request<any>(`/repos/${id}`),
   create: (body: any) =>
     request<any>('/repos', { method: 'POST', body: JSON.stringify(body) }),
+  validateLocal: (path: string) =>
+    request<any>('/repos/validate-local', { method: 'POST', body: JSON.stringify({ path }) }),
+  validateClone: (body: { url: string; branch?: string; name?: string }) =>
+    request<any>('/repos/validate-clone', { method: 'POST', body: JSON.stringify(body) }),
   clone: (body: { url: string; branch?: string; name?: string; description?: string; tags?: string[] }) =>
     request<any>('/repos/clone', { method: 'POST', body: JSON.stringify(body) }),
   update: (id: string, body: any) =>
@@ -946,6 +963,11 @@ export const auth = {
       method: 'POST',
       body: JSON.stringify({ email, password }),
     }),
+  bootstrap: (body: { name: string; email: string; password: string }) =>
+    request<SessionResponse>('/auth/bootstrap', {
+      method: 'POST',
+      body: JSON.stringify(body),
+    }),
   logout: (refreshToken: string) =>
     request<{ ok: true }>('/auth/logout', {
       method: 'POST',
@@ -957,6 +979,69 @@ export const auth = {
       body: JSON.stringify({ currentPassword, newPassword }),
     }),
   me: () => request<{ user: AuthUser }>('/auth/me'),
+};
+
+// ── System ────────────────────────────────────────────────────────────────
+export const system = {
+  onboardingStatus: () =>
+    request<{
+      isFirstRun: boolean;
+      userCount: number;
+      adminCount: number;
+      complete: boolean;
+      step: 'account' | 'complete';
+    }>('/system/onboarding-status'),
+  health: () =>
+    request<{
+      status: 'pass' | 'warn' | 'fail';
+      generatedAt: string;
+      requiredPassed: boolean;
+      checks: Array<{
+        id: string;
+        label: string;
+        required: boolean;
+        status: 'pass' | 'warn' | 'fail';
+        version?: string;
+        detail: string;
+        fix?: {
+          summary: string;
+          commands?: string[];
+          docsPath?: string;
+        };
+      }>;
+    }>('/system/health'),
+  verifySsh: (host = 'github.com') =>
+    request<{
+      ok: boolean;
+      host: string;
+      detail: string;
+      fix?: { summary: string; commands?: string[]; docsPath?: string };
+    }>('/system/verify-ssh', {
+      method: 'POST',
+      body: JSON.stringify({ host }),
+    }),
+  onboardingProgress: () =>
+    request<{
+      complete: boolean;
+      skipped: boolean;
+      step: 'health' | 'repository' | 'first_workflow' | 'complete';
+      completedAt: string | null;
+      skippedAt: string | null;
+    }>('/system/onboarding-progress'),
+  updateOnboardingProgress: (body: {
+    step?: 'health' | 'repository' | 'first_workflow' | 'complete';
+    action?: 'complete' | 'skip';
+  }) =>
+    request<{
+      complete: boolean;
+      skipped: boolean;
+      step: 'health' | 'repository' | 'first_workflow' | 'complete';
+      completedAt: string | null;
+      skippedAt: string | null;
+    }>('/system/onboarding-progress', {
+      method: 'PATCH',
+      body: JSON.stringify(body),
+    }),
 };
 
 // ── Linear Types ──────────────────────────────────────────────────────────

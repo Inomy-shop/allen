@@ -225,10 +225,11 @@ step "Setup complete"
 cat <<EOF
 
   Next steps:
-    1. Review .env and set ADMIN_EMAIL / ADMIN_PASSWORD if you want non-default credentials.
-    2. Authenticate Claude Code once if you haven't: ${C_BOLD}claude${C_RESET}
-    3. Authenticate Codex once if you haven't:       ${C_BOLD}codex${C_RESET}
+    1. Authenticate Claude Code once if you haven't: ${C_BOLD}claude${C_RESET}
+    2. Authenticate Codex once if you haven't:       ${C_BOLD}codex${C_RESET}
+    3. Check local readiness:                        ${C_BOLD}npm run health${C_RESET}
     4. Start Allen:                                  ${C_BOLD}npm start${C_RESET}
+    5. Open the UI and create the first admin account.
 
   Allen will be available at:
     API: http://localhost:4000

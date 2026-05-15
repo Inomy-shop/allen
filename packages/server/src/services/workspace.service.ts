@@ -74,7 +74,8 @@ export interface Workspace {
   prTitle?: string;
   prUrl?: string;
   basePort: number;
-  setupProgress?: { currentStep: number; totalSteps: number; currentCommand: string; log: string[]; status: 'running' | 'completed' | 'failed' };
+  setupProgress?: { currentStep?: number; totalSteps?: number; currentCommand?: string; log?: string[]; status: 'running' | 'completed' | 'failed'; error?: string };
+  setupError?: string;
   services: WorkspaceService[];
   terminals: { id: string; name: string; active: boolean }[];
   changedFiles: number;
@@ -116,6 +117,11 @@ type WorkspaceDiffFile = {
   originalContent: string;
   modifiedContent: string;
 };
+
+function errorMessage(err: unknown): string {
+  if (err instanceof Error) return err.message;
+  return String(err);
+}
 
 // ── Service ──
 
@@ -239,8 +245,17 @@ export class WorkspaceManager {
 
     // Run creation in background
     this.setupWorkspace(id.toString(), params.repoPath, worktreePath, params.branch, params.baseBranch, params.source === 'pr').catch(err => {
+      const setupError = errorMessage(err);
       console.error(`[workspace] Setup failed for ${id}:`, err);
-      this.col.updateOne({ _id: id }, { $set: { status: 'failed', 'setupProgress.status': 'failed' } }).catch(() => {});
+      this.col.updateOne({ _id: id }, {
+        $set: {
+          status: 'failed',
+          setupError,
+          'setupProgress.status': 'failed',
+          'setupProgress.error': setupError,
+          updatedAt: new Date(),
+        },
+      }).catch(() => {});
     });
 
     return workspace;
@@ -262,13 +277,19 @@ export class WorkspaceManager {
       // agent running in the workspace would miss recent commits without
       // any signal that something went wrong. If the host is genuinely
       // offline, creation should abort so the caller knows.
-      try {
-        await exec('git', ['fetch', '--prune', 'origin'], { cwd: repoPath, timeout: 60_000 });
-      } catch (err) {
-        throw new Error(
-          `git fetch origin failed for ${repoPath}: ${(err as Error).message}. ` +
-          `Workspace creation aborted to avoid cutting a branch from stale code.`,
-        );
+      const hasOriginRemote = await exec('git', ['remote', 'get-url', 'origin'], { cwd: repoPath })
+        .then(result => Boolean(result.stdout.trim()))
+        .catch(() => false);
+
+      if (hasOriginRemote) {
+        try {
+          await exec('git', ['fetch', '--prune', 'origin'], { cwd: repoPath, timeout: 60_000 });
+        } catch (err) {
+          throw new Error(
+            `git fetch origin failed for ${repoPath}: ${errorMessage(err)}. ` +
+            `Workspace creation aborted to avoid cutting a branch from stale code.`,
+          );
+        }
       }
 
       // Resolve a real ref for `baseBranch`. We try, in order:
@@ -280,10 +301,12 @@ export class WorkspaceManager {
       //      (or vice versa) and keeps create_workspace working when the
       //      repo record's defaultBranch is missing or stale.
       const resolveExistingRef = async (candidate: string): Promise<string | null> => {
-        try {
-          await exec('git', ['rev-parse', '--verify', `origin/${candidate}`], { cwd: repoPath });
-          return `origin/${candidate}`;
-        } catch {}
+        if (hasOriginRemote) {
+          try {
+            await exec('git', ['rev-parse', '--verify', `origin/${candidate}`], { cwd: repoPath });
+            return `origin/${candidate}`;
+          } catch {}
+        }
         try {
           await exec('git', ['rev-parse', '--verify', candidate], { cwd: repoPath });
           return candidate;
@@ -318,6 +341,9 @@ export class WorkspaceManager {
 
       // Create worktree
       if (isPr) {
+        if (!hasOriginRemote) {
+          throw new Error(`Cannot create a PR workspace for ${repoPath} because the repo has no origin remote.`);
+        }
         // Targeted fetch of the PR head — the general `fetch --prune origin`
         // above already refreshed every remote-tracking branch, but if the
         // PR lives on a fork or a non-default refspec, pull it explicitly.
@@ -327,7 +353,7 @@ export class WorkspaceManager {
           await exec('git', ['fetch', 'origin', branch], { cwd: repoPath, timeout: 60_000 });
         } catch (err) {
           throw new Error(
-            `git fetch origin ${branch} failed for ${repoPath}: ${(err as Error).message}. ` +
+            `git fetch origin ${branch} failed for ${repoPath}: ${errorMessage(err)}. ` +
             `Workspace creation aborted — PR branch is not reachable.`,
           );
         }
@@ -460,7 +486,16 @@ export class WorkspaceManager {
         }
       }
     } catch (err) {
-      await this.col.updateOne({ _id: oid }, { $set: { status: 'failed' } });
+      const setupError = errorMessage(err);
+      await this.col.updateOne({ _id: oid }, {
+        $set: {
+          status: 'failed',
+          setupError,
+          'setupProgress.status': 'failed',
+          'setupProgress.error': setupError,
+          updatedAt: new Date(),
+        },
+      });
       throw err;
     }
   }

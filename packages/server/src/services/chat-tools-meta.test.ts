@@ -15,12 +15,10 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 // ── Module mocks (hoisted by vitest) ─────────────────────────────────────────
 
-// Mock getAnyActiveSession — it is still imported by the module (used by
-// get_my_session_history / get_my_delegation_thread) but no longer used by
-// any mutation tool. Mocking different caller contexts proves the tools
-// don't gate on caller identity anymore.
+// Mock active-session resolution. Mocking different caller contexts proves
+// the mutation tools don't gate on caller identity.
 vi.mock('./chat-tools.js', () => ({
-  getAnyActiveSession: vi.fn().mockReturnValue(undefined),
+  resolveActiveSession: vi.fn().mockReturnValue(undefined),
 }));
 
 // Mock TeamService so team operations don't need a real MongoDB connection.
@@ -36,7 +34,7 @@ vi.mock('./workflow.service.js', () => ({
 
 // ── Imports (after mocks) ────────────────────────────────────────────────────
 
-import { getAnyActiveSession } from './chat-tools.js';
+import { resolveActiveSession } from './chat-tools.js';
 import { TeamService } from './team.service.js';
 import { WorkflowService } from './workflow.service.js';
 import { metaChatTools } from './chat-tools-meta.js';
@@ -169,12 +167,12 @@ function configureWorkflowService(overrides: Partial<{
 const CALLER_SCENARIOS = [
   {
     label: 'assistant (no agent context)',
-    setup: () => vi.mocked(getAnyActiveSession).mockReturnValue(undefined),
+    setup: () => vi.mocked(resolveActiveSession).mockReturnValue(undefined),
   },
   {
     label: 'non-builder agent "codebase-navigator"',
     setup: () =>
-      vi.mocked(getAnyActiveSession).mockReturnValue({
+      vi.mocked(resolveActiveSession).mockReturnValue({
         chatSessionId: 'sess-1',
         parentMessageId: 'msg-1',
         currentAgent: 'codebase-navigator',
@@ -186,7 +184,7 @@ const CALLER_SCENARIOS = [
   {
     label: 'previously-restricted "workflow-builder-agent"',
     setup: () =>
-      vi.mocked(getAnyActiveSession).mockReturnValue({
+      vi.mocked(resolveActiveSession).mockReturnValue({
         chatSessionId: 'sess-2',
         parentMessageId: 'msg-2',
         currentAgent: 'workflow-builder-agent',
@@ -198,7 +196,7 @@ const CALLER_SCENARIOS = [
   {
     label: 'previously-restricted "team-builder-agent"',
     setup: () =>
-      vi.mocked(getAnyActiveSession).mockReturnValue({
+      vi.mocked(resolveActiveSession).mockReturnValue({
         chatSessionId: 'sess-3',
         parentMessageId: 'msg-3',
         currentAgent: 'team-builder-agent',
@@ -277,7 +275,7 @@ describe('chat-tools-meta — allowlist removal (ENG-1524)', () => {
     }
 
     it('still refuses system-seeded workflows', async () => {
-      vi.mocked(getAnyActiveSession).mockReturnValue(undefined);
+      vi.mocked(resolveActiveSession).mockReturnValue(undefined);
       configureWorkflowService({
         getById: vi.fn().mockResolvedValue({
           _id: 'wf-system',
@@ -368,7 +366,7 @@ describe('chat-tools-meta — allowlist removal (ENG-1524)', () => {
     }
 
     it('allows updating fields other than canDelegateTo (old agent-builder restriction removed)', async () => {
-      vi.mocked(getAnyActiveSession).mockReturnValue({
+      vi.mocked(resolveActiveSession).mockReturnValue({
         chatSessionId: 'sess-ab',
         parentMessageId: 'msg-ab',
         currentAgent: 'agent-builder-agent',
@@ -410,7 +408,7 @@ describe('chat-tools-meta — allowlist removal (ENG-1524)', () => {
     });
 
     it('allows updating built-in agents', async () => {
-      vi.mocked(getAnyActiveSession).mockReturnValue(undefined);
+      vi.mocked(resolveActiveSession).mockReturnValue(undefined);
       configureTeamService();
       const db = makeMockDb({
         agents: [
@@ -474,7 +472,7 @@ describe('chat-tools-meta — allowlist removal (ENG-1524)', () => {
     }
 
     it('still requires confirm=true (destructive safeguard preserved)', async () => {
-      vi.mocked(getAnyActiveSession).mockReturnValue(undefined);
+      vi.mocked(resolveActiveSession).mockReturnValue(undefined);
       configureTeamService();
       const db = makeMockDb({
         agents: [{ name: 'safe-agent', isBuiltIn: false }],
@@ -488,7 +486,7 @@ describe('chat-tools-meta — allowlist removal (ENG-1524)', () => {
     });
 
     it('still refuses to delete built-in agents', async () => {
-      vi.mocked(getAnyActiveSession).mockReturnValue(undefined);
+      vi.mocked(resolveActiveSession).mockReturnValue(undefined);
       configureTeamService();
       const db = makeMockDb({
         agents: [{ name: 'built-in-agent', isBuiltIn: true }],
@@ -538,7 +536,7 @@ describe('chat-tools-meta — allowlist removal (ENG-1524)', () => {
     const tool = getTool('delete_team');
 
     it('still requires confirm=true (destructive safeguard preserved)', async () => {
-      vi.mocked(getAnyActiveSession).mockReturnValue(undefined);
+      vi.mocked(resolveActiveSession).mockReturnValue(undefined);
       configureTeamService();
       const db = makeMockDb();
 

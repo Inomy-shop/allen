@@ -22,6 +22,7 @@
   ],
   "scripts": {
     "setup": "bash scripts/setup.sh",
+    "health": "npm --workspace @allen/server run health --",
     "start": "turbo run dev",
     "dev": "turbo run dev",
     "build": "turbo run build",

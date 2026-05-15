@@ -73,7 +73,7 @@ The API, persistence, orchestration, and integration layer.
 Responsibilities:
 
 - Connect to MongoDB and ensure indexes.
-- Bootstrap the first admin user from `.env`.
+- Expose first-run UI bootstrap for the first admin user.
 - Seed default teams, agents, and workflows.
 - Expose authenticated API routes.
 - Manage users, auth, JWTs, password reset, and admin gating.
@@ -212,9 +212,9 @@ Allen supports Claude Code CLI and SDK execution.
 
 Default behavior:
 
-- Local repo/workspace context prefers CLI mode.
-- Temporary or non-repo contexts can use SDK mode.
-- `ALLEN_AGENT_EXECUTION_MODE=cli` or `sdk` forces a mode.
+- Claude-provider execution uses CLI mode by default.
+- `ALLEN_AGENT_EXECUTION_MODE=cli` keeps the default explicit.
+- `ALLEN_AGENT_EXECUTION_MODE=sdk` forces the in-process SDK path.
 - `CLAUDE_BIN` can point to a specific Claude binary.
 - `ALLEN_SYSTEM_PROMPT_MODE=append` preserves Claude Code scaffolding and appends Allen's role prompt.
 - `ALLEN_SYSTEM_PROMPT_MODE=custom` fully replaces the system prompt where supported.

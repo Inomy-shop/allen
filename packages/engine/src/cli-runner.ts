@@ -4,7 +4,8 @@
  * shape that `@anthropic-ai/claude-code`'s query() yields. This lets
  * node-executor.ts reuse its existing message-handling loop unchanged.
  *
- * Activated when ALLEN_AGENT_EXECUTION_MODE=cli. The default remains `sdk`.
+ * Default path for Claude-provider agent execution. Set
+ * ALLEN_AGENT_EXECUTION_MODE=sdk to force the in-process SDK path.
  *
  * This mode invokes the user's globally-installed `claude` binary with
  * `--agent allen-<name>`. The materialized file IS the system prompt — no

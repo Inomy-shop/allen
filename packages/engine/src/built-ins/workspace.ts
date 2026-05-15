@@ -193,7 +193,14 @@ export const createWorkspace: BuiltInFunction = async (config, state, ctx) => {
       basePort = ws.basePort as number;
       if (finalStatus === 'active' || finalStatus === 'running') break;
       if (finalStatus === 'failed' || finalStatus === 'archived') {
-        throw new Error(`Workspace setup failed (status=${finalStatus})`);
+        const setupProgress = ws.setupProgress as { error?: unknown } | undefined;
+        const setupError =
+          typeof ws.setupError === 'string'
+            ? ws.setupError
+            : typeof setupProgress?.error === 'string'
+              ? setupProgress.error
+              : '';
+        throw new Error(`Workspace setup failed (status=${finalStatus})${setupError ? `: ${setupError}` : ''}`);
       }
     }
     if (finalStatus !== 'active' && finalStatus !== 'running') {

@@ -2,10 +2,11 @@ import express, { type Express } from 'express';
 import { MongoClient, type Db } from 'mongodb';
 import { MongoMemoryServer } from 'mongodb-memory-server';
 import { authRoutes } from '../routes/auth.routes.js';
+import { systemRoutes } from '../routes/system.routes.js';
 import { userRoutes } from '../routes/users.routes.js';
 import { requireAuth } from '../middleware/requireAuth.js';
 import { blockIfMustReset } from '../middleware/blockIfMustReset.js';
-import { bootstrapAdmin } from '../services/adminBootstrap.js';
+import { UserService } from '../services/user.service.js';
 
 export interface TestContext {
   app: Express;
@@ -24,14 +25,10 @@ export interface TestContext {
  * blockIfMustReset used to verify the global gate behavior.
  */
 export async function makeTestApp(options?: {
-  adminEmail?: string;
-  adminPassword?: string;
-  bootstrap?: boolean;
+  seedAdmin?: boolean;
 }): Promise<TestContext> {
   process.env.JWT_ACCESS_SECRET = 'test-access-secret-do-not-use-in-prod';
   process.env.JWT_REFRESH_SECRET = 'test-refresh-secret-do-not-use-in-prod';
-  process.env.ADMIN_EMAIL = options?.adminEmail ?? 'admin@test.local';
-  process.env.ADMIN_PASSWORD = options?.adminPassword ?? 'BootAdmin!234';
   // Keep tokens short in tests so we can optionally exercise refresh flows
   // without actually sleeping.
   process.env.ACCESS_TOKEN_TTL = '1d';
@@ -47,13 +44,21 @@ export async function makeTestApp(options?: {
   await db.collection('refresh_tokens').createIndex({ tokenHash: 1 }, { unique: true });
   await db.collection('refresh_tokens').createIndex({ jti: 1 }, { unique: true });
 
-  if (options?.bootstrap !== false) {
-    await bootstrapAdmin(db);
+  if (options?.seedAdmin !== false) {
+    await new UserService(db).createUser({
+      email: 'admin@test.local',
+      name: 'Admin',
+      plainPassword: 'BootAdmin!234',
+      role: 'admin',
+      mustResetPassword: true,
+      createdBy: 'system',
+    });
   }
 
   const app = express();
   app.use(express.json());
 
+  app.use('/api/system', systemRoutes(db));
   app.use('/api/auth', authRoutes(db));
 
   app.use('/api', requireAuth, blockIfMustReset);
