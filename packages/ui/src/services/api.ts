@@ -470,9 +470,14 @@ export const executions = {
    */
   children: (id: string, mode: 'direct' | 'descendants' = 'direct') =>
     request<SpawnedChild[]>(`/executions/${id}/children?mode=${mode}`),
-  logs: (id: string, params?: Record<string, string>) => {
-    const qs = params ? '?' + new URLSearchParams(params).toString() : '';
+  logs: (id: string, params?: Record<string, string | number | boolean>) => {
+    const qs = params ? '?' + new URLSearchParams(Object.entries(params).map(([key, value]) => [key, String(value)])).toString() : '';
     return request<any[]>(`/executions/${id}/logs${qs}`);
+  },
+  logsPage: (id: string, params?: Record<string, string | number | boolean>) => {
+    const merged = { ...(params ?? {}), page: true };
+    const qs = '?' + new URLSearchParams(Object.entries(merged).map(([key, value]) => [key, String(value)])).toString();
+    return request<{ items: any[]; limit: number; offset: number; hasMore: boolean }>(`/executions/${id}/logs${qs}`);
   },
   traces: (id: string) => request<any[]>(`/executions/${id}/traces`),
   tracesByNode: (id: string, node: string) =>

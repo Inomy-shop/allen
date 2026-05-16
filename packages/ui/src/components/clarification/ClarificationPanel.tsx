@@ -76,7 +76,8 @@ export interface ClarificationPanelProps {
 
   /**
    * Which decision buttons to show. `simple` = just a "Submit" button.
-   * `approval` / `escalation` = approve + request_changes + reject.
+   * `approval` = approve + request_changes + reject.
+   * `escalation` = feedback box + Submit, which retries with feedback.
    * `question` = answer + reject.
    */
   mode?: 'simple' | 'approval' | 'question' | 'escalation';
@@ -312,11 +313,12 @@ export default function ClarificationPanel({
             </div>
           )}
 
-          {/* Decision buttons — only for approval / escalation. Question
+          {/* Decision buttons — only for approval. Question
               mode has just two choices (answer / reject), which we collapse
               into a single primary Submit + a secondary Reject link below
-              the action bar to avoid the redundant "Choose an action" card. */}
-          {(mode === 'approval' || mode === 'escalation') && (
+              the action bar to avoid the redundant "Choose an action" card.
+              Escalation review intentionally keeps only the feedback box. */}
+          {mode === 'approval' && (
             <DecisionButtons
               mode={mode}
               decision={decision}
@@ -396,7 +398,7 @@ export default function ClarificationPanel({
               )}
               <button
                 type="submit"
-                disabled={locked || submitting || ((mode === 'approval' || mode === 'escalation') && !decision)}
+                disabled={locked || submitting || (mode === 'approval' && !decision)}
                 className={`px-4 py-2 rounded-md text-sm font-medium flex items-center gap-2 transition-all shadow-sm disabled:opacity-40 disabled:cursor-not-allowed ${submitButtonClass(decision, severity)}`}
               >
                 {submitting
@@ -1049,12 +1051,12 @@ function submitButtonLabel(
   mode: ClarificationPanelProps['mode'],
   decision: ClarificationDecision | null,
 ): string {
+  if (mode === 'escalation')          return 'Submit';
   if (decision === 'reject')          return 'Reject';
   if (decision === 'request_changes') return 'Request changes';
   if (decision === 'approve')         return 'Approve';
   if (decision === 'answer')          return 'Submit answer';
   if (mode === 'approval')            return 'Choose an action';
-  if (mode === 'escalation')          return 'Choose an action';
   return 'Submit';
 }
 
@@ -1063,6 +1065,7 @@ function defaultDecision(mode: ClarificationPanelProps['mode']): ClarificationDe
   // still change it.
   switch (mode) {
     case 'question':   return 'answer';
+    case 'escalation': return 'request_changes';
     default:           return null;
   }
 }

@@ -3,8 +3,8 @@ import { User } from 'lucide-react';
 
 export default function HumanNode({ data, selected }: NodeProps) {
   return (
-    <div className={`px-4 py-3 rounded-lg border-2 bg-accent-orange/10 dark:bg-accent-orange/15 backdrop-blur-sm shadow-sm w-[280px] transition-all
-      ${selected ? 'border-accent-orange ring-2 ring-accent-orange/30' : 'border-accent-orange/60 hover:border-accent-orange'}
+    <div className={`px-4 py-3 rounded-lg border-2 bg-[#fff3d8] dark:bg-[#34250d] shadow-md w-[280px] transition-all
+      ${selected ? 'border-accent-orange ring-2 ring-accent-orange' : 'border-accent-orange hover:shadow-lg'}
     `}>
       <Handle type="target" position={Position.Top} id="top" className="!bg-accent-orange !w-2.5 !h-2.5 !border-surface" />
       <Handle type="target" position={Position.Right} id="right" className="!bg-accent-yellow !w-2 !h-2 !border-surface" />

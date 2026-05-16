@@ -19,7 +19,7 @@
  */
 
 import { Router, type Request, type Response } from 'express';
-import type { Db } from 'mongodb';
+import { ObjectId, type Db } from 'mongodb';
 import {
   InterventionService,
   type InterventionDecision,
@@ -38,6 +38,9 @@ export function interventionRoutes(db: Db): Router {
   // GET /api/interventions
   router.get('/', async (req: Request, res: Response) => {
     try {
+      if (typeof req.query.workflow_run_id === 'string') {
+        await ensurePendingInterventionForWaitingRun(db, service, req.query.workflow_run_id);
+      }
       const docs = await service.list({
         status: req.query.status as InterventionStatus | undefined,
         workflow_run_id: req.query.workflow_run_id as string | undefined,
@@ -55,7 +58,9 @@ export function interventionRoutes(db: Db): Router {
   // GET /api/interventions/by-workflow-run/:workflowRunId
   router.get('/by-workflow-run/:workflowRunId', async (req: Request, res: Response) => {
     try {
-      const docs = await service.listForWorkflowRun(param(req, 'workflowRunId'));
+      const workflowRunId = param(req, 'workflowRunId');
+      await ensurePendingInterventionForWaitingRun(db, service, workflowRunId);
+      const docs = await service.listForWorkflowRun(workflowRunId);
       res.json(docs);
     } catch (err: unknown) {
       res.status(500).json({ error: (err as Error).message });
@@ -143,6 +148,19 @@ export function interventionRoutes(db: Db): Router {
         const payload: Record<string, unknown> = {};
 
         const originalFields = (existing as unknown as { fields?: Array<{ name: string }> }).fields ?? [];
+        const isApprovalNode = originalFields.some(f => f.name === 'approval_decision')
+          || String(existing.stage ?? '').toLowerCase().includes('approval')
+          || String(existing.severity ?? '').toLowerCase() === 'approval';
+
+        const explicitApprovalDecision = field_values && typeof field_values === 'object'
+          ? (field_values.approval_decision ?? field_values.decision)
+          : undefined;
+
+        if (decision === 'approve' && isApprovalNode && explicitApprovalDecision !== 'approve') {
+          return res.status(400).json({
+            error: 'Approval requires an explicit approval decision payload.',
+          });
+        }
 
         if (field_values && typeof field_values === 'object') {
           // Preferred: UI sent explicit field_values keyed by field name.
@@ -187,13 +205,15 @@ export function interventionRoutes(db: Db): Router {
         const payload: Record<string, unknown> = field_values && typeof field_values === 'object'
           ? { ...field_values }
           : {};
+        const isEscalation = existing.severity === 'escalation'
+          || String(existing.stage ?? '').toLowerCase().includes('escalation');
         const hasDecisionField = originalFields.some(f => f.name === 'approval_decision' || f.name === 'decision');
         if (hasDecisionField) {
           if (originalFields.some(f => f.name === 'approval_decision') && payload.approval_decision == null) {
             payload.approval_decision = 'request_changes';
           }
-          if (originalFields.some(f => f.name === 'decision') && payload.decision == null) {
-            payload.decision = 'request_changes';
+          if (originalFields.some(f => f.name === 'decision')) {
+            payload.decision = isEscalation ? 'retry_with_feedback' : (payload.decision ?? 'request_changes');
           }
           if (originalFields.some(f => f.name === 'approval_feedback') && payload.approval_feedback == null) {
             payload.approval_feedback = feedback ?? answer ?? '';
@@ -428,6 +448,113 @@ function interventionAnswerForAssistant(input: {
     `${values}${answer}${feedback}`,
     `Continue from the latest workflow state and do not ask for this same input again.`,
   ].filter(Boolean).join('\n');
+}
+
+async function ensurePendingInterventionForWaitingRun(
+  db: Db,
+  service: InterventionService,
+  executionId: string,
+): Promise<void> {
+  const exec = await db.collection('executions').findOne({ id: executionId });
+  if (!exec || exec.status !== 'waiting_for_input') return;
+  const nodeName = Array.isArray(exec.currentNodes) ? String(exec.currentNodes[0] ?? '') : '';
+  if (!nodeName || nodeName === 'END') return;
+
+  const existing = await db.collection('workflow_interventions').findOne({
+    workflow_run_id: executionId,
+    stage: nodeName,
+    status: 'pending',
+  });
+  if (existing) return;
+
+  const workflowDoc = exec.workflowId && ObjectId.isValid(String(exec.workflowId))
+    ? await db.collection('workflows').findOne({ _id: new ObjectId(String(exec.workflowId)) })
+    : await db.collection('workflows').findOne({ name: exec.workflowName });
+  const workflow = (workflowDoc?.parsed ?? workflowDoc ?? {}) as Record<string, any>;
+  const nodeDef = workflow?.nodes?.[nodeName] ?? workflow?.parsed?.nodes?.[nodeName] ?? {};
+  const state = (exec.state ?? {}) as Record<string, unknown>;
+  const prompt = renderTemplate(String(nodeDef.prompt ?? `Input required for ${nodeName}`), state);
+  const rawFields = Array.isArray(nodeDef.fields) ? nodeDef.fields : [];
+  const fields = rawFields.map((field: any) => ({
+    name: String(field.name),
+    label: field.label,
+    type: field.type,
+    required: field.required,
+    options: field.options,
+    placeholder: field.placeholder,
+  })).filter((field: any) => field.name);
+  let severity: InterventionSeverity = 'question';
+  const stageLower = nodeName.toLowerCase();
+  if (stageLower.endsWith('_gate') || stageLower.includes('approval')) severity = 'approval';
+  else if (stageLower.includes('escalation')) severity = 'escalation';
+  const options = fields.flatMap((field: any) => {
+    if (field.type !== 'select' || !Array.isArray(field.options)) return [];
+    return field.options.map((option: string) => ({
+      label: option.replace(/_/g, ' '),
+      value: option,
+      primary: option === 'approve' || option === 'continue',
+      destructive: option === 'reject' || option === 'cancel' || option === 'abort',
+    }));
+  });
+  if (options.length === 0) {
+    if (severity === 'escalation') {
+      options.push(
+        { label: 'Retry with feedback', value: 'retry_with_feedback', primary: true, destructive: false },
+        { label: 'Override and continue', value: 'override_and_continue', primary: false, destructive: false },
+        { label: 'Abandon', value: 'abandon', primary: false, destructive: true },
+      );
+    } else if (severity === 'approval') {
+      options.push(
+        { label: 'Approve', value: 'approve', primary: true, destructive: false },
+        { label: 'Request changes', value: 'request_changes', primary: false, destructive: false },
+        { label: 'Reject', value: 'reject', primary: false, destructive: true },
+      );
+    } else {
+      options.push(
+        { label: 'Answer', value: 'answer', primary: true, destructive: false },
+        { label: 'Reject', value: 'reject', primary: false, destructive: true },
+      );
+    }
+  }
+
+  await service.create({
+    workflow_run_id: executionId,
+    workflow_name: String(exec.workflowName ?? workflow.name ?? ''),
+    chat_session_id: typeof (exec.input as any)?.chat_session_id === 'string' ? (exec.input as any).chat_session_id : undefined,
+    started_by_user_id: typeof (exec.input as any)?.started_by_user_id === 'string' ? (exec.input as any).started_by_user_id : undefined,
+    started_by_user_email: typeof (exec.input as any)?.started_by_user_email === 'string' ? (exec.input as any).started_by_user_email : undefined,
+    stage: nodeName,
+    severity,
+    title: String(nodeDef.displayName ?? humaniseNodeName(nodeName)),
+    context_summary: prompt.slice(0, 400) || `The workflow is paused at node "${nodeName}".`,
+    question: prompt || 'Please respond to continue.',
+    options,
+    fields,
+    docs: [],
+    user_request: typeof (exec.input as any)?.user_request === 'string'
+      ? (exec.input as any).user_request
+      : typeof (exec.input as any)?.bug_report === 'string'
+        ? (exec.input as any).bug_report
+        : typeof (exec.input as any)?.task === 'string'
+          ? (exec.input as any).task
+          : undefined,
+  });
+}
+
+function renderTemplate(template: string, state: Record<string, unknown>): string {
+  let rendered = template;
+  for (const [key, value] of Object.entries(state)) {
+    rendered = rendered.replace(new RegExp(`\\{\\{${escapeRegExp(key)}\\}\\}`, 'g'), String(value ?? ''));
+  }
+  return rendered;
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function humaniseNodeName(s: string): string {
+  return s.replace(/[_-]+/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
 }
 
 /**

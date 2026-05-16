@@ -10,8 +10,8 @@ interface Props {
 }
 
 /**
- * Right-side drawer hosting the chronological state-change log. Same
- * pattern as CheckpointsDrawer / TimelineDrawer.
+ * Right-side overlay hosting the chronological state-change log. Matches
+ * the execution logs panel shell so auxiliary run views feel consistent.
  */
 export default function StateChangesDrawer({ executionId, open, onClose }: Props) {
   useEffect(() => {
@@ -29,21 +29,22 @@ export default function StateChangesDrawer({ executionId, open, onClose }: Props
   if (!open) return null;
 
   return createPortal(
-    <div className="fixed inset-0 z-[9999]">
-      <div
-        className="absolute inset-0 bg-black/50 backdrop-blur-sm animate-in fade-in duration-150"
-        onClick={onClose}
-      />
+    <div className="fixed inset-0 z-50 bg-black/30 p-6" role="dialog" aria-modal="true" aria-label="State changes">
+      <button className="absolute inset-0" type="button" onClick={onClose} aria-label="Close state changes" />
       <aside
-        className="absolute top-0 right-0 h-full w-full sm:w-[560px] max-w-full bg-surface-50 border-l border-app shadow-2xl flex flex-col animate-in slide-in-from-right duration-200"
+        className="relative ml-auto flex h-full w-[min(860px,calc(100vw-48px))] flex-col overflow-hidden rounded-lg border border-app-strong bg-app-card shadow-2xl"
         onClick={(e) => e.stopPropagation()}
       >
-        <div className="flex items-center justify-between px-5 py-3.5 border-b border-app shrink-0">
-          <h3 className="text-[14px] font-medium text-theme-primary tracking-tight">State Changes</h3>
+        <div className="flex items-center justify-between gap-3 border-b border-app px-4 py-3">
+          <div>
+            <h3 className="text-[13px] font-semibold text-theme-primary">State Changes</h3>
+            <p className="text-[10px] text-theme-muted font-mono">Checkpoint diffs by completed node</p>
+          </div>
           <button
             onClick={onClose}
-            className="p-1 rounded-md hover:bg-app-muted text-theme-muted hover:text-theme-secondary transition-colors"
+            className="rounded p-1.5 text-theme-muted hover:bg-app-muted hover:text-theme-primary"
             title="Close"
+            aria-label="Close state changes"
           >
             <XIcon className="w-4 h-4" />
           </button>
