@@ -177,7 +177,7 @@ export function WorkflowInterventionDialog({
     try {
       let submitIntervention = activeIntervention;
       let submitModel = model;
-      if (!submitIntervention.intervention_id && (model.mode === 'approval' || model.mode === 'escalation')) {
+      if (!submitIntervention.intervention_id) {
         const hydrated = await hydrateIntervention(run, submitIntervention);
         if (hydrated) {
           submitIntervention = hydrated;
@@ -185,11 +185,15 @@ export function WorkflowInterventionDialog({
           setHydratedIntervention(hydrated);
         }
       }
-      if (!submitIntervention.intervention_id && (submitModel.mode === 'approval' || submitModel.mode === 'escalation')) {
-        throw new Error('Approval is still syncing. Please wait a moment and try again.');
+      if (!submitIntervention.intervention_id) {
+        throw new Error('Workflow input is still syncing. Please wait a moment and try again.');
       }
 
-      const decision = payload.decision ?? (submitModel.mode === 'question' ? 'answer' : 'approve');
+      if (submitModel.mode === 'approval' && !payload.decision) {
+        throw new Error('Choose approve, request changes, or reject before submitting.');
+      }
+
+      const decision = payload.decision ?? 'answer';
       const fieldValues = toWorkflowFieldValues(payload, submitModel);
       await onAnswer({
         executionId: run.executionId,
@@ -280,7 +284,10 @@ type PresentationModel = {
   visibleFields: ClarificationField[];
   decisionField?: ClarificationField;
   feedbackField?: ClarificationField;
+  responseField?: ClarificationField;
 };
+
+const FREEFORM_RESPONSE_FIELD = '__human_response';
 
 function buildPresentationModel(intervention: WorkflowInterventionLike): PresentationModel {
   const rawFields = normalizeClarificationFields(intervention.fields);
@@ -289,12 +296,8 @@ function buildPresentationModel(intervention: WorkflowInterventionLike): Present
     ? [optionField, ...rawFields]
     : rawFields;
   const severity = severityForIntervention(intervention, fields);
-  const mode: DialogMode = severity === 'escalation'
-    ? 'escalation'
-    : severity === 'approval'
-      ? 'approval'
-      : 'question';
-  const decisionField = fields.find(isDecisionField) ?? (mode === 'approval' || mode === 'escalation'
+  const mode: DialogMode = severity === 'approval' ? 'approval' : 'simple';
+  const decisionField = fields.find(isDecisionField) ?? (mode === 'approval'
     ? defaultDecisionField(intervention)
     : undefined);
   const feedbackField = fields.find((field) => {
@@ -304,19 +307,31 @@ function buildPresentationModel(intervention: WorkflowInterventionLike): Present
     return name.includes('feedback') || name.includes('reason') || name.includes('comment') || type === 'textarea';
   });
 
-  if (mode === 'question') {
+  if (mode !== 'approval') {
+    const responseField = feedbackField ?? fields.find(field => field !== decisionField);
     return {
       mode,
       severity,
-      title: 'Input Required',
-      visibleFields: fields.length > 0 ? fields : [{ name: 'answer', label: 'Your response', type: 'textarea', required: true }],
+      title: severity === 'escalation' ? 'Escalation Review' : 'Input Required',
+      visibleFields: [{
+        name: FREEFORM_RESPONSE_FIELD,
+        label: responseField?.label ?? 'Your response',
+        type: 'textarea',
+        required: true,
+        rows: responseField?.rows ?? 5,
+        placeholder: responseField?.placeholder ?? 'Type your response...',
+        help: responseField?.help,
+      }],
+      decisionField,
+      feedbackField,
+      responseField,
     };
   }
 
   return {
     mode,
     severity,
-    title: severity === 'escalation' ? 'Escalation Review' : 'Approval Required',
+    title: 'Approval Required',
     visibleFields: fields.filter(field => field !== decisionField && field !== feedbackField),
     decisionField,
     feedbackField,
@@ -351,7 +366,7 @@ async function hydrateIntervention(
   return {
     ...intervention,
     stage: waitingNode,
-    severity: intervention.severity ?? (waitingNode.toLowerCase().includes('escalation') ? 'escalation' : 'approval'),
+    severity: intervention.severity ?? (waitingNode.toLowerCase().includes('approval') ? 'approval' : waitingNode.toLowerCase().includes('escalation') ? 'escalation' : 'question'),
     title: intervention.title ?? nodeDef.displayName ?? humanLabel(waitingNode),
     question: renderTemplate(nodeDef.prompt ?? intervention.question ?? intervention.context_summary ?? '', execution.state ?? {}),
     fields: Array.isArray(nodeDef.fields) ? nodeDef.fields : intervention.fields,
@@ -426,14 +441,21 @@ function optionsFieldFromIntervention(intervention: WorkflowInterventionLike): C
 
 function defaultDecisionField(intervention: WorkflowInterventionLike): ClarificationField {
   const stage = intervention.stage?.toLowerCase() ?? '';
+  const isEscalation = stage.includes('escalation') || intervention.severity === 'escalation';
   return {
     name: stage.includes('approval') ? 'approval_decision' : 'decision',
     type: 'select',
-    options: [
-      { label: 'Approve', value: 'approve' },
-      { label: 'Request changes', value: 'request_changes' },
-      { label: 'Cancel', value: 'cancel' },
-    ],
+    options: isEscalation
+      ? [
+        { label: 'Retry with feedback', value: 'retry_with_feedback' },
+        { label: 'Override and continue', value: 'override_and_continue' },
+        { label: 'Abandon', value: 'abandon' },
+      ]
+      : [
+        { label: 'Approve', value: 'approve' },
+        { label: 'Request changes', value: 'request_changes' },
+        { label: 'Cancel', value: 'cancel' },
+      ],
     required: true,
   };
 }
@@ -447,8 +469,8 @@ function severityForIntervention(
     intervention.title,
     intervention.stage,
   ].filter(Boolean).join(' ').toLowerCase();
+  if (haystack.includes('approval') || haystack.includes('gate')) return 'approval';
   if (haystack.includes('escalation')) return 'escalation';
-  if (haystack.includes('approval') || haystack.includes('gate') || fields.some(isDecisionField)) return 'approval';
   return 'question';
 }
 
@@ -475,8 +497,22 @@ function toWorkflowFieldValues(
   },
   model: PresentationModel,
 ): Record<string, unknown> {
+  if (model.mode !== 'approval') {
+    const text = firstTextValue(payload.fieldValues);
+    const values: Record<string, unknown> = {};
+    if (model.decisionField) {
+      values[model.decisionField.name] = responseDecisionValueForField(model.decisionField, text);
+    }
+    if (model.responseField) {
+      values[model.responseField.name] = text;
+    } else {
+      values.answer = text;
+    }
+    return values;
+  }
+
   const values: Record<string, unknown> = { ...payload.fieldValues };
-  if ((model.mode === 'approval' || model.mode === 'escalation') && payload.decision && model.decisionField) {
+  if (model.mode === 'approval' && payload.decision && model.decisionField) {
     values[model.decisionField.name] = decisionValueForField(payload.decision, model.decisionField);
   }
   if (payload.feedback) {
@@ -491,8 +527,18 @@ function toWorkflowFieldValues(
   return values;
 }
 
+function responseDecisionValueForField(field: ClarificationField, text: string): string {
+  const values = normalizeFieldOptions(field).map(option => option.value);
+  if (values.includes('retry_with_feedback')) return 'retry_with_feedback';
+  if (values.includes('request_changes')) return 'request_changes';
+  return text;
+}
+
 function decisionValueForField(decision: ClarificationDecision, field: ClarificationField): string {
   const values = normalizeFieldOptions(field).map(option => option.value);
+  if (decision === 'request_changes' && values.includes('retry_with_feedback')) return 'retry_with_feedback';
+  if (decision === 'approve' && values.includes('override_and_continue')) return 'override_and_continue';
+  if (decision === 'reject' && values.includes('abandon')) return 'abandon';
   if (decision === 'reject' && values.includes('cancel')) return 'cancel';
   if (values.includes(decision)) return decision;
   return decision;
@@ -522,11 +568,11 @@ function normalizeOptions(
   }).filter(option => (typeof option === 'string' ? option : option.value));
 }
 
-function firstTextValue(values: Record<string, unknown>): string | undefined {
+function firstTextValue(values: Record<string, unknown>): string {
   for (const value of Object.values(values)) {
     if (typeof value === 'string' && value.trim()) return value;
   }
-  return undefined;
+  return '';
 }
 
 function humanLabel(value: string): string {

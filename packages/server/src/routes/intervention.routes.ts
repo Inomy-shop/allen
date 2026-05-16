@@ -148,6 +148,19 @@ export function interventionRoutes(db: Db): Router {
         const payload: Record<string, unknown> = {};
 
         const originalFields = (existing as unknown as { fields?: Array<{ name: string }> }).fields ?? [];
+        const isApprovalNode = originalFields.some(f => f.name === 'approval_decision')
+          || String(existing.stage ?? '').toLowerCase().includes('approval')
+          || String(existing.severity ?? '').toLowerCase() === 'approval';
+
+        const explicitApprovalDecision = field_values && typeof field_values === 'object'
+          ? (field_values.approval_decision ?? field_values.decision)
+          : undefined;
+
+        if (decision === 'approve' && isApprovalNode && explicitApprovalDecision !== 'approve') {
+          return res.status(400).json({
+            error: 'Approval requires an explicit approval decision payload.',
+          });
+        }
 
         if (field_values && typeof field_values === 'object') {
           // Preferred: UI sent explicit field_values keyed by field name.
@@ -192,13 +205,15 @@ export function interventionRoutes(db: Db): Router {
         const payload: Record<string, unknown> = field_values && typeof field_values === 'object'
           ? { ...field_values }
           : {};
+        const isEscalation = existing.severity === 'escalation'
+          || String(existing.stage ?? '').toLowerCase().includes('escalation');
         const hasDecisionField = originalFields.some(f => f.name === 'approval_decision' || f.name === 'decision');
         if (hasDecisionField) {
           if (originalFields.some(f => f.name === 'approval_decision') && payload.approval_decision == null) {
             payload.approval_decision = 'request_changes';
           }
-          if (originalFields.some(f => f.name === 'decision') && payload.decision == null) {
-            payload.decision = 'request_changes';
+          if (originalFields.some(f => f.name === 'decision')) {
+            payload.decision = isEscalation ? 'retry_with_feedback' : (payload.decision ?? 'request_changes');
           }
           if (originalFields.some(f => f.name === 'approval_feedback') && payload.approval_feedback == null) {
             payload.approval_feedback = feedback ?? answer ?? '';
@@ -482,7 +497,13 @@ async function ensurePendingInterventionForWaitingRun(
     }));
   });
   if (options.length === 0) {
-    if (severity === 'approval' || severity === 'escalation') {
+    if (severity === 'escalation') {
+      options.push(
+        { label: 'Retry with feedback', value: 'retry_with_feedback', primary: true, destructive: false },
+        { label: 'Override and continue', value: 'override_and_continue', primary: false, destructive: false },
+        { label: 'Abandon', value: 'abandon', primary: false, destructive: true },
+      );
+    } else if (severity === 'approval') {
       options.push(
         { label: 'Approve', value: 'approve', primary: true, destructive: false },
         { label: 'Request changes', value: 'request_changes', primary: false, destructive: false },

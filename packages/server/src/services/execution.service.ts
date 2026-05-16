@@ -2291,7 +2291,13 @@ export class ExecutionService {
             // Fallback: if no select options were emitted, provide a
             // standard approve/answer/reject set based on severity.
             if (options.length === 0) {
-              if (severity === 'approval' || severity === 'escalation') {
+              if (severity === 'escalation') {
+                options.push(
+                  { label: 'Retry with feedback', value: 'retry_with_feedback', primary: true, destructive: false },
+                  { label: 'Override and continue', value: 'override_and_continue', primary: false, destructive: false },
+                  { label: 'Abandon', value: 'abandon', primary: false, destructive: true },
+                );
+              } else if (severity === 'approval') {
                 options.push(
                   { label: 'Approve', value: 'approve', primary: true, destructive: false },
                   { label: 'Request changes', value: 'request_changes', primary: false, destructive: false },

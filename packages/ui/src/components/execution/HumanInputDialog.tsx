@@ -104,7 +104,10 @@ interface PresentationModel {
   visibleFields: ClarificationField[];
   decisionField?: ClarificationField;
   feedbackField?: ClarificationField;
+  responseField?: ClarificationField;
 }
+
+const FREEFORM_RESPONSE_FIELD = '__human_response';
 
 function buildPresentationModel(node: string, fields: ClarificationField[]): PresentationModel {
   const lowerNode = node.toLowerCase();
@@ -118,18 +121,7 @@ function buildPresentationModel(node: string, fields: ClarificationField[]): Pre
 
   const isEscalation = lowerNode.includes('escalation')
     || fields.some(field => field.name.toLowerCase().includes('escalation'));
-  const isApproval = isEscalation || lowerNode.includes('approval') || Boolean(decisionField);
-
-  if (isEscalation) {
-    return {
-      mode: 'escalation',
-      severity: 'escalation',
-      title: 'Escalation Review',
-      visibleFields: fields.filter(field => field !== decisionField && field !== feedbackField),
-      decisionField,
-      feedbackField,
-    };
-  }
+  const isApproval = !isEscalation && (lowerNode.includes('approval') || lowerNode.includes('gate'));
 
   if (isApproval) {
     return {
@@ -142,11 +134,23 @@ function buildPresentationModel(node: string, fields: ClarificationField[]): Pre
     };
   }
 
+  const responseField = feedbackField ?? fields.find(field => field !== decisionField);
   return {
     mode: 'simple',
-    severity: 'question',
-    title: 'Input Required',
-    visibleFields: fields,
+    severity: isEscalation ? 'escalation' : 'question',
+    title: isEscalation ? 'Escalation Review' : 'Input Required',
+    visibleFields: [{
+      name: FREEFORM_RESPONSE_FIELD,
+      label: responseField?.label ?? 'Your response',
+      type: 'textarea',
+      required: true,
+      rows: responseField?.rows ?? 5,
+      placeholder: responseField?.placeholder ?? 'Type your response...',
+      help: responseField?.help,
+    }],
+    decisionField,
+    feedbackField,
+    responseField,
   };
 }
 
@@ -176,12 +180,22 @@ function toWorkflowFieldValues(
   },
   model: PresentationModel,
 ): Record<string, unknown> {
-  if (model.mode !== 'approval' && model.mode !== 'escalation') {
-    return payload.fieldValues;
+  if (model.mode !== 'approval') {
+    const text = firstTextValue(payload.fieldValues);
+    const values: Record<string, unknown> = {};
+    if (model.decisionField) {
+      values[model.decisionField.name] = responseDecisionValueForField(model.decisionField, text);
+    }
+    if (model.responseField) {
+      values[model.responseField.name] = text;
+    } else {
+      values.answer = text;
+    }
+    return values;
   }
 
   const values: Record<string, unknown> = { ...payload.fieldValues };
-  if (payload.decision && model.decisionField) {
+  if (model.mode === 'approval' && payload.decision && model.decisionField) {
     values[model.decisionField.name] = decisionValueForField(payload.decision, model.decisionField);
   }
 
@@ -199,8 +213,18 @@ function toWorkflowFieldValues(
   return values;
 }
 
+function responseDecisionValueForField(field: ClarificationField, text: string): string {
+  const values = normalizeFieldOptions(field).map(option => option.value);
+  if (values.includes('retry_with_feedback')) return 'retry_with_feedback';
+  if (values.includes('request_changes')) return 'request_changes';
+  return text;
+}
+
 function decisionValueForField(decision: ClarificationDecision, field: ClarificationField): string {
   const values = normalizeFieldOptions(field).map(option => option.value);
+  if (decision === 'request_changes' && values.includes('retry_with_feedback')) return 'retry_with_feedback';
+  if (decision === 'approve' && values.includes('override_and_continue')) return 'override_and_continue';
+  if (decision === 'reject' && values.includes('abandon')) return 'abandon';
   if (decision === 'reject' && values.includes('cancel')) return 'cancel';
   if (values.includes(decision)) return decision;
   return decision;
@@ -213,4 +237,11 @@ function normalizeFieldOptions(field: ClarificationField): Array<{ label: string
       ? { label: option, value: option }
       : { label: option.label, value: option.value }
   ));
+}
+
+function firstTextValue(values: Record<string, unknown>): string {
+  for (const value of Object.values(values)) {
+    if (typeof value === 'string' && value.trim()) return value;
+  }
+  return '';
 }

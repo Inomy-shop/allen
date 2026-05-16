@@ -1429,10 +1429,12 @@ export default function ExecutionDetailPage() {
     if (!execution) return;
     const status = execution.status;
 
-    // Waiting for input → always pin the pane to the waiting node so the
-    // user sees the form (regardless of prior selection).
+    // Waiting for input → select the waiting node only on first load.
+    // Once the user clicks a previous node to inspect it, polling/SSE
+    // refreshes must not yank the detail pane back to the approval/running
+    // node every few seconds.
     if (status === 'waiting_for_input' && latestInputEvent?.data?.node) {
-      setSelectedNode(latestInputEvent.data.node);
+      if (!selectedNode) setSelectedNode(latestInputEvent.data.node);
       prevStatusRef.current = status;
       return;
     }
@@ -1460,9 +1462,10 @@ export default function ExecutionDetailPage() {
       return;
     }
 
-    // Just transitioned to completed/failed → select the final node
+    // Just transitioned to completed/failed → select the final node only
+    // if the user hasn't already chosen a node to inspect.
     if (status === 'completed' && prevStatusRef.current !== 'completed') {
-      if (execution.completedNodes?.length > 0) {
+      if (!selectedNode && execution.completedNodes?.length > 0) {
         setSelectedNode(execution.completedNodes[execution.completedNodes.length - 1]);
       }
       prevStatusRef.current = status;
@@ -1470,7 +1473,7 @@ export default function ExecutionDetailPage() {
     }
 
     if (status === 'failed' && prevStatusRef.current !== 'failed') {
-      if (execution.failedNode) {
+      if (!selectedNode && execution.failedNode) {
         setSelectedNode(execution.failedNode);
       }
       prevStatusRef.current = status;
@@ -1487,7 +1490,7 @@ export default function ExecutionDetailPage() {
     }
 
     prevStatusRef.current = status;
-  }, [execution?.status, execution?.failedNode, execution?.completedNodes, execution?.currentNodes, latestInputEvent, nodeStates]);
+  }, [execution?.status, execution?.failedNode, execution?.completedNodes, execution?.currentNodes, latestInputEvent, nodeStates, selectedNode]);
 
   const { size: rightWidth, handleMouseDown: rightResizeStart } = useResizable({ direction: 'horizontal', initialSize: 40, minSize: 20, maxSize: 60, unit: 'percent' });
 
