@@ -146,9 +146,10 @@ export default function ExecutionListPage() {
         search: search || undefined,
         limit: PAGE_SIZE,
         offset: page * PAGE_SIZE,
+        includeTotal: true,
       });
       setData(result.items);
-      setTotal(result.total);
+      setTotal(result.total ?? result.items.length);
     } catch { /* ignore */ }
     setLoading(false);
   }, [filter, typeFilter, search, page]);

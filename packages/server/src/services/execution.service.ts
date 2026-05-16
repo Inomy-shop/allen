@@ -135,6 +135,125 @@ const CHILDREN_PROJECTION = {
   errorMessage: 1, input: 1, meta: 1, currentNodes: 1, completedNodes: 1,
 };
 
+const EXECUTION_LIST_PROJECTION = {
+  _id: 0,
+  id: 1,
+  workflowId: 1,
+  workflowName: 1,
+  parentExecutionId: 1,
+  rootExecutionId: 1,
+  spawnDepth: 1,
+  source: 1,
+  status: 1,
+  startedAt: 1,
+  completedAt: 1,
+  durationMs: 1,
+  cost: 1,
+  failedNode: 1,
+  errorMessage: 1,
+  currentNodes: 1,
+  completedNodes: 1,
+
+  'meta.origin': 1,
+  'meta.chatSessionId': 1,
+  'meta.parentMessageId': 1,
+  'meta.linearIssueId': 1,
+  'meta.linearIdentifier': 1,
+  'meta.linearTitle': 1,
+  'meta.linearUrl': 1,
+  'meta.taskTitle': 1,
+  'meta.requestText': 1,
+  'meta.workspaceId': 1,
+  'meta.workspacePath': 1,
+  'meta.prUrl': 1,
+  'meta.prTitle': 1,
+  'meta.prStatus': 1,
+
+  'input.linear_issue_id': 1,
+  'input.linear_identifier': 1,
+  'input.linear_title': 1,
+  'input.linear_url': 1,
+  'input.ticket_id': 1,
+  'input.ticket_title': 1,
+  'input.ticket_url': 1,
+  'input.issue_title': 1,
+  'input.task_title': 1,
+  'input.workspace_id': 1,
+  'input.worktree_path': 1,
+  'input.repo_path': 1,
+  'input.pr_url': 1,
+  'input.url': 1,
+  'input.pr_title': 1,
+  'input.pr_status': 1,
+  'input.branch_name': 1,
+  'input.branch': 1,
+  'input.base_branch': 1,
+
+  'state.linear_issue_id': 1,
+  'state.linear_identifier': 1,
+  'state.linear_title': 1,
+  'state.linear_url': 1,
+  'state.ticket_id': 1,
+  'state.ticket_url': 1,
+  'state.workspace_id': 1,
+  'state.worktree_path': 1,
+  'state.pr_url': 1,
+  'state.url': 1,
+  'state.pr_title': 1,
+  'state.pr_status': 1,
+  'state.branch_name': 1,
+  'state.branch': 1,
+  'state.base_branch': 1,
+} satisfies Record<string, 0 | 1>;
+
+function listItemSummary(item: Record<string, unknown>): Record<string, unknown> {
+  const workflowName = stringValue(item.workflowName) ?? '';
+  const input = ((item.input ?? {}) as Record<string, unknown>) ?? {};
+  const state = ((item.state ?? {}) as Record<string, unknown>) ?? {};
+  const meta = ((item.meta ?? {}) as Record<string, unknown>) ?? {};
+  const isAgentExecution = workflowName.includes(':spawn_agent/')
+    || item.source === 'spawn'
+    || (!item.workflowId && item.source === 'chat');
+  const linear = (() => {
+    const identifier =
+      stringValue(meta.linearIdentifier)
+      ?? stringValue(input.linear_identifier)
+      ?? stringValue(input.ticket_id)
+      ?? stringValue(state.linear_identifier)
+      ?? stringValue(state.ticket_id);
+    const url = firstUrl([meta.linearUrl, input.linear_url, input.ticket_url, state.linear_url, state.ticket_url], /linear\.app/i);
+    const issueId = stringValue(meta.linearIssueId) ?? stringValue(input.linear_issue_id);
+    if (!identifier && !url && !issueId) return null;
+    return {
+      issueId,
+      identifier,
+      title: stringValue(meta.linearTitle) ?? stringValue(input.linear_title) ?? stringValue(state.linear_title),
+      url,
+      assignment: null,
+    };
+  })();
+  const prUrl = firstGithubPullRequestUrl([state.pr_url, state.url, input.pr_url, input.url, meta.prUrl, meta.url]);
+  const pullRequest = prUrl
+    ? {
+        number: Number(prUrl.match(/\/pull\/(\d+)/i)?.[1] ?? '') || null,
+        title: stringValue(state.pr_title) ?? stringValue(input.pr_title) ?? stringValue(meta.prTitle) ?? null,
+        url: prUrl,
+        status: stringValue(state.pr_status) ?? stringValue(input.pr_status) ?? stringValue(meta.prStatus) ?? 'open',
+        branch: stringValue(state.branch_name) ?? stringValue(state.branch) ?? stringValue(input.branch_name) ?? stringValue(input.branch) ?? null,
+        baseBranch: stringValue(state.base_branch) ?? stringValue(input.base_branch) ?? null,
+      }
+    : null;
+
+  return {
+    ...item,
+    type: isAgentExecution ? 'agent' : 'workflow',
+    origin: stringValue(meta.origin) ?? (item.source === 'chat' ? 'chat' : isAgentExecution ? 'direct_agent' : 'workflow'),
+    title: executionDisplayTitle(input, meta, workflowName),
+    linear,
+    pullRequest,
+  };
+}
+
 function decorateChildRow(
   row: Record<string, unknown>,
   linkType: 'direct' | 'timing',
@@ -575,7 +694,10 @@ export class ExecutionService {
     search?: string;
     skip?: number;
     limit?: number;
-  } = {}): Promise<{ items: Record<string, unknown>[]; total: number }> {
+    includeTotal?: boolean;
+    enrich?: boolean;
+    hydrateLegacyChatMetadata?: boolean;
+  } = {}): Promise<{ items: Record<string, unknown>[]; total?: number }> {
     const query: Record<string, unknown> = {};
     if (opts.status) query.status = opts.status;
     if (opts.workflowId) query.workflowId = opts.workflowId;
@@ -611,12 +733,17 @@ export class ExecutionService {
     const { items, total } = await this.stateManager.listExecutionsPaged(query, {
       skip: opts.skip,
       limit: opts.limit,
+      includeTotal: opts.includeTotal,
+      projection: EXECUTION_LIST_PROJECTION,
     });
     const normalizedItems = (items as unknown as Record<string, unknown>[]).map(normalizeTerminalCurrentNodes);
-    await this.attachChatMetadataFromMessages(normalizedItems);
-    const enriched = await Promise.all(
-      normalizedItems.map((item) => this.listItemContext(item)),
-    );
+    if (opts.hydrateLegacyChatMetadata) {
+      await this.attachChatMetadataFromMessages(normalizedItems);
+    }
+    if (!opts.enrich) {
+      return { items: normalizedItems.map(listItemSummary), total };
+    }
+    const enriched = await Promise.all(normalizedItems.map((item) => this.listItemContext(item)));
     return { items: enriched, total };
   }
 

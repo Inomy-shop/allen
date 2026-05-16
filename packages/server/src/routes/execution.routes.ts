@@ -92,6 +92,9 @@ export function executionRoutes(db: Db): Router {
           status, workflowId, workflowName, type, search,
           skip: Number.isFinite(offset) ? offset : 0,
           limit: Number.isFinite(limit) ? limit : 50,
+          includeTotal: req.query.includeTotal === 'true' || req.query.includeTotal === '1',
+          enrich: req.query.enrich === 'true',
+          hydrateLegacyChatMetadata: req.query.hydrateLegacyChatMetadata === 'true',
         });
         return res.json(result);
       }

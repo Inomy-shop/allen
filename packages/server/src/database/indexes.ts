@@ -53,6 +53,11 @@ export async function ensureIndexes(db: Db): Promise<void> {
   await db.collection('executions').createIndex({ workflowName: 1 });
   await db.collection('executions').createIndex({ status: 1 });
   await db.collection('executions').createIndex({ startedAt: -1 });
+  await db.collection('executions').createIndex({ status: 1, startedAt: -1 });
+  await db.collection('executions').createIndex(
+    { status: 1, 'meta.chatSessionId': 1 },
+    { partialFilterExpression: { 'meta.chatSessionId': { $exists: true } } },
+  );
   // Compound index for concurrency limit checks
   await db.collection('executions').createIndex({ workflowName: 1, status: 1 });
   // Spawn-tree indexes — parentExecutionId powers the "direct children of
@@ -112,6 +117,18 @@ export async function ensureIndexes(db: Db): Promise<void> {
   // Execution Logs
   await db.collection('execution_logs').createIndex({ executionId: 1, timestamp: 1 });
   await db.collection('execution_logs').createIndex({ executionId: 1, node: 1, timestamp: 1 });
+
+  // Pull Requests
+  await db.collection('pull_requests').createIndex({ updatedAt: -1 });
+  await db.collection('pull_requests').createIndex({ status: 1, updatedAt: -1 });
+  await db.collection('pull_requests').createIndex({ repoId: 1, status: 1, updatedAt: -1 });
+
+  // Workspaces
+  await db.collection('workspaces').createIndex({ status: 1, updatedAt: -1 });
+  await db.collection('workspaces').createIndex({ updatedAt: -1 });
+
+  // Alerts
+  await db.collection('alerts').createIndex({ read: 1, createdAt: -1 });
 
   // Learnings
   await db.collection('learnings').createIndex({ 'scope.level': 1, status: 1, confidence: -1 });
