@@ -97,6 +97,7 @@ export default function WorkflowDetailPage() {
         type: 'workflow',
         limit: 100,
         offset: 0,
+        includeTotal: true,
       });
 
       if (result.total === 0 && wf) {
@@ -105,11 +106,12 @@ export default function WorkflowDetailPage() {
           type: 'workflow',
           limit: 100,
           offset: 0,
+          includeTotal: true,
         });
       }
 
       setRuns(result.items);
-      setRunsTotal(result.total);
+      setRunsTotal(result.total ?? result.items.length);
     } finally {
       setRunsLoading(false);
     }
