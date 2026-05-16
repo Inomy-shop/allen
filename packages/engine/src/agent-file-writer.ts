@@ -207,7 +207,7 @@ export function renderAgentFile(agent: AgentSpec): { subagentName: string; body:
   // Only inject when an explicit allowlist exists — empty means "all tools",
   // which already includes the Allen MCP. Skip duplicates so we don't bloat
   // the frontmatter on agents that already opted in.
-  if (expandedTools.length > 0) {
+  // if (expandedTools.length > 0) {
     const seen = new Set(expandedTools);
     // Always-on artifact tools — agents are told to call these in
     // ARTIFACTS_GUIDANCE, so without injection the allowlist would
@@ -225,7 +225,7 @@ export function renderAgentFile(agent: AgentSpec): { subagentName: string; body:
         seen.add(t);
       }
     }
-  }
+  // }
   const frontmatter = [
     '---',
     `name: ${subagentName}`,

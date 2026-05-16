@@ -373,6 +373,13 @@ export const executions = {
     qs.set('offset', String(params.offset ?? 0));
     return request<{ items: any[]; total: number }>(`/executions?${qs.toString()}`);
   },
+  count: (params: { status?: string | string[]; chatSession?: boolean } = {}) => {
+    const qs = new URLSearchParams();
+    if (Array.isArray(params.status)) qs.set('status', params.status.join(','));
+    else if (params.status) qs.set('status', params.status);
+    if (params.chatSession) qs.set('chatSession', 'true');
+    return request<{ count: number }>(`/executions/count${qs.toString() ? `?${qs.toString()}` : ''}`);
+  },
   get: (id: string) => request<any>(`/executions/${id}`),
   forChat: (sessionId: string) => request<Array<{
     executionId: string;
@@ -650,6 +657,16 @@ export const repos = {
 export const dashboard = {
   stats: () => request<any>('/dashboard/stats'),
   cost: () => request<any>('/dashboard/cost'),
+  navCounts: () => request<{
+    mywork: number;
+    inbox: number;
+    threads: number;
+    tickets: number;
+    pulls: number;
+    workspaces: number;
+    activity: number;
+    learnings: number;
+  }>('/dashboard/nav-counts'),
 };
 
 // ── Chat ──────────────────────────────────────────────────────────────────

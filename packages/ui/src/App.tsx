@@ -17,11 +17,11 @@ import { BRAND_NAME } from './lib/brand';
 import {
   auth as authApi,
   chat as chatApi,
+  dashboard as dashboardApi,
   executions as executionsApi,
   interventions as interventionsApi,
   linear as linearApi,
 } from './services/api';
-import { pullRequests as pullRequestsApi, workspaces as workspacesApi } from './services/workspaceService';
 import { usePanelLayout } from './hooks/usePanelLayout';
 
 interface NavItem {
@@ -383,12 +383,9 @@ export default function App() {
     let cancelled = false;
     async function loadLiveCount() {
       try {
-        const [running, queued] = await Promise.all([
-          executionsApi.listPaged({ status: 'running', limit: 1, offset: 0 }),
-          executionsApi.listPaged({ status: 'queued', limit: 1, offset: 0 }),
-        ]);
+        const { count } = await executionsApi.count({ status: ['running', 'queued'] });
         if (cancelled) return;
-        setLiveCount((running.total ?? 0) + (queued.total ?? 0));
+        setLiveCount(count ?? 0);
         setHealthKnown(true);
       } catch {
         if (!cancelled) setHealthKnown(false);
