@@ -20,7 +20,18 @@ export class WorkflowService {
   async list(includeArchived = false): Promise<Record<string, unknown>[]> {
     const filter = includeArchived ? {} : { archived: { $ne: true } };
     return this.col.find(filter, {
-      projection: { name: 1, description: 1, version: 1, tags: 1, validation: 1, updatedAt: 1, archived: 1 },
+      projection: {
+        name: 1,
+        description: 1,
+        version: 1,
+        tags: 1,
+        validation: 1,
+        updatedAt: 1,
+        archived: 1,
+        'parsed.input': 1,
+        'parsed.nodes': 1,
+        'parsed.edges': 1,
+      },
     }).sort({ updatedAt: -1 }).toArray();
   }
 

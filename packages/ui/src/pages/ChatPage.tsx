@@ -451,13 +451,11 @@ export default function ChatPage() {
     setSidePanelOpen(true);
   }
 
-  const workspaceDiffRefs = spawnedAgents.reduce<Array<{ id: string; mode: 'auto' | 'branch' }>>((acc, run) => {
+  const workspaceDiffRefs = spawnedAgents.reduce<Array<{ id: string; mode: 'workspace' }>>((acc, run) => {
     const id = run.runContext?.workspace?.id;
     if (!id) return acc;
-    const mode = run.runContext?.pullRequest ? 'branch' : 'auto';
     const existing = acc.find(item => item.id === id);
-    if (!existing) acc.push({ id, mode });
-    else if (mode === 'branch') existing.mode = 'branch';
+    if (!existing) acc.push({ id, mode: 'workspace' });
     return acc;
   }, []);
   const pullRequestDiffRefs = spawnedAgents.reduce<Array<{ id: string }>>((acc, run) => {
@@ -474,7 +472,6 @@ export default function ChatPage() {
       run.sourceMessageId ?? '',
       run.status,
       run.runContext?.status ?? '',
-      run.runContext?.progress?.percent ?? '',
       run.runContext?.workspace?.id ?? '',
     ].join(':'))
     .join('|');
@@ -548,14 +545,8 @@ export default function ChatPage() {
     };
 
     void refreshDiffSummary();
-    const hasActiveRun = spawnedAgents.some(run => !['completed', 'failed', 'cancelled', 'canceled'].includes((run.runContext?.status ?? run.status ?? '').toLowerCase()));
-    if (!hasActiveRun && !streaming) return () => { cancelled = true; };
-    const timer = window.setInterval(refreshDiffSummary, 3000);
-    return () => {
-      cancelled = true;
-      window.clearInterval(timer);
-    };
-  }, [diffSourceSignature, diffRefreshSignature, streaming, spawnedAgents, activeSessionId]);
+    return () => { cancelled = true; };
+  }, [diffSourceSignature, diffRefreshSignature, activeSessionId]);
 
   const showResourceRail = Boolean(activeSessionId) || spawnedAgents.length > 0;
   const archivedWorkspace = activeSession?.archivedWorkspace;
@@ -833,6 +824,7 @@ export default function ChatPage() {
         open={sidePanelOpen}
         activeTab={sidePanelTab}
         onTabChange={setSidePanelTab}
+        onAnswerWorkflowIntervention={answerWorkflowIntervention}
         onClose={() => setSidePanelOpen(false)}
       />
     </div>

@@ -2468,6 +2468,12 @@ CRITICAL RULES:
     const currentDepth = (activeCtx?.delegationDepth ?? 0) + 1;
     const onEvent = activeCtx?.broadcastEvent;
 
+    if (!chatSessionId || !parentMessageId) {
+      return {
+        error: 'delegate_to_agent requires an active chat context with a parent message id. Refusing to create or reuse an unscoped delegation thread.',
+      };
+    }
+
     // Resolve cwd: explicit context > session cwd > workspace linked to
     // session > target agent's sourceRepoPath. See spawn_agent for the full
     // rationale. This fallback makes imported Claude agents "just work"

@@ -57,11 +57,14 @@ interface Snapshot {
   edges: Edge[];
 }
 
+type NodesChangeHandler = (nodes: Node[], markDirty?: boolean) => void;
+type EdgesChangeHandler = (edges: Edge[], markDirty?: boolean) => void;
+
 function useUndoRedo(
   nodes: Node[],
   edges: Edge[],
-  setNodes: (n: Node[]) => void,
-  setEdges: (e: Edge[]) => void,
+  setNodes: NodesChangeHandler,
+  setEdges: EdgesChangeHandler,
 ) {
   const undoStack = useRef<Snapshot[]>([]);
   const redoStack = useRef<Snapshot[]>([]);
@@ -82,16 +85,16 @@ function useUndoRedo(
     const prev = undoStack.current.pop();
     if (!prev) return;
     redoStack.current.push({ nodes: structuredClone(nodes), edges: structuredClone(edges) });
-    setNodes(prev.nodes);
-    setEdges(prev.edges);
+    setNodes(prev.nodes, true);
+    setEdges(prev.edges, true);
   }, [nodes, edges, setNodes, setEdges]);
 
   const redo = useCallback(() => {
     const next = redoStack.current.pop();
     if (!next) return;
     undoStack.current.push({ nodes: structuredClone(nodes), edges: structuredClone(edges) });
-    setNodes(next.nodes);
-    setEdges(next.edges);
+    setNodes(next.nodes, true);
+    setEdges(next.edges, true);
   }, [nodes, edges, setNodes, setEdges]);
 
   return { pushSnapshot, undo, redo, canUndo: undoStack.current.length > 0, canRedo: redoStack.current.length > 0 };
@@ -102,8 +105,8 @@ function useUndoRedo(
 interface Props {
   nodes: Node[];
   edges: Edge[];
-  onNodesChange: (nodes: Node[]) => void;
-  onEdgesChange: (edges: Edge[]) => void;
+  onNodesChange: NodesChangeHandler;
+  onEdgesChange: EdgesChangeHandler;
   workflowInput?: Record<string, any> | null;
 }
 
@@ -130,14 +133,24 @@ export default function Canvas({ nodes, edges, onNodesChange, onEdgesChange, wor
     const isStructural = changes.some(c => c.type === 'remove' || c.type === 'add');
     if (isStructural) pushSnapshot();
     const updated = applyNodeChanges(changes, nodes);
-    onNodesChange(updated);
+    const isPersistent = changes.some(c =>
+      c.type === 'remove'
+      || c.type === 'add'
+      || c.type === 'replace',
+    );
+    onNodesChange(updated, isPersistent);
   }, [nodes, onNodesChange, pushSnapshot]);
 
   const handleEdgesChange: OnEdgesChange = useCallback((changes) => {
     const isStructural = changes.some(c => c.type === 'remove' || c.type === 'add');
     if (isStructural) pushSnapshot();
     const updated = applyEdgeChanges(changes, edges);
-    onEdgesChange(updated);
+    const isPersistent = changes.some(c =>
+      c.type === 'remove'
+      || c.type === 'add'
+      || c.type === 'replace',
+    );
+    onEdgesChange(updated, isPersistent);
   }, [edges, onEdgesChange, pushSnapshot]);
 
   const handleConnect: OnConnect = useCallback((connection) => {
@@ -153,7 +166,7 @@ export default function Canvas({ nodes, edges, onNodesChange, onEdgesChange, wor
       },
       edges,
     );
-    onEdgesChange(updated);
+    onEdgesChange(updated, true);
   }, [edges, onEdgesChange, pushSnapshot]);
 
   const handleAddNode = useCallback((type: string, defaults: Record<string, any>) => {
@@ -165,7 +178,7 @@ export default function Canvas({ nodes, edges, onNodesChange, onEdgesChange, wor
       position: { x: 250, y: 150 + nodes.length * 80 },
       data: { ...defaults, label: id },
     };
-    onNodesChange([...nodes, newNode]);
+    onNodesChange([...nodes, newNode], true);
   }, [nodes, onNodesChange, pushSnapshot]);
 
   const handleUpdateNode = useCallback((id: string, data: Record<string, any>) => {
@@ -173,13 +186,13 @@ export default function Canvas({ nodes, edges, onNodesChange, onEdgesChange, wor
     const updated = nodes.map(n =>
       n.id === id ? { ...n, data: { ...data } } : n,
     );
-    onNodesChange(updated);
+    onNodesChange(updated, true);
   }, [nodes, onNodesChange, pushSnapshot]);
 
   const handleDeleteNode = useCallback((id: string) => {
     pushSnapshot();
-    onNodesChange(nodes.filter(n => n.id !== id));
-    onEdgesChange(edges.filter(e => e.source !== id && e.target !== id));
+    onNodesChange(nodes.filter(n => n.id !== id), true);
+    onEdgesChange(edges.filter(e => e.source !== id && e.target !== id), true);
   }, [nodes, edges, onNodesChange, onEdgesChange, pushSnapshot]);
 
   // Route each edge through the handle side that best matches the
@@ -223,7 +236,9 @@ export default function Canvas({ nodes, edges, onNodesChange, onEdgesChange, wor
 
   const displayEdges = useMemo(() => {
     const routed = applyPositionHandles(nodes, edges);
-    if (!selectedId) return routed;
+    if (!selectedId) {
+      return routed.map(e => ({ ...e, zIndex: 2 }));
+    }
     return routed.map((e) => {
       const isConnected = e.source === selectedId || e.target === selectedId;
       const baseStyle = (e.style as any) ?? {};
@@ -238,7 +253,9 @@ export default function Canvas({ nodes, edges, onNodesChange, onEdgesChange, wor
           ...baseStyle,
           opacity: isConnected ? 1 : 0.08,
           stroke: isConnected ? 'rgb(var(--color-accent))' : baseStyle.stroke,
+          strokeWidth: isConnected ? 3.5 : baseStyle.strokeWidth,
         },
+        zIndex: isConnected ? 8 : 1,
         animated: isConnected ? e.animated : false,
       };
     });

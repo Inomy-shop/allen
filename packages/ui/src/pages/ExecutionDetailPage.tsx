@@ -1,7 +1,7 @@
 import { useState, useCallback, useEffect, useRef, useMemo } from 'react';
 import { useParams, Link, useNavigate, useSearchParams } from 'react-router-dom';
 import {
-  ArrowLeft, XCircle, Pause, Play, RefreshCw, Wifi, WifiOff,
+  ArrowLeft, X, XCircle, Pause, Play, RefreshCw, Wifi, WifiOff,
   Download, RotateCcw, Brain, Bot, Clock, DollarSign, Terminal,
   CheckCircle, AlertCircle, Wrench, ChevronDown, ChevronRight,
   ArrowRight, AlertTriangle, Save, BarChart2, Activity,
@@ -42,6 +42,136 @@ function formatDuration(ms: number | null | undefined): string {
   const hours = Math.floor(totalMin / 60);
   const remainMin = totalMin % 60;
   return `${hours}h ${remainMin}m`;
+}
+
+function interventionDecisionLabel(value: string): string {
+  return value.replace(/[_-]+/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+}
+
+function ExecutionApprovalModal({
+  executionId,
+  intervention,
+  onClose,
+  onSubmitted,
+}: {
+  executionId: string;
+  intervention: any;
+  onClose: () => void;
+  onSubmitted: () => void;
+}) {
+  const options = (intervention.options?.length
+    ? intervention.options.map((option: any) => ({ value: option.value ?? option.label ?? '', label: option.label }))
+    : [
+        { value: 'approve', label: 'Approve' },
+        { value: 'request_changes', label: 'Request Changes' },
+        { value: 'reject', label: 'Cancel' },
+      ]).filter((option: any) => option.value);
+  const [decision, setDecision] = useState(options[0]?.value ?? 'approve');
+  const [feedback, setFeedback] = useState('');
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const needsFeedback = decision === 'request_changes';
+  const submitDisabled = submitting || (needsFeedback && !feedback.trim());
+  const title = intervention.title ?? 'Approval required';
+  const question = intervention.question ?? intervention.context_summary ?? '';
+
+  async function submit() {
+    if (submitDisabled || !intervention.intervention_id) return;
+    setSubmitting(true);
+    setError(null);
+    try {
+      await interventionsApi.respond(intervention.intervention_id, {
+        decision,
+        field_values: decision === 'approve' ? {} : undefined,
+        feedback: needsFeedback ? feedback : undefined,
+        human_node_name: intervention.stage,
+        source: 'execution_page',
+      });
+      onSubmitted();
+      onClose();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to submit response');
+      setSubmitting(false);
+    }
+  }
+
+  return (
+    <div className="chat-intervention-modal" role="dialog" aria-modal="true" aria-label={title}>
+      <button className="chat-intervention-backdrop" type="button" onClick={() => !submitting && onClose()} aria-label="Close approval dialog" />
+      <div className="chat-intervention-dialog">
+        <div className="chat-intervention-dialog-head">
+          <div className="chat-intervention-dialog-icon">
+            <ChevronRight className="h-4 w-4" />
+          </div>
+          <div className="min-w-0 flex-1">
+            <div className="flex items-center gap-2">
+              <span className="rounded bg-app-muted px-1.5 py-0.5 font-mono text-[9px] uppercase tracking-[0.08em] text-theme-muted">Approval</span>
+              <span className="truncate font-mono text-[10px] text-theme-subtle">{executionId.slice(0, 8)}</span>
+              {intervention.stage && <span className="truncate font-mono text-[10px] text-theme-subtle">{interventionDecisionLabel(intervention.stage)}</span>}
+            </div>
+            <div className="mt-0.5 truncate text-[13px] font-heading font-semibold text-theme-primary">{title}</div>
+          </div>
+          <button type="button" onClick={() => !submitting && onClose()} className="rounded p-1 text-theme-muted hover:bg-app-muted hover:text-theme-primary" disabled={submitting} aria-label="Close approval dialog">
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+
+        <div className="chat-intervention-dialog-body space-y-3 px-4 py-3">
+          {question && (
+            <div className="chat-intervention-content-scroll">
+              <div className="rounded-md border border-app bg-app-card px-3 py-2 text-[13px] leading-relaxed text-theme-secondary">
+                {renderMarkdown(question)}
+              </div>
+            </div>
+          )}
+
+          <div className="chat-intervention-actions-row flex flex-wrap gap-2">
+            {options.map((option: any) => (
+              <button
+                key={option.value}
+                type="button"
+                onClick={() => setDecision(option.value)}
+                disabled={submitting}
+                className={`rounded-md border px-3 py-1.5 font-mono text-[11px] capitalize transition-colors disabled:opacity-50 ${
+                  decision === option.value
+                    ? 'border-accent bg-accent text-[rgb(var(--color-surface))]'
+                    : 'border-app bg-app-card text-theme-muted hover:border-[rgb(var(--color-text-primary)/0.30)] hover:text-theme-primary'
+                }`}
+              >
+                {option.label ?? interventionDecisionLabel(option.value)}
+              </button>
+            ))}
+          </div>
+
+          {needsFeedback && (
+            <textarea
+              value={feedback}
+              onChange={event => setFeedback(event.target.value)}
+              placeholder="Tell the workflow what should change..."
+              rows={3}
+              disabled={submitting}
+              className="max-h-[110px] min-h-[84px] w-full resize-none overflow-y-auto rounded-md border border-app bg-app-muted px-3 py-2 text-sm text-theme-primary placeholder:text-theme-subtle focus:border-[rgb(var(--color-text-primary)/0.40)] focus:outline-none disabled:opacity-50"
+            />
+          )}
+
+          {error && <div className="rounded-md border border-accent-red/25 bg-accent-red/10 px-3 py-2 text-[12px] text-accent-red">{error}</div>}
+
+          <div className="chat-intervention-submit-row flex items-center justify-between gap-3">
+            <span className="truncate font-mono text-[10px] text-theme-subtle">{interventionDecisionLabel(intervention.stage ?? 'workflow pause')}</span>
+            <button
+              type="button"
+              onClick={submit}
+              disabled={submitDisabled}
+              className="inline-flex items-center gap-1.5 rounded-md bg-accent px-4 py-1.5 font-mono text-[12px] text-[rgb(var(--color-surface))] transition-colors hover:bg-accent/90 disabled:cursor-not-allowed disabled:opacity-40"
+            >
+              Submit
+              <ChevronRight className="h-3.5 w-3.5" />
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
 }
 
 
@@ -931,6 +1061,7 @@ export default function ExecutionDetailPage() {
   const [feedbackTargetNodes, setFeedbackTargetNodes] = useState<string[]>([]);
   const [feedbackBusy, setFeedbackBusy] = useState(false);
   const [feedbackError, setFeedbackError] = useState<string | null>(null);
+  const [approvalModalOpen, setApprovalModalOpen] = useState(false);
 
   // Input dialog is dismissible — user can close it to look at nodes/logs
   // and reopen via the header "Respond" button. The dismissed flag resets
@@ -981,16 +1112,22 @@ export default function ExecutionDetailPage() {
 
   // Load interventions for this workflow run when the execution loads,
   // and refresh on every status change so the banner updates in real time.
-  useEffect(() => {
+  const loadRunInterventions = useCallback(async () => {
     if (!id) return;
-    let cancelled = false;
-    interventionsApi.listForWorkflowRun(id)
-      .then(data => { if (!cancelled) setRunInterventions(data ?? []); })
-      .catch(() => {});
-    return () => { cancelled = true; };
-  }, [id, execution?.status]);
+    try {
+      const data = await interventionsApi.listForWorkflowRun(id);
+      setRunInterventions(data ?? []);
+    } catch {
+      setRunInterventions([]);
+    }
+  }, [id]);
+
+  useEffect(() => {
+    void loadRunInterventions();
+  }, [loadRunInterventions, execution?.status]);
 
   const pendingIntervention = runInterventions.find((i: any) => i.status === 'pending');
+  const approvalPending = Boolean(pendingIntervention || runContext?.humanInput?.required);
 
   // Auto-select node based on execution state.
   // IMPORTANT: the right-side detail pane should NOT auto-follow the running
@@ -1296,6 +1433,17 @@ export default function ExecutionDetailPage() {
                 <span className="w-1.5 h-1.5 rounded-full bg-accent-yellow animate-pulse" />
               </button>
             )}
+            {approvalPending && pendingIntervention && (
+              <button
+                type="button"
+                onClick={() => setApprovalModalOpen(true)}
+                className="cr-approval-button"
+                title="Open approval dialog"
+              >
+                <span className="cr-approval-main">Approve</span>
+                <ChevronRight className="h-3.5 w-3.5" />
+              </button>
+            )}
             {isLive && (
               <span title={connected ? 'Live' : 'Disconnected'}>
                 {connected
@@ -1524,26 +1672,24 @@ export default function ExecutionDetailPage() {
         </div>
       )}
 
-      {/* Intervention banner — shown when the run is paused awaiting a
-          human intervention. Action happens on the dedicated
-          /interventions/:id page, not inline here. */}
+      {approvalModalOpen && pendingIntervention && (
+        <ExecutionApprovalModal
+          executionId={id ?? execution.id}
+          intervention={pendingIntervention}
+          onClose={() => setApprovalModalOpen(false)}
+          onSubmitted={() => {
+            void loadRunInterventions();
+            refresh();
+          }}
+        />
+      )}
+
+      {/* Intervention banner — the action itself lives in the top header. */}
       {pendingIntervention && (
-        <div
-          className={`flex items-center gap-4 px-6 py-3 border-b border-app ${
-            pendingIntervention.severity === 'escalation'
-              ? 'bg-accent-red/10 border-accent-red/30'
-              : pendingIntervention.severity === 'approval'
-                ? 'bg-accent-green/10 border-accent-green/30'
-                : 'bg-accent-yellow/10 border-accent-yellow/30'
-          }`}
-        >
-          <span className="text-xl shrink-0">
-            {pendingIntervention.severity === 'escalation' ? '🔴'
-              : pendingIntervention.severity === 'approval' ? '🟢' : '🟡'}
-          </span>
+        <div className="flex items-center gap-4 px-6 py-3 border-b border-app bg-app-card">
           <div className="flex-1 min-w-0">
             <div className="text-xs font-heading font-semibold text-theme-primary">
-              PAUSED — {pendingIntervention.title}
+              {pendingIntervention.title}
             </div>
             <div className="text-[10px] font-mono text-theme-muted mt-0.5 truncate">
               {pendingIntervention.context_summary}
@@ -1551,12 +1697,14 @@ export default function ExecutionDetailPage() {
                 <> · round {pendingIntervention.round_info.current}/{pendingIntervention.round_info.max}</>}
             </div>
           </div>
-          <Link
-            to={`/interventions/${pendingIntervention.intervention_id}`}
-            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-[11px] font-mono bg-theme-primary text-surface-100 hover:opacity-80 transition-opacity shrink-0"
+          <button
+            type="button"
+            onClick={() => setApprovalModalOpen(true)}
+            className="cr-approval-button"
           >
-            Respond <ArrowRight className="w-3 h-3" />
-          </Link>
+            <span className="cr-approval-main">Approve</span>
+            <ChevronRight className="h-3.5 w-3.5" />
+          </button>
         </div>
       )}
 
@@ -1801,7 +1949,7 @@ export default function ExecutionDetailPage() {
           Mounted only when status is waiting_for_input AND we have the
           clarify payload; otherwise we defer to the pending-intervention
           banner higher up. */}
-      {execution.status === 'waiting_for_input' && !inputDialogDismissed && (() => {
+      {execution.status === 'waiting_for_input' && !pendingIntervention && !inputDialogDismissed && (() => {
         const st = (execution.state ?? {}) as Record<string, unknown>;
         // Field source priority:
         //   1. __clarify_fields   — agent-provided clarify fields (auto-gate)

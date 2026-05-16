@@ -459,7 +459,7 @@ export function chatRoutes(db: Db): Router {
       const executionIds = Array.isArray(req.body.executionIds) ? req.body.executionIds.map(String).filter(Boolean) : [];
       const requestedMode = req.body.mode === 'branch' || req.body.mode === 'working' || req.body.mode === 'auto' || req.body.mode === 'workspace'
         ? req.body.mode as WorkspaceDiffMode
-        : 'auto';
+        : 'workspace';
       const workspaceRefs = Array.isArray(req.body.workspaces)
         ? req.body.workspaces
           .map((item: Record<string, unknown>) => ({

@@ -13,6 +13,10 @@ import MermaidChatBlock from './MermaidChatBlock';
 import { agents as agentsApi, artifacts as artifactsApi, type ArtifactDoc } from '../../services/api';
 import { chatCodeDiffs, pullRequests as pullRequestsApi, workspaces as workspacesApi } from '../../services/workspaceService';
 
+const ChatExecutionsPanel = React.lazy(() =>
+  import('./ChatRunSidebar').then(module => ({ default: module.ExecutionsPanel })),
+);
+
 const AGENT_ICONS: Record<string, React.ElementType> = {
   bot: Bot, brain: Brain, sparkles: Sparkles, zap: Zap, cpu: Cpu, atom: Atom,
   terminal: Terminal, code: Code, rocket: Rocket, shield: Shield, hexagon: Hexagon, flame: Flame,
@@ -1095,8 +1099,39 @@ function ToolCallCard({ call, active }: { call: ToolCallRecord | ActiveToolCall;
   );
 }
 
+function toolCallLineText(call: ToolCallRecord | ActiveToolCall): string {
+  const label = humanizeToolName(call.tool);
+  const input = argsSummary(call.args);
+  const result = 'result' in call ? resultSummary(call.result) : '';
+  const detail = input || result;
+  return detail ? `${label} · ${detail}` : label;
+}
+
+function ToolCallLine({ call, count, active }: { call: ToolCallRecord | ActiveToolCall; count: number; active?: boolean }) {
+  const isRunning = active && (call as ActiveToolCall).status === 'running';
+  const result = 'result' in call ? call.result : undefined;
+  const duration = 'durationMs' in call ? call.durationMs : undefined;
+  const executionId = result?.execution_id as string | undefined;
+  const hasError = Boolean(result?.error);
+  const Icon = isRunning ? Loader2 : hasError ? AlertCircle : Wrench;
+
+  return (
+    <div className={`chat-tool-latest-line ${isRunning ? 'running' : ''} ${hasError ? 'error' : ''}`}>
+      <Icon className={`h-3.5 w-3.5 shrink-0 ${isRunning ? 'animate-spin text-accent-blue' : hasError ? 'text-accent-red' : 'text-theme-subtle'}`} />
+      <span className="chat-tool-count">{count} tool call{count === 1 ? '' : 's'}</span>
+      <span className="chat-tool-text">{toolCallLineText(call)}</span>
+      {duration != null && <span className="chat-tool-duration">{formatDuration(duration)}</span>}
+      {executionId && (
+        <a href={`/executions/${executionId}`} target="_blank" rel="noopener noreferrer" className="chat-tool-exec-link" title="Open execution">
+          <ExternalLink className="h-3 w-3" />
+        </a>
+      )}
+    </div>
+  );
+}
+
 /**
- * Completed message: threads shown inline, tool calls in a clean toggle.
+ * Completed message: threads shown inline, tool calls reduced to latest activity.
  */
 function ToolCallsSection({ calls, threads, agentMap }: { calls?: ToolCallRecord[]; threads?: AgentThreadType[]; agentMap?: Record<string, { displayName?: string; icon?: string; color?: string }> }) {
   const [showTools, setShowTools] = useState(false);
@@ -1104,24 +1139,23 @@ function ToolCallsSection({ calls, threads, agentMap }: { calls?: ToolCallRecord
 
   // Build thread tree from flat list, then show only root-level threads
   const rootThreads = threads ? buildThreadTree(threads) : [];
-
-  const hasErrors = calls.some(c => (c.result as Record<string, unknown>)?.error);
+  const latestCall = calls[calls.length - 1];
 
   return (
-    <div className="mt-3 space-y-1">
+    <div className="mt-3 space-y-2">
       {/* Threads — nested tree, primary content */}
       {rootThreads.map(thread => (
         <AgentThread key={thread.conversationId} thread={thread} agents={agentMap} />
       ))}
 
-      <button onClick={() => setShowTools(!showTools)} className="flex items-center gap-1.5 py-0.5 text-[11px] text-theme-subtle transition-colors hover:text-theme-secondary">
-        {showTools ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronRight className="h-3.5 w-3.5" />}
-        <Wrench className="h-3 w-3" />
-        <span>{calls.length} tool call{calls.length !== 1 ? 's' : ''}</span>
-        {hasErrors && <span className="text-accent-red">· errors</span>}
-      </button>
+      {latestCall && (
+        <button type="button" className="chat-tool-disclosure" onClick={() => setShowTools(value => !value)}>
+          {showTools ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronRight className="h-3.5 w-3.5" />}
+          <ToolCallLine call={latestCall} count={calls.length} />
+        </button>
+      )}
       {showTools && (
-        <div className="ml-4 max-h-[400px] space-y-0.5 overflow-y-auto border-l border-border/10 py-1 pl-3">
+        <div className="chat-tool-history">
           {calls.map((call, i) => <ToolCallCard key={`${call.toolUseId ?? call.tool}-${i}`} call={call} />)}
         </div>
       )}
@@ -1133,29 +1167,28 @@ function ToolCallsSection({ calls, threads, agentMap }: { calls?: ToolCallRecord
  * Streaming: threads + running indicator.
  */
 function ActiveToolCallsSection({ calls, liveThreads, agentMap }: { calls: ActiveToolCall[]; liveThreads?: AgentThreadType[]; agentMap?: Record<string, { displayName?: string; icon?: string; color?: string }> }) {
+  const [showTools, setShowTools] = useState(false);
   if (calls.length === 0 && (!liveThreads || liveThreads.length === 0)) return null;
 
   const rootThreads = buildThreadTree(liveThreads ?? []);
   const runningTool = [...calls].reverse().find(c => (c as ActiveToolCall).status === 'running');
-  const completedCount = calls.filter(c => (c as ActiveToolCall).status !== 'running').length;
+  const latestCall = runningTool ?? calls[calls.length - 1];
 
   return (
-    <div className="mt-3 space-y-1">
+    <div className="mt-3 space-y-2">
       {/* Live threads */}
       {rootThreads.map(thread => (
         <AgentThread key={thread.conversationId} thread={thread} agents={agentMap} />
       ))}
 
-      {runningTool && (
-        <div className="flex items-center gap-1.5 text-[10px] font-mono text-theme-subtle py-0.5">
-          <Loader2 className="w-2.5 h-2.5 text-accent-yellow animate-spin shrink-0" />
-          <Wrench className="w-2.5 h-2.5 text-accent-yellow shrink-0" />
-          <span className="text-accent-yellow/70">{TOOL_LABELS[runningTool.tool]?.label ?? runningTool.tool.replace('mcp__allen__', 'al:')}</span>
-          {completedCount > 0 && <span className="text-theme-subtle">· {completedCount} done</span>}
-        </div>
+      {latestCall && (
+        <button type="button" className="chat-tool-disclosure" onClick={() => setShowTools(value => !value)}>
+          {showTools ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronRight className="h-3.5 w-3.5" />}
+          <ToolCallLine call={latestCall} count={calls.length} active />
+        </button>
       )}
-      {calls.length > 0 && (
-        <div className="ml-4 max-h-[420px] space-y-0.5 overflow-y-auto border-l border-border/10 py-1 pl-3">
+      {showTools && (
+        <div className="chat-tool-history">
           {calls.map((call, i) => (
             <ToolCallCard key={`${call.toolUseId ?? call.tool}-${i}`} call={call} active />
           ))}
@@ -1204,7 +1237,7 @@ function ChatCodeDiffPreview({
   const pullRequestSignature = [...new Set(pullRequestRefs.map(ref => ref.id))].join('|');
   const sourceSignature = [workspaceSignature, pullRequestSignature].filter(Boolean).join('::');
   const runSignature = runs
-    .map(run => `${run.executionId}:${run.status}:${run.runContext?.status ?? ''}:${run.runContext?.progress?.percent ?? ''}`)
+    .map(run => `${run.executionId}:${run.status}:${run.runContext?.status ?? ''}`)
     .join('|');
 
   useEffect(() => {
@@ -1234,7 +1267,7 @@ function ChatCodeDiffPreview({
 
       const live = await Promise.all(uniqueRefs.map(async (ref) => {
         try {
-          const result = await workspacesApi.getDiff(ref.id);
+          const result = await workspacesApi.getDiff(ref.id, { mode: 'workspace' });
           const files = ((result.files ?? []) as ChatDiffFile[]).filter(file => file.diff?.trim() || file.modifiedContent?.trim());
           return { workspaceId: ref.id, workspaceName: ref.name, files };
         } catch {
@@ -1249,7 +1282,7 @@ function ChatCodeDiffPreview({
             messageId,
             executionIds: runs.map(run => run.executionId).filter(Boolean),
             workspaces: uniqueRefs,
-            mode: 'auto',
+            mode: 'workspace',
           });
           const frozen = snapshotBundles(captured.snapshots as ChatDiffSnapshot[]);
           if (frozen.length > 0) return frozen;
@@ -1702,7 +1735,6 @@ function RunProgressTimeline({ runs }: { runs: SpawnedAgent[] }) {
             </div>
           )}
         </div>
-        <RunProgressFeed runs={runs} />
       </div>
     );
   }
@@ -1732,7 +1764,6 @@ function RunProgressTimeline({ runs }: { runs: SpawnedAgent[] }) {
             );
           })}
         </div>
-        <RunProgressFeed runs={runs} />
       </div>
     );
   }
@@ -1760,7 +1791,6 @@ function RunProgressTimeline({ runs }: { runs: SpawnedAgent[] }) {
           );
         })}
       </div>
-      <RunProgressFeed runs={runs} />
     </div>
   );
 }
@@ -1787,113 +1817,69 @@ function activityLine(run: SpawnedAgent, item: any): { key: string; text: string
   return { key: `${run.executionId}-${at}-${type}-${tool}-${text}`, text, at };
 }
 
-function RunProgressFeed({ runs }: { runs: SpawnedAgent[] }) {
-  const rows = runs
-    .filter(run => !TERMINAL_RUN_STATUSES.has(run.runContext?.status ?? run.status))
-    .flatMap(run => {
-      const contextRows = (run.runContext?.recentActivity ?? []).slice(-6).map(item => activityLine(run, item));
-      const liveRows = run.activity.slice(-6).map(item => activityLine(run, item));
-      return [...contextRows, ...liveRows].filter((row): row is { key: string; text: string; at: string | number } => Boolean(row));
-    })
+function activityRowsForRun(run: SpawnedAgent): Array<{ key: string; text: string; at: string | number }> {
+  const rows = [
+    ...(run.runContext?.recentActivity ?? []).slice(-8).map(item => activityLine(run, item)),
+    ...run.activity.slice(-8).map(item => activityLine(run, item)),
+  ]
+    .filter((row): row is { key: string; text: string; at: string | number } => Boolean(row))
     .sort((a, b) => new Date(a.at).getTime() - new Date(b.at).getTime())
     .slice(-8);
 
-  if (rows.length === 0) return null;
-
   const seen = new Set<string>();
-  const uniqueRows = rows.filter(row => {
+  return rows.filter(row => {
     const normalized = row.text.toLowerCase();
     if (seen.has(normalized)) return false;
     seen.add(normalized);
     return true;
   });
-
-  return (
-    <div className="run-progress-feed">
-      <div className="run-progress-head">
-        <Loader2 className="h-3 w-3 animate-spin" />
-        <span>live progress</span>
-      </div>
-      {uniqueRows.map(row => (
-        <div key={row.key} className="run-progress-row">
-          <span className="run-progress-time">{formatTime(typeof row.at === 'string' ? row.at : new Date(row.at).toISOString())}</span>
-          <span className="run-progress-text">{row.text}</span>
-        </div>
-      ))}
-    </div>
-  );
 }
 
-function SubagentExecutionsDropdown({
+function RunProgressFeed({
   runs,
-  onOpenExecutionsPanel,
+  renderExecutionHeaderAction,
 }: {
   runs: SpawnedAgent[];
-  onOpenExecutionsPanel?: () => void;
+  renderExecutionHeaderAction?: (run: SpawnedAgent) => React.ReactNode;
 }) {
-  const [expanded, setExpanded] = useState(false);
-  if (runs.length === 0) return null;
+  const activeRuns = runs.filter(run => !TERMINAL_RUN_STATUSES.has(run.runContext?.status ?? run.status));
+  if (activeRuns.length === 0) return null;
 
-  const childCount = runs.reduce((sum, run) => sum + (run.runContext?.childAgents.length ?? 0), 0);
-  const activeCount = runs.filter(run => !TERMINAL_RUN_STATUSES.has(run.runContext?.status ?? run.status)).length;
+  const heading = activeRuns.length === 1 ? 'Execution running' : `${activeRuns.length} executions running`;
+
+  const renderExecutionLogs = (run: SpawnedAgent) => {
+    const logRows = activityRowsForRun(run).slice(-12);
+    return (
+      <details className="run-progress-logs">
+        <summary>
+          <ChevronRight className="cr-disclosure-icon h-3.5 w-3.5" />
+          <span>Logs</span>
+          <em>{logRows.length} event{logRows.length === 1 ? '' : 's'}</em>
+        </summary>
+        <div className="run-progress-log-list">
+          {logRows.length > 0 ? logRows.map(row => (
+            <div key={row.key} className="run-progress-row">
+              <span className="run-progress-time">{formatTime(typeof row.at === 'string' ? row.at : new Date(row.at).toISOString())}</span>
+              <span className="run-progress-text">{row.text}</span>
+            </div>
+          )) : (
+            <div className="run-progress-empty">No logs captured yet.</div>
+          )}
+        </div>
+      </details>
+    );
+  };
 
   return (
-    <div className="chat-exec-summary">
-      <div className="chat-exec-summary-head">
-        <button type="button" onClick={() => setExpanded(value => !value)}>
-          {expanded ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronRight className="h-3.5 w-3.5" />}
-          <span>{runs.length + childCount} agent execution{runs.length + childCount === 1 ? '' : 's'}</span>
-          {activeCount > 0 && <span className="chat-exec-live">{activeCount} running</span>}
-        </button>
-        <div className="chat-exec-actions">
-          <button type="button" onClick={onOpenExecutionsPanel} title="Open executions side panel">
-            <ExternalLink className="h-3.5 w-3.5" />
-          </button>
-        </div>
-      </div>
-      {expanded && (
-        <div className="chat-exec-list">
-          {runs.map((run, index) => {
-            const context = run.runContext;
-            const status = context?.status ?? run.status;
-            const childAgents = context?.childAgents ?? [];
-            const input = context?.io?.input ?? run.prompt;
-            const output = context?.io?.output ?? run.response;
-            return (
-              <div key={run.executionId} className="chat-exec-item">
-                <a href={`/executions/${run.executionId}`} target="_blank" rel="noopener noreferrer">
-                  <span>Execution {index + 1}</span>
-                  <span>{context?.title ?? run.agent}</span>
-                  <span>{humanLabel(status)}</span>
-                </a>
-                {childAgents.length > 0 && (
-                  <div className="chat-exec-children">
-                    {childAgents.map(child => (
-                      <a key={child.executionId} href={`/executions/${child.executionId}`} target="_blank" rel="noopener noreferrer">
-                        <span>{child.agentName}</span>
-                        <span>{humanLabel(child.status)}</span>
-                      </a>
-                    ))}
-                  </div>
-                )}
-                {expanded && (
-                  <div className="chat-exec-io-inline">
-                    <details open={Boolean(input)}>
-                      <summary>Input</summary>
-                      {input ? <pre>{input}</pre> : <span>No input captured.</span>}
-                    </details>
-                    <details open={Boolean(output)}>
-                      <summary>Output</summary>
-                      {output ? <pre>{output}</pre> : <span>No output captured yet.</span>}
-                    </details>
-                  </div>
-                )}
-              </div>
-            );
-          })}
-        </div>
-      )}
-    </div>
+    <section className="run-progress-feed" aria-label={heading}>
+      <React.Suspense fallback={<div className="run-progress-loading">Loading execution details...</div>}>
+        <ChatExecutionsPanel
+          runs={activeRuns}
+          renderExecutionHeaderAction={renderExecutionHeaderAction}
+          renderExecutionFooter={renderExecutionLogs}
+        />
+      </React.Suspense>
+    </section>
   );
 }
 
@@ -1991,48 +1977,27 @@ function WorkflowInterventionPrompt({
 
   const title = intervention.title ?? run.runContext?.humanInput?.title ?? 'Workflow input needed';
   const question = intervention.question ?? intervention.context_summary ?? '';
-  const previewOptions = optionRows.slice(0, 3);
   const actorLabel = humanLabel(intervention.stage ?? run.runContext?.progress.currentStep ?? 'plan-gate');
   const interventionAge = timeAgo(intervention.created_at ?? intervention.createdAt ?? null);
   const postedLabel = interventionAge === 'recently' || interventionAge === 'just now' ? 'posted now' : `posted ${interventionAge}`;
 
   return (
     <>
-      <div className="chat-intervention-block">
-        <div className="ch-msg allen">
-          <div className="ch-avatar">a</div>
-          <div className="ch-msg-body">
-            <div className="ch-msg-head">
-              <span className="ch-msg-who">{actorLabel}</span>
-              {(intervention.created_at ?? intervention.createdAt) && (
-                <span className="ch-msg-ts">{formatTime(intervention.created_at ?? intervention.createdAt)}</span>
-              )}
-            </div>
-            <div className="ch-msg-text">
-              {question ? renderMarkdown(question) : title}
-            </div>
-            <div className="ch-card gate-card" onClick={() => setModalOpen(true)} role="button" tabIndex={0} onKeyDown={(event) => {
-            if (event.key === 'Enter' || event.key === ' ') {
-              event.preventDefault();
-              setModalOpen(true);
-            }
-          }}>
-              <div className="ch-card-h">
-                <span className="cc-tag waiting">waiting on you</span>
-                <span className="cc-title">{title}</span>
-                <span className="cc-pct">{postedLabel}</span>
-              </div>
-              <div className="ch-card-b">
-                <p className="cc-summary">{question ? 'Allen needs your input to proceed.' : title}</p>
-                <div className="cc-acts">
-                  <button type="button" className="btn primary sm" onClick={(event) => { event.stopPropagation(); setModalOpen(true); }}>
-                    answer →
-                  </button>
-                </div>
-              </div>
-            </div>
-          </div>
-        </div>
+      <div className="cr-approval-footer">
+        <button
+          type="button"
+          className="cr-approval-button"
+          onClick={(event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            setModalOpen(true);
+          }}
+        >
+          <span className="cr-approval-main">Approve</span>
+          <ChevronRight className="h-3.5 w-3.5" />
+          <span className="cr-approval-title">{title}</span>
+          <span className="cr-approval-meta">{postedLabel}</span>
+        </button>
       </div>
 
       {modalOpen && (
@@ -2041,12 +2006,13 @@ function WorkflowInterventionPrompt({
           <div className="chat-intervention-dialog">
             <div className="chat-intervention-dialog-head">
               <div className="chat-intervention-dialog-icon">
-                <AlertCircle className="h-4 w-4" />
+                <ChevronRight className="h-4 w-4" />
               </div>
               <div className="min-w-0 flex-1">
                 <div className="flex items-center gap-2">
-                  <span className="rounded bg-accent-yellow/15 px-1.5 py-0.5 font-mono text-[9px] uppercase tracking-[0.08em] text-accent-yellow">Needs You</span>
+                  <span className="rounded bg-app-muted px-1.5 py-0.5 font-mono text-[9px] uppercase tracking-[0.08em] text-theme-muted">Approval</span>
                   <span className="truncate font-mono text-[10px] text-theme-subtle">{run.executionId.slice(0, 8)}</span>
+                  <span className="truncate font-mono text-[10px] text-theme-subtle">{actorLabel}</span>
                 </div>
                 <div className="mt-0.5 truncate text-[13px] font-heading font-semibold text-theme-primary">
                   {title}
@@ -2060,15 +2026,17 @@ function WorkflowInterventionPrompt({
               </button>
             </div>
 
-            <div className="space-y-3 px-4 py-3">
+            <div className="chat-intervention-dialog-body space-y-3 px-4 py-3">
               {question && (
-                <div className="rounded-md border border-app bg-app-card px-3 py-2 text-[13px] leading-relaxed text-theme-secondary">
-                  {renderMarkdown(question)}
+                <div className="chat-intervention-content-scroll">
+                  <div className="rounded-md border border-app bg-app-card px-3 py-2 text-[13px] leading-relaxed text-theme-secondary">
+                    {renderMarkdown(question)}
+                  </div>
                 </div>
               )}
 
               {optionRows.length > 0 && (
-                <div className="flex flex-wrap gap-2">
+                <div className="chat-intervention-actions-row flex flex-wrap gap-2">
                   {optionRows.map(option => {
                     const value = option.value ?? '';
                     const active = selected === value;
@@ -2082,9 +2050,9 @@ function WorkflowInterventionPrompt({
                         className={`rounded-md border px-3 py-1.5 font-mono text-[11px] capitalize transition-colors disabled:opacity-50 ${
                           active
                             ? destructive
-                              ? 'border-accent-red/40 bg-accent-red/10 text-accent-red'
-                              : 'border-accent-blue/45 bg-accent-blue/10 text-accent-blue'
-                            : 'border-app bg-app-card text-theme-muted hover:border-accent-blue/25 hover:text-theme-secondary'
+                              ? 'border-accent bg-accent text-[rgb(var(--color-surface))]'
+                              : 'border-accent bg-accent text-[rgb(var(--color-surface))]'
+                            : 'border-app bg-app-card text-theme-muted hover:border-[rgb(var(--color-text-primary)/0.30)] hover:text-theme-primary'
                         }`}
                       >
                         {option.label ?? humanLabel(value)}
@@ -2098,7 +2066,7 @@ function WorkflowInterventionPrompt({
                 <div key={field.name} className="space-y-1.5">
                   <label className="text-[10px] font-mono uppercase tracking-[0.08em] text-theme-muted">
                     {field.label ?? humanLabel(field.name)}
-                    {field.required !== false && <span className="ml-1 text-accent-yellow">*</span>}
+                    {field.required !== false && <span className="ml-1 text-theme-muted">*</span>}
                   </label>
                   <textarea
                     value={fieldValues[field.name] ?? ''}
@@ -2106,7 +2074,7 @@ function WorkflowInterventionPrompt({
                     placeholder={field.placeholder ?? (needsFeedback ? 'Tell the workflow what should change...' : 'Type your response...')}
                     rows={3}
                     disabled={submitting}
-                    className="max-h-[110px] min-h-[84px] w-full resize-none overflow-y-auto rounded-md border border-app bg-app-muted px-3 py-2 text-sm text-theme-primary placeholder:text-theme-subtle focus:border-accent-yellow/50 focus:outline-none disabled:opacity-50"
+                    className="max-h-[110px] min-h-[84px] w-full resize-none overflow-y-auto rounded-md border border-app bg-app-muted px-3 py-2 text-sm text-theme-primary placeholder:text-theme-subtle focus:border-[rgb(var(--color-text-primary)/0.40)] focus:outline-none disabled:opacity-50"
                   />
                 </div>
               )) : (
@@ -2117,7 +2085,7 @@ function WorkflowInterventionPrompt({
                     placeholder="Type your response..."
                     rows={3}
                     disabled={submitting}
-                    className="max-h-[110px] min-h-[84px] w-full resize-none overflow-y-auto rounded-md border border-app bg-app-muted px-3 py-2 text-sm text-theme-primary placeholder:text-theme-subtle focus:border-accent-yellow/50 focus:outline-none disabled:opacity-50"
+                    className="max-h-[110px] min-h-[84px] w-full resize-none overflow-y-auto rounded-md border border-app bg-app-muted px-3 py-2 text-sm text-theme-primary placeholder:text-theme-subtle focus:border-[rgb(var(--color-text-primary)/0.40)] focus:outline-none disabled:opacity-50"
                   />
                 )
               )}
@@ -2126,7 +2094,7 @@ function WorkflowInterventionPrompt({
                 <div className="rounded-md border border-accent-red/25 bg-accent-red/10 px-3 py-2 text-[12px] text-accent-red">{error}</div>
               )}
 
-              <div className="flex items-center justify-between gap-3">
+              <div className="chat-intervention-submit-row flex items-center justify-between gap-3">
                 <span className="truncate font-mono text-[10px] text-theme-subtle">
                   {humanLabel(intervention.stage ?? run.runContext?.progress.currentStep ?? 'workflow pause')}
                 </span>
@@ -2134,10 +2102,10 @@ function WorkflowInterventionPrompt({
                   type="button"
                   onClick={submit}
                   disabled={submitDisabled}
-                  className="inline-flex items-center gap-1.5 rounded-md bg-accent-blue/15 px-4 py-1.5 font-mono text-[12px] text-accent-blue transition-colors hover:bg-accent-blue/25 disabled:cursor-not-allowed disabled:opacity-40"
+                  className="inline-flex items-center gap-1.5 rounded-md bg-accent px-4 py-1.5 font-mono text-[12px] text-[rgb(var(--color-surface))] transition-colors hover:bg-accent/90 disabled:cursor-not-allowed disabled:opacity-40"
                 >
-                  <Send className="h-3.5 w-3.5" />
                   Submit
+                  <ChevronRight className="h-3.5 w-3.5" />
                 </button>
               </div>
             </div>
@@ -2151,6 +2119,7 @@ function WorkflowInterventionPrompt({
 export default function ChatMessageList({ messages, streamText, thinkingText, streaming, activeToolCalls = [], agentThreads = [], agentReports = [], threadsByMessage = {}, pendingUserQuestion, onAnswerUserQuestion, activeAgent, spawnedAgents = [], onAnswerWorkflowIntervention, onSaveToLearnings, onOpenExecutionsPanel, onOpenFilesPanel }: ChatMessageListProps) {
   const [agentMap, setAgentMap] = useState<Record<string, { displayName?: string; icon?: string; color?: string }>>({});
   const pendingWorkflowIntervention = onAnswerWorkflowIntervention ? workflowInterventionFromRuns(spawnedAgents) : null;
+  const hasActiveSpawnedRuns = spawnedAgents.some(run => !TERMINAL_RUN_STATUSES.has(run.runContext?.status ?? run.status));
 
   // Load agent info for labels, avatars, and thread display
   useEffect(() => {
@@ -2186,6 +2155,18 @@ export default function ChatMessageList({ messages, streamText, thinkingText, st
     }
   }, [messages, streamText, pendingWorkflowIntervention?.intervention.intervention_id]);
 
+  const renderWorkflowInterventionHeaderAction = (run: SpawnedAgent) => {
+    if (!pendingWorkflowIntervention || !onAnswerWorkflowIntervention) return null;
+    if (run.executionId !== pendingWorkflowIntervention.run.executionId) return null;
+    return (
+      <WorkflowInterventionPrompt
+        run={pendingWorkflowIntervention.run}
+        intervention={pendingWorkflowIntervention.intervention}
+        onAnswer={onAnswerWorkflowIntervention}
+      />
+    );
+  };
+
   return (
     <div ref={containerRef} className="chat-stream-v2">
       {messages.length === 0 && !streaming && (
@@ -2200,6 +2181,7 @@ export default function ChatMessageList({ messages, streamText, thinkingText, st
         const messageRuns = msg.role === 'assistant' && msg._id
           ? spawnedAgents.filter(run => run.sourceMessageId === msg._id)
           : [];
+        const messageHasActiveRuns = messageRuns.some(run => !TERMINAL_RUN_STATUSES.has(run.runContext?.status ?? run.status));
         return (<React.Fragment key={msg._id || i}>
         <div className={`ch-msg ${msg.role === 'user' ? 'you' : 'allen'} group/msg al-msg-enter`}>
           <div className="ch-avatar">{msg.role === 'user' ? senderInitial(senderLabel) : 'a'}</div>
@@ -2213,7 +2195,7 @@ export default function ChatMessageList({ messages, streamText, thinkingText, st
               {msg.role !== 'user' && msg.durationMs != null && msg.durationMs > 0 && <span className="ch-msg-ts">{(msg.durationMs / 1000).toFixed(1)}s</span>}
             </div>
 
-            <div className={`ch-msg-text ${msg.status === 'failed' ? 'failed' : ''}`}>
+            <div className={`ch-msg-text ${msg.status === 'failed' || msg.status === 'cancelled' ? 'failed' : ''}`}>
               {msg.role === 'assistant' && msg.thinkingText && (
                 <ThinkingBlock text={msg.thinkingText} durationMs={msg.durationMs} />
               )}
@@ -2222,7 +2204,7 @@ export default function ChatMessageList({ messages, streamText, thinkingText, st
                   {renderMarkdown(diffSplit.text)}
                 </div>
               )}
-              {msg.role === 'assistant' && (
+              {msg.role === 'assistant' && !messageHasActiveRuns && (
                 <ToolCallsSection calls={msg.toolCalls} threads={msgThreads} agentMap={agentMap} />
               )}
               {msg.error && (
@@ -2258,12 +2240,13 @@ export default function ChatMessageList({ messages, streamText, thinkingText, st
           </div>
         )}
 
-        {messageRuns.length > 0 && (
+        {messageRuns.length > 0 && !messageHasActiveRuns && (
           <>
-            <SubagentExecutionsDropdown
-              runs={messageRuns}
-              onOpenExecutionsPanel={onOpenExecutionsPanel}
-            />
+            <section className="run-progress-feed" aria-label={`${messageRuns.length} linked execution${messageRuns.length === 1 ? '' : 's'}`}>
+              <React.Suspense fallback={<div className="run-progress-loading">Loading execution details...</div>}>
+                <ChatExecutionsPanel runs={messageRuns} renderExecutionHeaderAction={renderWorkflowInterventionHeaderAction} />
+              </React.Suspense>
+            </section>
             <ChatCodeDiffPreview
               runs={messageRuns}
               sessionId={msg.sessionId}
@@ -2296,7 +2279,7 @@ export default function ChatMessageList({ messages, streamText, thinkingText, st
       })}
 
       {/* Streaming message */}
-      {streaming && (() => {
+      {streaming && (!hasActiveSpawnedRuns || Boolean(streamText) || Boolean(thinkingText) || activeToolCalls.length > 0) && (() => {
         const sAgentInfo = activeAgent ? agentMap[activeAgent] : undefined;
         return (
           <div className="ch-msg allen al-msg-enter">
@@ -2331,7 +2314,7 @@ export default function ChatMessageList({ messages, streamText, thinkingText, st
       })()}
 
       {/* Agent progress reports */}
-      {agentReports.length > 0 && (
+      {agentReports.length > 0 && !hasActiveSpawnedRuns && (
         <div className="chat-progress-mini">
           {agentReports.map((report, i) => {
             const reportAgent = agentMap[report.agent];
@@ -2379,17 +2362,8 @@ export default function ChatMessageList({ messages, streamText, thinkingText, st
       {/* Routed workflow/agent executions — only live progress belongs in chat; completed steps live in the sidebar. */}
       {spawnedAgents.some(run => !TERMINAL_RUN_STATUSES.has(run.runContext?.status ?? run.status)) && (
         <div className="chat-run-feed-wrap">
-          <RunProgressFeed runs={spawnedAgents} />
+          <RunProgressFeed runs={spawnedAgents} renderExecutionHeaderAction={renderWorkflowInterventionHeaderAction} />
         </div>
-      )}
-
-      {/* Workflow human intervention prompt — final required action */}
-      {pendingWorkflowIntervention && onAnswerWorkflowIntervention && (
-        <WorkflowInterventionPrompt
-          run={pendingWorkflowIntervention.run}
-          intervention={pendingWorkflowIntervention.intervention}
-          onAnswer={onAnswerWorkflowIntervention}
-        />
       )}
 
       <div ref={bottomRef} />

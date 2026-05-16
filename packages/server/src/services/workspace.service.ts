@@ -670,8 +670,13 @@ export class WorkspaceManager {
 
   async getGitState(worktreePath: string, baseBranch: string): Promise<{ changedFiles: number; ahead: number; behind: number; lastCommit?: { hash: string; message: string; date: Date } }> {
     try {
-      const { stdout: diffStat } = await exec('git', ['diff', '--stat', `${baseBranch}...HEAD`], { cwd: worktreePath });
-      const changedFiles = (diffStat.match(/\d+ file/)?.[0]?.match(/\d+/)?.[0] ?? '0');
+      const baseRef = (await exec('git', ['rev-parse', '--verify', `origin/${baseBranch}`], { cwd: worktreePath }).then(() => `origin/${baseBranch}`).catch(() => baseBranch));
+      const { stdout: changedTracked } = await exec('git', ['diff', '--name-only', baseRef], { cwd: worktreePath }).catch(() => ({ stdout: '' }));
+      const { stdout: untracked } = await exec('git', ['ls-files', '--others', '--exclude-standard'], { cwd: worktreePath }).catch(() => ({ stdout: '' }));
+      const changedFiles = new Set([
+        ...changedTracked.trim().split('\n').filter(Boolean),
+        ...untracked.trim().split('\n').filter(Boolean),
+      ]).size;
 
       const { stdout: log } = await exec('git', ['log', '-1', '--format=%H|%s|%aI'], { cwd: worktreePath });
       const [hash, message, dateStr] = log.trim().split('|');
@@ -680,7 +685,7 @@ export class WorkspaceManager {
       const [behind, ahead] = revList.trim().split(/\s+/).map(Number);
 
       return {
-        changedFiles: parseInt(changedFiles),
+        changedFiles,
         ahead: ahead ?? 0,
         behind: behind ?? 0,
         lastCommit: hash ? { hash, message, date: new Date(dateStr) } : undefined,

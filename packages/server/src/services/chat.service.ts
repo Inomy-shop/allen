@@ -536,6 +536,8 @@ interface CancelledExecutionInfo {
 export interface ChatCancelResult {
   cancelled: boolean;
   sessionId: string;
+  messageId?: string;
+  content?: string;
   cancelledExecutions: CancelledExecutionInfo[];
 }
 
@@ -662,10 +664,12 @@ function parseTitleVerification(raw: string): VerifiedTitle | null {
   return null;
 }
 
-async function cancelLinkedChatExecutions(sessionId: string, db: Db): Promise<CancelledExecutionInfo[]> {
+async function cancelLinkedChatExecutions(sessionId: string, db: Db, parentMessageId?: string): Promise<CancelledExecutionInfo[]> {
+  const directFilter: Record<string, unknown> = { 'meta.chatSessionId': sessionId };
+  if (parentMessageId) directFilter['meta.parentMessageId'] = parentMessageId;
   const linkedRows = await db.collection('executions')
     .find(
-      { 'meta.chatSessionId': sessionId },
+      directFilter,
       { projection: { id: 1, workflowName: 1 } },
     )
     .toArray();
@@ -676,7 +680,7 @@ async function cancelLinkedChatExecutions(sessionId: string, db: Db): Promise<Ca
       {
         status: { $in: ACTIVE_EXECUTION_STATUSES },
         $or: [
-          { 'meta.chatSessionId': sessionId },
+          directFilter,
           ...(linkedIds.length > 0 ? [
             { rootExecutionId: { $in: linkedIds } },
             { parentExecutionId: { $in: linkedIds } },
@@ -757,6 +761,7 @@ async function interruptedTaskContext(db: Db, sessionId: string): Promise<string
 export async function cancelChatSession(sessionId: string, db?: Db): Promise<ChatCancelResult> {
   const entry = activeQueries.get(sessionId);
   let cancelledExecutions: CancelledExecutionInfo[] = [];
+  let cancelledContent: string | undefined;
 
   // 1. Kill the subprocess for THIS turn only
   if (entry) {
@@ -766,7 +771,7 @@ export async function cancelChatSession(sessionId: string, db?: Db): Promise<Cha
 
   // 2. Cancel linked workflow/agent executions spawned from this chat.
   if (db) {
-    cancelledExecutions = await cancelLinkedChatExecutions(sessionId, db);
+    cancelledExecutions = await cancelLinkedChatExecutions(sessionId, db, entry?.messageId);
   }
 
   // 3. DO NOT touch llmSessionId — the thread still exists on the
@@ -780,11 +785,12 @@ export async function cancelChatSession(sessionId: string, db?: Db): Promise<Cha
       const executionNote = cancelledExecutions.length > 0
         ? `Interrupted by user. Cancelled linked tasks: ${cancelledExecutions.map((exec) => exec.id).join(', ')}. If you want to rerun, choose fresh start or resume.`
         : 'Interrupted by user.';
+      cancelledContent = entry.currentText ? `${entry.currentText}\n\n${executionNote}` : executionNote;
       await db.collection('chat_messages').updateOne(
         { _id: new ObjectId(entry.messageId) },
         { $set: {
           status: 'cancelled',
-          content: entry.currentText ? `${entry.currentText}\n\n${executionNote}` : executionNote,
+          content: cancelledContent,
           completedAt: new Date(),
         } },
       ).catch(() => {});
@@ -799,7 +805,7 @@ export async function cancelChatSession(sessionId: string, db?: Db): Promise<Cha
   // 6. Remove from active queries so the user can send the next message
   if (entry) activeQueries.delete(sessionId);
 
-  return { cancelled: Boolean(entry), sessionId, cancelledExecutions };
+  return { cancelled: Boolean(entry), sessionId, messageId: entry?.messageId, content: cancelledContent, cancelledExecutions };
 }
 
 function broadcastToListeners(entry: ActiveQuery, event: string, data: unknown): void {
@@ -1571,6 +1577,10 @@ User: ${userMessage.slice(0, 500)}`;
           };
           entry.toolCalls.push(record);
           entry.pendingToolCalls.delete(toolUseId);
+          this.messages.updateOne(
+            { _id: new ObjectId(assistantMsgId) },
+            { $set: { content: entry.currentText, thinkingText: entry.currentThinking, toolCalls: entry.toolCalls } },
+          ).catch(() => {});
           broadcastToListeners(entry, 'tool_result', { tool, args: record.args, result: resultData, toolUseId, tool_use_id: toolUseId, durationMs });
           const userReport = isReportToUserTool(tool) ? reportToUserPayload(resultData) : null;
           if (userReport) {
@@ -1795,6 +1805,10 @@ User: ${userMessage.slice(0, 500)}`;
               const record = { tool, args: pending?.args ?? {}, result: resultData, durationMs, timestamp: new Date(), toolUseId };
               entry.toolCalls.push(record);
               entry.pendingToolCalls.delete(toolUseId);
+              this.messages.updateOne(
+                { _id: new ObjectId(assistantMsgId) },
+                { $set: { content: entry.currentText, thinkingText: entry.currentThinking, toolCalls: entry.toolCalls } },
+              ).catch(() => {});
               broadcastToListeners(entry, 'tool_result', { tool, args: record.args, result: resultData, toolUseId, tool_use_id: toolUseId, durationMs });
               const userReport = isReportToUserTool(tool) ? reportToUserPayload(resultData) : null;
               if (userReport) {
