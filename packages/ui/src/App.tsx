@@ -22,6 +22,7 @@ import {
   interventions as interventionsApi,
   linear as linearApi,
 } from './services/api';
+import { pullRequests as pullRequestsApi, workspaces as workspacesApi } from './services/workspaceService';
 import { usePanelLayout } from './hooks/usePanelLayout';
 
 interface NavItem {
