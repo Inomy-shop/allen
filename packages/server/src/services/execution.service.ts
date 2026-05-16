@@ -1402,7 +1402,13 @@ export class ExecutionService {
     // and register the SSE emitter before the engine starts emitting.
     const { randomUUID } = await import('node:crypto');
     const newExecutionId = randomUUID();
-    const emitter = createSSEEmitter(newExecutionId);
+    const baseEmitter = createSSEEmitter(newExecutionId);
+    const emitter = this.wrapEmitterWithInterventionHook(
+      baseEmitter,
+      newExecutionId,
+      workflow,
+      (exec.input ?? {}) as Record<string, unknown>,
+    );
 
     const config: EngineConfig = {
       db: this.db,
@@ -1449,7 +1455,13 @@ export class ExecutionService {
     if (!workflowDoc) throw new Error('Workflow not found');
 
     const workflow = workflowDoc.parsed as WorkflowDef;
-    const emitter = createSSEEmitter(executionId);
+    const baseEmitter = createSSEEmitter(executionId);
+    const emitter = this.wrapEmitterWithInterventionHook(
+      baseEmitter,
+      executionId,
+      workflow,
+      (exec.input ?? {}) as Record<string, unknown>,
+    );
 
     const allWorkflowDocs = await this.db.collection('workflows').find({}).toArray();
     const workflows: Record<string, WorkflowDef> = {};

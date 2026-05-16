@@ -741,19 +741,38 @@ export default function NodeDetail({
     );
   }
 
-  // Deduplicate traces by attempt number
+  // Deduplicate traces by attempt number. Persisted traces only appear
+  // after an attempt finishes; when a retry is currently running/waiting,
+  // include the live nodeState as a synthetic attempt so the right panel
+  // still exposes the attempt switcher immediately.
   const dedupedTraces = (() => {
     const map = new Map<number, any>();
     for (const t of allTraces) map.set(t.attempt, t);
+    if (nodeState?.attempt && !map.has(nodeState.attempt)) {
+      map.set(nodeState.attempt, {
+        node: nodeName,
+        attempt: nodeState.attempt,
+        status: nodeState.status,
+        output: nodeState.output,
+        durationMs: nodeState.durationMs,
+        cost: nodeState.cost,
+        rawResponse: nodeState.streamText,
+        activity: nodeState.activity,
+        renderedPrompt: nodeState.renderedPrompt,
+        inputState: nodeState.inputState,
+        toolCalls: [],
+        __live: true,
+      });
+    }
     return Array.from(map.values()).sort((a, b) => a.attempt - b.attempt);
   })();
 
   const hasMultipleAttempts = dedupedTraces.length > 1;
   const activeTrace = viewAttempt != null
     ? dedupedTraces.find(t => t.attempt === viewAttempt) ?? trace
-    : trace;
+    : (dedupedTraces.find(t => t.attempt === nodeState?.attempt) ?? trace);
 
-  const status = nodeState?.status ?? activeTrace?.status ?? (isWaitingNode ? 'waiting_for_input' : 'pending');
+  const status = isWaitingNode ? 'waiting_for_input' : (nodeState?.status ?? activeTrace?.status ?? 'pending');
   const output = viewAttempt != null ? activeTrace?.output : (nodeState?.output ?? activeTrace?.output);
 
   const cost = viewAttempt != null ? activeTrace?.cost : (() => {
@@ -838,8 +857,8 @@ export default function NodeDetail({
           <h3 className="font-heading text-sm font-semibold text-theme-primary tracking-wider">{nodeName}</h3>
           <div className="flex items-center gap-3 mt-1">
             <StatusBadge status={status} />
-            {nodeState?.attempt && nodeState.attempt > 1 && (
-              <span className="text-xs text-accent-yellow font-mono">attempt #{viewAttempt ?? nodeState.attempt}</span>
+            {(nodeState?.attempt || activeTrace?.attempt) && (nodeState?.attempt ?? activeTrace?.attempt) > 1 && (
+              <span className="text-xs text-accent-yellow font-mono">attempt #{viewAttempt ?? nodeState?.attempt ?? activeTrace?.attempt}</span>
             )}
             {durationMs != null && (
               <span className="text-xs text-theme-secondary font-mono">{formatDuration(durationMs)}</span>
@@ -870,14 +889,15 @@ export default function NodeDetail({
           {dedupedTraces.map(t => (
             <button
               key={t.attempt}
-              onClick={() => setViewAttempt(t.attempt === (trace?.attempt) && viewAttempt == null ? null : t.attempt)}
+              onClick={() => setViewAttempt(t.attempt === nodeState?.attempt ? null : t.attempt)}
               className={`text-[11px] font-mono px-2 py-0.5 rounded-sm border transition-colors cursor-pointer ${
-                (viewAttempt === t.attempt || (viewAttempt == null && t.attempt === trace?.attempt))
+                (viewAttempt === t.attempt || (viewAttempt == null && t.attempt === nodeState?.attempt))
                   ? 'border-accent-blue bg-accent-blue/10 text-accent-blue'
                   : t.status === 'failed' ? 'border-accent-red/30 text-accent-red/70 hover:bg-accent-red/5' : 'border-border text-theme-secondary hover:bg-surface-200'
               }`}
             >
               #{t.attempt}
+              {t.__live && <span className="ml-1 text-accent-blue">live</span>}
               {t.status === 'completed' && <span className="ml-1 text-accent-green">✓</span>}
               {t.status === 'failed' && <span className="ml-1 text-accent-red">✗</span>}
             </button>

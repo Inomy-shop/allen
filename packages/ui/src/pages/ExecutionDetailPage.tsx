@@ -23,6 +23,7 @@ import GanttTimeline from '../components/execution/GanttTimeline';
 import StateChangesDrawer from '../components/execution/StateChangesDrawer';
 import HumanInputDialog from '../components/execution/HumanInputDialog';
 import RunControlsDrawer from '../components/execution/RunControlsDrawer';
+import { WorkflowInterventionDialog, type WorkflowInterventionSubmit } from '../components/execution/WorkflowInterventionAction';
 import { ToolCallLog, type ToolCall } from '../components/common/ToolCallLog';
 import { buildTracesForTimeline } from '../utils/executionState';
 
@@ -44,10 +45,6 @@ function formatDuration(ms: number | null | undefined): string {
   return `${hours}h ${remainMin}m`;
 }
 
-function interventionDecisionLabel(value: string): string {
-  return value.replace(/[_-]+/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
-}
-
 function ExecutionApprovalModal({
   executionId,
   intervention,
@@ -59,119 +56,56 @@ function ExecutionApprovalModal({
   onClose: () => void;
   onSubmitted: () => void;
 }) {
-  const options = (intervention.options?.length
-    ? intervention.options.map((option: any) => ({ value: option.value ?? option.label ?? '', label: option.label }))
-    : [
-        { value: 'approve', label: 'Approve' },
-        { value: 'request_changes', label: 'Request Changes' },
-        { value: 'reject', label: 'Cancel' },
-      ]).filter((option: any) => option.value);
-  const [decision, setDecision] = useState(options[0]?.value ?? 'approve');
-  const [feedback, setFeedback] = useState('');
-  const [submitting, setSubmitting] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const needsFeedback = decision === 'request_changes';
-  const submitDisabled = submitting || (needsFeedback && !feedback.trim());
-  const title = intervention.title ?? 'Approval required';
-  const question = intervention.question ?? intervention.context_summary ?? '';
+  return (
+    <WorkflowInterventionDialog
+      run={{ executionId, runContext: { humanInput: { title: intervention.title, stage: intervention.stage, severity: intervention.severity } } }}
+      intervention={intervention}
+      onClose={onClose}
+      onAnswer={async (answer: WorkflowInterventionSubmit) => {
+        if (!answer.interventionId) throw new Error('Missing intervention id for execution approval.');
+        await interventionsApi.respond(answer.interventionId, {
+          decision: answer.decision,
+          field_values: answer.fieldValues,
+          feedback: answer.feedback,
+          answer: answer.answer,
+          human_node_name: answer.humanNodeName,
+          source: 'execution_page',
+        });
+        onSubmitted();
+      }}
+    />
+  );
+}
 
-  async function submit() {
-    if (submitDisabled || !intervention.intervention_id) return;
-    setSubmitting(true);
-    setError(null);
-    try {
-      await interventionsApi.respond(intervention.intervention_id, {
-        decision,
-        field_values: decision === 'approve' ? {} : undefined,
-        feedback: needsFeedback ? feedback : undefined,
-        human_node_name: intervention.stage,
-        source: 'execution_page',
-      });
-      onSubmitted();
-      onClose();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to submit response');
-      setSubmitting(false);
-    }
+function looksLikeApprovalInput(
+  node?: string,
+  fields: Array<{ name?: string; type?: string; options?: unknown[] }> = [],
+): boolean {
+  const lowerNode = (node ?? '').toLowerCase();
+  if (lowerNode.includes('approval') || lowerNode.endsWith('_gate') || lowerNode.includes('escalation')) {
+    return true;
   }
 
-  return (
-    <div className="chat-intervention-modal" role="dialog" aria-modal="true" aria-label={title}>
-      <button className="chat-intervention-backdrop" type="button" onClick={() => !submitting && onClose()} aria-label="Close approval dialog" />
-      <div className="chat-intervention-dialog">
-        <div className="chat-intervention-dialog-head">
-          <div className="chat-intervention-dialog-icon">
-            <ChevronRight className="h-4 w-4" />
-          </div>
-          <div className="min-w-0 flex-1">
-            <div className="flex items-center gap-2">
-              <span className="rounded bg-app-muted px-1.5 py-0.5 font-mono text-[9px] uppercase tracking-[0.08em] text-theme-muted">Approval</span>
-              <span className="truncate font-mono text-[10px] text-theme-subtle">{executionId.slice(0, 8)}</span>
-              {intervention.stage && <span className="truncate font-mono text-[10px] text-theme-subtle">{interventionDecisionLabel(intervention.stage)}</span>}
-            </div>
-            <div className="mt-0.5 truncate text-[13px] font-heading font-semibold text-theme-primary">{title}</div>
-          </div>
-          <button type="button" onClick={() => !submitting && onClose()} className="rounded p-1 text-theme-muted hover:bg-app-muted hover:text-theme-primary" disabled={submitting} aria-label="Close approval dialog">
-            <X className="h-4 w-4" />
-          </button>
-        </div>
-
-        <div className="chat-intervention-dialog-body space-y-3 px-4 py-3">
-          {question && (
-            <div className="chat-intervention-content-scroll">
-              <div className="rounded-md border border-app bg-app-card px-3 py-2 text-[13px] leading-relaxed text-theme-secondary">
-                {renderMarkdown(question)}
-              </div>
-            </div>
-          )}
-
-          <div className="chat-intervention-actions-row flex flex-wrap gap-2">
-            {options.map((option: any) => (
-              <button
-                key={option.value}
-                type="button"
-                onClick={() => setDecision(option.value)}
-                disabled={submitting}
-                className={`rounded-md border px-3 py-1.5 font-mono text-[11px] capitalize transition-colors disabled:opacity-50 ${
-                  decision === option.value
-                    ? 'border-accent bg-accent text-[rgb(var(--color-surface))]'
-                    : 'border-app bg-app-card text-theme-muted hover:border-[rgb(var(--color-text-primary)/0.30)] hover:text-theme-primary'
-                }`}
-              >
-                {option.label ?? interventionDecisionLabel(option.value)}
-              </button>
-            ))}
-          </div>
-
-          {needsFeedback && (
-            <textarea
-              value={feedback}
-              onChange={event => setFeedback(event.target.value)}
-              placeholder="Tell the workflow what should change..."
-              rows={3}
-              disabled={submitting}
-              className="max-h-[110px] min-h-[84px] w-full resize-none overflow-y-auto rounded-md border border-app bg-app-muted px-3 py-2 text-sm text-theme-primary placeholder:text-theme-subtle focus:border-[rgb(var(--color-text-primary)/0.40)] focus:outline-none disabled:opacity-50"
-            />
-          )}
-
-          {error && <div className="rounded-md border border-accent-red/25 bg-accent-red/10 px-3 py-2 text-[12px] text-accent-red">{error}</div>}
-
-          <div className="chat-intervention-submit-row flex items-center justify-between gap-3">
-            <span className="truncate font-mono text-[10px] text-theme-subtle">{interventionDecisionLabel(intervention.stage ?? 'workflow pause')}</span>
-            <button
-              type="button"
-              onClick={submit}
-              disabled={submitDisabled}
-              className="inline-flex items-center gap-1.5 rounded-md bg-accent px-4 py-1.5 font-mono text-[12px] text-[rgb(var(--color-surface))] transition-colors hover:bg-accent/90 disabled:cursor-not-allowed disabled:opacity-40"
-            >
-              Submit
-              <ChevronRight className="h-3.5 w-3.5" />
-            </button>
-          </div>
-        </div>
-      </div>
-    </div>
-  );
+  return fields.some((field) => {
+    const name = (field.name ?? '').toLowerCase();
+    const type = (field.type ?? '').toLowerCase();
+    const optionValues = (field.options ?? []).map((option) => {
+      if (typeof option === 'string') return option.toLowerCase();
+      if (option && typeof option === 'object') {
+        const record = option as { value?: unknown; label?: unknown };
+        return String(record.value ?? record.label ?? '').toLowerCase();
+      }
+      return '';
+    });
+    return name.includes('approval')
+      || name.includes('decision')
+      || ((type === 'select' || type === 'radio') && optionValues.some(value => (
+        value === 'approve'
+        || value === 'request_changes'
+        || value === 'reject'
+        || value === 'cancel'
+      )));
+  });
 }
 
 function WorkflowTraceTable({
@@ -1457,6 +1391,11 @@ export default function ExecutionDetailPage() {
 
   const pendingIntervention = runInterventions.find((i: any) => i.status === 'pending');
   const approvalPending = Boolean(pendingIntervention || runContext?.humanInput?.required);
+  const latestInputNode = latestInputEvent?.data?.node as string | undefined;
+  const latestInputFields = Array.isArray(latestInputEvent?.data?.fields)
+    ? (latestInputEvent.data.fields as Array<{ name?: string; type?: string; options?: unknown[] }>)
+    : [];
+  const waitingInputLooksLikeApproval = looksLikeApprovalInput(latestInputNode, latestInputFields);
 
   // Auto-select node based on execution state.
   // IMPORTANT: the right-side detail pane should NOT auto-follow the running
@@ -1738,15 +1677,24 @@ export default function ExecutionDetailPage() {
                 <Pause className="w-3 h-3" /> paused
               </span>
             )}
-            {execution.status === 'waiting_for_input' && inputDialogDismissed && (
+            {execution.status === 'waiting_for_input' && inputDialogDismissed && !pendingIntervention && (
               <button
                 onClick={() => setInputDialogDismissed(false)}
-                className="badge badge-warn cursor-pointer"
+                className={waitingInputLooksLikeApproval ? 'cr-approval-button' : 'badge badge-warn cursor-pointer'}
                 title="Reopen the input dialog"
               >
-                <MessageSquare className="w-3 h-3" />
-                Respond to input
-                <span className="w-1.5 h-1.5 rounded-full bg-accent-yellow animate-pulse" />
+                {waitingInputLooksLikeApproval ? (
+                  <>
+                    <span className="cr-approval-main">Approve</span>
+                    <ChevronRight className="h-3.5 w-3.5" />
+                  </>
+                ) : (
+                  <>
+                    <MessageSquare className="w-3 h-3" />
+                    Respond to input
+                    <span className="w-1.5 h-1.5 rounded-full bg-accent-yellow animate-pulse" />
+                  </>
+                )}
               </button>
             )}
             {approvalPending && pendingIntervention && (
@@ -2235,6 +2183,50 @@ export default function ExecutionDetailPage() {
         // Only render if we have a waiting-node context. If not, fall back
         // to the intervention banner flow.
         if (!waitingNode) return null;
+        const waitingFields = fields as Array<{ name?: string; type?: string; options?: unknown[] }>;
+        if (looksLikeApprovalInput(waitingNode, waitingFields)) {
+          return (
+            <WorkflowInterventionDialog
+              run={{
+                executionId: id ?? execution.id,
+                runContext: {
+                  humanInput: {
+                    title: 'Approval required',
+                    stage: waitingNode,
+                    severity: waitingNode.toLowerCase().includes('escalation') ? 'escalation' : 'approval',
+                  },
+                  progress: { currentStep: waitingNode },
+                },
+              }}
+              intervention={{
+                status: 'pending',
+                stage: waitingNode,
+                severity: waitingNode.toLowerCase().includes('escalation') ? 'escalation' : 'approval',
+                title: 'Approval required',
+                question: reason,
+                fields: fields as any,
+              }}
+              onClose={() => setInputDialogDismissed(true)}
+              onAnswer={async (answer: WorkflowInterventionSubmit) => {
+                if (!answer.interventionId) {
+                  throw new Error('Approval is still syncing. Please wait a moment and try again.');
+                }
+                if (answer.interventionId) {
+                  await interventionsApi.respond(answer.interventionId, {
+                    decision: answer.decision,
+                    field_values: answer.fieldValues,
+                    feedback: answer.feedback,
+                    answer: answer.answer,
+                    human_node_name: answer.humanNodeName,
+                    source: 'execution_page',
+                  });
+                }
+                void loadRunInterventions();
+                refresh();
+              }}
+            />
+          );
+        }
         return (
           <HumanInputDialog
             node={waitingNode}

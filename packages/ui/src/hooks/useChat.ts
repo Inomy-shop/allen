@@ -168,7 +168,7 @@ export interface SpawnedAgent {
 
 export interface WorkflowInterventionAnswer {
   executionId: string;
-  interventionId: string;
+  interventionId?: string;
   decision: 'approve' | 'request_changes' | 'reject' | 'answer';
   fieldValues?: Record<string, unknown>;
   feedback?: string;
@@ -1462,6 +1462,10 @@ export function useChat() {
 
   const answerWorkflowIntervention = useCallback(async (input: WorkflowInterventionAnswer) => {
     if (!activeSessionId) return;
+
+    if (!input.interventionId) {
+      throw new Error('Approval is still syncing. Please wait a moment and try again.');
+    }
 
     await interventionsApi.respond(input.interventionId, {
       decision: input.decision,

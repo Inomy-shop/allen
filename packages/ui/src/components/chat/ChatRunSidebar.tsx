@@ -34,6 +34,7 @@ import { artifacts as artifactsApi, repos as reposApi, type ArtifactDoc, type Ru
 import { chatCodeDiffs, pullRequests as pullRequestsApi, workspaces as workspacesApi } from '../../services/workspaceService';
 import { getMonacoTheme, setupMonaco } from '../../lib/monaco-theme';
 import ArtifactViewer from '../artifacts/ArtifactViewer';
+import { WorkflowInterventionAction, type WorkflowInterventionLike } from '../execution/WorkflowInterventionAction';
 import { renderMarkdown } from './ChatMessageList';
 
 const FAILED_STATUSES = new Set(['failed', 'failure', 'error', 'errored']);
@@ -152,35 +153,46 @@ function approvalActionLabel(context?: RunStatus | null): string {
   return 'Input required';
 }
 
-type SidebarWorkflowIntervention = {
-  intervention_id?: string;
-  status?: string;
-  stage?: string;
-  severity?: string;
-  title?: string;
-  question?: string;
-  context_summary?: string;
-  created_at?: string;
-  createdAt?: string;
-  options?: Array<{ label?: string; value?: string; primary?: boolean; destructive?: boolean }>;
-};
+type SidebarWorkflowIntervention = WorkflowInterventionLike;
 
 function interventionForRun(run: SpawnedAgent): SidebarWorkflowIntervention | null {
   const context = run.runContext;
-  if (!context?.humanInput.required) return null;
+  const status = (context?.status ?? run.status ?? '').toLowerCase();
+  if (!context?.humanInput.required && status !== 'waiting_for_input' && status !== 'waiting') return null;
+  if (!context) return null;
   const interventions = (context.interventions ?? []) as SidebarWorkflowIntervention[];
   const pending =
     interventions.find(item => item.status === 'pending' && item.intervention_id === context.humanInput.interventionId)
     ?? interventions.find(item => item.status === 'pending');
   if (pending?.intervention_id) return pending;
-  if (!context.humanInput.interventionId) return null;
-  return {
-    intervention_id: context.humanInput.interventionId,
-    status: 'pending',
-    stage: context.humanInput.stage,
-    severity: context.humanInput.severity,
-    title: context.humanInput.title ?? approvalActionLabel(context),
-  };
+  if (context.humanInput.interventionId) {
+    return {
+      intervention_id: context.humanInput.interventionId,
+      status: 'pending',
+      stage: context.humanInput.stage,
+      severity: context.humanInput.severity,
+      title: context.humanInput.title ?? approvalActionLabel(context),
+    };
+  }
+  const stage = context.humanInput.stage
+    ?? context.progress.currentStep
+    ?? context.execution.currentNodes?.[0]
+    ?? undefined;
+  if (stage && looksLikeApprovalInput(stage, context.humanInput.severity)) {
+    return {
+      status: 'pending',
+      stage,
+      severity: context.humanInput.severity ?? (stage.toLowerCase().includes('escalation') ? 'escalation' : 'approval'),
+      title: context.humanInput.title ?? 'Approval required',
+      question: `Review the pause at ${humanLabel(stage)} and choose how the workflow should continue.`,
+    };
+  }
+  return null;
+}
+
+function looksLikeApprovalInput(stage?: string | null, severity?: string | null): boolean {
+  const lower = `${stage ?? ''} ${severity ?? ''}`.toLowerCase();
+  return lower.includes('approval') || lower.includes('escalation') || lower.includes('_gate') || lower.endsWith(' gate');
 }
 
 function SidebarApprovalButton({
@@ -193,125 +205,15 @@ function SidebarApprovalButton({
   className?: string;
 }) {
   const intervention = interventionForRun(run);
-  const [open, setOpen] = useState(false);
-  const [decision, setDecision] = useState<'approve' | 'request_changes' | 'reject'>('approve');
-  const [feedback, setFeedback] = useState('');
-  const [submitting, setSubmitting] = useState(false);
-  const [error, setError] = useState<string | null>(null);
   if (!intervention || !onAnswer) return null;
 
-  const title = intervention.title ?? run.runContext?.humanInput.title ?? approvalActionLabel(run.runContext);
-  const question = intervention.question ?? intervention.context_summary ?? '';
-  const needsFeedback = decision === 'request_changes';
-  const submitDisabled = submitting || (needsFeedback && !feedback.trim());
-
-  async function submit() {
-    if (submitDisabled || !intervention?.intervention_id) return;
-    setSubmitting(true);
-    setError(null);
-    try {
-      await onAnswer?.({
-        executionId: run.executionId,
-        interventionId: intervention.intervention_id,
-        decision,
-        fieldValues: {},
-        feedback: needsFeedback ? feedback : undefined,
-        humanNodeName: intervention.stage ?? run.runContext?.humanInput.stage,
-      });
-      setOpen(false);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to submit response');
-      setSubmitting(false);
-    }
-  }
-
   return (
-    <>
-      <button
-        type="button"
-        className={className}
-        onClick={(event) => {
-          event.preventDefault();
-          event.stopPropagation();
-          setOpen(true);
-        }}
-        title={title}
-      >
-        <span className="cr-approval-main">Approve</span>
-        <ChevronRight className="h-3.5 w-3.5" />
-      </button>
-      {open && (
-        <div className="chat-intervention-modal" role="dialog" aria-modal="true" aria-label={title}>
-          <button className="chat-intervention-backdrop" type="button" onClick={() => !submitting && setOpen(false)} aria-label="Close approval dialog" />
-          <div className="chat-intervention-dialog">
-            <div className="chat-intervention-dialog-head">
-              <div className="chat-intervention-dialog-icon">
-                <ChevronRight className="h-4 w-4" />
-              </div>
-              <div className="min-w-0 flex-1">
-                <div className="flex items-center gap-2">
-                  <span className="rounded bg-app-muted px-1.5 py-0.5 font-mono text-[9px] uppercase tracking-[0.08em] text-theme-muted">Approval</span>
-                  <span className="truncate font-mono text-[10px] text-theme-subtle">{run.executionId.slice(0, 8)}</span>
-                </div>
-                <div className="mt-0.5 truncate text-[13px] font-heading font-semibold text-theme-primary">{title}</div>
-              </div>
-              <button type="button" onClick={() => !submitting && setOpen(false)} className="rounded p-1 text-theme-muted hover:bg-app-muted hover:text-theme-primary" disabled={submitting} aria-label="Close approval dialog">
-                <X className="h-4 w-4" />
-              </button>
-            </div>
-            <div className="chat-intervention-dialog-body space-y-3 px-4 py-3">
-              {question && (
-                <div className="chat-intervention-content-scroll">
-                  <div className="rounded-md border border-app bg-app-card px-3 py-2 text-[13px] leading-relaxed text-theme-secondary">
-                    {renderMarkdown(question)}
-                  </div>
-                </div>
-              )}
-              <div className="chat-intervention-actions-row flex flex-wrap gap-2">
-                {(['approve', 'request_changes', 'reject'] as const).map(value => (
-                  <button
-                    key={value}
-                    type="button"
-                    onClick={() => setDecision(value)}
-                    disabled={submitting}
-                    className={`rounded-md border px-3 py-1.5 font-mono text-[11px] capitalize transition-colors disabled:opacity-50 ${
-                      decision === value
-                        ? 'border-accent bg-accent text-[rgb(var(--color-surface))]'
-                        : 'border-app bg-app-card text-theme-muted hover:border-[rgb(var(--color-text-primary)/0.30)] hover:text-theme-primary'
-                    }`}
-                  >
-                    {humanLabel(value)}
-                  </button>
-                ))}
-              </div>
-              {needsFeedback && (
-                <textarea
-                  value={feedback}
-                  onChange={event => setFeedback(event.target.value)}
-                  placeholder="Tell the workflow what should change..."
-                  rows={3}
-                  disabled={submitting}
-                  className="max-h-[110px] min-h-[84px] w-full resize-none overflow-y-auto rounded-md border border-app bg-app-muted px-3 py-2 text-sm text-theme-primary placeholder:text-theme-subtle focus:border-[rgb(var(--color-text-primary)/0.40)] focus:outline-none disabled:opacity-50"
-                />
-              )}
-              {error && <div className="rounded-md border border-accent-red/25 bg-accent-red/10 px-3 py-2 text-[12px] text-accent-red">{error}</div>}
-              <div className="chat-intervention-submit-row flex items-center justify-between gap-3">
-                <span className="truncate font-mono text-[10px] text-theme-subtle">{humanLabel(intervention.stage ?? run.runContext?.progress.currentStep ?? 'workflow pause')}</span>
-                <button
-                  type="button"
-                  onClick={submit}
-                  disabled={submitDisabled}
-                  className="inline-flex items-center gap-1.5 rounded-md bg-accent px-4 py-1.5 font-mono text-[12px] text-[rgb(var(--color-surface))] transition-colors hover:bg-accent/90 disabled:cursor-not-allowed disabled:opacity-40"
-                >
-                  Submit
-                  <ChevronRight className="h-3.5 w-3.5" />
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
-    </>
+    <WorkflowInterventionAction
+      run={run}
+      intervention={intervention}
+      onAnswer={onAnswer}
+      className={className}
+    />
   );
 }
 
