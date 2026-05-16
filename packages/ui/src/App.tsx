@@ -17,12 +17,9 @@ import { BRAND_NAME } from './lib/brand';
 import {
   auth as authApi,
   chat as chatApi,
+  dashboard as dashboardApi,
   executions as executionsApi,
-  interventions as interventionsApi,
-  learnings as learningsApi,
-  linear as linearApi,
 } from './services/api';
-import { pullRequests as pullRequestsApi, workspaces as workspacesApi } from './services/workspaceService';
 import { usePanelLayout } from './hooks/usePanelLayout';
 
 interface NavItem {
@@ -384,12 +381,9 @@ export default function App() {
     let cancelled = false;
     async function loadLiveCount() {
       try {
-        const [running, queued] = await Promise.all([
-          executionsApi.listPaged({ status: 'running', limit: 1, offset: 0 }),
-          executionsApi.listPaged({ status: 'queued', limit: 1, offset: 0 }),
-        ]);
+        const { count } = await executionsApi.count({ status: ['running', 'queued'] });
         if (cancelled) return;
-        setLiveCount((running.total ?? 0) + (queued.total ?? 0));
+        setLiveCount(count ?? 0);
         setHealthKnown(true);
       } catch {
         if (!cancelled) setHealthKnown(false);
@@ -433,43 +427,9 @@ export default function App() {
   useEffect(() => {
     let cancelled = false;
     async function loadNavCounts() {
-      const [
-        pending,
-        sessions,
-        tickets,
-        prs,
-        spaces,
-        recentRuns,
-        activeRuns,
-        learningStats,
-      ] = await Promise.allSettled([
-        interventionsApi.list({ status: 'pending', limit: 100 }),
-        chatApi.listSessions(),
-        linearApi.issues({ limit: 200 }),
-        pullRequestsApi.list(),
-        workspacesApi.list(),
-        executionsApi.listPaged({ limit: 1, offset: 0 }),
-        executionsApi.listPaged({ status: 'running', limit: 100, offset: 0 }),
-        learningsApi.stats(),
-      ]);
+      const counts = await dashboardApi.navCounts();
       if (cancelled) return;
-
-      const pendingCount = pending.status === 'fulfilled' ? (pending.value ?? []).length : undefined;
-      const activeCount = activeRuns.status === 'fulfilled'
-        ? (activeRuns.value.items ?? []).filter((run: any) => Boolean(run?.meta?.chatSessionId)).length
-        : undefined;
-      setNavCounts({
-        mywork: (pendingCount ?? 0) + (activeCount ?? 0),
-        inbox: pendingCount,
-        threads: sessions.status === 'fulfilled' ? (sessions.value ?? []).length : undefined,
-        tickets: tickets.status === 'fulfilled' ? (tickets.value ?? []).length : undefined,
-        pulls: prs.status === 'fulfilled' ? (prs.value ?? []).length : undefined,
-        workspaces: spaces.status === 'fulfilled' ? (spaces.value ?? []).length : undefined,
-        activity: recentRuns.status === 'fulfilled' ? recentRuns.value.total ?? 0 : undefined,
-        learnings: learningStats.status === 'fulfilled'
-          ? Number(learningStats.value?.total ?? learningStats.value?.count ?? learningStats.value?.approved ?? 0)
-          : undefined,
-      });
+      setNavCounts(counts);
     }
     void loadNavCounts();
     const interval = setInterval(loadNavCounts, 30000);

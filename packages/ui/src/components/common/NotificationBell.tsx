@@ -40,6 +40,13 @@ export default function NotificationBell() {
   const [unreadCount, setUnreadCount] = useState(0);
   const buttonRef = useRef<HTMLButtonElement>(null);
 
+  const loadCount = async () => {
+    try {
+      const { count } = await api.count();
+      setUnreadCount(count);
+    } catch {}
+  };
+
   const loadAlerts = async () => {
     try {
       const [list, { count }] = await Promise.all([api.list(), api.count()]);
@@ -49,8 +56,8 @@ export default function NotificationBell() {
   };
 
   useEffect(() => {
-    loadAlerts();
-    const interval = setInterval(loadAlerts, 30000);
+    loadCount();
+    const interval = setInterval(loadCount, 30000);
     return () => clearInterval(interval);
   }, []);
 
