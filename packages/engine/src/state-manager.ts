@@ -271,19 +271,22 @@ export class StateManager {
    */
   async listExecutionsPaged(
     filter: Record<string, unknown> = {},
-    opts: { skip?: number; limit?: number } = {},
-  ): Promise<{ items: ExecutionState[]; total: number }> {
+    opts: { skip?: number; limit?: number; projection?: Record<string, 0 | 1>; includeTotal?: boolean } = {},
+  ): Promise<{ items: ExecutionState[]; total?: number }> {
     const skip = Math.max(0, opts.skip ?? 0);
     const limit = Math.min(200, Math.max(1, opts.limit ?? 50));
-    const [items, total] = await Promise.all([
-      this.executionsCol
-        .find(filter)
-        .sort({ startedAt: -1 })
-        .skip(skip)
-        .limit(limit)
-        .toArray(),
-      this.executionsCol.countDocuments(filter),
-    ]);
+    const itemsPromise = this.executionsCol
+      .find(filter, opts.projection ? { projection: opts.projection } : undefined)
+      .sort({ startedAt: -1 })
+      .skip(skip)
+      .limit(limit)
+      .toArray();
+    const totalPromise = opts.includeTotal
+      ? Object.keys(filter).length === 0
+        ? this.executionsCol.estimatedDocumentCount()
+        : this.executionsCol.countDocuments(filter)
+      : Promise.resolve(undefined);
+    const [items, total] = await Promise.all([itemsPromise, totalPromise]);
     return { items: items as unknown as ExecutionState[], total };
   }
 

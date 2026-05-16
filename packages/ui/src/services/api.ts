@@ -362,6 +362,7 @@ export const executions = {
     search?: string;
     limit?: number;
     offset?: number;
+    includeTotal?: boolean;
   } = {}) => {
     const qs = new URLSearchParams();
     if (params.status) qs.set('status', params.status);
@@ -369,9 +370,10 @@ export const executions = {
     if (params.workflowName) qs.set('workflowName', params.workflowName);
     if (params.type) qs.set('type', params.type);
     if (params.search) qs.set('search', params.search);
+    if (params.includeTotal) qs.set('includeTotal', 'true');
     qs.set('limit', String(params.limit ?? 50));
     qs.set('offset', String(params.offset ?? 0));
-    return request<{ items: any[]; total: number }>(`/executions?${qs.toString()}`);
+    return request<{ items: any[]; total?: number }>(`/executions?${qs.toString()}`);
   },
   count: (params: { status?: string | string[]; chatSession?: boolean } = {}) => {
     const qs = new URLSearchParams();

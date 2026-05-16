@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Navigate, Outlet, useLocation } from 'react-router-dom';
 import { useAuthStore } from '../../stores/authStore';
 import { system } from '../../services/api';
@@ -25,20 +25,27 @@ export default function ProtectedRoute({ adminOnly = false }: { adminOnly?: bool
   const location = useLocation();
   const [onboardingPath, setOnboardingPath] = useState<string | null>(null);
   const [checkingOnboarding, setCheckingOnboarding] = useState(true);
+  const checkedOnboardingUserRef = useRef<string | null>(null);
 
   useEffect(() => {
     if (!hydrated) hydrate();
   }, [hydrated, hydrate]);
 
   useEffect(() => {
+    const userId = user?.id ?? null;
     const eligible = hydrated
       && Boolean(refreshToken)
-      && Boolean(user)
+      && Boolean(userId)
       && !user?.mustResetPassword
       && (!adminOnly || user?.role === 'admin');
     if (!eligible) {
+      checkedOnboardingUserRef.current = null;
       setCheckingOnboarding(false);
       setOnboardingPath(null);
+      return;
+    }
+    if (checkedOnboardingUserRef.current === userId) {
+      setCheckingOnboarding(false);
       return;
     }
 
@@ -47,6 +54,7 @@ export default function ProtectedRoute({ adminOnly = false }: { adminOnly?: bool
     system.onboardingProgress()
       .then(progress => {
         if (cancelled) return;
+        checkedOnboardingUserRef.current = userId;
         if (progress.complete) {
           setOnboardingPath(null);
           return;
@@ -60,7 +68,7 @@ export default function ProtectedRoute({ adminOnly = false }: { adminOnly?: bool
         if (!cancelled) setCheckingOnboarding(false);
       });
     return () => { cancelled = true; };
-  }, [adminOnly, hydrated, location.pathname, refreshToken, user]);
+  }, [adminOnly, hydrated, refreshToken, user?.id, user?.mustResetPassword, user?.role]);
 
   if (!hydrated) return null;
 
