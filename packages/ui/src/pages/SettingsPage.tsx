@@ -2,11 +2,13 @@ import { useEffect, useRef, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { RotateCcw, Check, Palette, Type, Sparkles, Server, User, Eye,
   Bot, Brain, Zap, Cpu, Atom, Terminal, Code, Rocket, Shield, Hexagon, Flame, Monitor, Moon, Sun,
-  Bell, Keyboard, ShieldCheck,
+  Bell, Keyboard, ShieldCheck, BarChart3,
 } from 'lucide-react';
 import McpServerManager from '../components/settings/McpServerManager';
 import { useAuthStore } from '../stores/authStore';
 import UsersAdminPage from './UsersAdminPage';
+import MonitoringPage from './MonitoringPage';
+import LearningsPage from './LearningsPage';
 import {
   useSettingsStore,
   THEME_PRESETS,
@@ -30,6 +32,8 @@ const TABS = [
   { id: 'appearance', label: 'appearance', icon: Palette, adminOnly: false },
   { id: 'shortcuts', label: 'shortcuts', icon: Keyboard, adminOnly: false },
   { id: 'notifications', label: 'notifications', icon: Bell, adminOnly: false },
+  { id: 'analytics', label: 'analytics', icon: BarChart3, adminOnly: false },
+  { id: 'learnings', label: 'learnings', icon: Brain, adminOnly: false },
   { id: 'users', label: 'users', icon: ShieldCheck, adminOnly: true },
   { id: 'mcp', label: 'mcp servers', icon: Server, adminOnly: false },
 ] as const;
@@ -477,6 +481,22 @@ function NotificationsTab() {
   );
 }
 
+function AnalyticsTab() {
+  return (
+    <div className="settings-body wide settings-embedded-page">
+      <MonitoringPage />
+    </div>
+  );
+}
+
+function LearningsTab() {
+  return (
+    <div className="settings-body wide settings-embedded-page">
+      <LearningsPage />
+    </div>
+  );
+}
+
 // ── MCP Tab ──
 
 function McpTab() {
@@ -495,6 +515,8 @@ const TAB_COMPONENTS: Record<TabId, React.FC> = {
   appearance: AppearanceTab,
   shortcuts: ShortcutsTab,
   notifications: NotificationsTab,
+  analytics: AnalyticsTab,
+  learnings: LearningsTab,
   users: UsersTab,
   mcp: McpTab,
 };

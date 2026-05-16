@@ -39,7 +39,7 @@ export default function HumanInputDialog({
 
   return createPortal(
     <div
-      className="fixed inset-0 z-[9999] flex items-start justify-center bg-black/70 backdrop-blur-sm p-4 overflow-y-auto"
+      className="fixed inset-0 z-[9999] flex items-start justify-center bg-black/35 p-6 overflow-y-auto"
       onClick={onCancel}
     >
       {/* Card grows with content; the OUTER overlay scrolls when the card
@@ -47,13 +47,13 @@ export default function HumanInputDialog({
           overflow-hidden, which clipped tall prompts/forms and hid the
           submit button below the fold with no scroll path. */}
       <div
-        className={`bg-surface-50 border border-app rounded-xl shadow-2xl w-full my-[4vh] flex flex-col ${
+        className={`bg-app-card border border-app rounded-lg shadow-xl w-full my-[3vh] flex flex-col overflow-hidden ${
           hasReview ? 'max-w-6xl' : 'max-w-2xl'
         }`}
         onClick={(e) => e.stopPropagation()}
       >
         {/* Tight top bar with node name and close */}
-        <div className="flex items-center justify-between px-4 py-2.5 bg-surface-100/50 border-b border-app shrink-0">
+        <div className="flex items-center justify-between px-4 py-3 bg-app-card border-b border-app shrink-0">
           <div className="text-[11px] font-mono text-theme-muted flex items-center gap-2">
             <span className="w-1.5 h-1.5 rounded-full bg-accent-yellow animate-pulse" />
             <span>Waiting at node</span>

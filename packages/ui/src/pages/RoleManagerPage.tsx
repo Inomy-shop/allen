@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAgents } from '../hooks/useAgents';
-import { useWorkflows } from '../hooks/useWorkflows';
 import { agents as agentsApi, teams as teamsApi, repos as reposApi, executions as executionsApi, skills as skillsApi, type SkillRecord } from '../services/api';
 import RoleIcon from '../components/common/RoleIcon';
 import RoleDialog from '../components/common/RoleDialog';
@@ -11,7 +10,7 @@ import { renderMarkdown } from '../components/chat/ChatMessageList';
 import {
   RefreshCw, Sparkles, Users, Crown, Search, Play, ArrowRight,
   X, FolderGit2, Plus, Pencil, Trash2, LayoutGrid, Info, Home,
-  ChevronRight, GitBranch, CheckCircle, XCircle, ExternalLink, UserRound,
+  ChevronRight, GitBranch, ExternalLink, UserRound,
   Layers, Tag, FileText, Monitor, Download, ScanSearch, Settings, BookOpen,
 } from 'lucide-react';
 import { DelegationGraph } from '../components/agents/DelegationGraph';
@@ -31,8 +30,7 @@ import { AgentCard } from '../components/agents/AgentCard';
 
 type Agent = Record<string, unknown>;
 type Selection = { kind: 'overview' } | { kind: 'team'; name: string } | { kind: 'unassigned' };
-type LibrarySection = 'workflows' | 'teams-agents' | 'skills' | 'repos' | 'integrations' | 'members';
-type WorkflowExecStats = { total: number; completed: number; failed: number; running: number; queued: number };
+type LibrarySection = 'teams-agents' | 'skills' | 'repos' | 'integrations' | 'members';
 
 // ── Agent detail panel (markdown viewer) ──────────────────────────────────
 
@@ -411,7 +409,6 @@ function RunAgentDialog({
 export default function RoleManagerPage() {
   const navigate = useNavigate();
   const { agents: allAgents, loading, refresh } = useAgents();
-  const { workflows, loading: workflowsLoading, refresh: refreshWorkflows } = useWorkflows();
   const toast = useToast();
 
   // Team data
@@ -421,7 +418,6 @@ export default function RoleManagerPage() {
   const [skillList, setSkillList] = useState<SkillRecord[]>([]);
   const [skillsLoading, setSkillsLoading] = useState(true);
   const [librarySection, setLibrarySection] = useState<LibrarySection>('teams-agents');
-  const [workflowExecStats, setWorkflowExecStats] = useState<Record<string, WorkflowExecStats>>({});
   // Selection + search
   const [selection, setSelection] = useState<Selection>({ kind: 'overview' });
   const [sidebarSearch, setSidebarSearch] = useState('');
@@ -488,27 +484,6 @@ export default function RoleManagerPage() {
     }
   }, []);
   useEffect(() => { void reloadSkills(); }, [reloadSkills]);
-
-  const reloadWorkflowExecStats = useCallback(async () => {
-    try {
-      const execs = await executionsApi.list();
-      const map: Record<string, WorkflowExecStats> = {};
-      for (const exec of execs as any[]) {
-        const name = exec.workflowName;
-        if (!name) continue;
-        if (!map[name]) map[name] = { total: 0, completed: 0, failed: 0, running: 0, queued: 0 };
-        map[name].total += 1;
-        if (exec.status === 'completed') map[name].completed += 1;
-        else if (exec.status === 'failed') map[name].failed += 1;
-        else if (exec.status === 'running') map[name].running += 1;
-        else if (exec.status === 'queued') map[name].queued += 1;
-      }
-      setWorkflowExecStats(map);
-    } catch {
-      setWorkflowExecStats({});
-    }
-  }, []);
-  useEffect(() => { void reloadWorkflowExecStats(); }, [reloadWorkflowExecStats, workflows.length]);
 
   // Agent CRUD dialog state
   const [dialogOpen, setDialogOpen] = useState(false);
@@ -780,7 +755,6 @@ export default function RoleManagerPage() {
   }
 
   const librarySections: Array<{ k: LibrarySection; label: string; desc: string; count: number | string }> = [
-    { k: 'workflows', label: 'workflows', desc: 'how work flows through agents', count: workflows.length },
     { k: 'teams-agents', label: 'teams & agents', desc: 'departments and the agents that live there', count: allTeams.length },
     { k: 'skills', label: 'skills', desc: 'routing playbooks for the assistant', count: skillList.length },
     { k: 'repos', label: 'repos', desc: 'connected source repositories', count: repoList.length },
@@ -793,7 +767,7 @@ export default function RoleManagerPage() {
       <aside className="lib-rail scroll-hide">
         <div className="lib-rail-head">
           <h1 className="lib-rail-title">library</h1>
-          <p className="lib-rail-sub">workflows, agents, skills, and integrations the org uses</p>
+          <p className="lib-rail-sub">agents, skills, repos, and integrations the org uses</p>
         </div>
         <nav className="lib-rail-list">
           {librarySections.map(section => (
@@ -820,17 +794,6 @@ export default function RoleManagerPage() {
           </div>
         )}
 
-        {librarySection === 'workflows' && (
-          <LibraryWorkflowsPane
-            workflows={workflows}
-            loading={workflowsLoading}
-            execStats={workflowExecStats}
-            onRefresh={refreshWorkflows}
-            onNew={() => navigate('/workflows/new')}
-            onOpen={(id) => navigate(`/workflows/${id}/edit`)}
-            onAll={() => navigate('/workflows')}
-          />
-        )}
         {librarySection === 'teams-agents' && (
           <LibraryTeamsAgentsPane
             teams={allTeams}
@@ -939,96 +902,6 @@ export default function RoleManagerPage() {
         onCancel={() => setDeletingTeam(null)}
         onConfirm={handleDeleteTeam}
       />
-    </div>
-  );
-}
-
-function countWorkflowNodes(wf: any): number {
-  if (wf.parsed?.nodes && !Array.isArray(wf.parsed.nodes)) return Object.keys(wf.parsed.nodes).length;
-  if (Array.isArray(wf.parsed?.nodes)) return wf.parsed.nodes.length;
-  if (Array.isArray(wf.parsed?.workflow?.nodes)) return wf.parsed.workflow.nodes.length;
-  return 0;
-}
-
-function countWorkflowEdges(wf: any): number {
-  if (Array.isArray(wf.parsed?.edges)) return wf.parsed.edges.length;
-  if (Array.isArray(wf.parsed?.workflow?.edges)) return wf.parsed.workflow.edges.length;
-  return 0;
-}
-
-function workflowInputKeys(wf: any): string[] {
-  if (!wf.parsed?.input || typeof wf.parsed.input !== 'object') return [];
-  return Object.keys(wf.parsed.input);
-}
-
-function LibraryWorkflowsPane({
-  workflows, loading, onRefresh, onNew, onOpen, onAll,
-  execStats,
-}: {
-  workflows: any[];
-  loading: boolean;
-  execStats: Record<string, WorkflowExecStats>;
-  onRefresh: () => void;
-  onNew: () => void;
-  onOpen: (id: string) => void;
-  onAll: () => void;
-}) {
-  return (
-    <div className="lib-section">
-      <div className="lib-page-head">
-        <div>
-          <h2>workflows</h2>
-          <p>{workflows.length} workflows · reusable, version-controlled</p>
-        </div>
-        <div className="lib-actions">
-          <button className="btn btn-secondary btn-sm" onClick={onRefresh}><RefreshCw className="w-3 h-3" /></button>
-          <button className="btn btn-secondary btn-sm" onClick={onAll}>all workflows</button>
-          <button className="btn btn-primary btn-sm" onClick={onNew}><Plus className="w-3 h-3" /> new workflow</button>
-        </div>
-      </div>
-
-      <div className="lib-card overflow-hidden">
-        {loading ? (
-          Array.from({ length: 5 }).map((_, i) => <div key={i} className="lib-row-skel" />)
-        ) : workflows.length === 0 ? (
-          <div className="lib-empty">no workflows yet</div>
-        ) : workflows.map((wf) => {
-          const nodeCount = countWorkflowNodes(wf);
-          const edgeCount = countWorkflowEdges(wf);
-          const inputKeys = workflowInputKeys(wf);
-          const stats = execStats[wf.name] ?? { total: 0, completed: 0, failed: 0, running: 0, queued: 0 };
-          const isValid = Boolean(wf.validation?.valid);
-          return (
-            <button key={wf._id} className="lib-workflow-row" onClick={() => onOpen(wf._id)}>
-              <GitBranch className="h-4 w-4 text-accent" />
-              <span className="lib-row-main">
-                <span className="lib-row-title mono">{wf.name}</span>
-                <span className="lib-row-sub">{wf.description || 'No description'}</span>
-                <span className="lib-workflow-meta">
-                  <span>v{wf.version ?? 1}</span>
-                  <span>{edgeCount} edges</span>
-                  <span>{inputKeys.length > 0 ? `${inputKeys.length} inputs` : 'no inputs'}</span>
-                  {(Array.isArray(wf.tags) ? wf.tags : []).slice(0, 2).map((tag: string) => <span key={tag}>{tag}</span>)}
-                </span>
-              </span>
-              <span className="lib-chip"><Layers className="h-3 w-3" /> {nodeCount} nodes</span>
-              <span className="lib-run-stats" title={`${stats.total} total runs`}>
-                <span className="ok"><CheckCircle className="h-3 w-3" /> {stats.completed}</span>
-                <span className="err"><XCircle className="h-3 w-3" /> {stats.failed}</span>
-                <span><Play className="h-3 w-3" /> {stats.running + stats.queued}</span>
-                <span>{stats.total} total</span>
-              </span>
-              <span className={`lib-chip ${isValid ? 'ok' : 'err'}`}>
-                {isValid ? <CheckCircle className="h-3 w-3" /> : <XCircle className="h-3 w-3" />}
-                {isValid ? 'valid' : 'invalid'}
-              </span>
-              <span className="lib-row-actions">
-                edit <ExternalLink className="h-3 w-3" />
-              </span>
-            </button>
-          );
-        })}
-      </div>
     </div>
   );
 }

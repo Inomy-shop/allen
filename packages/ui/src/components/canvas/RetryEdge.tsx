@@ -5,6 +5,7 @@ export default function RetryEdge(props: EdgeProps) {
 
   const maxRetries = (data as any)?.max_retries;
   const side = (data as any)?.retrySide ?? 'right';
+  const laneX = (data as any)?.retryLaneX;
 
   const offset = 60;
   const cornerRadius = 15;
@@ -15,7 +16,7 @@ export default function RetryEdge(props: EdgeProps) {
 
   if (side === 'left') {
     // Left side: go left → up → right to target
-    const midX = Math.min(sourceX, targetX) - offset;
+    const midX = typeof laneX === 'number' ? laneX : Math.min(sourceX, targetX) - offset;
     edgePath = [
       `M ${sourceX} ${sourceY}`,
       `L ${midX + cornerRadius} ${sourceY}`,
@@ -28,7 +29,7 @@ export default function RetryEdge(props: EdgeProps) {
     labelY = (sourceY + targetY) / 2;
   } else {
     // Right side: go right → up → left to target
-    const midX = Math.max(sourceX, targetX) + offset;
+    const midX = typeof laneX === 'number' ? laneX : Math.max(sourceX, targetX) + offset;
     edgePath = [
       `M ${sourceX} ${sourceY}`,
       `L ${midX - cornerRadius} ${sourceY}`,
@@ -59,6 +60,14 @@ export default function RetryEdge(props: EdgeProps) {
       </defs>
       <BaseEdge
         path={edgePath}
+        style={{
+          stroke: 'rgb(var(--color-surface))',
+          strokeWidth: 7,
+          opacity: 0.92,
+        }}
+      />
+      <BaseEdge
+        path={edgePath}
         // Theme CSS var supplies the base stroke color (amber in both
         // themes). Trailing `...style` spread lets the selected-node
         // highlight in LiveGraph override opacity + strokeWidth on this
@@ -66,7 +75,7 @@ export default function RetryEdge(props: EdgeProps) {
         // because retry edges hardcoded their full style inline.
         style={{
           stroke: 'rgb(var(--color-flow-edge-retry))',
-          strokeWidth: 2.5,
+          strokeWidth: 2.75,
           strokeDasharray: '6 3',
           ...(style as any),
         }}

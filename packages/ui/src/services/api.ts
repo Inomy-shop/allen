@@ -192,6 +192,10 @@ export interface RunStatus {
   chat?: {
     sessionId?: string | null;
     parentMessageId?: string | null;
+    title?: string | null;
+    userId?: string | null;
+    userName?: string | null;
+    userEmail?: string | null;
   } | null;
   io?: {
     input?: string | null;

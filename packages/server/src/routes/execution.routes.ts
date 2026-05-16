@@ -3,14 +3,17 @@ import { ExecutionService } from '../services/execution.service.js';
 import { InterventionService } from '../services/intervention.service.js';
 import { param } from '../types.js';
 import type { Db } from 'mongodb';
+import { UserService } from '../services/user.service.js';
+import type { AuthedRequest } from '../middleware/requireAuth.js';
 
 export function executionRoutes(db: Db): Router {
   const router = Router();
   const service = new ExecutionService(db);
   const interventionService = new InterventionService(db);
+  const userService = new UserService(db);
 
   // POST /api/executions
-  router.post('/', async (req: Request, res: Response) => {
+  router.post('/', async (req: AuthedRequest, res: Response) => {
     try {
       const { workflowId, input, agentProvider } = req.body;
       if (!workflowId) return res.status(400).json({ error: 'workflowId is required' });
@@ -19,11 +22,21 @@ export function executionRoutes(db: Db): Router {
         : undefined;
       const execution = await service.start(workflowId, input ?? {}, { agentProvider: provider });
       const chatSessionId = req.header('x-allen-chat-session-id');
+      const parentMessageId = req.header('x-allen-parent-message-id');
+      const authUser = req.user;
+      const dbUser = authUser?.sub ? await userService.findById(authUser.sub).catch(() => null) : null;
+      const userMeta: Record<string, unknown> = authUser ? {
+        'meta.startedByUserId': authUser.sub,
+        'meta.startedByUserEmail': dbUser?.email ?? authUser.email,
+        'meta.startedByUserName': dbUser?.name ?? authUser.email?.split('@')[0] ?? authUser.sub,
+      } : {};
       if (chatSessionId) {
         const chatMeta: Record<string, unknown> = {
           'meta.origin': 'chat',
           'meta.chatSessionId': chatSessionId,
+          ...userMeta,
         };
+        if (parentMessageId) chatMeta['meta.parentMessageId'] = parentMessageId;
         if (typeof input?.task === 'string') chatMeta['meta.requestText'] = input.task;
         else if (typeof input?.request === 'string') chatMeta['meta.requestText'] = input.request;
         if (typeof input?.workspace_id === 'string') chatMeta['meta.workspaceId'] = input.workspace_id;
@@ -32,6 +45,11 @@ export function executionRoutes(db: Db): Router {
         await db.collection('executions').updateOne(
           { id: execution.id },
           { $set: chatMeta },
+        ).catch(() => {});
+      } else if (Object.keys(userMeta).length > 0) {
+        await db.collection('executions').updateOne(
+          { id: execution.id },
+          { $set: userMeta },
         ).catch(() => {});
       }
       res.status(201).json(execution);

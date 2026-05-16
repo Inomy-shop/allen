@@ -4,11 +4,11 @@ import ErrorBoundary from './components/common/ErrorBoundary';
 import NotificationBell from './components/common/NotificationBell';
 import {
   GitBranch, Play, Users, Settings,
-  FolderGit2, Brain, MessageSquare,
+  FolderGit2, MessageSquare,
   ChevronRight, ChevronLeft,
   GitPullRequest, Ticket, LogOut,
   Sun, Moon, Search, PanelLeft, Command, Inbox, ArrowRight,
-  Sparkles, BarChart3,
+  Sparkles,
 } from 'lucide-react';
 import { useSettingsStore } from './stores/settingsStore';
 import { resolveColorMode } from './lib/theme';
@@ -19,7 +19,6 @@ import {
   chat as chatApi,
   executions as executionsApi,
   interventions as interventionsApi,
-  learnings as learningsApi,
   linear as linearApi,
 } from './services/api';
 import { pullRequests as pullRequestsApi, workspaces as workspacesApi } from './services/workspaceService';
@@ -45,12 +44,11 @@ interface CommandItem {
 interface NavCounts {
   mywork?: number;
   inbox?: number;
-  threads?: number;
+  chats?: number;
   tickets?: number;
   pulls?: number;
   workspaces?: number;
   activity?: number;
-  learnings?: number;
 }
 
 // ── Nav Groups (prototype direction: personal work, sources, org) ──
@@ -59,7 +57,7 @@ const NAV_GROUPS: Array<{ label: string; items: NavItem[] }> = [
   { label: '', items: [
     { to: '/', icon: Sparkles, label: 'my work', badgeKey: 'mywork', end: true },
     { to: '/interventions', icon: Inbox, label: 'inbox', badgeKey: 'inbox' },
-    { to: '/threads', icon: MessageSquare, label: 'threads', badgeKey: 'threads' },
+    { to: '/chats', icon: MessageSquare, label: 'chats', badgeKey: 'chats', activePrefixes: ['/chats', '/chat'] },
   ]},
   { label: 'Sources', items: [
     { to: '/tickets', icon: Ticket, label: 'tickets', badgeKey: 'tickets' },
@@ -67,10 +65,9 @@ const NAV_GROUPS: Array<{ label: string; items: NavItem[] }> = [
     { to: '/workspaces', icon: FolderGit2, label: 'workspaces', badgeKey: 'workspaces' },
   ]},
   { label: 'Org', items: [
-    { to: '/agents', icon: Users, label: 'library', activePrefixes: ['/agents', '/workflows', '/repos'] },
+    { to: '/agents', icon: Users, label: 'library', activePrefixes: ['/agents', '/repos'] },
+    { to: '/workflows', icon: GitBranch, label: 'workflows', activePrefixes: ['/workflows'] },
     { to: '/executions', icon: Play, label: 'activity', badgeKey: 'activity', activePrefixes: ['/executions'] },
-    { to: '/monitoring', icon: BarChart3, label: 'analytics', activePrefixes: ['/monitoring'] },
-    { to: '/learnings', icon: Brain, label: 'learnings', badgeKey: 'learnings' },
   ]},
   { label: 'Personal', items: [
     { to: '/settings', icon: Settings, label: 'settings', activePrefixes: ['/settings'] },
@@ -78,7 +75,8 @@ const NAV_GROUPS: Array<{ label: string; items: NavItem[] }> = [
 ];
 
 const ROUTE_TITLES: Array<{ prefix: string; label: string }> = [
-  { prefix: '/threads', label: 'Threads' },
+  { prefix: '/chats', label: 'Chats' },
+  { prefix: '/threads', label: 'Chats' },
   { prefix: '/chat', label: 'Chat' },
   { prefix: '/interventions', label: 'Inbox' },
   { prefix: '/tickets', label: 'Tickets' },
@@ -89,22 +87,23 @@ const ROUTE_TITLES: Array<{ prefix: string; label: string }> = [
   { prefix: '/workflows', label: 'Workflows' },
   { prefix: '/executions', label: 'Activity' },
   { prefix: '/crons', label: 'Schedules' },
-  { prefix: '/monitoring', label: 'Analytics' },
-  { prefix: '/learnings', label: 'Learnings' },
+  { prefix: '/monitoring', label: 'Settings' },
+  { prefix: '/learnings', label: 'Settings' },
   { prefix: '/settings', label: 'Settings' },
 ];
 
 const COMMANDS: CommandItem[] = [
   { id: 'my-work', label: 'Go to my work', group: 'Navigate', to: '/', icon: Sparkles },
   { id: 'inbox', label: 'Open inbox', group: 'Navigate', to: '/interventions', icon: Inbox },
-  { id: 'threads', label: 'Open threads', group: 'Navigate', to: '/threads', icon: MessageSquare },
+  { id: 'chats', label: 'Open chats', group: 'Navigate', to: '/chats', icon: MessageSquare },
   { id: 'chat', label: 'Open assistant chat', group: 'Action', to: '/chat', icon: MessageSquare },
   { id: 'activity', label: 'View activity', group: 'Runs', to: '/executions', icon: Play },
   { id: 'running', label: 'View running executions', group: 'Runs', to: '/executions?status=running', icon: Play },
   { id: 'tickets', label: 'Open Linear tickets', group: 'Sources', to: '/tickets', icon: Ticket },
   { id: 'pulls', label: 'Open pull requests', group: 'Sources', to: '/pull-requests', icon: GitPullRequest },
   { id: 'workspaces', label: 'Open workspaces', group: 'Code', to: '/workspaces', icon: FolderGit2 },
-  { id: 'analytics', label: 'Open analytics', group: 'Org', to: '/monitoring', icon: BarChart3 },
+  { id: 'analytics', label: 'Open analytics', group: 'Settings', to: '/settings/analytics', icon: Settings },
+  { id: 'learnings', label: 'Open learnings', group: 'Settings', to: '/settings/learnings', icon: Settings },
   { id: 'workflows', label: 'Open workflows', group: 'Library', to: '/workflows', icon: GitBranch },
   { id: 'agents', label: 'Open agents and teams', group: 'Library', to: '/agents', icon: Users },
 ];
@@ -433,6 +432,7 @@ export default function App() {
   useEffect(() => {
     let cancelled = false;
     async function loadNavCounts() {
+      const sessionParams = currentUser?.id ? { ownerUserId: currentUser.id } : undefined;
       const [
         pending,
         sessions,
@@ -441,16 +441,14 @@ export default function App() {
         spaces,
         recentRuns,
         activeRuns,
-        learningStats,
       ] = await Promise.allSettled([
         interventionsApi.list({ status: 'pending', limit: 100 }),
-        chatApi.listSessions(),
+        chatApi.listSessions(sessionParams),
         linearApi.issues({ limit: 200 }),
         pullRequestsApi.list(),
         workspacesApi.list(),
         executionsApi.listPaged({ limit: 1, offset: 0 }),
         executionsApi.listPaged({ status: 'running', limit: 100, offset: 0 }),
-        learningsApi.stats(),
       ]);
       if (cancelled) return;
 
@@ -458,17 +456,15 @@ export default function App() {
       const activeCount = activeRuns.status === 'fulfilled'
         ? (activeRuns.value.items ?? []).filter((run: any) => Boolean(run?.meta?.chatSessionId)).length
         : undefined;
+      const userSessions = sessions.status === 'fulfilled' ? (sessions.value ?? []) : [];
       setNavCounts({
         mywork: (pendingCount ?? 0) + (activeCount ?? 0),
         inbox: pendingCount,
-        threads: sessions.status === 'fulfilled' ? (sessions.value ?? []).length : undefined,
+        chats: sessions.status === 'fulfilled' ? userSessions.length : undefined,
         tickets: tickets.status === 'fulfilled' ? (tickets.value ?? []).length : undefined,
         pulls: prs.status === 'fulfilled' ? (prs.value ?? []).length : undefined,
         workspaces: spaces.status === 'fulfilled' ? (spaces.value ?? []).length : undefined,
         activity: recentRuns.status === 'fulfilled' ? recentRuns.value.total ?? 0 : undefined,
-        learnings: learningStats.status === 'fulfilled'
-          ? Number(learningStats.value?.total ?? learningStats.value?.count ?? learningStats.value?.approved ?? 0)
-          : undefined,
       });
     }
     void loadNavCounts();
@@ -477,7 +473,7 @@ export default function App() {
       cancelled = true;
       clearInterval(interval);
     };
-  }, []);
+  }, [currentUser?.id]);
 
   useEffect(() => {
     function onKeyDown(event: KeyboardEvent) {

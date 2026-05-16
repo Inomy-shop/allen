@@ -9,6 +9,7 @@ import {
   ChevronDown,
   ChevronRight,
   CheckCircle2,
+  Copy,
   ExternalLink,
   FileText,
   FolderOpen,
@@ -28,7 +29,7 @@ import {
   Code2,
   X,
 } from 'lucide-react';
-import type { SpawnedAgent } from '../../hooks/useChat';
+import type { SpawnedAgent, WorkflowInterventionAnswer } from '../../hooks/useChat';
 import { artifacts as artifactsApi, repos as reposApi, type ArtifactDoc, type RunStatus } from '../../services/api';
 import { chatCodeDiffs, pullRequests as pullRequestsApi, workspaces as workspacesApi } from '../../services/workspaceService';
 import { getMonacoTheme, setupMonaco } from '../../lib/monaco-theme';
@@ -37,6 +38,7 @@ import { renderMarkdown } from './ChatMessageList';
 
 const FAILED_STATUSES = new Set(['failed', 'failure', 'error', 'errored']);
 const CANCELLED_STATUSES = new Set(['cancelled', 'canceled']);
+const TERMINAL_STATUSES = new Set(['completed', 'merged', 'failed', 'failure', 'error', 'errored', 'cancelled', 'canceled', 'closed']);
 
 export type ChatRunPanelTab = 'tasks' | 'artifacts' | 'executions' | 'files';
 
@@ -49,6 +51,10 @@ type RepoBrowseSource = {
 function humanLabel(value?: string | null): string {
   if (!value) return '';
   return value.replace(/[_-]+/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+}
+
+function shortExecutionId(id: string): string {
+  return id.length > 12 ? `${id.slice(0, 8)}...${id.slice(-4)}` : id;
 }
 
 function timeAgo(dateStr?: string | null): string {
@@ -137,6 +143,176 @@ function statusBadgeClass(status?: string | null): string {
 function StatusBadge({ status }: { status?: string | null }) {
   const label = humanLabel(status ?? 'unknown');
   return <span className={`rounded px-1.5 py-0.5 font-mono text-[9px] uppercase ${statusBadgeClass(status)}`}>{label}</span>;
+}
+
+function approvalActionLabel(context?: RunStatus | null): string {
+  const severity = context?.humanInput.severity?.toLowerCase();
+  if (severity === 'approval') return 'Approval required';
+  if (severity === 'escalation') return 'Review required';
+  return 'Input required';
+}
+
+type SidebarWorkflowIntervention = {
+  intervention_id?: string;
+  status?: string;
+  stage?: string;
+  severity?: string;
+  title?: string;
+  question?: string;
+  context_summary?: string;
+  created_at?: string;
+  createdAt?: string;
+  options?: Array<{ label?: string; value?: string; primary?: boolean; destructive?: boolean }>;
+};
+
+function interventionForRun(run: SpawnedAgent): SidebarWorkflowIntervention | null {
+  const context = run.runContext;
+  if (!context?.humanInput.required) return null;
+  const interventions = (context.interventions ?? []) as SidebarWorkflowIntervention[];
+  const pending =
+    interventions.find(item => item.status === 'pending' && item.intervention_id === context.humanInput.interventionId)
+    ?? interventions.find(item => item.status === 'pending');
+  if (pending?.intervention_id) return pending;
+  if (!context.humanInput.interventionId) return null;
+  return {
+    intervention_id: context.humanInput.interventionId,
+    status: 'pending',
+    stage: context.humanInput.stage,
+    severity: context.humanInput.severity,
+    title: context.humanInput.title ?? approvalActionLabel(context),
+  };
+}
+
+function SidebarApprovalButton({
+  run,
+  onAnswer,
+  className = 'cr-approval-button',
+}: {
+  run: SpawnedAgent;
+  onAnswer?: (input: WorkflowInterventionAnswer) => Promise<void> | void;
+  className?: string;
+}) {
+  const intervention = interventionForRun(run);
+  const [open, setOpen] = useState(false);
+  const [decision, setDecision] = useState<'approve' | 'request_changes' | 'reject'>('approve');
+  const [feedback, setFeedback] = useState('');
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  if (!intervention || !onAnswer) return null;
+
+  const title = intervention.title ?? run.runContext?.humanInput.title ?? approvalActionLabel(run.runContext);
+  const question = intervention.question ?? intervention.context_summary ?? '';
+  const needsFeedback = decision === 'request_changes';
+  const submitDisabled = submitting || (needsFeedback && !feedback.trim());
+
+  async function submit() {
+    if (submitDisabled || !intervention?.intervention_id) return;
+    setSubmitting(true);
+    setError(null);
+    try {
+      await onAnswer?.({
+        executionId: run.executionId,
+        interventionId: intervention.intervention_id,
+        decision,
+        fieldValues: {},
+        feedback: needsFeedback ? feedback : undefined,
+        humanNodeName: intervention.stage ?? run.runContext?.humanInput.stage,
+      });
+      setOpen(false);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to submit response');
+      setSubmitting(false);
+    }
+  }
+
+  return (
+    <>
+      <button
+        type="button"
+        className={className}
+        onClick={(event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          setOpen(true);
+        }}
+        title={title}
+      >
+        <span className="cr-approval-main">Approve</span>
+        <ChevronRight className="h-3.5 w-3.5" />
+      </button>
+      {open && (
+        <div className="chat-intervention-modal" role="dialog" aria-modal="true" aria-label={title}>
+          <button className="chat-intervention-backdrop" type="button" onClick={() => !submitting && setOpen(false)} aria-label="Close approval dialog" />
+          <div className="chat-intervention-dialog">
+            <div className="chat-intervention-dialog-head">
+              <div className="chat-intervention-dialog-icon">
+                <ChevronRight className="h-4 w-4" />
+              </div>
+              <div className="min-w-0 flex-1">
+                <div className="flex items-center gap-2">
+                  <span className="rounded bg-app-muted px-1.5 py-0.5 font-mono text-[9px] uppercase tracking-[0.08em] text-theme-muted">Approval</span>
+                  <span className="truncate font-mono text-[10px] text-theme-subtle">{run.executionId.slice(0, 8)}</span>
+                </div>
+                <div className="mt-0.5 truncate text-[13px] font-heading font-semibold text-theme-primary">{title}</div>
+              </div>
+              <button type="button" onClick={() => !submitting && setOpen(false)} className="rounded p-1 text-theme-muted hover:bg-app-muted hover:text-theme-primary" disabled={submitting} aria-label="Close approval dialog">
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+            <div className="chat-intervention-dialog-body space-y-3 px-4 py-3">
+              {question && (
+                <div className="chat-intervention-content-scroll">
+                  <div className="rounded-md border border-app bg-app-card px-3 py-2 text-[13px] leading-relaxed text-theme-secondary">
+                    {renderMarkdown(question)}
+                  </div>
+                </div>
+              )}
+              <div className="chat-intervention-actions-row flex flex-wrap gap-2">
+                {(['approve', 'request_changes', 'reject'] as const).map(value => (
+                  <button
+                    key={value}
+                    type="button"
+                    onClick={() => setDecision(value)}
+                    disabled={submitting}
+                    className={`rounded-md border px-3 py-1.5 font-mono text-[11px] capitalize transition-colors disabled:opacity-50 ${
+                      decision === value
+                        ? 'border-accent bg-accent text-[rgb(var(--color-surface))]'
+                        : 'border-app bg-app-card text-theme-muted hover:border-[rgb(var(--color-text-primary)/0.30)] hover:text-theme-primary'
+                    }`}
+                  >
+                    {humanLabel(value)}
+                  </button>
+                ))}
+              </div>
+              {needsFeedback && (
+                <textarea
+                  value={feedback}
+                  onChange={event => setFeedback(event.target.value)}
+                  placeholder="Tell the workflow what should change..."
+                  rows={3}
+                  disabled={submitting}
+                  className="max-h-[110px] min-h-[84px] w-full resize-none overflow-y-auto rounded-md border border-app bg-app-muted px-3 py-2 text-sm text-theme-primary placeholder:text-theme-subtle focus:border-[rgb(var(--color-text-primary)/0.40)] focus:outline-none disabled:opacity-50"
+                />
+              )}
+              {error && <div className="rounded-md border border-accent-red/25 bg-accent-red/10 px-3 py-2 text-[12px] text-accent-red">{error}</div>}
+              <div className="chat-intervention-submit-row flex items-center justify-between gap-3">
+                <span className="truncate font-mono text-[10px] text-theme-subtle">{humanLabel(intervention.stage ?? run.runContext?.progress.currentStep ?? 'workflow pause')}</span>
+                <button
+                  type="button"
+                  onClick={submit}
+                  disabled={submitDisabled}
+                  className="inline-flex items-center gap-1.5 rounded-md bg-accent px-4 py-1.5 font-mono text-[12px] text-[rgb(var(--color-surface))] transition-colors hover:bg-accent/90 disabled:cursor-not-allowed disabled:opacity-40"
+                >
+                  Submit
+                  <ChevronRight className="h-3.5 w-3.5" />
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+    </>
+  );
 }
 
 function runKindLabel(context: RunStatus | null, fallback?: SpawnedAgent | null): string {
@@ -401,11 +577,13 @@ function AttemptRow({
   index,
   onOpenNode,
   onOpenExecution,
+  onAnswerWorkflowIntervention,
 }: {
   run: SpawnedAgent;
   index: number;
   onOpenNode: (executionId: string, nodeId: string) => void;
   onOpenExecution: (executionId: string) => void;
+  onAnswerWorkflowIntervention?: (input: WorkflowInterventionAnswer) => Promise<void> | void;
 }) {
   const [expanded, setExpanded] = useState(false);
   const context = run.runContext ?? null;
@@ -418,6 +596,7 @@ function AttemptRow({
   const isWorkflow = context?.runType === 'workflow';
   const summary =
     !isWorkflow ? humanLabel(status)
+      : state === 'wait-you' ? approvalActionLabel(context)
       : state === 'fail' ? workflowAttemptFailureLabel(run)
         : state === 'ok' ? 'Passed'
           : context?.progress.currentStep ? `Running ${humanLabel(context.progress.currentStep)}`
@@ -443,7 +622,9 @@ function AttemptRow({
           </span>
         </span>
         <span className="attempt-row-main">
-          <span className="step-name">Execution {index + 1}: {kind}</span>
+          <span className="step-name-row">
+            <span className="step-name">Execution {index + 1}: {kind}</span>
+          </span>
           <span className="step-meta">{executionKind} · {summary} · {cost}</span>
         </span>
         <span className="attempt-row-progress" aria-label={`Execution ${index + 1} progress ${percent}%`}>
@@ -452,6 +633,7 @@ function AttemptRow({
         {isWorkflow && expanded ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronRight className="h-3.5 w-3.5" />}
       </button>
       <div className="attempt-row-actions">
+        <SidebarApprovalButton run={run} onAnswer={onAnswerWorkflowIntervention} className="cr-approval-button" />
         <Link to={`/executions/${run.executionId}`} className="step-link-icon" title="Open execution">
           <ExternalLink className="h-3.5 w-3.5" />
         </Link>
@@ -595,7 +777,17 @@ function ArtifactLinks({ run, context }: { run: SpawnedAgent; context: RunStatus
   );
 }
 
-function ExecutionStep({ run, index, isLast }: { run: SpawnedAgent; index: number; isLast: boolean }) {
+function ExecutionStep({
+  run,
+  index,
+  isLast,
+  onAnswerWorkflowIntervention,
+}: {
+  run: SpawnedAgent;
+  index: number;
+  isLast: boolean;
+  onAnswerWorkflowIntervention?: (input: WorkflowInterventionAnswer) => Promise<void> | void;
+}) {
   const context = run.runContext ?? null;
   const state = runState(context, run);
   const percent = Math.max(0, Math.min(100, context?.progress.percent ?? 0));
@@ -614,7 +806,10 @@ function ExecutionStep({ run, index, isLast }: { run: SpawnedAgent; index: numbe
         <div className="mb-2 flex items-start justify-between gap-3">
           <div className="min-w-0">
             <div className="mb-1 font-mono text-[10px] font-semibold uppercase tracking-[0.08em] text-theme-muted">Step {index + 1}</div>
-            <div className="truncate text-[13px] font-semibold text-theme-primary">{title}</div>
+            <div className="step-name-row">
+              <div className="truncate text-[13px] font-semibold text-theme-primary">{title}</div>
+              <SidebarApprovalButton run={run} onAnswer={onAnswerWorkflowIntervention} className="cr-approval-button" />
+            </div>
             <div className="mt-1 font-mono text-[10.5px] text-theme-muted">{runKindLabel(context, run)} · {cost} · {expectedOutcome(context)}</div>
           </div>
           <StatusBadge status={context?.status ?? run.status} />
@@ -630,7 +825,7 @@ function ExecutionStep({ run, index, isLast }: { run: SpawnedAgent; index: numbe
 
         {context?.humanInput.required && (
           <div className="mt-2 rounded border border-accent-yellow/20 bg-accent-yellow/10 px-2 py-1.5 text-[11px] text-accent-yellow">
-            {context.humanInput.title ?? 'Needs your input'}
+            {context.humanInput.title ?? approvalActionLabel(context)}
           </div>
         )}
 
@@ -1409,26 +1604,57 @@ function ExecutionDetailInline({
   index,
   selectedExecutionId,
   selectedNodeId,
+  renderHeaderAction,
+  renderFooter,
 }: {
   run: SpawnedAgent;
   index: number;
   selectedExecutionId?: string | null;
   selectedNodeId?: string | null;
+  renderHeaderAction?: (run: SpawnedAgent) => ReactNode;
+  renderFooter?: (run: SpawnedAgent) => ReactNode;
 }) {
   const context = run.runContext ?? null;
   const status = context?.status ?? run.status;
+  const normalizedStatus = String(status).toLowerCase();
+  const isActive = !TERMINAL_STATUSES.has(normalizedStatus);
+  const isCancelled = CANCELLED_STATUSES.has(normalizedStatus);
+  const isFailed = FAILED_STATUSES.has(normalizedStatus) || normalizedStatus === 'closed';
+  const statusTone = isCancelled ? 'cancelled' : isFailed ? 'failed' : isActive ? 'running' : 'complete';
   const childAgents = context?.childAgents ?? [];
   const executionName = runDisplayName(context, run);
   const selected = selectedExecutionId === run.executionId;
 
   return (
-    <details className="cr-exec-detail" open={selected || undefined}>
+    <details className={`cr-exec-detail ${statusTone}`} open={selected || undefined}>
       <summary>
         <ChevronRight className="cr-disclosure-icon h-3.5 w-3.5" />
         <span className="cr-ref-ic repo"><RunExecutionIcon context={context} /></span>
         <span className="cr-list-body">
-          <span className="cr-list-title">Execution {index + 1}: {executionName}</span>
-          <span className="cr-list-sub">{runTypeName(context, run)} · {humanLabel(status)} · {formatCost(context?.execution.cost)}</span>
+          <span className="cr-list-title">
+            <span>Execution {index + 1}: {executionName}</span>
+            {(isActive || isCancelled || isFailed) && (
+              <span className={`cr-run-state ${statusTone}`}>
+                {isActive ? <Loader2 className="h-3 w-3 animate-spin" /> : statusIcon(status)}
+                {humanLabel(status)}
+              </span>
+            )}
+            {renderHeaderAction?.(run)}
+          </span>
+          <span className="cr-list-sub">{runTypeName(context, run)} · {isActive ? 'Active' : humanLabel(status)} · {formatCost(context?.execution.cost)}</span>
+          <button
+            type="button"
+            className="cr-exec-id"
+            title={`Copy execution id: ${run.executionId}`}
+            onClick={(event) => {
+              event.preventDefault();
+              event.stopPropagation();
+              void navigator.clipboard?.writeText(run.executionId);
+            }}
+          >
+            <Copy className="h-3 w-3" />
+            <span>{shortExecutionId(run.executionId)}</span>
+          </button>
           {context?.title && context.title !== executionName && <span className="cr-list-sub">{context.title}</span>}
         </span>
         <Link to={`/executions/${run.executionId}`} className="cr-detail-link" title="Open full execution page" onClick={(event) => event.stopPropagation()}>
@@ -1446,18 +1672,23 @@ function ExecutionDetailInline({
           {childAgents.map(child => <ChildExecutionRow key={child.executionId} child={child} />)}
         </div>
       )}
+      {renderFooter?.(run)}
     </details>
   );
 }
 
-function ExecutionsPanel({
+export function ExecutionsPanel({
   runs,
   selectedExecutionId,
   selectedNodeId,
+  renderExecutionHeaderAction,
+  renderExecutionFooter,
 }: {
   runs: SpawnedAgent[];
   selectedExecutionId?: string | null;
   selectedNodeId?: string | null;
+  renderExecutionHeaderAction?: (run: SpawnedAgent) => ReactNode;
+  renderExecutionFooter?: (run: SpawnedAgent) => ReactNode;
 }) {
   if (runs.length === 0) return <div className="cr-empty">No agent executions are linked to this chat yet.</div>;
   return (
@@ -1469,6 +1700,8 @@ function ExecutionsPanel({
           index={index}
           selectedExecutionId={selectedExecutionId}
           selectedNodeId={selectedNodeId}
+          renderHeaderAction={renderExecutionHeaderAction}
+          renderFooter={renderExecutionFooter}
         />
       ))}
     </div>
@@ -1546,7 +1779,7 @@ function FileChangesPanel({
   const [loading, setLoading] = useState(false);
 
   const workspaceRefs = useMemo(() => {
-    const refs: Array<{ id: string; name?: string | null; repoId?: string | null; mode: 'auto' | 'branch' }> = [];
+    const refs: Array<{ id: string; name?: string | null; repoId?: string | null; mode: 'workspace' }> = [];
     for (const run of runs) {
       const id = run.runContext?.workspace?.id;
       if (!id) continue;
@@ -1554,13 +1787,12 @@ function FileChangesPanel({
         id,
         name: run.runContext?.workspace?.name ?? run.runContext?.workspace?.repoName,
         repoId: run.runContext?.workspace?.repoId ?? null,
-        mode: run.runContext?.pullRequest ? 'branch' : 'auto',
+        mode: 'workspace',
       });
     }
-    return refs.reduce<Array<{ id: string; name?: string | null; repoId?: string | null; mode: 'auto' | 'branch' }>>((acc, ref) => {
+    return refs.reduce<Array<{ id: string; name?: string | null; repoId?: string | null; mode: 'workspace' }>>((acc, ref) => {
       const existing = acc.find(item => item.id === ref.id);
       if (!existing) acc.push(ref);
-      else if (ref.mode === 'branch') existing.mode = 'branch';
       return acc;
     }, []);
   }, [runs]);
@@ -1652,7 +1884,7 @@ function FileChangesPanel({
       if (!cancelled) setLoading(false);
     });
     return () => { cancelled = true; };
-  }, [signature, workspaceRefs, pullRequestRefs, rootType, rootId]);
+  }, [signature, rootType, rootId]);
 
   const additions = files.reduce((sum, file) => sum + (file.additions ?? 0), 0);
   const deletions = files.reduce((sum, file) => sum + (file.deletions ?? 0), 0);
@@ -1924,6 +2156,7 @@ function TasksPanel({
   expanded,
   onOpenNode,
   onOpenExecution,
+  onAnswerWorkflowIntervention,
 }: {
   activeRun: SpawnedAgent;
   activeContext: RunStatus | null;
@@ -1931,6 +2164,7 @@ function TasksPanel({
   expanded: boolean;
   onOpenNode: (executionId: string, nodeId: string) => void;
   onOpenExecution: (executionId: string) => void;
+  onAnswerWorkflowIntervention?: (input: WorkflowInterventionAnswer) => Promise<void> | void;
 }) {
   const attemptRuns = sortedRuns;
   const showAttempts = attemptRuns.length > 1;
@@ -1984,6 +2218,7 @@ function TasksPanel({
                 index={index}
                 onOpenNode={onOpenNode}
                 onOpenExecution={onOpenExecution}
+                onAnswerWorkflowIntervention={onAnswerWorkflowIntervention}
               />
             ))}
           </div>
@@ -2009,7 +2244,13 @@ function TasksPanel({
         <RailSection title="steps" count={`${sortedRuns.length}`}>
           <div className="cr-steps">
             {sortedRuns.map((run, index) => (
-              <ExecutionStep key={run.executionId} run={run} index={index} isLast={index === sortedRuns.length - 1} />
+              <ExecutionStep
+                key={run.executionId}
+                run={run}
+                index={index}
+                isLast={index === sortedRuns.length - 1}
+                onAnswerWorkflowIntervention={onAnswerWorkflowIntervention}
+              />
             ))}
           </div>
         </RailSection>
@@ -2036,16 +2277,6 @@ function TasksPanel({
         </RailSection>
       )}
 
-      {activeContext?.humanInput.required && (
-        <RailSection title="actions">
-          <div className="cr-acts">
-            <Link to={activeContext.humanInput.interventionId ? `/interventions/${activeContext.humanInput.interventionId}` : '/interventions'} className="btn-primary justify-center gap-1.5 text-[12px]">
-              Resolve Input
-              <ExternalLink className="h-3.5 w-3.5" />
-            </Link>
-          </div>
-        </RailSection>
-      )}
     </div>
   );
 }
@@ -2058,6 +2289,7 @@ export default function ChatRunSidebar({
   open,
   activeTab,
   onTabChange,
+  onAnswerWorkflowIntervention,
   onClose,
 }: {
   runs: SpawnedAgent[];
@@ -2067,6 +2299,7 @@ export default function ChatRunSidebar({
   open: boolean;
   activeTab: ChatRunPanelTab;
   onTabChange: (tab: ChatRunPanelTab) => void;
+  onAnswerWorkflowIntervention?: (input: WorkflowInterventionAnswer) => Promise<void> | void;
   onClose: () => void;
 }) {
   const sortedRuns = useMemo(() => [...runs], [runs]);
@@ -2184,6 +2417,7 @@ export default function ChatRunSidebar({
               expanded={fullScreen}
               onOpenNode={() => undefined}
               onOpenExecution={() => undefined}
+              onAnswerWorkflowIntervention={onAnswerWorkflowIntervention}
             />
           </div>
         )}
@@ -2198,6 +2432,7 @@ export default function ChatRunSidebar({
                 expanded={fullScreen}
                 onOpenNode={openExecutionNode}
                 onOpenExecution={openExecution}
+                onAnswerWorkflowIntervention={onAnswerWorkflowIntervention}
               />
             )
             : <div className="cr-empty">No task sequence is linked to this chat yet.</div>
@@ -2207,6 +2442,7 @@ export default function ChatRunSidebar({
             runs={sortedRuns}
             selectedExecutionId={selectedExecutionId}
             selectedNodeId={selectedWorkflowNodeId}
+            renderExecutionHeaderAction={(run) => <SidebarApprovalButton run={run} onAnswer={onAnswerWorkflowIntervention} />}
           />
         )}
         {activeTab === 'artifacts' && <ChatArtifactsPanel rootType={rootType} rootId={rootId} runs={sortedRuns} />}

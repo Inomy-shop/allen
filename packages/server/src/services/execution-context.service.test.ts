@@ -5,12 +5,18 @@ import { ExecutionService } from './execution.service.js';
 type Doc = Record<string, any>;
 
 function byPath(doc: Doc, path: string): unknown {
-  return path.split('.').reduce<unknown>((acc, part) => (
-    acc && typeof acc === 'object' ? (acc as Doc)[part] : undefined
-  ), doc);
+  return path.split('.').reduce<unknown>((acc, part) => {
+    if (Array.isArray(acc)) return acc.flatMap(item => {
+      const value = item && typeof item === 'object' ? (item as Doc)[part] : undefined;
+      return Array.isArray(value) ? value : [value];
+    }).filter(value => value !== undefined);
+    return acc && typeof acc === 'object' ? (acc as Doc)[part] : undefined;
+  }, doc);
 }
 
 function sameValue(a: unknown, b: unknown): boolean {
+  if (Array.isArray(a)) return a.some(value => sameValue(value, b));
+  if (Array.isArray(b)) return b.some(value => sameValue(a, value));
   if (a instanceof ObjectId || b instanceof ObjectId) return String(a) === String(b);
   return a === b;
 }
@@ -25,6 +31,15 @@ function matches(doc: Doc, query: Doc): boolean {
     if (expected && typeof expected === 'object' && !(expected instanceof ObjectId) && !Array.isArray(expected)) {
       if ('$ne' in expected && sameValue(actual, expected.$ne)) return false;
       if ('$nin' in expected && Array.isArray(expected.$nin) && expected.$nin.some((v: unknown) => sameValue(actual, v))) return false;
+      if ('$in' in expected && Array.isArray(expected.$in) && !expected.$in.some((v: unknown) => sameValue(actual, v))) return false;
+      if ('$exists' in expected) {
+        const exists = Array.isArray(actual) ? actual.length > 0 : actual !== undefined;
+        if (Boolean(expected.$exists) !== exists) return false;
+      }
+      if ('$type' in expected && expected.$type === 'string') {
+        const isString = Array.isArray(actual) ? actual.some(value => typeof value === 'string') : typeof actual === 'string';
+        if (!isString) return false;
+      }
       if ('$regex' in expected) {
         const re = new RegExp(String(expected.$regex), String(expected.$options ?? ''));
         if (!re.test(String(actual ?? ''))) return false;
@@ -78,12 +93,76 @@ function makeDb(seed: Record<string, Doc[]>): Db {
         async findOne(query: Doc = {}) {
           return rows.find((row) => matches(row, query)) ?? null;
         },
+        async bulkWrite() {
+          return {};
+        },
       };
     },
   } as unknown as Db;
 }
 
 describe('ExecutionService.getContext', () => {
+  it('hydrates running chat executions from persisted tool calls before the assistant turn completes', async () => {
+    const db = makeDb({
+      chat_messages: [
+        {
+          _id: new ObjectId('000000000000000000000111'),
+          sessionId: 'chat-1',
+          role: 'assistant',
+          status: 'streaming',
+          createdAt: new Date('2026-05-01T00:00:00Z'),
+          toolCalls: [
+            {
+              tool: 'spawn_agent',
+              result: {
+                execution_id: 'agent-live-1',
+                status: 'running',
+                agent_name: 'backend-developer',
+              },
+            },
+          ],
+        },
+      ],
+      executions: [
+        {
+          id: 'agent-live-1',
+          workflowName: 'chat:spawn_agent/backend-developer',
+          source: 'chat',
+          status: 'running',
+          input: { agent_name: 'backend-developer', prompt: 'Investigate refresh visibility' },
+          state: {},
+          currentNodes: ['backend-developer'],
+          completedNodes: [],
+          cost: { actual: null, estimated: 0 },
+          startedAt: new Date('2026-05-01T00:00:05Z'),
+          meta: {},
+        },
+      ],
+      execution_traces: [],
+      execution_logs: [],
+      agent_activity: [],
+      workflow_interventions: [],
+      workspaces: [],
+      ticket_assignments: [],
+      pull_requests: [],
+      artifacts: [],
+    });
+
+    const rows = await new ExecutionService(db).listForChatSession('chat-1');
+
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({
+      executionId: 'agent-live-1',
+      sourceMessageId: '000000000000000000000111',
+      status: 'running',
+      kind: 'agent',
+    });
+    expect((rows[0].runContext as any)?.chat).toMatchObject({
+      sessionId: 'chat-1',
+      parentMessageId: '000000000000000000000111',
+    });
+  });
+
   it('normalizes workflow progress, child agents, interventions, workspace, and artifacts', async () => {
     const workflowId = new ObjectId();
     const workspaceId = new ObjectId();

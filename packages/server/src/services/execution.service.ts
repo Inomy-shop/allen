@@ -311,6 +311,10 @@ export interface RunStatus {
   chat?: {
     sessionId?: string | null;
     parentMessageId?: string | null;
+    title?: string | null;
+    userId?: string | null;
+    userName?: string | null;
+    userEmail?: string | null;
   } | null;
   io?: {
     input?: string | null;
@@ -824,11 +828,14 @@ export class ExecutionService {
       new AgentActivityService(this.db).listForRef(id, { limit: 50 }).catch(() => []),
     ]);
 
-    const workspace = await this.findExecutionWorkspace(input, state, meta);
-    const assignment = await this.findExecutionAssignment(id, workspace, input, state, meta);
-    const pullRequest = await this.findExecutionPullRequest(id, workspace, input, state, meta, [row, ...traces, ...logs, ...activity]);
-    const artifacts = await this.findExecutionArtifacts(id, isAgentExecution, row, meta);
-    await this.captureChatDiffSnapshotIfReady(id, exec.status, workspace, meta).catch(() => {});
+    await this.attachChatMetadataFromMessages([row]);
+    const hydratedMeta = ((row.meta ?? {}) as Record<string, unknown>) ?? meta;
+    const chatSummary = await this.runChatSummary(input, hydratedMeta);
+    const workspace = await this.findExecutionWorkspace(input, state, hydratedMeta);
+    const assignment = await this.findExecutionAssignment(id, workspace, input, state, hydratedMeta);
+    const pullRequest = await this.findExecutionPullRequest(id, workspace, input, state, hydratedMeta, [row, ...traces, ...logs, ...activity]);
+    const artifacts = await this.findExecutionArtifacts(id, isAgentExecution, row, hydratedMeta);
+    await this.captureChatDiffSnapshotIfReady(id, exec.status, workspace, hydratedMeta).catch(() => {});
 
     const workflowSnapshot = (row.workflowSnapshot && typeof row.workflowSnapshot === 'object'
       ? row.workflowSnapshot
@@ -868,7 +875,7 @@ export class ExecutionService {
       ?? stringValue(input.prompt)
       ?? stringValue(input.task)
       ?? stringValue(input.request)
-      ?? stringValue(meta.requestText)
+      ?? stringValue(hydratedMeta.requestText)
       ?? null;
     const ioOutput =
       stringValue(traceOutput.response)
@@ -879,11 +886,15 @@ export class ExecutionService {
     return {
       origin,
       runType,
-      title: executionDisplayTitle(input, meta, workflowName),
+      title: executionDisplayTitle(input, hydratedMeta, workflowName),
       status: exec.status,
       chat: {
-        sessionId: stringValue(meta.chatSessionId) ?? null,
-        parentMessageId: stringValue(meta.parentMessageId) ?? null,
+        sessionId: stringValue(chatSummary?.sessionId) ?? stringValue(hydratedMeta.chatSessionId) ?? null,
+        parentMessageId: stringValue(hydratedMeta.parentMessageId) ?? null,
+        title: stringValue(chatSummary?.title) ?? null,
+        userId: stringValue(chatSummary?.userId) ?? stringValue(hydratedMeta.startedByUserId) ?? null,
+        userName: stringValue(chatSummary?.userName) ?? stringValue(hydratedMeta.startedByUserName) ?? null,
+        userEmail: stringValue(chatSummary?.userEmail) ?? stringValue(hydratedMeta.startedByUserEmail) ?? null,
       },
       io: {
         input: ioInput,
@@ -923,7 +934,7 @@ export class ExecutionService {
         required: exec.status === 'waiting_for_input',
         title: exec.status === 'waiting_for_input' ? 'Waiting for input' : undefined,
       },
-      linear: this.linearContext(assignment, input, state, meta),
+      linear: this.linearContext(assignment, input, state, hydratedMeta),
       workspace: workspace ? this.workspaceContext(workspace) : null,
       pullRequest: pullRequest ? this.pullRequestContext(pullRequest) : null,
       childAgents: directChildren.map((child) => this.childAgentContext(child)),
@@ -961,7 +972,7 @@ export class ExecutionService {
     }, { projection: { _id: 1 } });
     if (activeSibling) return;
 
-    const diff = await new WorkspaceManager(this.db).getDiff(workspaceId, { mode: 'auto' });
+    const diff = await new WorkspaceManager(this.db).getDiff(workspaceId, { mode: 'workspace' });
     const files = diff.files.filter(file => file.diff?.trim() || file.modifiedContent?.trim());
     if (files.length === 0) return;
 
@@ -1428,14 +1439,96 @@ export class ExecutionService {
     const workspace = await this.findExecutionWorkspace(input, state, meta);
     const assignment = id ? await this.findExecutionAssignment(id, workspace, input, state, meta) : null;
     const pullRequest = id ? await this.findExecutionPullRequest(id, workspace, input, state, meta, [item]) : null;
+    const chatSummary = await this.runChatSummary(input, meta);
 
     return {
       ...item,
       type: isAgentExecution ? 'agent' : 'workflow',
       origin: this.inferOrigin(item, assignment),
       title: this.executionTitle(workflowName, input, meta),
+      user: this.runUserSummary(meta, chatSummary),
+      chat: chatSummary,
       linear: this.linearContext(assignment, input, state, meta),
       pullRequest: pullRequest ? this.pullRequestContext(pullRequest) : null,
+    };
+  }
+
+  private runUserSummary(
+    meta: Record<string, unknown>,
+    chatSummary: Record<string, unknown> | null,
+  ): Record<string, unknown> | null {
+    const userId = stringValue(meta.startedByUserId) ?? stringValue(chatSummary?.userId);
+    const name = stringValue(meta.startedByUserName) ?? stringValue(chatSummary?.userName);
+    const email = stringValue(meta.startedByUserEmail) ?? stringValue(chatSummary?.userEmail);
+    if (!userId && !name && !email) return null;
+    return { userId: userId ?? null, name: name ?? null, email: email ?? null };
+  }
+
+  private async runChatSummary(
+    input: Record<string, unknown>,
+    meta: Record<string, unknown>,
+  ): Promise<Record<string, unknown> | null> {
+    const sessionId = stringValue(meta.chatSessionId)
+      ?? stringValue(input.chatSessionId)
+      ?? stringValue(input.sessionId)
+      ?? stringValue(input.chat_session_id);
+    if (!sessionId) return null;
+
+    let title: string | null = null;
+    let userId: string | null = stringValue(meta.startedByUserId) ?? null;
+    let userName: string | null = stringValue(meta.startedByUserName) ?? null;
+    let userEmail: string | null = stringValue(meta.startedByUserEmail) ?? null;
+
+    const session = ObjectId.isValid(sessionId)
+      ? await this.db.collection('chat_sessions').findOne(
+          { _id: new ObjectId(sessionId) },
+          {
+            projection: {
+              title: 1,
+              ownerUserId: 1,
+              ownerName: 1,
+              ownerEmail: 1,
+              source: 1,
+            },
+          },
+        ).catch(() => null)
+      : null;
+
+    if (session) {
+      title = stringValue(session.title) ?? null;
+      userId = userId ?? stringValue(session.ownerUserId) ?? null;
+      userName = userName ?? stringValue(session.ownerName) ?? null;
+      userEmail = userEmail ?? stringValue(session.ownerEmail) ?? null;
+    }
+
+    if ((!userId || !userName || !userEmail) && ObjectId.isValid(sessionId)) {
+      const firstUserMessage = await this.db.collection('chat_messages').findOne(
+        { sessionId, role: 'user' },
+        {
+          sort: { createdAt: 1 },
+          projection: { senderUserId: 1, senderName: 1, senderEmail: 1 },
+        },
+      ).catch(() => null);
+      userId = userId ?? stringValue(firstUserMessage?.senderUserId) ?? null;
+      userName = userName ?? stringValue(firstUserMessage?.senderName) ?? null;
+      userEmail = userEmail ?? stringValue(firstUserMessage?.senderEmail) ?? null;
+    }
+
+    if ((!userName || !userEmail) && userId && ObjectId.isValid(userId)) {
+      const user = await this.db.collection('users').findOne(
+        { _id: new ObjectId(userId) },
+        { projection: { name: 1, email: 1 } },
+      ).catch(() => null);
+      userName = userName ?? stringValue(user?.name) ?? null;
+      userEmail = userEmail ?? stringValue(user?.email) ?? null;
+    }
+
+    return {
+      sessionId,
+      title,
+      userId,
+      userName,
+      userEmail,
     };
   }
 
