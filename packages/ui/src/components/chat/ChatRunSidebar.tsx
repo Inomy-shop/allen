@@ -1847,7 +1847,9 @@ function FileChangesPanel({
 
       const workspaceGroups = await Promise.all(workspaceRefs.map(async ref => {
       try {
-        const result = await workspacesApi.getDiff(ref.id, { mode: ref.mode });
+        const result = await workspacesApi.getDiff(ref.id, rootType === 'chat'
+          ? { mode: ref.mode, anchor: 'creation' }
+          : { mode: ref.mode });
         return ((result.files ?? []) as Array<Omit<PanelDiffFile, 'workspaceId' | 'workspaceName'>>)
           .filter(file => file.diff?.trim() || file.modifiedContent?.trim())
           .map(file => ({ ...file, workspaceId: ref.id, workspaceName: ref.name }));

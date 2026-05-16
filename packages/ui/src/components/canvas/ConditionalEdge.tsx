@@ -27,7 +27,7 @@ function routeMidpoint(points: RoutePoint[]): RoutePoint | null {
 }
 
 function formatConditionLabel(value: unknown): string {
-  return String(value)
+  const normalized = String(value)
     .replace(/\s+/g, ' ')
     .replace(/\b&&\b|&&/g, ' and ')
     .replace(/\b\|\|\b|\|\|/g, ' or ')
@@ -40,14 +40,21 @@ function formatConditionLabel(value: unknown): string {
     .replace(/\s+/g, ' ')
     .replace(/["']/g, '')
     .trim();
+  return normalized
+    .replace(/^([a-zA-Z0-9_.]+)\s+is\s+/i, '')
+    .replace(/^([a-zA-Z0-9_.]+)\s+is not\s+/i, 'not ')
+    .replace(/\btrue\b/i, 'yes')
+    .replace(/\bfalse\b/i, 'no')
+    .replace(/\s+/g, ' ')
+    .trim();
 }
 
 function shortConditionLabel(value: unknown): string {
   const formatted = formatConditionLabel(value);
-  if (formatted.length <= 46) return formatted;
+  if (formatted.length <= 34) return formatted;
   const parts = formatted.split(/\s+(and|or)\s+/i);
-  if (parts[0] && parts[0].length <= 42) return `${parts[0]} + more`;
-  return `${formatted.slice(0, 43).trim()}...`;
+  if (parts[0] && parts[0].length <= 30) return `${parts[0]} + more`;
+  return `${formatted.slice(0, 31).trim()}...`;
 }
 
 export default function ConditionalEdge(props: EdgeProps) {
@@ -107,14 +114,14 @@ export default function ConditionalEdge(props: EdgeProps) {
       </defs>
       {label && (
         <foreignObject
-          x={labelX - 120} y={labelY - 18}
-          width={240} height={38}
+          x={labelX - 110} y={labelY - 16}
+          width={220} height={34}
           className="overflow-visible"
         >
           <div className="flex items-center justify-center">
             <span
               title={fullLabelText}
-              className="max-w-[220px] rounded-md border border-accent-blue/35 bg-app-card/95 px-2.5 py-1 text-center font-mono text-[10.5px] leading-snug text-theme-primary shadow-popover ring-1 ring-black/20 backdrop-blur-sm transition-all hover:max-w-[360px] hover:border-accent-blue hover:bg-app-card hover:text-theme-primary"
+              className="max-w-[200px] rounded border border-app-strong bg-app-card px-2 py-0.5 text-center font-mono text-[10px] font-semibold leading-tight text-theme-primary shadow-sm ring-1 ring-white/70 transition-all hover:max-w-[340px] hover:border-accent hover:bg-app-card"
             >
               {labelText}
             </span>

@@ -5498,6 +5498,30 @@
     box-shadow: 0 24px 80px rgb(0 0 0 / 0.28);
   }
 
+  /* Keep incoming and outgoing workflow handles visually distinct.
+     Nodes expose both source and target handles on each side; without
+     offsets, the two dots sit on the exact same point and make edge
+     direction hard to read. */
+  .react-flow__node .react-flow__handle.react-flow__handle-target.react-flow__handle-top,
+  .react-flow__node .react-flow__handle.react-flow__handle-target.react-flow__handle-bottom {
+    left: 42%;
+  }
+
+  .react-flow__node .react-flow__handle.react-flow__handle-source.react-flow__handle-top,
+  .react-flow__node .react-flow__handle.react-flow__handle-source.react-flow__handle-bottom {
+    left: 58%;
+  }
+
+  .react-flow__node .react-flow__handle.react-flow__handle-target.react-flow__handle-left,
+  .react-flow__node .react-flow__handle.react-flow__handle-target.react-flow__handle-right {
+    top: 42%;
+  }
+
+  .react-flow__node .react-flow__handle.react-flow__handle-source.react-flow__handle-left,
+  .react-flow__node .react-flow__handle.react-flow__handle-source.react-flow__handle-right {
+    top: 58%;
+  }
+
   .cr-steps {
     display: flex;
     flex-direction: column;

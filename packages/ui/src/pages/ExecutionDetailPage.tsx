@@ -4,7 +4,7 @@ import {
   ArrowLeft, X, XCircle, Pause, Play, RefreshCw, Wifi, WifiOff,
   Download, RotateCcw, Brain, Bot, Clock, DollarSign, Terminal,
   CheckCircle, AlertCircle, Wrench, ChevronDown, ChevronRight,
-  ArrowRight, AlertTriangle, Save, BarChart2, Activity,
+  ArrowRight, AlertTriangle, Save, Activity,
   MessageSquare, FileText, FolderGit2, GitPullRequest, ExternalLink,
 } from 'lucide-react';
 import { useExecution, type TimelineEvent, type NodeState } from '../hooks/useExecution';
@@ -12,17 +12,17 @@ import { useResizable } from '../hooks/useResizable';
 import { executions as api, authHeaders, interventions as interventionsApi, type RunStatus } from '../services/api';
 import StatusBadge from '../components/common/StatusBadge';
 import CostDisplay from '../components/common/CostDisplay';
+import Select from '../components/common/Select';
 import { renderMarkdown } from '../components/chat/ChatMessageList';
 import LiveGraph from '../components/execution/LiveGraph';
 import Timeline from '../components/execution/Timeline';
 import NodeDetail from '../components/execution/NodeDetail';
-import CheckpointsDrawer from '../components/execution/CheckpointsDrawer';
 import ArtifactsDrawer from '../components/artifacts/ArtifactsDrawer';
 import { artifacts as artifactsApi } from '../services/api';
-import TimelineDrawer from '../components/execution/TimelineDrawer';
+import GanttTimeline from '../components/execution/GanttTimeline';
 import StateChangesDrawer from '../components/execution/StateChangesDrawer';
 import HumanInputDialog from '../components/execution/HumanInputDialog';
-import WorkflowFeedbackDrawer from '../components/execution/WorkflowFeedbackDrawer';
+import RunControlsDrawer from '../components/execution/RunControlsDrawer';
 import { ToolCallLog, type ToolCall } from '../components/common/ToolCallLog';
 import { buildTracesForTimeline } from '../utils/executionState';
 
@@ -168,6 +168,262 @@ function ExecutionApprovalModal({
               <ChevronRight className="h-3.5 w-3.5" />
             </button>
           </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function WorkflowTraceTable({
+  nodeStates,
+  traces,
+  selectedNode,
+  onSelectNode,
+}: {
+  nodeStates: Map<string, NodeState>;
+  traces: any[];
+  selectedNode: string | null;
+  onSelectNode: (node: string) => void;
+}) {
+  return (
+    <div className="h-full overflow-auto bg-app-card">
+      <table className="w-full text-xs font-body">
+        <thead className="sticky top-0 z-10">
+          <tr className="bg-app-muted overline border-b border-app">
+            <th className="text-left px-4 py-2 font-medium">Node</th>
+            <th className="text-left px-4 py-2 font-medium">Status</th>
+            <th className="text-left px-4 py-2 font-medium">Attempt</th>
+            <th className="text-left px-4 py-2 font-medium">Duration</th>
+            <th className="text-left px-4 py-2 font-medium">Cost</th>
+          </tr>
+        </thead>
+        <tbody>
+          {Array.from(nodeStates.entries()).map(([name, state]) => {
+            const nodeTraces = traces.filter((t: any) => t.node === name);
+            const dedupMap = new Map<number, any>();
+            for (const t of nodeTraces) dedupMap.set(t.attempt, t);
+            const deduped = Array.from(dedupMap.values());
+
+            let totalCost = state.cost;
+            let totalDuration = state.durationMs;
+
+            if (deduped.length > 1) {
+              let est = 0; let act: number | null = null; let dur = 0;
+              for (const t of deduped) {
+                est += t.cost?.estimated ?? 0;
+                if (t.cost?.actual != null) act = (act ?? 0) + t.cost.actual;
+                dur += t.durationMs ?? 0;
+              }
+              if (est > 0 || act != null) totalCost = { estimated: est, actual: act };
+              if (dur > 0) totalDuration = dur;
+            }
+
+            return (
+              <tr
+                key={name}
+                onClick={() => onSelectNode(name)}
+                className={`cursor-pointer border-b border-app/60 transition-colors hover:bg-accent-blue/5 ${
+                  selectedNode === name ? 'bg-accent-blue/10' : ''
+                }`}
+              >
+                <td className="px-4 py-2 font-mono text-theme-primary">{name}</td>
+                <td className="px-4 py-2"><StatusBadge status={state.status} /></td>
+                <td className="px-4 py-2 text-theme-secondary tabular-nums font-mono">{state.attempt}</td>
+                <td className="px-4 py-2 text-theme-secondary tabular-nums font-mono">
+                  {totalDuration != null ? formatDuration(totalDuration) : '-'}
+                </td>
+                <td className="px-4 py-2"><CostDisplay cost={totalCost} /></td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+function ExecutionLogsOverlay({
+  open,
+  executionId,
+  logs,
+  logFilter,
+  workflowNodes,
+  traces,
+  onClose,
+  onNodeFilterChange,
+}: {
+  open: boolean;
+  executionId: string;
+  logs: any[];
+  logFilter: string | null;
+  workflowNodes: string[];
+  traces: any[];
+  onClose: () => void;
+  onNodeFilterChange: (node: string | null) => void;
+}) {
+  const [pageSize, setPageSize] = useState(50);
+  const [offset, setOffset] = useState(0);
+  const [page, setPage] = useState<{ items: any[]; limit: number; offset: number; hasMore: boolean } | null>(null);
+  const [loadingPage, setLoadingPage] = useState(false);
+  const [pageError, setPageError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    setOffset(0);
+    setPage(null);
+    setPageError(null);
+  }, [open, executionId, pageSize]);
+
+  useEffect(() => {
+    if (!open || !executionId) return;
+    let cancelled = false;
+    setLoadingPage(true);
+    setPageError(null);
+    api.logsPage(executionId, {
+      limit: pageSize,
+      offset,
+      include_descendants: true,
+    })
+      .then((result) => {
+        if (cancelled) return;
+        setPage({
+          ...result,
+          items: result.items.map((log: any) => ({
+            ...log,
+            timestamp: new Date(log.timestamp),
+          })),
+        });
+      })
+      .catch((err) => {
+        if (!cancelled) setPageError(err instanceof Error ? err.message : 'Failed to load logs');
+      })
+      .finally(() => {
+        if (!cancelled) setLoadingPage(false);
+      });
+    return () => { cancelled = true; };
+  }, [open, executionId, offset, pageSize]);
+
+  const isLatestPage = (page?.offset ?? offset) === 0;
+  const visibleLogs = useMemo(() => {
+    const history = page?.items ?? [];
+    const liveLogs = isLatestPage ? logs : [];
+    const seen = new Set<string>();
+    const merged: any[] = [];
+    const key = (log: any) => {
+      const ts = log.timestamp instanceof Date ? log.timestamp.getTime() : new Date(log.timestamp).getTime();
+      const id = log._id ? String(log._id) : '';
+      return id || `${log.executionId ?? executionId}|${ts}|${log.category ?? ''}|${log.node ?? ''}|${log.message ?? ''}`;
+    };
+    for (const log of [...history, ...liveLogs]) {
+      const k = key(log);
+      if (seen.has(k)) continue;
+      seen.add(k);
+      merged.push({
+        ...log,
+        timestamp: log.timestamp instanceof Date ? log.timestamp : new Date(log.timestamp),
+      });
+    }
+    merged.sort((a, b) => a.timestamp.getTime() - b.timestamp.getTime());
+    return merged;
+  }, [executionId, isLatestPage, logs, page]);
+
+  const pageOffset = page?.offset ?? offset;
+  const currentPage = Math.floor(pageOffset / pageSize) + 1;
+  const pageStart = pageOffset + 1;
+  const pageEnd = pageOffset + (page?.items.length ?? visibleLogs.length);
+  const canPrevPage = pageOffset > 0 && !loadingPage;
+  const canNextPage = Boolean(page?.hasMore) && !loadingPage;
+  const pageNumbers = (() => {
+    const nums = new Set<number>([1, currentPage]);
+    if (currentPage > 1) nums.add(currentPage - 1);
+    if (page?.hasMore) nums.add(currentPage + 1);
+    return [...nums].filter(n => n >= 1).sort((a, b) => a - b);
+  })();
+
+  if (!open) return null;
+  return (
+    <div className="fixed inset-0 z-50 bg-black/30 p-6" role="dialog" aria-modal="true" aria-label="Execution logs">
+      <button className="absolute inset-0" type="button" onClick={onClose} aria-label="Close logs" />
+      <div className="relative ml-auto flex h-full w-[min(860px,calc(100vw-48px))] flex-col overflow-hidden rounded-lg border border-app-strong bg-app-card shadow-2xl">
+        <div className="flex items-center justify-between gap-3 border-b border-app px-4 py-3">
+          <div>
+            <div className="text-[13px] font-semibold text-theme-primary">Logs</div>
+            <div className="font-mono text-[10px] text-theme-muted">
+              {loadingPage && !page ? 'Loading history...' : `Page ${currentPage} · rows ${pageStart}-${pageEnd} from latest`}
+              {isLatestPage && logs.length > 0 ? ' · live tail merged' : ''}
+            </div>
+          </div>
+          <div className="ml-auto flex items-center gap-2">
+            <Select
+              value={String(pageSize)}
+              onChange={(value) => setPageSize(Number(value))}
+              options={[
+                { value: '50', label: '50/page' },
+                { value: '100', label: '100/page' },
+                { value: '250', label: '250/page' },
+                { value: '500', label: '500/page' },
+              ]}
+              className="w-28"
+            />
+            <button
+              type="button"
+              disabled={!canPrevPage}
+              onClick={() => setOffset(Math.max(offset - pageSize, 0))}
+              className="btn-ghost text-[10px] disabled:opacity-40"
+              title="Previous page"
+            >
+              Prev
+            </button>
+            {pageNumbers.map((pageNumber, index) => {
+              const prevNumber = pageNumbers[index - 1];
+              const showGap = prevNumber != null && pageNumber - prevNumber > 1;
+              const active = pageNumber === currentPage;
+              return (
+                <span key={pageNumber} className="inline-flex items-center gap-1">
+                  {showGap && <span className="font-mono text-[10px] text-theme-subtle">...</span>}
+                  <button
+                    type="button"
+                    disabled={loadingPage || active}
+                    onClick={() => setOffset((pageNumber - 1) * pageSize)}
+                    className={`rounded px-2 py-1 font-mono text-[10px] transition-colors disabled:cursor-default ${
+                      active
+                        ? 'bg-accent-soft text-accent'
+                        : 'text-theme-muted hover:bg-app-muted hover:text-theme-primary disabled:opacity-40'
+                    }`}
+                    title={pageNumber === 1 ? 'Latest page' : `Page ${pageNumber}`}
+                  >
+                    {pageNumber}
+                  </button>
+                </span>
+              );
+            })}
+            <button
+              type="button"
+              disabled={!canNextPage}
+              onClick={() => setOffset(offset + pageSize)}
+              className="btn-ghost text-[10px] disabled:opacity-40"
+              title="Next page"
+            >
+              Next
+            </button>
+          </div>
+          <button type="button" onClick={onClose} className="rounded p-1.5 text-theme-muted hover:bg-app-muted hover:text-theme-primary" aria-label="Close logs">
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+        {pageError && (
+          <div className="border-b border-accent-red/30 bg-accent-red/10 px-4 py-2 font-mono text-[11px] text-accent-red">
+            {pageError}
+          </div>
+        )}
+        <div className="min-h-0 flex-1">
+          <Timeline
+            logs={visibleLogs}
+            nodeFilter={logFilter}
+            onNodeFilterChange={onNodeFilterChange}
+            workflowNodes={workflowNodes}
+            traces={traces}
+          />
         </div>
       </div>
     </div>
@@ -323,6 +579,94 @@ function LogRow({ log, toolCall }: { log: any; toolCall?: ToolCall }) {
           })()}
         </div>
       )}
+    </div>
+  );
+}
+
+function resolveToolCallForLog(log: any, toolCalls: ToolCall[]): ToolCall | undefined {
+  const byUseId = new Map<string, ToolCall>();
+  const byTool = new Map<string, ToolCall[]>();
+  for (const tc of toolCalls) {
+    if (tc.toolUseId) byUseId.set(tc.toolUseId, tc);
+    const arr = byTool.get(tc.tool) ?? [];
+    arr.push(tc);
+    byTool.set(tc.tool, arr);
+  }
+  if (log.toolUseId && byUseId.has(log.toolUseId)) return byUseId.get(log.toolUseId);
+  if (!log.tool) return undefined;
+  const candidates = byTool.get(log.tool) ?? [];
+  if (candidates.length === 0) return undefined;
+  if (!log.timestamp) return candidates[0];
+  const logTs = new Date(log.timestamp).getTime();
+  let best: ToolCall | undefined;
+  let bestDelta = Infinity;
+  for (const candidate of candidates) {
+    const delta = Math.abs(new Date(candidate.startedAt).getTime() - logTs);
+    if (delta < bestDelta) {
+      best = candidate;
+      bestDelta = delta;
+    }
+  }
+  return bestDelta <= 5000 ? best : undefined;
+}
+
+function AgentLogsDrawer({
+  open,
+  onClose,
+  logs,
+  toolCalls,
+  executionStatus,
+}: {
+  open: boolean;
+  onClose: () => void;
+  logs: any[];
+  toolCalls: ToolCall[];
+  executionStatus: string;
+}) {
+  useEffect(() => {
+    if (!open) return;
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
+    window.addEventListener('keydown', onKey);
+    return () => {
+      document.body.style.overflow = prev;
+      window.removeEventListener('keydown', onKey);
+    };
+  }, [open, onClose]);
+
+  if (!open) return null;
+  return (
+    <div className="fixed inset-0 z-50 bg-black/30 p-6" role="dialog" aria-modal="true" aria-label="Agent logs">
+      <button className="absolute inset-0" type="button" onClick={onClose} aria-label="Close logs" />
+      <aside
+        className="relative ml-auto flex h-full w-[min(860px,calc(100vw-48px))] flex-col overflow-hidden rounded-lg border border-app-strong bg-app-card shadow-2xl"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="flex items-center justify-between gap-3 border-b border-app px-4 py-3">
+          <div>
+            <div className="text-[13px] font-semibold text-theme-primary">Logs</div>
+            <div className="font-mono text-[10px] text-theme-muted">
+              {logs.length} entries
+              {executionStatus === 'running' ? ' · live tail' : ''}
+            </div>
+          </div>
+          <button type="button" onClick={onClose} className="rounded p-1.5 text-theme-muted hover:bg-app-muted hover:text-theme-primary" aria-label="Close logs">
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+        <div className="min-h-0 flex-1 overflow-y-auto bg-[rgb(var(--color-editor-background))] p-4">
+          {logs.length === 0 && executionStatus === 'running' && (
+            <div className="text-xs text-theme-subtle font-mono py-3 animate-pulse">Waiting for activity...</div>
+          )}
+          {logs.length === 0 && executionStatus !== 'running' && (
+            <div className="text-xs text-theme-muted font-mono">No logs captured for this run.</div>
+          )}
+          {logs.map((log: any, index: number) => (
+            <LogRow key={index} log={log} toolCall={resolveToolCallForLog(log, toolCalls)} />
+          ))}
+        </div>
+      </aside>
     </div>
   );
 }
@@ -543,6 +887,44 @@ function RunContextPanel({
 
 // ── Agent Execution View (single-node) ──
 
+function AgentResourceCard({
+  icon,
+  label,
+  title,
+  subtitle,
+  href,
+  external,
+}: {
+  icon: React.ReactNode;
+  label: string;
+  title: React.ReactNode;
+  subtitle?: React.ReactNode;
+  href?: string;
+  external?: boolean;
+}) {
+  const content = (
+    <div className="inline-flex max-w-full items-center gap-2 rounded-md px-2 py-1.5 text-theme-muted transition-colors hover:bg-app-muted hover:text-theme-primary">
+      <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded border border-app bg-app-card">
+        {icon}
+      </span>
+      <div className="min-w-0">
+        <div className="flex items-center gap-2 min-w-0">
+          <span className="shrink-0 font-mono text-[9px] uppercase tracking-[0.08em] text-theme-subtle">{label}</span>
+          <span className="truncate text-[12px] font-medium text-theme-primary">{title}</span>
+        </div>
+        {subtitle && <div className="truncate font-mono text-[10px] text-theme-muted">{subtitle}</div>}
+      </div>
+      {href && <ExternalLink className="h-3 w-3 shrink-0 text-theme-subtle" />}
+    </div>
+  );
+  if (!href) return content;
+  return (
+    <a href={href} target={external ? '_blank' : undefined} rel={external ? 'noopener noreferrer' : undefined}>
+      {content}
+    </a>
+  );
+}
+
 function AgentExecutionView({ execution, agentName, traces, id, liveToolCalls, refresh, runContext }: {
   execution: any; agentName: string; traces: any[]; id: string; liveToolCalls?: any[]; refresh: () => void; runContext?: RunStatus | null;
 }) {
@@ -564,13 +946,12 @@ function AgentExecutionView({ execution, agentName, traces, id, liveToolCalls, r
   const navigate = useNavigate();
   const [showPrompt, setShowPrompt] = useState(false);
   const [showResponse, setShowResponse] = useState(true);
-  const [showLogs, setShowLogs] = useState(true);
   const [liveLogs, setLiveLogs] = useState<any[]>([]);
   const [resumeOpen, setResumeOpen] = useState(false);
   const [resumePrompt, setResumePrompt] = useState('');
   const [resumeBusy, setResumeBusy] = useState(false);
   const [agentArtifactsOpen, setAgentArtifactsOpen] = useState(false);
-  const logsEndRef = useRef<HTMLDivElement>(null);
+  const [agentLogsOpen, setAgentLogsOpen] = useState(false);
 
   const prompt = trace?.renderedPrompt ?? execution.input?.prompt ?? '';
   const response = trace?.rawResponse ?? '';
@@ -727,11 +1108,6 @@ function AgentExecutionView({ execution, agentName, traces, id, liveToolCalls, r
     return logs.sort((a, b) => new Date(a.timestamp || 0).getTime() - new Date(b.timestamp || 0).getTime());
   })();
 
-  // Auto-scroll logs
-  useEffect(() => {
-    logsEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [allLogs.length]);
-
   return (
     <div className="flex flex-col h-full">
       {/* Header — agent execution variant */}
@@ -758,8 +1134,20 @@ function AgentExecutionView({ execution, agentName, traces, id, liveToolCalls, r
               </span>
             )}
             <CostDisplay cost={cost} />
+            <span className="hidden md:inline text-[12px] text-theme-muted font-mono">
+              {meta.model ?? cost.model ?? 'sonnet'} · {meta.provider ?? 'claude'}
+            </span>
           </div>
           <div className="flex items-center gap-2">
+            <button
+              onClick={() => setAgentLogsOpen(true)}
+              className="btn btn-secondary btn-sm"
+              title="View execution logs"
+            >
+              <Activity className="w-3.5 h-3.5" />
+              Logs
+              {allLogs.length > 0 && <span className="ml-0.5 text-[10px] font-mono opacity-70">{allLogs.length}</span>}
+            </button>
             <button
               onClick={() => setAgentArtifactsOpen(true)}
               className="btn btn-secondary btn-sm"
@@ -825,58 +1213,52 @@ function AgentExecutionView({ execution, agentName, traces, id, liveToolCalls, r
 
       {/* Content */}
       <div className="flex-1 overflow-y-auto p-6 space-y-4">
-        {/* Metadata cards — 2 rows */}
-        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-          <div className="card p-3">
-            <span className="overline">Status</span>
-            <div className="mt-1"><StatusBadge status={execution.status} /></div>
-          </div>
-          <div className="card p-3">
-            <span className="overline">Duration</span>
-            <div className="mt-1 text-sm text-theme-primary font-mono">{durationMs > 0 ? `${formatDuration(durationMs)}` : execution.status === 'running' ? '...' : '—'}</div>
-          </div>
-          <div className="card p-3">
-            <span className="overline">Cost</span>
-            <div className="mt-1 text-sm text-theme-primary font-mono">${(cost.actual ?? cost.estimated ?? 0).toFixed(4)}</div>
-          </div>
-          <div className="card p-3">
-            <span className="overline">Model</span>
-            <div className="mt-1 text-sm text-theme-primary font-mono">{meta.model ?? cost.model ?? 'sonnet'}</div>
-          </div>
-          <div className="card p-3">
-            <span className="overline">Provider</span>
-            <div className="mt-1 text-sm text-theme-primary font-mono">{meta.provider ?? 'claude'}</div>
-          </div>
-          <div className="card p-3">
-            <span className="overline">Spawned By</span>
-            <div className="mt-1 text-sm text-theme-primary font-mono">{meta.spawnedBy ?? 'user'}</div>
-          </div>
-          <div className="card p-3 col-span-2">
-            <span className="overline">Working Directory</span>
-            <div className="mt-1 text-xs text-accent font-mono truncate" title={meta.cwd ?? execution.input?.repo_path}>{meta.cwd ?? execution.input?.repo_path ?? '/tmp'}</div>
-          </div>
-        </div>
-
-        {runContext && (
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-            <div className="card p-3">
+        <section className="flex flex-wrap items-center gap-x-3 gap-y-2 border-b border-app pb-3">
+          {runContext?.progress?.phase && (
+            <span className="inline-flex items-center gap-1.5 font-mono text-[11px] text-theme-muted">
               <span className="overline">Phase</span>
-              <div className="mt-1 text-sm text-theme-primary font-mono capitalize">{phaseLabel(runContext.progress.phase)}</div>
-            </div>
-            <div className="card p-3">
-              <span className="overline">Workspace</span>
-              <div className="mt-1 text-sm text-theme-primary font-mono truncate">
-                {runContext.workspace?.branch ?? runContext.workspace?.name ?? 'none'}
-              </div>
-            </div>
-            <div className="card p-3">
-              <span className="overline">Human Input</span>
-              <div className={`mt-1 text-sm font-mono ${runContext.humanInput.required ? 'text-accent-yellow' : 'text-theme-primary'}`}>
-                {runContext.humanInput.required ? 'required' : 'none'}
-              </div>
-            </div>
-          </div>
-        )}
+              <span className="text-theme-primary">{phaseLabel(runContext.progress.phase)}</span>
+            </span>
+          )}
+          {runContext?.humanInput?.required && (
+            <span className="inline-flex items-center gap-1.5 rounded bg-accent-yellow/10 px-2 py-1 font-mono text-[11px] text-accent-yellow">
+              <AlertTriangle className="h-3 w-3" />
+              input required
+            </span>
+          )}
+          {runContext?.pullRequest && (
+            <AgentResourceCard
+              icon={<GitPullRequest className="w-3.5 h-3.5" />}
+              label="PR"
+              title={runContext.pullRequest.number ? `#${runContext.pullRequest.number}` : runContext.pullRequest.title ?? 'pull request'}
+              subtitle={runContext.pullRequest.status ?? undefined}
+              href={runContext.pullRequest.url ?? undefined}
+              external
+            />
+          )}
+          {runContext?.workspace && (
+            <AgentResourceCard
+              icon={<FolderGit2 className="w-3.5 h-3.5" />}
+              label="Workspace"
+              title={runContext.workspace.branch ?? runContext.workspace.name ?? 'workspace'}
+              subtitle={runContext.workspace.repoName ?? undefined}
+              href={runContext.workspace.id ? `/workspaces/${runContext.workspace.id}` : undefined}
+            />
+          )}
+          <AgentResourceCard
+            icon={<Terminal className="w-3.5 h-3.5" />}
+            label="CWD"
+            title={meta.cwd ?? execution.input?.repo_path ?? '/tmp'}
+          />
+          {meta.chatSessionId && (
+            <AgentResourceCard
+              icon={<MessageSquare className="w-3.5 h-3.5" />}
+              label="Chat"
+              title="open conversation"
+              href={`/chat/${meta.chatSessionId}`}
+            />
+          )}
+        </section>
 
         {/* Attempt tabs — shown when the agent has been resumed at least once.
             Each tab switches which trace (rawResponse / toolCalls / cost /
@@ -905,60 +1287,6 @@ function AgentExecutionView({ execution, agentName, traces, id, liveToolCalls, r
             })}
           </div>
         )}
-
-        {/* Live Logs — shown by default for running, togglable for completed */}
-        <div className="card overflow-hidden">
-          <button title="Toggle logs" onClick={() => setShowLogs(!showLogs)} className="w-full flex items-center gap-2 px-4 py-3 hover:bg-app-muted/50 transition-colors text-left">
-            {showLogs ? <ChevronDown className="w-4 h-4 text-theme-muted" /> : <ChevronRight className="w-4 h-4 text-theme-muted" />}
-            <Terminal className="w-4 h-4 text-accent-cyan" />
-            <span className="overline text-[12px]">Live Logs</span>
-            <span className="text-[10px] text-theme-subtle font-mono ml-auto">{allLogs.length} entries</span>
-            {execution.status === 'running' && <span className="w-1.5 h-1.5 rounded-full bg-blue-400 animate-pulse" />}
-          </button>
-          {showLogs && (
-            <div className="px-4 pb-4 border-t border-app max-h-[50vh] overflow-y-auto bg-[rgb(var(--color-editor-background))] rounded-b">
-              {allLogs.length === 0 && execution.status === 'running' && (
-                <div className="text-xs text-theme-subtle font-mono py-3 animate-pulse">Waiting for activity...</div>
-              )}
-              {(() => {
-                // Build two lookups so tool log rows can resolve to their
-                // full ToolCallRecord (with args + result):
-                //   - byUseId: exact match (the common case — both the log
-                //     emitter and the trace store carry toolUseId).
-                //   - byToolNearestTs: fallback — match by tool name and
-                //     the closest startedAt within ±5s.
-                const byUseId = new Map<string, ToolCall>();
-                const byTool = new Map<string, ToolCall[]>();
-                for (const tc of toolCalls as ToolCall[]) {
-                  if (tc.toolUseId) byUseId.set(tc.toolUseId, tc);
-                  const arr = byTool.get(tc.tool) ?? [];
-                  arr.push(tc);
-                  byTool.set(tc.tool, arr);
-                }
-                const resolve = (log: any): ToolCall | undefined => {
-                  if (log.toolUseId && byUseId.has(log.toolUseId)) return byUseId.get(log.toolUseId);
-                  if (log.tool) {
-                    const candidates = byTool.get(log.tool) ?? [];
-                    if (candidates.length === 0) return undefined;
-                    if (!log.timestamp) return candidates[0];
-                    const logTs = new Date(log.timestamp).getTime();
-                    let best: ToolCall | undefined; let bestDelta = Infinity;
-                    for (const c of candidates) {
-                      const d = Math.abs(new Date(c.startedAt).getTime() - logTs);
-                      if (d < bestDelta) { best = c; bestDelta = d; }
-                    }
-                    return bestDelta <= 5000 ? best : undefined;
-                  }
-                  return undefined;
-                };
-                return allLogs.map((log: any, i: number) => (
-                  <LogRow key={i} log={log} toolCall={resolve(log)} />
-                ));
-              })()}
-              <div ref={logsEndRef} />
-            </div>
-          )}
-        </div>
 
         {/* Prompt */}
         <div className="card overflow-hidden">
@@ -1006,6 +1334,14 @@ function AgentExecutionView({ execution, agentName, traces, id, liveToolCalls, r
         </div>
       </div>
 
+      <AgentLogsDrawer
+        open={agentLogsOpen}
+        onClose={() => setAgentLogsOpen(false)}
+        logs={allLogs}
+        toolCalls={toolCalls as ToolCall[]}
+        executionStatus={execution.status}
+      />
+
       {/* Artifacts drawer — standalone agent runs are their OWN root. If
           this run was spawned by a chat or workflow, its artifacts are
           filed under that parent instead and would show up empty here. */}
@@ -1041,26 +1377,19 @@ export default function ExecutionDetailPage() {
     else next.delete('node');
     setSearchParams(next, { replace: true });
   };
-  // Interventions for this workflow run — drives the pending-intervention
-  // banner and the interventions sidebar. The dedicated InterventionsPage
-  // is where users actually take action; this page just shows awareness.
+  // Interventions for this workflow run — drives the pending approval action
+  // in the header while keeping the execution canvas focused.
   const [runInterventions, setRunInterventions] = useState<any[]>([]);
-  // Checkpoints drawer — opens from a button in the top toolbar. Badge
-  // shows the count so users know whether there's anything to look at
-  // before clicking.
-  const [checkpointsOpen, setCheckpointsOpen] = useState(false);
-  const [feedbackOpen, setFeedbackOpen] = useState(false);
-  const [timelineOpen, setTimelineOpen] = useState(false);
+  const [runControlsOpen, setRunControlsOpen] = useState(false);
   const [stateChangesOpen, setStateChangesOpen] = useState(false);
+  const [logsOpen, setLogsOpen] = useState(false);
+  const [mainView, setMainView] = useState<'graph' | 'trace'>('trace');
+  const [traceTimelineOpen, setTraceTimelineOpen] = useState(false);
   const [checkpointCount, setCheckpointCount] = useState<number | null>(null);
   const [artifactsOpen, setArtifactsOpen] = useState(false);
   const [artifactCount, setArtifactCount] = useState<number | null>(null);
   const [runContext, setRunContext] = useState<RunStatus | null>(null);
   const [feedbackEntries, setFeedbackEntries] = useState<Array<{ id: string; content: string; targetNodes?: string[]; createdAt: string; createdBy?: string }>>([]);
-  const [feedbackText, setFeedbackText] = useState('');
-  const [feedbackTargetNodes, setFeedbackTargetNodes] = useState<string[]>([]);
-  const [feedbackBusy, setFeedbackBusy] = useState(false);
-  const [feedbackError, setFeedbackError] = useState<string | null>(null);
   const [approvalModalOpen, setApprovalModalOpen] = useState(false);
 
   // Input dialog is dismissible — user can close it to look at nodes/logs
@@ -1222,8 +1551,6 @@ export default function ExecutionDetailPage() {
   }, [execution?.status, execution?.failedNode, execution?.completedNodes, execution?.currentNodes, latestInputEvent, nodeStates]);
 
   const { size: rightWidth, handleMouseDown: rightResizeStart } = useResizable({ direction: 'horizontal', initialSize: 40, minSize: 20, maxSize: 60, unit: 'percent' });
-  const { size: bottomHeight, handleMouseDown: bottomResizeStart } = useResizable({ direction: 'vertical', initialSize: 200, minSize: 120, maxSize: 500 });
-  const { size: logsPct, handleMouseDown: logsResizeStart } = useResizable({ direction: 'horizontal', initialSize: 60, minSize: 25, maxSize: 85, side: 'start', unit: 'percent' });
 
   const handleCancel = useCallback(async () => {
     if (id) await api.cancel(id);
@@ -1273,25 +1600,6 @@ export default function ExecutionDetailPage() {
   }, [id, refresh]);
 
   const canAppendFeedback = ['completed', 'failed', 'cancelled'].includes(execution?.status);
-  const handleAppendFeedback = useCallback(async () => {
-    if (!id) return;
-    const trimmed = feedbackText.trim();
-    if (!trimmed) return;
-    setFeedbackBusy(true);
-    setFeedbackError(null);
-    try {
-      const targets = feedbackTargetNodes.length > 0 ? feedbackTargetNodes : undefined;
-      const entry = await api.feedback.create(id, trimmed, targets);
-      setFeedbackEntries((prev) => [...prev, entry]);
-      setFeedbackText('');
-      setFeedbackTargetNodes([]);
-      refresh();
-    } catch (err) {
-      setFeedbackError((err as Error).message);
-    } finally {
-      setFeedbackBusy(false);
-    }
-  }, [id, feedbackText, feedbackTargetNodes, refresh]);
 
   const handleExportTraces = useCallback(async () => {
     if (!id) return;
@@ -1398,6 +1706,14 @@ export default function ExecutionDetailPage() {
   const agentNodeNames = Object.entries((workflow?.parsed?.nodes ?? workflow?.nodes ?? {}) as Record<string, any>)
     .filter(([, nodeDef]) => ((nodeDef as any)?.type ?? 'agent') === 'agent')
     .map(([name]) => name);
+  const pullRequestUrl = runContext?.pullRequest?.url ?? runContext?.workspace?.prUrl ?? null;
+  const pullRequestLabel = runContext?.pullRequest?.number
+    ? `#${runContext.pullRequest.number}`
+    : (runContext?.pullRequest?.title ?? 'Pull request');
+  const pullRequestMeta = [
+    runContext?.pullRequest?.status,
+    runContext?.pullRequest?.branch,
+  ].filter(Boolean).join(' · ');
 
   return (
     <div className="flex flex-col h-full">
@@ -1469,31 +1785,16 @@ export default function ExecutionDetailPage() {
           </div>
 
         <div className="flex items-center gap-2">
-          {execution.durationMs != null && (
-            <span className="text-xs text-theme-secondary font-mono">{formatDuration(execution.durationMs)}</span>
-          )}
-          <CostDisplay cost={liveCost} />
-          {(learningCounts.injected > 0 || learningCounts.extracted > 0) && (
-            <Link
-              to={`/learnings?search=${encodeURIComponent(id ?? '')}`}
-              className="flex items-center gap-1 text-[10px] font-mono text-accent-purple hover:text-purple-300 transition-colors"
-              title="Learnings"
-            >
-              <Brain className="w-3 h-3" />
-              {learningCounts.injected > 0 && <span>{learningCounts.injected} in</span>}
-              {learningCounts.extracted > 0 && <span>{learningCounts.extracted} out</span>}
-            </Link>
-          )}
           <button
-            onClick={() => setTimelineOpen(true)}
+            onClick={() => setLogsOpen(true)}
             className="btn-ghost text-xs inline-flex items-center gap-1"
-            title="View node execution timeline (Gantt view)"
+            title="Open execution logs"
           >
-            <BarChart2 className="w-3.5 h-3.5" />
-            <span>Timeline</span>
-            {traces && traces.length > 0 && (
+            <Terminal className="w-3.5 h-3.5" />
+            <span>Logs</span>
+            {logs.length > 0 && (
               <span className="ml-0.5 px-1 py-px rounded-sm bg-accent-soft text-accent text-[10px] font-mono tabular-nums">
-                {traces.length}
+                {logs.length}
               </span>
             )}
           </button>
@@ -1506,28 +1807,20 @@ export default function ExecutionDetailPage() {
             <span>State Changes</span>
           </button>
           <button
-            onClick={() => setCheckpointsOpen(true)}
+            onClick={() => setRunControlsOpen(true)}
             className="btn-ghost text-xs inline-flex items-center gap-1"
-            title="View checkpoints (edit state, run from, fork)"
+            title="Rerun from saved state, edit state, and add feedback"
           >
             <Save className="w-3.5 h-3.5" />
-            <span>Checkpoints</span>
+            <span>Rerun from State</span>
             {checkpointCount != null && checkpointCount > 0 && (
               <span className="ml-0.5 px-1 py-px rounded-sm bg-accent-soft text-accent text-[10px] font-mono tabular-nums">
                 {checkpointCount}
               </span>
             )}
-          </button>
-          <button
-            onClick={() => setFeedbackOpen(true)}
-            className="btn-ghost text-xs inline-flex items-center gap-1"
-            title="View and add workflow feedback"
-          >
-            <MessageSquare className="w-3.5 h-3.5" />
-            <span>Feedback</span>
             {feedbackEntries.length > 0 && (
               <span className="ml-0.5 px-1 py-px rounded-sm bg-accent-soft text-accent text-[10px] font-mono tabular-nums">
-                {feedbackEntries.length}
+                {feedbackEntries.length}f
               </span>
             )}
           </button>
@@ -1684,79 +1977,85 @@ export default function ExecutionDetailPage() {
         />
       )}
 
-      {/* Intervention banner — the action itself lives in the top header. */}
-      {pendingIntervention && (
-        <div className="flex items-center gap-4 px-6 py-3 border-b border-app bg-app-card">
-          <div className="flex-1 min-w-0">
-            <div className="text-xs font-heading font-semibold text-theme-primary">
-              {pendingIntervention.title}
-            </div>
-            <div className="text-[10px] font-mono text-theme-muted mt-0.5 truncate">
-              {pendingIntervention.context_summary}
-              {pendingIntervention.round_info &&
-                <> · round {pendingIntervention.round_info.current}/{pendingIntervention.round_info.max}</>}
-            </div>
-          </div>
-          <button
-            type="button"
-            onClick={() => setApprovalModalOpen(true)}
-            className="cr-approval-button"
-          >
-            <span className="cr-approval-main">Approve</span>
-            <ChevronRight className="h-3.5 w-3.5" />
-          </button>
-        </div>
-      )}
-
-      {/* Interventions sidebar — quick chronological list of every
-          intervention fired on this run so the operator can see the
-          decision history at a glance. */}
-      {runInterventions.length > 0 && (
-        <div className="px-6 py-2 border-b border-app bg-surface-50 flex items-center gap-3 overflow-x-auto">
-          <span className="overline shrink-0">
-            Interventions ({runInterventions.length})
-          </span>
-          {runInterventions.map((i: any) => (
-            <Link
-              key={i.intervention_id}
-              to={`/interventions/${i.intervention_id}`}
-              className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[9px] font-mono bg-app-muted text-theme-muted hover:bg-app-muted transition-colors shrink-0"
-              title={`${i.title} — ${i.status}`}
-            >
-              <span>{i.severity === 'escalation' ? '🔴' : i.severity === 'approval' ? '🟢' : '🟡'}</span>
-              <span className="truncate max-w-[200px]">{i.title}</span>
-              <span className="text-theme-subtle">
-                {i.status === 'pending' ? '·' : `· ${i.response?.decision ?? i.status}`}
-              </span>
-            </Link>
-          ))}
-        </div>
-      )}
-
-      {/* Main content — prototype-aligned trace rail + work area + context/inspector */}
+      {/* Main content — single graph/trace workspace + context/inspector */}
       <div className="flex-1 flex flex-col overflow-hidden">
-        {/* Top: Trace rail + graph + context/selected-node detail */}
         <div className="flex-1 flex overflow-hidden min-h-0">
-          <TraceRail
-            workflowNodes={workflow?.parsed?.nodes ? Object.keys(workflow.parsed.nodes) : []}
-            nodeStates={nodeStates}
-            selectedNode={selectedNode}
-            onSelectNode={setSelectedNode}
-            children={children ?? []}
-          />
-
-          {/* Center: Live graph */}
-          <div className="flex-1 overflow-hidden bg-[rgb(var(--color-app-background))]">
-            <LiveGraph
-              workflow={workflow}
-              nodeStates={nodeStates}
-              selectedNode={selectedNode}
-              onSelectNode={setSelectedNode}
-              spawnCounts={(children ?? []).reduce((acc: Record<string, number>, c) => {
-                if (c.parentCaller) acc[c.parentCaller] = (acc[c.parentCaller] ?? 0) + 1;
-                return acc;
-              }, {})}
-            />
+          <div className="flex-1 min-w-0 overflow-hidden bg-[rgb(var(--color-app-background))] flex flex-col">
+            <div className="flex items-center justify-between gap-3 border-b border-app bg-app-card px-4 py-2 shrink-0">
+              <div className="inline-flex rounded-md border border-app bg-app-muted p-0.5">
+                <button
+                  type="button"
+                  onClick={() => setMainView('graph')}
+                  className={`rounded px-3 py-1.5 text-[11px] font-mono transition-colors ${mainView === 'graph' ? 'bg-app-card text-theme-primary shadow-sm' : 'text-theme-muted hover:text-theme-primary'}`}
+                >
+                  Graph
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setMainView('trace')}
+                  className={`rounded px-3 py-1.5 text-[11px] font-mono transition-colors ${mainView === 'trace' ? 'bg-app-card text-theme-primary shadow-sm' : 'text-theme-muted hover:text-theme-primary'}`}
+                >
+                  Trace
+                </button>
+              </div>
+              <div className="flex items-center gap-3">
+                <div className="font-mono text-[10px] text-theme-muted">
+                  {Array.from(nodeStates.values()).filter(state => state.status === 'completed').length}/{nodeStates.size} nodes
+                </div>
+              </div>
+            </div>
+            <div className="flex-1 min-h-0 overflow-hidden">
+              {mainView === 'graph' ? (
+                <LiveGraph
+                  workflow={workflow}
+                  nodeStates={nodeStates}
+                  selectedNode={selectedNode}
+                  onSelectNode={setSelectedNode}
+                  spawnCounts={(children ?? []).reduce((acc: Record<string, number>, c) => {
+                    if (c.parentCaller) acc[c.parentCaller] = (acc[c.parentCaller] ?? 0) + 1;
+                    return acc;
+                  }, {})}
+                />
+              ) : (
+                <div className="h-full min-h-0 overflow-auto bg-app-card">
+                  <div className="border-b border-app px-4 py-2 flex items-center justify-between gap-3 bg-surface-50">
+                    <div>
+                      <div className="text-[12px] font-semibold text-theme-primary">Trace</div>
+                      <div className="text-[10px] font-mono text-theme-muted">
+                        {tracesForTimeline.length} timeline {tracesForTimeline.length === 1 ? 'entry' : 'entries'}
+                      </div>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setTraceTimelineOpen(open => !open)}
+                      className={`btn-ghost text-xs ${traceTimelineOpen ? 'text-accent' : ''}`}
+                      title="Toggle node execution timeline"
+                    >
+                      Timeline
+                      {tracesForTimeline.length > 0 && (
+                        <span className="ml-1 px-1 py-px rounded-sm bg-accent-soft text-accent text-[10px] font-mono tabular-nums">
+                          {tracesForTimeline.length}
+                        </span>
+                      )}
+                    </button>
+                  </div>
+                  {traceTimelineOpen && (
+                    <div className="border-b border-app p-4">
+                      <GanttTimeline
+                        traces={tracesForTimeline as any}
+                        onNodeClick={(node) => setSelectedNode(node)}
+                      />
+                    </div>
+                  )}
+                  <WorkflowTraceTable
+                    nodeStates={nodeStates}
+                    traces={traces}
+                    selectedNode={selectedNode}
+                    onSelectNode={setSelectedNode}
+                  />
+                </div>
+              )}
+            </div>
           </div>
 
           {/* Right: Run context + Node detail — resizable */}
@@ -1769,12 +2068,27 @@ export default function ExecutionDetailPage() {
               className="absolute top-0 left-0 bottom-0 w-2 cursor-col-resize z-10"
               onMouseDown={rightResizeStart}
             />
-            <RunContextPanel
-              runContext={runContext}
-              execution={execution}
-              pendingIntervention={pendingIntervention}
-              artifactCount={artifactCount}
-            />
+            {pullRequestUrl && (
+              <div className="shrink-0 border-b border-app bg-app-card px-4 py-3 flex items-center justify-between gap-3">
+                <div className="min-w-0">
+                  <div className="text-[10px] font-mono uppercase tracking-wide text-theme-subtle">Pull Request</div>
+                  <div className="mt-0.5 flex items-center gap-2 min-w-0">
+                    <GitPullRequest className="w-3.5 h-3.5 text-accent-green shrink-0" />
+                    <span className="text-[12px] font-mono text-theme-primary truncate">{pullRequestLabel}</span>
+                    {pullRequestMeta && <span className="text-[10px] font-mono text-theme-muted truncate">{pullRequestMeta}</span>}
+                  </div>
+                </div>
+                <a
+                  href={pullRequestUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="btn-primary text-xs shrink-0 inline-flex items-center gap-1"
+                >
+                  Open PR
+                  <ExternalLink className="w-3 h-3" />
+                </a>
+              </div>
+            )}
             <div className="flex-1 min-h-0 overflow-y-auto">
               {/*
                 The inline human-input form is intentionally DISABLED here.
@@ -1800,125 +2114,21 @@ export default function ExecutionDetailPage() {
             </div>
           </div>
         </div>
-
-        {/* Bottom: Timeline (horizontal) + Execution log table — resizable */}
-        <div
-          className="shrink-0 bg-surface overflow-hidden flex flex-col border-t-2 border-app group/bottom"
-          style={{ minHeight: 120, height: bottomHeight, maxHeight: '60%' }}
-        >
-          {/* Resize grab zone — full width strip at top, overlapping border */}
-          <div
-            className="shrink-0 h-1 cursor-row-resize relative z-20 hover:[&]:border-t-2 hover:[&]:border-accent-blue"
-            onMouseDown={bottomResizeStart}
-            style={{ marginTop: -2 }}
-            onMouseEnter={e => { (e.currentTarget.parentElement as HTMLElement).style.borderTopColor = 'rgb(var(--color-accent))'; }}
-            onMouseLeave={e => { (e.currentTarget.parentElement as HTMLElement).style.borderTopColor = ''; }}
-          />
-          <div className="flex flex-1 overflow-hidden">
-          {/* Logs — resizable */}
-          <div
-            className="shrink-0 overflow-hidden border-r-2 border-app hover:border-accent-blue/50 transition-colors relative"
-            style={{ width: `${logsPct}%` }}
-          >
-            <div className="absolute top-0 right-0 bottom-0 w-2 cursor-col-resize z-10" onMouseDown={logsResizeStart} />
-            <Timeline
-              logs={logs}
-              nodeFilter={logFilter}
-              onNodeFilterChange={setLogFilter}
-              workflowNodes={workflow?.parsed?.nodes ? Object.keys(workflow.parsed.nodes) : []}
-              traces={traces}
-            />
-          </div>
-
-          {/* Execution log table */}
-          <div className="flex-1 overflow-auto">
-            <table className="w-full text-xs font-body">
-              <thead className="sticky top-0 z-10">
-                <tr className="bg-app-muted overline border-b border-app">
-                  <th className="text-left px-4 py-1.5 font-medium">Node</th>
-                  <th className="text-left px-4 py-1.5 font-medium">Status</th>
-                  <th className="text-left px-4 py-1.5 font-medium">Attempt</th>
-                  <th className="text-left px-4 py-1.5 font-medium">Duration</th>
-                  <th className="text-left px-4 py-1.5 font-medium">Cost</th>
-                </tr>
-              </thead>
-              <tbody>
-                {Array.from(nodeStates.entries()).map(([name, state]) => {
-                  // Sum cost and duration across all attempts from traces
-                  const nodeTraces = traces.filter((t: any) => t.node === name);
-                  const dedupMap = new Map<number, any>();
-                  for (const t of nodeTraces) dedupMap.set(t.attempt, t);
-                  const deduped = Array.from(dedupMap.values());
-
-                  let totalCost = state.cost;
-                  let totalDuration = state.durationMs;
-
-                  if (deduped.length > 1) {
-                    let est = 0; let act: number | null = null; let dur = 0;
-                    for (const t of deduped) {
-                      est += t.cost?.estimated ?? 0;
-                      if (t.cost?.actual != null) act = (act ?? 0) + t.cost.actual;
-                      dur += t.durationMs ?? 0;
-                    }
-                    if (est > 0 || act != null) totalCost = { estimated: est, actual: act };
-                    if (dur > 0) totalDuration = dur;
-                  }
-
-                  return (
-                    <tr
-                      key={name}
-                      onClick={() => setSelectedNode(name)}
-                      className={`cursor-pointer hover:bg-accent-blue/5 transition-colors
-                        ${selectedNode === name ? 'bg-accent-blue/10' : ''}`}
-                    >
-                      <td className="px-4 py-1.5 font-mono text-theme-primary">{name}</td>
-                      <td className="px-4 py-1.5"><StatusBadge status={state.status} /></td>
-                      <td className="px-4 py-1.5 text-theme-secondary tabular-nums font-mono">{state.attempt}</td>
-                      <td className="px-4 py-1.5 text-theme-secondary tabular-nums font-mono">
-                        {totalDuration != null ? formatDuration(totalDuration) : '-'}
-                      </td>
-                      <td className="px-4 py-1.5"><CostDisplay cost={totalCost} /></td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
-
-          {/* ── Checkpoints ──────────────────────────────────────────
-              View, edit, and resume/fork from any checkpoint saved
-              during this run. Actions gate on execution status:
-              edits blocked while running/waiting; run-from blocked
-              unless failed/cancelled; fork always allowed. */}
-          {/* Timeline, State Changes, and Checkpoints are all accessed via
-              the matching buttons in the header, which open right-side
-              drawers. Kept off the main flow to reduce scroll and put them
-              one click away at any time. */}
-          </div>
-        </div>
       </div>
 
       {/* Right-side drawers — mounted at page root, portal to body so
           ancestor backdrop-filter can't trap them. */}
-      <CheckpointsDrawer
+      <RunControlsDrawer
+        open={runControlsOpen}
+        onClose={() => setRunControlsOpen(false)}
         executionId={id!}
         executionStatus={execution.status}
-        open={checkpointsOpen}
-        onClose={() => setCheckpointsOpen(false)}
-      />
-      <WorkflowFeedbackDrawer
-        open={feedbackOpen}
-        onClose={() => setFeedbackOpen(false)}
-        entries={feedbackEntries}
-        canAppend={canAppendFeedback}
+        checkpointCount={checkpointCount}
+        feedbackEntries={feedbackEntries}
+        canAppendFeedback={canAppendFeedback}
         agentNodeNames={agentNodeNames}
-        feedbackText={feedbackText}
-        targetNodes={feedbackTargetNodes}
-        busy={feedbackBusy}
-        error={feedbackError}
-        onTextChange={setFeedbackText}
-        onTargetNodesChange={setFeedbackTargetNodes}
-        onSubmit={handleAppendFeedback}
+        onFeedbackCreated={(entries) => setFeedbackEntries((prev) => [...prev, ...entries])}
+        onRefreshExecution={refresh}
       />
       <ArtifactsDrawer
         rootType="workflow"
@@ -1926,16 +2136,20 @@ export default function ExecutionDetailPage() {
         open={artifactsOpen}
         onClose={() => setArtifactsOpen(false)}
       />
-      <TimelineDrawer
-        traces={tracesForTimeline as any}
-        open={timelineOpen}
-        onClose={() => setTimelineOpen(false)}
-        onNodeClick={(n) => setSelectedNode(n)}
-      />
       <StateChangesDrawer
         executionId={id!}
         open={stateChangesOpen}
         onClose={() => setStateChangesOpen(false)}
+      />
+      <ExecutionLogsOverlay
+        open={logsOpen}
+        executionId={id!}
+        logs={logs}
+        logFilter={logFilter}
+        onNodeFilterChange={setLogFilter}
+        workflowNodes={workflow?.parsed?.nodes ? Object.keys(workflow.parsed.nodes) : []}
+        traces={traces}
+        onClose={() => setLogsOpen(false)}
       />
 
       {/* Inline human-input dialog — brought back for clarification flows

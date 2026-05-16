@@ -7,8 +7,8 @@ export default function ConditionNode({ data, selected }: NodeProps) {
       {/* Diamond shape — scaled up so the node's bounding width matches
           the other node types (180px). */}
       <div
-        className={`absolute border-2 bg-accent-yellow/10 dark:bg-accent-yellow/15 backdrop-blur-sm shadow-sm
-          ${selected ? 'border-accent-yellow ring-2 ring-accent-yellow/30' : 'border-accent-yellow/60'}
+        className={`absolute border-2 bg-[#fff7d6] dark:bg-[#332909] shadow-md
+          ${selected ? 'border-accent-yellow ring-2 ring-accent-yellow' : 'border-accent-yellow'}
         `}
         style={{ transform: 'rotate(45deg)', borderRadius: 4, width: 130, height: 130, top: 25, left: 25 }}
       />

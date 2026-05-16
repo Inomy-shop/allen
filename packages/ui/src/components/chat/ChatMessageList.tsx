@@ -1267,7 +1267,7 @@ function ChatCodeDiffPreview({
 
       const live = await Promise.all(uniqueRefs.map(async (ref) => {
         try {
-          const result = await workspacesApi.getDiff(ref.id, { mode: 'workspace' });
+          const result = await workspacesApi.getDiff(ref.id, { mode: 'workspace', anchor: 'creation' });
           const files = ((result.files ?? []) as ChatDiffFile[]).filter(file => file.diff?.trim() || file.modifiedContent?.trim());
           return { workspaceId: ref.id, workspaceName: ref.name, files };
         } catch {
