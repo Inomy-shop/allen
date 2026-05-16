@@ -89,6 +89,29 @@ export function executionRoutes(db: Db): Router {
     }
   });
 
+  // GET /api/executions/count?status=running,queued
+  //
+  // Lightweight count endpoint for chrome/badges that do not need execution
+  // rows. Avoids the paginated list path, which enriches even limit=1 rows.
+  router.get('/count', async (req: Request, res: Response) => {
+    try {
+      const statuses = typeof req.query.status === 'string'
+        ? req.query.status.split(',').map(s => s.trim()).filter(Boolean)
+        : [];
+      const filter: Record<string, unknown> = {};
+      if (statuses.length === 1) filter.status = statuses[0];
+      else if (statuses.length > 1) filter.status = { $in: statuses };
+      if (req.query.chatSession === 'true') {
+        filter['meta.chatSessionId'] = { $exists: true, $nin: [null, ''] };
+      }
+
+      const count = await db.collection('executions').countDocuments(filter);
+      res.json({ count });
+    } catch (err: unknown) {
+      res.status(500).json({ error: (err as Error).message });
+    }
+  });
+
   router.get('/chat/:sessionId', async (req: Request, res: Response) => {
     try {
       const rows = await service.listForChatSession(param(req, 'sessionId'));
