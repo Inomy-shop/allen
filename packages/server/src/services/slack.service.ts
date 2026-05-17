@@ -447,9 +447,11 @@ export class SlackService {
   // ── Slack Web API helpers ──
 
   /**
-   * Fetch messages from a Slack thread, excluding bot messages and the triggering mention.
-   * Returns up to ~50 messages of context. Image-only messages (no text) are retained
-   * so their file attachments can be forwarded to the LLM.
+   * Fetch messages from a Slack thread, excluding only the triggering mention and
+   * genuinely empty messages (no text and no file attachments). Bot and app messages
+   * (those carrying bot_id or subtype: 'bot_message') are intentionally included so
+   * that integrations such as PagerDuty, GitHub, or Slack workflow posts are visible
+   * to the LLM as context. Returns up to ~50 messages.
    */
   private async fetchThreadMessages(
     channelId: string,
@@ -465,7 +467,7 @@ export class SlackService {
       throw new Error(`Slack conversations.replies failed: ${data.error}`);
     }
     return (data.messages ?? [])
-      .filter(m => !m.bot_id && !m.subtype && m.ts !== excludeTs && (m.text || (m.files && m.files.length > 0)))
+      .filter(m => m.ts !== excludeTs && (m.text || (m.files && m.files.length > 0)))
       .map(m => ({
         text: (m.text ?? '').replace(MENTION_REGEX, '').trim(),
         author: m.user,

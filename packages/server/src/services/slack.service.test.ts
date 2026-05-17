@@ -247,3 +247,91 @@ describe('SlackService file attachment handling', () => {
     expect(fetchSpy).not.toHaveBeenCalled();
   });
 });
+
+// ── Bot/app message in thread tests ──
+
+describe('SlackService bot/app messages in thread', () => {
+  let fetchSpy: ReturnType<typeof vi.spyOn>;
+
+  beforeEach(() => {
+    fetchSpy = vi.spyOn(global, 'fetch');
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('includes bot/app messages from conversations.replies in combined message to chatService', async () => {
+    const { service } = makeService();
+
+    // Thread timestamps
+    const threadTs = '200.000';
+    const humanMsgTs = '200.001';
+    const botMsgTs = '200.002';
+    const triggerTs = '200.999'; // the @Allen mention — must be excluded
+
+    fetchSpy.mockImplementation((input: RequestInfo | URL) => {
+      const url = typeof input === 'string' ? input : (input as URL).toString();
+      if (url.includes('conversations.replies')) {
+        return Promise.resolve(
+          fakeResponse({
+            ok: true,
+            messages: [
+              // Normal human message (not the trigger)
+              {
+                ts: humanMsgTs,
+                user: 'U200',
+                text: 'Here is the incident details',
+              },
+              // Bot/app message — previously filtered out, must now be included
+              {
+                ts: botMsgTs,
+                bot_id: 'B123BOT',
+                subtype: 'bot_message',
+                text: 'Bot posted this alert message',
+                // no `user` field — author will be undefined
+              },
+              // The triggering @Allen mention — must be excluded
+              {
+                ts: triggerTs,
+                user: 'U456',
+                text: '<@U123> please summarize this thread',
+              },
+            ],
+          }),
+        );
+      }
+      // All other Slack API calls (reactions.add/remove, chat.postMessage)
+      return Promise.resolve(fakeResponse({ ok: true }));
+    });
+
+    // A reply inside an existing thread (thread_ts ≠ ts)
+    const event = {
+      type: 'app_mention',
+      text: '<@U123> please summarize this thread',
+      user: 'U456',
+      channel: 'C789',
+      ts: triggerTs,
+      thread_ts: threadTs,
+    };
+
+    await service.handleNewThread('T001', 'C789', threadTs, event);
+
+    const sendCalls = vi.mocked(service.chatService.sendMessageForSlack).mock.calls;
+    expect(sendCalls.length).toBeGreaterThan(0);
+    const messageArg: string = sendCalls[0][1];
+
+    // Bot/app message text must be present in the combined message (AC1, AC2, AC8)
+    expect(messageArg).toContain('Bot posted this alert message');
+
+    // Human message text must also be present
+    expect(messageArg).toContain('Here is the incident details');
+
+    // The trigger mention (excludeTs) must NOT appear as a thread context entry.
+    // The thread context section is before "User's request:" — the trigger text
+    // "please summarize this thread" only appears in the "User's request:" part, not
+    // as a [Message X] context entry, proving the excludeTs filter still works (AC3).
+    const [contextSection] = messageArg.split("User's request:");
+    expect(contextSection).not.toContain('please summarize this thread');
+  });
+});
