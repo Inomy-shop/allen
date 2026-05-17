@@ -12,6 +12,7 @@ import RoleIcon from '../common/RoleIcon';
 import MermaidChatBlock from './MermaidChatBlock';
 import { agents as agentsApi, artifacts as artifactsApi, type ArtifactDoc } from '../../services/api';
 import { chatCodeDiffs, pullRequests as pullRequestsApi, workspaces as workspacesApi } from '../../services/workspaceService';
+import { WorkflowInterventionAction } from '../execution/WorkflowInterventionAction';
 
 const ChatExecutionsPanel = React.lazy(() =>
   import('./ChatRunSidebar').then(module => ({ default: module.ExecutionsPanel })),
@@ -68,8 +69,6 @@ type WorkflowIntervention = {
   fields?: WorkflowInterventionField[];
   options?: Array<{ label?: string; value?: string; primary?: boolean; destructive?: boolean }>;
 };
-
-type WorkflowInterventionOption = { label?: string; value: string; primary?: boolean; destructive?: boolean };
 
 type ChatDiffFile = {
   path: string;
@@ -1267,7 +1266,7 @@ function ChatCodeDiffPreview({
 
       const live = await Promise.all(uniqueRefs.map(async (ref) => {
         try {
-          const result = await workspacesApi.getDiff(ref.id, { mode: 'workspace' });
+          const result = await workspacesApi.getDiff(ref.id, { mode: 'workspace', anchor: 'creation' });
           const files = ((result.files ?? []) as ChatDiffFile[]).filter(file => file.diff?.trim() || file.modifiedContent?.trim());
           return { workspaceId: ref.id, workspaceName: ref.name, files };
         } catch {
@@ -1886,7 +1885,9 @@ function RunProgressFeed({
 function workflowInterventionFromRuns(runs: SpawnedAgent[]): { run: SpawnedAgent; intervention: WorkflowIntervention } | null {
   for (const run of runs) {
     const context = run.runContext;
-    if (!context?.humanInput?.required) continue;
+    const status = (context?.status ?? run.status ?? '').toLowerCase();
+    if (!context?.humanInput?.required && status !== 'waiting_for_input' && status !== 'waiting') continue;
+    if (!context) continue;
     const interventions = (context.interventions ?? []) as WorkflowIntervention[];
     const pending =
       interventions.find(item => item.status === 'pending' && item.intervention_id === context.humanInput.interventionId)
@@ -1904,16 +1905,29 @@ function workflowInterventionFromRuns(runs: SpawnedAgent[]): { run: SpawnedAgent
         },
       };
     }
+    const stage = context.humanInput.stage
+      ?? context.progress.currentStep
+      ?? context.execution.currentNodes?.[0]
+      ?? undefined;
+    if (stage && looksLikeApprovalInput(stage, context.humanInput.severity)) {
+      return {
+        run,
+        intervention: {
+          status: 'pending',
+          stage,
+          severity: context.humanInput.severity ?? (stage.toLowerCase().includes('escalation') ? 'escalation' : 'approval'),
+          title: context.humanInput.title ?? 'Approval required',
+          question: `Review the pause at ${humanLabel(stage)} and choose how the workflow should continue.`,
+        },
+      };
+    }
   }
   return null;
 }
 
-function optionValue(option: string | { label?: string; value?: string }): string {
-  return typeof option === 'string' ? option : option.value ?? option.label ?? '';
-}
-
-function optionLabel(option: string | { label?: string; value?: string }): string {
-  return typeof option === 'string' ? humanLabel(option) : option.label ?? humanLabel(option.value ?? '');
+function looksLikeApprovalInput(stage?: string | null, severity?: string | null): boolean {
+  const lower = `${stage ?? ''} ${severity ?? ''}`.toLowerCase();
+  return lower.includes('approval') || lower.includes('escalation') || lower.includes('_gate') || lower.endsWith(' gate');
 }
 
 function WorkflowInterventionPrompt({
@@ -1925,194 +1939,15 @@ function WorkflowInterventionPrompt({
   intervention: WorkflowIntervention;
   onAnswer: (input: WorkflowInterventionAnswer) => Promise<void> | void;
 }) {
-  const fields = intervention.fields ?? [];
-  const selectField = fields.find(field => field.type === 'select' || (field.options?.length ?? 0) > 0);
-  const optionRows: WorkflowInterventionOption[] = intervention.options?.length
-    ? intervention.options.map(option => ({ value: option.value ?? option.label ?? '', label: option.label, primary: option.primary, destructive: option.destructive }))
-    : (selectField?.options ?? []).map(option => ({ value: optionValue(option), label: optionLabel(option) }));
-  const initialOption = optionRows.find(option => option.primary)?.value ?? optionRows[0]?.value ?? '';
-  const isApproval = intervention.severity === 'approval' || optionRows.some(option => ['approve', 'request_changes', 'reject'].includes(option.value ?? ''));
-  const [selected, setSelected] = useState(initialOption || (isApproval ? 'approve' : 'answer'));
-  const [fieldValues, setFieldValues] = useState<Record<string, string>>({});
-  const [submitting, setSubmitting] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [modalOpen, setModalOpen] = useState(false);
-
-  const textFields = fields.filter(field => field !== selectField);
-  const primaryTextField = textFields[0];
-  const answerText = primaryTextField ? fieldValues[primaryTextField.name] : fieldValues.answer;
-  const feedbackValue =
-    textFields.map(field => fieldValues[field.name]).find(Boolean)
-    ?? fieldValues.feedback
-    ?? '';
-  const decision = (isApproval ? selected : 'answer') as WorkflowInterventionAnswer['decision'];
-  const needsFeedback = decision === 'request_changes';
-  const submitDisabled = submitting
-    || (!isApproval && !answerText?.trim())
-    || (decision === 'approve' && textFields.some(field => field.required !== false && !fieldValues[field.name]?.trim()))
-    || (needsFeedback && !feedbackValue.trim());
-
-  async function submit() {
-    if (submitDisabled || !intervention.intervention_id) return;
-    setSubmitting(true);
-    setError(null);
-    try {
-      const values: Record<string, unknown> = { ...fieldValues };
-      if (selectField?.name && selected) values[selectField.name] = selected;
-      await onAnswer({
-        executionId: run.executionId,
-        interventionId: intervention.intervention_id,
-        decision,
-        fieldValues: values,
-        feedback: needsFeedback ? feedbackValue : undefined,
-        answer: !isApproval ? answerText : undefined,
-        humanNodeName: intervention.stage,
-      });
-      setModalOpen(false);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to submit response');
-      setSubmitting(false);
-    }
-  }
-
-  const title = intervention.title ?? run.runContext?.humanInput?.title ?? 'Workflow input needed';
-  const question = intervention.question ?? intervention.context_summary ?? '';
-  const actorLabel = humanLabel(intervention.stage ?? run.runContext?.progress.currentStep ?? 'plan-gate');
-  const interventionAge = timeAgo(intervention.created_at ?? intervention.createdAt ?? null);
-  const postedLabel = interventionAge === 'recently' || interventionAge === 'just now' ? 'posted now' : `posted ${interventionAge}`;
-
   return (
-    <>
-      <div className="cr-approval-footer">
-        <button
-          type="button"
-          className="cr-approval-button"
-          onClick={(event) => {
-            event.preventDefault();
-            event.stopPropagation();
-            setModalOpen(true);
-          }}
-        >
-          <span className="cr-approval-main">Approve</span>
-          <ChevronRight className="h-3.5 w-3.5" />
-          <span className="cr-approval-title">{title}</span>
-          <span className="cr-approval-meta">{postedLabel}</span>
-        </button>
-      </div>
-
-      {modalOpen && (
-        <div className="chat-intervention-modal" role="dialog" aria-modal="true" aria-label={title}>
-          <button className="chat-intervention-backdrop" type="button" onClick={() => !submitting && setModalOpen(false)} aria-label="Close intervention dialog" />
-          <div className="chat-intervention-dialog">
-            <div className="chat-intervention-dialog-head">
-              <div className="chat-intervention-dialog-icon">
-                <ChevronRight className="h-4 w-4" />
-              </div>
-              <div className="min-w-0 flex-1">
-                <div className="flex items-center gap-2">
-                  <span className="rounded bg-app-muted px-1.5 py-0.5 font-mono text-[9px] uppercase tracking-[0.08em] text-theme-muted">Approval</span>
-                  <span className="truncate font-mono text-[10px] text-theme-subtle">{run.executionId.slice(0, 8)}</span>
-                  <span className="truncate font-mono text-[10px] text-theme-subtle">{actorLabel}</span>
-                </div>
-                <div className="mt-0.5 truncate text-[13px] font-heading font-semibold text-theme-primary">
-                  {title}
-                </div>
-              </div>
-              <a href={`/executions/${run.executionId}`} target="_blank" rel="noopener noreferrer" className="rounded p-1 text-accent hover:bg-app-muted" title="Open execution">
-                <ExternalLink className="h-3.5 w-3.5" />
-              </a>
-              <button type="button" onClick={() => !submitting && setModalOpen(false)} className="rounded px-2 py-1 font-mono text-[12px] text-theme-muted hover:bg-app-muted hover:text-theme-primary" disabled={submitting}>
-                Esc
-              </button>
-            </div>
-
-            <div className="chat-intervention-dialog-body space-y-3 px-4 py-3">
-              {question && (
-                <div className="chat-intervention-content-scroll">
-                  <div className="rounded-md border border-app bg-app-card px-3 py-2 text-[13px] leading-relaxed text-theme-secondary">
-                    {renderMarkdown(question)}
-                  </div>
-                </div>
-              )}
-
-              {optionRows.length > 0 && (
-                <div className="chat-intervention-actions-row flex flex-wrap gap-2">
-                  {optionRows.map(option => {
-                    const value = option.value ?? '';
-                    const active = selected === value;
-                    const destructive = option.destructive || value === 'reject';
-                    return (
-                      <button
-                        key={value}
-                        type="button"
-                        onClick={() => setSelected(value)}
-                        disabled={submitting}
-                        className={`rounded-md border px-3 py-1.5 font-mono text-[11px] capitalize transition-colors disabled:opacity-50 ${
-                          active
-                            ? destructive
-                              ? 'border-accent bg-accent text-[rgb(var(--color-surface))]'
-                              : 'border-accent bg-accent text-[rgb(var(--color-surface))]'
-                            : 'border-app bg-app-card text-theme-muted hover:border-[rgb(var(--color-text-primary)/0.30)] hover:text-theme-primary'
-                        }`}
-                      >
-                        {option.label ?? humanLabel(value)}
-                      </button>
-                    );
-                  })}
-                </div>
-              )}
-
-              {textFields.length > 0 ? textFields.map(field => (
-                <div key={field.name} className="space-y-1.5">
-                  <label className="text-[10px] font-mono uppercase tracking-[0.08em] text-theme-muted">
-                    {field.label ?? humanLabel(field.name)}
-                    {field.required !== false && <span className="ml-1 text-theme-muted">*</span>}
-                  </label>
-                  <textarea
-                    value={fieldValues[field.name] ?? ''}
-                    onChange={event => setFieldValues(prev => ({ ...prev, [field.name]: event.target.value }))}
-                    placeholder={field.placeholder ?? (needsFeedback ? 'Tell the workflow what should change...' : 'Type your response...')}
-                    rows={3}
-                    disabled={submitting}
-                    className="max-h-[110px] min-h-[84px] w-full resize-none overflow-y-auto rounded-md border border-app bg-app-muted px-3 py-2 text-sm text-theme-primary placeholder:text-theme-subtle focus:border-[rgb(var(--color-text-primary)/0.40)] focus:outline-none disabled:opacity-50"
-                  />
-                </div>
-              )) : (
-                !isApproval && (
-                  <textarea
-                    value={fieldValues.answer ?? ''}
-                    onChange={event => setFieldValues(prev => ({ ...prev, answer: event.target.value }))}
-                    placeholder="Type your response..."
-                    rows={3}
-                    disabled={submitting}
-                    className="max-h-[110px] min-h-[84px] w-full resize-none overflow-y-auto rounded-md border border-app bg-app-muted px-3 py-2 text-sm text-theme-primary placeholder:text-theme-subtle focus:border-[rgb(var(--color-text-primary)/0.40)] focus:outline-none disabled:opacity-50"
-                  />
-                )
-              )}
-
-              {error && (
-                <div className="rounded-md border border-accent-red/25 bg-accent-red/10 px-3 py-2 text-[12px] text-accent-red">{error}</div>
-              )}
-
-              <div className="chat-intervention-submit-row flex items-center justify-between gap-3">
-                <span className="truncate font-mono text-[10px] text-theme-subtle">
-                  {humanLabel(intervention.stage ?? run.runContext?.progress.currentStep ?? 'workflow pause')}
-                </span>
-                <button
-                  type="button"
-                  onClick={submit}
-                  disabled={submitDisabled}
-                  className="inline-flex items-center gap-1.5 rounded-md bg-accent px-4 py-1.5 font-mono text-[12px] text-[rgb(var(--color-surface))] transition-colors hover:bg-accent/90 disabled:cursor-not-allowed disabled:opacity-40"
-                >
-                  Submit
-                  <ChevronRight className="h-3.5 w-3.5" />
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
-    </>
+    <div className="cr-approval-footer">
+      <WorkflowInterventionAction
+        run={run}
+        intervention={intervention}
+        onAnswer={onAnswer}
+        showTitleMeta
+      />
+    </div>
   );
 }
 

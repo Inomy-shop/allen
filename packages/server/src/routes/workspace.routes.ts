@@ -76,7 +76,8 @@ export function workspaceRoutes(db: Db): Router {
       const mode = req.query.mode === 'branch' || req.query.mode === 'working' || req.query.mode === 'auto' || req.query.mode === 'workspace'
         ? req.query.mode
         : undefined;
-      res.json(await manager.getDiff(p(req, 'id'), { mode }));
+      const anchorToCreation = req.query.anchor === 'creation';
+      res.json(await manager.getDiff(p(req, 'id'), { mode, anchorToCreation }));
     }
     catch (err: unknown) { res.status(500).json({ error: (err as Error).message }); }
   });

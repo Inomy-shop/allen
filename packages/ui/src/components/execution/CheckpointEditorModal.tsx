@@ -87,7 +87,7 @@ export default function CheckpointEditorModal({
         <div className="flex items-center justify-between px-5 py-3.5 border-b border-app">
           <div className="min-w-0">
             <h3 className="font-heading text-sm text-theme-primary tracking-wider">
-              Edit checkpoint state
+              Edit saved state
             </h3>
             <p className="text-[11px] text-theme-muted font-mono truncate">
               after node · {afterNode}

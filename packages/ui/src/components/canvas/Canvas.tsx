@@ -235,7 +235,13 @@ export default function Canvas({ nodes, edges, onNodesChange, onEdgesChange, wor
   }, [nodes, connectedIds]);
 
   const displayEdges = useMemo(() => {
-    const routed = applyPositionHandles(nodes, edges);
+    const routed = applyPositionHandles(nodes, edges).map((edge) => {
+      if (edge.type === 'al-retry') return edge;
+      const data = edge.data as Record<string, unknown> | undefined;
+      if (!data || !('routePoints' in data)) return edge;
+      const { routePoints: _routePoints, ...liveData } = data;
+      return { ...edge, data: liveData };
+    });
     if (!selectedId) {
       return routed.map(e => ({ ...e, zIndex: 2 }));
     }

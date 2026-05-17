@@ -571,7 +571,8 @@ export function executionRoutes(db: Db): Router {
   //
   // Query params:
   //   include_descendants=false   — exclude child logs (child pages use this)
-  //   limit / offset              — standard pagination
+  //   page=true                   — return { items, limit, offset, hasMore }
+  //   limit / offset              — latest-first page window when page=true
   //   node / category / level     — field filters on the PARENT's own rows;
   //                                 not applied to descendant rows so the
   //                                 user sees the full child context
@@ -618,15 +619,20 @@ export function executionRoutes(db: Db): Router {
         ? { $or: [parentFilter, { executionId: { $in: descendantIds } }] }
         : parentFilter;
 
-      const limit = Math.min(parseInt(String(req.query.limit ?? '500'), 10), 2000);
-      const offset = parseInt(String(req.query.offset ?? '0'), 10);
+      const paged = req.query.page === 'true';
+      const parsedLimit = parseInt(String(req.query.limit ?? '50'), 10);
+      const parsedOffset = parseInt(String(req.query.offset ?? '0'), 10);
+      const limit = Math.min(Math.max(Number.isFinite(parsedLimit) ? parsedLimit : 50, 1), 2000);
+      const offset = Math.max(Number.isFinite(parsedOffset) ? parsedOffset : 0, 0);
 
-      const logs = await db.collection('execution_logs')
+      const rawLogs = await db.collection('execution_logs')
         .find(filter)
-        .sort({ timestamp: 1 })
+        .sort(paged ? { timestamp: -1 } : { timestamp: 1 })
         .skip(offset)
-        .limit(limit)
+        .limit(paged ? limit + 1 : limit)
         .toArray();
+      const hasMore = paged && rawLogs.length > limit;
+      const logs = (paged ? rawLogs.slice(0, limit).reverse() : rawLogs);
 
       // Normalize descendant rows into the engine's log shape so the UI
       // renders them natively. The child's own execution_logs rows use a
@@ -681,6 +687,16 @@ export function executionRoutes(db: Db): Router {
           },
         };
       });
+
+      if (paged) {
+        res.json({
+          items: normalized,
+          limit,
+          offset,
+          hasMore,
+        });
+        return;
+      }
 
       res.json(normalized);
     } catch (err: unknown) {

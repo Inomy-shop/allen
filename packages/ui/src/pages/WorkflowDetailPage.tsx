@@ -92,23 +92,13 @@ export default function WorkflowDetailPage() {
     if (!id) return;
     setRunsLoading(true);
     try {
-      let result = await executionsApi.listPaged({
+      const result = await executionsApi.listPaged({
         workflowId: id,
         type: 'workflow',
         limit: 100,
         offset: 0,
         includeTotal: true,
       });
-
-      if (result.total === 0 && wf) {
-        result = await executionsApi.listPaged({
-          workflowName: workflowName(wf),
-          type: 'workflow',
-          limit: 100,
-          offset: 0,
-          includeTotal: true,
-        });
-      }
 
       setRuns(result.items);
       setRunsTotal(result.total ?? result.items.length);

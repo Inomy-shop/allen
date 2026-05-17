@@ -60,6 +60,8 @@ export default function Timeline({ logs, nodeFilter, onNodeFilterChange, workflo
   const [autoScroll, setAutoScroll] = useState(true);
   const [showSpawnLogs, setShowSpawnLogs] = useState(true);
   const [openRows, setOpenRows] = useState<Set<string>>(() => new Set());
+  const [scrollTop, setScrollTop] = useState(0);
+  const [viewportHeight, setViewportHeight] = useState(0);
   const isUserScrolling = useRef(false);
 
   // Build a tool-call lookup from every trace's toolCalls array so log rows
@@ -112,10 +114,21 @@ export default function Timeline({ logs, nodeFilter, onNodeFilterChange, workflo
     }
   }, [logs.length, autoScroll]);
 
+  useEffect(() => {
+    const el = containerRef.current;
+    if (!el) return;
+    const syncSize = () => setViewportHeight(el.clientHeight);
+    syncSize();
+    const resizeObserver = new ResizeObserver(syncSize);
+    resizeObserver.observe(el);
+    return () => resizeObserver.disconnect();
+  }, []);
+
   // Detect if user scrolled away from bottom
   const handleScroll = () => {
     const el = containerRef.current;
     if (!el) return;
+    setScrollTop(el.scrollTop);
     const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 40;
     if (!atBottom) isUserScrolling.current = true;
     else isUserScrolling.current = false;
@@ -135,6 +148,14 @@ export default function Timeline({ logs, nodeFilter, onNodeFilterChange, workflo
   });
 
   const spawnLogCount = logs.filter(isChildLog).length;
+  const rowHeight = 28;
+  const overscan = 16;
+  const virtualStart = Math.max(0, Math.floor(scrollTop / rowHeight) - overscan);
+  const visibleCount = Math.ceil((viewportHeight || 480) / rowHeight) + overscan * 2;
+  const virtualEnd = Math.min(filtered.length, virtualStart + visibleCount);
+  const virtualRows = filtered.slice(virtualStart, virtualEnd);
+  const topSpacer = virtualStart * rowHeight;
+  const bottomSpacer = Math.max(0, (filtered.length - virtualEnd) * rowHeight);
 
   return (
     <div className="flex flex-col h-full relative">
@@ -188,7 +209,10 @@ export default function Timeline({ logs, nodeFilter, onNodeFilterChange, workflo
             {logs.length === 0 ? 'WAITING FOR LOGS...' : 'NO MATCHING LOGS'}
           </div>
         ) : (
-          filtered.map((log, i) => {
+          <>
+          <div style={{ height: topSpacer }} />
+          {virtualRows.map((log, virtualIndex) => {
+            const i = virtualStart + virtualIndex;
             const isError = log.level === 'error';
             const catClass = isError ? 'text-accent-red bg-accent-red/10' : (categoryColors[log.category] ?? 'text-theme-secondary bg-app-muted');
             const child = isChildLog(log) ? (log.data as {
@@ -315,7 +339,9 @@ export default function Timeline({ logs, nodeFilter, onNodeFilterChange, workflo
                 )}
               </div>
             );
-          })
+          })}
+          <div style={{ height: bottomSpacer }} />
+          </>
         )}
         <div ref={bottomRef} />
       </div>

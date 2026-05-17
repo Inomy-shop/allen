@@ -8,12 +8,14 @@ import {
   Eye,
   GitBranch,
   Loader2,
+  MessageSquare,
   Play,
   Save,
 } from 'lucide-react';
 import { executions as api } from '../../services/api';
 import CheckpointEditorModal from './CheckpointEditorModal';
 import StateDiffModal from './StateDiffModal';
+import type { WorkflowFeedbackEntry } from './WorkflowFeedbackDrawer';
 
 interface CheckpointDoc {
   _id: string;
@@ -31,6 +33,11 @@ interface CheckpointDoc {
 interface Props {
   executionId: string;
   executionStatus: string;
+  feedbackEntries?: WorkflowFeedbackEntry[];
+  canAppendFeedback?: boolean;
+  agentNodeNames?: string[];
+  onFeedbackCreated?: (entries: WorkflowFeedbackEntry[]) => void;
+  onRefreshExecution?: () => void;
 }
 
 /**
@@ -41,7 +48,15 @@ interface Props {
  *   - Run     → resume same execution id from this checkpoint (failed/cancelled only)
  *   - Fork    → create a new execution id seeded from this checkpoint
  */
-export default function CheckpointsPanel({ executionId, executionStatus }: Props) {
+export default function CheckpointsPanel({
+  executionId,
+  executionStatus,
+  feedbackEntries = [],
+  canAppendFeedback = false,
+  agentNodeNames = [],
+  onFeedbackCreated,
+  onRefreshExecution,
+}: Props) {
   const [checkpoints, setCheckpoints] = useState<CheckpointDoc[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -52,6 +67,12 @@ export default function CheckpointsPanel({ executionId, executionStatus }: Props
    *  selected, the "Compare selected" button lights up and opens the diff. */
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [diffing, setDiffing] = useState<[CheckpointDoc, CheckpointDoc] | null>(null);
+  const [commonFeedback, setCommonFeedback] = useState('');
+  const [commonTargets, setCommonTargets] = useState<string[]>([]);
+  const [checkpointFeedbackOpen, setCheckpointFeedbackOpen] = useState<string | null>(null);
+  const [checkpointFeedbackDrafts, setCheckpointFeedbackDrafts] = useState<Record<string, string>>({});
+  const [feedbackBusy, setFeedbackBusy] = useState<string | null>(null);
+  const [feedbackError, setFeedbackError] = useState<string | null>(null);
 
   const isActive = executionStatus === 'running' || executionStatus === 'waiting_for_input';
   const canRunFromCheckpoint = executionStatus === 'completed'
@@ -107,19 +128,129 @@ export default function CheckpointsPanel({ executionId, executionStatus }: Props
     }
   }
 
+  async function addCommonFeedback() {
+    const trimmed = commonFeedback.trim();
+    if (!trimmed) return;
+    setFeedbackBusy('common');
+    setFeedbackError(null);
+    try {
+      const targets = commonTargets.length > 0 ? commonTargets : undefined;
+      const entry = await api.feedback.create(executionId, trimmed, targets);
+      onFeedbackCreated?.([entry]);
+      setCommonFeedback('');
+      setCommonTargets([]);
+      onRefreshExecution?.();
+    } catch (e) {
+      setFeedbackError((e as Error).message);
+    } finally {
+      setFeedbackBusy(null);
+    }
+  }
+
+  async function addCheckpointFeedback(cp: CheckpointDoc) {
+    const trimmed = (checkpointFeedbackDrafts[cp._id] ?? '').trim();
+    if (!trimmed) return;
+    if (!agentNodeNames.includes(cp.afterNode)) {
+      setFeedbackError(`Feedback can only target agent nodes. ${cp.afterNode} is not an agent node.`);
+      return;
+    }
+    setFeedbackBusy(cp._id);
+    setFeedbackError(null);
+    try {
+      const entry = await api.feedback.create(executionId, trimmed, [cp.afterNode]);
+      onFeedbackCreated?.([entry]);
+      setCheckpointFeedbackDrafts((prev) => ({ ...prev, [cp._id]: '' }));
+      setCheckpointFeedbackOpen(null);
+      onRefreshExecution?.();
+    } catch (e) {
+      setFeedbackError((e as Error).message);
+    } finally {
+      setFeedbackBusy(null);
+    }
+  }
+
   return (
     <div className="space-y-3">
+      <div className="rounded-lg border border-app bg-surface p-3 space-y-3">
+        <div className="flex items-center justify-between gap-3">
+          <div className="flex items-center gap-2">
+            <MessageSquare className="w-4 h-4 text-accent-blue" />
+            <div>
+              <div className="font-label text-xs uppercase tracking-widest text-theme-muted">Feedback</div>
+              <div className="text-[10px] font-mono text-theme-subtle">
+                {feedbackEntries.length} existing · shared or selected node targets
+              </div>
+            </div>
+          </div>
+        </div>
+        {canAppendFeedback ? (
+          <>
+            <textarea
+              value={commonFeedback}
+              onChange={(e) => setCommonFeedback(e.target.value)}
+              rows={3}
+              className="w-full resize-y rounded-md border border-app bg-app-card px-3 py-2 text-xs text-theme-primary placeholder:text-theme-subtle focus:border-accent-blue focus:outline-none"
+              placeholder="Common feedback for the next rerun..."
+            />
+            {agentNodeNames.length > 0 && (
+              <div className="max-h-36 overflow-y-auto rounded-md border border-app bg-app-card p-2">
+                <label className="flex items-center gap-2 py-1 font-mono text-[11px] text-theme-secondary">
+                  <input
+                    type="checkbox"
+                    checked={commonTargets.length === 0}
+                    onChange={() => setCommonTargets([])}
+                    className="accent-accent-blue"
+                  />
+                  All agent nodes
+                </label>
+                <div className="grid grid-cols-2 gap-x-3">
+                  {agentNodeNames.map((nodeName) => (
+                    <label key={nodeName} className="flex min-w-0 items-center gap-2 py-1 font-mono text-[11px] text-theme-secondary">
+                      <input
+                        type="checkbox"
+                        checked={commonTargets.includes(nodeName)}
+                        onChange={() => {
+                          setCommonTargets((prev) =>
+                            prev.includes(nodeName)
+                              ? prev.filter((node) => node !== nodeName)
+                              : [...prev, nodeName],
+                          );
+                        }}
+                        className="accent-accent-blue"
+                      />
+                      <span className="truncate" title={nodeName}>{nodeName}</span>
+                    </label>
+                  ))}
+                </div>
+              </div>
+            )}
+            <div className="flex items-center justify-between gap-3">
+              <div className="font-mono text-[11px] text-theme-subtle">
+                {commonTargets.length === 0 ? 'Applies to all agent nodes' : `Applies to ${commonTargets.length} selected node${commonTargets.length === 1 ? '' : 's'}`}
+              </div>
+              <button
+                type="button"
+                onClick={addCommonFeedback}
+                disabled={feedbackBusy != null || !commonFeedback.trim()}
+                className="btn-primary text-xs disabled:cursor-not-allowed disabled:opacity-40"
+              >
+                {feedbackBusy === 'common' ? 'Adding...' : 'Add Feedback'}
+              </button>
+            </div>
+          </>
+        ) : (
+          <div className="rounded-md border border-dashed border-app px-3 py-2 text-center text-xs text-theme-muted">
+            Feedback can be added after a run is completed, failed, or cancelled.
+          </div>
+        )}
+        {feedbackError && <div className="font-mono text-[11px] text-accent-red">{feedbackError}</div>}
+      </div>
+
       <div className="flex items-center justify-between gap-3">
         <div className="flex items-center gap-2">
           <Save className="w-4 h-4 text-accent-blue" />
-          <h2 className="font-label text-xs uppercase tracking-widest text-theme-muted">
-            Checkpoints
-          </h2>
-          {!loading && (
-            <span className="text-[10px] font-mono text-theme-subtle">
-              {checkpoints.length} saved
-            </span>
-          )}
+          <h2 className="font-label text-xs uppercase tracking-widest text-theme-muted">Saved states to rerun from</h2>
+          {!loading && <span className="text-[10px] font-mono text-theme-subtle">{checkpoints.length} saved</span>}
         </div>
         {selected.size >= 2 && (
           <button
@@ -128,32 +259,12 @@ export default function CheckpointsPanel({ executionId, executionStatus }: Props
               if (arr.length >= 2) setDiffing([arr[arr.length - 1], arr[0]]);
             }}
             className="text-[11px] font-mono px-2 py-1 rounded-md border border-accent-blue/40 text-accent-blue hover:bg-accent-blue/10 transition-colors"
-            title="Show state diff between the two selected checkpoints"
+            title="Show state diff between the selected checkpoints"
           >
-            Compare {selected.size} selected
+            Compare {selected.size}
           </button>
         )}
       </div>
-
-      {/* How-to hint — makes the edit → resume flow discoverable without
-          needing to hover every icon. Only rendered when there's at least
-          one checkpoint so empty-state copy isn't doubled up. */}
-      {!loading && checkpoints.length > 0 && (
-        <div className="text-[11px] text-theme-muted font-body bg-app-muted/50 border border-app rounded-md px-3 py-2 leading-relaxed">
-          <span className="text-theme-primary font-semibold">Edit and re-run:</span> click{' '}
-          <Edit2 className="w-3 h-3 inline align-text-bottom text-accent-yellow" /> to open
-          the state editor, save your changes, then click{' '}
-          <Play className="w-3 h-3 inline align-text-bottom text-accent-green" /> to resume
-          the execution from that checkpoint with the edited state. Run is enabled only when
-          the execution is <span className="font-mono">completed</span>,{' '}
-          <span className="font-mono">failed</span>, or <span className="font-mono">cancelled</span>.
-          {isActive && (
-            <span className="block mt-1 text-accent-yellow">
-              Editing and resuming are disabled while the execution is active.
-            </span>
-          )}
-        </div>
-      )}
 
       {error && <div className="text-xs text-accent-red font-mono">{error}</div>}
 
@@ -165,10 +276,10 @@ export default function CheckpointsPanel({ executionId, executionStatus }: Props
         <div className="border border-dashed border-app rounded-lg p-6 text-center">
           <AlertCircle className="w-5 h-5 mx-auto text-theme-subtle mb-1.5" />
           <div className="text-xs text-theme-muted font-body">
-            No checkpoints saved for this execution yet.
+            No saved states are available yet.
           </div>
           <div className="text-[11px] text-theme-subtle font-body mt-1">
-            Checkpoints are written after each node completes successfully.
+            A saved state is written after each node completes successfully.
           </div>
         </div>
       ) : (
@@ -246,7 +357,7 @@ export default function CheckpointsPanel({ executionId, executionStatus }: Props
                     disabled={!canRunFromCheckpoint || busy[cp._id] === 'run'}
                     className="p-1.5 rounded-md hover:bg-app-muted text-theme-muted hover:text-accent-green disabled:opacity-30 transition-colors"
                     title={canRunFromCheckpoint
-                      ? 'Resume same execution from this checkpoint'
+                      ? 'Resume this execution from this saved state'
                       : 'Only completed, failed, or cancelled executions can resume'}
                   >
                     {busy[cp._id] === 'run'
@@ -257,14 +368,66 @@ export default function CheckpointsPanel({ executionId, executionStatus }: Props
                     onClick={() => handleFork(cp)}
                     disabled={busy[cp._id] === 'fork'}
                     className="p-1.5 rounded-md hover:bg-app-muted text-theme-muted hover:text-accent-blue disabled:opacity-30 transition-colors"
-                    title="Fork: create a new execution id from this checkpoint"
+                    title="Fork: create a new execution from this saved state"
                   >
                     {busy[cp._id] === 'fork'
                       ? <Loader2 className="w-3.5 h-3.5 animate-spin" />
                       : <GitBranch className="w-3.5 h-3.5" />}
                   </button>
+                  <button
+                    onClick={() => {
+                      setCheckpointFeedbackOpen((current) => current === cp._id ? null : cp._id);
+                      setFeedbackError(null);
+                    }}
+                    disabled={!canAppendFeedback || !agentNodeNames.includes(cp.afterNode)}
+                    className="p-1.5 rounded-md hover:bg-app-muted text-theme-muted hover:text-accent-blue disabled:opacity-30 transition-colors"
+                    title={
+                      !canAppendFeedback
+                        ? 'Feedback can be added after the run is terminal'
+                        : agentNodeNames.includes(cp.afterNode)
+                          ? `Add feedback for ${cp.afterNode}`
+                          : 'Feedback can only target agent nodes'
+                    }
+                  >
+                    <MessageSquare className="w-3.5 h-3.5" />
+                  </button>
                 </div>
               </div>
+
+              {checkpointFeedbackOpen === cp._id && (
+                <div className="border-t border-app bg-surface-200/20 px-3 py-3 space-y-2">
+                  <div className="flex items-center justify-between gap-3">
+                    <div>
+                      <div className="text-[11px] font-semibold text-theme-primary">Feedback for {cp.afterNode}</div>
+                      <div className="text-[10px] font-mono text-theme-subtle">Targets this checkpoint node on the next rerun.</div>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setCheckpointFeedbackOpen(null)}
+                      className="text-[10px] font-mono text-theme-muted hover:text-theme-primary"
+                    >
+                      Close
+                    </button>
+                  </div>
+                  <textarea
+                    value={checkpointFeedbackDrafts[cp._id] ?? ''}
+                    onChange={(e) => setCheckpointFeedbackDrafts((prev) => ({ ...prev, [cp._id]: e.target.value }))}
+                    rows={3}
+                    className="w-full resize-y rounded-md border border-app bg-app-card px-3 py-2 text-xs text-theme-primary placeholder:text-theme-subtle focus:border-accent-blue focus:outline-none"
+                    placeholder={`Feedback for ${cp.afterNode}`}
+                  />
+                  <div className="flex justify-end">
+                    <button
+                      type="button"
+                      onClick={() => addCheckpointFeedback(cp)}
+                      disabled={feedbackBusy != null || !(checkpointFeedbackDrafts[cp._id] ?? '').trim()}
+                      className="btn-primary text-xs disabled:cursor-not-allowed disabled:opacity-40"
+                    >
+                      {feedbackBusy === cp._id ? 'Adding...' : 'Add Node Feedback'}
+                    </button>
+                  </div>
+                </div>
+              )}
 
               {expanded.has(cp._id) && (
                 <div className="border-t border-app bg-surface-200/20 px-3 py-3 space-y-2">

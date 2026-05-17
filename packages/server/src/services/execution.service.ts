@@ -1402,7 +1402,13 @@ export class ExecutionService {
     // and register the SSE emitter before the engine starts emitting.
     const { randomUUID } = await import('node:crypto');
     const newExecutionId = randomUUID();
-    const emitter = createSSEEmitter(newExecutionId);
+    const baseEmitter = createSSEEmitter(newExecutionId);
+    const emitter = this.wrapEmitterWithInterventionHook(
+      baseEmitter,
+      newExecutionId,
+      workflow,
+      (exec.input ?? {}) as Record<string, unknown>,
+    );
 
     const config: EngineConfig = {
       db: this.db,
@@ -1449,7 +1455,13 @@ export class ExecutionService {
     if (!workflowDoc) throw new Error('Workflow not found');
 
     const workflow = workflowDoc.parsed as WorkflowDef;
-    const emitter = createSSEEmitter(executionId);
+    const baseEmitter = createSSEEmitter(executionId);
+    const emitter = this.wrapEmitterWithInterventionHook(
+      baseEmitter,
+      executionId,
+      workflow,
+      (exec.input ?? {}) as Record<string, unknown>,
+    );
 
     const allWorkflowDocs = await this.db.collection('workflows').find({}).toArray();
     const workflows: Record<string, WorkflowDef> = {};
@@ -2279,7 +2291,13 @@ export class ExecutionService {
             // Fallback: if no select options were emitted, provide a
             // standard approve/answer/reject set based on severity.
             if (options.length === 0) {
-              if (severity === 'approval' || severity === 'escalation') {
+              if (severity === 'escalation') {
+                options.push(
+                  { label: 'Retry with feedback', value: 'retry_with_feedback', primary: true, destructive: false },
+                  { label: 'Override and continue', value: 'override_and_continue', primary: false, destructive: false },
+                  { label: 'Abandon', value: 'abandon', primary: false, destructive: true },
+                );
+              } else if (severity === 'approval') {
                 options.push(
                   { label: 'Approve', value: 'approve', primary: true, destructive: false },
                   { label: 'Request changes', value: 'request_changes', primary: false, destructive: false },
