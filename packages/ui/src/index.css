@@ -19,7 +19,7 @@
 
 @layer base {
   :root {
-    /* Light tokens converted from allen-prototype/styles.css OKLCH values. */
+    /* Light theme design tokens (OKLCH-derived). */
     --color-surface:        251 250 248;   /* prototype --bg            */
     --color-surface-100:    255 255 255;   /* prototype --panel         */
     --color-surface-200:    246 245 242;   /* prototype --bg-2          */
@@ -89,7 +89,7 @@
     --focus-ring: 0 0 0 3px rgb(var(--color-accent) / 0.18);
   }
 
-  /* Dark tokens converted from allen-prototype/styles.css OKLCH values. */
+  /* Dark theme design tokens (OKLCH-derived). */
   .dark {
     --color-surface:          6   8  12;
     --color-surface-100:     13  17  22;

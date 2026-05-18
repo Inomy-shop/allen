@@ -460,7 +460,7 @@ export function mcpRoutes(db: Db): Router {
         argKeys: finalArgKeys,
         command: finalCommand,
         args: finalArgs,
-        env,            // legacy literal env — passthrough, may contain @secret:KEY refs
+        env,            // legacy literal env — passthrough for backwards-compat with existing records
         url, headers,
         bundleId, bundlePath, bundleEntry,
         python: finalPython,
