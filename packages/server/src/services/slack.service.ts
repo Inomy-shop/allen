@@ -378,7 +378,9 @@ export class SlackService {
   ): Promise<void> {
     // Acknowledge with hourglass reaction
     await this.addReaction(channelId, reactionTs, 'hourglass_flowing_sand').catch(() => {});
-    const onProgress = this.createProgressHandler(channelId, threadTs);
+    const onProgress = isSlackProgressEnabled()
+      ? this.createProgressHandler(channelId, threadTs)
+      : undefined;
 
     try {
       const result = await this.chatService.sendMessageForSlack(sessionId, content, undefined, sender, onProgress);
@@ -576,6 +578,16 @@ function toolProgressLabel(tool: string): string {
   if (tool.includes('list_repos')) return 'checking repositories';
   if (tool.includes('linear')) return 'checking Linear';
   return normalized;
+}
+
+/**
+ * Returns true only when ALLEN_SLACK_PROGRESS_POSTS is explicitly set to
+ * 'true' or '1' (case-insensitive, trimmed). Any other value — including
+ * unset, empty, 'false', '0', or whitespace — leaves progress posts OFF.
+ */
+function isSlackProgressEnabled(): boolean {
+  const val = (process.env.ALLEN_SLACK_PROGRESS_POSTS ?? '').trim().toLowerCase();
+  return val === 'true' || val === '1';
 }
 
 /**

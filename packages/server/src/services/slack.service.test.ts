@@ -248,6 +248,166 @@ describe('SlackService file attachment handling', () => {
   });
 });
 
+// ── Progress handler flag tests ──
+
+describe('SlackService ALLEN_SLACK_PROGRESS_POSTS flag', () => {
+  const originalProgressPosts = process.env.ALLEN_SLACK_PROGRESS_POSTS;
+  let fetchSpy: ReturnType<typeof vi.spyOn>;
+
+  beforeEach(() => {
+    delete process.env.ALLEN_SLACK_PROGRESS_POSTS;
+    fetchSpy = vi.spyOn(global, 'fetch');
+    // Default: all Slack API calls succeed
+    fetchSpy.mockResolvedValue(fakeResponse({ ok: true }));
+  });
+
+  afterEach(() => {
+    if (originalProgressPosts === undefined) delete process.env.ALLEN_SLACK_PROGRESS_POSTS;
+    else process.env.ALLEN_SLACK_PROGRESS_POSTS = originalProgressPosts;
+    vi.restoreAllMocks();
+  });
+
+  it('flag unset → sendMessageForSlack is called with undefined as 5th arg', async () => {
+    const { service } = makeService();
+
+    const event = {
+      type: 'app_mention',
+      text: '<@U123> hello',
+      user: 'U456',
+      channel: 'C789',
+      ts: '111.001',
+    };
+
+    await service.handleNewThread('T001', 'C789', '111.001', event);
+
+    const sendCalls = vi.mocked(service.chatService.sendMessageForSlack).mock.calls;
+    expect(sendCalls.length).toBeGreaterThan(0);
+    // 5th argument (index 4) must be undefined — no progress handler
+    expect(sendCalls[0][4]).toBeUndefined();
+  });
+
+  it('flag unset → hourglass reaction added, success reaction added, final message posted', async () => {
+    const { service } = makeService();
+
+    const event = {
+      type: 'app_mention',
+      text: '<@U123> hello',
+      user: 'U456',
+      channel: 'C789',
+      ts: '111.002',
+    };
+
+    await service.handleNewThread('T001', 'C789', '111.002', event);
+
+    const urls = fetchSpy.mock.calls.map((c) => {
+      const input = c[0];
+      return typeof input === 'string' ? input : (input as URL).toString();
+    });
+
+    // Hourglass reaction must be added
+    expect(urls.some((u) => u.includes('reactions.add'))).toBe(true);
+    const addBodies = fetchSpy.mock.calls
+      .filter((c) => {
+        const input = c[0];
+        const url = typeof input === 'string' ? input : (input as URL).toString();
+        return url.includes('reactions.add');
+      })
+      .map((c) => {
+        const opts = c[1] as RequestInit | undefined;
+        return JSON.parse((opts?.body as string) ?? '{}') as Record<string, string>;
+      });
+    expect(addBodies.some((b) => b.name === 'hourglass_flowing_sand')).toBe(true);
+    expect(addBodies.some((b) => b.name === 'white_check_mark')).toBe(true);
+
+    // Final response must be posted via chat.postMessage
+    expect(urls.some((u) => u.includes('chat.postMessage'))).toBe(true);
+  });
+
+  it('flag set to "true" → sendMessageForSlack is called with a function as 5th arg', async () => {
+    process.env.ALLEN_SLACK_PROGRESS_POSTS = 'true';
+    const { service } = makeService();
+
+    const event = {
+      type: 'app_mention',
+      text: '<@U123> hello',
+      user: 'U456',
+      channel: 'C789',
+      ts: '111.003',
+    };
+
+    await service.handleNewThread('T001', 'C789', '111.003', event);
+
+    const sendCalls = vi.mocked(service.chatService.sendMessageForSlack).mock.calls;
+    expect(sendCalls.length).toBeGreaterThan(0);
+    // 5th argument (index 4) must be a function when the flag is enabled
+    expect(typeof sendCalls[0][4]).toBe('function');
+
+    // Reactions must still fire even in opt-in mode
+    const urls = fetchSpy.mock.calls.map((c) => {
+      const input = c[0];
+      return typeof input === 'string' ? input : (input as URL).toString();
+    });
+    expect(urls.some((u) => u.includes('reactions.add'))).toBe(true);
+  });
+
+  it('flag set to "1" → sendMessageForSlack is called with a function as 5th arg', async () => {
+    process.env.ALLEN_SLACK_PROGRESS_POSTS = '1';
+    const { service } = makeService();
+
+    const event = {
+      type: 'app_mention',
+      text: '<@U123> hello',
+      user: 'U456',
+      channel: 'C789',
+      ts: '111.004',
+    };
+
+    await service.handleNewThread('T001', 'C789', '111.004', event);
+
+    const sendCalls = vi.mocked(service.chatService.sendMessageForSlack).mock.calls;
+    expect(sendCalls.length).toBeGreaterThan(0);
+    expect(typeof sendCalls[0][4]).toBe('function');
+  });
+
+  it('flag set to "TRUE" (uppercase) → sendMessageForSlack is called with a function', async () => {
+    process.env.ALLEN_SLACK_PROGRESS_POSTS = 'TRUE';
+    const { service } = makeService();
+
+    const event = {
+      type: 'app_mention',
+      text: '<@U123> hello',
+      user: 'U456',
+      channel: 'C789',
+      ts: '111.005',
+    };
+
+    await service.handleNewThread('T001', 'C789', '111.005', event);
+
+    const sendCalls = vi.mocked(service.chatService.sendMessageForSlack).mock.calls;
+    expect(sendCalls.length).toBeGreaterThan(0);
+    expect(typeof sendCalls[0][4]).toBe('function');
+  });
+
+  it('flag set to "false" → sendMessageForSlack is called with undefined (OFF)', async () => {
+    process.env.ALLEN_SLACK_PROGRESS_POSTS = 'false';
+    const { service } = makeService();
+
+    const event = {
+      type: 'app_mention',
+      text: '<@U123> hello',
+      user: 'U456',
+      channel: 'C789',
+      ts: '111.006',
+    };
+
+    await service.handleNewThread('T001', 'C789', '111.006', event);
+
+    const sendCalls = vi.mocked(service.chatService.sendMessageForSlack).mock.calls;
+    expect(sendCalls.length).toBeGreaterThan(0);
+    expect(sendCalls[0][4]).toBeUndefined();
+  });
+});
+
 // ── Bot/app message in thread tests ──
 
 describe('SlackService bot/app messages in thread', () => {
