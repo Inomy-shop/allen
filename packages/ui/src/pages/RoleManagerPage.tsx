@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useAgents } from '../hooks/useAgents';
 import { agents as agentsApi, teams as teamsApi, repos as reposApi, executions as executionsApi, skills as skillsApi, type SkillRecord } from '../services/api';
 import RoleIcon from '../components/common/RoleIcon';
@@ -10,7 +10,7 @@ import { renderMarkdown } from '../components/chat/ChatMessageList';
 import {
   RefreshCw, Sparkles, Users, Crown, Search, Play, ArrowRight,
   X, FolderGit2, Plus, Pencil, Trash2, LayoutGrid, Info, Home,
-  ChevronRight, GitBranch, ExternalLink, UserRound,
+  ChevronRight, GitBranch, ExternalLink,
   Layers, Tag, FileText, Monitor, Download, ScanSearch, Settings, BookOpen,
 } from 'lucide-react';
 import { DelegationGraph } from '../components/agents/DelegationGraph';
@@ -30,7 +30,7 @@ import { AgentCard } from '../components/agents/AgentCard';
 
 type Agent = Record<string, unknown>;
 type Selection = { kind: 'overview' } | { kind: 'team'; name: string } | { kind: 'unassigned' };
-type LibrarySection = 'teams-agents' | 'skills' | 'repos' | 'integrations' | 'members';
+type LibrarySection = 'teams-agents' | 'skills' | 'repos' | 'integrations';
 
 // ── Agent detail panel (markdown viewer) ──────────────────────────────────
 
@@ -408,6 +408,7 @@ function RunAgentDialog({
 
 export default function RoleManagerPage() {
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
   const { agents: allAgents, loading, refresh } = useAgents();
   const toast = useToast();
 
@@ -417,7 +418,14 @@ export default function RoleManagerPage() {
   const [repoLoading, setRepoLoading] = useState(true);
   const [skillList, setSkillList] = useState<SkillRecord[]>([]);
   const [skillsLoading, setSkillsLoading] = useState(true);
-  const [librarySection, setLibrarySection] = useState<LibrarySection>('teams-agents');
+  const sectionParam = searchParams.get('section');
+  const librarySection: LibrarySection =
+    sectionParam === 'skills'
+      || sectionParam === 'repos'
+      || sectionParam === 'integrations'
+      || sectionParam === 'teams-agents'
+      ? sectionParam
+      : 'teams-agents';
   // Selection + search
   const [selection, setSelection] = useState<Selection>({ kind: 'overview' });
   const [sidebarSearch, setSidebarSearch] = useState('');
@@ -754,36 +762,8 @@ export default function RoleManagerPage() {
     );
   }
 
-  const librarySections: Array<{ k: LibrarySection; label: string; desc: string; count: number | string }> = [
-    { k: 'teams-agents', label: 'teams & agents', desc: 'departments and the agents that live there', count: allTeams.length },
-    { k: 'skills', label: 'skills', desc: 'routing playbooks for the assistant', count: skillList.length },
-    { k: 'repos', label: 'repos', desc: 'connected source repositories', count: repoList.length },
-    { k: 'integrations', label: 'integrations', desc: 'linear · github · slack · ...', count: 3 },
-    { k: 'members', label: 'members', desc: 'people in this org', count: '—' },
-  ];
-
   return (
     <div className="lib-shell" data-screen-label="library">
-      <aside className="lib-rail scroll-hide">
-        <div className="lib-rail-head">
-          <h1 className="lib-rail-title">library</h1>
-          <p className="lib-rail-sub">agents, skills, repos, and integrations the org uses</p>
-        </div>
-        <nav className="lib-rail-list">
-          {librarySections.map(section => (
-            <button
-              key={section.k}
-              className={`lib-rail-item ${librarySection === section.k ? 'active' : ''}`}
-              onClick={() => setLibrarySection(section.k)}
-            >
-              <span className="lib-ri-label">{section.label}</span>
-              <span className="lib-ri-count">{section.count}</span>
-              <span className="lib-ri-desc">{section.desc}</span>
-            </button>
-          ))}
-        </nav>
-      </aside>
-
       <main className="lib-pane scroll-hide">
         {selectedAgents.size > 0 && (
           <div className="lib-selection-bar">
@@ -835,13 +815,6 @@ export default function RoleManagerPage() {
           />
         )}
         {librarySection === 'integrations' && <LibraryIntegrationsPane />}
-        {librarySection === 'members' && (
-          <LibraryMembersPane
-            teams={allTeams}
-            agents={allAgents as any[]}
-            unassigned={unassigned as any[]}
-          />
-        )}
       </main>
 
       {/* Modals */}
@@ -1067,8 +1040,8 @@ function LibrarySkillsPane({
   }
 
   return (
-    <div className="lib-section">
-      <div className="lib-page-head">
+    <div className="lib-section lib-skills-section">
+      <div className="lib-page-head lib-skills-head">
         <div>
           <h2>skills</h2>
           <p>{skills.length} routing playbooks · loaded on demand by the assistant</p>
@@ -1079,15 +1052,15 @@ function LibrarySkillsPane({
         </div>
       </div>
 
-      <div className="grid grid-cols-1 xl:grid-cols-[380px_minmax(0,1fr)] gap-4">
-        <div className="lib-card overflow-hidden">
-          <div className="p-3 border-b border-app">
+      <div className="lib-skills-layout">
+        <aside className="lib-skills-list-panel">
+          <div className="lib-skills-search">
             <div className="lib-search">
               <Search className="w-4 h-4" />
               <input value={query} onChange={e => setQuery(e.target.value)} placeholder="Search skills" />
             </div>
           </div>
-          <div className="max-h-[calc(100vh-260px)] overflow-auto scroll-hide">
+          <div className="lib-skills-list-scroll scroll-hide">
             {loading ? (
               Array.from({ length: 8 }).map((_, i) => <div key={i} className="lib-row-skel" />)
             ) : filtered.length === 0 ? (
@@ -1098,14 +1071,14 @@ function LibrarySkillsPane({
               return (
                 <button
                   key={id}
-                  className={`w-full text-left px-4 py-3 border-b border-app hover:bg-app-muted transition-colors ${active ? 'bg-app-muted' : ''}`}
+                  className={`lib-skill-row ${active ? 'active' : ''}`}
                   onClick={() => { void selectSkill(skill); }}
                 >
                   <div className="flex items-start gap-3">
                     <BookOpen className="h-4 w-4 text-accent mt-0.5 shrink-0" />
                     <div className="min-w-0 flex-1">
                       <div className="flex items-center gap-2">
-                        <span className="font-medium text-theme-primary truncate">{skill.displayName ?? skill.name}</span>
+                        <span className="skill-row-title font-medium text-theme-primary truncate">{skill.displayName ?? skill.name}</span>
                         <span className={`badge ${skill.enabled === false ? 'badge-muted' : 'badge-ok'}`}>
                           {skill.enabled === false ? 'disabled' : 'enabled'}
                         </span>
@@ -1122,10 +1095,10 @@ function LibrarySkillsPane({
               );
             })}
           </div>
-        </div>
+        </aside>
 
-        <div className="space-y-4 min-w-0">
-          <div className="lib-card p-4">
+        <section className="lib-skills-editor-scroll scroll-hide">
+          <div className="lib-skill-editor">
             <div className="flex items-center justify-between gap-3 mb-4">
               <div>
                 <h3 className="text-sm font-semibold text-theme-primary">{activeId === 'new' ? 'new skill' : draft.name}</h3>
@@ -1216,7 +1189,7 @@ function LibrarySkillsPane({
             </label>
           </div>
 
-          <div className="lib-card p-4">
+          <div className="lib-skill-tester">
             <div className="flex items-center justify-between gap-3 mb-3">
               <div>
                 <h3 className="text-sm font-semibold text-theme-primary">skill matcher</h3>
@@ -1251,7 +1224,7 @@ function LibrarySkillsPane({
               </div>
             )}
           </div>
-        </div>
+        </section>
       </div>
     </div>
   );
@@ -1282,19 +1255,17 @@ function LibraryTeamsAgentsPane({
   onAddAgentToTeam: (team: Team) => void;
   onRefresh: () => void;
 }) {
-  const [activeName, setActiveName] = useState('');
+  const [activeName, setActiveName] = useState('all');
   const [teamQuery, setTeamQuery] = useState('');
   const [agentQuery, setAgentQuery] = useState('');
+  const [roleFilter, setRoleFilter] = useState<'all' | 'lead' | 'member'>('all');
 
   useEffect(() => {
-    if (teams.length === 0) {
-      setActiveName('');
-      return;
-    }
-    if (!activeName || !teams.some(t => t.name === activeName)) setActiveName(teams[0].name);
+    if (activeName !== 'all' && !teams.some(t => t.name === activeName)) setActiveName('all');
   }, [activeName, teams]);
 
   const totalAgents = agents.length;
+  const leadCount = agents.filter(agent => agent.teamRole === 'lead').length;
   const q = teamQuery.trim().toLowerCase();
   const filteredTeams = teams.filter(team =>
     !q
@@ -1303,17 +1274,33 @@ function LibraryTeamsAgentsPane({
     || (team.leadAgentName ?? '').toLowerCase().includes(q)
     || (team.mission ?? '').toLowerCase().includes(q),
   );
-  const activeTeam = teams.find(t => t.name === activeName) ?? teams[0] ?? null;
-  const activeMembers = activeTeam ? (agentsByTeam.get(activeTeam.name) ?? []) : [];
+  const activeTeam = activeName === 'all' ? null : teams.find(t => t.name === activeName) ?? null;
+  const activeMembers = activeTeam ? (agentsByTeam.get(activeTeam.name) ?? []) : agents;
   const activeLead = activeMembers.find(member => member.teamRole === 'lead');
   const memberQ = agentQuery.trim().toLowerCase();
-  const filteredMembers = !memberQ
-    ? activeMembers
-    : activeMembers.filter(member =>
-      String(member.name ?? '').toLowerCase().includes(memberQ)
+  const matchesAgentFilters = (member: any) => {
+    const matchesRole = roleFilter === 'all' || member.teamRole === roleFilter;
+    const matchesText = !memberQ
+      || String(member.name ?? '').toLowerCase().includes(memberQ)
       || String(member.displayName ?? '').toLowerCase().includes(memberQ)
-      || ((member.capabilities as string[] | undefined) ?? []).some(cap => cap.toLowerCase().includes(memberQ)),
-    );
+      || String(member.teamName ?? '').toLowerCase().includes(memberQ)
+      || ((member.capabilities as string[] | undefined) ?? []).some(cap => cap.toLowerCase().includes(memberQ));
+    return matchesRole && matchesText;
+  };
+  const filteredMembers = activeMembers.filter(matchesAgentFilters);
+  const filteredTeamSet = new Set(filteredTeams.map(team => team.name));
+  const groupedFilteredMembers = teams
+    .filter(team => activeTeam ? team.name === activeTeam.name : filteredTeamSet.has(team.name))
+    .map(team => ({
+      team,
+      members: (agentsByTeam.get(team.name) ?? []).filter(matchesAgentFilters),
+    }))
+    .filter(group => group.members.length > 0);
+  const unassignedMembers = activeTeam ? [] : agents
+    .filter(agent => !agent.teamName && matchesAgentFilters)
+    .filter(() => !q || 'unassigned'.includes(q));
+  const visibleGroupCount = groupedFilteredMembers.length + (unassignedMembers.length > 0 ? 1 : 0);
+  const showingAllAgents = !activeTeam;
 
   return (
     <div className="lib-team-shell">
@@ -1327,9 +1314,23 @@ function LibraryTeamsAgentsPane({
             <Search className="h-3 w-3" />
             <input placeholder="search teams or leads..." value={teamQuery} onChange={e => setTeamQuery(e.target.value)} />
           </div>
+          <div className="lib-team-actions">
+            <button className="btn btn-secondary btn-sm" onClick={onImportAgents}><FolderGit2 className="w-3 h-3" /> import</button>
+            <button className="btn btn-secondary btn-sm" onClick={onCreateTeam}><Plus className="w-3 h-3" /> new team</button>
+          </div>
         </div>
         <div className="lib-team-body">
-          {filteredTeams.length === 0 && <div className="lib-empty">no teams match "{teamQuery}"</div>}
+          <button
+            className={`lib-team-row ${showingAllAgents ? 'active' : ''}`}
+            onClick={() => setActiveName('all')}
+          >
+            <span className="lib-team-row-head">
+              <span>All agents</span>
+              <em>{totalAgents}</em>
+            </span>
+            <span className="lib-team-row-sub">grouped by team</span>
+          </button>
+          {filteredTeams.length === 0 && <div className="lib-empty compact">no teams match "{teamQuery}"</div>}
           {filteredTeams.map(team => (
             <button
               key={team.name}
@@ -1344,61 +1345,133 @@ function LibraryTeamsAgentsPane({
             </button>
           ))}
         </div>
-        <div className="lib-team-foot">
-          <button className="btn btn-secondary btn-sm" onClick={onImportAgents}><FolderGit2 className="w-3 h-3" /> import</button>
-          <button className="btn btn-secondary btn-sm" onClick={onCreateTeam}><Plus className="w-3 h-3" /> new team</button>
-        </div>
       </aside>
 
       <section className="lib-team-detail scroll-hide">
-        {activeTeam ? (
+        {teams.length > 0 || showingAllAgents ? (
           <>
             <header className="lib-team-detail-head">
               <div>
-                <h2>{activeTeam.displayName}</h2>
-                <p>{activeTeam.mission || activeTeam.description || 'No mission defined.'}</p>
+                <h2>{activeTeam ? activeTeam.displayName : 'all agents'}</h2>
+                <p>
+                  {activeTeam
+                    ? activeTeam.mission || activeTeam.description || 'No mission defined.'
+                    : 'Browse every agent, grouped by team. Search across names, teams, and capabilities.'}
+                </p>
               </div>
               <div className="lib-actions">
                 <button className="btn btn-secondary btn-sm" onClick={onRefresh}><RefreshCw className="w-3 h-3" /></button>
                 <button className="btn btn-secondary btn-sm" onClick={onImportAgents}><FolderGit2 className="w-3 h-3" /> import from repo</button>
-                <button className="btn btn-secondary btn-sm" onClick={() => onEditTeam(activeTeam)}><Pencil className="w-3 h-3" /> edit</button>
-                <button className="btn btn-primary btn-sm" onClick={() => onAddAgentToTeam(activeTeam)}><Plus className="w-3 h-3" /> add agent</button>
+                {activeTeam && <button className="btn btn-secondary btn-sm" onClick={() => onEditTeam(activeTeam)}><Pencil className="w-3 h-3" /> edit</button>}
+                <button className="btn btn-primary btn-sm" onClick={() => activeTeam ? onAddAgentToTeam(activeTeam) : onCreateAgent()}><Plus className="w-3 h-3" /> add agent</button>
               </div>
             </header>
 
             <div className="lib-team-stats">
-              <div><span>lead</span><strong>{activeLead?.displayName ?? activeLead?.name ?? activeTeam.leadAgentName ?? 'none'}</strong></div>
-              <div><span>agents</span><strong className="mono">{activeMembers.length}</strong></div>
-              <div><span>id</span><strong className="mono">{activeTeam.name}</strong></div>
+              {activeTeam ? (
+                <>
+                  <div><span>lead</span><strong>{activeLead?.displayName ?? activeLead?.name ?? activeTeam.leadAgentName ?? 'none'}</strong></div>
+                  <div><span>agents</span><strong className="mono">{activeMembers.length}</strong></div>
+                  <div><span>id</span><strong className="mono">{activeTeam.name}</strong></div>
+                </>
+              ) : (
+                <>
+                  <div><span>teams</span><strong className="mono">{teams.length}</strong></div>
+                  <div><span>agents</span><strong className="mono">{totalAgents}</strong></div>
+                  <div><span>leads</span><strong className="mono">{leadCount}</strong></div>
+                </>
+              )}
             </div>
 
             <div className="lib-team-section-head">
               <h3>agents <span>{filteredMembers.length}</span></h3>
               <div className="lib-actions">
-                <input className="lib-mini-search" placeholder="filter..." value={agentQuery} onChange={e => setAgentQuery(e.target.value)} />
+                <input className="lib-mini-search wide" placeholder="search agents..." value={agentQuery} onChange={e => setAgentQuery(e.target.value)} />
+                <select className="lib-mini-select" value={roleFilter} onChange={event => setRoleFilter(event.target.value as 'all' | 'lead' | 'member')}>
+                  <option value="all">All roles</option>
+                  <option value="lead">Leads</option>
+                  <option value="member">Members</option>
+                </select>
                 <button className="btn btn-ghost btn-sm" onClick={onRefresh}><RefreshCw className="w-3 h-3" /></button>
               </div>
             </div>
 
-            <div className="lib-agent-list">
-              {filteredMembers.length === 0 ? (
-                <div className="lib-empty">no agents in this team</div>
-              ) : filteredMembers.map(agent => (
-                <LibraryAgentListRow
-                  key={agent.name}
-                  agent={agent}
-                  runs7d={activityByAgent.get(agent.name as string) ?? 0}
-                  selected={selectedAgents.has(agent.name)}
-                  onToggle={() => onToggleSelect(agent.name)}
-                  onView={() => onViewAgent(agent)}
-                  onEdit={() => onEditAgent(agent)}
-                  onDelete={() => onDeleteAgent(agent.name)}
-                  onRun={() => onRunAgent(agent)}
-                />
-              ))}
-            </div>
+            {showingAllAgents ? (
+              <div className="lib-agent-group-list">
+                {visibleGroupCount === 0 ? (
+                  <div className="lib-empty">no agents match these filters</div>
+                ) : (
+                  <>
+                    {groupedFilteredMembers.map(group => (
+                      <div className="lib-agent-group" key={group.team.name}>
+                        <button className="lib-agent-group-head" onClick={() => setActiveName(group.team.name)}>
+                          <span>{group.team.displayName}</span>
+                          <em>{group.members.length}</em>
+                        </button>
+                        <div className="lib-agent-list">
+                          {group.members.map(agent => (
+                            <LibraryAgentListRow
+                              key={agent.name}
+                              agent={agent}
+                              runs7d={activityByAgent.get(agent.name as string) ?? 0}
+                              selected={selectedAgents.has(agent.name)}
+                              onToggle={() => onToggleSelect(agent.name)}
+                              onView={() => onViewAgent(agent)}
+                              onEdit={() => onEditAgent(agent)}
+                              onDelete={() => onDeleteAgent(agent.name)}
+                              onRun={() => onRunAgent(agent)}
+                            />
+                          ))}
+                        </div>
+                      </div>
+                    ))}
+                    {unassignedMembers.length > 0 && (
+                      <div className="lib-agent-group">
+                        <div className="lib-agent-group-head">
+                          <span>Unassigned</span>
+                          <em>{unassignedMembers.length}</em>
+                        </div>
+                        <div className="lib-agent-list">
+                          {unassignedMembers.map(agent => (
+                            <LibraryAgentListRow
+                              key={agent.name}
+                              agent={agent}
+                              runs7d={activityByAgent.get(agent.name as string) ?? 0}
+                              selected={selectedAgents.has(agent.name)}
+                              onToggle={() => onToggleSelect(agent.name)}
+                              onView={() => onViewAgent(agent)}
+                              onEdit={() => onEditAgent(agent)}
+                              onDelete={() => onDeleteAgent(agent.name)}
+                              onRun={() => onRunAgent(agent)}
+                            />
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                  </>
+                )}
+              </div>
+            ) : (
+              <div className="lib-agent-list">
+                {filteredMembers.length === 0 ? (
+                  <div className="lib-empty">no agents match these filters</div>
+                ) : filteredMembers.map(agent => (
+                  <LibraryAgentListRow
+                    key={agent.name}
+                    agent={agent}
+                    runs7d={activityByAgent.get(agent.name as string) ?? 0}
+                    selected={selectedAgents.has(agent.name)}
+                    onToggle={() => onToggleSelect(agent.name)}
+                    onView={() => onViewAgent(agent)}
+                    onEdit={() => onEditAgent(agent)}
+                    onDelete={() => onDeleteAgent(agent.name)}
+                    onRun={() => onRunAgent(agent)}
+                  />
+                ))}
+              </div>
+            )}
 
-            {!activeTeam.isBuiltIn && (
+            {activeTeam && !activeTeam.isBuiltIn && (
               <div className="lib-danger-row">
                 <span>team management</span>
                 <button className="btn btn-ghost btn-sm hover:text-accent-red" onClick={() => onDeleteTeam(activeTeam)}>
@@ -1532,7 +1605,7 @@ function LibraryReposPane({
 
 function LibraryIntegrationsPane() {
   return (
-    <div className="lib-section">
+    <div className="lib-section lib-integrations-section">
       <div className="lib-page-head">
         <div>
           <h2>integrations</h2>
@@ -1540,37 +1613,6 @@ function LibraryIntegrationsPane() {
         </div>
       </div>
       <McpServerManager />
-    </div>
-  );
-}
-
-function LibraryMembersPane({ teams, agents, unassigned }: { teams: Team[]; agents: any[]; unassigned: any[] }) {
-  const leads = agents.filter(agent => agent.teamRole === 'lead');
-  return (
-    <div className="lib-section">
-      <div className="lib-page-head">
-        <div>
-          <h2>members</h2>
-          <p>{agents.length} agent owners across {teams.length} teams</p>
-        </div>
-      </div>
-      <div className="lib-team-stats mb-5">
-        <div><span>team leads</span><strong className="mono">{leads.length}</strong></div>
-        <div><span>assigned agents</span><strong className="mono">{agents.length - unassigned.length}</strong></div>
-        <div><span>unassigned</span><strong className="mono">{unassigned.length}</strong></div>
-      </div>
-      <div className="lib-pref-list">
-        {leads.slice(0, 12).map(agent => (
-          <div key={agent.name} className="lib-pref-row">
-            <span>
-              <strong>{agent.displayName ?? agent.name}</strong>
-              <em>{agent.teamName ?? 'no team'} · {agent.model ?? 'sonnet'}</em>
-            </span>
-            <span className="lib-pill ok"><UserRound className="h-3 w-3" /> lead</span>
-          </div>
-        ))}
-        {leads.length === 0 && <div className="lib-empty">no team leads found</div>}
-      </div>
     </div>
   );
 }

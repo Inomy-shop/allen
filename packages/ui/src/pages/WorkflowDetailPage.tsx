@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import {
-  ArrowLeft, FileText, GitBranch, Layers, MessageSquare, Pencil, Play, RefreshCw, Shield,
+  ArrowLeft, FileText, GitBranch, Layers, Pencil, Play, RefreshCw, Shield,
 } from 'lucide-react';
 import { executions as executionsApi, users as usersApi, workflows as workflowsApi } from '../services/api';
 import type { AuthUser } from '../stores/authStore';
@@ -58,7 +58,13 @@ function runUserId(run: any): string | null {
 }
 
 function runHasLinkedChat(run: any): boolean {
-  return Boolean(run?.chat?.sessionId ?? run?.meta?.chatSessionId);
+  return Boolean(runChatSessionId(run));
+}
+
+function runChatSessionId(run: any): string | null {
+  return run?.chat?.sessionId
+    ?? run?.meta?.chatSessionId
+    ?? null;
 }
 
 export default function WorkflowDetailPage() {
@@ -265,7 +271,7 @@ export default function WorkflowDetailPage() {
       {tab === 'runs' && (
         <div className="mt-4">
           <div className="card overflow-hidden">
-            <div className="grid grid-cols-[110px_1fr_220px_140px_110px_110px_92px] items-center gap-4 border-b border-app bg-app-muted px-4 py-2">
+            <div className="grid grid-cols-[110px_1fr_220px_140px_110px_110px_180px] items-center gap-4 border-b border-app bg-app-muted px-4 py-2">
               <span className="overline">Run</span>
               <span className="overline">Workflow</span>
               <span className="overline">User</span>
@@ -292,7 +298,7 @@ export default function WorkflowDetailPage() {
                     navigate(`/executions/${run.id ?? run._id}`);
                   }
                 }}
-                className="grid w-full grid-cols-[110px_1fr_220px_140px_110px_110px_92px] items-center gap-4 border-b border-app px-4 py-3.5 text-left transition-colors last:border-b-0 hover:bg-app-muted"
+                className="grid w-full grid-cols-[110px_1fr_220px_140px_110px_110px_180px] items-center gap-4 border-b border-app px-4 py-3.5 text-left transition-colors last:border-b-0 hover:bg-app-muted"
               >
                 <span className="font-mono text-[12px] text-theme-muted truncate">{(run.id ?? run._id ?? '').slice(0, 8)}</span>
                 <span className="min-w-0">
@@ -309,14 +315,14 @@ export default function WorkflowDetailPage() {
                 <span className="font-mono text-[12px] text-theme-muted">{shortDuration(run.durationMs)}</span>
                 <span className="font-mono text-[12px] text-theme-muted">{shortAge(run.startedAt)}</span>
                 <span>
-                  {run.chat?.sessionId ? (
+                  {runChatSessionId(run) ? (
                     <Link
-                      to={`/chat/${run.chat.sessionId}`}
-                      className="btn btn-secondary btn-sm inline-flex"
+                      to={`/chat/${runChatSessionId(run)}`}
+                      className="inline-block max-w-full truncate text-[12px] text-accent hover:underline"
                       title={run.chat?.title ? `Open chat: ${run.chat.title}` : 'Open linked chat'}
                       onClick={(event) => event.stopPropagation()}
                     >
-                      <MessageSquare className="w-3 h-3" /> Open
+                      Open
                     </Link>
                   ) : (
                     <span className="text-[12px] text-theme-subtle">—</span>

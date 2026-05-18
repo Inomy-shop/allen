@@ -22,7 +22,7 @@ import ClarificationPanel, {
 import RunStatusCard from '../components/executions/RunStatusCard';
 import {
   ArrowRight, Check, AlertTriangle, CheckCircle2, HelpCircle,
-  Clock, RefreshCw, Search, Inbox,
+  Clock, RefreshCw, Search, Inbox as InterventionIcon,
   Archive, Activity, ChevronLeft, User,
   Sparkles, ShieldCheck, Shield,
 } from 'lucide-react';
@@ -307,11 +307,11 @@ function InterventionsListView() {
   };
 
   return (
-    <div className="content scroll-hide" data-screen-label="inbox">
+    <div className="content scroll-hide" data-screen-label="interventions">
       <div className="page-head">
         <div className="ph-row">
           <div>
-            <h1>inbox</h1>
+            <h1>interventions</h1>
             <p className="sub">
               {pendingCount} things waiting on you · {answeredCount} answered · {items.length} total
             </p>
@@ -332,7 +332,7 @@ function InterventionsListView() {
           <input
             value={search}
             onChange={e => setSearch(e.target.value)}
-            placeholder="search inbox..."
+            placeholder="search interventions..."
           />
         </div>
       </div>
@@ -391,7 +391,7 @@ function EmptyState({ hasFilters }: { hasFilters: boolean }) {
   return (
     <div className="flex flex-col items-center justify-center py-20 px-6 text-center">
       <div className="w-16 h-16 rounded-full bg-app-muted/50 flex items-center justify-center mb-4">
-        <Inbox className="w-8 h-8 text-theme-subtle" />
+        <InterventionIcon className="w-8 h-8 text-theme-subtle" />
       </div>
       {hasFilters ? (
         <>

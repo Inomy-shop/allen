@@ -100,6 +100,14 @@ function hideDelegatedChildrenWhenParentVisible(items: any[]): any[] {
   return items.filter((exec) => !hasParentExecutionVisible(exec, items));
 }
 
+function executionSourceLabel(exec: any): string {
+  const origin = String(exec?.origin ?? exec?.meta?.origin ?? exec?.source ?? '').toLowerCase();
+  if (origin === 'chat' || exec?.meta?.chatSessionId) return 'chat';
+  if (origin === 'linear') return 'linear';
+  if (exec?.source === 'spawn' || origin === 'direct_agent' || isDelegatedAgentExecution(exec)) return 'agent';
+  return 'manual';
+}
+
 export default function ExecutionListPage() {
   const [data, setData] = useState<any[]>([]);
   const [total, setTotal] = useState(0);
@@ -185,7 +193,7 @@ export default function ExecutionListPage() {
       <div className="page-head">
         <div className="ph-row">
           <div>
-            <h1>activity</h1>
+            <h1>executions</h1>
             <p className="sub">what's running, queued, and just finished across the org</p>
           </div>
           <button title="Refresh executions" onClick={refresh} className="btn btn-secondary btn-sm" type="button">
@@ -263,6 +271,7 @@ export default function ExecutionListPage() {
                   <Link key={exec.id ?? exec._id} className="an-run" to={`/executions/${exec.id}`}>
                     <span className="mono an-run-id">{exec.id?.slice(0, 8) ?? 'N/A'}</span>
                     <span className="an-run-wf">{exec.workflowName}</span>
+                    <span className={`an-run-source ${executionSourceLabel(exec)}`}>{executionSourceLabel(exec)}</span>
                     <StatusBadge status={exec.status} />
                     <span className="mono">{shortDuration(exec.durationMs)}</span>
                   </Link>
@@ -283,6 +292,7 @@ export default function ExecutionListPage() {
               <Link key={exec.id ?? exec._id} className="an-run" to={`/executions/${exec.id}`}>
                 <span className="mono an-run-id">{exec.id?.slice(0, 8) ?? 'N/A'}</span>
                 <span className="an-run-wf">{exec.workflowName}</span>
+                <span className={`an-run-source ${executionSourceLabel(exec)}`}>{executionSourceLabel(exec)}</span>
                 <StatusBadge status={exec.status} />
                 <span className="mono">{shortDuration(exec.durationMs)}</span>
                 <span className="muted mono">{shortAge(exec.startedAt)}</span>

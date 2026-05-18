@@ -157,6 +157,9 @@ const EXECUTION_LIST_PROJECTION = {
   'meta.origin': 1,
   'meta.chatSessionId': 1,
   'meta.parentMessageId': 1,
+  'meta.startedByUserId': 1,
+  'meta.startedByUserEmail': 1,
+  'meta.startedByUserName': 1,
   'meta.linearIssueId': 1,
   'meta.linearIdentifier': 1,
   'meta.linearTitle': 1,
@@ -248,10 +251,19 @@ function listItemSummary(item: Record<string, unknown>): Record<string, unknown>
     ...item,
     type: isAgentExecution ? 'agent' : 'workflow',
     origin: stringValue(meta.origin) ?? (item.source === 'chat' ? 'chat' : isAgentExecution ? 'direct_agent' : 'workflow'),
+    user: listUserSummary(meta),
     title: executionDisplayTitle(input, meta, workflowName),
     linear,
     pullRequest,
   };
+}
+
+function listUserSummary(meta: Record<string, unknown>): Record<string, unknown> | null {
+  const userId = stringValue(meta.startedByUserId);
+  const name = stringValue(meta.startedByUserName);
+  const email = stringValue(meta.startedByUserEmail);
+  if (!userId && !name && !email) return null;
+  return { userId: userId ?? null, name: name ?? null, email: email ?? null };
 }
 
 function decorateChildRow(
