@@ -148,7 +148,6 @@ Responsibilities:
 Key activity page components:
 
 - `src/pages/ExecutionListPage.tsx` - Activity page. Renders the paginated execution list. Exports the `paginationViewModel({ page, total, pageSize })` pure function that computes UI-state (`visible`, `pageCount`, `currentPageLabel`, `prevDisabled`, `nextDisabled`) with no DOM dependency so it can be tested in isolation.
-The Dashboard shows an **Automations** panel (above in-flight work) that lists configured automation cron jobs. Each card renders the job's last-run status, next-run time, and a `View Report →` link to the linked automation chat thread (only shown once `linkedChatSessionId` is set). The `DailyStatusPrepCard` component (`DashboardPage.tsx`) displays a `glow-running` badge with an animated `Loader2` spinner while `runStatus === 'running'`.
 
 Key chat UI components:
 

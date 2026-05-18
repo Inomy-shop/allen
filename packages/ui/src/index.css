@@ -4570,17 +4570,10 @@
   .dot-err  { background: rgb(var(--color-accent-red)); }
   .dot-idle { background: rgb(var(--color-text-subtle)); }
 
-  /* ─── Status glows (legacy names kept; no-ops in v2) ─── */
-  .glow-running   { animation: pulse-running 2s ease-in-out infinite; }
-  .glow-completed { /* no-op — completed state shown via badge color */ }
-  .glow-failed    { /* no-op — failed state shown via badge color */ }
+  /* Status colour communicated via badge class; no animation by default. */
+  .glow-completed { }
+  .glow-failed    { }
 
-  @keyframes pulse-running {
-    0%,100% { box-shadow: 0 0 0 0 rgb(var(--color-accent-cyan) / 0.45); }
-    50%     { box-shadow: 0 0 0 5px rgb(var(--color-accent-cyan) / 0); }
-  }
-
-  /* Legacy keyframes preserved as no-ops for existing className refs */
   @keyframes pulse-glow {
     0%, 100% { opacity: 1; }
     50%      { opacity: 0.6; }

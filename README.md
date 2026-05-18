@@ -23,9 +23,8 @@ You only need Node.js 22+ on your machine to begin. The setup script will check 
 
 - Node.js 22+ and npm 10+
 - MongoDB 7 (auto-installed on macOS via Homebrew; instructions printed elsewhere)
-- Claude Code CLI (auto-installed via `npm install -g @anthropic-ai/claude-code`)
-- Codex CLI (auto-installed via `npm install -g @openai/codex`) — Allen's chat defaults to Codex
-- An Anthropic account to authenticate Claude Code, and an OpenAI account to authenticate Codex
+- Claude Code CLI (required — auto-installed via `npm install -g @anthropic-ai/claude-code`), plus an Anthropic account to authenticate it
+- Codex CLI (optional — auto-installed via `npm install -g @openai/codex`). Allen's chat defaults to Codex; set `ALLEN_DEFAULT_CHAT_PROVIDER=claude-cli` in `.env` to use Claude Code for chat instead and skip the OpenAI account
 
 ### 1. Clone
 

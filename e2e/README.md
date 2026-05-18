@@ -26,10 +26,6 @@ npm run test:e2e:headed -- --project=chromium --debug e2e/workspace-terminal.spe
 npm run test:e2e:report
 ```
 
-On an AWS EC2 deploy, the bootstrap script (`infra/templates/bootstrap.sh`)
-installs the Chromium browser bundle and its system libs automatically, so
-`npm run test:e2e` on the server works with no additional steps.
-
 ## What's covered — 88 tests in 16 spec files
 
 | Area | Specs |
@@ -64,7 +60,7 @@ installs the Chromium browser bundle and its system libs automatically, so
 
 ## NOT run by `npm test`
 
-The root `npm test` command fans out via turbo to the three workspace `vitest` suites (unit tests only — ~2s total, 73 tests). E2E tests are deliberately excluded because they:
+The root `npm test` command fans out via turbo to the three workspace `vitest` suites (unit tests only). E2E tests are deliberately excluded because they:
 
 - Take 5–20 minutes
 - Need an actual server + UI running

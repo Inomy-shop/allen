@@ -2,23 +2,15 @@
  * Brand identity — single source of truth for the project's public name.
  *
  * To rename the project, change the constants in this file and in
- * packages/ui/src/lib/brand.ts. The following things are NOT covered by
- * these constants and require separate, explicit renames:
+ * packages/ui/src/lib/brand.ts. The following are NOT covered by these
+ * constants and require explicit renames:
  *
- *   - npm package names (@allen/*)  — 4 package.json files
- *   - environment variable names (ALLEN_*)  — .env.production + systemd
- *     EnvironmentFile on the deployed host
- *   - on-disk path identifiers (~/.allen, /tmp/allen, /var/lib/allen) —
- *     defined in packages/engine/src/paths.ts
- *   - CSS class names (.prose-allen) — in packages/ui/src/index.css
- *   - domain, terraform resource names, DNS records, ACM cert —
- *     in infra/
- *   - systemd unit filename (allen.service) — in infra/templates/
+ *   - npm package names (@allen/*) — 4 package.json files
+ *   - environment variable names (ALLEN_*) — .env.example and any deployment env
+ *   - on-disk path identifiers (~/.allen, /tmp/allen) — packages/engine/src/paths.ts
+ *   - CSS class names (.prose-allen) — packages/ui/src/index.css
  *   - file names containing "allen" (allen-mcp-server.ts, etc.)
- *   - MongoDB database name default — shared: see DB_NAME_DEFAULT below
- *   - GitHub Actions workflow filename (deploy-allen.yml)
- *
- * See RENAME.md at the repo root for the full rename runbook.
+ *   - MongoDB database name default — DB_NAME_DEFAULT below
  */
 
 /** Display name used in UI copy, system prompts, log prefixes. PascalCase. */
