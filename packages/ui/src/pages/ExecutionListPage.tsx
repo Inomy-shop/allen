@@ -45,6 +45,14 @@ function shortDuration(ms: number | null | undefined): string {
   return `${m}m ${Math.floor(s % 60)}s`;
 }
 
+function executionDurationMs(exec: any, nowMs: number): number | null | undefined {
+  if (!isActiveStatus(exec.status)) return exec.durationMs;
+  const startedAt = exec.startedAt ?? exec.createdAt;
+  const startedMs = startedAt ? new Date(startedAt).getTime() : NaN;
+  if (!Number.isFinite(startedMs)) return exec.durationMs;
+  return Math.max(exec.durationMs ?? 0, nowMs - startedMs);
+}
+
 function shortAge(value: string | Date | null | undefined): string {
   if (!value) return '—';
   const then = new Date(value).getTime();
@@ -112,6 +120,7 @@ export default function ExecutionListPage() {
   const [data, setData] = useState<any[]>([]);
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(true);
+  const [nowMs, setNowMs] = useState(Date.now());
   const [searchParams, setSearchParams] = useSearchParams();
   const filter = searchParams.get('status') ?? '';
   const typeFilter = (searchParams.get('type') ?? '') as TypeFilter;
@@ -166,11 +175,18 @@ export default function ExecutionListPage() {
 
   // Auto-refresh every 5s when there are running executions
   useEffect(() => {
-    const hasRunning = data.some(e => e.status === 'running' || e.status === 'queued');
+    const hasRunning = data.some(e => isActiveStatus(e.status));
     if (!hasRunning) return;
     const interval = setInterval(refresh, 5000);
     return () => clearInterval(interval);
   }, [data, refresh]);
+
+  useEffect(() => {
+    const hasRunning = data.some(e => isActiveStatus(e.status));
+    if (!hasRunning) return;
+    const interval = setInterval(() => setNowMs(Date.now()), 1000);
+    return () => clearInterval(interval);
+  }, [data]);
 
   const sorted = useMemo(() => {
     const copy = [...data];
@@ -273,7 +289,7 @@ export default function ExecutionListPage() {
                     <span className="an-run-wf">{exec.workflowName}</span>
                     <span className={`an-run-source ${executionSourceLabel(exec)}`}>{executionSourceLabel(exec)}</span>
                     <StatusBadge status={exec.status} />
-                    <span className="mono">{shortDuration(exec.durationMs)}</span>
+                    <span className="mono">{shortDuration(executionDurationMs(exec, nowMs))}</span>
                   </Link>
                 ))}
               </div>
@@ -294,7 +310,7 @@ export default function ExecutionListPage() {
                 <span className="an-run-wf">{exec.workflowName}</span>
                 <span className={`an-run-source ${executionSourceLabel(exec)}`}>{executionSourceLabel(exec)}</span>
                 <StatusBadge status={exec.status} />
-                <span className="mono">{shortDuration(exec.durationMs)}</span>
+                <span className="mono">{shortDuration(executionDurationMs(exec, nowMs))}</span>
                 <span className="muted mono">{shortAge(exec.startedAt)}</span>
               </Link>
             ))}
