@@ -13,19 +13,7 @@ import { existsSync, mkdirSync, unlinkSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { resolve as resolvePath } from 'node:path';
 import { expandToClaudeTools } from './tool-mapping.js';
-import { MCP_SERVER_NAME } from './brand.js';
-
-/**
- * Allen MCP tools the ARTIFACTS_GUIDANCE tells every CLI agent to use. When
- * the agent's authored tools list is non-empty, Claude Code treats it as a
- * hard allowlist — so we must inject these three or the guidance becomes a
- * no-op (agent is told to call a tool it can't see).
- */
-const ARTIFACT_MCP_TOOLS: readonly string[] = [
-  `mcp__${MCP_SERVER_NAME}__allen_save_artifact`,
-  `mcp__${MCP_SERVER_NAME}__allen_list_artifacts`,
-  `mcp__${MCP_SERVER_NAME}__allen_get_artifact`,
-];
+import { ALLEN_MCP_CLAUDE_TOOL_NAMES } from './allen-mcp-tools.js';
 
 /**
  * Single source of truth for the artifact-save instruction appended to every
@@ -172,6 +160,10 @@ export type AgentSpec = {
    * stays as the author wrote it).
    */
   mcpToolNames?: string[];
+  /** Allen MCP tool names disabled for this materialized agent. */
+  disabledAllenMcpTools?: string[];
+  /** Disabled MCP tools by server name, using bare tool names. */
+  disabledMcpTools?: Record<string, string[]>;
 };
 
 /** Slug the agent name so it forms a valid filename + subagent identifier. */
@@ -209,10 +201,22 @@ export function renderAgentFile(agent: AgentSpec): { subagentName: string; body:
   // the frontmatter on agents that already opted in.
   // if (expandedTools.length > 0) {
     const seen = new Set(expandedTools);
-    // Always-on artifact tools — agents are told to call these in
-    // ARTIFACTS_GUIDANCE, so without injection the allowlist would
-    // silently strip them.
-    for (const t of ARTIFACT_MCP_TOOLS) if (!seen.has(t)) { expandedTools.push(t); seen.add(t); }
+    // Always-on Allen MCP tools. Workflow / direct agent runs rely on Allen
+    // MCP for artifacts, execution lookup, spawning, workflow dispatch, etc.
+    // When a Claude agent file has a `tools:` allowlist, every MCP tool that
+    // should be callable must be listed explicitly.
+    const disabledAllenTools = new Set([
+      ...(agent.disabledAllenMcpTools ?? []),
+      ...(agent.disabledMcpTools?.allen ?? []),
+    ]
+      .filter((t): t is string => typeof t === 'string' && t.length > 0)
+      .map((t) => t.startsWith('mcp__') ? t : `mcp__allen__${t}`));
+    for (const t of ALLEN_MCP_CLAUDE_TOOL_NAMES) {
+      if (!disabledAllenTools.has(t) && !seen.has(t)) {
+        expandedTools.push(t);
+        seen.add(t);
+      }
+    }
     // Caller-supplied list of every registered MCP tool name. Without
     // this, an authored allowlist (e.g. `tools: [Read, Write, Bash]`)
     // hides every mcp__linear__*, mcp__postgres__*, etc. — the agent
@@ -221,6 +225,10 @@ export function renderAgentFile(agent: AgentSpec): { subagentName: string; body:
     // "the author's tools + every MCP tool the runtime discovered".
     for (const t of agent.mcpToolNames ?? []) {
       if (typeof t === 'string' && t.startsWith('mcp__') && !seen.has(t)) {
+        const [, serverName, ...toolParts] = t.split('__');
+        const disabledForServer = agent.disabledMcpTools?.[serverName] ?? [];
+        const bareToolName = toolParts.join('__');
+        if (disabledForServer.includes(bareToolName)) continue;
         expandedTools.push(t);
         seen.add(t);
       }

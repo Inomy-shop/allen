@@ -868,9 +868,18 @@ export interface McpDiscoverResult {
   }>;
 }
 
+export interface McpToolGroup {
+  serverName: string;
+  builtIn: boolean;
+  enabled: boolean;
+  tools: Array<{ name: string; fullName: string; description: string }>;
+}
+
 export const mcp = {
   list: () => request<McpServer[]>('/mcp/servers'),
   presets: () => request<McpPreset[]>('/mcp/presets'),
+  tools: (options?: { refresh?: boolean }) =>
+    request<McpToolGroup[]>(`/mcp/tools${options?.refresh === false ? '?refresh=0' : ''}`),
   /**
    * Create an MCP server. Preset flow: send `{ name, type, source: { kind: 'preset', presetName } }`
    * — backend copies command/args/envKeys from the preset and validates ALLEN_* env.

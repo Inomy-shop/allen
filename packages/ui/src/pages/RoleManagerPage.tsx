@@ -47,6 +47,21 @@ function AgentDetailPanel({
   const capabilities = (agent.capabilities as string[] | undefined) ?? [];
   const delegateTargets = (agent.canDelegateTo as string[] | undefined) ?? [];
   const tools = (agent.tools as string[] | undefined) ?? [];
+  const externalMcpServers = Array.isArray(agent.externalMcpServers)
+    ? agent.externalMcpServers as string[]
+    : [];
+  const configuredDisabledMcpTools = agent.disabledMcpTools && typeof agent.disabledMcpTools === 'object' && !Array.isArray(agent.disabledMcpTools)
+    ? agent.disabledMcpTools as Record<string, unknown>
+    : {};
+  const disabledAllenMcpTools = [
+    ...new Set([
+      ...(Array.isArray(configuredDisabledMcpTools.allen) ? configuredDisabledMcpTools.allen : []),
+      ...(Array.isArray(agent.disabledAllenMcpTools) ? agent.disabledAllenMcpTools : []),
+    ].filter((tool): tool is string => typeof tool === 'string')),
+  ];
+  const disabledExternalMcpToolCount = Object.entries(configuredDisabledMcpTools)
+    .filter(([server]) => server !== 'allen')
+    .reduce((count, [, tools]) => count + (Array.isArray(tools) ? tools.filter((tool) => typeof tool === 'string').length : 0), 0);
 
   const provider = String(agent.provider ?? 'claude');
   const model = String(agent.model ?? 'sonnet');
@@ -202,6 +217,37 @@ function AgentDetailPanel({
                   </div>
                 </DetailSection>
               )}
+
+              <DetailSection label="External MCP">
+                {externalMcpServers.length > 0 ? (
+                  <div className="flex flex-wrap gap-1.5">
+                    {externalMcpServers.map(t => (
+                      <span
+                        key={t}
+                        className="text-[10.5px] font-mono px-1.5 py-0.5 rounded bg-app-muted text-theme-secondary"
+                      >
+                        {t}
+                      </span>
+                    ))}
+                  </div>
+                ) : (
+                  <span className="text-[11px] font-mono text-theme-muted">None</span>
+                )}
+                <div className="text-[10px] text-theme-subtle mt-1">Allen MCP selected by default</div>
+              </DetailSection>
+
+              <DetailSection label="MCP Tools">
+                <div className="flex flex-col gap-1 text-[11px] font-mono text-theme-muted">
+                  <span>
+                    Allen: {disabledAllenMcpTools.length === 0
+                      ? 'all tools enabled'
+                      : `${disabledAllenMcpTools.length} disabled`}
+                  </span>
+                  {disabledExternalMcpToolCount > 0 && (
+                    <span>External: {disabledExternalMcpToolCount} disabled</span>
+                  )}
+                </div>
+              </DetailSection>
 
               {delegateTargets.length > 0 && (
                 <DetailSection label={`Delegates to · ${delegateTargets.length}`}>
@@ -547,9 +593,10 @@ export default function RoleManagerPage() {
 
   async function handleSaveAgent(data: Record<string, unknown>) {
     if (!editingRole) return;
-    await agentsApi.update(data.name as string, data);
+    const updated = await agentsApi.update(data.name as string, data);
+    setEditingRole({ ...editingRole, ...data, ...(updated ?? {}) });
     toast.success('Agent updated.');
-    refresh();
+    await refresh();
   }
 
   async function handleSubmitTeam(input: Partial<Team>) {

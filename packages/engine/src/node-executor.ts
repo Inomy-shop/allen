@@ -102,6 +102,48 @@ export interface NodeExecutorDeps {
   discoverMcpToolNames?: () => Promise<string[]>;
 }
 
+function resolveExternalMcpServers(
+  nodeDef: NodeDef,
+  role: AgentDef | undefined,
+): string[] {
+  const override = nodeDef.agentOverrides?.externalMcpServers;
+  if (override !== undefined) return Array.isArray(override) ? override : [];
+  const agentDefault = role?.externalMcpServers;
+  return Array.isArray(agentDefault) ? agentDefault : [];
+}
+
+function resolveDisabledMcpTools(
+  nodeDef: NodeDef,
+  role: AgentDef | undefined,
+): Record<string, string[]> {
+  const override = nodeDef.agentOverrides?.disabledMcpTools;
+  const raw = override !== undefined ? override : role?.disabledMcpTools;
+  const result: Record<string, string[]> = {};
+  if (raw && typeof raw === 'object' && !Array.isArray(raw)) {
+    for (const [server, tools] of Object.entries(raw)) {
+      if (Array.isArray(tools)) result[server] = tools.filter((name): name is string => typeof name === 'string' && name.length > 0);
+    }
+  }
+  const legacyOverride = nodeDef.agentOverrides?.disabledAllenMcpTools;
+  const legacyAllen = legacyOverride !== undefined ? legacyOverride : role?.disabledAllenMcpTools;
+  if (Array.isArray(legacyAllen)) {
+    result.allen = [...new Set([...(result.allen ?? []), ...legacyAllen.filter((name): name is string => typeof name === 'string' && name.length > 0)])];
+  }
+  return result;
+}
+
+function filterExternalMcpToolNames(
+  toolNames: string[],
+  externalServerNames: string[] | undefined,
+): string[] {
+  if (externalServerNames === undefined) return toolNames;
+  const allowed = new Set(externalServerNames);
+  return toolNames.filter((name) => {
+    const parts = name.split('__');
+    return parts.length >= 3 && parts[0] === 'mcp' ? allowed.has(parts[1]) : false;
+  });
+}
+
 export interface NodeResult {
   outputs: Record<string, unknown>;
   rawResponse?: string;
@@ -532,9 +574,19 @@ ${context}
   // block here so it's carried as a first-class subprocess env, not left
   // to the SDK's undocumented merge behavior.
   let mcpServers: Record<string, unknown> | undefined;
+  const externalMcpServers = resolveExternalMcpServers(nodeDef, role);
+  const disabledMcpTools = resolveDisabledMcpTools(nodeDef, role);
+  const disallowedMcpToolNames = Object.entries(disabledMcpTools).flatMap(([server, tools]) =>
+    tools.map((tool) => tool.startsWith('mcp__') ? tool : `mcp__${server}__${tool}`),
+  );
   try {
     const { loadAllMcpServers } = await import('./mcp-loader.js');
-    if (deps.db) mcpServers = await loadAllMcpServers(deps.db, spawnContextEnv);
+    if (deps.db) {
+      mcpServers = await loadAllMcpServers(deps.db, {
+        extraEnv: spawnContextEnv,
+        externalServerNames: externalMcpServers,
+      });
+    }
   } catch { /* MCP not available — continue without */ }
 
   // Build the effective system prompt with live org chart + delegation targets
@@ -653,6 +705,7 @@ ${context}
       if (deps.discoverMcpToolNames) {
         try {
           discoveredMcpTools = await deps.discoverMcpToolNames();
+          discoveredMcpTools = filterExternalMcpToolNames(discoveredMcpTools, externalMcpServers);
         } catch (err) {
           console.warn(`[node:${nodeName}] MCP tool discovery failed:`, (err as Error).message);
         }
@@ -665,6 +718,7 @@ ${context}
           model: resolvedModel,
           tools: Array.isArray((role as any)?.tools) ? (role as any).tools : undefined,
           mcpToolNames: discoveredMcpTools,
+          disabledMcpTools,
         },
         prompt: effectivePrompt,
         cwd,
@@ -690,6 +744,7 @@ ${context}
           // Merge parent env so PATH / HOME / ANTHROPIC_API_KEY / etc survive,
           // then overlay our spawn-tree vars.
           env: { ...process.env, ...spawnContextEnv },
+          ...(disallowedMcpToolNames.length > 0 ? { disallowedTools: disallowedMcpToolNames } : {}),
           ...(mcpServers && Object.keys(mcpServers).length > 0 ? { mcpServers: mcpServers as any } : {}),
           ...(deps.abortSignal ? { abortController: { signal: deps.abortSignal, abort() { /* handled by engine */ } } as any } : {}),
         } as Record<string, unknown>,

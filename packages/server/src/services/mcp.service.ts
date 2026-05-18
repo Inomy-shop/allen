@@ -278,11 +278,15 @@ export class McpService {
    * shared engine resolver so source-based (preset/repo) and legacy
    * bundle-based records are handled the same way agent execution handles them.
    */
-  async getEnabledAsConfig(): Promise<Record<string, unknown>> {
+  async getEnabledAsConfig(externalServerNames?: string[]): Promise<Record<string, unknown>> {
     const { buildSingleServerConfig } = await import('@allen/engine');
     const servers = await this.collection.find({ enabled: true }).toArray() as McpServerRecord[];
+    const allowedExternal = externalServerNames
+      ? new Set(externalServerNames.filter((name) => typeof name === 'string' && name.length > 0))
+      : null;
     const config: Record<string, unknown> = {};
     for (const s of servers) {
+      if (allowedExternal && !allowedExternal.has(s.name)) continue;
       if (s.type === 'stdio') {
         const cfg = await buildSingleServerConfig(s as unknown as Record<string, unknown>, this.db);
         if (cfg) config[s.name] = cfg;

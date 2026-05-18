@@ -24,6 +24,8 @@ export function reactFlowToYaml(
     if (node.id === 'START' || node.id === 'END') continue;
     const data = { ...node.data };
     delete data.label;
+    if (data.agent == null && data.role != null) data.agent = data.role;
+    delete data.role;
 
     // Clean up undefined fields
     const clean: Record<string, any> = {};

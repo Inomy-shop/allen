@@ -6,7 +6,7 @@ import { existsSync, mkdirSync, unlinkSync, readdirSync, readFileSync, statSync 
 import { join, relative, resolve as resolvePath, extname } from 'node:path';
 import multer from 'multer';
 import { ObjectId, type Db } from 'mongodb';
-import { forgetInstall, ensureInstalled, ensurePythonVenv, deletePythonVenv, resolvePythonInterpreter } from '@allen/engine';
+import { forgetInstall, ensureInstalled, ensurePythonVenv, deletePythonVenv, resolvePythonInterpreter, ALLEN_MCP_TOOL_NAMES } from '@allen/engine';
 import { param } from '../types.js';
 import {
   McpService,
@@ -16,7 +16,7 @@ import {
 } from '../services/mcp.service.js';
 import { McpBundleService } from '../services/mcp-bundle.service.js';
 import { healthCheckMcpServer } from '../services/mcp-health.service.js';
-import { evictMcpConnection } from '../services/chat-mcp-client.js';
+import { evictMcpConnection, getCachedMcpTools, loadMcpTools } from '../services/chat-mcp-client.js';
 
 const BUNDLE_UPLOAD_TMP = '/tmp/mcp-bundle-uploads';
 if (!existsSync(BUNDLE_UPLOAD_TMP)) mkdirSync(BUNDLE_UPLOAD_TMP, { recursive: true });
@@ -271,6 +271,51 @@ export function mcpRoutes(db: Db): Router {
   // GET /api/mcp/presets — list hardcoded presets (global, no scoping)
   router.get('/presets', (_req: AuthedRequest, res: Response) => {
     res.json(MCP_PRESETS);
+  });
+
+  // GET /api/mcp/tools — list available MCP tools grouped by server for access configuration.
+  router.get('/tools', async (_req: AuthedRequest, res: Response) => {
+    try {
+      const service = new McpService(db);
+      const enabledStdioServers = (await service.list())
+        .filter((server) => server.enabled && server.type === 'stdio')
+        .sort((a, b) => a.name.localeCompare(b.name));
+      const externalTools = getCachedMcpTools();
+      const grouped = new Map<string, Array<{ name: string; fullName: string; description: string }>>();
+      for (const tool of externalTools) {
+        const list = grouped.get(tool.serverName) ?? [];
+        list.push({ name: tool.name, fullName: tool.fullName, description: tool.description });
+        grouped.set(tool.serverName, list);
+      }
+      const warmDiscovery = _req.query.refresh !== '0';
+      res.json([
+        {
+          serverName: 'allen',
+          builtIn: true,
+          enabled: true,
+          tools: ALLEN_MCP_TOOL_NAMES.map((name) => ({
+            name,
+            fullName: `mcp__allen__${name}`,
+            description: '',
+          })),
+        },
+        ...enabledStdioServers.map((server) => ({
+          serverName: server.name,
+          builtIn: false,
+          enabled: true,
+          tools: (grouped.get(server.name) ?? []).sort((a, b) => a.name.localeCompare(b.name)),
+        })),
+      ]);
+      if (warmDiscovery) {
+        setImmediate(() => {
+          void loadMcpTools(db).catch((err) => {
+            console.error('[mcp] Background tool discovery failed:', (err as Error).message);
+          });
+        });
+      }
+    } catch (err: unknown) {
+      res.status(500).json({ error: (err as Error).message });
+    }
   });
 
   // GET /api/mcp/servers/discover/:repoId — scan the repo for MCP entry candidates
@@ -618,4 +663,3 @@ export function mcpRoutes(db: Db): Router {
 
   return router;
 }
-

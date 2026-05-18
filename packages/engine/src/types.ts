@@ -42,6 +42,22 @@ export interface AgentOverrides {
   model?: string | null;
   reasoningEffort?: 'off' | 'low' | 'medium' | 'high' | 'max' | null;
   planMode?: boolean | null;
+  /**
+   * External MCP server allowlist for this node. Allen's built-in MCP is
+   * selected by default. undefined = inherit from agent, [] = no external
+   * MCPs, [name] = only those external MCP servers.
+   */
+  externalMcpServers?: string[] | null;
+  /**
+   * Allen MCP tools disabled for this node. Allen tools are enabled by
+   * default; the node can inherit, or store only unchecked Allen tool names.
+   */
+  disabledAllenMcpTools?: string[] | null;
+  /**
+   * Disabled MCP tools by server name. Values are bare tool names, not
+   * `mcp__server__tool` names. Example: { allen: ['query_database'] }.
+   */
+  disabledMcpTools?: Record<string, string[]> | null;
 }
 
 export interface NodeDef {
@@ -232,6 +248,22 @@ export interface AgentDef {
   reasoningEffort?: 'off' | 'low' | 'medium' | 'high' | 'max';
   /** Default plan-mode flag for this agent. Claude-only; silently ignored for Codex. */
   planMode?: boolean;
+  /**
+   * External MCP server allowlist for this agent. Allen's built-in MCP is
+   * selected by default. undefined/null and [] mean no external MCPs,
+   * [name] = only those external MCP servers.
+   */
+  externalMcpServers?: string[] | null;
+  /**
+   * Allen MCP tools disabled for this agent. Allen tools are enabled by
+   * default; store only unchecked Allen tool names.
+   */
+  disabledAllenMcpTools?: string[] | null;
+  /**
+   * Disabled MCP tools by server name. Values are bare tool names, not
+   * `mcp__server__tool` names. Example: { allen: ['query_database'] }.
+   */
+  disabledMcpTools?: Record<string, string[]> | null;
   /**
    * Absolute filesystem path the agent should run in when the caller
    * doesn't provide an explicit cwd. Populated for agents imported from a
