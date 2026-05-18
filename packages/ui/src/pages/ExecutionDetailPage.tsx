@@ -148,6 +148,9 @@ function WorkflowTraceTable({
                 if (t.cost?.actual != null) act = (act ?? 0) + t.cost.actual;
                 dur += t.durationMs ?? 0;
               }
+              if ((state.status === 'running' || state.status === 'waiting_for_input') && state.durationMs != null) {
+                dur += state.durationMs;
+              }
               if (est > 0 || act != null) totalCost = { estimated: est, actual: act };
               if (dur > 0) totalDuration = dur;
             }
@@ -906,7 +909,16 @@ function AgentExecutionView({ execution, agentName, traces, id, liveToolCalls, r
     merged.sort((a, b) => new Date(a.startedAt).getTime() - new Date(b.startedAt).getTime());
     return merged;
   })();
-  const durationMs = trace?.durationMs ?? execution.durationMs ?? 0;
+  const [durationNowMs, setDurationNowMs] = useState(Date.now());
+  const activeStartedAt = trace?.startedAt ?? execution.startedAt;
+  useEffect(() => {
+    if (execution.status !== 'running' && execution.status !== 'waiting_for_input') return;
+    const interval = setInterval(() => setDurationNowMs(Date.now()), 1000);
+    return () => clearInterval(interval);
+  }, [execution.status]);
+  const activeStartedMs = activeStartedAt ? new Date(activeStartedAt).getTime() : NaN;
+  const liveDurationMs = Number.isFinite(activeStartedMs) ? Math.max(0, durationNowMs - activeStartedMs) : 0;
+  const durationMs = trace?.durationMs ?? execution.durationMs ?? liveDurationMs;
   const meta = execution.meta ?? {};
 
   // Session ID for resume — stored on the execution row at sessions.<agentName>

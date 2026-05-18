@@ -788,6 +788,9 @@ export default function NodeDetail({
     if (dedupedTraces.length <= 1) return nodeState?.durationMs ?? activeTrace?.durationMs;
     let total = 0;
     for (const t of dedupedTraces) total += t.durationMs ?? 0;
+    if ((nodeState?.status === 'running' || nodeState?.status === 'waiting_for_input') && nodeState.durationMs != null) {
+      total += nodeState.durationMs;
+    }
     return total > 0 ? total : (nodeState?.durationMs ?? activeTrace?.durationMs);
   })();
 
