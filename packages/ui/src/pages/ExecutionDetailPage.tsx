@@ -24,7 +24,7 @@ import StateChangesDrawer from '../components/execution/StateChangesDrawer';
 import HumanInputDialog from '../components/execution/HumanInputDialog';
 import RunControlsDrawer from '../components/execution/RunControlsDrawer';
 import { WorkflowInterventionDialog, type WorkflowInterventionSubmit } from '../components/execution/WorkflowInterventionAction';
-import { ToolCallLog, type ToolCall } from '../components/common/ToolCallLog';
+import { ToolCallRow, type ToolCall } from '../components/common/ToolCallLog';
 import { buildTracesForTimeline } from '../utils/executionState';
 
 /**
@@ -147,6 +147,9 @@ function WorkflowTraceTable({
                 est += t.cost?.estimated ?? 0;
                 if (t.cost?.actual != null) act = (act ?? 0) + t.cost.actual;
                 dur += t.durationMs ?? 0;
+              }
+              if ((state.status === 'running' || state.status === 'waiting_for_input') && state.durationMs != null) {
+                dur += state.durationMs;
               }
               if (est > 0 || act != null) totalCost = { estimated: est, actual: act };
               if (dur > 0) totalDuration = dur;
@@ -880,6 +883,7 @@ function AgentExecutionView({ execution, agentName, traces, id, liveToolCalls, r
   const navigate = useNavigate();
   const [showPrompt, setShowPrompt] = useState(false);
   const [showResponse, setShowResponse] = useState(true);
+  const [showToolCalls, setShowToolCalls] = useState(false);
   const [liveLogs, setLiveLogs] = useState<any[]>([]);
   const [resumeOpen, setResumeOpen] = useState(false);
   const [resumePrompt, setResumePrompt] = useState('');
@@ -906,7 +910,16 @@ function AgentExecutionView({ execution, agentName, traces, id, liveToolCalls, r
     merged.sort((a, b) => new Date(a.startedAt).getTime() - new Date(b.startedAt).getTime());
     return merged;
   })();
-  const durationMs = trace?.durationMs ?? execution.durationMs ?? 0;
+  const [durationNowMs, setDurationNowMs] = useState(Date.now());
+  const activeStartedAt = trace?.startedAt ?? execution.startedAt;
+  useEffect(() => {
+    if (execution.status !== 'running' && execution.status !== 'waiting_for_input') return;
+    const interval = setInterval(() => setDurationNowMs(Date.now()), 1000);
+    return () => clearInterval(interval);
+  }, [execution.status]);
+  const activeStartedMs = activeStartedAt ? new Date(activeStartedAt).getTime() : NaN;
+  const liveDurationMs = Number.isFinite(activeStartedMs) ? Math.max(0, durationNowMs - activeStartedMs) : 0;
+  const durationMs = trace?.durationMs ?? execution.durationMs ?? liveDurationMs;
   const meta = execution.meta ?? {};
 
   // Session ID for resume — stored on the execution row at sessions.<agentName>
@@ -1041,6 +1054,9 @@ function AgentExecutionView({ execution, agentName, traces, id, liveToolCalls, r
     }
     return logs.sort((a, b) => new Date(a.timestamp || 0).getTime() - new Date(b.timestamp || 0).getTime());
   })();
+  const showLogsInMain = execution.status === 'running';
+  const primaryPanelTitle = showLogsInMain ? 'Logs' : 'Response';
+  const primaryPanelCount = showLogsInMain ? `${allLogs.length} entries` : `${response.length} chars`;
 
   return (
     <div className="flex flex-col h-full">
@@ -1237,28 +1253,59 @@ function AgentExecutionView({ execution, agentName, traces, id, liveToolCalls, r
           )}
         </div>
 
-        {/* Response */}
+        {/* Response / live logs */}
         <div className="card overflow-hidden">
-          <button title="Toggle response" onClick={() => setShowResponse(!showResponse)} className="w-full flex items-center gap-2 px-4 py-3 hover:bg-app-muted/50 transition-colors text-left">
+          <button title={`Toggle ${primaryPanelTitle.toLowerCase()}`} onClick={() => setShowResponse(!showResponse)} className="w-full flex items-center gap-2 px-4 py-3 hover:bg-app-muted/50 transition-colors text-left">
             {showResponse ? <ChevronDown className="w-4 h-4 text-theme-muted" /> : <ChevronRight className="w-4 h-4 text-theme-muted" />}
-            {execution.status === 'completed' ? <CheckCircle className="w-4 h-4 text-accent-green" /> : execution.status === 'running' ? <Brain className="w-4 h-4 text-accent-blue animate-pulse" /> : <AlertCircle className="w-4 h-4 text-accent-red" />}
-            <span className="overline text-[12px]">Response</span>
-            <span className="text-[10px] text-theme-subtle font-mono ml-auto">{response.length} chars</span>
+            {showLogsInMain ? <Activity className="w-4 h-4 text-accent-blue animate-pulse" /> : execution.status === 'completed' ? <CheckCircle className="w-4 h-4 text-accent-green" /> : <AlertCircle className="w-4 h-4 text-accent-red" />}
+            <span className="overline text-[12px]">{primaryPanelTitle}</span>
+            <span className="text-[10px] text-theme-subtle font-mono ml-auto">{primaryPanelCount}</span>
           </button>
           {showResponse && (
             <div className="px-4 pb-4 border-t border-app">
-              <div className="text-sm text-theme-secondary font-body mt-2 leading-relaxed max-h-[60vh] overflow-y-auto prose-allen">
-                {response
-                  ? renderMarkdown(response)
-                  : <span className="text-theme-muted">{execution.status === 'running' ? 'Agent is working...' : execution.errorMessage || '(no response)'}</span>
-                }
-              </div>
+              {showLogsInMain ? (
+                <div className="mt-2 max-h-[60vh] overflow-y-auto rounded-md bg-[rgb(var(--color-editor-background))]">
+                  {allLogs.length === 0 ? (
+                    <div className="px-4 py-4 text-xs text-theme-subtle font-mono animate-pulse">Waiting for activity...</div>
+                  ) : (
+                    allLogs.map((log: any, index: number) => (
+                      <LogRow key={index} log={log} toolCall={resolveToolCallForLog(log, toolCalls as ToolCall[])} />
+                    ))
+                  )}
+                </div>
+              ) : (
+                <div className="text-sm text-theme-secondary font-body mt-2 leading-relaxed max-h-[60vh] overflow-y-auto prose-allen">
+                  {response
+                    ? renderMarkdown(response)
+                    : <span className="text-theme-muted">{execution.errorMessage || '(no response)'}</span>
+                  }
+                </div>
+              )}
             </div>
           )}
         </div>
 
         {/* Tool Calls */}
-        {toolCalls.length > 0 && <ToolCallLog calls={toolCalls} />}
+        {toolCalls.length > 0 && (
+          <div className="card overflow-hidden">
+            <button
+              type="button"
+              title="Toggle tool calls"
+              onClick={() => setShowToolCalls(v => !v)}
+              className="w-full flex items-center gap-2 px-4 py-3 hover:bg-app-muted/50 transition-colors text-left"
+            >
+              {showToolCalls ? <ChevronDown className="w-4 h-4 text-theme-muted" /> : <ChevronRight className="w-4 h-4 text-theme-muted" />}
+              <Wrench className="w-4 h-4 text-accent-yellow" />
+              <span className="overline text-theme-secondary">Tool Calls</span>
+              <span className="text-[10px] text-theme-subtle font-mono ml-auto">{toolCalls.length}</span>
+            </button>
+            {showToolCalls && (
+              <div className="border-t border-app max-h-[60vh] overflow-y-auto">
+                {(toolCalls as ToolCall[]).map((tc: ToolCall, i: number) => <ToolCallRow key={i} tc={tc} index={i} />)}
+              </div>
+            )}
+          </div>
+        )}
 
         {/* Timestamps */}
         <div className="text-[10px] text-theme-subtle font-mono flex gap-4 flex-wrap">

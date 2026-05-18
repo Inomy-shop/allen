@@ -15,6 +15,7 @@ export function applyCurrentNodesBackfill(
   currentNodes: string[] | undefined,
   completedNodes: string[] | undefined,
   executionStatus?: string,
+  startedAtByNode: Map<string, Date | string> = new Map(),
 ): void {
   if (!Array.isArray(currentNodes)) return;
   const liveStatus = executionStatus === 'waiting_for_input' ? 'waiting_for_input' : 'running';
@@ -26,10 +27,19 @@ export function applyCurrentNodesBackfill(
       ? (existing.attempt ?? 0) + 1
       : (existing?.attempt ?? 0);
     const nextAttempt = Math.max(priorAttempts + 1, traceBasedAttempt);
+    const startedAt = existing?.startedAt
+      ?? existing?.completedAt
+      ?? startedAtByNode.get(name)
+      ?? new Date();
+    const startedMs = new Date(startedAt).getTime();
+    const durationMs = Number.isFinite(startedMs) ? Math.max(0, Date.now() - startedMs) : existing?.durationMs;
     map.set(name, {
       name,
       status: liveStatus as NodeState['status'],
       attempt: nextAttempt,
+      startedAt,
+      completedAt: null,
+      durationMs,
       streamText: '',
       activity: [],
     });
@@ -49,7 +59,7 @@ export function applyCurrentNodesBackfill(
  */
 export function buildTracesForTimeline(
   traces: any[],
-  nodeStates: Map<string, Pick<NodeState, 'status' | 'attempt'>>,
+  nodeStates: Map<string, Pick<NodeState, 'status' | 'attempt' | 'startedAt' | 'durationMs'>>,
 ): any[] {
   const result = [...traces];
 
@@ -68,10 +78,13 @@ export function buildTracesForTimeline(
     if (state.status !== 'running' && state.status !== 'waiting_for_input') continue;
     // Don't duplicate a running entry if one already exists in traces
     if (result.some(t => t.node === name && (t.status === 'running' || t.status === 'waiting_for_input'))) continue;
+    const stateStartedMs = state.startedAt ? new Date(state.startedAt).getTime() : NaN;
+    const startedMs = Number.isFinite(stateStartedMs) ? stateStartedMs : latestEndMs;
+    const durationMs = state.durationMs ?? Math.max(0, Date.now() - startedMs);
     result.push({
       node: name,
-      startedAt: new Date(latestEndMs),
-      durationMs: 0,
+      startedAt: new Date(startedMs),
+      durationMs,
       status: state.status,
       attempt: state.attempt,
     });

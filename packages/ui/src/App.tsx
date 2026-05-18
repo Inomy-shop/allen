@@ -56,7 +56,7 @@ interface NavCounts {
 
 const NAV_GROUPS: Array<{ label: string; items: NavItem[] }> = [
   { label: '', items: [
-    { to: '/', icon: Sparkles, label: 'my work', badgeKey: 'mywork', end: true },
+    { to: '/', icon: Sparkles, label: 'new chat', badgeKey: 'mywork', end: true },
     { to: '/executions', icon: Play, label: 'executions', badgeKey: 'activity', activePrefixes: ['/executions'] },
     { to: '/chats', icon: MessageSquare, label: 'chats', badgeKey: 'chats', activePrefixes: ['/chats', '/chat'] },
   ]},
@@ -104,7 +104,7 @@ const ROUTE_TITLES: Array<{ prefix: string; label: string }> = [
 ];
 
 const COMMANDS: CommandItem[] = [
-  { id: 'my-work', label: 'Go to my work', group: 'Navigate', to: '/', icon: Sparkles },
+  { id: 'my-work', label: 'Go to new chat', group: 'Navigate', to: '/', icon: Sparkles },
   { id: 'executions', label: 'Open executions', group: 'Navigate', to: '/executions', icon: Play },
   { id: 'chats', label: 'Open chats', group: 'Navigate', to: '/chats', icon: MessageSquare },
   { id: 'chat', label: 'Open assistant chat', group: 'Action', to: '/chat', icon: MessageSquare },
@@ -120,7 +120,7 @@ const COMMANDS: CommandItem[] = [
 ];
 
 function routeTitle(pathname: string): string {
-  if (pathname === '/') return 'My work';
+  if (pathname === '/') return 'New Chat';
   const match = ROUTE_TITLES.find(route => pathname.startsWith(route.prefix));
   return match?.label ?? 'Allen';
 }

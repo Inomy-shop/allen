@@ -79,7 +79,7 @@ describe('buildTracesForTimeline', () => {
     attempt: 1,
   };
 
-  it('adds synthetic running entry for a running node not in traces', () => {
+  it('adds synthetic running entry with elapsed duration for a running node not in traces', () => {
     const states = new Map<string, Pick<NodeState, 'status' | 'attempt'>>([
       ['node_b', { status: 'running', attempt: 2 }],
     ]);
@@ -88,7 +88,7 @@ describe('buildTracesForTimeline', () => {
     expect(runningEntry).toBeDefined();
     expect(runningEntry?.status).toBe('running');
     expect(runningEntry?.attempt).toBe(2);
-    expect(runningEntry?.durationMs).toBe(0);
+    expect(runningEntry?.durationMs).toBeGreaterThan(0);
   });
 
   it('adds synthetic waiting entry for a waiting input node', () => {
