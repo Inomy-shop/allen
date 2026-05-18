@@ -378,7 +378,9 @@ export class SlackService {
   ): Promise<void> {
     // Acknowledge with hourglass reaction
     await this.addReaction(channelId, reactionTs, 'hourglass_flowing_sand').catch(() => {});
-    const onProgress = this.createProgressHandler(channelId, threadTs);
+    const onProgress = isSlackProgressEnabled()
+      ? this.createProgressHandler(channelId, threadTs)
+      : undefined;
 
     try {
       const result = await this.chatService.sendMessageForSlack(sessionId, content, undefined, sender, onProgress);
@@ -447,9 +449,11 @@ export class SlackService {
   // ── Slack Web API helpers ──
 
   /**
-   * Fetch messages from a Slack thread, excluding bot messages and the triggering mention.
-   * Returns up to ~50 messages of context. Image-only messages (no text) are retained
-   * so their file attachments can be forwarded to the LLM.
+   * Fetch messages from a Slack thread, excluding only the triggering mention and
+   * genuinely empty messages (no text and no file attachments). Bot and app messages
+   * (those carrying bot_id or subtype: 'bot_message') are intentionally included so
+   * that integrations such as PagerDuty, GitHub, or Slack workflow posts are visible
+   * to the LLM as context. Returns up to ~50 messages.
    */
   private async fetchThreadMessages(
     channelId: string,
@@ -465,7 +469,7 @@ export class SlackService {
       throw new Error(`Slack conversations.replies failed: ${data.error}`);
     }
     return (data.messages ?? [])
-      .filter(m => !m.bot_id && !m.subtype && m.ts !== excludeTs && (m.text || (m.files && m.files.length > 0)))
+      .filter(m => m.ts !== excludeTs && (m.text || (m.files && m.files.length > 0)))
       .map(m => ({
         text: (m.text ?? '').replace(MENTION_REGEX, '').trim(),
         author: m.user,
@@ -574,6 +578,16 @@ function toolProgressLabel(tool: string): string {
   if (tool.includes('list_repos')) return 'checking repositories';
   if (tool.includes('linear')) return 'checking Linear';
   return normalized;
+}
+
+/**
+ * Returns true only when ALLEN_SLACK_PROGRESS_POSTS is explicitly set to
+ * 'true' or '1' (case-insensitive, trimmed). Any other value — including
+ * unset, empty, 'false', '0', or whitespace — leaves progress posts OFF.
+ */
+function isSlackProgressEnabled(): boolean {
+  const val = (process.env.ALLEN_SLACK_PROGRESS_POSTS ?? '').trim().toLowerCase();
+  return val === 'true' || val === '1';
 }
 
 /**
