@@ -41,13 +41,17 @@ npm run setup
 
 The setup script:
 
-- Verifies Node.js 22+ and npm 10+.
+- Verifies Node.js 22+, npm 10+, and git.
 - Installs MongoDB 7 (macOS via Homebrew) or prints install instructions for your OS, then starts it.
-- Installs the Claude Code CLI globally if it is missing.
+- Installs the standalone Claude Code CLI via the official installer (`curl -fsSL https://claude.ai/install.sh | bash`) if missing or broken.
+- Installs the Codex CLI globally via npm if missing.
 - Runs `npm install` for all workspace packages.
-- Creates `.env` from `.env.example` and generates strong values for `JWT_ACCESS_SECRET` and `JWT_REFRESH_SECRET`.
+- Creates `.env` from `.env.example`, generates strong values for `JWT_ACCESS_SECRET` and `JWT_REFRESH_SECRET`, and auto-pins `CLAUDE_BIN` to the verified standalone CLI.
+- Runs `npm run health` and shows PASS/FAIL per dependency.
 
 Re-running the script is safe — it skips work that is already done.
+
+If any step fails, the script exits with a coloured error line. See [docs/troubleshooting.md → `npm run setup` Fails](docs/troubleshooting.md#npm-run-setup-fails) for the fix matrix.
 
 ### 3. Authenticate the CLIs (one-time)
 
