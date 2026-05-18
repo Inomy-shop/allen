@@ -1,26 +1,25 @@
-import { useState, useCallback, useMemo, useEffect } from 'react';
+import { useState, useCallback, useMemo } from 'react';
 import { useWorkflows } from '../hooks/useWorkflows';
-import { workflows as wfApi, executions as execApi, repos as repoApi } from '../services/api';
 import { useNavigate, Link } from 'react-router-dom';
 import {
-  GitBranch, Plus, Play, Trash2, CheckCircle, XCircle,
-  RefreshCw, X, Pencil, Loader2, Layers, ArrowRight, Sparkles,
+  GitBranch, Plus, Play, CheckCircle, XCircle,
+  RefreshCw, Loader2, Layers, Sparkles,
   ChevronDown, ChevronRight, Tag, FileText, Shield,
+  Eye,
 } from 'lucide-react';
-import DeleteConfirmDialog from '../components/common/DeleteConfirmDialog';
-import { useToast } from '../components/common/Toast';
 import WorkflowRunDialog from '../components/workflow/WorkflowRunDialog';
+import { workflowEdges, workflowInput, workflowNodes } from '../utils/workflowShape';
 
 interface RunDialogState {
   open: boolean;
   workflow: any | null;
 }
 
-interface WorkflowExecStats {
-  total: number;
-  completed: number;
-  failed: number;
-  running: number;
+function shortDescription(description?: string): string {
+  const value = description?.trim();
+  if (!value) return 'No description';
+  const compact = value.replace(/\s+/g, ' ');
+  return compact.length > 72 ? `${compact.slice(0, 69).trim()}...` : compact;
 }
 
 // ── Loading Row Skeleton ────────────────────────────────────────────────────
@@ -38,11 +37,6 @@ function RowSkeleton() {
         <div className="h-3 w-40 bg-app-muted/50 rounded" />
       </div>
       <div className="h-5 w-10 bg-app-muted/50 rounded-full" />
-      <div className="flex gap-2">
-        <div className="h-4 w-10 bg-surface-200/20 rounded" />
-        <div className="h-4 w-10 bg-surface-200/20 rounded" />
-        <div className="h-4 w-10 bg-surface-200/20 rounded" />
-      </div>
       <div className="flex gap-1.5">
         <div className="h-6 w-14 bg-app-muted/50 rounded-full" />
         <div className="h-6 w-14 bg-app-muted/50 rounded-full" />
@@ -55,37 +49,19 @@ function RowSkeleton() {
 export default function WorkflowListPage() {
   const { workflows, loading, refresh } = useWorkflows();
   const navigate = useNavigate();
-  const toast = useToast();
 
   const [runningId] = useState<string | null>(null);
   const [runDialog, setRunDialog] = useState<RunDialogState>({ open: false, workflow: null });
-  const [deletingWf, setDeletingWf] = useState<{ id: string; name: string } | null>(null);
   const [expandedId, setExpandedId] = useState<string | null>(null);
 
   const stats = useMemo(() => {
     const map: Record<string, { nodes: number; edges: number }> = {};
     for (const wf of workflows) {
-      const nodes = wf.parsed?.nodes ? Object.keys(wf.parsed.nodes).length : 0;
-      const edges = wf.parsed?.edges?.length ?? 0;
+      const nodes = Object.keys(workflowNodes(wf)).length;
+      const edges = workflowEdges(wf).length;
       map[wf._id] = { nodes, edges };
     }
     return map;
-  }, [workflows]);
-
-  const [execStats, setExecStats] = useState<Record<string, WorkflowExecStats>>({});
-  useEffect(() => {
-    execApi.list().then((execs: any[]) => {
-      const map: Record<string, WorkflowExecStats> = {};
-      for (const exec of execs) {
-        const name = exec.workflowName;
-        if (!map[name]) map[name] = { total: 0, completed: 0, failed: 0, running: 0 };
-        map[name].total++;
-        if (exec.status === 'completed') map[name].completed++;
-        else if (exec.status === 'failed') map[name].failed++;
-        else if (exec.status === 'running') map[name].running++;
-      }
-      setExecStats(map);
-    }).catch(() => {});
   }, [workflows]);
 
   // Open dialog: we just pass the workflow `{_id, name}` — the shared
@@ -93,18 +69,6 @@ export default function WorkflowListPage() {
   const openRunDialog = useCallback((wf: any) => {
     setRunDialog({ open: true, workflow: wf });
   }, []);
-
-  const handleDelete = useCallback(async () => {
-    if (!deletingWf) return;
-    try {
-      await wfApi.delete(deletingWf.id);
-      toast.success(`Workflow "${deletingWf.name}" deleted`);
-      refresh();
-    } catch (e: any) {
-      toast.error(e.message || 'Failed to delete workflow');
-    }
-    setDeletingWf(null);
-  }, [deletingWf, refresh, toast]);
 
   const toggleExpand = useCallback((id: string) => {
     setExpandedId(prev => (prev === id ? null : id));
@@ -177,32 +141,39 @@ export default function WorkflowListPage() {
             <span className="w-48 overline">Name</span>
             <span className="flex-1 overline">Description</span>
             <span className="w-16 text-center overline">Nodes</span>
-            <span className="w-40 text-center overline">Run stats</span>
-            <span className="w-48 text-right overline">Actions</span>
+            <span className="w-44 text-right overline">Actions</span>
           </div>
 
           {workflows.map((wf: any) => {
             const wfStats = stats[wf._id] ?? { nodes: 0, edges: 0 };
-            const es = execStats[wf.name] ?? { total: 0, completed: 0, failed: 0, running: 0 };
             const isValid = wf.validation?.valid;
             const isRunning = runningId === wf._id;
             const isExpanded = expandedId === wf._id;
-            const inputKeys = wf.parsed?.input ? Object.keys(wf.parsed.input) : [];
+            const input = workflowInput(wf);
+            const inputKeys = Object.keys(input);
 
             return (
               <div key={wf._id} className="border-b border-app last:border-b-0">
                 {/* ── Row ── */}
                 <div
                   className="flex items-center gap-4 px-4 py-2.5 hover:bg-app-muted/55 transition-colors cursor-pointer select-none"
-                  onClick={() => toggleExpand(wf._id)}
+                  onClick={() => navigate(`/workflows/${wf._id}`)}
                 >
                   {/* Expand chevron */}
-                  <span className="w-5 shrink-0 text-theme-muted">
+                  <button
+                    type="button"
+                    className="w-5 shrink-0 text-theme-muted hover:text-theme-primary"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      toggleExpand(wf._id);
+                    }}
+                    title={isExpanded ? 'Collapse details' : 'Preview details'}
+                  >
                     {isExpanded
                       ? <ChevronDown className="w-4 h-4" />
                       : <ChevronRight className="w-4 h-4" />
                     }
-                  </span>
+                  </button>
 
                   {/* Workflow icon */}
                   <div className={`w-8 h-8 rounded-md flex items-center justify-center shrink-0 ${isValid ? 'bg-accent-soft' : 'bg-accent-red/10'}`}>
@@ -223,10 +194,10 @@ export default function WorkflowListPage() {
                     <span className="text-[10px] font-mono text-theme-subtle block">v{wf.version}</span>
                   </div>
 
-                  {/* Description (truncated) */}
+                  {/* Description hint */}
                   <div className="flex-1 min-w-0">
                     <p className="text-[12px] text-theme-muted font-body truncate">
-                      {wf.description || 'No description'}
+                      {shortDescription(wf.description)}
                     </p>
                   </div>
 
@@ -237,21 +208,8 @@ export default function WorkflowListPage() {
                     </div>
                   </div>
 
-                  {/* Run stats */}
-                  <div className="w-40 flex items-center justify-center gap-3">
-                    <div className="flex items-center gap-1 text-[11px] font-mono text-theme-muted">
-                      <CheckCircle className="w-3 h-3 text-accent-green" /> {es.completed}
-                    </div>
-                    <div className="flex items-center gap-1 text-[11px] font-mono text-theme-muted">
-                      <XCircle className="w-3 h-3 text-accent-red" /> {es.failed}
-                    </div>
-                    <div className="flex items-center gap-1 text-[11px] font-mono text-theme-muted">
-                      <Play className="w-3 h-3" /> {es.total}
-                    </div>
-                  </div>
-
                   {/* Actions */}
-                  <div className="w-48 flex items-center justify-end gap-1.5 shrink-0" onClick={e => e.stopPropagation()}>
+                  <div className="w-44 flex items-center justify-end gap-1.5 shrink-0" onClick={e => e.stopPropagation()}>
                     <button
                       onClick={() => openRunDialog(wf)}
                       disabled={isRunning || !isValid}
@@ -263,18 +221,11 @@ export default function WorkflowListPage() {
                       }
                     </button>
                     <Link
-                      to={`/workflows/${wf._id}/edit`}
+                      to={`/workflows/${wf._id}`}
                       className="btn btn-secondary btn-sm"
                     >
-                      <Pencil className="w-3 h-3" /> Edit
+                      <Eye className="w-3 h-3" /> View details
                     </Link>
-                    <button
-                      onClick={() => setDeletingWf({ id: wf._id, name: wf.name })}
-                      className="btn btn-ghost btn-sm hover:text-accent-red"
-                      title="Delete workflow"
-                    >
-                      <Trash2 className="w-3 h-3" />
-                    </button>
                   </div>
                 </div>
 
@@ -282,12 +233,18 @@ export default function WorkflowListPage() {
                 {isExpanded && (
                   <div className="bg-app-muted/40 px-8 py-4 space-y-4">
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                      {/* Full description */}
+                      {/* Workflow shape */}
                       <div>
-                        <p className="overline mb-2">Description</p>
-                        <p className="text-[13px] text-theme-primary font-body leading-relaxed">
-                          {wf.description || 'No description provided.'}
-                        </p>
+                        <p className="overline mb-2">Shape</p>
+                        <div className="flex flex-wrap gap-2">
+                          <span className="badge">
+                            <Layers className="w-2.5 h-2.5" /> {wfStats.nodes} nodes
+                          </span>
+                          <span className="badge">
+                            <GitBranch className="w-2.5 h-2.5" /> {wfStats.edges} edges
+                          </span>
+                          <span className="badge">v{wf.version}</span>
+                        </div>
                       </div>
 
                       {/* Validation status */}
@@ -337,7 +294,7 @@ export default function WorkflowListPage() {
                         {inputKeys.length > 0 ? (
                           <div className="flex flex-wrap gap-1.5">
                             {inputKeys.map((key: string) => {
-                              const schema = wf.parsed.input[key];
+                              const schema = input[key];
                               const required = schema?.required !== false;
                               return (
                                 <span key={key} className="badge" style={{ background: 'rgb(var(--color-accent-soft))', color: 'rgb(var(--color-accent))' }}>
@@ -374,13 +331,6 @@ export default function WorkflowListPage() {
       )}
 
 
-      <DeleteConfirmDialog
-        open={!!deletingWf}
-        resourceType="workflow"
-        resourceName={deletingWf?.name ?? ''}
-        onConfirm={handleDelete}
-        onCancel={() => setDeletingWf(null)}
-      />
     </div>
   );
 }

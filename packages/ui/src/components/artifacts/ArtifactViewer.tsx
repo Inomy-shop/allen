@@ -63,9 +63,9 @@ export default function ArtifactViewer({ artifact, onClose, onDelete, showExtern
   const Icon = iconForType(artifact.contentType);
 
   return (
-    <div className="flex flex-col h-full">
+    <div className="flex h-full flex-col bg-surface">
       {/* Header */}
-      <div className="shrink-0 px-4 py-2.5 border-b border-app bg-app-muted/40">
+      <div className="shrink-0 border-b border-app bg-app-card px-4 py-3">
         <div className="flex items-center gap-2.5 mb-1">
           <Icon className={`w-4 h-4 shrink-0 ${colorForType(artifact.contentType)}`} />
           <div className="flex-1 min-w-0">
@@ -95,7 +95,7 @@ export default function ArtifactViewer({ artifact, onClose, onDelete, showExtern
               onClick={handleCopy}
               disabled={!content || artifact.contentType === 'binary'}
               title="Copy content"
-              className="p-1.5 rounded-md hover:bg-app-muted text-theme-muted hover:text-theme-secondary transition-colors disabled:opacity-30"
+              className="rounded-md p-1.5 text-theme-muted transition-colors hover:bg-app-muted hover:text-theme-primary disabled:opacity-30"
             >
               <Copy className="w-3.5 h-3.5" />
             </button>
@@ -105,7 +105,7 @@ export default function ArtifactViewer({ artifact, onClose, onDelete, showExtern
                 target="_blank"
                 rel="noreferrer"
                 title="Open in new tab"
-                className="p-1.5 rounded-md hover:bg-app-muted text-theme-muted hover:text-theme-secondary transition-colors"
+                className="rounded-md p-1.5 text-theme-muted transition-colors hover:bg-app-muted hover:text-theme-primary"
               >
                 <ExternalLink className="w-3.5 h-3.5" />
               </a>
@@ -114,7 +114,7 @@ export default function ArtifactViewer({ artifact, onClose, onDelete, showExtern
               href={url}
               download={artifact.filename}
               title="Download"
-              className="p-1.5 rounded-md hover:bg-app-muted text-theme-muted hover:text-theme-secondary transition-colors"
+              className="rounded-md p-1.5 text-theme-muted transition-colors hover:bg-app-muted hover:text-theme-primary"
             >
               <Download className="w-3.5 h-3.5" />
             </a>
@@ -122,7 +122,7 @@ export default function ArtifactViewer({ artifact, onClose, onDelete, showExtern
               <button
                 onClick={onDelete}
                 title="Delete artifact"
-                className="p-1.5 rounded-md hover:bg-accent-red/10 text-theme-muted hover:text-accent-red transition-colors"
+                className="rounded-md p-1.5 text-theme-muted transition-colors hover:bg-accent-red/10 hover:text-accent-red"
               >
                 <Trash2 className="w-3.5 h-3.5" />
               </button>
@@ -131,7 +131,7 @@ export default function ArtifactViewer({ artifact, onClose, onDelete, showExtern
               <button
                 onClick={onClose}
                 title="Close viewer"
-                className="p-1.5 rounded-md hover:bg-app-muted text-theme-muted hover:text-theme-secondary transition-colors"
+                className="rounded-md p-1.5 text-theme-muted transition-colors hover:bg-app-muted hover:text-theme-primary"
               >
                 <XIcon className="w-3.5 h-3.5" />
               </button>
@@ -149,7 +149,7 @@ export default function ArtifactViewer({ artifact, onClose, onDelete, showExtern
       </div>
 
       {/* Body */}
-      <div className="flex-1 min-h-0 overflow-auto">
+      <div className="min-h-0 flex-1 overflow-auto">
         {loading && (
           <div className="p-6 text-xs text-theme-muted font-mono">Loading…</div>
         )}
@@ -157,7 +157,7 @@ export default function ArtifactViewer({ artifact, onClose, onDelete, showExtern
           <div className="p-6 text-xs text-accent-red font-mono">Failed to load: {error}</div>
         )}
         {!loading && !error && (
-          <div className="p-4">
+          <div className="p-4 md:p-5">
             {artifact.contentType === 'markdown' && (
               <div className="prose prose-sm prose-invert max-w-none">
                 {renderMarkdown(content ?? '') as React.ReactNode}

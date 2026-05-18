@@ -224,18 +224,45 @@ async function connectServer(server: McpServerRecord, db: Db): Promise<McpConnec
  * Load all enabled MCP servers, connect to them, and return their tools
  * as function definitions that can be registered with any LLM provider.
  */
-export async function loadMcpTools(db: Db): Promise<McpTool[]> {
+export async function loadMcpTools(
+  db: Db,
+  options?: { externalServerNames?: string[] },
+): Promise<McpTool[]> {
   const service = new McpService(db);
   const servers = (await service.list()).filter(s => s.enabled && s.type === 'stdio');
+  const allowedExternal = options?.externalServerNames
+    ? new Set(options.externalServerNames.filter((name) => typeof name === 'string' && name.length > 0))
+    : null;
 
   const allTools: McpTool[] = [];
   for (const server of servers) {
+    if (allowedExternal && !allowedExternal.has(server.name)) continue;
     try {
       const conn = await connectServer(server, db);
       allTools.push(...conn.tools);
     } catch (err) {
       console.error(`\x1b[31m[mcp]\x1b[0m Failed to connect to ${server.name}:`, (err as Error).message);
     }
+  }
+  return allTools;
+}
+
+/**
+ * Return tools for MCP servers that are already connected. This never spawns
+ * subprocesses or performs JSON-RPC handshakes, so it is safe for fast UI
+ * metadata endpoints.
+ */
+export function getCachedMcpTools(
+  options?: { externalServerNames?: string[] },
+): McpTool[] {
+  const allowedExternal = options?.externalServerNames
+    ? new Set(options.externalServerNames.filter((name) => typeof name === 'string' && name.length > 0))
+    : null;
+  const allTools: McpTool[] = [];
+  for (const conn of connections.values()) {
+    if (allowedExternal && !allowedExternal.has(conn.serverName)) continue;
+    if (conn.process.killed || conn.process.exitCode !== null) continue;
+    allTools.push(...conn.tools);
   }
   return allTools;
 }

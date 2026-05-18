@@ -83,7 +83,7 @@ export interface ChatMessage {
   sessionId: string;
   role: 'user' | 'assistant';
   content: string;
-  status: 'completed' | 'streaming' | 'failed';
+  status: 'completed' | 'streaming' | 'failed' | 'cancelled';
   senderUserId?: string;
   senderName?: string;
   senderEmail?: string;
@@ -168,7 +168,7 @@ export interface SpawnedAgent {
 
 export interface WorkflowInterventionAnswer {
   executionId: string;
-  interventionId: string;
+  interventionId?: string;
   decision: 'approve' | 'request_changes' | 'reject' | 'answer';
   fieldValues?: Record<string, unknown>;
   feedback?: string;
@@ -274,6 +274,58 @@ function toolRunFromResult(tool: string, result: Record<string, unknown> | undef
     activity: [],
     kind: isWorkflow ? 'workflow' : 'agent',
   };
+}
+
+function activeToolCallsFromRecords(records?: ToolCallRecord[]): ActiveToolCall[] {
+  return (records ?? []).map(record => ({
+    tool: record.tool,
+    args: record.args ?? {},
+    status: 'completed' as const,
+    result: record.result,
+    durationMs: record.durationMs,
+    toolUseId: record.toolUseId,
+  }));
+}
+
+function mergeToolStart(prev: ActiveToolCall[], data: any): ActiveToolCall[] {
+  const toolUseId = data.toolUseId ?? data.tool_use_id;
+  if (toolUseId && prev.some(tc => tc.toolUseId === toolUseId)) return prev;
+  return [
+    ...prev,
+    { tool: data.tool, args: data.args ?? {}, status: 'running' as const, toolUseId },
+  ];
+}
+
+function mergeToolResult(prev: ActiveToolCall[], data: any): ActiveToolCall[] {
+  const toolUseId = data.toolUseId ?? data.tool_use_id;
+  let matched = false;
+  const next = prev.map(tc => {
+    const isMatch = toolUseId
+      ? tc.toolUseId === toolUseId
+      : tc.tool === data.tool && tc.status === 'running';
+    if (!isMatch) return tc;
+    matched = true;
+    return {
+      ...tc,
+      status: 'completed' as const,
+      args: data.args ?? tc.args,
+      result: data.result,
+      durationMs: data.durationMs,
+      toolUseId: tc.toolUseId ?? toolUseId,
+    };
+  });
+  if (matched) return next;
+  return [
+    ...next,
+    {
+      tool: data.tool,
+      args: data.args ?? {},
+      status: 'completed' as const,
+      result: data.result,
+      durationMs: data.durationMs,
+      toolUseId,
+    },
+  ];
 }
 
 function runsFromMessages(messages: ChatMessage[]): SpawnedAgent[] {
@@ -547,7 +599,12 @@ export function useChat() {
         console.log('[useChat:refresh] reconnecting SSE stream for', activeSessionId);
         setStreaming(true);
         const streamingMsg = session.messages?.find((m: any) => m.status === 'streaming');
-        if (streamingMsg?.content) setStreamText(streamingMsg.content);
+        if (streamingMsg) {
+          setMessages(prev => prev.filter(m => m._id !== streamingMsg._id));
+          setStreamText(streamingMsg.content ?? '');
+          setThinkingText(streamingMsg.thinkingText ?? '');
+          setActiveToolCalls(activeToolCallsFromRecords(streamingMsg.toolCalls));
+        }
 
         // Attempt to attach an SSE reader with up to MAX_RECONNECT_ATTEMPTS retries.
         let sessionReader: ReadableStreamDefaultReader<Uint8Array> | null = null;
@@ -622,20 +679,11 @@ export function useChat() {
         break;
 
       case 'tool_start':
-        setActiveToolCalls(prev => [
-          ...prev,
-          { tool: data.tool, args: data.args ?? {}, status: 'running', toolUseId: data.toolUseId ?? data.tool_use_id },
-        ]);
+        setActiveToolCalls(prev => mergeToolStart(prev, data));
         break;
 
       case 'tool_result':
-        setActiveToolCalls(prev =>
-          prev.map(tc =>
-            ((data.toolUseId ?? data.tool_use_id) ? tc.toolUseId === (data.toolUseId ?? data.tool_use_id) : tc.tool === data.tool && tc.status === 'running')
-              ? { ...tc, status: 'completed' as const, args: data.args ?? tc.args, result: data.result, durationMs: data.durationMs }
-              : tc,
-          ),
-        );
+        setActiveToolCalls(prev => mergeToolResult(prev, data));
         {
           const run = toolRunFromResult(data.tool, data.result);
           if (run) {
@@ -1000,10 +1048,7 @@ export function useChat() {
                   if (data.toolUseId ?? data.tool_use_id) {
                     activeToolArgs.set(data.toolUseId ?? data.tool_use_id, data.args ?? {});
                   }
-                  setActiveToolCalls(prev => [
-                    ...prev,
-                    { tool: data.tool, args: data.args ?? {}, status: 'running', toolUseId: data.toolUseId ?? data.tool_use_id },
-                  ]);
+                  setActiveToolCalls(prev => mergeToolStart(prev, data));
                   break;
 
                 case 'tool_result': {
@@ -1018,13 +1063,7 @@ export function useChat() {
                   };
                   collectedToolCalls.push(toolRecord);
                   if (toolUseId) activeToolArgs.delete(toolUseId);
-                  setActiveToolCalls(prev =>
-                    prev.map(tc =>
-                      (toolUseId ? tc.toolUseId === toolUseId : tc.tool === data.tool && tc.status === 'running')
-                        ? { ...tc, status: 'completed' as const, args: data.args ?? tc.args, result: data.result, durationMs: data.durationMs }
-                      : tc,
-                    ),
-                  );
+                  setActiveToolCalls(prev => mergeToolResult(prev, data));
                   const run = toolRunFromResult(data.tool, data.result);
                   if (run) {
                     run.sourceMessageId = data.messageId || assistantMsgId;
@@ -1284,8 +1323,16 @@ export function useChat() {
             // Backfill any partial content that arrived before the drop.
             const session = await api.getSession(sessionId);
             const streamingMsg = session.messages?.find((m: any) => m.status === 'streaming');
-            if (streamingMsg?.content) {
-              setStreamText(streamingMsg.content);
+            if (streamingMsg) {
+              setMessages(prev => prev.filter(m => m._id !== streamingMsg._id));
+              setStreamText(streamingMsg.content ?? '');
+              setThinkingText(streamingMsg.thinkingText ?? '');
+              setActiveToolCalls(prev => {
+                const hydrated = activeToolCallsFromRecords(streamingMsg.toolCalls);
+                const existingKeys = new Set(prev.map(tc => tc.toolUseId || `${tc.tool}:${tc.status}`));
+                const missing = hydrated.filter(tc => !existingKeys.has(tc.toolUseId || `${tc.tool}:${tc.status}`));
+                return missing.length ? [...prev, ...missing] : prev;
+              });
             }
 
             // Attach a fresh SSE reader to the existing stream.
@@ -1374,7 +1421,38 @@ export function useChat() {
       fetch(`/api/chat/sessions/${activeSessionId}/cancel`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', ...authHeaders() },
-      }).catch(() => { /* best-effort — frontend abort already happened */ });
+      })
+        .then(res => res.ok ? res.json() : null)
+        .then((result: { messageId?: string; content?: string; cancelledExecutions?: Array<{ id?: string; workflowName?: string; status?: string }> } | null) => {
+          if (!result?.messageId) return;
+          const fallbackContent = result.cancelledExecutions?.length
+            ? `Interrupted by user. Cancelled linked tasks: ${result.cancelledExecutions.map(exec => exec.id).filter(Boolean).join(', ')}. If you want to rerun, choose fresh start or resume.`
+            : 'Interrupted by user.';
+          const content = result.content ?? fallbackContent;
+          setMessages(prev => {
+            const existing = prev.find(message => message._id === result.messageId);
+            if (existing) {
+              return prev.map(message => message._id === result.messageId
+                ? { ...message, content, status: 'cancelled' as const }
+                : message);
+            }
+            return [
+              ...prev,
+              {
+                _id: result.messageId,
+                sessionId: activeSessionId,
+                role: 'assistant',
+                content,
+                status: 'cancelled',
+                createdAt: new Date().toISOString(),
+              },
+            ];
+          });
+          setSpawnedAgents(prev => prev.map(run => run.sourceMessageId === result.messageId
+            ? { ...run, status: 'cancelled' as const }
+            : run));
+        })
+        .catch(() => { /* best-effort — frontend abort already happened */ });
     }
     setStreaming(false);
     setStreamText('');
@@ -1384,6 +1462,10 @@ export function useChat() {
 
   const answerWorkflowIntervention = useCallback(async (input: WorkflowInterventionAnswer) => {
     if (!activeSessionId) return;
+
+    if (!input.interventionId) {
+      throw new Error('Approval is still syncing. Please wait a moment and try again.');
+    }
 
     await interventionsApi.respond(input.interventionId, {
       decision: input.decision,

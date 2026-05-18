@@ -22,7 +22,7 @@ import ClarificationPanel, {
 import RunStatusCard from '../components/executions/RunStatusCard';
 import {
   ArrowRight, Check, AlertTriangle, CheckCircle2, HelpCircle,
-  Clock, RefreshCw, Search, Inbox,
+  Clock, RefreshCw, Search, Inbox as InterventionIcon,
   Archive, Activity, ChevronLeft, User,
   Sparkles, ShieldCheck, Shield,
 } from 'lucide-react';
@@ -307,11 +307,11 @@ function InterventionsListView() {
   };
 
   return (
-    <div className="content scroll-hide" data-screen-label="inbox">
+    <div className="content scroll-hide" data-screen-label="interventions">
       <div className="page-head">
         <div className="ph-row">
           <div>
-            <h1>inbox</h1>
+            <h1>interventions</h1>
             <p className="sub">
               {pendingCount} things waiting on you · {answeredCount} answered · {items.length} total
             </p>
@@ -332,7 +332,7 @@ function InterventionsListView() {
           <input
             value={search}
             onChange={e => setSearch(e.target.value)}
-            placeholder="search inbox..."
+            placeholder="search interventions..."
           />
         </div>
       </div>
@@ -391,7 +391,7 @@ function EmptyState({ hasFilters }: { hasFilters: boolean }) {
   return (
     <div className="flex flex-col items-center justify-center py-20 px-6 text-center">
       <div className="w-16 h-16 rounded-full bg-app-muted/50 flex items-center justify-center mb-4">
-        <Inbox className="w-8 h-8 text-theme-subtle" />
+        <InterventionIcon className="w-8 h-8 text-theme-subtle" />
       </div>
       {hasFilters ? (
         <>
@@ -470,18 +470,15 @@ function InterventionDetailView() {
   const isPlanApproval = item.stage === 'plan_approval_gate';
 
   // Map intervention → ClarificationPanel props
-  const panelMode: 'simple' | 'approval' | 'question' | 'escalation' =
-    item.severity === 'approval'   ? 'approval'
-    : item.severity === 'escalation' ? 'escalation'
-    : item.severity === 'question'   ? 'question'
-    : 'simple';
+  const panelMode: 'simple' | 'approval' =
+    item.severity === 'approval' ? 'approval' : 'simple';
 
   const panelSeverity: ClarificationSeverity =
     item.severity === 'approval'   ? 'approval'
     : item.severity === 'escalation' ? 'escalation'
     : 'question';
 
-  const fields: ClarificationField[] = (item.fields ?? []).map(f => ({
+  const originalFields: ClarificationField[] = (item.fields ?? []).map(f => ({
     name: f.name,
     type: (f.type as ClarificationField['type']) ?? 'text',
     label: f.label,
@@ -489,6 +486,20 @@ function InterventionDetailView() {
     options: f.options,
     placeholder: f.placeholder,
   }));
+  const responseField = originalFields.find(f => {
+    const name = f.name.toLowerCase();
+    const type = String(f.type || '').toLowerCase();
+    return name.includes('feedback') || name.includes('reason') || name.includes('comment') || type === 'textarea';
+  }) ?? originalFields.find(f => !isDecisionFieldName(f.name));
+  const fields: ClarificationField[] = panelMode === 'approval'
+    ? originalFields
+    : [{
+      name: '__human_response',
+      type: 'textarea',
+      label: responseField?.label ?? 'Your response',
+      required: true,
+      placeholder: responseField?.placeholder ?? 'Type your response...',
+    }];
 
   const scopeOptions = isPlanApproval ? [
     { value: 'requirements',     label: 'Requirements (PRD)',   description: 'Re-runs PRD → HLA → TDD' },
@@ -503,20 +514,24 @@ function InterventionDetailView() {
     feedback?: string;
     scope?: string;
   }) {
-    if (!item || !payload.decision) return;
+    if (!item || (panelMode === 'approval' && !payload.decision)) return;
     setSubmitting(true);
     try {
+      const decision = panelMode === 'approval' ? payload.decision! : 'answer';
+      const fieldValues = panelMode === 'approval'
+        ? payload.fieldValues
+        : freeformFieldValues(originalFields, payload.fieldValues);
       await interventionsApi.respond(item.intervention_id, {
-        decision: payload.decision,
+        decision,
         feedback: payload.feedback,
         scope: payload.scope as 'requirements' | 'architecture' | 'technical_design' | 'all' | undefined,
         field_values:
-          payload.decision === 'answer' || payload.decision === 'approve'
-            ? (payload.fieldValues as Record<string, string>)
+          decision === 'answer' || decision === 'approve'
+            ? (fieldValues as Record<string, string>)
             : undefined,
         human_node_name: item.stage,
       });
-      toast.success(`Response submitted: ${payload.decision}`);
+      toast.success(`Response submitted: ${decision}`);
       await load();
     } catch (err: unknown) {
       toast.error(err instanceof Error ? err.message : 'Failed to submit response');
@@ -716,6 +731,43 @@ function ResponseField({ label, value, pre, mono }: {
       )}
     </div>
   );
+}
+
+function isDecisionFieldName(name: string): boolean {
+  const lower = name.toLowerCase();
+  return lower.includes('decision') || lower.includes('approval') || lower === 'action';
+}
+
+function freeformFieldValues(
+  fields: ClarificationField[],
+  submitted: Record<string, unknown>,
+): Record<string, unknown> {
+  const text = firstTextValue(submitted);
+  const values: Record<string, unknown> = {};
+  const decisionField = fields.find(f => isDecisionFieldName(f.name));
+  const responseField = fields.find(f => {
+    const name = f.name.toLowerCase();
+    const type = String(f.type || '').toLowerCase();
+    return name.includes('feedback') || name.includes('reason') || name.includes('comment') || type === 'textarea';
+  }) ?? fields.find(f => !isDecisionFieldName(f.name));
+
+  if (decisionField) {
+    const optionValues = (decisionField.options ?? []).map(option => (
+      typeof option === 'string' ? option : option.value
+    ));
+    if (optionValues.includes('retry_with_feedback')) values[decisionField.name] = 'retry_with_feedback';
+    else if (optionValues.includes('request_changes')) values[decisionField.name] = 'request_changes';
+    else values[decisionField.name] = text;
+  }
+  values[responseField?.name ?? 'answer'] = text;
+  return values;
+}
+
+function firstTextValue(values: Record<string, unknown>): string {
+  for (const value of Object.values(values)) {
+    if (typeof value === 'string' && value.trim()) return value;
+  }
+  return '';
 }
 
 // ── Page component ────────────────────────────────────────────────────

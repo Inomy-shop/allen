@@ -459,7 +459,7 @@ export function chatRoutes(db: Db): Router {
       const executionIds = Array.isArray(req.body.executionIds) ? req.body.executionIds.map(String).filter(Boolean) : [];
       const requestedMode = req.body.mode === 'branch' || req.body.mode === 'working' || req.body.mode === 'auto' || req.body.mode === 'workspace'
         ? req.body.mode as WorkspaceDiffMode
-        : 'auto';
+        : 'workspace';
       const workspaceRefs = Array.isArray(req.body.workspaces)
         ? req.body.workspaces
           .map((item: Record<string, unknown>) => ({
@@ -479,7 +479,7 @@ export function chatRoutes(db: Db): Router {
           snapshots.push(existing);
           continue;
         }
-        const diff = await workspaceManager.getDiff(ref.id, { mode: requestedMode });
+        const diff = await workspaceManager.getDiff(ref.id, { mode: requestedMode, anchorToCreation: requestedMode === 'workspace' });
         const files = diff.files.filter(file => file.diff?.trim() || file.modifiedContent?.trim());
         if (files.length === 0) continue;
         const now = new Date();
@@ -490,6 +490,7 @@ export function chatRoutes(db: Db): Router {
           workspaceId: ref.id,
           workspaceName: ref.name,
           baseBranch: diff.baseBranch,
+          baseCommit: diff.baseCommit,
           mode: diff.mode,
           files,
           createdAt: now,

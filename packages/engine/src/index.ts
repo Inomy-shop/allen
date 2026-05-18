@@ -14,6 +14,7 @@ export { LearningManager, type ExtractionContext } from './learning-manager.js';
 export * from './types.js';
 export { embed, embedAndSave, searchSimilarLearnings, backfillEmbeddings, invalidateEmbeddingCache, cosineSimilarity, registerEmbeddingProvider, setEmbeddingProvider, getActiveProvider, type EmbeddingProvider } from './embedding.js';
 export { loadMcpServers, loadAllMcpServers, getAllenMcpConfig, buildSingleServerConfig, type LoadMcpOptions } from './mcp-loader.js';
+export { ALLEN_MCP_TOOL_NAMES, ALLEN_MCP_CLAUDE_TOOL_NAMES } from './allen-mcp-tools.js';
 export { queryViaCli, type CliQueryOptions } from './cli-runner.js';
 export { writeAgentFile, renderAgentFile, ARTIFACTS_GUIDANCE, withArtifactsGuidance, NON_INTERACTIVE_GUIDANCE, withNonInteractiveGuidance, type AgentSpec, type MaterializedAgent } from './agent-file-writer.js';
 export { expandToClaudeTools } from './tool-mapping.js';

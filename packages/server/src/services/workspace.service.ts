@@ -68,6 +68,7 @@ export interface Workspace {
   worktreePath: string;
   branch: string;
   baseBranch: string;
+  baseCommit?: string;
   status: 'creating' | 'setting_up' | 'active' | 'running' | 'archiving' | 'archived' | 'failed';
   source: 'new' | 'pr';
   prNumber?: number;
@@ -339,6 +340,10 @@ export class WorkspaceManager {
         await this.col.updateOne({ _id: oid }, { $set: { baseBranch } }).catch(() => {});
       }
 
+      let baseCommit = await exec('git', ['rev-parse', `${baseRef}^{commit}`], { cwd: repoPath })
+        .then(result => result.stdout.trim())
+        .catch(() => '');
+
       // Create worktree
       if (isPr) {
         if (!hasOriginRemote) {
@@ -357,6 +362,9 @@ export class WorkspaceManager {
             `Workspace creation aborted — PR branch is not reachable.`,
           );
         }
+        baseCommit = await exec('git', ['merge-base', baseRef, `origin/${branch}`], { cwd: repoPath })
+          .then(result => result.stdout.trim())
+          .catch(() => baseCommit);
         await exec('git', ['worktree', 'add', worktreePath, `origin/${branch}`], { cwd: repoPath });
       } else {
         // Delete stale branch if it exists, then create fresh from base.
@@ -365,6 +373,10 @@ export class WorkspaceManager {
         // starts from up-to-date code.
         await exec('git', ['branch', '-D', branch], { cwd: repoPath }).catch(() => {});
         await exec('git', ['worktree', 'add', '-b', branch, worktreePath, baseRef], { cwd: repoPath });
+      }
+
+      if (baseCommit) {
+        await this.col.updateOne({ _id: oid }, { $set: { baseCommit } }).catch(() => {});
       }
 
       // Load config for this repo
@@ -670,8 +682,13 @@ export class WorkspaceManager {
 
   async getGitState(worktreePath: string, baseBranch: string): Promise<{ changedFiles: number; ahead: number; behind: number; lastCommit?: { hash: string; message: string; date: Date } }> {
     try {
-      const { stdout: diffStat } = await exec('git', ['diff', '--stat', `${baseBranch}...HEAD`], { cwd: worktreePath });
-      const changedFiles = (diffStat.match(/\d+ file/)?.[0]?.match(/\d+/)?.[0] ?? '0');
+      const baseRef = (await exec('git', ['rev-parse', '--verify', `origin/${baseBranch}`], { cwd: worktreePath }).then(() => `origin/${baseBranch}`).catch(() => baseBranch));
+      const { stdout: changedTracked } = await exec('git', ['diff', '--name-only', baseRef], { cwd: worktreePath }).catch(() => ({ stdout: '' }));
+      const { stdout: untracked } = await exec('git', ['ls-files', '--others', '--exclude-standard'], { cwd: worktreePath }).catch(() => ({ stdout: '' }));
+      const changedFiles = new Set([
+        ...changedTracked.trim().split('\n').filter(Boolean),
+        ...untracked.trim().split('\n').filter(Boolean),
+      ]).size;
 
       const { stdout: log } = await exec('git', ['log', '-1', '--format=%H|%s|%aI'], { cwd: worktreePath });
       const [hash, message, dateStr] = log.trim().split('|');
@@ -680,7 +697,7 @@ export class WorkspaceManager {
       const [behind, ahead] = revList.trim().split(/\s+/).map(Number);
 
       return {
-        changedFiles: parseInt(changedFiles),
+        changedFiles,
         ahead: ahead ?? 0,
         behind: behind ?? 0,
         lastCommit: hash ? { hash, message, date: new Date(dateStr) } : undefined,
@@ -690,7 +707,7 @@ export class WorkspaceManager {
     }
   }
 
-  async getDiff(id: string, options: { mode?: WorkspaceDiffMode } = {}): Promise<{ baseBranch: string; mode: WorkspaceDiffMode; files: { path: string; status: string; additions: number; deletions: number; diff: string; originalContent: string; modifiedContent: string }[] }> {
+  async getDiff(id: string, options: { mode?: WorkspaceDiffMode; anchorToCreation?: boolean } = {}): Promise<{ baseBranch: string; baseCommit?: string; mode: WorkspaceDiffMode; files: { path: string; status: string; additions: number; deletions: number; diff: string; originalContent: string; modifiedContent: string }[] }> {
     const ws = await this.get(id);
     if (!ws) throw new Error('Workspace not found');
 
@@ -705,13 +722,44 @@ export class WorkspaceManager {
     let includeUntracked = true;
     let nameStatus = '';
     let numstat = '';
+    let anchoredToCreationBase = false;
 
     if (mode !== 'branch' && mode !== 'workspace') {
       nameStatus = (await exec('git', ['diff', '--name-status', diffRange], { cwd: ws.worktreePath }).catch(() => ({ stdout: '' }))).stdout;
       numstat = (await exec('git', ['diff', '--numstat', diffRange], { cwd: ws.worktreePath }).catch(() => ({ stdout: '' }))).stdout;
     }
 
-    if ((mode === 'workspace' || mode === 'branch' || (mode === 'auto' && !nameStatus.trim())) && ws.baseBranch) {
+    const resolveCreationBaseRef = async (): Promise<string | null> => {
+      if (ws.baseCommit) {
+        const verified = await exec('git', ['rev-parse', '--verify', `${ws.baseCommit}^{commit}`], { cwd: ws.worktreePath })
+          .then(result => result.stdout.trim())
+          .catch(() => '');
+        if (verified) return verified;
+      }
+      const branchCandidates = [`origin/${ws.baseBranch}`, ws.baseBranch].filter(Boolean);
+      for (const candidate of branchCandidates) {
+        const mergeBase = await exec('git', ['merge-base', candidate, 'HEAD'], { cwd: ws.worktreePath })
+          .then(result => result.stdout.trim())
+          .catch(() => '');
+        if (mergeBase) return mergeBase;
+      }
+      return null;
+    };
+
+    if (mode === 'workspace' && options.anchorToCreation && ws.baseBranch) {
+      const creationBaseRef = await resolveCreationBaseRef();
+      if (creationBaseRef) {
+        anchoredToCreationBase = true;
+        const status = await exec('git', ['diff', '--name-status', creationBaseRef], { cwd: ws.worktreePath }).catch(() => ({ stdout: '' }));
+        nameStatus = status.stdout;
+        numstat = (await exec('git', ['diff', '--numstat', creationBaseRef], { cwd: ws.worktreePath }).catch(() => ({ stdout: '' }))).stdout;
+        diffRange = creationBaseRef;
+        baseRef = creationBaseRef;
+        includeUntracked = true;
+      }
+    }
+
+    if (!anchoredToCreationBase && !nameStatus.trim() && (mode === 'workspace' || mode === 'branch' || (mode === 'auto' && !nameStatus.trim())) && ws.baseBranch) {
       const candidates = [`origin/${ws.baseBranch}...HEAD`, `${ws.baseBranch}...HEAD`];
       for (const range of candidates) {
         const statusArgs = mode === 'workspace'
@@ -785,7 +833,7 @@ export class WorkspaceManager {
       } catch {}
     }));
 
-    return { baseBranch: ws.baseBranch, mode, files };
+    return { baseBranch: ws.baseBranch, baseCommit: ws.baseCommit, mode, files };
   }
 
   async listFiles(id: string): Promise<{ path: string; isDir: boolean; status?: string }[]> {

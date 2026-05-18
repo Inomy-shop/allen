@@ -17,9 +17,7 @@ interface ChatSessionItem {
 }
 
 type ThreadItem =
-  { id: string; title: string; subtitle: string; status: string; href: string; startedAt?: string; provider?: string };
-
-type Tab = 'ongoing' | 'recent' | 'history';
+  { id: string; title: string; runner: string; messageCount: number; href: string; lastMessageAt?: string };
 
 function timeAgo(dateStr?: string): string {
   if (!dateStr) return 'recently';
@@ -37,11 +35,10 @@ export default function ThreadsPage() {
   const currentUser = useAuthStore((s) => s.user);
   const [chatSessions, setChatSessions] = useState<ChatSessionItem[]>([]);
   const [allUsers, setAllUsers] = useState<AuthUser[]>([]);
-  const [tab, setTab] = useState<Tab>('ongoing');
   const [query, setQuery] = useState('');
   const [loading, setLoading] = useState(true);
   // Sentinel values: 'all' = no filter, 'none' = unowned, otherwise userId.
-  // Defaults to the current logged-in user so people land on their own threads.
+  // Defaults to the current logged-in user so people land on their own chats.
   const [selectedOwner, setSelectedOwner] = useState<string>(() => currentUser?.id ?? 'all');
 
   useEffect(() => {
@@ -88,65 +85,35 @@ export default function ThreadsPage() {
     });
   }, [chatSessions, query]);
 
-  const buckets = useMemo(() => {
+  const items = useMemo(() => {
     const chatItems: ThreadItem[] = filteredSessions.map((session) => ({
       id: session._id,
       title: session.title || 'Untitled conversation',
-      subtitle: `${session.messageCount ?? 0} messages · ${session.provider ?? 'assistant'} · ${timeAgo(session.lastMessageAt)}`,
-      status: session.status,
-      progress: 100,
+      runner: session.ownerEmail || session.ownerName || 'Automation / Unknown',
+      messageCount: session.messageCount ?? 0,
       href: `/chat/${session._id}`,
-      startedAt: session.lastMessageAt,
-      provider: session.provider,
+      lastMessageAt: session.lastMessageAt,
     }));
 
-    const sorted = chatItems.sort((a, b) => new Date(b.startedAt ?? 0).getTime() - new Date(a.startedAt ?? 0).getTime());
-
-    const active = sorted.filter((item) => item.status === 'active');
-    const archived = sorted.filter((item) => item.status === 'archived');
-
-    return {
-      ongoing: active,
-      recent: sorted.slice(0, 80),
-      history: archived.length > 0 ? archived : sorted.slice(80),
-    };
+    return chatItems.sort((a, b) => new Date(b.lastMessageAt ?? 0).getTime() - new Date(a.lastMessageAt ?? 0).getTime());
   }, [filteredSessions]);
 
-  const tabs: Array<{ key: Tab; label: string; count: number }> = [
-    { key: 'ongoing', label: 'ongoing', count: buckets.ongoing.length },
-    { key: 'recent', label: 'recently completed', count: buckets.recent.length },
-    { key: 'history', label: 'history', count: buckets.history.length },
-  ];
-  const items = buckets[tab];
-
   return (
-    <div className="content scroll-hide" data-screen-label="threads">
+    <div className="content scroll-hide" data-screen-label="chats">
       <div className="page-head">
         <div className="ph-row">
           <div>
-            <h1>threads</h1>
-            <p className="sub">every conversation with allen, with what came of it</p>
+            <h1>Chats</h1>
+            <p className="sub">Pick up where conversations left off</p>
           </div>
         </div>
-        <nav className="topfilter-tabs mt-3">
-          {tabs.map((item) => (
-            <button
-              key={item.key}
-              type="button"
-              className={`tft ${tab === item.key ? 'active' : ''}`}
-              onClick={() => setTab(item.key)}
-            >
-              {item.label} <span className="tft-ct">{item.count}</span>
-            </button>
-          ))}
-        </nav>
       </div>
 
       <div className="th-search flex items-center gap-2 flex-wrap">
         <input
           value={query}
           onChange={(event) => setQuery(event.target.value)}
-          placeholder="search threads / tickets..."
+          placeholder="Search conversations..."
           className="!flex-1 !max-w-[480px]"
         />
         <select
@@ -166,17 +133,17 @@ export default function ThreadsPage() {
       </div>
 
       <div className="th-list">
-        {loading && items.length === 0 && <div className="task-empty">loading threads...</div>}
-        {!loading && items.length === 0 && <div className="task-empty">no threads here</div>}
+        {loading && items.length === 0 && <div className="task-empty">loading chats...</div>}
+        {!loading && items.length === 0 && <div className="task-empty">no chats here</div>}
         {items.map((item) => (
-          <Link key={`chat-${item.id}`} className="th-row th-row-chat" to={item.href}>
-            <div className="r-refs">
-              <span className="r-ref linear">chat</span>
-              <span className="r-ref gh">{item.id.slice(0, 8)}</span>
+          <Link key={`chat-${item.id}`} className="thread-card-row" to={item.href}>
+            <div className="thread-card-main">
+              <div className="thread-card-title">{item.title}</div>
+              <div className="thread-card-runner">{item.runner}</div>
             </div>
-            <div className="th-body">
-              <div className="th-title">{item.title}</div>
-              <div className="th-sub">{item.subtitle}</div>
+            <div className="thread-card-meta">
+              <span>{item.messageCount} {item.messageCount === 1 ? 'message' : 'messages'}</span>
+              <span>{timeAgo(item.lastMessageAt)}</span>
             </div>
           </Link>
         ))}

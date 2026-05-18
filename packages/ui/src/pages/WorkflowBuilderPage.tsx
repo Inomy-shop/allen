@@ -17,7 +17,12 @@ import { reactFlowToYaml } from '../lib/reactflow-to-yaml';
 
 type Mode = 'visual' | 'yaml';
 
-export default function WorkflowBuilderPage() {
+type WorkflowBuilderPageProps = {
+  embedded?: boolean;
+  onBack?: () => void;
+};
+
+export default function WorkflowBuilderPage({ embedded = false, onBack }: WorkflowBuilderPageProps = {}) {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
   const toast = useToast();
@@ -60,13 +65,16 @@ export default function WorkflowBuilderPage() {
     if (!id) {
       const defaultYaml = `name: new-workflow\ndescription: \nversion: 1\n\ncontext:\n  requires: []\n  tools: []\n\ninput:\n  task: { type: string, required: true }\n\nnodes:\n  plan:\n    role: planner\n    prompt: "Break down: {{task}}"\n    outputs:\n      plan: "A structured breakdown of the task into concrete steps."\n\nedges:\n  - { from: START, to: plan }\n  - { from: plan, to: END }\n`;
       setYamlContent(defaultYaml);
+      savedYamlRef.current = defaultYaml;
       syncYamlToVisual(defaultYaml);
       setLoading(false);
       return;
     }
 
     wfApi.get(id).then(wf => {
-      setYamlContent(wf.yaml ?? yaml.dump(wf.parsed));
+      const loadedYaml = wf.yaml ?? yaml.dump(wf.parsed);
+      setYamlContent(loadedYaml);
+      savedYamlRef.current = loadedYaml;
       setWorkflowMeta({
         name: wf.name,
         description: wf.description,
@@ -129,7 +137,7 @@ export default function WorkflowBuilderPage() {
   // YAML change handler
   const handleYamlChange = useCallback((val: string) => {
     setYamlContent(val);
-    setDirty(true);
+    setDirty(val !== savedYamlRef.current);
   }, []);
 
   // Save
@@ -145,10 +153,12 @@ export default function WorkflowBuilderPage() {
 
       if (isNew) {
         const result = await wfApi.create({ yaml: finalYaml });
+        savedYamlRef.current = finalYaml;
         setDirty(false);
         navigate(`/workflows/${result._id}/edit`, { replace: true });
       } else {
         await wfApi.update(id!, { yaml: finalYaml });
+        savedYamlRef.current = finalYaml;
         setDirty(false);
       }
     } catch (e: any) {
@@ -216,7 +226,14 @@ export default function WorkflowBuilderPage() {
       {/* Top bar */}
       <header className="flex items-center justify-between px-4 py-2.5 border-b border-app shrink-0">
         <div className="flex items-center gap-3">
-          <button onClick={() => navigate('/workflows')} className="text-theme-muted hover:text-theme-primary transition-colors" title="Back to workflows">
+          <button
+            onClick={() => {
+              if (embedded && onBack) onBack();
+              else navigate('/workflows');
+            }}
+            className="text-theme-muted hover:text-theme-primary transition-colors"
+            title={embedded ? 'Back to workflow' : 'Back to workflows'}
+          >
             <ArrowLeft className="w-4 h-4" />
           </button>
           <span className="text-[14px] font-semibold text-theme-primary tracking-tight">
@@ -340,8 +357,8 @@ export default function WorkflowBuilderPage() {
           <Canvas
             nodes={nodes}
             edges={edges}
-            onNodesChange={(n) => { setNodes(n); setDirty(true); }}
-            onEdgesChange={(e) => { setEdges(e); setDirty(true); }}
+            onNodesChange={(n, markDirty = false) => { setNodes(n); if (markDirty) setDirty(true); }}
+            onEdgesChange={(e, markDirty = false) => { setEdges(e); if (markDirty) setDirty(true); }}
             workflowInput={parsedWorkflow?.input ?? null}
           />
         ) : (

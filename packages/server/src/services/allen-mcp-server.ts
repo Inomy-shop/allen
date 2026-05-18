@@ -424,11 +424,16 @@ async function executeTool(name: string, args: Record<string, unknown>): Promise
           };
         }
       }
-      const url = `${API_BASE}/api/executions`;
+      // Go through the chat-tool dispatcher instead of the raw execution
+      // route so server-side active chat context can stamp both
+      // meta.chatSessionId and meta.parentMessageId. The raw route only sees
+      // headers from this MCP process and cannot know which assistant message
+      // owns the workflow run.
+      const url = `${API_BASE}/api/chat/tools/run_workflow`;
       const res = await fetch(url, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ workflowId: wf._id, input }),
+        body: JSON.stringify({ workflow_name: args.workflow_name, input }),
       });
       return res.json();
     }

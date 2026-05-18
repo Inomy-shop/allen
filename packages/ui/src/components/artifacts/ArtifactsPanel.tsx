@@ -14,7 +14,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import {
   FileText, Code2, FileJson, Database, FileSpreadsheet, File,
-  RefreshCw, Search, X as XIcon,
+  ChevronRight, RefreshCw, Search, X as XIcon,
 } from 'lucide-react';
 import { artifacts as artifactsApi, type ArtifactDoc } from '../../services/api';
 
@@ -25,6 +25,8 @@ export interface ArtifactsPanelProps {
   selectedId?: string | null;
   /** Called when the user clicks a row. Parent is expected to open the viewer. */
   onSelect?: (artifact: ArtifactDoc) => void;
+  /** Called after every successful load so parents can sync selection. */
+  onItemsChange?: (artifacts: ArtifactDoc[]) => void;
   /** Optional close button rendered in the header — when set, the parent
    *  drawer/overlay can rely on the panel's own chrome instead of stacking
    *  another header on top. */
@@ -34,7 +36,7 @@ export interface ArtifactsPanelProps {
 }
 
 export default function ArtifactsPanel({
-  rootType, rootId, selectedId, onSelect, onClose, pollIntervalMs = 5000,
+  rootType, rootId, selectedId, onSelect, onItemsChange, onClose, pollIntervalMs = 5000,
 }: ArtifactsPanelProps) {
   const [items, setItems] = useState<ArtifactDoc[]>([]);
   const [loading, setLoading] = useState(true);
@@ -45,7 +47,11 @@ export default function ArtifactsPanel({
     setError(null);
     try {
       const data = await artifactsApi.list({ rootType, rootId, limit: 500 });
-      setItems(data ?? []);
+      const sorted = [...(data ?? [])].sort((a, b) =>
+        new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime(),
+      );
+      setItems(sorted);
+      onItemsChange?.(sorted);
     } catch (err) {
       setError((err as Error).message);
     } finally {
@@ -53,7 +59,11 @@ export default function ArtifactsPanel({
     }
   }
 
-  useEffect(() => { load(); }, [rootType, rootId]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    setLoading(true);
+    setItems([]);
+    load();
+  }, [rootType, rootId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     if (!pollIntervalMs) return;
@@ -79,7 +89,7 @@ export default function ArtifactsPanel({
       const key = a.spawnContext?.nodeName
         ?? a.spawnContext?.agentName
         ?? a.spawnContext?.originType
-        ?? 'other';
+        ?? 'Ungrouped';
       const arr = map.get(key) ?? [];
       arr.push(a);
       map.set(key, arr);
@@ -88,12 +98,12 @@ export default function ArtifactsPanel({
   }, [filtered]);
 
   return (
-    <div className="flex flex-col h-full">
+    <div className="flex h-full flex-col bg-app-card">
       {/* Header */}
-      <div className="shrink-0 px-3 py-2.5 border-b border-app bg-app-muted/40">
+      <div className="shrink-0 border-b border-app px-4 py-3">
         <div className="flex items-center gap-2 mb-2">
-          <FileText className="w-4 h-4 text-accent-blue shrink-0" />
-          <h3 className="font-heading text-sm font-semibold text-theme-primary tracking-wide truncate">
+          <FileText className="w-4 h-4 text-theme-muted shrink-0" />
+          <h3 className="text-[13px] font-semibold text-theme-primary truncate">
             Artifacts
           </h3>
           <span className="text-[10px] font-mono text-theme-muted bg-app-muted px-1.5 py-0.5 rounded-full shrink-0">
@@ -102,7 +112,7 @@ export default function ArtifactsPanel({
           <button
             onClick={load}
             disabled={loading}
-            className="ml-auto p-1 rounded-md hover:bg-app-muted text-theme-muted hover:text-theme-secondary transition-colors disabled:opacity-50"
+            className="ml-auto rounded p-1.5 text-theme-muted transition-colors hover:bg-app-muted hover:text-theme-primary disabled:opacity-50"
             title="Refresh"
           >
             <RefreshCw className={`w-3.5 h-3.5 ${loading ? 'animate-spin' : ''}`} />
@@ -110,7 +120,7 @@ export default function ArtifactsPanel({
           {onClose && (
             <button
               onClick={onClose}
-              className="p-1 rounded-md hover:bg-app-muted text-theme-muted hover:text-theme-secondary transition-colors"
+              className="rounded p-1.5 text-theme-muted transition-colors hover:bg-app-muted hover:text-theme-primary"
               title="Close"
             >
               <XIcon className="w-4 h-4" />
@@ -124,13 +134,20 @@ export default function ArtifactsPanel({
             value={search}
             onChange={e => setSearch(e.target.value)}
             placeholder="Filter…"
-            className="w-full pl-7 pr-2 py-1.5 text-[11px] rounded-md border border-app bg-app-card text-theme-primary focus:outline-none focus:border-accent-blue/60 focus:ring-1 focus:ring-accent-blue/30"
+            className="w-full rounded-md border border-app bg-app-card py-1.5 pl-7 pr-2 text-[11px] text-theme-primary focus:border-accent-blue/60 focus:outline-none focus:ring-1 focus:ring-accent-blue/30"
           />
         </div>
       </div>
 
       {/* List */}
-      <div className="flex-1 min-h-0 overflow-y-auto">
+      <div className="min-h-0 flex-1 overflow-y-auto bg-app-muted/35 px-2.5 py-2">
+        {loading && items.length === 0 && (
+          <div className="space-y-2">
+            {[0, 1, 2].map(index => (
+              <div key={index} className="h-12 rounded-md bg-app-muted/50 animate-pulse" />
+            ))}
+          </div>
+        )}
         {error && (
           <div className="p-3 text-[11px] text-accent-red font-mono">{error}</div>
         )}
@@ -138,10 +155,11 @@ export default function ArtifactsPanel({
           <EmptyState hasSearch={!!search.trim()} rootType={rootType} />
         )}
         {grouped.map(([group, list]) => (
-          <div key={group} className="border-b border-border/10 last:border-b-0">
-            <div className="sticky top-0 bg-surface-50/95 backdrop-blur-sm px-3 py-1 overline border-b border-border/10 truncate">
+          <div key={group} className="mb-3 last:mb-0">
+            <div className="sticky top-0 z-10 mb-1 bg-app-muted/95 px-1.5 py-1 overline backdrop-blur-sm truncate">
               {group}
             </div>
+            <div className="cr-list">
             {list.map(a => (
               <ArtifactRow
                 key={a.artifactId}
@@ -150,6 +168,7 @@ export default function ArtifactsPanel({
                 onClick={() => onSelect?.(a)}
               />
             ))}
+            </div>
           </div>
         ))}
       </div>
@@ -168,29 +187,24 @@ function ArtifactRow({
 }) {
   const Icon = iconForType(artifact.contentType);
   return (
-    <button
-      onClick={onClick}
-      className={`w-full flex items-start gap-2 px-3 py-2 text-left hover:bg-app-muted/50 transition-colors border-l-2 ${
-        selected
-          ? 'bg-accent-blue/5 border-accent-blue'
-          : 'border-transparent'
-      }`}
-    >
-      <Icon className={`w-3.5 h-3.5 mt-0.5 shrink-0 ${colorForType(artifact.contentType)}`} />
-      <div className="flex-1 min-w-0">
-        <div className="text-[11px] font-mono text-theme-primary truncate">
-          {artifact.filename}
-        </div>
-        <div className="text-[9px] font-mono text-theme-subtle truncate">
-          {artifact.relativePath !== artifact.filename && <span>{artifact.relativePath.replace('/' + artifact.filename, '')} · </span>}
-          {formatSize(artifact.sizeBytes)} · {formatTime(artifact.createdAt)}
-        </div>
+    <button type="button" onClick={onClick} className={`cr-list-row w-full ${selected ? 'active' : ''}`}>
+      <span className="cr-ref-ic repo">
+        <Icon className="h-3 w-3" />
+      </span>
+      <span className="cr-list-body">
+        <span className="cr-list-title">
+          <span>{artifact.filename}</span>
+        </span>
+        <span className="cr-list-sub">
+          {humanType(artifact.contentType)} · {formatSize(artifact.sizeBytes)} · {formatTime(artifact.createdAt)}
+        </span>
         {artifact.description && (
-          <div className="text-[10px] text-theme-muted italic mt-0.5 truncate">
+          <span className="cr-list-sub italic">
             {artifact.description}
-          </div>
+          </span>
         )}
-      </div>
+      </span>
+      <ChevronRight className="h-3.5 w-3.5 text-theme-subtle" />
     </button>
   );
 }
@@ -232,16 +246,9 @@ function iconForType(t: ArtifactDoc['contentType']) {
   }
 }
 
-function colorForType(t: ArtifactDoc['contentType']): string {
-  switch (t) {
-    case 'markdown': return 'text-accent-blue';
-    case 'json':     return 'text-accent-yellow';
-    case 'csv':      return 'text-accent-green';
-    case 'code':     return 'text-accent-purple';
-    case 'binary':   return 'text-theme-muted';
-    case 'text':
-    default:         return 'text-theme-secondary';
-  }
+function humanType(value?: string | null): string {
+  if (!value) return 'File';
+  return value.replace(/[_-]+/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
 }
 
 function formatSize(bytes: number): string {

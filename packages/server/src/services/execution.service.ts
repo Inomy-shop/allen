@@ -103,6 +103,9 @@ async function loadAllAgents(db: Db): Promise<Record<string, AgentDef>> {
           model: 1,
           provider: 1,
           tools: 1,
+          externalMcpServers: 1,
+          disabledAllenMcpTools: 1,
+          disabledMcpTools: 1,
           type: 1,
           reasoningEffort: 1,
           planMode: 1,
@@ -118,6 +121,11 @@ async function loadAllAgents(db: Db): Promise<Record<string, AgentDef>> {
       model: a.model as string,
       provider: a.provider as AgentDef['provider'],
       tools: a.tools as string[],
+      externalMcpServers: Array.isArray(a.externalMcpServers) ? a.externalMcpServers as string[] : [],
+      disabledAllenMcpTools: Array.isArray(a.disabledAllenMcpTools) ? a.disabledAllenMcpTools as string[] : a.disabledAllenMcpTools as null | undefined,
+      disabledMcpTools: (a.disabledMcpTools && typeof a.disabledMcpTools === 'object' && !Array.isArray(a.disabledMcpTools))
+        ? a.disabledMcpTools as Record<string, string[]>
+        : undefined,
       reasoningEffort: a.reasoningEffort as AgentDef['reasoningEffort'],
       planMode: a.planMode as boolean | undefined,
       sourceRepoPath: (a.sourceRepoPath as string | undefined) || undefined,
@@ -134,6 +142,137 @@ const CHILDREN_PROJECTION = {
   completedAt: 1, durationMs: 1, cost: 1, failedNode: 1,
   errorMessage: 1, input: 1, meta: 1, currentNodes: 1, completedNodes: 1,
 };
+
+const EXECUTION_LIST_PROJECTION = {
+  _id: 0,
+  id: 1,
+  workflowId: 1,
+  workflowName: 1,
+  parentExecutionId: 1,
+  rootExecutionId: 1,
+  spawnDepth: 1,
+  source: 1,
+  status: 1,
+  startedAt: 1,
+  completedAt: 1,
+  durationMs: 1,
+  cost: 1,
+  failedNode: 1,
+  errorMessage: 1,
+  currentNodes: 1,
+  completedNodes: 1,
+
+  'meta.origin': 1,
+  'meta.chatSessionId': 1,
+  'meta.parentMessageId': 1,
+  'meta.startedByUserId': 1,
+  'meta.startedByUserEmail': 1,
+  'meta.startedByUserName': 1,
+  'meta.linearIssueId': 1,
+  'meta.linearIdentifier': 1,
+  'meta.linearTitle': 1,
+  'meta.linearUrl': 1,
+  'meta.taskTitle': 1,
+  'meta.requestText': 1,
+  'meta.workspaceId': 1,
+  'meta.workspacePath': 1,
+  'meta.prUrl': 1,
+  'meta.prTitle': 1,
+  'meta.prStatus': 1,
+
+  'input.linear_issue_id': 1,
+  'input.linear_identifier': 1,
+  'input.linear_title': 1,
+  'input.linear_url': 1,
+  'input.ticket_id': 1,
+  'input.ticket_title': 1,
+  'input.ticket_url': 1,
+  'input.issue_title': 1,
+  'input.task_title': 1,
+  'input.workspace_id': 1,
+  'input.worktree_path': 1,
+  'input.repo_path': 1,
+  'input.pr_url': 1,
+  'input.url': 1,
+  'input.pr_title': 1,
+  'input.pr_status': 1,
+  'input.branch_name': 1,
+  'input.branch': 1,
+  'input.base_branch': 1,
+
+  'state.linear_issue_id': 1,
+  'state.linear_identifier': 1,
+  'state.linear_title': 1,
+  'state.linear_url': 1,
+  'state.ticket_id': 1,
+  'state.ticket_url': 1,
+  'state.workspace_id': 1,
+  'state.worktree_path': 1,
+  'state.pr_url': 1,
+  'state.url': 1,
+  'state.pr_title': 1,
+  'state.pr_status': 1,
+  'state.branch_name': 1,
+  'state.branch': 1,
+  'state.base_branch': 1,
+} satisfies Record<string, 0 | 1>;
+
+function listItemSummary(item: Record<string, unknown>): Record<string, unknown> {
+  const workflowName = stringValue(item.workflowName) ?? '';
+  const input = ((item.input ?? {}) as Record<string, unknown>) ?? {};
+  const state = ((item.state ?? {}) as Record<string, unknown>) ?? {};
+  const meta = ((item.meta ?? {}) as Record<string, unknown>) ?? {};
+  const isAgentExecution = workflowName.includes(':spawn_agent/')
+    || item.source === 'spawn'
+    || (!item.workflowId && item.source === 'chat');
+  const linear = (() => {
+    const identifier =
+      stringValue(meta.linearIdentifier)
+      ?? stringValue(input.linear_identifier)
+      ?? stringValue(input.ticket_id)
+      ?? stringValue(state.linear_identifier)
+      ?? stringValue(state.ticket_id);
+    const url = firstUrl([meta.linearUrl, input.linear_url, input.ticket_url, state.linear_url, state.ticket_url], /linear\.app/i);
+    const issueId = stringValue(meta.linearIssueId) ?? stringValue(input.linear_issue_id);
+    if (!identifier && !url && !issueId) return null;
+    return {
+      issueId,
+      identifier,
+      title: stringValue(meta.linearTitle) ?? stringValue(input.linear_title) ?? stringValue(state.linear_title),
+      url,
+      assignment: null,
+    };
+  })();
+  const prUrl = firstGithubPullRequestUrl([state.pr_url, state.url, input.pr_url, input.url, meta.prUrl, meta.url]);
+  const pullRequest = prUrl
+    ? {
+        number: Number(prUrl.match(/\/pull\/(\d+)/i)?.[1] ?? '') || null,
+        title: stringValue(state.pr_title) ?? stringValue(input.pr_title) ?? stringValue(meta.prTitle) ?? null,
+        url: prUrl,
+        status: stringValue(state.pr_status) ?? stringValue(input.pr_status) ?? stringValue(meta.prStatus) ?? 'open',
+        branch: stringValue(state.branch_name) ?? stringValue(state.branch) ?? stringValue(input.branch_name) ?? stringValue(input.branch) ?? null,
+        baseBranch: stringValue(state.base_branch) ?? stringValue(input.base_branch) ?? null,
+      }
+    : null;
+
+  return {
+    ...item,
+    type: isAgentExecution ? 'agent' : 'workflow',
+    origin: stringValue(meta.origin) ?? (item.source === 'chat' ? 'chat' : isAgentExecution ? 'direct_agent' : 'workflow'),
+    user: listUserSummary(meta),
+    title: executionDisplayTitle(input, meta, workflowName),
+    linear,
+    pullRequest,
+  };
+}
+
+function listUserSummary(meta: Record<string, unknown>): Record<string, unknown> | null {
+  const userId = stringValue(meta.startedByUserId);
+  const name = stringValue(meta.startedByUserName);
+  const email = stringValue(meta.startedByUserEmail);
+  if (!userId && !name && !email) return null;
+  return { userId: userId ?? null, name: name ?? null, email: email ?? null };
+}
 
 function decorateChildRow(
   row: Record<string, unknown>,
@@ -311,6 +450,10 @@ export interface RunStatus {
   chat?: {
     sessionId?: string | null;
     parentMessageId?: string | null;
+    title?: string | null;
+    userId?: string | null;
+    userName?: string | null;
+    userEmail?: string | null;
   } | null;
   io?: {
     input?: string | null;
@@ -571,7 +714,10 @@ export class ExecutionService {
     search?: string;
     skip?: number;
     limit?: number;
-  } = {}): Promise<{ items: Record<string, unknown>[]; total: number }> {
+    includeTotal?: boolean;
+    enrich?: boolean;
+    hydrateLegacyChatMetadata?: boolean;
+  } = {}): Promise<{ items: Record<string, unknown>[]; total?: number }> {
     const query: Record<string, unknown> = {};
     if (opts.status) query.status = opts.status;
     if (opts.workflowId) query.workflowId = opts.workflowId;
@@ -607,12 +753,17 @@ export class ExecutionService {
     const { items, total } = await this.stateManager.listExecutionsPaged(query, {
       skip: opts.skip,
       limit: opts.limit,
+      includeTotal: opts.includeTotal,
+      projection: EXECUTION_LIST_PROJECTION,
     });
     const normalizedItems = (items as unknown as Record<string, unknown>[]).map(normalizeTerminalCurrentNodes);
-    await this.attachChatMetadataFromMessages(normalizedItems);
-    const enriched = await Promise.all(
-      normalizedItems.map((item) => this.listItemContext(item)),
-    );
+    if (opts.hydrateLegacyChatMetadata) {
+      await this.attachChatMetadataFromMessages(normalizedItems);
+    }
+    if (!opts.enrich) {
+      return { items: normalizedItems.map(listItemSummary), total };
+    }
+    const enriched = await Promise.all(normalizedItems.map((item) => this.listItemContext(item)));
     return { items: enriched, total };
   }
 
@@ -824,11 +975,14 @@ export class ExecutionService {
       new AgentActivityService(this.db).listForRef(id, { limit: 50 }).catch(() => []),
     ]);
 
-    const workspace = await this.findExecutionWorkspace(input, state, meta);
-    const assignment = await this.findExecutionAssignment(id, workspace, input, state, meta);
-    const pullRequest = await this.findExecutionPullRequest(id, workspace, input, state, meta, [row, ...traces, ...logs, ...activity]);
-    const artifacts = await this.findExecutionArtifacts(id, isAgentExecution, row, meta);
-    await this.captureChatDiffSnapshotIfReady(id, exec.status, workspace, meta).catch(() => {});
+    await this.attachChatMetadataFromMessages([row]);
+    const hydratedMeta = ((row.meta ?? {}) as Record<string, unknown>) ?? meta;
+    const chatSummary = await this.runChatSummary(input, hydratedMeta);
+    const workspace = await this.findExecutionWorkspace(input, state, hydratedMeta);
+    const assignment = await this.findExecutionAssignment(id, workspace, input, state, hydratedMeta);
+    const pullRequest = await this.findExecutionPullRequest(id, workspace, input, state, hydratedMeta, [row, ...traces, ...logs, ...activity]);
+    const artifacts = await this.findExecutionArtifacts(id, isAgentExecution, row, hydratedMeta);
+    await this.captureChatDiffSnapshotIfReady(id, exec.status, workspace, hydratedMeta).catch(() => {});
 
     const workflowSnapshot = (row.workflowSnapshot && typeof row.workflowSnapshot === 'object'
       ? row.workflowSnapshot
@@ -868,7 +1022,7 @@ export class ExecutionService {
       ?? stringValue(input.prompt)
       ?? stringValue(input.task)
       ?? stringValue(input.request)
-      ?? stringValue(meta.requestText)
+      ?? stringValue(hydratedMeta.requestText)
       ?? null;
     const ioOutput =
       stringValue(traceOutput.response)
@@ -879,11 +1033,15 @@ export class ExecutionService {
     return {
       origin,
       runType,
-      title: executionDisplayTitle(input, meta, workflowName),
+      title: executionDisplayTitle(input, hydratedMeta, workflowName),
       status: exec.status,
       chat: {
-        sessionId: stringValue(meta.chatSessionId) ?? null,
-        parentMessageId: stringValue(meta.parentMessageId) ?? null,
+        sessionId: stringValue(chatSummary?.sessionId) ?? stringValue(hydratedMeta.chatSessionId) ?? null,
+        parentMessageId: stringValue(hydratedMeta.parentMessageId) ?? null,
+        title: stringValue(chatSummary?.title) ?? null,
+        userId: stringValue(chatSummary?.userId) ?? stringValue(hydratedMeta.startedByUserId) ?? null,
+        userName: stringValue(chatSummary?.userName) ?? stringValue(hydratedMeta.startedByUserName) ?? null,
+        userEmail: stringValue(chatSummary?.userEmail) ?? stringValue(hydratedMeta.startedByUserEmail) ?? null,
       },
       io: {
         input: ioInput,
@@ -923,7 +1081,7 @@ export class ExecutionService {
         required: exec.status === 'waiting_for_input',
         title: exec.status === 'waiting_for_input' ? 'Waiting for input' : undefined,
       },
-      linear: this.linearContext(assignment, input, state, meta),
+      linear: this.linearContext(assignment, input, state, hydratedMeta),
       workspace: workspace ? this.workspaceContext(workspace) : null,
       pullRequest: pullRequest ? this.pullRequestContext(pullRequest) : null,
       childAgents: directChildren.map((child) => this.childAgentContext(child)),
@@ -961,7 +1119,7 @@ export class ExecutionService {
     }, { projection: { _id: 1 } });
     if (activeSibling) return;
 
-    const diff = await new WorkspaceManager(this.db).getDiff(workspaceId, { mode: 'auto' });
+    const diff = await new WorkspaceManager(this.db).getDiff(workspaceId, { mode: 'workspace' });
     const files = diff.files.filter(file => file.diff?.trim() || file.modifiedContent?.trim());
     if (files.length === 0) return;
 
@@ -1264,7 +1422,13 @@ export class ExecutionService {
     // and register the SSE emitter before the engine starts emitting.
     const { randomUUID } = await import('node:crypto');
     const newExecutionId = randomUUID();
-    const emitter = createSSEEmitter(newExecutionId);
+    const baseEmitter = createSSEEmitter(newExecutionId);
+    const emitter = this.wrapEmitterWithInterventionHook(
+      baseEmitter,
+      newExecutionId,
+      workflow,
+      (exec.input ?? {}) as Record<string, unknown>,
+    );
 
     const config: EngineConfig = {
       db: this.db,
@@ -1311,7 +1475,13 @@ export class ExecutionService {
     if (!workflowDoc) throw new Error('Workflow not found');
 
     const workflow = workflowDoc.parsed as WorkflowDef;
-    const emitter = createSSEEmitter(executionId);
+    const baseEmitter = createSSEEmitter(executionId);
+    const emitter = this.wrapEmitterWithInterventionHook(
+      baseEmitter,
+      executionId,
+      workflow,
+      (exec.input ?? {}) as Record<string, unknown>,
+    );
 
     const allWorkflowDocs = await this.db.collection('workflows').find({}).toArray();
     const workflows: Record<string, WorkflowDef> = {};
@@ -1428,14 +1598,96 @@ export class ExecutionService {
     const workspace = await this.findExecutionWorkspace(input, state, meta);
     const assignment = id ? await this.findExecutionAssignment(id, workspace, input, state, meta) : null;
     const pullRequest = id ? await this.findExecutionPullRequest(id, workspace, input, state, meta, [item]) : null;
+    const chatSummary = await this.runChatSummary(input, meta);
 
     return {
       ...item,
       type: isAgentExecution ? 'agent' : 'workflow',
       origin: this.inferOrigin(item, assignment),
       title: this.executionTitle(workflowName, input, meta),
+      user: this.runUserSummary(meta, chatSummary),
+      chat: chatSummary,
       linear: this.linearContext(assignment, input, state, meta),
       pullRequest: pullRequest ? this.pullRequestContext(pullRequest) : null,
+    };
+  }
+
+  private runUserSummary(
+    meta: Record<string, unknown>,
+    chatSummary: Record<string, unknown> | null,
+  ): Record<string, unknown> | null {
+    const userId = stringValue(meta.startedByUserId) ?? stringValue(chatSummary?.userId);
+    const name = stringValue(meta.startedByUserName) ?? stringValue(chatSummary?.userName);
+    const email = stringValue(meta.startedByUserEmail) ?? stringValue(chatSummary?.userEmail);
+    if (!userId && !name && !email) return null;
+    return { userId: userId ?? null, name: name ?? null, email: email ?? null };
+  }
+
+  private async runChatSummary(
+    input: Record<string, unknown>,
+    meta: Record<string, unknown>,
+  ): Promise<Record<string, unknown> | null> {
+    const sessionId = stringValue(meta.chatSessionId)
+      ?? stringValue(input.chatSessionId)
+      ?? stringValue(input.sessionId)
+      ?? stringValue(input.chat_session_id);
+    if (!sessionId) return null;
+
+    let title: string | null = null;
+    let userId: string | null = stringValue(meta.startedByUserId) ?? null;
+    let userName: string | null = stringValue(meta.startedByUserName) ?? null;
+    let userEmail: string | null = stringValue(meta.startedByUserEmail) ?? null;
+
+    const session = ObjectId.isValid(sessionId)
+      ? await this.db.collection('chat_sessions').findOne(
+          { _id: new ObjectId(sessionId) },
+          {
+            projection: {
+              title: 1,
+              ownerUserId: 1,
+              ownerName: 1,
+              ownerEmail: 1,
+              source: 1,
+            },
+          },
+        ).catch(() => null)
+      : null;
+
+    if (session) {
+      title = stringValue(session.title) ?? null;
+      userId = userId ?? stringValue(session.ownerUserId) ?? null;
+      userName = userName ?? stringValue(session.ownerName) ?? null;
+      userEmail = userEmail ?? stringValue(session.ownerEmail) ?? null;
+    }
+
+    if ((!userId || !userName || !userEmail) && ObjectId.isValid(sessionId)) {
+      const firstUserMessage = await this.db.collection('chat_messages').findOne(
+        { sessionId, role: 'user' },
+        {
+          sort: { createdAt: 1 },
+          projection: { senderUserId: 1, senderName: 1, senderEmail: 1 },
+        },
+      ).catch(() => null);
+      userId = userId ?? stringValue(firstUserMessage?.senderUserId) ?? null;
+      userName = userName ?? stringValue(firstUserMessage?.senderName) ?? null;
+      userEmail = userEmail ?? stringValue(firstUserMessage?.senderEmail) ?? null;
+    }
+
+    if ((!userName || !userEmail) && userId && ObjectId.isValid(userId)) {
+      const user = await this.db.collection('users').findOne(
+        { _id: new ObjectId(userId) },
+        { projection: { name: 1, email: 1 } },
+      ).catch(() => null);
+      userName = userName ?? stringValue(user?.name) ?? null;
+      userEmail = userEmail ?? stringValue(user?.email) ?? null;
+    }
+
+    return {
+      sessionId,
+      title,
+      userId,
+      userName,
+      userEmail,
     };
   }
 
@@ -2059,7 +2311,13 @@ export class ExecutionService {
             // Fallback: if no select options were emitted, provide a
             // standard approve/answer/reject set based on severity.
             if (options.length === 0) {
-              if (severity === 'approval' || severity === 'escalation') {
+              if (severity === 'escalation') {
+                options.push(
+                  { label: 'Retry with feedback', value: 'retry_with_feedback', primary: true, destructive: false },
+                  { label: 'Override and continue', value: 'override_and_continue', primary: false, destructive: false },
+                  { label: 'Abandon', value: 'abandon', primary: false, destructive: true },
+                );
+              } else if (severity === 'approval') {
                 options.push(
                   { label: 'Approve', value: 'approve', primary: true, destructive: false },
                   { label: 'Request changes', value: 'request_changes', primary: false, destructive: false },

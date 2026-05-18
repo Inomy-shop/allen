@@ -250,6 +250,64 @@ function findJsonEnd(text: string, start: number): number {
   return -1;
 }
 
+function formatOutputValue(value: unknown): string {
+  if (value == null || value === '') return 'none';
+  if (typeof value === 'string') return value;
+  if (typeof value === 'number' || typeof value === 'boolean') return String(value);
+  try { return JSON.stringify(value, null, 2); }
+  catch { return String(value); }
+}
+
+function humanizeKey(key: string): string {
+  return key
+    .replace(/^__/, '')
+    .replace(/[_-]+/g, ' ')
+    .replace(/\b\w/g, c => c.toUpperCase());
+}
+
+function structuredResponseMarkdown(nodeName: string, output: Record<string, unknown> | null | undefined): string {
+  if (!output || Object.keys(output).length === 0) return '';
+  const title = nodeName.includes('escalation')
+    ? 'Escalation Review'
+    : nodeName.includes('approval')
+      ? 'Review Decision'
+      : 'Structured Response';
+  const primaryKeys = ['decision', 'escalation_decision', 'approval_decision', '__action', 'verdict', 'status'];
+  const feedbackKeys = ['feedback', 'escalation_feedback', 'approval_feedback', '__reason', 'reason', 'rationale'];
+  const hiddenKeys = new Set(['__clarify_content', '__clarify_content_type']);
+  const lines: string[] = [`### ${title}`];
+
+  for (const key of primaryKeys) {
+    if (output[key] == null || output[key] === '') continue;
+    lines.push('', `**${humanizeKey(key)}:** \`${formatOutputValue(output[key])}\``);
+    break;
+  }
+
+  for (const key of feedbackKeys) {
+    if (output[key] == null || output[key] === '') continue;
+    lines.push('', `**${humanizeKey(key)}**`, '', formatOutputValue(output[key]));
+  }
+
+  const remaining = Object.entries(output)
+    .filter(([key, value]) =>
+      !primaryKeys.includes(key) &&
+      !feedbackKeys.includes(key) &&
+      !hiddenKeys.has(key) &&
+      value != null &&
+      value !== '',
+    );
+  if (remaining.length > 0) {
+    lines.push('', '**Other outputs**');
+    for (const [key, value] of remaining) {
+      const formatted = formatOutputValue(value);
+      if (formatted.includes('\n')) lines.push('', `**${humanizeKey(key)}**`, '', '```', formatted, '```');
+      else lines.push(`- **${humanizeKey(key)}:** ${formatted}`);
+    }
+  }
+
+  return lines.join('\n');
+}
+
 function InlineMarkdown({
   content, maxHeight = 200, fill = false,
 }: {
@@ -683,19 +741,38 @@ export default function NodeDetail({
     );
   }
 
-  // Deduplicate traces by attempt number
+  // Deduplicate traces by attempt number. Persisted traces only appear
+  // after an attempt finishes; when a retry is currently running/waiting,
+  // include the live nodeState as a synthetic attempt so the right panel
+  // still exposes the attempt switcher immediately.
   const dedupedTraces = (() => {
     const map = new Map<number, any>();
     for (const t of allTraces) map.set(t.attempt, t);
+    if (nodeState?.attempt && !map.has(nodeState.attempt)) {
+      map.set(nodeState.attempt, {
+        node: nodeName,
+        attempt: nodeState.attempt,
+        status: nodeState.status,
+        output: nodeState.output,
+        durationMs: nodeState.durationMs,
+        cost: nodeState.cost,
+        rawResponse: nodeState.streamText,
+        activity: nodeState.activity,
+        renderedPrompt: nodeState.renderedPrompt,
+        inputState: nodeState.inputState,
+        toolCalls: [],
+        __live: true,
+      });
+    }
     return Array.from(map.values()).sort((a, b) => a.attempt - b.attempt);
   })();
 
   const hasMultipleAttempts = dedupedTraces.length > 1;
   const activeTrace = viewAttempt != null
     ? dedupedTraces.find(t => t.attempt === viewAttempt) ?? trace
-    : trace;
+    : (dedupedTraces.find(t => t.attempt === nodeState?.attempt) ?? trace);
 
-  const status = nodeState?.status ?? activeTrace?.status ?? (isWaitingNode ? 'waiting_for_input' : 'pending');
+  const status = isWaitingNode ? 'waiting_for_input' : (nodeState?.status ?? activeTrace?.status ?? 'pending');
   const output = viewAttempt != null ? activeTrace?.output : (nodeState?.output ?? activeTrace?.output);
 
   const cost = viewAttempt != null ? activeTrace?.cost : (() => {
@@ -711,6 +788,9 @@ export default function NodeDetail({
     if (dedupedTraces.length <= 1) return nodeState?.durationMs ?? activeTrace?.durationMs;
     let total = 0;
     for (const t of dedupedTraces) total += t.durationMs ?? 0;
+    if ((nodeState?.status === 'running' || nodeState?.status === 'waiting_for_input') && nodeState.durationMs != null) {
+      total += nodeState.durationMs;
+    }
     return total > 0 ? total : (nodeState?.durationMs ?? activeTrace?.durationMs);
   })();
 
@@ -736,11 +816,12 @@ export default function NodeDetail({
 
   const outputJson = output && Object.keys(output).length > 0 ? JSON.stringify(output, null, 2) : null;
   const inputJson = inputState ? JSON.stringify(inputState, null, 2) : null;
+  const structuredResponse = !streamText && output ? structuredResponseMarkdown(nodeName, output) : '';
 
   // Tab availability flags — used for auto-selection and to disable empty tabs.
   const tabHasInput = !!inputJson;
   const tabHasPrompt = !!prompt;
-  const tabHasResponse = !!streamText;
+  const tabHasResponse = !!streamText || !!structuredResponse;
   const tabHasOutputs = !!outputJson;
 
   // Resolve which tab to actually render. If the user's pinned tab
@@ -766,7 +847,9 @@ export default function NodeDetail({
   // it doesn't duplicate the Outputs tab. Live streaming text is passed
   // through unchanged (partial blocks are unsafe to strip mid-stream).
   const responseDisplay = tabHasResponse
-    ? (status === 'running' ? streamText : stripTrailingJsonBlock(streamText))
+    ? (streamText
+      ? (status === 'running' ? streamText : stripTrailingJsonBlock(streamText))
+      : structuredResponse)
     : '';
 
   return (
@@ -777,8 +860,8 @@ export default function NodeDetail({
           <h3 className="font-heading text-sm font-semibold text-theme-primary tracking-wider">{nodeName}</h3>
           <div className="flex items-center gap-3 mt-1">
             <StatusBadge status={status} />
-            {nodeState?.attempt && nodeState.attempt > 1 && (
-              <span className="text-xs text-accent-yellow font-mono">attempt #{viewAttempt ?? nodeState.attempt}</span>
+            {(nodeState?.attempt || activeTrace?.attempt) && (nodeState?.attempt ?? activeTrace?.attempt) > 1 && (
+              <span className="text-xs text-accent-yellow font-mono">attempt #{viewAttempt ?? nodeState?.attempt ?? activeTrace?.attempt}</span>
             )}
             {durationMs != null && (
               <span className="text-xs text-theme-secondary font-mono">{formatDuration(durationMs)}</span>
@@ -809,14 +892,15 @@ export default function NodeDetail({
           {dedupedTraces.map(t => (
             <button
               key={t.attempt}
-              onClick={() => setViewAttempt(t.attempt === (trace?.attempt) && viewAttempt == null ? null : t.attempt)}
+              onClick={() => setViewAttempt(t.attempt === nodeState?.attempt ? null : t.attempt)}
               className={`text-[11px] font-mono px-2 py-0.5 rounded-sm border transition-colors cursor-pointer ${
-                (viewAttempt === t.attempt || (viewAttempt == null && t.attempt === trace?.attempt))
+                (viewAttempt === t.attempt || (viewAttempt == null && t.attempt === nodeState?.attempt))
                   ? 'border-accent-blue bg-accent-blue/10 text-accent-blue'
                   : t.status === 'failed' ? 'border-accent-red/30 text-accent-red/70 hover:bg-accent-red/5' : 'border-border text-theme-secondary hover:bg-surface-200'
               }`}
             >
               #{t.attempt}
+              {t.__live && <span className="ml-1 text-accent-blue">live</span>}
               {t.status === 'completed' && <span className="ml-1 text-accent-green">✓</span>}
               {t.status === 'failed' && <span className="ml-1 text-accent-red">✗</span>}
             </button>

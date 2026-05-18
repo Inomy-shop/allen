@@ -5,6 +5,7 @@ import App from './App';
 import './index.css';
 
 import WorkflowListPage from './pages/WorkflowListPage';
+import WorkflowDetailPage from './pages/WorkflowDetailPage';
 import WorkflowBuilderPage from './pages/WorkflowBuilderPage';
 import ExecutionListPage from './pages/ExecutionListPage';
 import ExecutionDetailPage from './pages/ExecutionDetailPage';
@@ -12,7 +13,6 @@ import DashboardPage from './pages/DashboardPage';
 import RoleManagerPage from './pages/RoleManagerPage';
 import RepoManagerPage from './pages/RepoManagerPage';
 import SettingsPage from './pages/SettingsPage';
-import LearningsPage from './pages/LearningsPage';
 import ChatPage from './pages/ChatPage';
 import ThreadsPage from './pages/ThreadsPage';
 import WorkspaceListPage from './pages/WorkspaceListPage';
@@ -21,7 +21,6 @@ import PullRequestDetailPage from './pages/PullRequestDetailPage';
 import CronManagerPage from './pages/CronManagerPage';
 import InterventionsPage from './pages/InterventionsPage';
 import TicketsPage from './pages/TicketsPage';
-import MonitoringPage from './pages/MonitoringPage';
 import LoginPage from './pages/LoginPage';
 import OnboardingAccountPage from './pages/OnboardingAccountPage';
 import OnboardingHealthPage from './pages/OnboardingHealthPage';
@@ -51,14 +50,16 @@ const router = createBrowserRouter([
           { index: true, element: <DashboardPage /> },
           { path: 'workflows', element: <WorkflowListPage /> },
           { path: 'workflows/new', element: <WorkflowBuilderPage /> },
+          { path: 'workflows/:id', element: <WorkflowDetailPage /> },
           { path: 'workflows/:id/edit', element: <WorkflowBuilderPage /> },
           { path: 'repos', element: <RepoManagerPage /> },
-          { path: 'learnings', element: <LearningsPage /> },
+          { path: 'learnings', element: <Navigate to="/settings/learnings" replace /> },
           { path: 'executions', element: <ExecutionListPage /> },
           { path: 'executions/:id', element: <ExecutionDetailPage /> },
           { path: 'agents', element: <RoleManagerPage /> },
           { path: 'teams', element: <Navigate to="/agents" replace /> },
-          { path: 'threads', element: <ThreadsPage /> },
+          { path: 'chats', element: <ThreadsPage /> },
+          { path: 'threads', element: <Navigate to="/chats" replace /> },
           { path: 'chat', element: <ChatPage /> },
           { path: 'chat/:sessionId', element: <ChatPage /> },
           { path: 'workspaces', element: <WorkspaceListPage /> },
@@ -67,7 +68,7 @@ const router = createBrowserRouter([
           { path: 'pull-requests/:id', element: <PullRequestDetailPage /> },
           { path: 'crons', element: <CronManagerPage /> },
           { path: 'tickets', element: <TicketsPage /> },
-          { path: 'monitoring', element: <MonitoringPage /> },
+          { path: 'monitoring', element: <Navigate to="/settings/analytics" replace /> },
           { path: 'interventions', element: <InterventionsPage /> },
           { path: 'interventions/:id', element: <InterventionsPage /> },
           { path: 'settings', element: <SettingsPage /> },

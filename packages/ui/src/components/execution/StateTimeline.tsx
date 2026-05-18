@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { ArrowDown, Info, Loader2 } from 'lucide-react';
+import { ArrowDown, Loader2 } from 'lucide-react';
 import { executions as api } from '../../services/api';
 
 interface Checkpoint {
@@ -66,21 +66,7 @@ export default function StateTimeline({ executionId }: Props) {
   }
 
   return (
-    <div className="space-y-3">
-      {/* Intro — tells the user what they're looking at. */}
-      <div className="flex items-start gap-2 border border-app rounded-md bg-app-muted/50 p-3">
-        <Info className="w-3.5 h-3.5 text-accent-blue shrink-0 mt-0.5" />
-        <div className="text-[11px] text-theme-secondary font-body leading-relaxed">
-          <div className="text-theme-primary font-semibold mb-0.5">How to read this</div>
-          Each row is one completed node, in the order it ran. Under each row you can see{' '}
-          <span className="text-accent-green font-mono">new keys</span> the node added to the
-          workflow state, and{' '}
-          <span className="text-accent-yellow font-mono">existing keys</span> it modified. Click a row
-          to see the actual values.
-        </div>
-      </div>
-
-      {/* Step list with vertical connecting line */}
+    <div className="space-y-2">
       <ol className="space-y-0">
         {checkpoints.map((cp, i) => {
           const prev = i > 0 ? checkpoints[i - 1].state : {};

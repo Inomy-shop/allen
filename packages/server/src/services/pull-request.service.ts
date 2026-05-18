@@ -77,7 +77,32 @@ export class PullRequestService {
     const query: any = {};
     if (filters?.repoId) query.repoId = filters.repoId;
     if (filters?.status) query.status = filters.status;
-    return this.col.find(query).sort({ updatedAt: -1 }).limit(100).toArray() as Promise<PullRequest[]>;
+    return this.col.find(query, {
+      projection: {
+        repoId: 1,
+        repoName: 1,
+        number: 1,
+        title: 1,
+        branch: 1,
+        baseBranch: 1,
+        status: 1,
+        author: 1,
+        url: 1,
+        additions: 1,
+        deletions: 1,
+        changedFiles: 1,
+        labels: 1,
+        createdByAgent: 1,
+        chatSessionId: 1,
+        workspaceId: 1,
+        createdByWorkflow: 1,
+        originatingExecutionId: 1,
+        resolutionInProgress: 1,
+        createdAt: 1,
+        updatedAt: 1,
+        mergedAt: 1,
+      },
+    }).sort({ updatedAt: -1 }).limit(100).toArray() as Promise<PullRequest[]>;
   }
 
   async get(id: string): Promise<PullRequest | null> {

@@ -14,15 +14,32 @@ export function applyCurrentNodesBackfill(
   map: Map<string, NodeState>,
   currentNodes: string[] | undefined,
   completedNodes: string[] | undefined,
+  executionStatus?: string,
+  startedAtByNode: Map<string, Date | string> = new Map(),
 ): void {
   if (!Array.isArray(currentNodes)) return;
+  const liveStatus = executionStatus === 'waiting_for_input' ? 'waiting_for_input' : 'running';
   for (const name of currentNodes) {
     if (name === 'END') continue;
+    const existing = map.get(name);
     const priorAttempts = (completedNodes ?? []).filter((n: string) => n === name).length;
+    const traceBasedAttempt = existing?.status === 'completed'
+      ? (existing.attempt ?? 0) + 1
+      : (existing?.attempt ?? 0);
+    const nextAttempt = Math.max(priorAttempts + 1, traceBasedAttempt);
+    const startedAt = existing?.startedAt
+      ?? existing?.completedAt
+      ?? startedAtByNode.get(name)
+      ?? new Date();
+    const startedMs = new Date(startedAt).getTime();
+    const durationMs = Number.isFinite(startedMs) ? Math.max(0, Date.now() - startedMs) : existing?.durationMs;
     map.set(name, {
       name,
-      status: 'running',
-      attempt: priorAttempts + 1,
+      status: liveStatus as NodeState['status'],
+      attempt: nextAttempt,
+      startedAt,
+      completedAt: null,
+      durationMs,
       streamText: '',
       activity: [],
     });
@@ -42,7 +59,7 @@ export function applyCurrentNodesBackfill(
  */
 export function buildTracesForTimeline(
   traces: any[],
-  nodeStates: Map<string, Pick<NodeState, 'status' | 'attempt'>>,
+  nodeStates: Map<string, Pick<NodeState, 'status' | 'attempt' | 'startedAt' | 'durationMs'>>,
 ): any[] {
   const result = [...traces];
 
@@ -58,14 +75,17 @@ export function buildTracesForTimeline(
   if (latestEndMs === 0) latestEndMs = Date.now();
 
   for (const [name, state] of nodeStates) {
-    if (state.status !== 'running') continue;
+    if (state.status !== 'running' && state.status !== 'waiting_for_input') continue;
     // Don't duplicate a running entry if one already exists in traces
-    if (result.some(t => t.node === name && t.status === 'running')) continue;
+    if (result.some(t => t.node === name && (t.status === 'running' || t.status === 'waiting_for_input'))) continue;
+    const stateStartedMs = state.startedAt ? new Date(state.startedAt).getTime() : NaN;
+    const startedMs = Number.isFinite(stateStartedMs) ? stateStartedMs : latestEndMs;
+    const durationMs = state.durationMs ?? Math.max(0, Date.now() - startedMs);
     result.push({
       node: name,
-      startedAt: new Date(latestEndMs),
-      durationMs: 0,
-      status: 'running',
+      startedAt: new Date(startedMs),
+      durationMs,
+      status: state.status,
       attempt: state.attempt,
     });
   }

@@ -42,7 +42,7 @@ import { cleanupOrphanedSeedEntities } from './services/org-cleanup.js';
 import { CronService } from './services/cron.service.js';
 import { seedCronJobs } from './services/cron-seed.service.js';
 import { createRepoScanIfChangedAction } from './services/repo-context-scanner.service.js';
-import { createRepoPullAllAction } from './services/repo.service.js';
+import { RepoService, createRepoPullAllAction } from './services/repo.service.js';
 import { createPrSyncAllAction } from './services/pull-request.service.js';
 import { createMcpBundleCleanupAction } from './services/mcp-bundle.service.js';
 import { createSelfHealingMonitorScanAction } from './services/self-healing-monitor.service.js';
@@ -307,9 +307,13 @@ async function main(): Promise<void> {
   wsManager.cleanupStalePids().catch(err => logger.error('[workspace] stale PID cleanup failed', { component: 'workspace', error: (err as Error).message }));
 
   // Start dedicated WebSocket terminal server on port 4024
+  const repoService = new RepoService(db);
   startTerminalWebSocketServer(async (workspaceId: string) => {
     const ws = await wsManager.get(workspaceId);
     return ws?.worktreePath ?? null;
+  }, async (repoId: string) => {
+    const repo = await repoService.getById(repoId);
+    return typeof repo?.path === 'string' ? repo.path : null;
   });
 }
 

@@ -4,8 +4,8 @@ import { outputsAsKeys } from '../../utils/outputs';
 
 export default function AgentNode({ data, selected }: NodeProps) {
   return (
-    <div className={`px-4 py-3 rounded-lg border-2 bg-accent-blue/10 dark:bg-accent-blue/15 backdrop-blur-sm shadow-sm w-[280px] transition-all
-      ${selected ? 'border-accent-blue ring-2 ring-accent-blue/30' : 'border-accent-blue/60 hover:border-accent-blue'}
+    <div className={`px-4 py-3 rounded-lg border-2 bg-[#eaf2ff] dark:bg-[#10233f] shadow-md w-[280px] transition-all
+      ${selected ? 'border-accent-blue ring-2 ring-accent-blue' : 'border-accent-blue hover:shadow-lg'}
     `}>
       <Handle type="target" position={Position.Top} id="top" className="!bg-accent-blue !w-2.5 !h-2.5 !border-surface" />
       <Handle type="target" position={Position.Right} id="right" className="!bg-accent-yellow !w-2 !h-2 !border-surface" />
@@ -15,7 +15,7 @@ export default function AgentNode({ data, selected }: NodeProps) {
         <RoleIcon icon={(data as any).icon} color={(data as any).color ?? '#00d4ff'} size={16} />
         <div className="min-w-0 flex-1">
           <div className="text-sm font-label font-semibold text-theme-primary truncate">{(data as any).label}</div>
-          <div className="text-[10px] text-accent-blue font-mono uppercase truncate">{(data as any).agent ?? 'agent'}</div>
+          <div className="text-[10px] text-accent-blue font-mono uppercase truncate">{(data as any).agent ?? (data as any).role ?? 'agent'}</div>
         </div>
       </div>
       {(() => {
@@ -27,11 +27,11 @@ export default function AgentNode({ data, selected }: NodeProps) {
         return (
           <div className="mt-1.5 flex flex-wrap gap-1">
             {visible.map((o) => (
-              <span key={o} className="text-[10px] bg-surface-100/80 border border-accent-blue/20 text-accent-blue px-1 rounded-sm font-mono">{o}</span>
+              <span key={o} className="text-[10px] bg-white dark:bg-[#172b49] border border-accent-blue text-accent-blue px-1 rounded-sm font-mono">{o}</span>
             ))}
             {hidden > 0 && (
               <span
-                className="text-[10px] bg-surface-100/80 border border-accent-blue/20 text-accent-blue px-1 rounded-sm font-mono"
+                className="text-[10px] bg-white dark:bg-[#172b49] border border-accent-blue text-accent-blue px-1 rounded-sm font-mono"
                 title={keys.slice(MAX_VISIBLE).join(', ')}
               >
                 +{hidden}

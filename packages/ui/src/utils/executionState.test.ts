@@ -31,6 +31,12 @@ describe('applyCurrentNodesBackfill', () => {
     expect(map.get('node_b')?.attempt).toBe(1);
   });
 
+  it('marks the current node as waiting when execution is waiting for input', () => {
+    const map = new Map<string, NodeState>();
+    applyCurrentNodesBackfill(map, ['approval_node'], [], 'waiting_for_input');
+    expect(map.get('approval_node')?.status).toBe('waiting_for_input');
+  });
+
   it('computes attempt = (prior completed occurrences) + 1', () => {
     const map = makeMap([
       { name: 'node_a', status: 'failed', attempt: 2, streamText: '', activity: [] },
@@ -38,6 +44,15 @@ describe('applyCurrentNodesBackfill', () => {
     // node_a has been completed once before (then failed on attempt 2)
     applyCurrentNodesBackfill(map, ['node_a'], ['node_a']);
     expect(map.get('node_a')?.attempt).toBe(2); // 1 prior completed + 1
+  });
+
+  it('advances from the latest persisted trace attempt even if completedNodes is stale', () => {
+    const map = makeMap([
+      { name: 'approval_node', status: 'completed', attempt: 1, streamText: '', activity: [] },
+    ]);
+    applyCurrentNodesBackfill(map, ['approval_node'], [], 'waiting_for_input');
+    expect(map.get('approval_node')?.status).toBe('waiting_for_input');
+    expect(map.get('approval_node')?.attempt).toBe(2);
   });
 
   it('skips the END sentinel', () => {
@@ -64,7 +79,7 @@ describe('buildTracesForTimeline', () => {
     attempt: 1,
   };
 
-  it('adds synthetic running entry for a running node not in traces', () => {
+  it('adds synthetic running entry with elapsed duration for a running node not in traces', () => {
     const states = new Map<string, Pick<NodeState, 'status' | 'attempt'>>([
       ['node_b', { status: 'running', attempt: 2 }],
     ]);
@@ -73,7 +88,17 @@ describe('buildTracesForTimeline', () => {
     expect(runningEntry).toBeDefined();
     expect(runningEntry?.status).toBe('running');
     expect(runningEntry?.attempt).toBe(2);
-    expect(runningEntry?.durationMs).toBe(0);
+    expect(runningEntry?.durationMs).toBeGreaterThan(0);
+  });
+
+  it('adds synthetic waiting entry for a waiting input node', () => {
+    const states = new Map<string, Pick<NodeState, 'status' | 'attempt'>>([
+      ['approval_node', { status: 'waiting_for_input', attempt: 1 }],
+    ]);
+    const result = buildTracesForTimeline([completedTrace], states);
+    const waitingEntry = result.find(t => t.node === 'approval_node');
+    expect(waitingEntry).toBeDefined();
+    expect(waitingEntry?.status).toBe('waiting_for_input');
   });
 
   it('does not add entries for completed or failed nodes', () => {

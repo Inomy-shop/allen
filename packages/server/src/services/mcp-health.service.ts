@@ -24,7 +24,7 @@ import { AlertService } from './alert.service.js';
 
 // ── Config ──
 
-const HEALTH_CHECK_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes
+const HEALTH_CHECK_INTERVAL_MS = 60 * 60 * 1000; // 1 hour
 const STARTUP_DELAY_MS = 30 * 1000; // wait 30s after boot before first check
 const HANDSHAKE_TIMEOUT_MS = 15 * 1000; // each RPC waits at most 15s
 const SPAWN_TIMEOUT_MS = 30 * 1000; // total per-server budget incl. process startup
@@ -196,6 +196,13 @@ async function checkStdioServer(server: McpServerRecord, db: Db): Promise<Health
       }
     });
 
+    // Swallow stream errors (EPIPE when the child dies mid-write, etc.) so
+    // they don't surface as uncaughtException and crash the whole server.
+    // The exit/timeout handlers above are responsible for settling the promise.
+    childProc.stdin?.on('error', () => { /* handled via exit/timeout */ });
+    childProc.stdout?.on('error', () => { /* handled via exit/timeout */ });
+    childProc.stderr?.on('error', () => { /* handled via exit/timeout */ });
+
     const sendRpc = (method: string, params?: unknown): Promise<any> => {
       const id = randomUUID();
       return new Promise((rpcResolve, rpcReject) => {
@@ -208,8 +215,25 @@ async function checkStdioServer(server: McpServerRecord, db: Db): Promise<Health
           if (msg.error) rpcReject(new Error(msg.error.message ?? JSON.stringify(msg.error)));
           else rpcResolve(msg.result);
         });
+        const stdin = childProc.stdin;
+        if (!stdin || stdin.destroyed || !stdin.writable) {
+          clearTimeout(t);
+          pending.delete(id);
+          rpcReject(new Error('child stdin is not writable'));
+          return;
+        }
+        const payload = JSON.stringify({ jsonrpc: '2.0', id, method, params: params ?? {} }) + '\n';
         try {
-          childProc.stdin?.write(JSON.stringify({ jsonrpc: '2.0', id, method, params: params ?? {} }) + '\n');
+          // Use the callback form so async write failures (EPIPE when the
+          // child dies between calls) become RPC rejections instead of
+          // uncaught 'error' events on the stream.
+          stdin.write(payload, (err) => {
+            if (err) {
+              clearTimeout(t);
+              pending.delete(id);
+              rpcReject(err);
+            }
+          });
         } catch (err) {
           clearTimeout(t);
           pending.delete(id);

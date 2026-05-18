@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { ArrowRight, Loader2 } from 'lucide-react';
+import { ArrowRight, Clock3, Loader2, Zap } from 'lucide-react';
 import { agents as agentsApi, chat as chatApi, crons, executions, interventions, repos as reposApi } from '../services/api';
 import { pullRequests } from '../services/workspaceService';
 import { useAuthStore } from '../stores/authStore';
@@ -94,6 +94,15 @@ interface NeedsYouItem {
   href: string;
   external?: boolean;
   createdAt?: string;
+}
+
+interface HumanApprovalItem {
+  id: string;
+  title: string;
+  sub: string;
+  href: string;
+  createdAt?: string;
+  kind: 'approval' | 'question' | 'blocked' | 'waiting';
 }
 
 const DASHBOARD_SKELETONS = Array.from({ length: 4 }, (_, index) => `dashboard-skeleton-${index}`);
@@ -246,6 +255,39 @@ function needsItemFromIntervention(item: InterventionItem): NeedsYouItem {
     href: `/interventions/${item.intervention_id}`,
     createdAt: item.created_at,
   };
+}
+
+function approvalItemFromIntervention(item: InterventionItem, run?: ExecutionItem): HumanApprovalItem {
+  return {
+    id: `approval-${item.intervention_id}`,
+    kind: item.severity === 'escalation' ? 'blocked' : item.severity === 'question' ? 'question' : 'approval',
+    title: item.title || (run ? runTitle(run) : 'Execution approval'),
+    sub: run ? `${runTitle(run)} · ${humanizeLabel(item.stage ?? item.severity)}` : (item.workflow_name || 'Workflow execution'),
+    href: `/executions/${item.workflow_run_id}`,
+    createdAt: item.created_at,
+  };
+}
+
+function approvalItemFromWaitingRun(run: ExecutionItem): HumanApprovalItem {
+  return {
+    id: `waiting-${run.id}`,
+    kind: 'waiting',
+    title: runTitle(run),
+    sub: stepLabel(run) ?? 'Waiting for input',
+    href: `/executions/${run.id}`,
+    createdAt: run.startedAt,
+  };
+}
+
+function dedupeApprovals(items: HumanApprovalItem[]): HumanApprovalItem[] {
+  const seen = new Set<string>();
+  const result: HumanApprovalItem[] = [];
+  for (const item of items) {
+    if (seen.has(item.href)) continue;
+    seen.add(item.href);
+    result.push(item);
+  }
+  return result;
 }
 
 function isReviewNeededPr(pr: PullRequestReviewItem): boolean {
@@ -418,8 +460,11 @@ function TaskRefs({ run }: { run: ExecutionItem }) {
 function DailyStatusPrepCard({ job }: { job: any | null }) {
   if (!job) {
     return (
-      <div style={{ padding: '12px', color: 'var(--text-muted, #888)', fontSize: '13px' }}>
-        Daily Status Prep — not yet configured
+      <div className="mw-automation-card muted">
+        <div>
+          <div className="mw-automation-title">Daily Status Prep</div>
+          <div className="mw-automation-meta">Not configured yet</div>
+        </div>
       </div>
     );
   }
@@ -446,20 +491,20 @@ function DailyStatusPrepCard({ job }: { job: any | null }) {
   }
 
   return (
-    <div className="r-open-area">
-      <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
-        <span style={{ fontWeight: 500 }}>{displayName || 'Daily Status Prep'}</span>
+    <div className={`mw-automation-card r-open-area ${lastRunStatus === 'failed' ? 'failed' : ''}`}>
+      <div className="mw-automation-main">
+        <div className="mw-automation-title">{displayName || 'Daily Status Prep'}</div>
         <span className={`badge ${badgeClass}${runStatus === 'running' ? ' glow-running' : ''}`.trim()}>
           {runStatus === 'running' && <Loader2 className="inline animate-spin" style={{ width: '12px', height: '12px', marginRight: '4px', verticalAlign: 'middle' }} />}
           {badgeText}
         </span>
+      </div>
+      <div className="mw-automation-meta">
+        <span>{lastRunAt ? `Last run ${timeAgo(lastRunAt)}` : 'Never run'}</span>
+        {nextRunAt ? <span>Next {timeUntil(nextRunAt)}</span> : null}
         {linkedChatSessionId ? (
           <Link className="link" to={`/chat/${linkedChatSessionId}`}>View Report →</Link>
         ) : null}
-      </div>
-      <div className="mw-sec-meta" style={{ marginTop: '4px', fontSize: '12px' }}>
-        {lastRunAt ? `Last run: ${timeAgo(lastRunAt)}` : 'Never run'}
-        {nextRunAt ? ` · Next: ${timeUntil(nextRunAt)}` : ''}
       </div>
     </div>
   );
@@ -557,7 +602,23 @@ export default function DashboardPage() {
     ]).sort((a, b) => new Date(b.createdAt ?? 0).getTime() - new Date(a.createdAt ?? 0).getTime()),
     [pendingInterventions, reviewPrs, runs],
   );
+  const humanApprovals = useMemo(
+    () => dedupeApprovals([
+      ...pendingInterventions.map((item) => approvalItemFromIntervention(
+        item,
+        runs.find((run) => run.id === item.workflow_run_id),
+      )),
+      ...runs
+        .filter((run) => run.status === 'waiting_for_input')
+        .map(approvalItemFromWaitingRun),
+    ]).sort((a, b) => new Date(b.createdAt ?? 0).getTime() - new Date(a.createdAt ?? 0).getTime()),
+    [pendingInterventions, runs],
+  );
   const firstName = (user?.name || user?.email?.split('@')[0] || 'there').split(/\s+/)[0];
+  const dailyStatusJob = cronJobs.find((j: any) => j.name === 'daily-status-prep') ?? null;
+  const activePreview = inFlight.slice(0, 3);
+  const recentPreview = recent.slice(0, 4);
+  const approvalPreview = humanApprovals.slice(0, 3);
 
   const selectedAgentDoc = selectedAgent
     ? allAgents.find((agent) => agent.name === selectedAgent) ?? null
@@ -579,175 +640,169 @@ export default function DashboardPage() {
 
   return (
     <div className="content scroll-hide" data-screen-label="my-work">
-      <div className="mw-greet">
-        <div className="mw-hello">
-          <h1>good afternoon, {firstName}</h1>
-          <p className="sub">
-            {needsYou.length} need you · {inFlight.length} in flight · {recent.length} recent
-          </p>
-        </div>
-      </div>
+      <section className="mw-hero">
+        <div className="mw-hero-inner">
+          <div className="mw-greet">
+            <div className="mw-hello">
+              <span className="mw-kicker">New Chat</span>
+              <h1>good afternoon, {firstName}</h1>
+              <p className="sub">
+                {humanApprovals.length} approvals · {inFlight.length} running · {recent.length} recent
+              </p>
+            </div>
+            <div className="mw-pulse">
+              <span><Clock3 className="h-3.5 w-3.5" /> {dailyStatusJob?.nextRunAt ? `Next status ${timeUntil(dailyStatusJob.nextRunAt)}` : 'No status scheduled'}</span>
+            </div>
+          </div>
 
-      <div className="mw-command">
-        <div className="mw-command-composer">
-          <ChatInput
-            onSend={sendPrompt}
-            streaming={false}
-            providers={providers}
-            selectedProvider={selectedProvider}
-            selectedModel={selectedModel}
-            onProviderChange={(provider, model) => {
-              setSelectedProvider(provider);
-              setSelectedModel(model);
-            }}
-            repos={repos}
-            selectedRepoName={selectedRepo?.name ?? null}
-            onRepoChange={setSelectedRepo}
-            agentOverrides={agentOverrides}
-            inheritedEffort={selectedAgentDoc?.reasoningEffort ?? (selectedProvider === 'codex' ? 'high' : 'medium')}
-            inheritedPlanMode={selectedAgentDoc?.planMode ?? null}
-            onAgentOverridesChanged={setAgentOverrides}
-            extraControls={(
-              <AgentChatDropdown
-                value={selectedAgent}
-                onChange={(name, cwd) => {
-                  setSelectedAgent(name);
-                  setSelectedAgentCwd(cwd);
+          <div className="mw-command">
+            <div className="mw-command-composer">
+              <ChatInput
+                onSend={sendPrompt}
+                streaming={false}
+                providers={providers}
+                selectedProvider={selectedProvider}
+                selectedModel={selectedModel}
+                onProviderChange={(provider, model) => {
+                  setSelectedProvider(provider);
+                  setSelectedModel(model);
                 }}
-                agents={allAgents}
-                loading={agentsLoading}
-                variant="composer"
+                repos={repos}
+                selectedRepoName={selectedRepo?.name ?? null}
+                onRepoChange={setSelectedRepo}
+                agentOverrides={agentOverrides}
+                inheritedEffort={selectedAgentDoc?.reasoningEffort ?? (selectedProvider === 'codex' ? 'high' : 'medium')}
+                inheritedPlanMode={selectedAgentDoc?.planMode ?? null}
+                onAgentOverridesChanged={setAgentOverrides}
+                extraControls={(
+                  <AgentChatDropdown
+                    value={selectedAgent}
+                    onChange={(name, cwd) => {
+                      setSelectedAgent(name);
+                      setSelectedAgentCwd(cwd);
+                    }}
+                    agents={allAgents}
+                    loading={agentsLoading}
+                    variant="composer"
+                  />
+                )}
               />
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <div className="mw-below">
+        <section className="mw-sec mw-human">
+          <header className="mw-sec-h">
+            <div>
+              <h3>Human approval</h3>
+              <p>{humanApprovals.length ? `${humanApprovals.length} execution${humanApprovals.length === 1 ? '' : 's'} waiting` : 'Nothing waiting'}</p>
+            </div>
+            <Link className="link quiet" to="/executions">View all <ArrowRight className="h-3 w-3" /></Link>
+          </header>
+          {initialLoading && pendingInterventions.length === 0 && inFlight.length === 0 ? (
+            <div className="mw-human-list">
+              {DASHBOARD_SKELETONS.slice(0, 2).map((key) => (
+                <div key={key} className="mw-human-item skeleton-card">
+                  <span className="sk sk-title" />
+                  <span className="sk sk-line" />
+                </div>
+              ))}
+            </div>
+          ) : humanApprovals.length === 0 ? (
+            <div className="task-empty compact">No executions need approval right now.</div>
+          ) : (
+            <div className="mw-human-list">
+              {approvalPreview.map((item) => (
+                <Link key={item.id} className="mw-human-item" to={item.href}>
+                  <span className={`need-kind ${item.kind === 'waiting' ? 'gate' : item.kind}`}>{humanizeLabel(item.kind)}</span>
+                  <span className="mw-human-copy">
+                    <span className="need-title">{item.title}</span>
+                    <span className="need-sub">{item.sub}</span>
+                  </span>
+                  <span className="need-age">{timeAgo(item.createdAt)}</span>
+                </Link>
+              ))}
+            </div>
+          )}
+        </section>
+
+        <div className="mw-soft-grid">
+          <section className="mw-sec">
+            <header className="mw-sec-h">
+              <div>
+                <h3>Automations</h3>
+                <p>Scheduled work</p>
+              </div>
+            </header>
+            <DailyStatusPrepCard job={dailyStatusJob} />
+          </section>
+
+          <section className="mw-sec">
+            <header className="mw-sec-h">
+              <div>
+                <h3>In flight</h3>
+                <p>{inFlight.length} active</p>
+              </div>
+              <Zap className="mw-section-icon h-4 w-4" />
+            </header>
+            {initialLoading && inFlight.length === 0 ? (
+              <div className="mw-flight compact">
+                {DASHBOARD_SKELETONS.slice(0, 2).map((key) => (
+                  <div key={key} className="mw-flight-row skeleton-row">
+                    <span className="sk sk-title" />
+                    <span className="sk sk-bar" />
+                  </div>
+                ))}
+              </div>
+            ) : inFlight.length === 0 ? (
+              <div className="task-empty compact">No tasks running.</div>
+            ) : (
+              <div className="mw-flight compact">
+                {activePreview.map((run) => (
+                  <Link key={run.id} className="mw-active-card r-open-area" to={runPrimaryHref(run)} title="Open chat thread">
+                    <span className="r-line">{runTitle(run)}</span>
+                    <span className="r-sub">{runSubline(run)}</span>
+                    <span className="bar"><span style={{ width: `${progressForRun(run)}%` }} /></span>
+                  </Link>
+                ))}
+              </div>
             )}
-          />
+          </section>
+
+          <section className="mw-sec">
+            <header className="mw-sec-h">
+              <div>
+                <h3>Recent</h3>
+                <p>Latest outcomes</p>
+              </div>
+              <Link className="link quiet" to="/executions">All <ArrowRight className="h-3 w-3" /></Link>
+            </header>
+            {initialLoading && recent.length === 0 ? (
+              <div className="mw-recent compact">
+                {DASHBOARD_SKELETONS.slice(0, 2).map((key) => (
+                  <div key={key} className="mw-recent-mini skeleton-row">
+                    <span className="sk sk-title" />
+                    <span className="sk sk-pill" />
+                  </div>
+                ))}
+              </div>
+            ) : recent.length === 0 ? (
+              <div className="task-empty compact">Completed work will appear here.</div>
+            ) : (
+              <div className="mw-recent compact">
+                {recentPreview.map((run) => (
+                  <Link key={run.id} className="mw-recent-mini r-open-area" to={runPrimaryHref(run)} title="Open chat thread">
+                    <span className="r-line">{runTitle(run)}</span>
+                    <WorkStatusBadge run={run} />
+                  </Link>
+                ))}
+              </div>
+            )}
+          </section>
         </div>
       </div>
-
-      <section className="mw-sec">
-        <header className="mw-sec-h">
-          <h3>Needs You</h3>
-          <Link className="link" to="/interventions">Inbox <ArrowRight className="h-3 w-3" /></Link>
-        </header>
-        {initialLoading && pendingInterventions.length === 0 ? (
-          <div className="mw-needs">
-            {DASHBOARD_SKELETONS.map((key) => (
-              <div key={key} className="mw-need skeleton-card">
-                <span className="sk sk-chip" />
-                <span className="sk sk-title" />
-                <span className="sk sk-line" />
-                <span className="sk sk-line short" />
-              </div>
-            ))}
-          </div>
-        ) : needsYou.length === 0 ? (
-          <div className="task-empty">No workflow interventions or PR reviews need your input right now.</div>
-        ) : (
-          <div className="mw-needs">
-            {needsYou.slice(0, 4).map((item) => (
-              item.external ? (
-                <a key={item.id} className="mw-need" href={item.href} target="_blank" rel="noreferrer">
-                  <span className={`need-kind ${item.kind}`}>{humanizeLabel(item.kind)}</span>
-                  <span className="need-title">{item.title}</span>
-                  <span className="need-sub">{item.sub}</span>
-                  <span className="need-age">{timeAgo(item.createdAt)}</span>
-                </a>
-              ) : (
-              <Link key={item.id} className="mw-need" to={item.href}>
-                <span className={`need-kind ${item.kind}`}>{humanizeLabel(item.kind)}</span>
-                <span className="need-title">{item.title}</span>
-                <span className="need-sub">{item.sub}</span>
-                <span className="need-age">{timeAgo(item.createdAt)}</span>
-              </Link>
-              )
-            ))}
-          </div>
-        )}
-      </section>
-
-      {/* Automations */}
-      <section className="mw-sec">
-        <header className="mw-sec-h">
-          <h3>Automations</h3>
-        </header>
-        <DailyStatusPrepCard
-          job={cronJobs.find((j: any) => j.name === 'daily-status-prep') ?? null}
-        />
-      </section>
-
-      <section className="mw-sec">
-        <header className="mw-sec-h">
-          <h3>In Flight</h3>
-          <span className="mw-sec-meta">{inFlight.length}</span>
-        </header>
-        {initialLoading && inFlight.length === 0 ? (
-          <div className="mw-flight">
-            {DASHBOARD_SKELETONS.slice(0, 3).map((key) => (
-              <div key={key} className="mw-flight-row skeleton-row">
-                <span className="sk sk-ref" />
-                <span className="sk sk-title" />
-                <span className="sk sk-bar" />
-                <span className="sk sk-pill" />
-              </div>
-            ))}
-          </div>
-        ) : inFlight.length === 0 ? (
-          <div className="task-empty">No tasks are currently running.</div>
-        ) : (
-          <div className="mw-flight">
-            {inFlight.map((run) => (
-              <div key={run.id} className="mw-flight-row">
-                <TaskRefs run={run} />
-                <Link className="r-ttl r-open-area" to={runPrimaryHref(run)} title="Open chat thread">
-                  <div className="r-line">{runTitle(run)}</div>
-                  <div className="r-sub">{runSubline(run)}</div>
-                </Link>
-                <Link className="r-prog r-open-area" to={runPrimaryHref(run)} title="Open chat thread">
-                  <div className="bar"><span style={{ width: `${progressForRun(run)}%` }} /></div>
-                  <span className="r-pct">{progressForRun(run)}%</span>
-                </Link>
-                <div className="r-actions">
-                  <WorkStatusBadge run={run} />
-                </div>
-              </div>
-            ))}
-          </div>
-        )}
-      </section>
-
-      <section className="mw-sec">
-        <header className="mw-sec-h">
-          <h3>Recent</h3>
-          <Link className="link" to="/executions">All Activity <ArrowRight className="h-3 w-3" /></Link>
-        </header>
-        {initialLoading && recent.length === 0 ? (
-          <div className="mw-recent">
-            {DASHBOARD_SKELETONS.slice(0, 3).map((key) => (
-              <div key={key} className="mw-recent-row skeleton-row">
-                <span className="sk sk-ref" />
-                <span className="sk sk-title" />
-                <span className="sk sk-pill" />
-              </div>
-            ))}
-          </div>
-        ) : recent.length === 0 ? (
-          <div className="task-empty">Completed work will appear here.</div>
-        ) : (
-          <div className="mw-recent">
-            {recent.map((run) => (
-              <div key={run.id} className="mw-recent-row">
-                <TaskRefs run={run} />
-                <Link className="r-ttl r-open-area" to={runPrimaryHref(run)} title="Open chat thread">
-                  <div className="r-line">{runTitle(run)}</div>
-                  <div className="r-sub">{runSubline(run)}</div>
-                </Link>
-                <div className="r-actions">
-                  <WorkStatusBadge run={run} />
-                </div>
-              </div>
-            ))}
-          </div>
-        )}
-      </section>
     </div>
   );
 }

@@ -133,7 +133,7 @@ export default function MonitoringPage() {
     setLoading(true);
     try {
       const [execRes, incidentRes] = await Promise.all([
-        executionsApi.listPaged({ limit: 100, offset: 0 }),
+        executionsApi.listPaged({ limit: 100, offset: 0, includeTotal: true }),
         monitoringApi.incidents({ status: statusFilter || undefined, limit: 100 }).catch(() => ({ incidents: [] })),
       ]);
       setExecutions(execRes.items ?? []);

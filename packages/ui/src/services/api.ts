@@ -192,6 +192,10 @@ export interface RunStatus {
   chat?: {
     sessionId?: string | null;
     parentMessageId?: string | null;
+    title?: string | null;
+    userId?: string | null;
+    userName?: string | null;
+    userEmail?: string | null;
   } | null;
   io?: {
     input?: string | null;
@@ -358,6 +362,7 @@ export const executions = {
     search?: string;
     limit?: number;
     offset?: number;
+    includeTotal?: boolean;
   } = {}) => {
     const qs = new URLSearchParams();
     if (params.status) qs.set('status', params.status);
@@ -365,9 +370,17 @@ export const executions = {
     if (params.workflowName) qs.set('workflowName', params.workflowName);
     if (params.type) qs.set('type', params.type);
     if (params.search) qs.set('search', params.search);
+    if (params.includeTotal) qs.set('includeTotal', 'true');
     qs.set('limit', String(params.limit ?? 50));
     qs.set('offset', String(params.offset ?? 0));
-    return request<{ items: any[]; total: number }>(`/executions?${qs.toString()}`);
+    return request<{ items: any[]; total?: number }>(`/executions?${qs.toString()}`);
+  },
+  count: (params: { status?: string | string[]; chatSession?: boolean } = {}) => {
+    const qs = new URLSearchParams();
+    if (Array.isArray(params.status)) qs.set('status', params.status.join(','));
+    else if (params.status) qs.set('status', params.status);
+    if (params.chatSession) qs.set('chatSession', 'true');
+    return request<{ count: number }>(`/executions/count${qs.toString() ? `?${qs.toString()}` : ''}`);
   },
   get: (id: string) => request<any>(`/executions/${id}`),
   forChat: (sessionId: string) => request<Array<{
@@ -457,9 +470,14 @@ export const executions = {
    */
   children: (id: string, mode: 'direct' | 'descendants' = 'direct') =>
     request<SpawnedChild[]>(`/executions/${id}/children?mode=${mode}`),
-  logs: (id: string, params?: Record<string, string>) => {
-    const qs = params ? '?' + new URLSearchParams(params).toString() : '';
+  logs: (id: string, params?: Record<string, string | number | boolean>) => {
+    const qs = params ? '?' + new URLSearchParams(Object.entries(params).map(([key, value]) => [key, String(value)])).toString() : '';
     return request<any[]>(`/executions/${id}/logs${qs}`);
+  },
+  logsPage: (id: string, params?: Record<string, string | number | boolean>) => {
+    const merged = { ...(params ?? {}), page: true };
+    const qs = '?' + new URLSearchParams(Object.entries(merged).map(([key, value]) => [key, String(value)])).toString();
+    return request<{ items: any[]; limit: number; offset: number; hasMore: boolean }>(`/executions/${id}/logs${qs}`);
   },
   traces: (id: string) => request<any[]>(`/executions/${id}/traces`),
   tracesByNode: (id: string, node: string) =>
@@ -646,6 +664,16 @@ export const repos = {
 export const dashboard = {
   stats: () => request<any>('/dashboard/stats'),
   cost: () => request<any>('/dashboard/cost'),
+  navCounts: () => request<{
+    mywork: number;
+    inbox: number;
+    threads: number;
+    tickets: number;
+    pulls: number;
+    workspaces: number;
+    activity: number;
+    learnings: number;
+  }>('/dashboard/nav-counts'),
 };
 
 // ── Chat ──────────────────────────────────────────────────────────────────
@@ -840,9 +868,18 @@ export interface McpDiscoverResult {
   }>;
 }
 
+export interface McpToolGroup {
+  serverName: string;
+  builtIn: boolean;
+  enabled: boolean;
+  tools: Array<{ name: string; fullName: string; description: string }>;
+}
+
 export const mcp = {
   list: () => request<McpServer[]>('/mcp/servers'),
   presets: () => request<McpPreset[]>('/mcp/presets'),
+  tools: (options?: { refresh?: boolean }) =>
+    request<McpToolGroup[]>(`/mcp/tools${options?.refresh === false ? '?refresh=0' : ''}`),
   /**
    * Create an MCP server. Preset flow: send `{ name, type, source: { kind: 'preset', presetName } }`
    * — backend copies command/args/envKeys from the preset and validates ALLEN_* env.

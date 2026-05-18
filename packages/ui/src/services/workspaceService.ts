@@ -18,9 +18,10 @@ export const workspaces = {
   create: (body: any) => request<any>('/workspaces', { method: 'POST', body: JSON.stringify(body) }),
   createFromPr: (body: any) => request<any>('/workspaces/from-pr', { method: 'POST', body: JSON.stringify(body) }),
   archive: (id: string) => request<any>(`/workspaces/${id}`, { method: 'DELETE' }),
-  getDiff: (id: string, options?: { mode?: 'auto' | 'working' | 'branch' | 'workspace' }) => {
+  getDiff: (id: string, options?: { mode?: 'auto' | 'working' | 'branch' | 'workspace'; anchor?: 'creation' }) => {
     const params = new URLSearchParams();
     if (options?.mode) params.set('mode', options.mode);
+    if (options?.anchor) params.set('anchor', options.anchor);
     const qs = params.toString();
     return request<any>(`/workspaces/${id}/diff${qs ? `?${qs}` : ''}`);
   },

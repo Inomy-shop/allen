@@ -5,6 +5,7 @@ import { executions as api } from '../services/api';
 import StatusBadge from '../components/common/StatusBadge';
 
 type TypeFilter = '' | 'agent' | 'workflow';
+type ActivityTab = 'running' | 'recent';
 
 const PAGE_SIZE = 50;
 
@@ -44,6 +45,14 @@ function shortDuration(ms: number | null | undefined): string {
   return `${m}m ${Math.floor(s % 60)}s`;
 }
 
+function executionDurationMs(exec: any, nowMs: number): number | null | undefined {
+  if (!isActiveStatus(exec.status)) return exec.durationMs;
+  const startedAt = exec.startedAt ?? exec.createdAt;
+  const startedMs = startedAt ? new Date(startedAt).getTime() : NaN;
+  if (!Number.isFinite(startedMs)) return exec.durationMs;
+  return Math.max(exec.durationMs ?? 0, nowMs - startedMs);
+}
+
 function shortAge(value: string | Date | null | undefined): string {
   if (!value) return '—';
   const then = new Date(value).getTime();
@@ -58,26 +67,65 @@ function shortAge(value: string | Date | null | undefined): string {
   return `${days}d ago`;
 }
 
-function progressFor(status: string): number {
-  switch (status) {
-    case 'completed': return 100;
-    case 'failed': return 60;
-    case 'cancelled': return 20;
-    case 'waiting_for_input': return 35;
-    case 'running': return 58;
-    case 'queued': return 12;
-    default: return 25;
-  }
+function executionId(exec: any): string {
+  return String(exec?.id ?? exec?._id ?? '');
+}
+
+function isActiveStatus(status: string): boolean {
+  return status === 'running' || status === 'queued' || status === 'waiting_for_input';
+}
+
+function isTerminalStatus(status: string): boolean {
+  return status === 'completed' || status === 'failed' || status === 'cancelled' || status === 'canceled';
+}
+
+function isDelegatedAgentExecution(exec: any): boolean {
+  return exec?.type === 'agent'
+    || exec?.source === 'spawn'
+    || typeof exec?.workflowName === 'string' && exec.workflowName.includes(':spawn_agent/');
+}
+
+function hasParentExecutionVisible(exec: any, candidates: any[]): boolean {
+  if (!isDelegatedAgentExecution(exec)) return false;
+  const parentId = exec?.parentExecutionId ? String(exec.parentExecutionId) : null;
+  const rootId = exec?.rootExecutionId ? String(exec.rootExecutionId) : null;
+  const chatSessionId = exec?.meta?.chatSessionId ? String(exec.meta.chatSessionId) : null;
+
+  return candidates.some((candidate) => {
+    if (candidate === exec || isDelegatedAgentExecution(candidate)) return false;
+    const candidateId = executionId(candidate);
+    const candidateRootId = candidate?.rootExecutionId ? String(candidate.rootExecutionId) : null;
+    const candidateChatSessionId = candidate?.meta?.chatSessionId ? String(candidate.meta.chatSessionId) : null;
+    return Boolean(
+      (parentId && parentId === candidateId)
+      || (rootId && (rootId === candidateId || rootId === candidateRootId))
+      || (chatSessionId && candidateChatSessionId && chatSessionId === candidateChatSessionId),
+    );
+  });
+}
+
+function hideDelegatedChildrenWhenParentVisible(items: any[]): any[] {
+  return items.filter((exec) => !hasParentExecutionVisible(exec, items));
+}
+
+function executionSourceLabel(exec: any): string {
+  const origin = String(exec?.origin ?? exec?.meta?.origin ?? exec?.source ?? '').toLowerCase();
+  if (origin === 'chat' || exec?.meta?.chatSessionId) return 'chat';
+  if (origin === 'linear') return 'linear';
+  if (exec?.source === 'spawn' || origin === 'direct_agent' || isDelegatedAgentExecution(exec)) return 'agent';
+  return 'manual';
 }
 
 export default function ExecutionListPage() {
   const [data, setData] = useState<any[]>([]);
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(true);
+  const [nowMs, setNowMs] = useState(Date.now());
   const [searchParams, setSearchParams] = useSearchParams();
   const filter = searchParams.get('status') ?? '';
   const typeFilter = (searchParams.get('type') ?? '') as TypeFilter;
   const search = searchParams.get('q') ?? '';
+  const activeTab = (searchParams.get('view') === 'recent' ? 'recent' : 'running') as ActivityTab;
   const page = Math.max(0, Number(searchParams.get('page') ?? '0') || 0);
 
   const updateParams = (updates: Record<string, string | null>) => {
@@ -91,6 +139,7 @@ export default function ExecutionListPage() {
 
   const setFilter = (s: string) => updateParams({ status: s || null, page: null });
   const setTypeFilter = (t: string) => updateParams({ type: t || null, page: null });
+  const setActiveTab = (view: ActivityTab) => updateParams({ view: view === 'running' ? null : view, page: null });
 
   // Local search input state — debounced into the URL so list refreshes
   // don't fire on every keystroke.
@@ -114,9 +163,10 @@ export default function ExecutionListPage() {
         search: search || undefined,
         limit: PAGE_SIZE,
         offset: page * PAGE_SIZE,
+        includeTotal: true,
       });
       setData(result.items);
-      setTotal(result.total);
+      setTotal(result.total ?? result.items.length);
     } catch { /* ignore */ }
     setLoading(false);
   }, [filter, typeFilter, search, page]);
@@ -125,11 +175,18 @@ export default function ExecutionListPage() {
 
   // Auto-refresh every 5s when there are running executions
   useEffect(() => {
-    const hasRunning = data.some(e => e.status === 'running' || e.status === 'queued');
+    const hasRunning = data.some(e => isActiveStatus(e.status));
     if (!hasRunning) return;
     const interval = setInterval(refresh, 5000);
     return () => clearInterval(interval);
   }, [data, refresh]);
+
+  useEffect(() => {
+    const hasRunning = data.some(e => isActiveStatus(e.status));
+    if (!hasRunning) return;
+    const interval = setInterval(() => setNowMs(Date.now()), 1000);
+    return () => clearInterval(interval);
+  }, [data]);
 
   const sorted = useMemo(() => {
     const copy = [...data];
@@ -142,8 +199,8 @@ export default function ExecutionListPage() {
   }, [data]);
 
   const statuses = ['', 'running', 'completed', 'failed', 'cancelled', 'queued', 'waiting_for_input'];
-  const runningNow = sorted.filter(exec => exec.status === 'running' || exec.status === 'queued' || exec.status === 'waiting_for_input');
-  const recentExecs = sorted;
+  const runningNow = hideDelegatedChildrenWhenParentVisible(sorted.filter(exec => isActiveStatus(exec.status)));
+  const recentExecs = hideDelegatedChildrenWhenParentVisible(sorted.filter(exec => isTerminalStatus(exec.status)));
 
   const vm = paginationViewModel({ page, total, pageSize: PAGE_SIZE });
 
@@ -152,7 +209,7 @@ export default function ExecutionListPage() {
       <div className="page-head">
         <div className="ph-row">
           <div>
-            <h1>activity</h1>
+            <h1>executions</h1>
             <p className="sub">what's running, queued, and just finished across the org</p>
           </div>
           <button title="Refresh executions" onClick={refresh} className="btn btn-secondary btn-sm" type="button">
@@ -199,31 +256,50 @@ export default function ExecutionListPage() {
       </div>
 
       <div className="an-body">
-        <section className="an-section">
-          <header className="an-h">
-            <h3><Play className="h-3 w-3" /> running now <span className="an-h-ct">{runningNow.length}</span></h3>
-            <button className="an-h-link" onClick={() => setFilter('running')} type="button">view all <span>→</span></button>
-          </header>
-          {runningNow.length === 0 ? (
-            <div className="an-empty">no executions running.</div>
-          ) : (
-            <div className="an-runlist">
-              {runningNow.map((exec: any) => (
-                <Link key={exec.id ?? exec._id} className="an-run" to={`/executions/${exec.id}`}>
-                  <span className="mono an-run-id">{exec.id?.slice(0, 8) ?? 'N/A'}</span>
-                  <span className="an-run-wf">{exec.workflowName}</span>
-                  <StatusBadge status={exec.status} />
-                  <span className="mono">{shortDuration(exec.durationMs)}</span>
-                </Link>
-              ))}
-            </div>
-          )}
-        </section>
+        <nav className="topfilter-tabs mb-4">
+          <button
+            type="button"
+            className={`tft ${activeTab === 'running' ? 'active' : ''}`}
+            onClick={() => setActiveTab('running')}
+          >
+            running now <span className="tft-ct">{runningNow.length}</span>
+          </button>
+          <button
+            type="button"
+            className={`tft ${activeTab === 'recent' ? 'active' : ''}`}
+            onClick={() => setActiveTab('recent')}
+          >
+            recent executions <span className="tft-ct">{recentExecs.length}</span>
+          </button>
+        </nav>
 
-        <section className="an-section">
+        {activeTab === 'running' ? (
+          <section className="an-section">
+            <header className="an-h">
+              <h3><Play className="h-3 w-3" /> running now</h3>
+              <button className="an-h-link" onClick={() => setFilter('running')} type="button">view all <span>→</span></button>
+            </header>
+            {runningNow.length === 0 ? (
+              <div className="an-empty">no executions running.</div>
+            ) : (
+              <div className="an-runlist">
+                {runningNow.map((exec: any) => (
+                  <Link key={exec.id ?? exec._id} className="an-run" to={`/executions/${exec.id}`}>
+                    <span className="mono an-run-id">{exec.id?.slice(0, 8) ?? 'N/A'}</span>
+                    <span className="an-run-wf">{exec.workflowName}</span>
+                    <span className={`an-run-source ${executionSourceLabel(exec)}`}>{executionSourceLabel(exec)}</span>
+                    <StatusBadge status={exec.status} />
+                    <span className="mono">{shortDuration(executionDurationMs(exec, nowMs))}</span>
+                  </Link>
+                ))}
+              </div>
+            )}
+          </section>
+        ) : (
+          <section className="an-section">
           <header className="an-h">
             <h3><Play className="h-3 w-3" /> recent executions</h3>
-            <span className="an-h-ct">{total} total</span>
+            <span className="an-h-ct">{recentExecs.length} shown</span>
           </header>
           <div className="an-runlist">
             {recentExecs.length === 0 ? (
@@ -232,8 +308,9 @@ export default function ExecutionListPage() {
               <Link key={exec.id ?? exec._id} className="an-run" to={`/executions/${exec.id}`}>
                 <span className="mono an-run-id">{exec.id?.slice(0, 8) ?? 'N/A'}</span>
                 <span className="an-run-wf">{exec.workflowName}</span>
+                <span className={`an-run-source ${executionSourceLabel(exec)}`}>{executionSourceLabel(exec)}</span>
                 <StatusBadge status={exec.status} />
-                <span className="mono">{shortDuration(exec.durationMs)}</span>
+                <span className="mono">{shortDuration(executionDurationMs(exec, nowMs))}</span>
                 <span className="muted mono">{shortAge(exec.startedAt)}</span>
               </Link>
             ))}
@@ -263,33 +340,9 @@ export default function ExecutionListPage() {
               </button>
             </div>
           )}
-        </section>
+          </section>
+        )}
 
-        <section className="an-section">
-          <header className="an-h">
-            <h3><Play className="h-3 w-3" /> tasks in motion</h3>
-          </header>
-          {runningNow.length === 0 ? (
-            <div className="an-empty">no tasks in motion.</div>
-          ) : (
-            <div className="th-list p-0">
-              {runningNow.map((exec: any) => (
-                <Link key={exec.id ?? exec._id} className="th-row" to={`/executions/${exec.id}`}>
-                  <div className="r-refs">
-                    <span className="r-ref linear">{exec.type ?? 'run'}</span>
-                    <span className="r-ref gh">{exec.id?.slice(0, 8) ?? 'N/A'}</span>
-                  </div>
-                  <div className="th-body">
-                    <div className="th-title">{exec.workflowName}</div>
-                    <div className="th-sub">{exec.status}</div>
-                  </div>
-                  <div className="bar th-prog"><span style={{ width: `${progressFor(exec.status)}%` }} /></div>
-                  <StatusBadge status={exec.status} />
-                </Link>
-              ))}
-            </div>
-          )}
-        </section>
       </div>
     </div>
   );

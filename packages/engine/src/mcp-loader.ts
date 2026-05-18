@@ -254,6 +254,12 @@ export type LoadMcpOptions = {
   ownerId?: ObjectId | string | null;
   /** Extra env vars merged into each MCP's env. */
   extraEnv?: Record<string, string>;
+  /**
+   * External MCP server allowlist. Allen's built-in MCP is handled by
+   * loadAllMcpServers and is never filtered here. undefined = all external
+   * MCPs, [] = no external MCPs, [name] = only those external MCP servers.
+   */
+  externalServerNames?: string[];
 };
 
 /**
@@ -278,9 +284,13 @@ export async function loadMcpServers(
   }
 
   const servers = await db.collection('mcp_servers').find(filter).toArray();
+  const allowedExternal = options?.externalServerNames
+    ? new Set(options.externalServerNames.filter((name) => typeof name === 'string' && name.length > 0))
+    : null;
 
   const config: Record<string, unknown> = {};
   for (const s of servers) {
+    if (allowedExternal && !allowedExternal.has(String(s.name))) continue;
     try {
       const cfg = await buildSingleServerConfig(s, db, options?.extraEnv);
       if (cfg) config[s.name as string] = cfg;
@@ -384,5 +394,5 @@ export async function loadAllMcpServers(
 
 function isLoadOptions(v: unknown): v is LoadMcpOptions {
   if (!v || typeof v !== 'object') return false;
-  return 'ownerId' in v || 'extraEnv' in v;
+  return 'ownerId' in v || 'extraEnv' in v || 'externalServerNames' in v;
 }

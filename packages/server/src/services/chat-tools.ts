@@ -34,7 +34,7 @@ const CLAUDE_SPAWN_NOTICE = `
 You are running as a spawned agent via the Claude CLI / SDK, NOT the
 interactive Claude Code harness. Therefore:
 
-- Every MCP tool is already loaded eagerly — call the tool you want
+- MCP tools are loaded eagerly according to this agent's MCP configuration — call the tool you want
   directly by its full name (for example \`mcp__allen__*\`,
   \`mcp__pipeline-api-server__*\`, \`mcp__documentdb__*\`, \`mcp__postgres__*\`,
   \`mcp__opensearch__*\`, \`mcp__oxylabs-server__*\`, \`mcp__aws__*\`).
@@ -68,6 +68,33 @@ function resolveAgentCwd(...candidates: Array<string | undefined>): string {
   const picked = candidates.find((c) => typeof c === 'string' && c.length > 0) ?? AGENT_FALLBACK_CWD;
   mkdirSync(picked, { recursive: true });
   return picked;
+}
+
+function externalMcpServersForAgent(agent: Record<string, unknown> | null | undefined): string[] {
+  const configured = agent?.externalMcpServers;
+  return Array.isArray(configured)
+    ? configured.filter((name): name is string => typeof name === 'string' && name.length > 0)
+    : [];
+}
+
+function disabledMcpToolsForAgent(agent: Record<string, unknown> | null | undefined): Record<string, string[]> {
+  const configured = agent?.disabledMcpTools;
+  const result: Record<string, string[]> = {};
+  if (configured && typeof configured === 'object' && !Array.isArray(configured)) {
+    for (const [server, tools] of Object.entries(configured)) {
+      if (Array.isArray(tools)) result[server] = tools.filter((name): name is string => typeof name === 'string' && name.length > 0);
+    }
+  }
+  const legacyAllen = agent?.disabledAllenMcpTools;
+  if (Array.isArray(legacyAllen)) {
+    result[MCP_SERVER_NAME] = [
+      ...new Set([
+        ...(result[MCP_SERVER_NAME] ?? []),
+        ...legacyAllen.filter((name): name is string => typeof name === 'string' && name.length > 0),
+      ]),
+    ];
+  }
+  return result;
 }
 
 /**
@@ -1435,7 +1462,15 @@ async function runSpawnInBackground(
       // Allen MCP server subprocess gets the vars in its own env dict —
       // not relying on claude-cli's parent-env inheritance for MCP
       // children, which is implementation-defined.
-      const mcpServers = await loadAllMcpServers(db, spawnContextEnv);
+      const externalMcpServers = externalMcpServersForAgent(role as Record<string, unknown>);
+      const disabledMcpTools = disabledMcpToolsForAgent(role as Record<string, unknown>);
+      const disallowedMcpToolNames = Object.entries(disabledMcpTools).flatMap(([server, tools]) =>
+        tools.map((tool) => tool.startsWith('mcp__') ? tool : `mcp__${server}__${tool}`),
+      );
+      const mcpServers = await loadAllMcpServers(db, {
+        extraEnv: spawnContextEnv,
+        externalServerNames: externalMcpServers,
+      });
 
       const sdkOptions: Record<string, unknown> = {
         model, permissionMode: 'bypassPermissions',
@@ -1446,6 +1481,7 @@ async function runSpawnInBackground(
         // inside the CLI (or tools that fall back to process.env) can see
         // the spawn tree. Merged on top of parent env.
         env: { ...process.env, ...spawnContextEnv },
+        ...(disallowedMcpToolNames.length > 0 ? { disallowedTools: disallowedMcpToolNames } : {}),
         ...(Object.keys(mcpServers).length > 0 ? { mcpServers } : {}),
       };
       if (currentResumeSession) sdkOptions.resume = currentResumeSession;
@@ -1482,7 +1518,7 @@ async function runSpawnInBackground(
         let discoveredMcpTools: string[] = [];
         try {
           const { loadMcpTools } = await import('./chat-mcp-client.js');
-          discoveredMcpTools = (await loadMcpTools(db)).map(t => t.fullName);
+          discoveredMcpTools = (await loadMcpTools(db, { externalServerNames: externalMcpServers })).map(t => t.fullName);
         } catch (err) {
           logger.warn('[spawn] MCP tool discovery failed (allowlist will lack mcp__* entries)', { executionId, agentName, error: (err as Error).message });
         }
@@ -1500,6 +1536,7 @@ async function runSpawnInBackground(
             model: sdkOptions.model as string | undefined,
             tools: Array.isArray((role as any)?.tools) ? (role as any).tools : undefined,
             mcpToolNames: discoveredMcpTools,
+            disabledMcpTools,
           },
           prompt,
           cwd: sdkOptions.cwd as string | undefined,
@@ -2468,6 +2505,12 @@ CRITICAL RULES:
     const currentDepth = (activeCtx?.delegationDepth ?? 0) + 1;
     const onEvent = activeCtx?.broadcastEvent;
 
+    if (!chatSessionId || !parentMessageId) {
+      return {
+        error: 'delegate_to_agent requires an active chat context with a parent message id. Refusing to create or reuse an unscoped delegation thread.',
+      };
+    }
+
     // Resolve cwd: explicit context > session cwd > workspace linked to
     // session > target agent's sourceRepoPath. See spawn_agent for the full
     // rationale. This fallback makes imported Claude agents "just work"
@@ -3211,10 +3254,22 @@ async function runAgentTurn(
         },
       };
       const { loadExternalMcpServers } = await import('./chat-mcp.js');
-      Object.assign(mcpServers, await loadExternalMcpServers(db));
+      const externalMcpServers = externalMcpServersForAgent(targetAgent as Record<string, unknown>);
+      const disabledMcpTools = disabledMcpToolsForAgent(targetAgent as Record<string, unknown>);
+      const disallowedMcpToolNames = Object.entries(disabledMcpTools).flatMap(([server, tools]) =>
+        tools.map((tool) => tool.startsWith('mcp__') ? tool : `mcp__${server}__${tool}`),
+      );
+      Object.assign(mcpServers, await loadExternalMcpServers(db, externalMcpServers));
 
       const abortController = new AbortController();
-      const sdkOptions: Record<string, unknown> = { model, permissionMode: 'bypassPermissions', cwd: resolveAgentCwd(cwd), mcpServers, abortController };
+      const sdkOptions: Record<string, unknown> = {
+        model,
+        permissionMode: 'bypassPermissions',
+        cwd: resolveAgentCwd(cwd),
+        mcpServers,
+        abortController,
+        ...(disallowedMcpToolNames.length > 0 ? { disallowedTools: disallowedMcpToolNames } : {}),
+      };
       if (resumeSessionId) sdkOptions.resume = resumeSessionId;
       else if (process.env.ALLEN_SYSTEM_PROMPT_MODE === 'custom') sdkOptions.customSystemPrompt = systemPrompt;
       else sdkOptions.appendSystemPrompt = systemPrompt;
@@ -3227,7 +3282,7 @@ async function runAgentTurn(
         let discoveredMcpTools: string[] = [];
         try {
           const { loadMcpTools } = await import('./chat-mcp-client.js');
-          discoveredMcpTools = (await loadMcpTools(db)).map(t => t.fullName);
+          discoveredMcpTools = (await loadMcpTools(db, { externalServerNames: externalMcpServers })).map(t => t.fullName);
         } catch (err) {
           logger.warn('[delegation] MCP tool discovery failed (allowlist will lack mcp__* entries)', { convId, targetName, error: (err as Error).message });
         }
@@ -3239,6 +3294,7 @@ async function runAgentTurn(
             model,
             tools: Array.isArray(targetAgent.tools) ? targetAgent.tools as string[] : undefined,
             mcpToolNames: discoveredMcpTools,
+            disabledMcpTools,
           },
           prompt,
           cwd: sdkOptions.cwd as string | undefined,

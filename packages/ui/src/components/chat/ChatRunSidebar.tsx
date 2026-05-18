@@ -9,6 +9,7 @@ import {
   ChevronDown,
   ChevronRight,
   CheckCircle2,
+  Copy,
   ExternalLink,
   FileText,
   FolderOpen,
@@ -24,21 +25,26 @@ import {
   Route,
   Rows3,
   StopCircle,
+  Terminal,
   Timer,
   Code2,
   X,
 } from 'lucide-react';
-import type { SpawnedAgent } from '../../hooks/useChat';
+import type { SpawnedAgent, WorkflowInterventionAnswer } from '../../hooks/useChat';
 import { artifacts as artifactsApi, repos as reposApi, type ArtifactDoc, type RunStatus } from '../../services/api';
 import { chatCodeDiffs, pullRequests as pullRequestsApi, workspaces as workspacesApi } from '../../services/workspaceService';
 import { getMonacoTheme, setupMonaco } from '../../lib/monaco-theme';
 import ArtifactViewer from '../artifacts/ArtifactViewer';
+import { WorkflowInterventionAction, type WorkflowInterventionLike } from '../execution/WorkflowInterventionAction';
+import { XTerminal } from '../workspace/XTerminal';
 import { renderMarkdown } from './ChatMessageList';
 
 const FAILED_STATUSES = new Set(['failed', 'failure', 'error', 'errored']);
 const CANCELLED_STATUSES = new Set(['cancelled', 'canceled']);
+const TERMINAL_STATUSES = new Set(['completed', 'merged', 'failed', 'failure', 'error', 'errored', 'cancelled', 'canceled', 'closed']);
 
 export type ChatRunPanelTab = 'tasks' | 'artifacts' | 'executions' | 'files';
+type FilePanelView = 'changes' | 'browser' | 'terminal';
 
 type RepoBrowseSource = {
   id?: string | null;
@@ -49,6 +55,10 @@ type RepoBrowseSource = {
 function humanLabel(value?: string | null): string {
   if (!value) return '';
   return value.replace(/[_-]+/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+}
+
+function shortExecutionId(id: string): string {
+  return id.length > 12 ? `${id.slice(0, 8)}...${id.slice(-4)}` : id;
 }
 
 function timeAgo(dateStr?: string | null): string {
@@ -137,6 +147,77 @@ function statusBadgeClass(status?: string | null): string {
 function StatusBadge({ status }: { status?: string | null }) {
   const label = humanLabel(status ?? 'unknown');
   return <span className={`rounded px-1.5 py-0.5 font-mono text-[9px] uppercase ${statusBadgeClass(status)}`}>{label}</span>;
+}
+
+function approvalActionLabel(context?: RunStatus | null): string {
+  const severity = context?.humanInput.severity?.toLowerCase();
+  if (severity === 'approval') return 'Approval required';
+  if (severity === 'escalation') return 'Review required';
+  return 'Input required';
+}
+
+type SidebarWorkflowIntervention = WorkflowInterventionLike;
+
+function interventionForRun(run: SpawnedAgent): SidebarWorkflowIntervention | null {
+  const context = run.runContext;
+  const status = (context?.status ?? run.status ?? '').toLowerCase();
+  if (!context?.humanInput.required && status !== 'waiting_for_input' && status !== 'waiting') return null;
+  if (!context) return null;
+  const interventions = (context.interventions ?? []) as SidebarWorkflowIntervention[];
+  const pending =
+    interventions.find(item => item.status === 'pending' && item.intervention_id === context.humanInput.interventionId)
+    ?? interventions.find(item => item.status === 'pending');
+  if (pending?.intervention_id) return pending;
+  if (context.humanInput.interventionId) {
+    return {
+      intervention_id: context.humanInput.interventionId,
+      status: 'pending',
+      stage: context.humanInput.stage,
+      severity: context.humanInput.severity,
+      title: context.humanInput.title ?? approvalActionLabel(context),
+    };
+  }
+  const stage = context.humanInput.stage
+    ?? context.progress.currentStep
+    ?? context.execution.currentNodes?.[0]
+    ?? undefined;
+  if (stage && looksLikeApprovalInput(stage, context.humanInput.severity)) {
+    return {
+      status: 'pending',
+      stage,
+      severity: context.humanInput.severity ?? (stage.toLowerCase().includes('escalation') ? 'escalation' : 'approval'),
+      title: context.humanInput.title ?? 'Approval required',
+      question: `Review the pause at ${humanLabel(stage)} and choose how the workflow should continue.`,
+    };
+  }
+  return null;
+}
+
+function looksLikeApprovalInput(stage?: string | null, severity?: string | null): boolean {
+  const lower = `${stage ?? ''} ${severity ?? ''}`.toLowerCase();
+  return lower.includes('approval') || lower.includes('escalation') || lower.includes('_gate') || lower.endsWith(' gate');
+}
+
+function SidebarApprovalButton({
+  run,
+  onAnswer,
+  className = 'cr-approval-button',
+}: {
+  run: SpawnedAgent;
+  onAnswer?: (input: WorkflowInterventionAnswer) => Promise<void> | void;
+  className?: string;
+}) {
+  const intervention = interventionForRun(run);
+  if (!intervention || !onAnswer) return null;
+
+  return (
+    <WorkflowInterventionAction
+      run={run}
+      intervention={intervention}
+      onAnswer={onAnswer}
+      className={className}
+    />
+  );
 }
 
 function runKindLabel(context: RunStatus | null, fallback?: SpawnedAgent | null): string {
@@ -401,11 +482,13 @@ function AttemptRow({
   index,
   onOpenNode,
   onOpenExecution,
+  onAnswerWorkflowIntervention,
 }: {
   run: SpawnedAgent;
   index: number;
   onOpenNode: (executionId: string, nodeId: string) => void;
   onOpenExecution: (executionId: string) => void;
+  onAnswerWorkflowIntervention?: (input: WorkflowInterventionAnswer) => Promise<void> | void;
 }) {
   const [expanded, setExpanded] = useState(false);
   const context = run.runContext ?? null;
@@ -418,6 +501,7 @@ function AttemptRow({
   const isWorkflow = context?.runType === 'workflow';
   const summary =
     !isWorkflow ? humanLabel(status)
+      : state === 'wait-you' ? approvalActionLabel(context)
       : state === 'fail' ? workflowAttemptFailureLabel(run)
         : state === 'ok' ? 'Passed'
           : context?.progress.currentStep ? `Running ${humanLabel(context.progress.currentStep)}`
@@ -443,7 +527,9 @@ function AttemptRow({
           </span>
         </span>
         <span className="attempt-row-main">
-          <span className="step-name">Execution {index + 1}: {kind}</span>
+          <span className="step-name-row">
+            <span className="step-name">Execution {index + 1}: {kind}</span>
+          </span>
           <span className="step-meta">{executionKind} · {summary} · {cost}</span>
         </span>
         <span className="attempt-row-progress" aria-label={`Execution ${index + 1} progress ${percent}%`}>
@@ -452,6 +538,7 @@ function AttemptRow({
         {isWorkflow && expanded ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronRight className="h-3.5 w-3.5" />}
       </button>
       <div className="attempt-row-actions">
+        <SidebarApprovalButton run={run} onAnswer={onAnswerWorkflowIntervention} className="cr-approval-button" />
         <Link to={`/executions/${run.executionId}`} className="step-link-icon" title="Open execution">
           <ExternalLink className="h-3.5 w-3.5" />
         </Link>
@@ -595,7 +682,17 @@ function ArtifactLinks({ run, context }: { run: SpawnedAgent; context: RunStatus
   );
 }
 
-function ExecutionStep({ run, index, isLast }: { run: SpawnedAgent; index: number; isLast: boolean }) {
+function ExecutionStep({
+  run,
+  index,
+  isLast,
+  onAnswerWorkflowIntervention,
+}: {
+  run: SpawnedAgent;
+  index: number;
+  isLast: boolean;
+  onAnswerWorkflowIntervention?: (input: WorkflowInterventionAnswer) => Promise<void> | void;
+}) {
   const context = run.runContext ?? null;
   const state = runState(context, run);
   const percent = Math.max(0, Math.min(100, context?.progress.percent ?? 0));
@@ -614,7 +711,10 @@ function ExecutionStep({ run, index, isLast }: { run: SpawnedAgent; index: numbe
         <div className="mb-2 flex items-start justify-between gap-3">
           <div className="min-w-0">
             <div className="mb-1 font-mono text-[10px] font-semibold uppercase tracking-[0.08em] text-theme-muted">Step {index + 1}</div>
-            <div className="truncate text-[13px] font-semibold text-theme-primary">{title}</div>
+            <div className="step-name-row">
+              <div className="truncate text-[13px] font-semibold text-theme-primary">{title}</div>
+              <SidebarApprovalButton run={run} onAnswer={onAnswerWorkflowIntervention} className="cr-approval-button" />
+            </div>
             <div className="mt-1 font-mono text-[10.5px] text-theme-muted">{runKindLabel(context, run)} · {cost} · {expectedOutcome(context)}</div>
           </div>
           <StatusBadge status={context?.status ?? run.status} />
@@ -630,7 +730,7 @@ function ExecutionStep({ run, index, isLast }: { run: SpawnedAgent; index: numbe
 
         {context?.humanInput.required && (
           <div className="mt-2 rounded border border-accent-yellow/20 bg-accent-yellow/10 px-2 py-1.5 text-[11px] text-accent-yellow">
-            {context.humanInput.title ?? 'Needs your input'}
+            {context.humanInput.title ?? approvalActionLabel(context)}
           </div>
         )}
 
@@ -1409,26 +1509,57 @@ function ExecutionDetailInline({
   index,
   selectedExecutionId,
   selectedNodeId,
+  renderHeaderAction,
+  renderFooter,
 }: {
   run: SpawnedAgent;
   index: number;
   selectedExecutionId?: string | null;
   selectedNodeId?: string | null;
+  renderHeaderAction?: (run: SpawnedAgent) => ReactNode;
+  renderFooter?: (run: SpawnedAgent) => ReactNode;
 }) {
   const context = run.runContext ?? null;
   const status = context?.status ?? run.status;
+  const normalizedStatus = String(status).toLowerCase();
+  const isActive = !TERMINAL_STATUSES.has(normalizedStatus);
+  const isCancelled = CANCELLED_STATUSES.has(normalizedStatus);
+  const isFailed = FAILED_STATUSES.has(normalizedStatus) || normalizedStatus === 'closed';
+  const statusTone = isCancelled ? 'cancelled' : isFailed ? 'failed' : isActive ? 'running' : 'complete';
   const childAgents = context?.childAgents ?? [];
   const executionName = runDisplayName(context, run);
   const selected = selectedExecutionId === run.executionId;
 
   return (
-    <details className="cr-exec-detail" open={selected || undefined}>
+    <details className={`cr-exec-detail ${statusTone}`} open={selected || undefined}>
       <summary>
         <ChevronRight className="cr-disclosure-icon h-3.5 w-3.5" />
         <span className="cr-ref-ic repo"><RunExecutionIcon context={context} /></span>
         <span className="cr-list-body">
-          <span className="cr-list-title">Execution {index + 1}: {executionName}</span>
-          <span className="cr-list-sub">{runTypeName(context, run)} · {humanLabel(status)} · {formatCost(context?.execution.cost)}</span>
+          <span className="cr-list-title">
+            <span>Execution {index + 1}: {executionName}</span>
+            {(isActive || isCancelled || isFailed) && (
+              <span className={`cr-run-state ${statusTone}`}>
+                {isActive ? <Loader2 className="h-3 w-3 animate-spin" /> : statusIcon(status)}
+                {humanLabel(status)}
+              </span>
+            )}
+            {renderHeaderAction?.(run)}
+          </span>
+          <span className="cr-list-sub">{runTypeName(context, run)} · {isActive ? 'Active' : humanLabel(status)} · {formatCost(context?.execution.cost)}</span>
+          <button
+            type="button"
+            className="cr-exec-id"
+            title={`Copy execution id: ${run.executionId}`}
+            onClick={(event) => {
+              event.preventDefault();
+              event.stopPropagation();
+              void navigator.clipboard?.writeText(run.executionId);
+            }}
+          >
+            <Copy className="h-3 w-3" />
+            <span>{shortExecutionId(run.executionId)}</span>
+          </button>
           {context?.title && context.title !== executionName && <span className="cr-list-sub">{context.title}</span>}
         </span>
         <Link to={`/executions/${run.executionId}`} className="cr-detail-link" title="Open full execution page" onClick={(event) => event.stopPropagation()}>
@@ -1446,18 +1577,23 @@ function ExecutionDetailInline({
           {childAgents.map(child => <ChildExecutionRow key={child.executionId} child={child} />)}
         </div>
       )}
+      {renderFooter?.(run)}
     </details>
   );
 }
 
-function ExecutionsPanel({
+export function ExecutionsPanel({
   runs,
   selectedExecutionId,
   selectedNodeId,
+  renderExecutionHeaderAction,
+  renderExecutionFooter,
 }: {
   runs: SpawnedAgent[];
   selectedExecutionId?: string | null;
   selectedNodeId?: string | null;
+  renderExecutionHeaderAction?: (run: SpawnedAgent) => ReactNode;
+  renderExecutionFooter?: (run: SpawnedAgent) => ReactNode;
 }) {
   if (runs.length === 0) return <div className="cr-empty">No agent executions are linked to this chat yet.</div>;
   return (
@@ -1469,6 +1605,8 @@ function ExecutionsPanel({
           index={index}
           selectedExecutionId={selectedExecutionId}
           selectedNodeId={selectedNodeId}
+          renderHeaderAction={renderExecutionHeaderAction}
+          renderFooter={renderExecutionFooter}
         />
       ))}
     </div>
@@ -1527,16 +1665,18 @@ function FileChangesPanel({
   rootType,
   rootId,
   repoBrowseSource,
+  viewRequest,
 }: {
   runs: SpawnedAgent[];
   rootType?: 'chat' | 'workflow' | 'agent';
   rootId?: string | null;
   repoBrowseSource?: RepoBrowseSource | null;
+  viewRequest?: { view: FilePanelView; nonce: number };
 }) {
   const [files, setFiles] = useState<PanelDiffFile[]>([]);
   const [activeDiffPath, setActiveDiffPath] = useState('');
   const [diffMode, setDiffMode] = useState<'split' | 'unified'>('unified');
-  const [view, setView] = useState<'changes' | 'browser'>('changes');
+  const [view, setView] = useState<FilePanelView>('changes');
   const [workspaceFiles, setWorkspaceFiles] = useState<WorkspaceFileEntry[]>([]);
   const [browserPath, setBrowserPath] = useState('');
   const [browserContent, setBrowserContent] = useState('');
@@ -1545,8 +1685,12 @@ function FileChangesPanel({
   const [browserLoading, setBrowserLoading] = useState(false);
   const [loading, setLoading] = useState(false);
 
+  useEffect(() => {
+    if (viewRequest) setView(viewRequest.view);
+  }, [viewRequest]);
+
   const workspaceRefs = useMemo(() => {
-    const refs: Array<{ id: string; name?: string | null; repoId?: string | null; mode: 'auto' | 'branch' }> = [];
+    const refs: Array<{ id: string; name?: string | null; repoId?: string | null; mode: 'workspace' }> = [];
     for (const run of runs) {
       const id = run.runContext?.workspace?.id;
       if (!id) continue;
@@ -1554,13 +1698,12 @@ function FileChangesPanel({
         id,
         name: run.runContext?.workspace?.name ?? run.runContext?.workspace?.repoName,
         repoId: run.runContext?.workspace?.repoId ?? null,
-        mode: run.runContext?.pullRequest ? 'branch' : 'auto',
+        mode: 'workspace',
       });
     }
-    return refs.reduce<Array<{ id: string; name?: string | null; repoId?: string | null; mode: 'auto' | 'branch' }>>((acc, ref) => {
+    return refs.reduce<Array<{ id: string; name?: string | null; repoId?: string | null; mode: 'workspace' }>>((acc, ref) => {
       const existing = acc.find(item => item.id === ref.id);
       if (!existing) acc.push(ref);
-      else if (ref.mode === 'branch') existing.mode = 'branch';
       return acc;
     }, []);
   }, [runs]);
@@ -1615,7 +1758,9 @@ function FileChangesPanel({
 
       const workspaceGroups = await Promise.all(workspaceRefs.map(async ref => {
       try {
-        const result = await workspacesApi.getDiff(ref.id, { mode: ref.mode });
+        const result = await workspacesApi.getDiff(ref.id, rootType === 'chat'
+          ? { mode: ref.mode, anchor: 'creation' }
+          : { mode: ref.mode });
         return ((result.files ?? []) as Array<Omit<PanelDiffFile, 'workspaceId' | 'workspaceName'>>)
           .filter(file => file.diff?.trim() || file.modifiedContent?.trim())
           .map(file => ({ ...file, workspaceId: ref.id, workspaceName: ref.name }));
@@ -1652,11 +1797,16 @@ function FileChangesPanel({
       if (!cancelled) setLoading(false);
     });
     return () => { cancelled = true; };
-  }, [signature, workspaceRefs, pullRequestRefs, rootType, rootId]);
+  }, [signature, rootType, rootId]);
 
   const additions = files.reduce((sum, file) => sum + (file.additions ?? 0), 0);
   const deletions = files.reduce((sum, file) => sum + (file.deletions ?? 0), 0);
   const activeWorkspace = workspaceRefs[0] ?? null;
+  const terminalSource = activeWorkspace?.id
+    ? { type: 'workspace' as const, id: activeWorkspace.id, name: activeWorkspace.name ?? 'Workspace terminal', href: `/workspaces/${activeWorkspace.id}` }
+    : repoBrowseSource?.id
+      ? { type: 'repo' as const, id: repoBrowseSource.id, name: repoBrowseSource.name ?? repoBrowseSource.path ?? 'Repository terminal', href: null }
+      : null;
   const activeDiff = files.find(file => file.path === activeDiffPath) ?? files[0] ?? null;
   const changedStatuses = useMemo(() => new Map(files.map(file => [file.path, changedFileStatus(file)])), [files]);
   const fileTree = useMemo(() => buildFileTree(workspaceFiles, changedStatuses), [workspaceFiles, changedStatuses]);
@@ -1743,7 +1893,6 @@ function FileChangesPanel({
     }
   }
 
-  if (loading) return <div className="cr-empty">Checking workspace changes...</div>;
   if (files.length === 0 && workspaceRefs.length === 0 && pullRequestRefs.length === 0 && !repoBrowseSource?.id) {
     return <div className="cr-empty">No file changes are linked to this chat yet.</div>;
   }
@@ -1758,6 +1907,10 @@ function FileChangesPanel({
         <button type="button" className={view === 'browser' ? 'active' : ''} onClick={() => setView('browser')} disabled={!activeWorkspace && !repoBrowseSource?.id}>
           <FolderOpen className="h-3.5 w-3.5" />
           <span>Browse</span>
+        </button>
+        <button type="button" className={view === 'terminal' ? 'active' : ''} onClick={() => setView('terminal')} disabled={!terminalSource}>
+          <Terminal className="h-3.5 w-3.5" />
+          <span>Terminal</span>
         </button>
         <span className="spacer" />
         {view === 'changes' && (
@@ -1774,7 +1927,31 @@ function FileChangesPanel({
         )}
       </div>
 
-      {view === 'changes' ? (
+      {view === 'terminal' ? (
+        <div className="cr-files-terminal ws-panel">
+          {terminalSource ? (
+            <>
+              <div className="ws-diff-h">
+                <Terminal className="h-3.5 w-3.5 text-theme-muted" />
+                <span className="truncate">{terminalSource.name}</span>
+                {terminalSource.href && (
+                  <Link to={terminalSource.href} className="btn btn-ghost btn-sm">
+                    <ExternalLink className="h-3.5 w-3.5" /> workspace
+                  </Link>
+                )}
+              </div>
+              <div className="ws-terminal-body">
+                <XTerminal workspaceId={terminalSource.id} sourceType={terminalSource.type} terminalId="chat-files" className="h-full" />
+              </div>
+            </>
+          ) : (
+            <div className="cr-empty">No workspace or repository terminal is available for this chat yet.</div>
+          )}
+        </div>
+      ) : view === 'changes' ? (
+        loading ? (
+          <div className="cr-empty">Checking workspace changes...</div>
+        ) : (
         <div className="ws-main ws-panel cr-workspace-view">
           <aside className="ws-tree scroll-hide">
             <div className="ws-tree-h">
@@ -1830,6 +2007,7 @@ function FileChangesPanel({
             </div>
           </section>
         </div>
+        )
       ) : (
         <div className="ws-files-body ws-panel cr-workspace-view">
           <aside className="ws-files-list scroll-hide">
@@ -1924,6 +2102,7 @@ function TasksPanel({
   expanded,
   onOpenNode,
   onOpenExecution,
+  onAnswerWorkflowIntervention,
 }: {
   activeRun: SpawnedAgent;
   activeContext: RunStatus | null;
@@ -1931,6 +2110,7 @@ function TasksPanel({
   expanded: boolean;
   onOpenNode: (executionId: string, nodeId: string) => void;
   onOpenExecution: (executionId: string) => void;
+  onAnswerWorkflowIntervention?: (input: WorkflowInterventionAnswer) => Promise<void> | void;
 }) {
   const attemptRuns = sortedRuns;
   const showAttempts = attemptRuns.length > 1;
@@ -1984,6 +2164,7 @@ function TasksPanel({
                 index={index}
                 onOpenNode={onOpenNode}
                 onOpenExecution={onOpenExecution}
+                onAnswerWorkflowIntervention={onAnswerWorkflowIntervention}
               />
             ))}
           </div>
@@ -2009,7 +2190,13 @@ function TasksPanel({
         <RailSection title="steps" count={`${sortedRuns.length}`}>
           <div className="cr-steps">
             {sortedRuns.map((run, index) => (
-              <ExecutionStep key={run.executionId} run={run} index={index} isLast={index === sortedRuns.length - 1} />
+              <ExecutionStep
+                key={run.executionId}
+                run={run}
+                index={index}
+                isLast={index === sortedRuns.length - 1}
+                onAnswerWorkflowIntervention={onAnswerWorkflowIntervention}
+              />
             ))}
           </div>
         </RailSection>
@@ -2036,16 +2223,6 @@ function TasksPanel({
         </RailSection>
       )}
 
-      {activeContext?.humanInput.required && (
-        <RailSection title="actions">
-          <div className="cr-acts">
-            <Link to={activeContext.humanInput.interventionId ? `/interventions/${activeContext.humanInput.interventionId}` : '/interventions'} className="btn-primary justify-center gap-1.5 text-[12px]">
-              Resolve Input
-              <ExternalLink className="h-3.5 w-3.5" />
-            </Link>
-          </div>
-        </RailSection>
-      )}
     </div>
   );
 }
@@ -2058,6 +2235,8 @@ export default function ChatRunSidebar({
   open,
   activeTab,
   onTabChange,
+  filesViewRequest,
+  onAnswerWorkflowIntervention,
   onClose,
 }: {
   runs: SpawnedAgent[];
@@ -2067,6 +2246,8 @@ export default function ChatRunSidebar({
   open: boolean;
   activeTab: ChatRunPanelTab;
   onTabChange: (tab: ChatRunPanelTab) => void;
+  filesViewRequest?: { view: FilePanelView; nonce: number };
+  onAnswerWorkflowIntervention?: (input: WorkflowInterventionAnswer) => Promise<void> | void;
   onClose: () => void;
 }) {
   const sortedRuns = useMemo(() => [...runs], [runs]);
@@ -2184,6 +2365,7 @@ export default function ChatRunSidebar({
               expanded={fullScreen}
               onOpenNode={() => undefined}
               onOpenExecution={() => undefined}
+              onAnswerWorkflowIntervention={onAnswerWorkflowIntervention}
             />
           </div>
         )}
@@ -2198,6 +2380,7 @@ export default function ChatRunSidebar({
                 expanded={fullScreen}
                 onOpenNode={openExecutionNode}
                 onOpenExecution={openExecution}
+                onAnswerWorkflowIntervention={onAnswerWorkflowIntervention}
               />
             )
             : <div className="cr-empty">No task sequence is linked to this chat yet.</div>
@@ -2207,10 +2390,11 @@ export default function ChatRunSidebar({
             runs={sortedRuns}
             selectedExecutionId={selectedExecutionId}
             selectedNodeId={selectedWorkflowNodeId}
+            renderExecutionHeaderAction={(run) => <SidebarApprovalButton run={run} onAnswer={onAnswerWorkflowIntervention} />}
           />
         )}
         {activeTab === 'artifacts' && <ChatArtifactsPanel rootType={rootType} rootId={rootId} runs={sortedRuns} />}
-        {activeTab === 'files' && <FileChangesPanel runs={sortedRuns} rootType={rootType} rootId={rootId} repoBrowseSource={repoBrowseSource} />}
+        {activeTab === 'files' && <FileChangesPanel runs={sortedRuns} rootType={rootType} rootId={rootId} repoBrowseSource={repoBrowseSource} viewRequest={filesViewRequest} />}
         </div>
       </div>
     </aside>

@@ -3,14 +3,17 @@ import { ExecutionService } from '../services/execution.service.js';
 import { InterventionService } from '../services/intervention.service.js';
 import { param } from '../types.js';
 import type { Db } from 'mongodb';
+import { UserService } from '../services/user.service.js';
+import type { AuthedRequest } from '../middleware/requireAuth.js';
 
 export function executionRoutes(db: Db): Router {
   const router = Router();
   const service = new ExecutionService(db);
   const interventionService = new InterventionService(db);
+  const userService = new UserService(db);
 
   // POST /api/executions
-  router.post('/', async (req: Request, res: Response) => {
+  router.post('/', async (req: AuthedRequest, res: Response) => {
     try {
       const { workflowId, input, agentProvider } = req.body;
       if (!workflowId) return res.status(400).json({ error: 'workflowId is required' });
@@ -19,11 +22,21 @@ export function executionRoutes(db: Db): Router {
         : undefined;
       const execution = await service.start(workflowId, input ?? {}, { agentProvider: provider });
       const chatSessionId = req.header('x-allen-chat-session-id');
+      const parentMessageId = req.header('x-allen-parent-message-id');
+      const authUser = req.user;
+      const dbUser = authUser?.sub ? await userService.findById(authUser.sub).catch(() => null) : null;
+      const userMeta: Record<string, unknown> = authUser ? {
+        'meta.startedByUserId': authUser.sub,
+        'meta.startedByUserEmail': dbUser?.email ?? authUser.email,
+        'meta.startedByUserName': dbUser?.name ?? authUser.email?.split('@')[0] ?? authUser.sub,
+      } : {};
       if (chatSessionId) {
         const chatMeta: Record<string, unknown> = {
           'meta.origin': 'chat',
           'meta.chatSessionId': chatSessionId,
+          ...userMeta,
         };
+        if (parentMessageId) chatMeta['meta.parentMessageId'] = parentMessageId;
         if (typeof input?.task === 'string') chatMeta['meta.requestText'] = input.task;
         else if (typeof input?.request === 'string') chatMeta['meta.requestText'] = input.request;
         if (typeof input?.workspace_id === 'string') chatMeta['meta.workspaceId'] = input.workspace_id;
@@ -32,6 +45,11 @@ export function executionRoutes(db: Db): Router {
         await db.collection('executions').updateOne(
           { id: execution.id },
           { $set: chatMeta },
+        ).catch(() => {});
+      } else if (Object.keys(userMeta).length > 0) {
+        await db.collection('executions').updateOne(
+          { id: execution.id },
+          { $set: userMeta },
         ).catch(() => {});
       }
       res.status(201).json(execution);
@@ -74,6 +92,9 @@ export function executionRoutes(db: Db): Router {
           status, workflowId, workflowName, type, search,
           skip: Number.isFinite(offset) ? offset : 0,
           limit: Number.isFinite(limit) ? limit : 50,
+          includeTotal: req.query.includeTotal === 'true' || req.query.includeTotal === '1',
+          enrich: req.query.enrich === 'true',
+          hydrateLegacyChatMetadata: req.query.hydrateLegacyChatMetadata === 'true',
         });
         return res.json(result);
       }
@@ -84,6 +105,29 @@ export function executionRoutes(db: Db): Router {
       if (workflowName) filter.workflowName = workflowName;
       const executions = await service.list(filter);
       res.json(executions);
+    } catch (err: unknown) {
+      res.status(500).json({ error: (err as Error).message });
+    }
+  });
+
+  // GET /api/executions/count?status=running,queued
+  //
+  // Lightweight count endpoint for chrome/badges that do not need execution
+  // rows. Avoids the paginated list path, which enriches even limit=1 rows.
+  router.get('/count', async (req: Request, res: Response) => {
+    try {
+      const statuses = typeof req.query.status === 'string'
+        ? req.query.status.split(',').map(s => s.trim()).filter(Boolean)
+        : [];
+      const filter: Record<string, unknown> = {};
+      if (statuses.length === 1) filter.status = statuses[0];
+      else if (statuses.length > 1) filter.status = { $in: statuses };
+      if (req.query.chatSession === 'true') {
+        filter['meta.chatSessionId'] = { $exists: true, $nin: [null, ''] };
+      }
+
+      const count = await db.collection('executions').countDocuments(filter);
+      res.json({ count });
     } catch (err: unknown) {
       res.status(500).json({ error: (err as Error).message });
     }
@@ -527,7 +571,8 @@ export function executionRoutes(db: Db): Router {
   //
   // Query params:
   //   include_descendants=false   — exclude child logs (child pages use this)
-  //   limit / offset              — standard pagination
+  //   page=true                   — return { items, limit, offset, hasMore }
+  //   limit / offset              — latest-first page window when page=true
   //   node / category / level     — field filters on the PARENT's own rows;
   //                                 not applied to descendant rows so the
   //                                 user sees the full child context
@@ -574,15 +619,20 @@ export function executionRoutes(db: Db): Router {
         ? { $or: [parentFilter, { executionId: { $in: descendantIds } }] }
         : parentFilter;
 
-      const limit = Math.min(parseInt(String(req.query.limit ?? '500'), 10), 2000);
-      const offset = parseInt(String(req.query.offset ?? '0'), 10);
+      const paged = req.query.page === 'true';
+      const parsedLimit = parseInt(String(req.query.limit ?? '50'), 10);
+      const parsedOffset = parseInt(String(req.query.offset ?? '0'), 10);
+      const limit = Math.min(Math.max(Number.isFinite(parsedLimit) ? parsedLimit : 50, 1), 2000);
+      const offset = Math.max(Number.isFinite(parsedOffset) ? parsedOffset : 0, 0);
 
-      const logs = await db.collection('execution_logs')
+      const rawLogs = await db.collection('execution_logs')
         .find(filter)
-        .sort({ timestamp: 1 })
+        .sort(paged ? { timestamp: -1 } : { timestamp: 1 })
         .skip(offset)
-        .limit(limit)
+        .limit(paged ? limit + 1 : limit)
         .toArray();
+      const hasMore = paged && rawLogs.length > limit;
+      const logs = (paged ? rawLogs.slice(0, limit).reverse() : rawLogs);
 
       // Normalize descendant rows into the engine's log shape so the UI
       // renders them natively. The child's own execution_logs rows use a
@@ -637,6 +687,16 @@ export function executionRoutes(db: Db): Router {
           },
         };
       });
+
+      if (paged) {
+        res.json({
+          items: normalized,
+          limit,
+          offset,
+          hasMore,
+        });
+        return;
+      }
 
       res.json(normalized);
     } catch (err: unknown) {

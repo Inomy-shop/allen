@@ -6,7 +6,7 @@ export default function TerminalNode({ data, id }: NodeProps) {
   const Icon = isStart ? Play : Square;
 
   return (
-    <div className="px-5 py-2 rounded-full border-2 border-border bg-surface-100 shadow-sm backdrop-blur-sm
+    <div className="px-5 py-2 rounded-full border-2 border-app-strong bg-[#f4f5f7] dark:bg-[#202229] shadow-md
       flex items-center gap-2 select-none"
     >
       <Icon className="w-3.5 h-3.5 text-theme-secondary" />

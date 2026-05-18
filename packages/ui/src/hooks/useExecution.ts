@@ -30,10 +30,12 @@ export interface ActivityEntry {
 
 export interface NodeState {
   name: string;
-  status: 'pending' | 'running' | 'completed' | 'failed';
+  status: 'pending' | 'running' | 'waiting_for_input' | 'completed' | 'failed';
   attempt: number;
   output?: any;
   durationMs?: number;
+  startedAt?: Date | string;
+  completedAt?: Date | string | null;
   cost?: any;
   streamText: string;
   activity: ActivityEntry[];
@@ -68,6 +70,33 @@ export function useExecution(id: string | undefined) {
   const [liveToolCallsByNode, setLiveToolCallsByNode] = useState<Map<string, any[]>>(new Map());
   const eventCounter = useRef(0);
 
+  const computeCurrentNodeStarts = useCallback((exec: any, tr: any[]) => {
+    const starts = new Map<string, Date | string>();
+    const traceEnds = tr
+      .map((trace: any) => {
+        const startedMs = new Date(trace.startedAt).getTime();
+        if (!Number.isFinite(startedMs)) return null;
+        const completedMs = trace.completedAt ? new Date(trace.completedAt).getTime() : NaN;
+        const endMs = Number.isFinite(completedMs) ? completedMs : startedMs + (trace.durationMs ?? 0);
+        return { trace, endMs };
+      })
+      .filter((entry): entry is { trace: any; endMs: number } => !!entry && Number.isFinite(entry.endMs))
+      .sort((a, b) => a.endMs - b.endMs);
+
+    const fallback =
+      traceEnds[traceEnds.length - 1]?.endMs != null
+        ? new Date(traceEnds[traceEnds.length - 1].endMs)
+        : (exec?.startedAt ? new Date(exec.startedAt) : new Date());
+
+    for (const name of exec?.currentNodes ?? []) {
+      if (name === 'END') continue;
+      const priorForNode = traceEnds.filter(({ trace }) => trace.node === name);
+      const prior = priorForNode[priorForNode.length - 1]?.trace;
+      starts.set(name, prior?.completedAt ?? prior?.startedAt ?? fallback);
+    }
+    return starts;
+  }, []);
+
   // Fetch initial data
   useEffect(() => {
     if (!id) return;
@@ -99,6 +128,8 @@ export function useExecution(id: string | undefined) {
             attempt: t.attempt,
             output: t.output,
             durationMs: t.durationMs,
+            startedAt: t.startedAt,
+            completedAt: t.completedAt,
             cost: t.cost,
             streamText: t.rawResponse ?? '',
             activity: t.activity ?? [],
@@ -115,7 +146,7 @@ export function useExecution(id: string | undefined) {
         // Guard uses status === 'completed' (not map.has) so a node with a
         // prior failed trace is correctly promoted to 'running' when it
         // reappears in currentNodes on rerun.
-        applyCurrentNodesBackfill(map, exec.currentNodes, exec.completedNodes);
+        applyCurrentNodesBackfill(map, exec.currentNodes, exec.completedNodes, exec.status, computeCurrentNodeStarts(exec, tr));
         setNodeStates(map);
 
         // If waiting for input, synthesize the input_required event from execution state + workflow
@@ -184,12 +215,13 @@ export function useExecution(id: string | undefined) {
               const next = new Map(prev);
               const existing = next.get(waitingNode);
               if (existing) {
-                next.set(waitingNode, { ...existing, status: 'waiting_for_input' as any });
+                next.set(waitingNode, { ...existing, status: 'waiting_for_input', startedAt: existing.startedAt ?? new Date() });
               } else {
                 next.set(waitingNode, {
                   name: waitingNode,
-                  status: 'waiting_for_input' as any,
+                  status: 'waiting_for_input',
                   attempt: 1,
+                  startedAt: new Date(),
                   streamText: '',
                   activity: [],
                 });
@@ -396,6 +428,9 @@ export function useExecution(id: string | undefined) {
             name: node,
             status: 'running',
             attempt: e.data.attempt ?? 1,
+            startedAt: e.data.startedAt ?? entry.timestamp,
+            completedAt: null,
+            durationMs: 0,
             streamText: '',
             activity: [],
             renderedPrompt: e.data.renderedPrompt,
@@ -413,6 +448,8 @@ export function useExecution(id: string | undefined) {
             attempt: existing?.attempt ?? e.data.attempt ?? 1,
             output: e.data.output,
             durationMs: e.data.durationMs,
+            startedAt: existing?.startedAt ?? e.data.startedAt,
+            completedAt: e.data.completedAt ?? entry.timestamp,
             cost: e.data.cost,
             streamText: existing?.streamText ?? '',
             activity: existing?.activity ?? [],
@@ -431,6 +468,9 @@ export function useExecution(id: string | undefined) {
             name: node,
             status: 'failed',
             attempt: existing?.attempt ?? 1,
+            durationMs: e.data.durationMs ?? existing?.durationMs,
+            startedAt: existing?.startedAt ?? e.data.startedAt,
+            completedAt: e.data.completedAt ?? entry.timestamp,
             streamText: existing?.streamText ?? '',
             activity: existing?.activity ?? [],
             renderedPrompt: existing?.renderedPrompt,
@@ -447,6 +487,9 @@ export function useExecution(id: string | undefined) {
               ...existing,
               status: 'running',
               attempt: e.data.attempt ?? (existing.attempt + 1),
+              startedAt: e.data.startedAt ?? entry.timestamp,
+              completedAt: null,
+              durationMs: 0,
               streamText: '',
               activity: [],
               // Clear prompt/inputState — a new node_started event will
@@ -544,7 +587,7 @@ export function useExecution(id: string | undefined) {
           if (!node) break;
           const existing = next.get(node);
           if (existing) {
-            next.set(node, { ...existing, status: 'waiting_for_input' as any });
+            next.set(node, { ...existing, status: 'waiting_for_input', startedAt: existing.startedAt ?? entry.timestamp });
           }
           break;
         }
@@ -604,6 +647,8 @@ export function useExecution(id: string | undefined) {
         attempt: t.attempt,
         output: t.output,
         durationMs: t.durationMs,
+        startedAt: t.startedAt,
+        completedAt: t.completedAt,
         cost: t.cost,
         streamText: t.rawResponse ?? '',
         activity: t.activity ?? [],
@@ -613,13 +658,13 @@ export function useExecution(id: string | undefined) {
     // the case where retryFrom() is followed immediately by refresh() before
     // the SSE node_started event fires — without this the rerun node stays
     // 'failed' in nodeStates because no running trace exists yet.
-    applyCurrentNodesBackfill(map, exec.currentNodes, exec.completedNodes);
+    applyCurrentNodesBackfill(map, exec.currentNodes, exec.completedNodes, exec.status, computeCurrentNodeStarts(exec, tr));
     // Merge: keep SSE-provided running states, but fill in any missing nodes from traces
     setNodeStates(prev => {
       const merged = new Map(map);
       // If a node is currently running via SSE but trace shows completed, trust SSE (more recent)
       for (const [name, state] of prev) {
-        if (state.status === 'running' && (!merged.has(name) || merged.get(name)?.status !== 'completed')) {
+        if ((state.status === 'running' || state.status === 'waiting_for_input') && (!merged.has(name) || merged.get(name)?.status !== 'completed')) {
           merged.set(name, state);
         }
       }
@@ -653,6 +698,36 @@ export function useExecution(id: string | undefined) {
 
     return () => clearInterval(interval);
   }, [id, execution?.status, refresh]);
+
+  useEffect(() => {
+    const hasLiveTimedNode = Array.from(nodeStates.values()).some(state =>
+      (state.status === 'running' || state.status === 'waiting_for_input') && state.startedAt,
+    );
+    if (!hasLiveTimedNode) return;
+
+    const interval = setInterval(() => {
+      const now = Date.now();
+      setNodeStates(prev => {
+        let changed = false;
+        const next = new Map(prev);
+
+        for (const [name, state] of next) {
+          if (state.status !== 'running' && state.status !== 'waiting_for_input') continue;
+          if (!state.startedAt) continue;
+          const startedMs = new Date(state.startedAt).getTime();
+          if (!Number.isFinite(startedMs) || now < startedMs) continue;
+          const durationMs = now - startedMs;
+          if (Math.abs(durationMs - (state.durationMs ?? 0)) < 500) continue;
+          next.set(name, { ...state, durationMs });
+          changed = true;
+        }
+
+        return changed ? next : prev;
+      });
+    }, 1000);
+
+    return () => clearInterval(interval);
+  }, [nodeStates]);
 
   return {
     execution,
