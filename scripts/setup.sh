@@ -76,6 +76,24 @@ else
 fi
 
 # ---------------------------------------------------------------------------
+# Git
+# ---------------------------------------------------------------------------
+step "Checking Git"
+if have git; then
+  ok "git $(git --version 2>/dev/null | awk '{print $3}')"
+else
+  err "git not found."
+  if [ "$PLATFORM" = "macos" ]; then
+    warn "Install with: xcode-select --install   (or: brew install git), then re-run."
+  elif [ "$PLATFORM" = "linux" ]; then
+    warn "Install via your package manager (e.g. sudo apt install git, sudo dnf install git), then re-run."
+  else
+    warn "Install Git from https://git-scm.com/downloads, then re-run."
+  fi
+  exit 1
+fi
+
+# ---------------------------------------------------------------------------
 # MongoDB 7
 # ---------------------------------------------------------------------------
 step "Checking MongoDB 7"
@@ -135,7 +153,15 @@ else
   if mongo_reachable; then
     ok "MongoDB is reachable"
   else
-    warn "MongoDB still not reachable on localhost:27017. Start it manually before running 'npm start'."
+    err "MongoDB still not reachable on localhost:27017."
+    if [ "$PLATFORM" = "macos" ]; then
+      warn "Try: brew services start mongodb-community@7.0   (then re-run this script)"
+    elif [ "$PLATFORM" = "linux" ]; then
+      warn "Try: sudo systemctl start mongod   (then re-run this script)"
+    else
+      warn "Start MongoDB so it listens on localhost:27017, then re-run this script."
+    fi
+    exit 1
   fi
 fi
 
@@ -219,20 +245,81 @@ replace_placeholder JWT_ACCESS_SECRET
 replace_placeholder JWT_REFRESH_SECRET
 
 # ---------------------------------------------------------------------------
+# CLAUDE_BIN auto-detection
+#
+# Allen's CLI executor refuses any `claude` binary under node_modules/.bin/
+# (the bundled SDK CLI lacks `--agent <name>` support). If the global Claude
+# Code install lives somewhere PATH does not resolve first, the engine throws
+# a long error at first agent run. Pin the absolute path now to avoid that.
+# ---------------------------------------------------------------------------
+step "Resolving CLAUDE_BIN"
+if grep -qE "^CLAUDE_BIN=." .env; then
+  ok "CLAUDE_BIN already set in .env (leaving as-is)"
+else
+  # `which -a` lists every match on PATH; skip any bundled SDK shim.
+  CLAUDE_BIN_PATH="$(command which -a claude 2>/dev/null | grep -v '/node_modules/.bin/' | head -n1 || true)"
+  if [ -n "${CLAUDE_BIN_PATH:-}" ] && [ -x "$CLAUDE_BIN_PATH" ]; then
+    # Append rather than rewrite, since .env may not have a placeholder line.
+    if grep -qE "^# *CLAUDE_BIN=" .env; then
+      # Uncomment-and-set the existing placeholder.
+      awk -v v="$CLAUDE_BIN_PATH" 'BEGIN{FS=OFS="="} /^# *CLAUDE_BIN=/{print "CLAUDE_BIN=" v; next} {print}' .env > .env.tmp && mv .env.tmp .env
+    else
+      printf "\nCLAUDE_BIN=%s\n" "$CLAUDE_BIN_PATH" >> .env
+    fi
+    ok "Pinned CLAUDE_BIN=$CLAUDE_BIN_PATH"
+  else
+    warn "Could not auto-detect a global \`claude\` binary outside node_modules/.bin/."
+    warn "If you hit \"requires globally-installed claude binary\" errors at runtime,"
+    warn "install Claude Code per https://docs.claude.com/en/docs/claude-code/quickstart"
+    warn "and add CLAUDE_BIN=<absolute-path> to .env."
+  fi
+fi
+
+# ---------------------------------------------------------------------------
+# Health check
+#
+# Run the full health check so the user sees PASS/FAIL on each runtime
+# dependency before they ever try `npm start`. Auth checks ("Claude Code
+# authenticated") will FAIL on first setup until the user runs `claude`
+# interactively — that is expected and surfaced as a guided next step.
+# ---------------------------------------------------------------------------
+step "Running health check"
+if npm run --silent health; then
+  ok "Health check passed"
+  HEALTH_OK=1
+else
+  warn "Health check reported issues (most likely: Claude Code / Codex not authenticated yet)."
+  HEALTH_OK=0
+fi
+
+# ---------------------------------------------------------------------------
 # Done
 # ---------------------------------------------------------------------------
 step "Setup complete"
-cat <<EOF
+if [ "$HEALTH_OK" -eq 1 ]; then
+  cat <<EOF
 
-  Next steps:
-    1. Authenticate Claude Code once if you haven't: ${C_BOLD}claude${C_RESET}
-    2. Authenticate Codex once if you haven't:       ${C_BOLD}codex${C_RESET}
-    3. Check local readiness:                        ${C_BOLD}npm run health${C_RESET}
-    4. Start Allen:                                  ${C_BOLD}npm start${C_RESET}
-    5. Open the UI and create the first admin account.
+  All runtime deps look good. Next:
+    1. Start Allen:                                  ${C_BOLD}npm start${C_RESET}
+    2. Open ${C_BOLD}http://localhost:5173${C_RESET} and complete the onboarding screens
+       (account → health → repository → first workflow).
 
   Allen will be available at:
     API: http://localhost:4000
     UI:  http://localhost:5173
 
 EOF
+else
+  cat <<EOF
+
+  Setup finished but the health check above flagged something. Common fixes:
+    - Authenticate Claude Code:                      ${C_BOLD}claude${C_RESET}
+    - Authenticate Codex (optional):                 ${C_BOLD}codex${C_RESET}
+    - Re-run the health check:                       ${C_BOLD}npm run health${C_RESET}
+
+  Once health is green:
+    - Start Allen:                                   ${C_BOLD}npm start${C_RESET}
+    - Open ${C_BOLD}http://localhost:5173${C_RESET} and complete onboarding.
+
+EOF
+fi
