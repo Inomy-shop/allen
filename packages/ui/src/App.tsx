@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom';
+import { Link, NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom';
 import ErrorBoundary from './components/common/ErrorBoundary';
 import NotificationBell from './components/common/NotificationBell';
 import {
@@ -7,7 +7,7 @@ import {
   FolderGit2, MessageSquare,
   ChevronRight, ChevronLeft,
   GitPullRequest, Ticket, LogOut,
-  Sun, Moon, Search, PanelLeft, Command, Inbox, ArrowRight,
+  Sun, Moon, Search, PanelLeft, Command, ArrowRight,
   Sparkles,
 } from 'lucide-react';
 import { useSettingsStore } from './stores/settingsStore';
@@ -32,6 +32,7 @@ interface NavItem {
   badgeKey?: keyof NavCounts;
   activePrefixes?: string[];
   end?: boolean;
+  children?: Array<{ to: string; label: string }>;
 }
 
 interface CommandItem {
@@ -44,7 +45,6 @@ interface CommandItem {
 
 interface NavCounts {
   mywork?: number;
-  inbox?: number;
   chats?: number;
   tickets?: number;
   pulls?: number;
@@ -57,7 +57,7 @@ interface NavCounts {
 const NAV_GROUPS: Array<{ label: string; items: NavItem[] }> = [
   { label: '', items: [
     { to: '/', icon: Sparkles, label: 'my work', badgeKey: 'mywork', end: true },
-    { to: '/interventions', icon: Inbox, label: 'inbox', badgeKey: 'inbox' },
+    { to: '/executions', icon: Play, label: 'executions', badgeKey: 'activity', activePrefixes: ['/executions'] },
     { to: '/chats', icon: MessageSquare, label: 'chats', badgeKey: 'chats', activePrefixes: ['/chats', '/chat'] },
   ]},
   { label: 'Sources', items: [
@@ -66,9 +66,19 @@ const NAV_GROUPS: Array<{ label: string; items: NavItem[] }> = [
     { to: '/workspaces', icon: FolderGit2, label: 'workspaces', badgeKey: 'workspaces' },
   ]},
   { label: 'Org', items: [
-    { to: '/agents', icon: Users, label: 'library', activePrefixes: ['/agents', '/repos'] },
+    {
+      to: '/agents',
+      icon: Users,
+      label: 'library',
+      activePrefixes: ['/agents', '/repos'],
+      children: [
+        { to: '/agents?section=teams-agents', label: 'teams & agents' },
+        { to: '/agents?section=skills', label: 'skills' },
+        { to: '/agents?section=repos', label: 'repos' },
+        { to: '/agents?section=integrations', label: 'integrations' },
+      ],
+    },
     { to: '/workflows', icon: GitBranch, label: 'workflows', activePrefixes: ['/workflows'] },
-    { to: '/executions', icon: Play, label: 'activity', badgeKey: 'activity', activePrefixes: ['/executions'] },
   ]},
   { label: 'Personal', items: [
     { to: '/settings', icon: Settings, label: 'settings', activePrefixes: ['/settings'] },
@@ -79,14 +89,14 @@ const ROUTE_TITLES: Array<{ prefix: string; label: string }> = [
   { prefix: '/chats', label: 'Chats' },
   { prefix: '/threads', label: 'Chats' },
   { prefix: '/chat', label: 'Chat' },
-  { prefix: '/interventions', label: 'Inbox' },
+  { prefix: '/interventions', label: 'Interventions' },
   { prefix: '/tickets', label: 'Tickets' },
   { prefix: '/pull-requests', label: 'Pull requests' },
   { prefix: '/repos', label: 'Repositories' },
   { prefix: '/workspaces', label: 'Workspaces' },
   { prefix: '/agents', label: 'Library' },
   { prefix: '/workflows', label: 'Workflows' },
-  { prefix: '/executions', label: 'Activity' },
+  { prefix: '/executions', label: 'Executions' },
   { prefix: '/crons', label: 'Schedules' },
   { prefix: '/monitoring', label: 'Settings' },
   { prefix: '/learnings', label: 'Settings' },
@@ -95,11 +105,11 @@ const ROUTE_TITLES: Array<{ prefix: string; label: string }> = [
 
 const COMMANDS: CommandItem[] = [
   { id: 'my-work', label: 'Go to my work', group: 'Navigate', to: '/', icon: Sparkles },
-  { id: 'inbox', label: 'Open inbox', group: 'Navigate', to: '/interventions', icon: Inbox },
+  { id: 'executions', label: 'Open executions', group: 'Navigate', to: '/executions', icon: Play },
   { id: 'chats', label: 'Open chats', group: 'Navigate', to: '/chats', icon: MessageSquare },
   { id: 'chat', label: 'Open assistant chat', group: 'Action', to: '/chat', icon: MessageSquare },
-  { id: 'activity', label: 'View activity', group: 'Runs', to: '/executions', icon: Play },
-  { id: 'running', label: 'View running executions', group: 'Runs', to: '/executions?status=running', icon: Play },
+  { id: 'activity', label: 'View execution log', group: 'Executions', to: '/executions', icon: Play },
+  { id: 'running', label: 'View running executions', group: 'Executions', to: '/executions?status=running', icon: Play },
   { id: 'tickets', label: 'Open Linear tickets', group: 'Sources', to: '/tickets', icon: Ticket },
   { id: 'pulls', label: 'Open pull requests', group: 'Sources', to: '/pull-requests', icon: GitPullRequest },
   { id: 'workspaces', label: 'Open workspaces', group: 'Code', to: '/workspaces', icon: FolderGit2 },
@@ -332,6 +342,19 @@ function isNavItemActive(item: NavItem, pathname: string, isActive: boolean): bo
   return isActive;
 }
 
+function isNavChildActive(to: string, location: ReturnType<typeof useLocation>): boolean {
+  const [path, query = ''] = to.split('?');
+  if (location.pathname !== path) return false;
+  if (!query) return true;
+  const expected = new URLSearchParams(query);
+  const current = new URLSearchParams(location.search);
+  for (const [key, value] of expected.entries()) {
+    if (key === 'section' && value === 'teams-agents' && !current.get(key)) continue;
+    if ((current.get(key) ?? '') !== value) return false;
+  }
+  return true;
+}
+
 // ── Main App ──
 
 export default function App() {
@@ -347,6 +370,9 @@ export default function App() {
   const location = useLocation();
   const navigate = useNavigate();
   const title = routeTitle(location.pathname);
+  const [expandedNav, setExpandedNav] = useState<Record<string, boolean>>(() => ({
+    '/agents': location.pathname.startsWith('/agents'),
+  }));
   const [chatTopbarTitle, setChatTopbarTitle] = useState<string | null>(null);
   const [commandOpen, setCommandOpen] = useState(false);
   const [liveCount, setLiveCount] = useState(0);
@@ -457,7 +483,6 @@ export default function App() {
       const userSessions = sessions.status === 'fulfilled' ? (sessions.value ?? []) : [];
       setNavCounts({
         mywork: (pendingCount ?? 0) + (activeCount ?? 0),
-        inbox: pendingCount,
         chats: sessions.status === 'fulfilled' ? userSessions.length : undefined,
         tickets: tickets.status === 'fulfilled' ? (tickets.value ?? []).length : undefined,
         pulls: prs.status === 'fulfilled' ? (prs.value ?? []).length : undefined,
@@ -491,6 +516,12 @@ export default function App() {
     minSize: 180,
     maxSize: 320,
   });
+
+  const toggleNavSection = (item: NavItem) => {
+    const isActiveSection = isNavItemActive(item, location.pathname, location.pathname === item.to);
+    setExpandedNav(prev => ({ ...prev, [item.to]: !prev[item.to] }));
+    if (!isActiveSection) navigate(item.to);
+  };
 
   return (
     <div className="app-shell">
@@ -568,18 +599,31 @@ export default function App() {
                 )}
                 {group.items.map(item => (
                   <div key={item.to}>
-                    <NavLink
-                      to={item.to}
-                      end={item.end ?? item.to === '/'}
-                      className={({ isActive }) =>
-                        `nav-item ${
-                          isNavItemActive(item, location.pathname, isActive)
-                            ? 'active'
-                            : ''
-                        }`
-                      }
-                    >
-                      {({ isActive }) => (
+                    {item.children ? (
+                      <button
+                        type="button"
+                        className={`nav-item nav-accordion ${
+                          isNavItemActive(item, location.pathname, location.pathname === item.to) ? 'active' : ''
+                        }`}
+                        aria-expanded={Boolean(expandedNav[item.to])}
+                        onClick={() => toggleNavSection(item)}
+                      >
+                        <item.icon className="ico" />
+                        <span className="lbl">{item.label}</span>
+                        <ChevronRight className={`nav-caret ${expandedNav[item.to] ? 'open' : ''}`} />
+                      </button>
+                    ) : (
+                      <NavLink
+                        to={item.to}
+                        end={item.end ?? item.to === '/'}
+                        className={({ isActive }) =>
+                          `nav-item ${
+                            isNavItemActive(item, location.pathname, isActive)
+                              ? 'active'
+                              : ''
+                          }`
+                        }
+                      >
                         <>
                           <item.icon className="ico" />
                           <span className="lbl">{item.label}</span>
@@ -589,8 +633,21 @@ export default function App() {
                             </span>
                           )}
                         </>
-                      )}
-                    </NavLink>
+                      </NavLink>
+                    )}
+                    {item.children && expandedNav[item.to] && (
+                      <div className="nav-sublist">
+                        {item.children.map(child => (
+                          <Link
+                            key={child.to}
+                            to={child.to}
+                            className={`nav-subitem ${isNavChildActive(child.to, location) ? 'active' : ''}`}
+                          >
+                            {child.label}
+                          </Link>
+                        ))}
+                      </div>
+                    )}
                   </div>
                 ))}
               </div>

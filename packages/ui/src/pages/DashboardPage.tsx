@@ -626,7 +626,7 @@ export default function DashboardPage() {
       <section className="mw-sec">
         <header className="mw-sec-h">
           <h3>Needs You</h3>
-          <Link className="link" to="/interventions">Inbox <ArrowRight className="h-3 w-3" /></Link>
+          <Link className="link" to="/interventions">Interventions <ArrowRight className="h-3 w-3" /></Link>
         </header>
         {initialLoading && pendingInterventions.length === 0 ? (
           <div className="mw-needs">
@@ -717,7 +717,7 @@ export default function DashboardPage() {
       <section className="mw-sec">
         <header className="mw-sec-h">
           <h3>Recent</h3>
-          <Link className="link" to="/executions">All Activity <ArrowRight className="h-3 w-3" /></Link>
+          <Link className="link" to="/executions">All executions <ArrowRight className="h-3 w-3" /></Link>
         </header>
         {initialLoading && recent.length === 0 ? (
           <div className="mw-recent">

@@ -106,8 +106,8 @@ function ServerCard({
   }
 
   return (
-    <div className={`border rounded-lg overflow-hidden transition-colors ${server.enabled ? 'border-app bg-app-card' : 'border-app bg-app-muted/40 opacity-60'}`}>
-      <div className="flex items-center gap-3 px-4 py-3">
+    <div className={`mcp-server-card border rounded-lg overflow-hidden transition-colors ${server.enabled ? 'border-app bg-app-card' : 'border-app bg-app-muted/40 opacity-60'}`}>
+      <div className="mcp-server-row flex items-center gap-3 px-4 py-3">
         <button
           onClick={() => setExpanded(!expanded)}
           className="text-theme-muted hover:text-theme-secondary"
@@ -173,7 +173,7 @@ function ServerCard({
       </div>
 
       {expanded && (
-        <div className="px-4 py-3 border-t border-app bg-surface-200/20 space-y-2 text-xs">
+        <div className="mcp-server-details px-4 py-3 border-t border-app bg-surface-200/20 space-y-2 text-xs">
           <DetailRow label="Source">{sourceLabel}</DetailRow>
           {server.command && (
             <DetailRow label="Command">
@@ -726,12 +726,8 @@ export default function McpServerManager() {
   useEffect(() => { refresh(); }, []);
 
   return (
-    <div className="card">
-      {/* Sticky header — Add button stays visible as the list scrolls.
-          `top-0` sticks to the nearest scroll ancestor (SettingsPage's
-          overflow-auto container). Solid bg-surface-100 masks list rows
-          scrolling underneath, and z-20 keeps it above ServerCards. */}
-      <div className="sticky top-0 z-20 bg-surface-100/95 backdrop-blur-sm border-b border-app rounded-t-sm px-6 py-4">
+    <div className="mcp-settings-panel">
+      <div className="mcp-panel-head border-b border-app pb-4">
         <div className="flex items-center justify-between gap-3">
           <div className="min-w-0">
             <div className="flex items-center gap-2 mb-1">
@@ -751,7 +747,7 @@ export default function McpServerManager() {
         </div>
       </div>
 
-      <div className="p-6 space-y-3">
+      <div className="mcp-panel-body space-y-3 pt-4">
         {err && <div className="text-xs text-accent-red font-mono">{err}</div>}
 
         {loading ? (
@@ -759,7 +755,7 @@ export default function McpServerManager() {
             <Loader2 className="w-3 h-3 animate-spin" /> loading…
           </div>
         ) : servers.length === 0 ? (
-          <div className="border border-dashed border-app rounded-lg p-8 text-center">
+          <div className="py-14 text-center">
             <Server className="w-6 h-6 mx-auto text-theme-subtle mb-2" />
             <div className="text-sm text-theme-secondary font-body mb-1">No MCP servers yet</div>
             <div className="text-xs text-theme-muted font-body">
@@ -777,11 +773,11 @@ export default function McpServerManager() {
           const ownerKeys = Object.keys(grouped).sort();
 
           return (
-            <div className="space-y-4">
+            <div className="mcp-server-groups space-y-4">
               {ownerKeys.map(ownerLabel => (
-                <div key={ownerLabel}>
+                <div key={ownerLabel} className="mcp-server-group">
                   <h3 className="overline text-theme-muted mb-2 px-1">{ownerLabel}</h3>
-                  <div className="space-y-2">
+                  <div className="mcp-server-list space-y-2">
                     {grouped[ownerLabel].map((s) => (
                       <ServerCard key={s._id} server={s} onChange={refresh} />
                     ))}
