@@ -89,8 +89,28 @@ export function XTerminal({ workspaceId, terminalId = 'default', sourceType = 'w
     term.open(containerRef.current);
     fitAddon.fit();
 
+    term.attachCustomKeyEventHandler((event) => {
+      if (event.ctrlKey || event.metaKey || event.altKey) {
+        event.stopPropagation();
+      }
+      return true;
+    });
+
     termRef.current = term;
     fitRef.current = fitAddon;
+
+    // xterm should own keyboard input while focused. This lets terminal
+    // shortcuts reach the PTY without triggering surrounding app shortcuts
+    // such as command palettes, panel toggles, or canvas/editor hotkeys.
+    const stopTerminalShortcutBubble = (event: Event) => {
+      event.stopPropagation();
+    };
+    const terminalRoot = containerRef.current;
+    terminalRoot.addEventListener('keydown', stopTerminalShortcutBubble);
+    terminalRoot.addEventListener('keyup', stopTerminalShortcutBubble);
+    terminalRoot.addEventListener('keypress', stopTerminalShortcutBubble);
+    terminalRoot.addEventListener('paste', stopTerminalShortcutBubble);
+    terminalRoot.addEventListener('copy', stopTerminalShortcutBubble);
 
     // Input → WebSocket. Bound once; always reads the current wsRef.
     term.onData((data) => {
@@ -190,6 +210,11 @@ export function XTerminal({ workspaceId, terminalId = 'default', sourceType = 'w
     return () => {
       unmountedRef.current = true;
       resizeObserver.disconnect();
+      terminalRoot.removeEventListener('keydown', stopTerminalShortcutBubble);
+      terminalRoot.removeEventListener('keyup', stopTerminalShortcutBubble);
+      terminalRoot.removeEventListener('keypress', stopTerminalShortcutBubble);
+      terminalRoot.removeEventListener('paste', stopTerminalShortcutBubble);
+      terminalRoot.removeEventListener('copy', stopTerminalShortcutBubble);
       document.removeEventListener('visibilitychange', onVisible);
       window.removeEventListener('online', kickReconnect);
       if (reconnectTimerRef.current !== null) {
