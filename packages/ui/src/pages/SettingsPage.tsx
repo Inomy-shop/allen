@@ -597,7 +597,7 @@ function ShortcutsTab() {
         <div className="pref-row"><span className="pref-k">⌘ N</span><span className="pref-v">new chat</span></div>
         <div className="pref-row"><span className="pref-k">⌘ /</span><span className="pref-v">focus composer</span></div>
         <div className="pref-row"><span className="pref-k">G then E</span><span className="pref-v">go to executions</span></div>
-        <div className="pref-row"><span className="pref-k">G then M</span><span className="pref-v">go to my work</span></div>
+        <div className="pref-row"><span className="pref-k">G then M</span><span className="pref-v">go to new chat</span></div>
       </div>
     </div>
   );

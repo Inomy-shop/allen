@@ -644,7 +644,7 @@ export default function DashboardPage() {
         <div className="mw-hero-inner">
           <div className="mw-greet">
             <div className="mw-hello">
-              <span className="mw-kicker">My work</span>
+              <span className="mw-kicker">New Chat</span>
               <h1>good afternoon, {firstName}</h1>
               <p className="sub">
                 {humanApprovals.length} approvals · {inFlight.length} running · {recent.length} recent
