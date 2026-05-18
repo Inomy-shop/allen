@@ -167,17 +167,47 @@ fi
 
 # ---------------------------------------------------------------------------
 # Claude Code CLI
+#
+# IMPORTANT: do not `npm install -g @anthropic-ai/claude-code`. That npm
+# package is the Claude Agent SDK; its bundled `cli.js` lacks the
+# `--agent <name>` flag that Allen's engine requires (see
+# packages/engine/src/cli-runner.ts). Use the official standalone installer.
 # ---------------------------------------------------------------------------
+claude_has_agent_flag() {
+  command -v "$1" >/dev/null 2>&1 && "$1" --help 2>/dev/null | grep -q -- '--agent <agent>'
+}
+
 step "Checking Claude Code CLI"
+NEED_CLAUDE_INSTALL=0
 if have claude; then
-  ok "claude $(claude --version 2>/dev/null | head -n1 || echo 'installed')"
-else
-  warn "claude CLI not found. Installing globally via npm..."
-  if npm install -g @anthropic-ai/claude-code; then
-    ok "Installed Claude Code CLI"
-    warn "Authenticate it once with: claude  (then complete the login prompt)"
+  if claude_has_agent_flag claude; then
+    ok "claude $(claude --version 2>/dev/null | head -n1 || echo 'installed') (has --agent support)"
   else
-    err "Could not install Claude Code CLI. Install manually: npm install -g @anthropic-ai/claude-code"
+    warn "\`claude\` is on PATH but lacks --agent support (likely the npm SDK shim)."
+    warn "Allen's engine requires the standalone Claude Code CLI."
+    NEED_CLAUDE_INSTALL=1
+  fi
+else
+  warn "claude CLI not found."
+  NEED_CLAUDE_INSTALL=1
+fi
+
+if [ "$NEED_CLAUDE_INSTALL" -eq 1 ]; then
+  if have curl; then
+    warn "Installing the standalone Claude Code CLI via the official installer..."
+    if curl -fsSL https://claude.ai/install.sh | bash; then
+      ok "Installed Claude Code CLI (typically to ~/.local/bin/claude)"
+      warn "If \`claude\` is not on your PATH after this, add \`~/.local/bin\` to PATH and restart your shell."
+      warn "Authenticate it once with: ${C_BOLD}claude${C_RESET}"
+    else
+      err "Official Claude Code installer failed."
+      warn "Install manually from https://docs.claude.com/en/docs/claude-code/quickstart, then re-run this script."
+      exit 1
+    fi
+  else
+    err "Cannot install Claude Code: \`curl\` is not available."
+    warn "Install curl, OR install Claude Code manually from https://docs.claude.com/en/docs/claude-code/quickstart, then re-run."
+    exit 1
   fi
 fi
 
@@ -248,30 +278,36 @@ replace_placeholder JWT_REFRESH_SECRET
 # CLAUDE_BIN auto-detection
 #
 # Allen's CLI executor refuses any `claude` binary under node_modules/.bin/
-# (the bundled SDK CLI lacks `--agent <name>` support). If the global Claude
-# Code install lives somewhere PATH does not resolve first, the engine throws
-# a long error at first agent run. Pin the absolute path now to avoid that.
+# AND any binary that lacks `--agent <name>` support (the npm SDK shim does
+# not implement it). Walk every `claude` on PATH, skip node_modules/.bin
+# entries, and pin the first one whose --help advertises `--agent <agent>`.
 # ---------------------------------------------------------------------------
 step "Resolving CLAUDE_BIN"
 if grep -qE "^CLAUDE_BIN=." .env; then
   ok "CLAUDE_BIN already set in .env (leaving as-is)"
 else
-  # `which -a` lists every match on PATH; skip any bundled SDK shim.
-  CLAUDE_BIN_PATH="$(command which -a claude 2>/dev/null | grep -v '/node_modules/.bin/' | head -n1 || true)"
-  if [ -n "${CLAUDE_BIN_PATH:-}" ] && [ -x "$CLAUDE_BIN_PATH" ]; then
-    # Append rather than rewrite, since .env may not have a placeholder line.
+  CLAUDE_BIN_PATH=""
+  while IFS= read -r candidate; do
+    [ -x "$candidate" ] || continue
+    if "$candidate" --help 2>/dev/null | grep -q -- '--agent <agent>'; then
+      CLAUDE_BIN_PATH="$candidate"
+      break
+    fi
+  done < <(command which -a claude 2>/dev/null | grep -v '/node_modules/.bin/')
+
+  if [ -n "${CLAUDE_BIN_PATH:-}" ]; then
+    # Uncomment an existing `# CLAUDE_BIN=` placeholder if present, otherwise append.
     if grep -qE "^# *CLAUDE_BIN=" .env; then
-      # Uncomment-and-set the existing placeholder.
       awk -v v="$CLAUDE_BIN_PATH" 'BEGIN{FS=OFS="="} /^# *CLAUDE_BIN=/{print "CLAUDE_BIN=" v; next} {print}' .env > .env.tmp && mv .env.tmp .env
     else
       printf "\nCLAUDE_BIN=%s\n" "$CLAUDE_BIN_PATH" >> .env
     fi
-    ok "Pinned CLAUDE_BIN=$CLAUDE_BIN_PATH"
+    ok "Pinned CLAUDE_BIN=$CLAUDE_BIN_PATH (verified --agent support)"
   else
-    warn "Could not auto-detect a global \`claude\` binary outside node_modules/.bin/."
-    warn "If you hit \"requires globally-installed claude binary\" errors at runtime,"
-    warn "install Claude Code per https://docs.claude.com/en/docs/claude-code/quickstart"
-    warn "and add CLAUDE_BIN=<absolute-path> to .env."
+    warn "Could not find any \`claude\` binary with --agent support on PATH."
+    warn "Allen's engine will reject the npm SDK CLI (node_modules/.bin/claude or @anthropic-ai/claude-code global)."
+    warn "Install the standalone Claude Code CLI from https://docs.claude.com/en/docs/claude-code/quickstart"
+    warn "then re-run this script (or set CLAUDE_BIN=<absolute-path> in .env)."
   fi
 fi
 
