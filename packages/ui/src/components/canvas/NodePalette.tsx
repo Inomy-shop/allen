@@ -16,7 +16,7 @@ const paletteItems: PaletteItem[] = [
     icon: BrainCircuit,
     color: 'text-accent-blue',
     bgColor: 'hover:bg-accent-blue/10',
-    defaults: { role: 'developer', prompt: '', outputs: {} },
+    defaults: { agent: 'developer', prompt: '', outputs: {} },
   },
   {
     type: 'code',

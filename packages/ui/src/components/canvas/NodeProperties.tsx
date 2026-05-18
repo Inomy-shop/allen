@@ -1,8 +1,9 @@
 import { useState, useEffect } from 'react';
 import type { Node } from '@xyflow/react';
 import { Trash2, Plus, X } from 'lucide-react';
-import { agents as agentsApi } from '../../services/api';
+import { agents as agentsApi, mcp as mcpApi, type McpToolGroup } from '../../services/api';
 import { outputsAsKeys, mergeOutputsFromKeys } from '../../utils/outputs';
+import { ALLEN_MCP_TOOL_NAMES } from '../../lib/allen-mcp-tools';
 
 interface HumanField {
   name: string;
@@ -28,14 +29,43 @@ const builtIns = [
   'prompt-user',
 ];
 const fieldTypes = ['string', 'text', 'boolean', 'number', 'select'];
+const MCP_TOOL_REFRESH_DELAYS = [1_500, 5_000, 10_000, 20_000, 30_000];
 
 export default function NodeProperties({ node, onUpdate, onDelete, workflowInput }: Props) {
   const [localData, setLocalData] = useState<Record<string, any>>({});
   const [agentList, setAgentList] = useState<any[]>([]);
+  const [mcpToolGroups, setMcpToolGroups] = useState<McpToolGroup[]>([]);
 
   // Fetch agents from backend
   useEffect(() => {
     agentsApi.list().then(setAgentList).catch(() => {});
+    let cancelled = false;
+    const loadGroups = (refresh?: boolean) => mcpApi.tools({ refresh })
+      .then((groups) => {
+        if (!cancelled) setMcpToolGroups(groups ?? []);
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setMcpToolGroups([
+            {
+              serverName: 'allen',
+              builtIn: true,
+              enabled: true,
+              tools: ALLEN_MCP_TOOL_NAMES.map((name) => ({ name, fullName: `mcp__allen__${name}`, description: '' })),
+            },
+          ]);
+        }
+      });
+    void loadGroups();
+    const timers = MCP_TOOL_REFRESH_DELAYS.map((delay) =>
+      window.setTimeout(() => {
+        if (!cancelled) void loadGroups(false);
+      }, delay),
+    );
+    return () => {
+      cancelled = true;
+      timers.forEach(window.clearTimeout);
+    };
   }, []);
 
   useEffect(() => {
@@ -166,7 +196,16 @@ export default function NodeProperties({ node, onUpdate, onDelete, workflowInput
         <>
           <div>
             <label className="block text-xs font-label font-medium text-theme-secondary mb-1 uppercase tracking-wider">Agent</label>
-            <select className="input w-full text-xs" value={(localData.agent as string) ?? ''} onChange={e => update('agent', e.target.value)}>
+            <select
+              className="input w-full text-xs"
+              value={(localData.agent as string) ?? (localData.role as string) ?? ''}
+              onChange={e => {
+                const next: Record<string, any> = { ...localData, agent: e.target.value };
+                delete next.role;
+                setLocalData(next);
+                onUpdate(node.id, next);
+              }}
+            >
               <option value="">Select agent...</option>
               {agentList.map((a: any) => <option key={a.name} value={a.name}>{a.name}</option>)}
             </select>
@@ -185,8 +224,9 @@ export default function NodeProperties({ node, onUpdate, onDelete, workflowInput
             <label className="text-xs text-theme-secondary font-label">Resume on retry</label>
           </div>
           <AgentNodeOverrides
-            agentName={(localData.agent as string) ?? ''}
+            agentName={(localData.agent as string) ?? (localData.role as string) ?? ''}
             agentList={agentList}
+            mcpToolGroups={mcpToolGroups}
             overrides={(localData.agentOverrides as AgentOverridesValue | undefined) ?? {}}
             onChange={(next) => update('agentOverrides', next)}
           />
@@ -288,6 +328,9 @@ interface AgentOverridesValue {
   model?: string | null;
   reasoningEffort?: EffortValue | null;
   planMode?: boolean | null;
+  externalMcpServers?: string[] | null;
+  disabledAllenMcpTools?: string[] | null;
+  disabledMcpTools?: Record<string, string[]> | null;
 }
 
 // Both Claude and Codex model lists — the dropdown always shows both, grouped
@@ -313,14 +356,63 @@ function normalizeProvider(p: string | undefined): ProviderValue {
   return p === 'codex' ? 'codex' : 'claude-cli';
 }
 
+function normalizeStringArray(value: unknown): string[] {
+  return Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string' && item.length > 0) : [];
+}
+
+function normalizeDisabledMcpTools(value: unknown): Record<string, string[]> {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
+  return Object.fromEntries(
+    Object.entries(value as Record<string, unknown>)
+      .map(([server, tools]) => [server, normalizeStringArray(tools)] as const)
+      .filter(([, tools]) => tools.length > 0),
+  );
+}
+
+function mergeLegacyAllenTools(disabled: Record<string, string[]>, legacy: unknown): Record<string, string[]> {
+  const legacyTools = normalizeStringArray(legacy);
+  if (legacyTools.length === 0) return disabled;
+  return {
+    ...disabled,
+    allen: [...new Set([...(disabled.allen ?? []), ...legacyTools])],
+  };
+}
+
+function withConfiguredMcpGroups(
+  groups: McpToolGroup[],
+  configuredServers: string[],
+  disabledTools: Record<string, string[]>,
+): McpToolGroup[] {
+  const byName = new Map(groups.map((group) => [group.serverName, group]));
+  if (!byName.has('allen')) {
+    byName.set('allen', {
+      serverName: 'allen',
+      builtIn: true,
+      enabled: true,
+      tools: ALLEN_MCP_TOOL_NAMES.map((name) => ({ name, fullName: `mcp__allen__${name}`, description: '' })),
+    });
+  }
+  for (const serverName of [...configuredServers, ...Object.keys(disabledTools)]) {
+    if (!serverName || byName.has(serverName)) continue;
+    byName.set(serverName, { serverName, builtIn: false, enabled: true, tools: [] });
+  }
+  return [...byName.values()].sort((a, b) => {
+    if (a.serverName === 'allen') return -1;
+    if (b.serverName === 'allen') return 1;
+    return a.serverName.localeCompare(b.serverName);
+  });
+}
+
 function AgentNodeOverrides({
   agentName,
   agentList,
+  mcpToolGroups,
   overrides,
   onChange,
 }: {
   agentName: string;
   agentList: any[];
+  mcpToolGroups: McpToolGroup[];
   overrides: AgentOverridesValue;
   onChange: (next: AgentOverridesValue) => void;
 }) {
@@ -335,6 +427,13 @@ function AgentNodeOverrides({
   const agentModel: string | undefined = agent.model;
   const agentEffort: EffortValue | undefined = agent.reasoningEffort;
   const agentPlan: boolean | undefined = agent.planMode;
+  const agentExternalMcpServers = Array.isArray(agent.externalMcpServers)
+    ? agent.externalMcpServers as string[]
+    : null;
+  const agentDisabledMcpTools = mergeLegacyAllenTools(
+    normalizeDisabledMcpTools(agent.disabledMcpTools),
+    agent.disabledAllenMcpTools,
+  );
 
   // Effective resolved values (override wins, else agent default).
   const effectiveProvider: ProviderValue = overrides.provider ?? agentProvider;
@@ -364,6 +463,9 @@ function AgentNodeOverrides({
     if (pruned.model == null) delete pruned.model;
     if (pruned.reasoningEffort == null) delete pruned.reasoningEffort;
     if (pruned.planMode == null) delete pruned.planMode;
+    if (pruned.externalMcpServers === undefined) delete pruned.externalMcpServers;
+    if (pruned.disabledAllenMcpTools === undefined) delete pruned.disabledAllenMcpTools;
+    if (pruned.disabledMcpTools === undefined) delete pruned.disabledMcpTools;
     onChange(pruned);
   }
 
@@ -391,7 +493,51 @@ function AgentNodeOverrides({
     (overrides.provider != null) ||
     (overrides.model != null) ||
     (overrides.reasoningEffort != null) ||
-    (overrides.planMode != null);
+    (overrides.planMode != null) ||
+    (overrides.externalMcpServers !== undefined) ||
+    (overrides.disabledAllenMcpTools !== undefined) ||
+    (overrides.disabledMcpTools !== undefined);
+
+  const mcpOverrideMode: 'inherit' | 'custom' =
+    overrides.externalMcpServers === undefined &&
+    overrides.disabledMcpTools === undefined &&
+    overrides.disabledAllenMcpTools === undefined
+      ? 'inherit'
+      : 'custom';
+  const selectedExternalMcpServers = Array.isArray(overrides.externalMcpServers)
+    ? overrides.externalMcpServers
+    : [];
+  const disabledMcpTools = mergeLegacyAllenTools(
+    normalizeDisabledMcpTools(overrides.disabledMcpTools),
+    overrides.disabledAllenMcpTools,
+  );
+  const inheritedMcpLabel = agentExternalMcpServers
+    ? agentExternalMcpServers.length > 0 ? agentExternalMcpServers.join(', ') : 'none'
+    : 'all enabled';
+  const inheritedAllenDisabledCount = agentDisabledMcpTools.allen?.length ?? 0;
+  const inheritedAllenLabel = inheritedAllenDisabledCount === 0
+    ? 'all Allen checked'
+    : `${ALLEN_MCP_TOOL_NAMES.length - inheritedAllenDisabledCount}/${ALLEN_MCP_TOOL_NAMES.length} Allen checked`;
+  const visibleMcpToolGroups = withConfiguredMcpGroups(mcpToolGroups, selectedExternalMcpServers, disabledMcpTools);
+
+  function toggleExternalMcpServer(name: string): void {
+    const base = mcpOverrideMode === 'custom' ? selectedExternalMcpServers : [];
+    const next = base.includes(name) ? base.filter((server) => server !== name) : [...base, name];
+    update({ ...overrides, externalMcpServers: next, disabledMcpTools });
+  }
+
+  function toggleMcpTool(serverName: string, toolName: string): void {
+    const disabledForServer = disabledMcpTools[serverName] ?? [];
+    const next = disabledForServer.includes(toolName)
+      ? disabledForServer.filter((tool) => tool !== toolName)
+      : [...disabledForServer, toolName];
+    update({
+      ...overrides,
+      externalMcpServers: selectedExternalMcpServers,
+      disabledMcpTools: { ...disabledMcpTools, [serverName]: next },
+      disabledAllenMcpTools: undefined,
+    });
+  }
 
   return (
     <div className="mt-3 border-t border-app pt-3">
@@ -487,6 +633,100 @@ function AgentNodeOverrides({
               mode is unavailable. Switch the model back to a Claude option to use it.
             </div>
           )}
+
+          <div>
+            <label className="block overline mb-1">
+              MCP Access
+            </label>
+            <select
+              className="input w-full text-xs"
+              value={mcpOverrideMode}
+              onChange={(e) => {
+                if (e.target.value === 'inherit') {
+                  update({
+                    ...overrides,
+                    externalMcpServers: undefined,
+                    disabledMcpTools: undefined,
+                    disabledAllenMcpTools: undefined,
+                  });
+                } else {
+                  update({
+                    ...overrides,
+                    externalMcpServers: selectedExternalMcpServers,
+                    disabledMcpTools,
+                    disabledAllenMcpTools: undefined,
+                  });
+                }
+              }}
+            >
+              <option value="inherit">Inherit — external: {inheritedMcpLabel}; {inheritedAllenLabel}</option>
+              <option value="custom">Configure MCP access</option>
+            </select>
+            {mcpOverrideMode === 'custom' && (
+              <div className="mt-2 space-y-2">
+                {visibleMcpToolGroups.length === 0 ? (
+                  <div className="text-[10px] text-theme-subtle font-mono">
+                    No MCP tools available
+                  </div>
+                ) : visibleMcpToolGroups.map((group) => {
+                  const isAllen = group.serverName === 'allen';
+                  const enabled = isAllen || selectedExternalMcpServers.includes(group.serverName);
+                  const disabledForServer = disabledMcpTools[group.serverName] ?? [];
+                  return (
+                    <div key={group.serverName} className="border border-app rounded-md bg-app-muted/40">
+                      <label
+                        className={`flex items-center gap-2 text-[11px] font-mono px-2 py-1.5 rounded-t-md cursor-pointer border-b border-app ${
+                          enabled ? 'text-accent-blue' : 'text-theme-muted hover:text-theme-primary'
+                        }`}
+                      >
+                        <input
+                          type="checkbox"
+                          checked={enabled}
+                          disabled={isAllen}
+                          onChange={() => toggleExternalMcpServer(group.serverName)}
+                          className="accent-accent-blue"
+                        />
+                        <span className="truncate">{group.serverName}</span>
+                        {isAllen && <span className="text-[9px] text-theme-subtle">default</span>}
+                      </label>
+                      {enabled && (
+                        <div className="max-h-44 overflow-y-auto grid grid-cols-1 gap-1 p-1.5">
+                          {group.tools.length === 0 ? (
+                            <div className="text-[10px] text-theme-subtle font-mono px-2 py-1.5">
+                              Tool list loading...
+                            </div>
+                          ) : group.tools.map((tool) => {
+                            const checked = !disabledForServer.includes(tool.name);
+                            return (
+                              <label
+                                key={tool.fullName}
+                                className={`flex items-center gap-2 text-[11px] font-mono px-2 py-1 rounded cursor-pointer border ${
+                                  checked
+                                    ? 'bg-accent-blue/10 text-accent-blue border-accent-blue/30'
+                                    : 'bg-surface-200/60 text-theme-muted border-app hover:bg-app-muted'
+                                }`}
+                              >
+                                <input
+                                  type="checkbox"
+                                  checked={checked}
+                                  onChange={() => toggleMcpTool(group.serverName, tool.name)}
+                                  className="accent-accent-blue"
+                                />
+                                <span className="truncate">{tool.name}</span>
+                              </label>
+                            );
+                          })}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+                <p className="text-[10px] text-theme-subtle font-body leading-relaxed">
+                  Allen is selected by default. External MCP servers are off until selected.
+                </p>
+              </div>
+            )}
+          </div>
         </div>
       )}
     </div>

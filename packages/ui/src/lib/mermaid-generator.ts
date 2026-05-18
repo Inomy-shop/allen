@@ -19,7 +19,8 @@ export function generateMermaid(workflow: any): string {
 
   for (const [name, node] of Object.entries(workflow.nodes) as [string, any][]) {
     const type = node.type ?? 'agent';
-    const label = node.role ? `${name}\\n(${node.role})` : name;
+    const agent = node.agent ?? node.role;
+    const label = agent ? `${name}\\n(${agent})` : name;
 
     switch (type) {
       case 'agent':

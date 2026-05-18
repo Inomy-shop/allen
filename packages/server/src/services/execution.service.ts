@@ -103,6 +103,9 @@ async function loadAllAgents(db: Db): Promise<Record<string, AgentDef>> {
           model: 1,
           provider: 1,
           tools: 1,
+          externalMcpServers: 1,
+          disabledAllenMcpTools: 1,
+          disabledMcpTools: 1,
           type: 1,
           reasoningEffort: 1,
           planMode: 1,
@@ -118,6 +121,11 @@ async function loadAllAgents(db: Db): Promise<Record<string, AgentDef>> {
       model: a.model as string,
       provider: a.provider as AgentDef['provider'],
       tools: a.tools as string[],
+      externalMcpServers: Array.isArray(a.externalMcpServers) ? a.externalMcpServers as string[] : [],
+      disabledAllenMcpTools: Array.isArray(a.disabledAllenMcpTools) ? a.disabledAllenMcpTools as string[] : a.disabledAllenMcpTools as null | undefined,
+      disabledMcpTools: (a.disabledMcpTools && typeof a.disabledMcpTools === 'object' && !Array.isArray(a.disabledMcpTools))
+        ? a.disabledMcpTools as Record<string, string[]>
+        : undefined,
       reasoningEffort: a.reasoningEffort as AgentDef['reasoningEffort'],
       planMode: a.planMode as boolean | undefined,
       sourceRepoPath: (a.sourceRepoPath as string | undefined) || undefined,

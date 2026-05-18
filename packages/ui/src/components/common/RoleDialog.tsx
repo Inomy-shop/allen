@@ -3,6 +3,8 @@ import { X, Sparkles, FileText, Eye, Columns, Pencil, AlertCircle } from 'lucide
 import Select from './Select';
 import RoleIcon from './RoleIcon';
 import { renderMarkdown } from '../chat/ChatMessageList';
+import { mcp as mcpApi, type McpToolGroup } from '../../services/api';
+import { ALLEN_MCP_TOOL_NAMES } from '../../lib/allen-mcp-tools';
 
 const CLAUDE_MODELS = ['sonnet', 'opus', 'haiku'];
 const CODEX_MODELS = ['gpt-5.5', 'gpt-5.4', 'gpt-5.3-codex', 'gpt-5.2-codex', 'gpt-5.1-codex-max', 'gpt-5.2', 'gpt-5.1-codex-mini'];
@@ -26,6 +28,7 @@ const AGENT_TYPES = [
   { value: 'team', label: 'Team Agent — coordinates and delegates' },
   { value: 'technical', label: 'Technical Agent — executes specific tasks' },
 ];
+const MCP_TOOL_REFRESH_DELAYS = [1_500, 5_000, 10_000, 20_000, 30_000];
 
 function getModelsForProvider(provider: string): string[] {
   return provider === 'codex' ? CODEX_MODELS : CLAUDE_MODELS;
@@ -36,6 +39,31 @@ function getModelsForProvider(provider: string): string[] {
 function normalizeProviderForUi(p: unknown): string {
   if (p === 'codex') return 'codex';
   return 'claude';
+}
+
+function withConfiguredMcpGroups(
+  groups: McpToolGroup[],
+  configuredServers: string[],
+  disabledTools: Record<string, string[]>,
+): McpToolGroup[] {
+  const byName = new Map(groups.map((group) => [group.serverName, group]));
+  if (!byName.has('allen')) {
+    byName.set('allen', {
+      serverName: 'allen',
+      builtIn: true,
+      enabled: true,
+      tools: ALLEN_MCP_TOOL_NAMES.map((name) => ({ name, fullName: `mcp__allen__${name}`, description: '' })),
+    });
+  }
+  for (const serverName of [...configuredServers, ...Object.keys(disabledTools)]) {
+    if (!serverName || byName.has(serverName)) continue;
+    byName.set(serverName, { serverName, builtIn: false, enabled: true, tools: [] });
+  }
+  return [...byName.values()].sort((a, b) => {
+    if (a.serverName === 'allen') return -1;
+    if (b.serverName === 'allen') return 1;
+    return a.serverName.localeCompare(b.serverName);
+  });
 }
 
 interface RoleDialogProps {
@@ -58,6 +86,9 @@ export default function RoleDialog({ open, onClose, onSave, role }: RoleDialogPr
   const [reasoningEffort, setReasoningEffort] = useState('');
   const [planMode, setPlanMode] = useState('');
   const [tools, setTools] = useState<string[]>([]);
+  const [externalMcpServers, setExternalMcpServers] = useState<string[]>([]);
+  const [disabledMcpTools, setDisabledMcpTools] = useState<Record<string, string[]>>({});
+  const [mcpToolGroups, setMcpToolGroups] = useState<McpToolGroup[]>([]);
   const [icon, setIcon] = useState('clipboard');
   const [color, setColor] = useState('#3b82f6');
   const [agentType, setAgentType] = useState('technical');
@@ -78,6 +109,18 @@ export default function RoleDialog({ open, onClose, onSave, role }: RoleDialogPr
         role.planMode === true ? 'on' : role.planMode === false ? 'off' : '',
       );
       setTools((role.tools as string[]) ?? []);
+      setExternalMcpServers(Array.isArray(role.externalMcpServers)
+        ? (role.externalMcpServers as string[]).filter(Boolean)
+        : []);
+      const configuredDisabled = role.disabledMcpTools && typeof role.disabledMcpTools === 'object' && !Array.isArray(role.disabledMcpTools)
+        ? role.disabledMcpTools as Record<string, string[]>
+        : {};
+      setDisabledMcpTools({
+        ...configuredDisabled,
+        ...(Array.isArray(role.disabledAllenMcpTools)
+          ? { allen: [...new Set([...(configuredDisabled.allen ?? []), ...(role.disabledAllenMcpTools as string[]).filter(Boolean)])] }
+          : {}),
+      });
       setIcon((role.icon as string) ?? 'clipboard');
       setColor((role.color as string) ?? '#3b82f6');
       setAgentType((role.type as string) ?? 'technical');
@@ -92,6 +135,8 @@ export default function RoleDialog({ open, onClose, onSave, role }: RoleDialogPr
       setReasoningEffort('');
       setPlanMode('');
       setTools([]);
+      setExternalMcpServers([]);
+      setDisabledMcpTools({});
       setIcon('clipboard');
       setColor('#3b82f6');
       setAgentType('technical');
@@ -101,6 +146,36 @@ export default function RoleDialog({ open, onClose, onSave, role }: RoleDialogPr
     setError('');
   }, [open, role]);
 
+  useEffect(() => {
+    if (!open) return;
+    let cancelled = false;
+    const loadGroups = (refresh?: boolean) => mcpApi.tools({ refresh })
+      .then((groups) => {
+        if (cancelled) return;
+        setMcpToolGroups(groups ?? []);
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setMcpToolGroups([
+            {
+              serverName: 'allen',
+              builtIn: true,
+              enabled: true,
+              tools: ALLEN_MCP_TOOL_NAMES.map((name) => ({ name, fullName: `mcp__allen__${name}`, description: '' })),
+            },
+          ]);
+        }
+      });
+    void loadGroups();
+    const timers = MCP_TOOL_REFRESH_DELAYS.map((delay) =>
+      window.setTimeout(() => { void loadGroups(false); }, delay),
+    );
+    return () => {
+      cancelled = true;
+      timers.forEach(window.clearTimeout);
+    };
+  }, [open]);
+
   function handleProviderChange(val: string) {
     setProvider(val);
     const models = getModelsForProvider(val);
@@ -109,6 +184,20 @@ export default function RoleDialog({ open, onClose, onSave, role }: RoleDialogPr
 
   function toggleTool(tool: string) {
     setTools(prev => prev.includes(tool) ? prev.filter(t => t !== tool) : [...prev, tool]);
+  }
+
+  function toggleExternalMcpServer(name: string) {
+    setExternalMcpServers(prev => prev.includes(name) ? prev.filter(s => s !== name) : [...prev, name]);
+  }
+
+  function toggleMcpTool(serverName: string, toolName: string) {
+    setDisabledMcpTools(prev => {
+      const disabled = prev[serverName] ?? [];
+      const next = disabled.includes(toolName)
+        ? disabled.filter(t => t !== toolName)
+        : [...disabled, toolName];
+      return { ...prev, [serverName]: next };
+    });
   }
 
   async function handleSubmit(e: React.FormEvent) {
@@ -128,6 +217,8 @@ export default function RoleDialog({ open, onClose, onSave, role }: RoleDialogPr
         reasoningEffort: reasoningEffort || undefined,
         planMode: planMode === '' ? undefined : planMode === 'on',
         tools,
+        externalMcpServers,
+        disabledMcpTools,
         icon,
         color,
         type: agentType,
@@ -174,6 +265,7 @@ export default function RoleDialog({ open, onClose, onSave, role }: RoleDialogPr
   const wordCount = system.trim() ? system.trim().split(/\s+/).length : 0;
   const charCount = system.length;
   const lineCount = system ? system.split('\n').length : 0;
+  const visibleMcpToolGroups = withConfiguredMcpGroups(mcpToolGroups, externalMcpServers, disabledMcpTools);
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm" onClick={onClose}>
@@ -330,6 +422,70 @@ export default function RoleDialog({ open, onClose, onSave, role }: RoleDialogPr
                     </label>
                   ))}
                 </div>
+              </div>
+
+              <div>
+                <label className="font-label text-[10px] font-semibold text-theme-secondary uppercase tracking-widest mb-1.5 block">
+                  MCP Access
+                </label>
+                <div className="space-y-2">
+                  {visibleMcpToolGroups.map((group) => {
+                    const isAllen = group.serverName === 'allen';
+                    const enabled = isAllen || externalMcpServers.includes(group.serverName);
+                    const disabledForServer = disabledMcpTools[group.serverName] ?? [];
+                    return (
+                      <div key={group.serverName} className="border border-app rounded-md bg-app-muted/40">
+                        <label
+                          className={`flex items-center gap-2 text-[11px] font-mono px-2 py-1.5 rounded-t-md cursor-pointer transition-colors ${
+                            enabled ? 'text-accent-blue' : 'text-theme-muted hover:text-theme-primary'
+                          }`}
+                        >
+                          <input
+                            type="checkbox"
+                            checked={enabled}
+                            disabled={isAllen}
+                            onChange={() => toggleExternalMcpServer(group.serverName)}
+                            className="accent-accent-blue"
+                          />
+                          <span className="truncate">{group.serverName}</span>
+                          {isAllen && <span className="text-[9px] text-theme-subtle">default</span>}
+                        </label>
+                        {enabled && (
+                          <div className="max-h-44 overflow-y-auto grid grid-cols-1 gap-1 p-1.5 border-t border-app">
+                            {group.tools.length === 0 ? (
+                              <div className="text-[10px] text-theme-subtle font-mono px-2 py-1.5">
+                                Tool list loading...
+                              </div>
+                            ) : group.tools.map((tool) => {
+                              const checked = !disabledForServer.includes(tool.name);
+                              return (
+                                <label
+                                  key={tool.fullName}
+                                  className={`flex items-center gap-2 text-[11px] font-mono px-2 py-1 rounded cursor-pointer transition-colors border ${
+                                    checked
+                                      ? 'bg-accent-blue/10 text-accent-blue border-accent-blue/30'
+                                      : 'bg-surface-200/60 text-theme-muted border-app hover:bg-app-muted'
+                                  }`}
+                                >
+                                  <input
+                                    type="checkbox"
+                                    checked={checked}
+                                    onChange={() => toggleMcpTool(group.serverName, tool.name)}
+                                    className="accent-accent-blue"
+                                  />
+                                  <span className="truncate">{tool.name}</span>
+                                </label>
+                              );
+                            })}
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+                <p className="text-[10px] text-theme-subtle font-body leading-relaxed mt-1">
+                  Allen is selected by default. External MCP servers are off until selected.
+                </p>
               </div>
 
               {/* Previous prompt */}

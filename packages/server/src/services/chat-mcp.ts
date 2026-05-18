@@ -11,7 +11,10 @@ import { McpService } from './mcp.service.js';
  * Load all enabled external MCP servers from the database
  * and return them as a Claude Code SDK mcpServers config.
  */
-export async function loadExternalMcpServers(db: Db): Promise<Record<string, unknown>> {
+export async function loadExternalMcpServers(
+  db: Db,
+  externalServerNames?: string[],
+): Promise<Record<string, unknown>> {
   const service = new McpService(db);
-  return service.getEnabledAsConfig();
+  return service.getEnabledAsConfig(externalServerNames);
 }
