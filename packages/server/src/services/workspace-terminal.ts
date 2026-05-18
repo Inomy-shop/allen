@@ -114,9 +114,14 @@ function getWsPort(): number {
 
 /**
  * Start a dedicated WebSocket server for terminal PTY on its own port.
- * URL pattern: /ws/workspaces/:workspaceId/terminal/:terminalId
+ * URL patterns:
+ *   /ws/workspaces/:workspaceId/terminal/:terminalId
+ *   /ws/repos/:repoId/terminal/:terminalId
  */
-export function startTerminalWebSocketServer(getWorkspacePath: (workspaceId: string) => Promise<string | null>): void {
+export function startTerminalWebSocketServer(
+  getWorkspacePath: (workspaceId: string) => Promise<string | null>,
+  getRepoPath?: (repoId: string) => Promise<string | null>,
+): void {
   if (!pty) {
     console.warn('[terminal] Skipping WebSocket setup — node-pty not available');
     return;
@@ -136,7 +141,15 @@ export function startTerminalWebSocketServer(getWorkspacePath: (workspaceId: str
     const termMatch = url.match(/^\/ws\/workspaces\/([a-f0-9]+)\/terminal\/([a-zA-Z0-9_-]+)/);
     if (termMatch) {
       wss.handleUpgrade(request, socket, head, (ws) => {
-        handleConnection(ws, termMatch[1], termMatch[2], getWorkspacePath);
+        handleConnection(ws, 'workspace', termMatch[1], termMatch[2], getWorkspacePath);
+      });
+      return;
+    }
+
+    const repoTermMatch = url.match(/^\/ws\/repos\/([a-f0-9]+)\/terminal\/([a-zA-Z0-9_-]+)/);
+    if (repoTermMatch && getRepoPath) {
+      wss.handleUpgrade(request, socket, head, (ws) => {
+        handleConnection(ws, 'repo', repoTermMatch[1], repoTermMatch[2], getRepoPath);
       });
       return;
     }
@@ -165,16 +178,23 @@ export function startTerminalWebSocketServer(getWorkspacePath: (workspaceId: str
   });
 }
 
-async function handleConnection(ws: WebSocket, workspaceId: string, terminalId: string, getWorkspacePath: (id: string) => Promise<string | null>): Promise<void> {
-  const key = `${workspaceId}:${terminalId}`;
+async function handleConnection(
+  ws: WebSocket,
+  sourceType: 'workspace' | 'repo',
+  sourceId: string,
+  terminalId: string,
+  getPath: (id: string) => Promise<string | null>,
+): Promise<void> {
+  const sourceLabel = sourceType === 'repo' ? 'Repository' : 'Workspace';
+  const key = `${sourceType}:${sourceId}:${terminalId}`;
 
   // Reuse existing session or create new
   let session = sessions.get(key);
 
   if (!session) {
-    const cwd = await getWorkspacePath(workspaceId);
+    const cwd = await getPath(sourceId);
     if (!cwd) {
-      ws.send(JSON.stringify({ type: 'error', data: 'Workspace not found' }));
+      ws.send(JSON.stringify({ type: 'error', data: `${sourceLabel} not found` }));
       ws.close();
       return;
     }
@@ -186,14 +206,14 @@ async function handleConnection(ws: WebSocket, workspaceId: string, terminalId: 
     try {
       const st = statSync(cwd);
       if (!st.isDirectory()) {
-        ws.send(JSON.stringify({ type: 'error', data: `Workspace path is not a directory: ${cwd}` }));
+        ws.send(JSON.stringify({ type: 'error', data: `${sourceLabel} path is not a directory: ${cwd}` }));
         ws.close();
         return;
       }
     } catch (err) {
       ws.send(JSON.stringify({
         type: 'error',
-        data: `Workspace path not accessible: ${cwd} (${(err as Error).message})`,
+        data: `${sourceLabel} path not accessible: ${cwd} (${(err as Error).message})`,
       }));
       ws.close();
       return;
@@ -251,7 +271,7 @@ async function handleConnection(ws: WebSocket, workspaceId: string, terminalId: 
       });
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
-      console.error(`[terminal] Failed to spawn pty for workspace ${workspaceId} in ${cwd} with shell ${shell}:`, msg);
+      console.error(`[terminal] Failed to spawn pty for ${sourceType} ${sourceId} in ${cwd} with shell ${shell}:`, msg);
 
       // Build a user-facing hint based on the error pattern. "posix_spawnp
       // failed." almost always means node-pty's spawn-helper binary is
@@ -282,7 +302,7 @@ async function handleConnection(ws: WebSocket, workspaceId: string, terminalId: 
       return;
     }
 
-    session = { id: terminalId, workspaceId, pty: term, ws: new Set() };
+    session = { id: terminalId, workspaceId: sourceId, pty: term, ws: new Set() };
     sessions.set(key, session);
 
     // PTY output → broadcast to all connected WebSockets

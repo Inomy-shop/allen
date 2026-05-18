@@ -8,6 +8,7 @@ import '@xterm/xterm/css/xterm.css';
 interface XTerminalProps {
   workspaceId: string;
   terminalId?: string;
+  sourceType?: 'workspace' | 'repo';
   className?: string;
   /** Command to auto-run after terminal connects */
   initialCommand?: string;
@@ -20,7 +21,7 @@ const MAX_RECONNECT_ATTEMPTS = 20;
 const BASE_DELAY_MS = 500;
 const MAX_DELAY_MS = 10_000;
 
-export function XTerminal({ workspaceId, terminalId = 'default', className, initialCommand }: XTerminalProps) {
+export function XTerminal({ workspaceId, terminalId = 'default', sourceType = 'workspace', className, initialCommand }: XTerminalProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const termRef = useRef<XTerm | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
@@ -105,7 +106,8 @@ export function XTerminal({ workspaceId, terminalId = 'default', className, init
       setStatus(attemptNum === 0 ? 'connecting' : 'reconnecting');
 
       const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-      const wsUrl = `${protocol}//${window.location.host}/ws/workspaces/${workspaceId}/terminal/${terminalId}`;
+      const sourceSegment = sourceType === 'repo' ? 'repos' : 'workspaces';
+      const wsUrl = `${protocol}//${window.location.host}/ws/${sourceSegment}/${workspaceId}/terminal/${terminalId}`;
       const ws = new WebSocket(wsUrl);
       wsRef.current = ws;
 
@@ -200,7 +202,7 @@ export function XTerminal({ workspaceId, terminalId = 'default', className, init
       wsRef.current = null;
       fitRef.current = null;
     };
-  }, [workspaceId, terminalId]);
+  }, [workspaceId, terminalId, sourceType]);
 
   const badge = (() => {
     if (status === 'connected') return null;

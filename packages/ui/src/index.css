@@ -2533,6 +2533,10 @@
     @apply min-h-0 flex-1 bg-[#0d1116];
   }
 
+  .cr-files-terminal {
+    @apply flex min-h-0 flex-1 flex-col overflow-hidden;
+  }
+
   .ws-activity-row {
     @apply mb-2 grid items-start gap-3 rounded-lg border border-app bg-app-card px-3 py-2.5 text-[12px];
     grid-template-columns: 180px 180px minmax(0, 1fr);
@@ -5740,6 +5744,7 @@
   }
 
   .chat-resource-rail button {
+    position: relative;
     display: inline-flex;
     width: 30px;
     height: 30px;
@@ -5754,6 +5759,56 @@
   .chat-resource-rail button.active {
     background: rgb(var(--color-surface-200));
     color: rgb(var(--color-text-primary));
+  }
+
+  .chat-resource-rail button[data-tooltip]::after {
+    content: attr(data-tooltip);
+    position: absolute;
+    right: calc(100% + 9px);
+    top: 50%;
+    z-index: 60;
+    max-width: 180px;
+    transform: translateY(-50%) translateX(4px);
+    border: 1px solid rgb(var(--color-border-strong));
+    border-radius: 6px;
+    background: rgb(var(--color-surface-100));
+    box-shadow: var(--shadow-lg);
+    color: rgb(var(--color-text-primary));
+    font-size: 11px;
+    line-height: 1;
+    opacity: 0;
+    padding: 6px 8px;
+    pointer-events: none;
+    transition: opacity 120ms ease, transform 120ms ease;
+    white-space: nowrap;
+  }
+
+  .chat-resource-rail button[data-tooltip]::before {
+    content: "";
+    position: absolute;
+    right: calc(100% + 5px);
+    top: 50%;
+    z-index: 61;
+    width: 7px;
+    height: 7px;
+    transform: translateY(-50%) rotate(45deg);
+    border-right: 1px solid rgb(var(--color-border-strong));
+    border-top: 1px solid rgb(var(--color-border-strong));
+    background: rgb(var(--color-surface-100));
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 120ms ease;
+  }
+
+  .chat-resource-rail button[data-tooltip]:hover::after,
+  .chat-resource-rail button[data-tooltip]:focus-visible::after {
+    opacity: 1;
+    transform: translateY(-50%) translateX(0);
+  }
+
+  .chat-resource-rail button[data-tooltip]:hover::before,
+  .chat-resource-rail button[data-tooltip]:focus-visible::before {
+    opacity: 1;
   }
 
   .cr-task-panel {
