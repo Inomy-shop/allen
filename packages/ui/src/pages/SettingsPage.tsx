@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { RotateCcw, Check, Palette, Type, Sparkles, Server, User, Eye,
   Bot, Brain, Zap, Cpu, Atom, Terminal, Code, Rocket, Shield, Hexagon, Flame, Monitor, Moon, Sun,
-  Bell, Keyboard, ShieldCheck, BarChart3,
+  Bell, Keyboard, ShieldCheck, BarChart3, ChevronDown,
 } from 'lucide-react';
 import McpServerManager from '../components/settings/McpServerManager';
 import { useAuthStore } from '../stores/authStore';
@@ -28,14 +28,14 @@ const ICON_MAP: Record<string, React.ElementType> = {
 // ── Settings Tabs ──
 
 const TABS = [
-  { id: 'account', label: 'account', icon: User, adminOnly: false },
-  { id: 'appearance', label: 'appearance', icon: Palette, adminOnly: false },
-  { id: 'shortcuts', label: 'shortcuts', icon: Keyboard, adminOnly: false },
-  { id: 'notifications', label: 'notifications', icon: Bell, adminOnly: false },
-  { id: 'analytics', label: 'analytics', icon: BarChart3, adminOnly: false },
-  { id: 'learnings', label: 'learnings', icon: Brain, adminOnly: false },
-  { id: 'users', label: 'users', icon: ShieldCheck, adminOnly: true },
-  { id: 'mcp', label: 'mcp servers', icon: Server, adminOnly: false },
+  { id: 'account', label: 'General', icon: User, adminOnly: false },
+  { id: 'appearance', label: 'Appearance', icon: Palette, adminOnly: false },
+  { id: 'shortcuts', label: 'Shortcuts', icon: Keyboard, adminOnly: false },
+  { id: 'notifications', label: 'Notifications', icon: Bell, adminOnly: false },
+  { id: 'analytics', label: 'Analytics', icon: BarChart3, adminOnly: false },
+  { id: 'learnings', label: 'Learnings', icon: Brain, adminOnly: false },
+  { id: 'users', label: 'Users', icon: ShieldCheck, adminOnly: true },
+  { id: 'mcp', label: 'MCP Servers', icon: Server, adminOnly: false },
 ] as const;
 
 type TabId = (typeof TABS)[number]['id'];
@@ -62,6 +62,74 @@ function ProfileRow({ label, value }: { label: string; value: React.ReactNode })
   );
 }
 
+function SettingsSection({ title, children }: { title: string; children: React.ReactNode }) {
+  return (
+    <section className="settings-section">
+      <h2>{title}</h2>
+      <div className="settings-section-body">{children}</div>
+    </section>
+  );
+}
+
+function SettingsLine({
+  label,
+  description,
+  children,
+}: {
+  label: string;
+  description?: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <div className="settings-line">
+      <span>
+        <strong>{label}</strong>
+        {description && <em>{description}</em>}
+      </span>
+      <div className="settings-line-control">{children}</div>
+    </div>
+  );
+}
+
+function ReadOnlyInput({ value }: { value: string }) {
+  return <input className="settings-readonly-input" readOnly value={value} />;
+}
+
+function SettingsSwitch({ checked = false }: { checked?: boolean }) {
+  return (
+    <button
+      type="button"
+      className={`settings-switch ${checked ? 'active' : ''}`}
+      aria-pressed={checked}
+    >
+      <span />
+    </button>
+  );
+}
+
+function AppearancePicker() {
+  const colorMode = useSettingsStore((s) => s.colorMode);
+  const setColorMode = useSettingsStore((s) => s.setColorMode);
+  return (
+    <div className="settings-appearance-picker" aria-label="Appearance">
+      {COLOR_MODE_OPTIONS.map((option) => {
+        const Icon = option.icon;
+        return (
+          <button
+            key={option.value}
+            type="button"
+            className={colorMode === option.value ? 'active' : ''}
+            onClick={() => setColorMode(option.value)}
+            title={option.label}
+          >
+            <Icon className="h-3.5 w-3.5" />
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
 function formatProfileDate(iso: string | null): string {
   if (!iso) return '—';
   const d = new Date(iso);
@@ -77,6 +145,8 @@ function formatProfileDate(iso: string | null): string {
 
 function ProfileTab() {
   const user = useAuthStore((s) => s.user);
+  const fontName = useSettingsStore((s) => s.fontName);
+  const activeFont = FONT_PRESETS.find((font) => font.name === fontName) ?? FONT_PRESETS[0];
 
   if (!user) {
     return (
@@ -91,17 +161,82 @@ function ProfileTab() {
     );
   }
 
+  const displayName = user.name || user.email;
+  const avatarInitial = (displayName || 'A').trim().charAt(0).toUpperCase();
+
   return (
-    <div className="settings-body">
-      <div className="pref-list">
-        <ProfileRow label="name" value={user.name} />
-        <ProfileRow label="email" value={user.email} />
-        <ProfileRow label="role" value={user.role} />
-        <ProfileRow label="user id" value={<span className="mono text-[11px]">{user.id}</span>} />
-        <ProfileRow label="created" value={formatProfileDate(user.createdAt)} />
-        <ProfileRow label="last login" value={formatProfileDate(user.lastLoginAt)} />
-        {user.mustResetPassword && <ProfileRow label="password" value="reset required" />}
-      </div>
+    <div className="settings-body settings-general">
+      <SettingsSection title="Profile">
+        <div className="settings-avatar-row">
+          <span>Avatar</span>
+          <div className="settings-avatar-dot">{avatarInitial}</div>
+        </div>
+        <SettingsLine label="Full name">
+          <ReadOnlyInput value={user.name || '—'} />
+        </SettingsLine>
+        <SettingsLine label="What should Allen call you?">
+          <ReadOnlyInput value={displayName} />
+        </SettingsLine>
+        <SettingsLine label="What best describes your work?">
+          <button type="button" className="settings-select-button">
+            <span>Select</span>
+            <ChevronDown className="h-3.5 w-3.5" />
+          </button>
+        </SettingsLine>
+        <SettingsLine label="Email">
+          <span className="settings-static-value">{user.email}</span>
+        </SettingsLine>
+        <SettingsLine label="Role">
+          <span className="settings-static-value">{user.role}</span>
+        </SettingsLine>
+        <SettingsLine label="User ID">
+          <span className="settings-static-value mono">{user.id}</span>
+        </SettingsLine>
+        <SettingsLine label="Created">
+          <span className="settings-static-value">{formatProfileDate(user.createdAt)}</span>
+        </SettingsLine>
+        <SettingsLine label="Last login">
+          <span className="settings-static-value">{formatProfileDate(user.lastLoginAt)}</span>
+        </SettingsLine>
+        {user.mustResetPassword && (
+          <SettingsLine label="Password">
+            <span className="settings-static-value">reset required</span>
+          </SettingsLine>
+        )}
+      </SettingsSection>
+
+      <SettingsSection title="Preferences">
+        <SettingsLine label="Appearance">
+          <AppearancePicker />
+        </SettingsLine>
+        <SettingsLine label="Chat font">
+          <button type="button" className="settings-select-button strong">
+            <span>{activeFont.label}</span>
+            <ChevronDown className="h-3.5 w-3.5" />
+          </button>
+        </SettingsLine>
+        <SettingsLine label="Voice">
+          <button type="button" className="settings-select-button strong">
+            <span>Buttery</span>
+            <ChevronDown className="h-3.5 w-3.5" />
+          </button>
+        </SettingsLine>
+      </SettingsSection>
+
+      <SettingsSection title="Notifications">
+        <SettingsLine
+          label="Response completions"
+          description="Get notified when Allen has finished a response. Useful for long-running tasks."
+        >
+          <SettingsSwitch />
+        </SettingsLine>
+        <SettingsLine
+          label="Dispatch messages"
+          description="Get a push notification on your phone when Allen messages you in Dispatch."
+        >
+          <SettingsSwitch />
+        </SettingsLine>
+      </SettingsSection>
     </div>
   );
 }
@@ -110,7 +245,7 @@ function ProfileTab() {
 
 function UsersTab() {
   return (
-    <div className="settings-body wide">
+    <div className="settings-body wide settings-embedded-page">
       <UsersAdminPage />
     </div>
   );
@@ -461,7 +596,7 @@ function ShortcutsTab() {
         <div className="pref-row"><span className="pref-k">⌘ K</span><span className="pref-v">command palette</span></div>
         <div className="pref-row"><span className="pref-k">⌘ N</span><span className="pref-v">new chat</span></div>
         <div className="pref-row"><span className="pref-k">⌘ /</span><span className="pref-v">focus composer</span></div>
-        <div className="pref-row"><span className="pref-k">G then I</span><span className="pref-v">go to inbox</span></div>
+        <div className="pref-row"><span className="pref-k">G then E</span><span className="pref-v">go to executions</span></div>
         <div className="pref-row"><span className="pref-k">G then M</span><span className="pref-v">go to my work</span></div>
       </div>
     </div>
@@ -543,14 +678,13 @@ export default function SettingsPage() {
 
   return (
     <div className="content scroll-hide" data-screen-label="settings">
-      <div className="settings-head">
-        <h1>settings</h1>
-        <p className="sub">your preferences</p>
-        <nav className="topfilter-tabs">
+      <aside className="settings-sidebar">
+        <h1>Settings</h1>
+        <nav className="settings-nav">
           {visibleTabs.map((item) => (
             <button
               key={item.id}
-              className={`tft ${activeTab === item.id ? 'active' : ''}`}
+              className={activeTab === item.id ? 'active' : ''}
               onClick={() => navigate(`/settings/${item.id}`)}
               type="button"
             >
@@ -558,8 +692,10 @@ export default function SettingsPage() {
             </button>
           ))}
         </nav>
-      </div>
-      <TabContent />
+      </aside>
+      <main className="settings-main">
+        <TabContent />
+      </main>
     </div>
   );
 }

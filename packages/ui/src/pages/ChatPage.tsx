@@ -10,7 +10,7 @@ import ChatRunSidebar, { type ChatRunPanelTab } from '../components/chat/ChatRun
 import { ToolCallLog } from '../components/common/ToolCallLog';
 import { chat as chatApi, mcp as mcpApi, learnings as learningsApi, agents as agentsApi, repos as reposApi, type ChatQueueItem } from '../services/api';
 import { chatCodeDiffs, pullRequests as pullRequestsApi, workspaces as workspacesApi } from '../services/workspaceService';
-import { Code2, ExternalLink, FileText, GitPullRequest, ListTree, PanelRightOpen, Route, X } from 'lucide-react';
+import { Code2, ExternalLink, FileText, GitPullRequest, ListTree, PanelRightOpen, Route, Terminal, X } from 'lucide-react';
 
 type PendingSendOptions = {
   provider?: string | null;
@@ -101,6 +101,7 @@ export default function ChatPage() {
   const [toolLogOpen, setToolLogOpen] = useState(false);
   const [sidePanelOpen, setSidePanelOpen] = useState(false);
   const [sidePanelTab, setSidePanelTab] = useState<ChatRunPanelTab>('tasks');
+  const [filesViewRequest, setFilesViewRequest] = useState<{ view: 'changes' | 'browser' | 'terminal'; nonce: number } | undefined>();
   const [mcpCount, setMcpCount] = useState<{ enabled: number; connected: number }>({ enabled: 0, connected: 0 });
   const [providers, setProviders] = useState<any[]>([]);
   const [selectedProvider, setSelectedProvider] = useState('codex');
@@ -446,7 +447,10 @@ export default function ChatPage() {
     } catch {}
   }
 
-  function openSidePanel(tab: ChatRunPanelTab) {
+  function openSidePanel(tab: ChatRunPanelTab, filesView?: 'changes' | 'browser' | 'terminal') {
+    if (tab === 'files' && filesView) {
+      setFilesViewRequest(prev => ({ view: filesView, nonce: (prev?.nonce ?? 0) + 1 }));
+    }
     setSidePanelTab(tab);
     setSidePanelOpen(true);
   }
@@ -567,7 +571,7 @@ export default function ChatPage() {
       ) : messages.length === 0 && !activeSessionId && !streaming ? (
         <div className="chat-empty-stream" aria-label="New conversation" />
       ) : (
-        <ChatMessageList messages={messages} streamText={streamText} thinkingText={thinkingText} streaming={streaming} activeToolCalls={activeToolCalls} agentThreads={agentThreads} agentReports={agentReports} threadsByMessage={threadsByMessage} spawnedAgents={spawnedAgents} pendingUserQuestion={pendingUserQuestion} onAnswerUserQuestion={answerUserQuestion} onAnswerWorkflowIntervention={answerWorkflowIntervention} activeAgent={activeSession?.activeAgent} onSuggestionClick={handleSuggestionClick} onSaveToLearnings={handleSaveToLearnings} onOpenExecutionsPanel={() => openSidePanel('executions')} onOpenFilesPanel={() => openSidePanel('files')} />
+        <ChatMessageList messages={messages} streamText={streamText} thinkingText={thinkingText} streaming={streaming} activeToolCalls={activeToolCalls} agentThreads={agentThreads} agentReports={agentReports} threadsByMessage={threadsByMessage} spawnedAgents={spawnedAgents} pendingUserQuestion={pendingUserQuestion} onAnswerUserQuestion={answerUserQuestion} onAnswerWorkflowIntervention={answerWorkflowIntervention} activeAgent={activeSession?.activeAgent} onSuggestionClick={handleSuggestionClick} onSaveToLearnings={handleSaveToLearnings} onOpenExecutionsPanel={() => openSidePanel('executions')} onOpenFilesPanel={() => openSidePanel('files', 'changes')} />
       )}
       {floatingPullRequest && <FloatingPullRequestCard pullRequest={floatingPullRequest} />}
 
@@ -596,7 +600,7 @@ export default function ChatPage() {
             <button
               type="button"
               className="chat-code-summary-pill"
-              onClick={() => openSidePanel('files')}
+              onClick={() => openSidePanel('files', 'changes')}
               title="Open all code changes in this chat"
             >
               <Code2 className="h-3 w-3" />
@@ -799,20 +803,24 @@ export default function ChatPage() {
             className={sidePanelOpen ? 'active' : ''}
             onClick={() => setSidePanelOpen(value => !value)}
             title={sidePanelOpen ? 'Close resources' : 'Open resources'}
+            data-tooltip={sidePanelOpen ? 'Close resources' : 'Open resources'}
           >
             <PanelRightOpen className="h-4 w-4" />
           </button>
-          <button type="button" className={sidePanelOpen && sidePanelTab === 'tasks' ? 'active' : ''} onClick={() => openSidePanel('tasks')} title="Task sequence">
+          <button type="button" className={sidePanelOpen && sidePanelTab === 'tasks' ? 'active' : ''} onClick={() => openSidePanel('tasks')} title="Task sequence" data-tooltip="Task sequence">
             <ListTree className="h-4 w-4" />
           </button>
-          <button type="button" className={sidePanelOpen && sidePanelTab === 'executions' ? 'active' : ''} onClick={() => openSidePanel('executions')} title="Agent executions">
+          <button type="button" className={sidePanelOpen && sidePanelTab === 'executions' ? 'active' : ''} onClick={() => openSidePanel('executions')} title="Agent executions" data-tooltip="Agent executions">
             <Route className="h-4 w-4" />
           </button>
-          <button type="button" className={sidePanelOpen && sidePanelTab === 'artifacts' ? 'active' : ''} onClick={() => openSidePanel('artifacts')} title="Artifacts">
+          <button type="button" className={sidePanelOpen && sidePanelTab === 'artifacts' ? 'active' : ''} onClick={() => openSidePanel('artifacts')} title="Artifacts" data-tooltip="Artifacts">
             <FileText className="h-4 w-4" />
           </button>
-          <button type="button" className={sidePanelOpen && sidePanelTab === 'files' ? 'active' : ''} onClick={() => openSidePanel('files')} title="File changes">
+          <button type="button" className={sidePanelOpen && sidePanelTab === 'files' ? 'active' : ''} onClick={() => openSidePanel('files', 'changes')} title="File changes" data-tooltip="File changes">
             <Code2 className="h-4 w-4" />
+          </button>
+          <button type="button" onClick={() => openSidePanel('files', 'terminal')} title="Terminal" data-tooltip="Terminal">
+            <Terminal className="h-4 w-4" />
           </button>
         </nav>
       )}
@@ -824,6 +832,7 @@ export default function ChatPage() {
         open={sidePanelOpen}
         activeTab={sidePanelTab}
         onTabChange={setSidePanelTab}
+        filesViewRequest={filesViewRequest}
         onAnswerWorkflowIntervention={answerWorkflowIntervention}
         onClose={() => setSidePanelOpen(false)}
       />

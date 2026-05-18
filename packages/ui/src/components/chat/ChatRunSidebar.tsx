@@ -25,6 +25,7 @@ import {
   Route,
   Rows3,
   StopCircle,
+  Terminal,
   Timer,
   Code2,
   X,
@@ -35,6 +36,7 @@ import { chatCodeDiffs, pullRequests as pullRequestsApi, workspaces as workspace
 import { getMonacoTheme, setupMonaco } from '../../lib/monaco-theme';
 import ArtifactViewer from '../artifacts/ArtifactViewer';
 import { WorkflowInterventionAction, type WorkflowInterventionLike } from '../execution/WorkflowInterventionAction';
+import { XTerminal } from '../workspace/XTerminal';
 import { renderMarkdown } from './ChatMessageList';
 
 const FAILED_STATUSES = new Set(['failed', 'failure', 'error', 'errored']);
@@ -42,6 +44,7 @@ const CANCELLED_STATUSES = new Set(['cancelled', 'canceled']);
 const TERMINAL_STATUSES = new Set(['completed', 'merged', 'failed', 'failure', 'error', 'errored', 'cancelled', 'canceled', 'closed']);
 
 export type ChatRunPanelTab = 'tasks' | 'artifacts' | 'executions' | 'files';
+type FilePanelView = 'changes' | 'browser' | 'terminal';
 
 type RepoBrowseSource = {
   id?: string | null;
@@ -1662,16 +1665,18 @@ function FileChangesPanel({
   rootType,
   rootId,
   repoBrowseSource,
+  viewRequest,
 }: {
   runs: SpawnedAgent[];
   rootType?: 'chat' | 'workflow' | 'agent';
   rootId?: string | null;
   repoBrowseSource?: RepoBrowseSource | null;
+  viewRequest?: { view: FilePanelView; nonce: number };
 }) {
   const [files, setFiles] = useState<PanelDiffFile[]>([]);
   const [activeDiffPath, setActiveDiffPath] = useState('');
   const [diffMode, setDiffMode] = useState<'split' | 'unified'>('unified');
-  const [view, setView] = useState<'changes' | 'browser'>('changes');
+  const [view, setView] = useState<FilePanelView>('changes');
   const [workspaceFiles, setWorkspaceFiles] = useState<WorkspaceFileEntry[]>([]);
   const [browserPath, setBrowserPath] = useState('');
   const [browserContent, setBrowserContent] = useState('');
@@ -1679,6 +1684,10 @@ function FileChangesPanel({
   const [fileLoading, setFileLoading] = useState(false);
   const [browserLoading, setBrowserLoading] = useState(false);
   const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    if (viewRequest) setView(viewRequest.view);
+  }, [viewRequest]);
 
   const workspaceRefs = useMemo(() => {
     const refs: Array<{ id: string; name?: string | null; repoId?: string | null; mode: 'workspace' }> = [];
@@ -1793,6 +1802,11 @@ function FileChangesPanel({
   const additions = files.reduce((sum, file) => sum + (file.additions ?? 0), 0);
   const deletions = files.reduce((sum, file) => sum + (file.deletions ?? 0), 0);
   const activeWorkspace = workspaceRefs[0] ?? null;
+  const terminalSource = activeWorkspace?.id
+    ? { type: 'workspace' as const, id: activeWorkspace.id, name: activeWorkspace.name ?? 'Workspace terminal', href: `/workspaces/${activeWorkspace.id}` }
+    : repoBrowseSource?.id
+      ? { type: 'repo' as const, id: repoBrowseSource.id, name: repoBrowseSource.name ?? repoBrowseSource.path ?? 'Repository terminal', href: null }
+      : null;
   const activeDiff = files.find(file => file.path === activeDiffPath) ?? files[0] ?? null;
   const changedStatuses = useMemo(() => new Map(files.map(file => [file.path, changedFileStatus(file)])), [files]);
   const fileTree = useMemo(() => buildFileTree(workspaceFiles, changedStatuses), [workspaceFiles, changedStatuses]);
@@ -1879,7 +1893,6 @@ function FileChangesPanel({
     }
   }
 
-  if (loading) return <div className="cr-empty">Checking workspace changes...</div>;
   if (files.length === 0 && workspaceRefs.length === 0 && pullRequestRefs.length === 0 && !repoBrowseSource?.id) {
     return <div className="cr-empty">No file changes are linked to this chat yet.</div>;
   }
@@ -1894,6 +1907,10 @@ function FileChangesPanel({
         <button type="button" className={view === 'browser' ? 'active' : ''} onClick={() => setView('browser')} disabled={!activeWorkspace && !repoBrowseSource?.id}>
           <FolderOpen className="h-3.5 w-3.5" />
           <span>Browse</span>
+        </button>
+        <button type="button" className={view === 'terminal' ? 'active' : ''} onClick={() => setView('terminal')} disabled={!terminalSource}>
+          <Terminal className="h-3.5 w-3.5" />
+          <span>Terminal</span>
         </button>
         <span className="spacer" />
         {view === 'changes' && (
@@ -1910,7 +1927,31 @@ function FileChangesPanel({
         )}
       </div>
 
-      {view === 'changes' ? (
+      {view === 'terminal' ? (
+        <div className="cr-files-terminal ws-panel">
+          {terminalSource ? (
+            <>
+              <div className="ws-diff-h">
+                <Terminal className="h-3.5 w-3.5 text-theme-muted" />
+                <span className="truncate">{terminalSource.name}</span>
+                {terminalSource.href && (
+                  <Link to={terminalSource.href} className="btn btn-ghost btn-sm">
+                    <ExternalLink className="h-3.5 w-3.5" /> workspace
+                  </Link>
+                )}
+              </div>
+              <div className="ws-terminal-body">
+                <XTerminal workspaceId={terminalSource.id} sourceType={terminalSource.type} terminalId="chat-files" className="h-full" />
+              </div>
+            </>
+          ) : (
+            <div className="cr-empty">No workspace or repository terminal is available for this chat yet.</div>
+          )}
+        </div>
+      ) : view === 'changes' ? (
+        loading ? (
+          <div className="cr-empty">Checking workspace changes...</div>
+        ) : (
         <div className="ws-main ws-panel cr-workspace-view">
           <aside className="ws-tree scroll-hide">
             <div className="ws-tree-h">
@@ -1966,6 +2007,7 @@ function FileChangesPanel({
             </div>
           </section>
         </div>
+        )
       ) : (
         <div className="ws-files-body ws-panel cr-workspace-view">
           <aside className="ws-files-list scroll-hide">
@@ -2193,6 +2235,7 @@ export default function ChatRunSidebar({
   open,
   activeTab,
   onTabChange,
+  filesViewRequest,
   onAnswerWorkflowIntervention,
   onClose,
 }: {
@@ -2203,6 +2246,7 @@ export default function ChatRunSidebar({
   open: boolean;
   activeTab: ChatRunPanelTab;
   onTabChange: (tab: ChatRunPanelTab) => void;
+  filesViewRequest?: { view: FilePanelView; nonce: number };
   onAnswerWorkflowIntervention?: (input: WorkflowInterventionAnswer) => Promise<void> | void;
   onClose: () => void;
 }) {
@@ -2350,7 +2394,7 @@ export default function ChatRunSidebar({
           />
         )}
         {activeTab === 'artifacts' && <ChatArtifactsPanel rootType={rootType} rootId={rootId} runs={sortedRuns} />}
-        {activeTab === 'files' && <FileChangesPanel runs={sortedRuns} rootType={rootType} rootId={rootId} repoBrowseSource={repoBrowseSource} />}
+        {activeTab === 'files' && <FileChangesPanel runs={sortedRuns} rootType={rootType} rootId={rootId} repoBrowseSource={repoBrowseSource} viewRequest={filesViewRequest} />}
         </div>
       </div>
     </aside>
