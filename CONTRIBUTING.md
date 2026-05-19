@@ -17,12 +17,13 @@ Allen coordinates coding agents, workspaces, workflow traces, artifacts, and int
 ```bash
 git clone https://github.com/Kalpai-poc/allen.git
 cd allen
-npm run setup
-claude            # one-time Claude Code authentication
+./scripts/setup.sh        # installs deps; installs Node 22 via nvm if needed
+claude                    # one-time Claude Code authentication
+npm run build             # packages compile to dist/ before first run
 npm start
 ```
 
-`npm run setup` checks for Node 22+, installs MongoDB 7 (Homebrew on macOS) and the Claude Code CLI if missing, runs `npm install`, creates `.env` from `.env.example`, and generates `JWT_ACCESS_SECRET` and `JWT_REFRESH_SECRET`. The first admin account is created from the UI onboarding screen on first launch.
+`./scripts/setup.sh` installs Node 22 via nvm if Node is missing or older than 22, checks npm 10+ and git, installs MongoDB 7 (Homebrew on macOS) and the standalone Claude Code CLI if missing, runs `npm install`, creates `.env` from `.env.example`, and generates `JWT_ACCESS_SECRET` and `JWT_REFRESH_SECRET`. The first admin account is created from the UI onboarding screen on first launch.
 
 ## Before You Change Code
 

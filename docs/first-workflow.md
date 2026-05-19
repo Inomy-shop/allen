@@ -23,12 +23,12 @@ cd allen
 ## 2. Run the setup script
 
 ```bash
-npm run setup
+./scripts/setup.sh
 ```
 
 This:
 
-- Checks Node.js 22+, npm 10+, and git.
+- Checks npm 10+ and git, and installs Node 22 via nvm if Node is missing or older than 22.
 - Installs MongoDB 7 (macOS via Homebrew) or prints install instructions for your OS, then ensures it is reachable.
 - Installs the standalone Claude Code CLI via the official installer (`curl -fsSL https://claude.ai/install.sh | bash`) if missing or if the one on `PATH` lacks `--agent` support. Allen's engine requires the standalone CLI's `--agent` flag.
 - Installs the Codex CLI via `npm install -g @openai/codex` if missing.
@@ -56,9 +56,12 @@ codex     # log in with your OpenAI account
 
 After the first login each CLI persists auth on disk. Chat uses Codex by default; to use Claude Code for chat instead, set `ALLEN_DEFAULT_CHAT_PROVIDER=claude-cli` in `.env` (or pick a provider in the chat UI). Skip a CLI you do not plan to use.
 
-## 4. Start Allen
+## 4. Build and start Allen
+
+Build first — packages compile to `dist/` and the engine is imported as a built dependency:
 
 ```bash
+npm run build
 npm start
 ```
 

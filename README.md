@@ -58,7 +58,7 @@ Allen runs a multi-team organization of AI agents against your codebases. You ta
 
 ### Requirements
 
-You only need **Node.js 22+** to begin. `npm run setup` checks for and (where possible) installs the rest:
+`./scripts/setup.sh` checks for and (where possible) installs everything below — including Node 22 itself via nvm if it is missing:
 
 - Node.js 22+ and npm 10+
 - Git
@@ -78,12 +78,12 @@ cd allen
 ### 2. Run setup
 
 ```bash
-npm run setup
+./scripts/setup.sh
 ```
 
 The setup script, in order:
 
-1. Verifies Node.js 22+, npm 10+, and git.
+1. Verifies npm 10+ and git, and installs Node 22 via nvm if Node is missing or older than 22.
 2. Checks/installs MongoDB 7 (macOS via Homebrew) and ensures it is reachable on `localhost:27017`.
 3. Installs the standalone Claude Code CLI via the official installer if missing or if the one on `PATH` lacks `--agent` support.
 4. Installs the Codex CLI via npm if missing.
@@ -91,7 +91,7 @@ The setup script, in order:
 6. Creates `.env` from `.env.example`, generates `JWT_ACCESS_SECRET` / `JWT_REFRESH_SECRET`, and auto-pins `CLAUDE_BIN` to the verified standalone CLI.
 7. Runs `npm run health` and prints PASS/FAIL per dependency.
 
-Re-running is safe — it skips work already done and preserves your `.env`. If a step fails the script exits with a red error line; see [docs/troubleshooting.md → `npm run setup` Fails](docs/troubleshooting.md#npm-run-setup-fails) for the fix matrix.
+Re-running is safe — it skips work already done and preserves your `.env`. If a step fails the script exits with a red error line; see [docs/troubleshooting.md → Setup Script Fails](docs/troubleshooting.md#setup-script-fails) for the fix matrix.
 
 ### 3. Authenticate the CLIs (one-time)
 
@@ -102,9 +102,12 @@ codex     # optional: log in with your OpenAI account (skip if using claude-cli 
 
 Both CLIs persist auth on disk after first login.
 
-### 4. Start Allen
+### 4. Build and start Allen
+
+The packages compile to `dist/` and the engine is consumed as a built dependency, so build before starting:
 
 ```bash
+npm run build
 npm start
 ```
 
