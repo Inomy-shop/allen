@@ -769,7 +769,11 @@ const resumeExecution: ChatTool = {
     if (!exec) return { error: `Execution "${executionId}" not found.` };
 
     const workflowName = String(exec.workflowName ?? '');
-    const isAgentExecution = workflowName.includes(':spawn_agent/') || exec.source === 'chat' || exec.source === 'spawn';
+    const isAgentExecution =
+      workflowName.includes(':spawn_agent/') ||
+      exec.source === 'spawn' ||
+      (!exec.workflowId && exec.source === 'chat');
+    logger.debug('resume.tool.routed', { executionId, route: isAgentExecution ? 'agent' : 'workflow', workflowName });
     if (isAgentExecution) {
       const input = ((exec.input ?? {}) as Record<string, unknown>) ?? {};
       const prompt = typeof args.prompt === 'string' && args.prompt.trim()
@@ -1752,6 +1756,13 @@ async function runSpawnInBackground(
   if (activeCtx) activeCtx.pendingBackgroundTasks--;
 }
 
+// Test-injection seam — allows unit tests to spy on runSpawnInBackground.
+// The function is called via __internalsForTest so tests can replace the reference.
+export const __internalsForTest = {
+  runSpawnInBackground: (...args: Parameters<typeof runSpawnInBackground>) =>
+    runSpawnInBackground(...args),
+};
+
 /**
  * Resume a completed/failed agent execution as a new attempt on the SAME
  * executionId. Computes the next attempt number from existing traces, sets
@@ -1781,11 +1792,60 @@ export async function resumeAgentExecution(
   const role = await db.collection('agents').findOne({ name: agentName });
   if (!role) return { error: `Agent "${agentName}" not found` };
 
-  // Session id may be absent if the agent process was killed before the SDK
-  // emitted its session marker (e.g. exit 143 / SIGTERM). In that case we
-  // start a fresh session: the user gets a new attempt that re-runs from
-  // scratch with their new prompt instead of being stuck on a dead execution.
-  const sessionId = (exec.sessions as Record<string, string> | undefined)?.[agentName];
+  // ── session-id fallback chain ─────────────────────────────────────────────
+  // (1) Primary: sessions map — REQ-001
+  const sessionsMap = (exec.sessions as Record<string, string> | undefined) ?? {};
+  const fromMap = sessionsMap[agentName];
+  let sessionId: string | undefined;
+  let resolvedVia: 'sessions_map' | 'trace' | 'input' | 'none' = 'none';
+
+  if (typeof fromMap === 'string' && fromMap.trim()) {
+    sessionId = fromMap;
+    resolvedVia = 'sessions_map';
+  }
+
+  // (2) Trace fallback — REQ-002
+  if (!sessionId) {
+    const traceForSession = await db.collection('execution_traces').findOne(
+      { executionId },
+      { sort: { completedAt: -1, createdAt: -1 } },
+    );
+    const traceOutput = traceForSession?.output;
+    if (traceOutput && typeof traceOutput === 'object') {
+      const fromTrace = (traceOutput as Record<string, unknown>).session_id;
+      if (typeof fromTrace === 'string' && fromTrace.trim()) {
+        sessionId = fromTrace;
+        resolvedVia = 'trace';
+      }
+    }
+  }
+
+  // (3) Input fallback — REQ-003
+  if (!sessionId) {
+    const execInput = (exec.input as Record<string, unknown> | undefined) ?? {};
+    const fromInput = execInput.session_id;
+    if (typeof fromInput === 'string' && fromInput.trim()) {
+      sessionId = fromInput;
+      resolvedVia = 'input';
+    }
+  }
+
+  // (4) Backfill — REQ-004 (must complete BEFORE spawn — NFR-002)
+  let backfilled = false;
+  if (sessionId && (resolvedVia === 'trace' || resolvedVia === 'input')) {
+    try {
+      await db.collection('executions').updateOne(
+        { id: executionId },
+        { $set: { [`sessions.${agentName}`]: sessionId } },
+      );
+      backfilled = true;
+    } catch (err) {
+      logger.warn('resume.agent.backfill_failed', { executionId, agentName });
+      // Continue — backfill is best-effort
+    }
+  }
+
+  logger.info('resume.agent.session_resolved', { executionId, agentName });
 
   // Next attempt = max(existing attempts) + 1.
   const lastTrace = await db.collection('execution_traces')
@@ -1825,7 +1885,7 @@ export async function resumeAgentExecution(
     ?? (exec.rootExecutionId as string | undefined)
     ?? executionId;
 
-  runSpawnInBackground(
+  __internalsForTest.runSpawnInBackground(
     db,
     role as Record<string, unknown>,
     agentName,

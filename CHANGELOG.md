@@ -6,6 +6,11 @@ Allen is currently pre-release, so behavior can change between commits. Versione
 
 ## Unreleased
 
+### Fixed
+
+- **`resume_execution` — agent session continuity** (`packages/server/src/services/chat-tools.ts`): `resumeAgentExecution` now walks a three-layer fallback chain when resolving the LLM session ID: (1) `executions.sessions[agentName]` (primary, no extra query), (2) `output.session_id` from the latest `execution_traces` row (sorted `{ completedAt: -1, createdAt: -1 }`), (3) `exec.input.session_id`. When the ID is found via layers 2 or 3, it is written back to the sessions map (`$set`) before spawning the resumed process so future resumes use the fast primary path. Agents that were killed before their SDK session marker was written now resume into the same conversation instead of starting cold.
+- **`resume_execution` — workflow routing guard** (`packages/server/src/services/chat-tools.ts`): the `isAgentExecution` check now correctly excludes chat-started workflow executions (`source === 'chat'` with a truthy `workflowId`). Previously any execution with `source === 'chat'` was routed into the agent-resume path; it now reaches the checkpoint-based workflow-resume path as intended. Pure agent spawns from chat (`source === 'chat'`, no `workflowId`) continue to use the agent-resume path unchanged.
+
 ### Added
 
 - Activity page (`ExecutionListPage`) now paginates the execution list server-side: 50 executions per page, `?page=N` URL state, Previous / Next controls with a "Page X of Y" label. Controls are hidden when the total count fits on one page.
