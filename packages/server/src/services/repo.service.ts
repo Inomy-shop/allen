@@ -7,6 +7,7 @@ import { resolveRepositoriesDir } from '@allen/engine';
 import { scanRepo } from './repo-scanner.js';
 import { RepoContextScannerService } from './repo-context-scanner.service.js';
 import { RepoKnowledgeGraphService } from './repo-knowledge-graph.service.js';
+import { isContextEngineEnabled } from './context-provider-config.js';
 
 const exec = promisify(execFile);
 
@@ -135,16 +136,15 @@ export class RepoService {
 
     const result = await this.col.insertOne(doc);
 
-    // Fire deep context scan in the background — don't await, don't fail create
-    this.contextScanner.scheduleScan(String(result.insertedId)).catch((err) => {
-      console.error(`[repos] failed to schedule deep scan for ${result.insertedId}:`, err);
-    });
-    this.knowledgeGraph.scheduleIndex(String(result.insertedId)).catch((err) => {
-      console.error(`[repos] failed to schedule knowledge graph index for ${result.insertedId}:`, err);
-    });
-    this.knowledgeGraph.scheduleIndex(String(result.insertedId)).catch((err) => {
-      console.error(`[repos] failed to schedule knowledge graph index for ${result.insertedId}:`, err);
-    });
+    if (isContextEngineEnabled()) {
+      // Fire context scans in the background — don't await, don't fail create.
+      this.contextScanner.scheduleScan(String(result.insertedId)).catch((err) => {
+        console.error(`[repos] failed to schedule deep scan for ${result.insertedId}:`, err);
+      });
+      this.knowledgeGraph.scheduleIndex(String(result.insertedId)).catch((err) => {
+        console.error(`[repos] failed to schedule knowledge graph index for ${result.insertedId}:`, err);
+      });
+    }
 
     return { ...doc, _id: result.insertedId };
   }
@@ -403,31 +403,37 @@ export class RepoService {
 
     const result = await this.col.insertOne(doc);
 
-    // Fire deep context scan in the background
-    this.contextScanner.scheduleScan(String(result.insertedId)).catch((err) => {
-      console.error(`[repos] failed to schedule deep scan for ${result.insertedId}:`, err);
-    });
+    if (isContextEngineEnabled()) {
+      // Fire deep context scan in the background.
+      this.contextScanner.scheduleScan(String(result.insertedId)).catch((err) => {
+        console.error(`[repos] failed to schedule deep scan for ${result.insertedId}:`, err);
+      });
+    }
 
     return { ...doc, _id: result.insertedId };
   }
 
   /** Trigger a fresh deep context scan for a repo. Async — returns immediately. */
   async rescanContext(id: string): Promise<{ scheduled: boolean; reason?: string }> {
+    if (!isContextEngineEnabled()) return { scheduled: false, reason: 'Context provider is disabled' };
     return this.contextScanner.scheduleScan(id);
   }
 
   async indexKnowledgeGraph(id: string): Promise<{ scheduled: boolean; reason?: string; executionId?: string }> {
+    if (!isContextEngineEnabled()) return { scheduled: false, reason: 'Context provider is disabled' };
     return this.knowledgeGraph.scheduleIndex(id);
   }
 
   /** Fetch the stored detailed context document for a repo. */
   async getContext(id: string): Promise<Record<string, unknown> | null> {
+    if (!isContextEngineEnabled()) return null;
     const ctx = await this.contextScanner.getByRepoId(id);
     return ctx as unknown as Record<string, unknown> | null;
   }
 
   /** Fetch context by repo path (used by MCP get_repo_context tool). */
   async getContextByPath(repoPath: string): Promise<Record<string, unknown> | null> {
+    if (!isContextEngineEnabled()) return null;
     const repo = await this.col.findOne({ path: repoPath });
     if (!repo) return null;
     const ctx = await this.contextScanner.getByRepoId(String(repo._id));
@@ -555,8 +561,9 @@ export class RepoService {
     };
     await this.col.updateOne({ _id: new ObjectId(id) }, { $set: updates });
 
-    // Kick off the deep agent scan in the background
-    const deepResult = await this.contextScanner.scheduleScan(id);
+    const deepResult = isContextEngineEnabled()
+      ? await this.contextScanner.scheduleScan(id)
+      : { scheduled: false, reason: 'Context provider is disabled' };
 
     return { ...existing, ...updates, deepScan: deepResult };
   }

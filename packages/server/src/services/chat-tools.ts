@@ -18,6 +18,7 @@ import { monitoringAgentTools } from './monitoring-agent-tools.js';
 import { buildRepoContextBlock } from './repo-context-builder.js';
 import { RepoKnowledgeGraphService } from './repo-knowledge-graph.service.js';
 import { ContextEvaluationService } from './context-evaluation.service.js';
+import { isContextEngineEnabled } from './context-provider-config.js';
 import { withRepoKnowledgeGraphPersistenceGuidance } from './repo-knowledge-graph-persistence-guidance.js';
 import { AGENT_FALLBACK_CWD } from './chat-providers.js';
 import { MonitoringService } from './self-healing-monitor.service.js';
@@ -1225,8 +1226,9 @@ async function runSpawnInBackground(
   // is the repo or a workspace clone (the common case), the agent has
   // filesystem access via Read/Grep/Glob — context injection is redundant and
   // burns tokens. Always skip for the scanner itself to avoid circularity.
+  const contextEngineEnabled = isContextEngineEnabled();
   let repoContextBlock = '';
-  if (repoPath && agentName !== 'repo-scanner' && isEphemeralCwd(repoPath)) {
+  if (contextEngineEnabled && repoPath && agentName !== 'repo-scanner' && isEphemeralCwd(repoPath)) {
     try {
       repoContextBlock = await buildRepoContextBlock(db, repoPath);
       if (repoContextBlock) {
@@ -1250,7 +1252,7 @@ async function runSpawnInBackground(
     systemPromptContextInjected?: boolean;
   } | null = null;
   let repoKnowledgeSystemPromptBlock = '';
-  if (repoPath && agentName !== 'repo-knowledge-graph-indexer') {
+  if (contextEngineEnabled && repoPath && agentName !== 'repo-knowledge-graph-indexer') {
     try {
       const repoKnowledge = new RepoKnowledgeGraphService(db);
       const packet = await repoKnowledge.buildNodeContextPacket({
@@ -1278,6 +1280,7 @@ async function runSpawnInBackground(
   }
 
   const repoKnowledgeEnv = (): Record<string, string> => {
+    if (!contextEngineEnabled) return {};
     if (repoKnowledgePacketSummary) {
       return {
         ALLEN_REPO_KNOWLEDGE_PACKET_ID: repoKnowledgePacketSummary.packetId,
@@ -1301,14 +1304,20 @@ async function runSpawnInBackground(
 
   const initialRenderedPrompt = prompt;
   const roleSystem = (role.system as string) ?? '';
-  const roleSystemWithGraphPersistenceGuidance = withRepoKnowledgeGraphPersistenceGuidance(roleSystem, {
-    agentName,
-    prompt: initialRenderedPrompt,
-    repoPath,
-  });
+  const roleSystemWithGraphPersistenceGuidance = contextEngineEnabled
+    ? withRepoKnowledgeGraphPersistenceGuidance(roleSystem, {
+      agentName,
+      prompt: initialRenderedPrompt,
+      repoPath,
+    })
+    : roleSystem;
   const repoContextLoadingGuidanceAlreadyPresent = hasRepoContextLoadingGuidance(roleSystemWithGraphPersistenceGuidance);
-  const roleSystemWithRepoContextGuidance = withRepoContextLoadingGuidance(roleSystemWithGraphPersistenceGuidance);
-  const roleSystemWithMandatoryRepoContext = withMandatoryRepoContext(roleSystemWithRepoContextGuidance, repoKnowledgeSystemPromptBlock);
+  const roleSystemWithRepoContextGuidance = contextEngineEnabled
+    ? withRepoContextLoadingGuidance(roleSystemWithGraphPersistenceGuidance)
+    : roleSystemWithGraphPersistenceGuidance;
+  const roleSystemWithMandatoryRepoContext = contextEngineEnabled
+    ? withMandatoryRepoContext(roleSystemWithRepoContextGuidance, repoKnowledgeSystemPromptBlock)
+    : roleSystemWithRepoContextGuidance;
   const repoContextLoadingGuidancePresent = hasRepoContextLoadingGuidance(roleSystemWithRepoContextGuidance);
   const repoContextLoadingGuidanceInjected =
     !repoContextLoadingGuidanceAlreadyPresent && repoContextLoadingGuidancePresent;
@@ -2494,9 +2503,11 @@ const submitExecutionInput: ChatTool = {
         scope: scope as 'requirements' | 'architecture' | 'technical_design' | 'all' | undefined,
         answered_by_user_id: 'chat',
       });
-      new ContextEvaluationService(db).reevaluateExecution(intervention.workflow_run_id).catch((err) => {
-        logger.warn('[chat-tools] context evaluation refresh after intervention failed', { executionId: intervention.workflow_run_id, error: (err as Error).message });
-      });
+      if (isContextEngineEnabled()) {
+        new ContextEvaluationService(db).reevaluateExecution(intervention.workflow_run_id).catch((err) => {
+          logger.warn('[chat-tools] context evaluation refresh after intervention failed', { executionId: intervention.workflow_run_id, error: (err as Error).message });
+        });
+      }
 
       return {
         message: `Intervention ${interventionId} resolved with "${decision}".`,
@@ -3194,13 +3205,15 @@ async function runAgentTurn(
   const prevCtx = activeCtx ? { ...activeCtx } : undefined;
   if (activeCtx) { activeCtx.currentAgent = targetName; activeCtx.delegationDepth = currentDepth; activeCtx.currentConversationId = convId; }
 
-  let systemPrompt = resumeSessionId ? undefined : withRepoContextLoadingGuidance(buildDelegationPrompt(targetAgent, fromAgent, currentDepth, conversationService.maxDepth, cwd));
+  const contextEngineEnabled = isContextEngineEnabled();
+  const baseSystemPrompt = buildDelegationPrompt(targetAgent, fromAgent, currentDepth, conversationService.maxDepth, cwd);
+  let systemPrompt = resumeSessionId ? undefined : (contextEngineEnabled ? withRepoContextLoadingGuidance(baseSystemPrompt) : baseSystemPrompt);
 
   // Inject the deep repo context block (skip for the scanner itself).
   // buildDelegationPrompt already appended the WORKSPACE CONSTRAINT section at the
   // tail when cwd is set, so we splice the repo context in right before it to
   // preserve ordering: base → repoContext → workspaceConstraint.
-  if (systemPrompt && cwd && targetName !== 'repo-scanner' && isEphemeralCwd(cwd)) {
+  if (contextEngineEnabled && systemPrompt && cwd && targetName !== 'repo-scanner' && isEphemeralCwd(cwd)) {
     try {
       const repoContextBlock = await buildRepoContextBlock(db, cwd);
       if (repoContextBlock) {

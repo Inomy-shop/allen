@@ -14,6 +14,7 @@ import {
   type CogneeSidecarProgress,
 } from './repo-context-cognee-provider.js';
 import { normalizeUsageArray } from './repo-knowledge-graph-usage.js';
+import { contextProviderDisabledError, isCogneeContextEnabled } from './context-provider-config.js';
 
 const exec = promisify(execFile);
 const DEFAULT_COGNEE_STALE_MS = 10 * 60_000;
@@ -109,6 +110,7 @@ export class CogneeMemoryService {
   }
 
   async getStatus(repoId: string): Promise<CogneeDatasetStatus | null> {
+    if (!isCogneeContextEnabled()) return null;
     const status = await this.statuses.findOne({ repoId });
     if (status?.status === 'running' && !this.runningBuilds.has(repoId) && isStaleRunningStatus(status)) {
       await this.markStaleFailed(repoId, status);
@@ -118,6 +120,7 @@ export class CogneeMemoryService {
   }
 
   async refreshRepo(repoId: string, options: { pullLatest?: boolean; cleanRebuild?: boolean } = {}): Promise<CogneeDatasetStatus> {
+    if (!isCogneeContextEnabled()) throw contextProviderDisabledError('Cognee context provider is disabled.');
     const input = await this.resolveRepoInput(repoId, options);
     const controller = new AbortController();
     this.runningBuilds.add(repoId);
@@ -131,6 +134,7 @@ export class CogneeMemoryService {
   }
 
   async scheduleRefreshRepo(repoId: string, options: { pullLatest?: boolean; cleanRebuild?: boolean } = {}): Promise<CogneeDatasetStatus> {
+    if (!isCogneeContextEnabled()) throw contextProviderDisabledError('Cognee context provider is disabled.');
     const existing = await this.statuses.findOne({ repoId });
     if (this.runningBuilds.has(repoId)) {
       return this.decorateStatus(existing ?? await this.createInitialRunningStatus(await this.resolveRepoInput(repoId, options)))!;
@@ -153,6 +157,7 @@ export class CogneeMemoryService {
   }
 
   async stopRefreshRepo(repoId: string): Promise<CogneeDatasetStatus> {
+    if (!isCogneeContextEnabled()) throw contextProviderDisabledError('Cognee context provider is disabled.');
     const existing = await this.statuses.findOne({ repoId });
     const controller = this.buildControllers.get(repoId);
     if (controller) {

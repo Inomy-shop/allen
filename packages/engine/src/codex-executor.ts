@@ -103,7 +103,12 @@ export async function executeCodexNode(
     // via the synced Codex config). Non-interactive guidance is layered on top
     // so codex workflow runs can't call ask_user / delegate_to_agent (no chat
     // surface to resolve them on).
-    const systemPrefix = withNonInteractiveGuidance(withMandatoryRepoContext(withArtifactsGuidance(withRepoContextLoadingGuidance(role?.system)), repoKnowledgeContext?.systemPromptBlock));
+    let systemPrefix = withArtifactsGuidance(role?.system);
+    if (repoKnowledgeContext) {
+      systemPrefix = withRepoContextLoadingGuidance(systemPrefix);
+      systemPrefix = withMandatoryRepoContext(systemPrefix, repoKnowledgeContext.systemPromptBlock);
+    }
+    systemPrefix = withNonInteractiveGuidance(systemPrefix);
     repoContextLoadingGuidancePresent = hasRepoContextLoadingGuidance(systemPrefix);
     repoContextLoadingGuidanceInjected =
       !repoContextLoadingGuidanceAlreadyPresent && repoContextLoadingGuidancePresent;

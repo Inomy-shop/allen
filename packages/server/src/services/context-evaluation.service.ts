@@ -7,6 +7,7 @@ import type { Collection, Db } from 'mongodb';
 import { normalizeUsageArray } from './repo-knowledge-graph-usage.js';
 import { firstString, isRecord } from './repo-knowledge-graph-utils.js';
 import { resolveAllenPython } from './python-runtime.js';
+import { isContextEngineEnabled } from './context-provider-config.js';
 
 export type ContextEvaluationStatus = 'passed' | 'warning' | 'failed';
 export type SemanticEvaluationStatus = 'disabled' | 'queued' | 'running' | 'completed' | 'failed';
@@ -66,6 +67,7 @@ export class ContextEvaluationService {
   }
 
   async evaluateUsageTrace(input: EvaluationInput): Promise<Record<string, unknown> | null> {
+    if (!isContextEngineEnabled()) return null;
     const [packet, usageRow, trace, existing] = await Promise.all([
       this.packets.findOne({ packetId: input.packetId }),
       input.usageTraceId
@@ -134,6 +136,7 @@ export class ContextEvaluationService {
   }
 
   async runPendingSemanticEvaluations(limit = 10): Promise<number> {
+    if (!isContextEngineEnabled()) return 0;
     if (!isDeepEvalEnabled()) return 0;
     if (semanticMode() !== 'per_node') return 0;
     const now = new Date();
@@ -168,6 +171,7 @@ export class ContextEvaluationService {
   }
 
   async retrySemanticEvaluation(traceId: string): Promise<boolean> {
+    if (!isContextEngineEnabled()) return false;
     if (semanticMode() !== 'per_node') return false;
     const result = await this.evaluations.updateOne(
       { traceId },
@@ -188,6 +192,7 @@ export class ContextEvaluationService {
   }
 
   async runSemanticEvaluation(traceId: string): Promise<Record<string, unknown> | null> {
+    if (!isContextEngineEnabled()) return null;
     if (!isDeepEvalEnabled()) return null;
     if (semanticMode() !== 'per_node') return null;
     const evaluation = await this.evaluations.findOne({ traceId });
@@ -273,6 +278,7 @@ export class ContextEvaluationService {
   }
 
   async reevaluateExecution(executionId: string): Promise<number> {
+    if (!isContextEngineEnabled()) return 0;
     const usageRows = await this.usage.find({
       $or: [
         { executionId },

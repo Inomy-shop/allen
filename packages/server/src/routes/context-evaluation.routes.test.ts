@@ -1,7 +1,7 @@
 import { createHmac } from 'node:crypto';
 import express from 'express';
 import request from 'supertest';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { internalContextEvaluationRoutes } from './context-evaluation.routes.js';
 import { runChatLLM } from '../services/chat-llm.js';
 
@@ -17,8 +17,16 @@ vi.mock('../services/chat-llm.js', () => ({
 }));
 
 describe('internalContextEvaluationRoutes', () => {
+  const originalContextProvider = process.env.ALLEN_CONTEXT_PROVIDER;
+
   beforeEach(() => {
+    process.env.ALLEN_CONTEXT_PROVIDER = 'graph';
     vi.clearAllMocks();
+  });
+
+  afterEach(() => {
+    if (originalContextProvider === undefined) delete process.env.ALLEN_CONTEXT_PROVIDER;
+    else process.env.ALLEN_CONTEXT_PROVIDER = originalContextProvider;
   });
 
   it('verifies HMAC against the exact raw JSON body', async () => {
@@ -62,6 +70,7 @@ describe('internalContextEvaluationRoutes', () => {
   });
 
   it('serves Cognee OpenAI-compatible chat completions through Allen Codex', async () => {
+    process.env.ALLEN_CONTEXT_PROVIDER = 'cognee';
     process.env.JWT_ACCESS_SECRET = 'test-context-eval-secret';
     const app = express();
     app.use('/api/internal/context-evaluation', express.raw({ type: 'application/json' }), internalContextEvaluationRoutes({} as any));

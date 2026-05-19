@@ -73,7 +73,8 @@ async function request<T>(path: string, options: RequestInit = {}, signal?: Abor
     || path.startsWith('/auth/refresh')
     || path.startsWith('/auth/bootstrap')
     || path.startsWith('/system/onboarding-status')
-    || path.startsWith('/system/health');
+    || path.startsWith('/system/health')
+    || path.startsWith('/system/runtime-config');
   const token = isPublicAuth ? null : useAuthStore.getState().accessToken;
 
   let res = await doFetch(path, options, token, signal);
@@ -1106,6 +1107,14 @@ export const system = {
         };
       }>;
     }>('/system/health'),
+  runtimeConfig: () =>
+    request<{
+      contextEngine: {
+        enabled: boolean;
+        provider: 'allen' | 'cognee' | 'cognee_memory' | null;
+        cogneeEnabled: boolean;
+      };
+    }>('/system/runtime-config'),
   verifySsh: (host = 'github.com') =>
     request<{
       ok: boolean;

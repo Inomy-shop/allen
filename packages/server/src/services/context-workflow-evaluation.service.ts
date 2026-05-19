@@ -9,6 +9,7 @@ import { firstString, isRecord } from './repo-knowledge-graph-utils.js';
 import { normalizeUsageArray } from './repo-knowledge-graph-usage.js';
 import { buildWorkflowSemanticEvaluationPromptArtifacts } from './context-workflow-evaluation-prompt.js';
 import { resolveAllenPython } from './python-runtime.js';
+import { isContextEngineEnabled } from './context-provider-config.js';
 
 type WorkflowSemanticStatus = 'queued' | 'running' | 'completed' | 'failed';
 
@@ -678,7 +679,8 @@ function workflowJudgeSecret(): string {
 }
 
 function isWorkflowDeepEvalEnabled(): boolean {
-  return (process.env.ALLEN_CONTEXT_SEMANTIC_EVALUATOR ?? '').toLowerCase() === 'deepeval'
+  return isContextEngineEnabled()
+    && (process.env.ALLEN_CONTEXT_SEMANTIC_EVALUATOR ?? '').toLowerCase() === 'deepeval'
     && (process.env.ALLEN_CONTEXT_SEMANTIC_MODE ?? 'workflow_summary').toLowerCase() !== 'per_node';
 }
 

@@ -126,6 +126,7 @@ async function main(): Promise<void> {
         'resolve-pr-reviews',
         'allen-self-healing-monitor-hourly',
         'self-healing-incident-triage',
+        'bug-fix-by-severity',
       ],
     );
   }

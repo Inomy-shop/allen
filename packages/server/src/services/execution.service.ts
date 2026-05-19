@@ -28,6 +28,7 @@ import { RepoKnowledgeGraphService } from './repo-knowledge-graph.service.js';
 import { ContextEvaluationService } from './context-evaluation.service.js';
 import { ContextWorkflowEvaluationService } from './context-workflow-evaluation.service.js';
 import { hydrateTraceContextEvaluations } from './context-evaluation-trace-hydrator.js';
+import { isContextEngineEnabled } from './context-provider-config.js';
 
 /**
  * Build the in-process service hook bundle the engine passes to built-ins.
@@ -39,7 +40,7 @@ function buildEngineServices(db: Db): EngineConfig['services'] {
   const wsManager = new WorkspaceManager(db);
   const artifactService = new ArtifactService(db);
   const repoKnowledge = new RepoKnowledgeGraphService(db);
-  return {
+  const services: EngineConfig['services'] = {
     workspaces: {
       create: async (payload) => {
         const ws = await wsManager.create(payload);
@@ -88,11 +89,14 @@ function buildEngineServices(db: Db): EngineConfig['services'] {
         }));
       },
     },
-    repoKnowledge: {
+  };
+  if (isContextEngineEnabled()) {
+    services.repoKnowledge = {
       buildNodeContextPacket: (input) => repoKnowledge.buildNodeContextPacket(input),
       recordContextUsage: (input) => repoKnowledge.recordContextUsage(input),
-    },
-  };
+    };
+  }
+  return services;
 }
 
 // Track running engines by executionId
@@ -1163,6 +1167,7 @@ export class ExecutionService {
   }
 
   private async enqueueWorkflowContextEvaluation(executionId: string, reason = 'workflow_terminal', force = false): Promise<void> {
+    if (!isContextEngineEnabled()) return;
     const exec = await this.stateManager.getExecution(executionId).catch(() => null);
     if (!exec || (exec.status !== 'completed' && exec.status !== 'failed')) return;
     const service = new ContextWorkflowEvaluationService(this.db);
@@ -1174,6 +1179,7 @@ export class ExecutionService {
   }
 
   async rerunWorkflowContextEvaluation(executionId: string): Promise<Record<string, unknown> | null> {
+    if (!isContextEngineEnabled()) return null;
     const exec = await this.stateManager.getExecution(executionId).catch(() => null);
     if (!exec) throw new Error('Execution not found');
     if (exec.status !== 'completed' && exec.status !== 'failed') {
@@ -1248,12 +1254,14 @@ export class ExecutionService {
       createdBy,
     };
     await this.stateManager.appendFeedback(executionId, entry);
-    new ContextEvaluationService(this.db).reevaluateExecution(executionId).catch((err) => {
-      logger.warn('context evaluation refresh after feedback failed', { executionId, error: (err as Error).message });
-    });
-    this.enqueueWorkflowContextEvaluation(executionId, 'feedback', true).catch((err) => {
-      logger.warn('workflow context semantic evaluation enqueue after feedback failed', { executionId, error: (err as Error).message });
-    });
+    if (isContextEngineEnabled()) {
+      new ContextEvaluationService(this.db).reevaluateExecution(executionId).catch((err) => {
+        logger.warn('context evaluation refresh after feedback failed', { executionId, error: (err as Error).message });
+      });
+      this.enqueueWorkflowContextEvaluation(executionId, 'feedback', true).catch((err) => {
+        logger.warn('workflow context semantic evaluation enqueue after feedback failed', { executionId, error: (err as Error).message });
+      });
+    }
     return entry;
   }
 

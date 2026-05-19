@@ -58,6 +58,7 @@ import {
 import { arrayOfStrings, firstString, hashJson, normalizeKind, normalizeRelation, sha256, stableNodeKey } from './repo-knowledge-graph-utils.js';
 import { ContextEvaluationService } from './context-evaluation.service.js';
 import { ContextWorkflowEvaluationService } from './context-workflow-evaluation.service.js';
+import { contextProviderDisabledError, isContextEngineEnabled } from './context-provider-config.js';
 
 export { KNOWLEDGE_GRAPH_INDEX_VERSION } from './repo-knowledge-graph.types.js';
 export type { KnowledgeEdgeRecord, KnowledgeNodeRecord } from './repo-knowledge-graph.types.js';
@@ -85,6 +86,7 @@ export class RepoKnowledgeGraphService {
   }
 
   async scheduleIndex(repoId: string): Promise<{ scheduled: boolean; reason?: string; executionId?: string }> {
+    if (!isContextEngineEnabled()) return { scheduled: false, reason: 'Context provider is disabled' };
     const { ObjectId } = await import('mongodb');
     const repo = await this.repos.findOne({ _id: new ObjectId(repoId) });
     if (!repo) return { scheduled: false, reason: 'Repo not found' };
@@ -125,6 +127,7 @@ export class RepoKnowledgeGraphService {
     sourceExecutionId?: string;
     source?: 'api' | 'agent_tool';
   }): Promise<{ repoId: string; indexId: string; nodeCount: number; edgeCount: number; latest: true }> {
+    if (!isContextEngineEnabled()) throw contextProviderDisabledError();
     const repo = input.repoId
       ? await this.repoById(input.repoId)
       : await resolveRepoFromPath(this.db, input.repoPath);
@@ -163,6 +166,7 @@ export class RepoKnowledgeGraphService {
     rootExecutionId?: string;
     provider?: RepoContextProvider;
   }): Promise<{ packetId: string; promptBlock: string; systemPromptBlock: string; traceSummary: any } | null> {
+    if (!isContextEngineEnabled()) return null;
     const pathHint = firstString(input.state.worktree_path, input.state.repo_path, input.state.repository_path);
     const repo = await resolveRepoFromPath(this.db, pathHint);
     if (!repo) return null;
@@ -283,6 +287,7 @@ export class RepoKnowledgeGraphService {
     repoContextUsage: Record<string, unknown>;
     contextEvaluation?: Record<string, unknown>;
   } | null> {
+    if (!isContextEngineEnabled()) return null;
     if (!input.packetId) return null;
     const parsed = extractUsage(input.outputs, input.rawResponse, input.toolCalls);
     const packet = await this.packets.findOne({ packetId: input.packetId }).catch(() => null);
@@ -561,6 +566,7 @@ export class RepoKnowledgeGraphService {
     content: string;
     tokenEstimate: number;
   }> {
+    if (!isContextEngineEnabled()) throw contextProviderDisabledError();
     const repo = await resolveRepoFromPath(this.db, input.repoPath);
     if (!repo) throw new Error('Repo not found');
     const repoId = String(repo._id);
@@ -621,6 +627,7 @@ export class RepoKnowledgeGraphService {
     content: string;
     tokenEstimate: number;
   }> {
+    if (!isContextEngineEnabled()) throw contextProviderDisabledError();
     const repo = await resolveRepoFromPath(this.db, input.repoPath);
     if (!repo) throw new Error('Repo not found');
     const repoId = String(repo._id);
@@ -679,6 +686,7 @@ export class RepoKnowledgeGraphService {
     indexId: string;
     refs: Array<Record<string, unknown>>;
   }> {
+    if (!isContextEngineEnabled()) throw contextProviderDisabledError();
     const repo = await resolveRepoFromPath(this.db, input.repoPath);
     if (!repo) throw new Error('Repo not found');
     const repoId = String(repo._id);
@@ -715,6 +723,7 @@ export class RepoKnowledgeGraphService {
   }
 
   private async runIndex(repoId: string, repoPath: string, repoName: string, executionId: string): Promise<void> {
+    if (!isContextEngineEnabled()) return;
     const { ObjectId } = await import('mongodb');
     const startedAt = new Date();
     let headSha: string | undefined;
@@ -1021,6 +1030,7 @@ export function createRepoKnowledgeGraphIndexIfChangedAction(db: Db): SystemActi
     name: 'repo-knowledge-graph-index-if-changed',
     description: 'Rebuild repo knowledge graph indexes for active repos whose base-branch HEAD has changed.',
     async run() {
+      if (!isContextEngineEnabled()) return 'Skipped: context provider is disabled.';
       const service = new RepoKnowledgeGraphService(db);
       const repos = await db.collection('repos').find({ status: 'active' }).toArray();
       const queued: string[] = [];

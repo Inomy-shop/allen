@@ -102,6 +102,7 @@ interface Trace {
 interface Props {
   trace: Trace;
   workflowEdges?: Array<{ from: string; to: string | string[]; condition?: string; parallel?: boolean }>;
+  contextEngineEnabled?: boolean;
 }
 
 /**
@@ -109,7 +110,7 @@ interface Props {
  * Phase-2 enrichment field as a collapsible section. All sections are
  * self-hiding when their data is absent (older traces, non-agent nodes, etc).
  */
-export default function NodeInspector({ trace, workflowEdges }: Props) {
+export default function NodeInspector({ trace, workflowEdges, contextEngineEnabled = true }: Props) {
   // State diff: keys added/modified by this node's output vs the pre-run state.
   const stateDiff = diffState(trace.inputState ?? {}, trace.output ?? {});
 
@@ -155,6 +156,7 @@ export default function NodeInspector({ trace, workflowEdges }: Props) {
         ) : <Empty>No runtime context captured (pre-Phase-2 trace).</Empty>}
       </Section>
 
+      {contextEngineEnabled && (
       <Section icon={BookOpen} title="Repo context injection" defaultOpen={Boolean(trace.repoKnowledgeInjected?.mandatoryContextInjected)}>
         {trace.repoKnowledgeInjected ? (
           <div className="space-y-2">
@@ -214,7 +216,9 @@ export default function NodeInspector({ trace, workflowEdges }: Props) {
           </div>
         ) : <Empty>No repo knowledge packet captured.</Empty>}
       </Section>
+      )}
 
+      {contextEngineEnabled && (
       <Section icon={CheckCircle} title="Context quality evaluation" defaultOpen={Boolean(trace.contextEvaluation || trace.workflowContextFinding)}>
         {trace.contextEvaluation ? (
           <div className="space-y-2">
@@ -266,6 +270,7 @@ export default function NodeInspector({ trace, workflowEdges }: Props) {
           </div>
         )}
       </Section>
+      )}
 
       <Section icon={Zap} title="Agent overrides">
         {trace.agentOverrides ? (
