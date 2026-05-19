@@ -6,6 +6,7 @@ import type { Collection, Db } from 'mongodb';
 import { resolveRepositoriesDir } from '@allen/engine';
 import { scanRepo } from './repo-scanner.js';
 import { RepoContextScannerService } from './repo-context-scanner.service.js';
+import { RepoKnowledgeGraphService } from './repo-knowledge-graph.service.js';
 
 const exec = promisify(execFile);
 
@@ -71,11 +72,13 @@ export class RepoService {
   private db: Db;
   private col: Collection;
   private contextScanner: RepoContextScannerService;
+  private knowledgeGraph: RepoKnowledgeGraphService;
 
   constructor(db: Db) {
     this.db = db;
     this.col = db.collection('repos');
     this.contextScanner = new RepoContextScannerService(db);
+    this.knowledgeGraph = new RepoKnowledgeGraphService(db);
   }
 
   async list(): Promise<Record<string, unknown>[]> {
@@ -125,6 +128,7 @@ export class RepoService {
       lastUsedAt: undefined,
       executionCount: 0,
       contextScan: { status: 'pending' as const, scannedAt: null },
+      knowledgeGraphIndex: { status: 'pending' as const, indexedAt: null },
       createdAt: new Date(),
       updatedAt: new Date(),
     };
@@ -134,6 +138,12 @@ export class RepoService {
     // Fire deep context scan in the background — don't await, don't fail create
     this.contextScanner.scheduleScan(String(result.insertedId)).catch((err) => {
       console.error(`[repos] failed to schedule deep scan for ${result.insertedId}:`, err);
+    });
+    this.knowledgeGraph.scheduleIndex(String(result.insertedId)).catch((err) => {
+      console.error(`[repos] failed to schedule knowledge graph index for ${result.insertedId}:`, err);
+    });
+    this.knowledgeGraph.scheduleIndex(String(result.insertedId)).catch((err) => {
+      console.error(`[repos] failed to schedule knowledge graph index for ${result.insertedId}:`, err);
     });
 
     return { ...doc, _id: result.insertedId };
@@ -386,6 +396,7 @@ export class RepoService {
       lastUsedAt: undefined,
       executionCount: 0,
       contextScan: { status: 'pending' as const, scannedAt: null },
+      knowledgeGraphIndex: { status: 'pending' as const, indexedAt: null },
       createdAt: new Date(),
       updatedAt: new Date(),
     };
@@ -403,6 +414,10 @@ export class RepoService {
   /** Trigger a fresh deep context scan for a repo. Async — returns immediately. */
   async rescanContext(id: string): Promise<{ scheduled: boolean; reason?: string }> {
     return this.contextScanner.scheduleScan(id);
+  }
+
+  async indexKnowledgeGraph(id: string): Promise<{ scheduled: boolean; reason?: string; executionId?: string }> {
+    return this.knowledgeGraph.scheduleIndex(id);
   }
 
   /** Fetch the stored detailed context document for a repo. */
@@ -498,6 +513,9 @@ export class RepoService {
     await this.col.deleteOne({ _id: new ObjectId(id) });
     // Cascade-delete the deep context row so we don't leave orphans
     await this.db.collection('repo_contexts').deleteOne({ repoId: id }).catch(() => {});
+    await this.db.collection('repo_knowledge_indexes').deleteMany({ repoId: id }).catch(() => {});
+    await this.db.collection('knowledge_nodes').deleteMany({ repoId: id }).catch(() => {});
+    await this.db.collection('knowledge_edges').deleteMany({ repoId: id }).catch(() => {});
     // Remove the cloned directory from disk
     const clonePath = existing?.path as string | undefined;
     if (clonePath && existsSync(clonePath)) {

@@ -299,6 +299,7 @@ export type ExecutionStatus =
 export type NodeStatus = 'pending' | 'running' | 'completed' | 'failed' | 'cancelled' | 'skipped';
 
 export interface NodeTrace {
+  executionTraceId?: string;
   node: string;
   attempt: number;
   status: NodeStatus;
@@ -365,7 +366,21 @@ export interface NodeTrace {
   runtimeContext?: {
     cwd?: string;
     executionMode?: 'sdk' | 'cli';
-    systemPromptMode?: 'append' | 'custom';
+    systemPromptMode?: 'append' | 'custom' | 'prompt-prefix';
+    repoContextLoadingGuidancePresent?: boolean;
+    repoContextLoadingGuidanceInjected?: boolean;
+    mandatoryRepoContextInjected?: boolean;
+    mandatoryRepoContextInjectedCount?: number;
+    mandatoryRepoContextSkippedProviderNativeCount?: number;
+    mandatoryRepoContextTargetLayer?: string;
+    materializedAgentFile?: {
+      subagentName: string;
+      path: string;
+      sha256: string;
+      byteLength: number;
+      containsMandatoryRepoContext: boolean;
+      createdAt: Date;
+    };
     resolvedModel?: string;
     reasoningEffort?: string;
     planMode?: boolean;
@@ -386,6 +401,43 @@ export interface NodeTrace {
     id: string;
     createdAt: Date;
   }>;
+
+  /** Repo knowledge packet injected into this node attempt, if available. */
+  repoKnowledgeInjected?: {
+    packetId: string;
+    repoId: string;
+    repoName?: string;
+    indexId?: string;
+    indexFreshness?: 'fresh' | 'stale' | 'partial' | 'missing';
+    mandatoryCount: number;
+    recommendedCount: number;
+    skillCount: number;
+    productionKnowledgeCount: number;
+    preselectedContextCount?: number;
+    availableContextCount?: number;
+    selectedContextCount?: number;
+    retrievalProviders?: string[];
+    providerDiagnostics?: Array<Record<string, unknown>>;
+    mandatoryContextInjected?: boolean;
+    mandatoryContextInjectedCount?: number;
+    mandatoryContextSkippedProviderNativeCount?: number;
+    mandatoryContextSkippedOversizeCount?: number;
+    mandatoryContextTargetLayer?: string;
+    systemPromptContextInjected?: boolean;
+    contextInjection?: Record<string, unknown>;
+  };
+
+  /** Context usage reported or inferred for this node attempt. */
+  contextUsage?: {
+    traceId?: string;
+    preselectedCount?: number;
+    loadedCount: number;
+    appliedCount: number;
+    skippedCount: number;
+  };
+
+  /** Deterministic/semantic repo context quality evaluation for this node attempt. */
+  contextEvaluation?: Record<string, unknown>;
 
   /** Effective agent settings at spawn time + which layer set each. */
   agentOverrides?: {
@@ -595,6 +647,46 @@ export interface EngineServices {
       sizeBytes: number;
       nodeName?: string;
     }>>;
+  };
+  repoKnowledge?: {
+    buildNodeContextPacket: (input: {
+      executionId: string;
+      workflowName: string;
+      nodeName: string;
+      nodeRole?: string;
+      attempt: number;
+      state: Record<string, unknown>;
+      prompt?: string;
+      parentPacketId?: string;
+      parentExecutionId?: string | null;
+      rootExecutionId?: string;
+      provider?: 'claude' | 'codex' | 'unknown';
+    }) => Promise<{
+      packetId: string;
+      promptBlock: string;
+      systemPromptBlock?: string;
+      traceSummary: NonNullable<NodeTrace['repoKnowledgeInjected']>;
+    } | null>;
+    recordContextUsage: (input: {
+      executionId: string;
+      executionTraceId?: string;
+      workflowName: string;
+      nodeName: string;
+      nodeRole?: string;
+      attempt: number;
+      packetId?: string;
+      outputs: Record<string, unknown>;
+      rawResponse?: string;
+      toolCalls?: import('./tool-call.js').ToolCallRecord[];
+      parentPacketId?: string | null;
+      parentExecutionId?: string | null;
+      rootExecutionId?: string;
+      parentNodeName?: string;
+      agentName?: string;
+    }) => Promise<(NonNullable<NodeTrace['contextUsage']> & {
+      repoContextUsage?: Record<string, unknown>;
+      contextEvaluation?: Record<string, unknown>;
+    }) | null>;
   };
 }
 

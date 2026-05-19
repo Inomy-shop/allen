@@ -257,8 +257,9 @@ export async function runCodexCLI(
   // env vars not set". Codex accepts dotted-key TOML overrides via -c,
   // including for MCP env values, so we inject the chat-scope vars here
   // on every codex exec.
+  const disabledMcpArgs = skipTools ? ['-c', 'mcp_servers={}'] : [];
   const mcpEnvOverrides: string[] = [];
-  if (chatSessionId) {
+  if (chatSessionId && !skipTools) {
     mcpEnvOverrides.push(
       '-c', `mcp_servers.${MCP_SERVER_NAME}.env.ALLEN_ARTIFACT_ROOT_TYPE="chat"`,
       '-c', `mcp_servers.${MCP_SERVER_NAME}.env.ALLEN_ARTIFACT_ROOT_ID="${chatSessionId}"`,
@@ -277,6 +278,7 @@ export async function runCodexCLI(
     args.push('resume', '--json', '--dangerously-bypass-approvals-and-sandbox', '--skip-git-repo-check');
     // Apply resume-safe overrides (effort only) BEFORE the session id + prompt.
     if (resumeSafeArgs.length > 0) args.push(...resumeSafeArgs);
+    if (disabledMcpArgs.length > 0) args.push(...disabledMcpArgs);
     if (mcpEnvOverrides.length > 0) args.push(...mcpEnvOverrides);
     args.push('--', resumeSessionId, prompt);
   } else {
@@ -286,6 +288,7 @@ export async function runCodexCLI(
     } else if (model && model !== 'default') {
       args.push('-c', `model="${model}"`);
     }
+    if (disabledMcpArgs.length > 0) args.push(...disabledMcpArgs);
     if (mcpEnvOverrides.length > 0) args.push(...mcpEnvOverrides);
     args.push(prompt);
   }

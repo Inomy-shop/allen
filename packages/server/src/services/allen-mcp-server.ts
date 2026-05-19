@@ -30,6 +30,11 @@ const SPAWN_ARTIFACT_ROOT_TYPE = process.env.ALLEN_ARTIFACT_ROOT_TYPE || undefin
 const SPAWN_ARTIFACT_ROOT_ID = process.env.ALLEN_ARTIFACT_ROOT_ID || undefined;
 const SPAWN_PARENT_CALLER = process.env.ALLEN_PARENT_CALLER || undefined;
 const SPAWN_ROOT_EXECUTION_ID = process.env.ALLEN_ROOT_EXECUTION_ID || undefined;
+const REPO_KNOWLEDGE_PACKET_ID = process.env.ALLEN_REPO_KNOWLEDGE_PACKET_ID || undefined;
+const REPO_KNOWLEDGE_REPO_ID = process.env.ALLEN_REPO_KNOWLEDGE_REPO_ID || undefined;
+const REPO_KNOWLEDGE_INDEX_ID = process.env.ALLEN_REPO_KNOWLEDGE_INDEX_ID || undefined;
+const REPO_KNOWLEDGE_REPO_NAME = process.env.ALLEN_REPO_KNOWLEDGE_REPO_NAME || undefined;
+const REPO_KNOWLEDGE_FRESHNESS = process.env.ALLEN_REPO_KNOWLEDGE_FRESHNESS || undefined;
 // Session-scope markers. These are attached as headers on outbound
 // /api/chat/* calls so the server can route tools to the correct chat /
 // spawn-execution context. Set by whoever spawned this MCP subprocess:
@@ -44,6 +49,7 @@ const SPAWN_CHAT_SESSION_ID = process.env.ALLEN_CHAT_SESSION_ID || undefined;
 // cache it for a few minutes to avoid re-signing on every call.
 
 import jwt, { type SignOptions } from 'jsonwebtoken';
+import { parseAllenApiResponse } from './mcp-api-response.js';
 
 const JWT_ACCESS_SECRET = process.env.JWT_ACCESS_SECRET;
 
@@ -155,6 +161,7 @@ const TOOLS = [
   { name: 'submit_execution_input', description: 'Submit input to a paused workflow execution (e.g. answer a human node).', params: { execution_id: 'string (required)', node: 'string (required)', data: 'object (required)' } },
   { name: 'get_node_trace', description: 'Get detailed trace of a specific node execution: prompt, response, outputs, cost, duration.', params: { execution_id: 'string (required)', node_name: 'string (required)' } },
   { name: 'get_execution_logs', description: 'Get execution logs filtered by node, level, or category.', params: { execution_id: 'string (required)', node: 'string', level: 'string', category: 'string', limit: 'number' } },
+  { name: 'get_node_context_usage', description: 'Get repo-knowledge context packets and usage traces captured for an execution.', params: { execution_id: 'string (required)' } },
 
   // ── Agents ──
   { name: 'list_agents', description: 'List all agents with minimal info: name, displayName, teamName, type, model, provider. Use get_agent for full details.', params: {} },
@@ -177,6 +184,11 @@ const TOOLS = [
   // ── Repos ──
   { name: 'list_repos', description: 'List registered repositories with tech stack.', params: {} },
   { name: 'get_repo_context', description: 'Get the deep agent-generated context document for a repo (markdown describing each module).', params: { repo_path: 'string (required) — absolute path of a registered repo or workspace worktree' } },
+  { name: 'get_repo_knowledge_graph', description: 'Get the structured repo knowledge graph for a repo: modules, instruction files, skills, production notes, commands, and relationships.', params: { repo_path: 'string (required) — absolute path of a registered repo or workspace worktree' } },
+  { name: 'search_repo_knowledge', description: 'Search the repo knowledge graph for missing or follow-up context refs by query. Use when an investigation discovers a module, file, term, or concept not covered by repo_context_selection; load useful file-backed results with get_repo_context_body/get_repo_skill_body before relying on them.', params: { repo_path: 'string (required) — absolute path of a registered repo or workspace worktree', query: 'string (required) — module, file, ticket, error, or concept to search for', node_role: 'string — optional workflow node role', current_files: 'string[] — optional repo-relative files currently being inspected', limit: 'number — optional max refs' } },
+  { name: 'get_repo_skill_body', description: 'Load the full body of a repo skill file referenced by the knowledge graph. Use when a repo_knowledge_packet summary makes a skill look useful; summaries are only a relevance filter and must not be the only source for useful skills.', params: { repo_path: 'string (required) — absolute path of a registered repo or workspace worktree', ref_id: 'string — knowledge graph refId for the skill', skill_path: 'string — repo-relative SKILL.md path alternative to ref_id' } },
+  { name: 'get_repo_context_body', description: 'Load the full body of a repo instruction, context, doc, runbook, or production knowledge file referenced by the knowledge graph. Use when a repo_knowledge_packet summary makes a file-backed ref look useful; summaries are only a relevance filter and must not be the only source for useful context.', params: { repo_path: 'string (required) — absolute path of a registered repo or workspace worktree', ref_id: 'string — knowledge graph refId for the context file', context_path: 'string — repo-relative file path alternative to ref_id' } },
+  { name: 'save_repo_knowledge_graph', description: 'Save a generated repo knowledge graph as a new latest version in Allen DB. Use after repo-knowledge-graph-indexer produces graph JSON directly in chat/agent execution.', params: { repo_path: 'string (required) — absolute path of a registered repo or workspace worktree', graph: 'object — parsed graph JSON with repoSummary, nodes, edges', graph_json: 'string — graph JSON string alternative to graph' } },
   { name: 'find_repo_for_pr_url', description: 'Given a GitHub PR URL, find the registered Allen repo whose remote matches (owner/repo). Returns null if the repo is not registered.', params: { pr_url: 'string (required) — https://github.com/<owner>/<repo>/pull/<n>' } },
 
   // ── Pull Requests ──
@@ -261,8 +273,7 @@ async function callAPI(endpoint: string, method = 'GET', body?: unknown): Promis
   if (body) opts.body = JSON.stringify(body);
 
   const res = await fetch(url, opts);
-  if (!res.ok) return { error: `API ${res.status}: ${await res.text().catch(() => 'unknown')}` };
-  return res.json();
+  return parseAllenApiResponse(res);
 }
 
 function trimText(value: unknown, max: number): string | undefined {
@@ -448,6 +459,69 @@ async function executeTool(name: string, args: Record<string, unknown>): Promise
         return { error: `API ${res.status}: ${await res.text().catch(() => 'unknown')}` };
       }
       return res.json();
+    }
+    case 'get_repo_knowledge_graph': {
+      const path = String(args.repo_path ?? '');
+      if (!path) return { error: 'repo_path is required' };
+      const url = `${API_BASE}/api/repos/knowledge-graph?path=${encodeURIComponent(path)}`;
+      const res = await fetch(url);
+      if (!res.ok) {
+        if (res.status === 404) return { error: `No knowledge graph found for path: ${path}. Either the repo is not registered or its first graph index has not completed yet.` };
+        return { error: `API ${res.status}: ${await res.text().catch(() => 'unknown')}` };
+      }
+      return res.json();
+    }
+    case 'search_repo_knowledge': {
+      const path = String(args.repo_path ?? '');
+      const query = String(args.query ?? '');
+      if (!path) return { error: 'repo_path is required' };
+      if (!query.trim()) return { error: 'query is required' };
+      const params = new URLSearchParams({ path, query });
+      if (args.node_role) params.set('nodeRole', String(args.node_role));
+      if (Array.isArray(args.current_files)) params.set('currentFiles', args.current_files.map(String).join(','));
+      if (args.limit) params.set('limit', String(args.limit));
+      const res = await fetch(`${API_BASE}/api/repos/search-knowledge?${params.toString()}`);
+      if (!res.ok) return { error: `API ${res.status}: ${await res.text().catch(() => 'unknown')}` };
+      return res.json();
+    }
+    case 'get_repo_skill_body': {
+      const path = String(args.repo_path ?? '');
+      if (!path) return { error: 'repo_path is required' };
+      const params = new URLSearchParams({ path });
+      if (args.ref_id) params.set('refId', String(args.ref_id));
+      if (args.skill_path) params.set('skillPath', String(args.skill_path));
+      if (!params.has('refId') && !params.has('skillPath')) return { error: 'ref_id or skill_path is required' };
+      const res = await fetch(`${API_BASE}/api/repos/skill-body?${params.toString()}`);
+      if (!res.ok) return { error: `API ${res.status}: ${await res.text().catch(() => 'unknown')}` };
+      return res.json();
+    }
+    case 'get_repo_context_body': {
+      const path = String(args.repo_path ?? '');
+      if (!path) return { error: 'repo_path is required' };
+      const params = new URLSearchParams({ path });
+      if (args.ref_id) params.set('refId', String(args.ref_id));
+      if (args.context_path) params.set('contextPath', String(args.context_path));
+      if (!params.has('refId') && !params.has('contextPath')) return { error: 'ref_id or context_path is required' };
+      const res = await fetch(`${API_BASE}/api/repos/context-body?${params.toString()}`);
+      if (!res.ok) return { error: `API ${res.status}: ${await res.text().catch(() => 'unknown')}` };
+      return res.json();
+    }
+    case 'save_repo_knowledge_graph': {
+      const path = String(args.repo_path ?? '');
+      if (!path) return { error: 'repo_path is required' };
+      const graph = args.graph as Record<string, unknown> | undefined;
+      const graphJson = typeof args.graph_json === 'string' ? args.graph_json : undefined;
+      if (!graph && !graphJson) return { error: 'graph or graph_json is required' };
+      return callAPI(`/api/repos/knowledge-graph?path=${encodeURIComponent(path)}`, 'POST', {
+        graph,
+        graph_json: graphJson,
+        source_execution_id: SPAWN_ROOT_EXECUTION_ID || SPAWN_PARENT_EXECUTION_ID,
+      });
+    }
+    case 'get_node_context_usage': {
+      const executionId = String(args.execution_id ?? '');
+      if (!executionId) return { error: 'execution_id is required' };
+      return callAPI(`/api/executions/${encodeURIComponent(executionId)}/context-usage`);
     }
     case 'find_repo_for_pr_url': {
       const prUrl = String(args.pr_url ?? '');
@@ -739,6 +813,11 @@ async function executeTool(name: string, args: Record<string, unknown>): Promise
           // would re-root under their own agent exec id.
           artifact_root_type: SPAWN_ARTIFACT_ROOT_TYPE,
           artifact_root_id: SPAWN_ARTIFACT_ROOT_ID,
+          repo_knowledge_packet_id: REPO_KNOWLEDGE_PACKET_ID,
+          repo_knowledge_repo_id: REPO_KNOWLEDGE_REPO_ID,
+          repo_knowledge_index_id: REPO_KNOWLEDGE_INDEX_ID,
+          repo_knowledge_repo_name: REPO_KNOWLEDGE_REPO_NAME,
+          repo_knowledge_freshness: REPO_KNOWLEDGE_FRESHNESS,
         }),
       });
       return res.json();

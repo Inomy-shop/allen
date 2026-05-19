@@ -115,4 +115,18 @@ describe('OrgSeedService SEED_OVERRIDE policy', () => {
     expect(team.displayName).toBe('Engineering');
     expect(team.mission).not.toBe('custom mission');
   });
+
+  it('seeds mandatory repo knowledge graph persistence instructions', async () => {
+    const db = makeDb();
+
+    await new OrgSeedService(db).seed();
+
+    const indexer = db.store.agents.find((a: any) => a.name === 'repo-knowledge-graph-indexer');
+    expect(indexer.model).toBe('opus');
+    expect(indexer.system).toContain('MUST call save_repo_knowledge_graph');
+    expect(indexer.system).toContain('mcp__allen__save_repo_knowledge_graph');
+    expect(indexer.system).toContain('allen_save_artifact');
+    expect(indexer.system).toContain('is not graph persistence');
+    expect(indexer.system).toContain('KNOWLEDGE_GRAPH_VALIDATION_FAILED');
+  });
 });

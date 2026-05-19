@@ -714,7 +714,7 @@ export default function WorkspaceListPage() {
                       </a>
                     ) : null}
                     <button className="btn btn-ghost btn-sm" type="button" onClick={() => openWorkspace(ws._id)} title="Open workspace">
-                      <ExternalLink className="h-3.5 w-3.5" />
+                      <ExternalLink className="h-3.5 w-3.5" /> Open
                     </button>
                     <button
                       className="btn btn-ghost btn-sm ws-danger-action"

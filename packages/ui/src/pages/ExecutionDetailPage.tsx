@@ -45,6 +45,64 @@ function formatDuration(ms: number | null | undefined): string {
   return `${hours}h ${remainMin}m`;
 }
 
+function sleep(ms: number): Promise<void> {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+function workflowContextEvaluationInFlight(summary: unknown): boolean {
+  const status = String((summary as { status?: unknown } | null | undefined)?.status ?? '');
+  return status === 'queued' || status === 'running';
+}
+
+function workflowFindingIdentity(finding: any): { executionId?: string; nodeName?: string; attempt: number } {
+  const executionId = typeof finding?.executionId === 'string' && finding.executionId.trim()
+    ? finding.executionId
+    : undefined;
+  let nodeName = typeof finding?.nodeName === 'string' ? finding.nodeName : undefined;
+  let attempt = Number(finding?.attempt);
+  if ((!Number.isFinite(attempt) || attempt <= 0) && nodeName) {
+    const legacy = nodeName.match(/^(.*?)\s+(?:attempt\s*#?|#)(\d+)\s*$/i);
+    if (legacy?.[1] && legacy[2]) {
+      nodeName = legacy[1].trim();
+      attempt = Number(legacy[2]);
+    }
+  }
+  return {
+    executionId,
+    nodeName,
+    attempt: Number.isFinite(attempt) && attempt > 0 ? Math.floor(attempt) : 1,
+  };
+}
+
+function workflowFindingStorageKeys(identity: { executionId?: string; nodeName?: string; attempt: number }): string[] {
+  if (!identity.nodeName) return [];
+  const weak = `:${identity.nodeName}:${identity.attempt}`;
+  return identity.executionId ? [`${identity.executionId}:${identity.nodeName}:${identity.attempt}`] : [weak];
+}
+
+function workflowTraceLookupKeys(identity: { executionId?: string; nodeName?: string; attempt: number }): string[] {
+  if (!identity.nodeName) return [];
+  const weak = `:${identity.nodeName}:${identity.attempt}`;
+  return identity.executionId ? [`${identity.executionId}:${identity.nodeName}:${identity.attempt}`, weak] : [weak];
+}
+
+function workflowFindingForTrace(findingsByIdentity: Map<string, any>, trace: any, fallbackExecutionId: string): any | undefined {
+  const identity = {
+    executionId: typeof trace?.executionId === 'string' && trace.executionId.trim() ? trace.executionId : fallbackExecutionId,
+    nodeName: trace?.node,
+    attempt: Number.isFinite(Number(trace?.attempt)) && Number(trace?.attempt) > 0 ? Math.floor(Number(trace.attempt)) : 1,
+  };
+  for (const key of workflowTraceLookupKeys(identity)) {
+    const finding = findingsByIdentity.get(key);
+    if (finding) return finding;
+  }
+  return undefined;
+}
+
+function interventionDecisionLabel(value: string): string {
+  return value.replace(/[_-]+/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+}
+
 function ExecutionApprovalModal({
   executionId,
   intervention,
@@ -717,15 +775,22 @@ function RunContextPanel({
   execution,
   pendingIntervention,
   artifactCount,
+  onRerunContextEvaluation,
+  contextEvaluationBusy,
 }: {
   runContext: RunStatus | null;
   execution: any;
   pendingIntervention?: any;
   artifactCount: number | null;
+  onRerunContextEvaluation?: () => void;
+  contextEvaluationBusy?: boolean;
 }) {
   const [expanded, setExpanded] = useState(false);
   const percent = runContext?.progress.percent ?? 0;
   const phase = runContext?.progress.phase ?? execution.status;
+  const workflowContextEval = runContext?.execution.contextWorkflowEvaluation;
+  const workflowContextScore = workflowContextEval?.result?.scores?.overall;
+  const showWorkflowContextEval = Boolean(workflowContextEval || ['completed', 'failed', 'cancelled'].includes(String(execution.status)));
   return (
     <section className="shrink-0 border-b border-app bg-surface">
       <button
@@ -747,7 +812,7 @@ function RunContextPanel({
           </div>
         </div>
       </button>
-      {expanded && <div className="max-h-[34vh] overflow-y-auto p-3 space-y-3">
+      {expanded && <div className="max-h-[48vh] overflow-y-auto p-3 space-y-3">
         <div>
           <div className="flex items-center justify-between text-[10px] font-mono text-theme-subtle mb-1">
             <span>{runContext?.progress.currentStep ?? 'current run'}</span>
@@ -790,6 +855,57 @@ function RunContextPanel({
             label="Artifacts"
             value={`${runContext?.artifacts.length ?? artifactCount ?? 0} saved`}
           />
+          {showWorkflowContextEval && (
+            <div className="rounded-md border border-app bg-app-muted/35 px-2 py-2">
+              <div className="flex items-start justify-between gap-2">
+                <div className="min-w-0 flex items-start gap-2">
+                  <Brain className="w-3.5 h-3.5 text-theme-muted shrink-0 mt-0.5" />
+                  <div className="min-w-0">
+                    <div className="text-[9px] uppercase tracking-wide text-theme-subtle font-mono">Context eval</div>
+                    <div className="text-[11px] text-theme-primary">
+                      {[
+                        workflowContextEval?.status ?? 'not queued',
+                        workflowContextScore == null ? null : `overall ${Math.round(workflowContextScore * 100)}%`,
+                        workflowContextEval?.stale ? 'stale' : null,
+                      ].filter(Boolean).join(' · ')}
+                    </div>
+                    {workflowContextEval?.result?.summary && (
+                      <div className="mt-1 max-h-[140px] overflow-y-auto rounded border border-app bg-surface/60 p-2 text-[10px] leading-relaxed text-theme-secondary whitespace-pre-wrap">
+                        {workflowContextEval.result.summary}
+                      </div>
+                    )}
+                    {workflowContextEval?.staleReason && (
+                      <div className="mt-1 max-h-24 overflow-y-auto rounded border border-accent-yellow/30 bg-yellow-500/10 p-2 text-[10px] leading-relaxed text-accent-yellow whitespace-pre-wrap">
+                        {workflowContextEval.staleReason}
+                      </div>
+                    )}
+                    {workflowContextEval?.error && (
+                      <div className="mt-1 max-h-24 overflow-y-auto rounded border border-accent-red/30 bg-red-500/10 p-2 text-[10px] leading-relaxed text-accent-red whitespace-pre-wrap">
+                        {workflowContextEval.error}
+                      </div>
+                    )}
+                    {workflowContextEval?.audit && (
+                      <ContextEvalAuditDetails
+                        audit={workflowContextEval.audit}
+                        normalizedResult={workflowContextEval.result}
+                      />
+                    )}
+                  </div>
+                </div>
+                {onRerunContextEvaluation && (
+                  <button
+                    type="button"
+                    onClick={onRerunContextEvaluation}
+                    disabled={contextEvaluationBusy || execution.status === 'running'}
+                    className="btn-ghost text-[10px] px-2 py-1 shrink-0"
+                    title="Rerun workflow context evaluation"
+                  >
+                    <RefreshCw className={`w-3 h-3 ${contextEvaluationBusy ? 'animate-spin' : ''}`} />
+                  </button>
+                )}
+              </div>
+            </div>
+          )}
         </div>
 
         {(pendingIntervention || runContext?.humanInput?.required) && (
@@ -819,6 +935,65 @@ function RunContextPanel({
         )}
       </div>}
     </section>
+  );
+}
+
+function ContextEvalAuditDetails({
+  audit,
+  normalizedResult,
+}: {
+  audit: Record<string, any>;
+  normalizedResult?: Record<string, any>;
+}) {
+  const packedEvidenceJson = audit.packedEvidencePayload ? JSON.stringify(audit.packedEvidencePayload, null, 2) : '';
+  const fullEvidenceJson = audit.evidencePayload ? JSON.stringify(audit.evidencePayload, null, 2) : '';
+  const normalizedJson = normalizedResult ? JSON.stringify(normalizedResult, null, 2) : '';
+  return (
+    <div className="mt-2 space-y-1.5">
+      <div className="grid grid-cols-2 gap-x-2 gap-y-1 text-[10px] font-mono text-theme-subtle">
+        <span>judge</span>
+        <span className="text-theme-secondary truncate">{[audit.judgeProvider, audit.judgeModel].filter(Boolean).join(' / ') || '—'}</span>
+        <span>duration</span>
+        <span className="text-theme-secondary">{audit.judgeDurationMs == null ? '—' : `${Math.round(audit.judgeDurationMs)}ms`}</span>
+        <span>prompt</span>
+        <span className="text-theme-secondary">{audit.promptChars == null ? '—' : `${audit.promptChars} chars`}</span>
+        <span>evidence</span>
+        <span className="text-theme-secondary">
+          {audit.evidenceStats?.packedChars == null
+            ? '—'
+            : `${audit.evidenceStats.packedChars} / ${audit.evidenceStats.originalChars ?? '?'} chars`}
+        </span>
+        <span>sha256</span>
+        <span className="text-theme-secondary truncate">{audit.promptSha256 ?? '—'}</span>
+      </div>
+      {audit.evidenceTruncated && (
+        <div className="rounded border border-accent-yellow/30 bg-yellow-500/10 p-1.5 text-[10px] text-accent-yellow">
+          {audit.evidenceStats
+            ? 'Evidence was packed and some per-node sections were shortened before the judge call.'
+            : 'Evidence JSON was truncated before the judge call.'}
+        </div>
+      )}
+      <AuditDisclosure title="Evaluator prompt" content={audit.promptPreview} />
+      <AuditDisclosure title="Packing stats" content={audit.evidenceStats ? JSON.stringify(audit.evidenceStats, null, 2) : ''} />
+      <AuditDisclosure title="Packed evidence sent to judge" content={packedEvidenceJson} />
+      <AuditDisclosure title="Full stored evidence payload" content={fullEvidenceJson} />
+      <AuditDisclosure title="Raw LLM response" content={audit.rawJudgeResponse} />
+      <AuditDisclosure title="Normalized result" content={normalizedJson} />
+    </div>
+  );
+}
+
+function AuditDisclosure({ title, content }: { title: string; content?: string }) {
+  if (!content) return null;
+  return (
+    <details className="rounded border border-app bg-surface/60">
+      <summary className="cursor-pointer px-2 py-1 text-[10px] font-mono uppercase tracking-wide text-theme-subtle hover:text-theme-secondary">
+        {title}
+      </summary>
+      <pre className="max-h-[220px] overflow-auto border-t border-app p-2 text-[10px] leading-relaxed text-theme-secondary whitespace-pre-wrap">
+        {content}
+      </pre>
+    </details>
   );
 }
 
@@ -1370,6 +1545,7 @@ export default function ExecutionDetailPage() {
   const [artifactsOpen, setArtifactsOpen] = useState(false);
   const [artifactCount, setArtifactCount] = useState<number | null>(null);
   const [runContext, setRunContext] = useState<RunStatus | null>(null);
+  const [contextEvaluationBusy, setContextEvaluationBusy] = useState(false);
   const [feedbackEntries, setFeedbackEntries] = useState<Array<{ id: string; content: string; targetNodes?: string[]; createdAt: string; createdBy?: string }>>([]);
   const [approvalModalOpen, setApprovalModalOpen] = useState(false);
 
@@ -1588,6 +1764,32 @@ export default function ExecutionDetailPage() {
     }
   }, [id, refresh]);
 
+  const handleRerunContextEvaluation = useCallback(async () => {
+    if (!id) return;
+    setContextEvaluationBusy(true);
+    try {
+      let summary = await api.rerunWorkflowContextEvaluation(id);
+      setRunContext(prev => prev ? {
+        ...prev,
+        execution: {
+          ...prev.execution,
+          contextWorkflowEvaluation: summary,
+        },
+      } : prev);
+      const deadline = Date.now() + 10 * 60_000;
+      while (workflowContextEvaluationInFlight(summary) && Date.now() < deadline) {
+        await sleep(2000);
+        const context = await api.context(id);
+        setRunContext(context);
+        summary = context.execution.contextWorkflowEvaluation;
+      }
+    } catch (err) {
+      alert(`Failed to rerun context evaluation: ${(err as Error).message}`);
+    } finally {
+      setContextEvaluationBusy(false);
+    }
+  }, [id]);
+
   const canAppendFeedback = ['completed', 'failed', 'cancelled'].includes(execution?.status);
 
   const handleExportTraces = useCallback(async () => {
@@ -1652,8 +1854,24 @@ export default function ExecutionDetailPage() {
     />;
   }
 
-  const selectedTraces = traces.filter((t: any) => t.node === selectedNode);
+  const workflowContextFindingsByIdentity = new Map<string, any>();
+  for (const finding of ((runContext?.execution.contextWorkflowEvaluation?.result?.nodeFindings ?? []) as any[])) {
+    const identity = workflowFindingIdentity(finding);
+    for (const key of workflowFindingStorageKeys(identity)) workflowContextFindingsByIdentity.set(key, finding);
+  }
+  const selectedTraces = traces
+    .filter((t: any) => t.node === selectedNode)
+    .map((trace: any) => ({
+      ...trace,
+      workflowContextFinding: workflowFindingForTrace(workflowContextFindingsByIdentity, trace, execution.id),
+    }));
   const selectedTrace = selectedTraces.length > 0 ? selectedTraces[selectedTraces.length - 1] : undefined;
+  const selectedTraceWithContextFinding = selectedTrace
+    ? {
+        ...selectedTrace,
+        workflowContextFinding: selectedNode ? workflowFindingForTrace(workflowContextFindingsByIdentity, selectedTrace, execution.id) : undefined,
+      }
+    : undefined;
   const selectedState = selectedNode ? nodeStates.get(selectedNode) : undefined;
   const isPaused = execution.status === 'waiting_for_input' && !latestInputEvent;
 
@@ -2087,6 +2305,14 @@ export default function ExecutionDetailPage() {
                 </a>
               </div>
             )}
+            <RunContextPanel
+              runContext={runContext}
+              execution={execution}
+              pendingIntervention={pendingIntervention}
+              artifactCount={artifactCount}
+              onRerunContextEvaluation={handleRerunContextEvaluation}
+              contextEvaluationBusy={contextEvaluationBusy}
+            />
             <div className="flex-1 min-h-0 overflow-y-auto">
               {/*
                 The inline human-input form is intentionally DISABLED here.
@@ -2100,7 +2326,7 @@ export default function ExecutionDetailPage() {
               <NodeDetail
                 nodeName={selectedNode ?? ''}
                 nodeState={selectedState}
-                trace={selectedTrace}
+                trace={selectedTraceWithContextFinding}
                 allTraces={selectedTraces}
                 waitingInput={null}
                 onSubmitInput={handleSubmitInput}

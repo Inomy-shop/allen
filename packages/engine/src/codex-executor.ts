@@ -4,7 +4,7 @@ import type { NodeDef, AgentDef, EngineEventEmitter } from './types.js';
 import { renderTemplate } from './template.js';
 import { extractOutputs, buildOutputInstruction } from './output-extractor.js';
 import { buildToolCallRecord, type ToolCallRecord } from './tool-call.js';
-import { withArtifactsGuidance, withNonInteractiveGuidance } from './agent-file-writer.js';
+import { hasRepoContextLoadingGuidance, withArtifactsGuidance, withMandatoryRepoContext, withNonInteractiveGuidance, withRepoContextLoadingGuidance } from './agent-file-writer.js';
 import { MCP_SERVER_NAME } from './brand.js';
 
 /** Scratch dir when no worktree/repo is in scope. Never fall back to
@@ -24,6 +24,22 @@ interface CodexResult {
   };
   durationMs: number;
   toolCalls?: ToolCallRecord[];
+  runtimeContext?: {
+    cwd?: string;
+    executionMode?: 'cli';
+    systemPromptMode?: 'prompt-prefix';
+    repoContextLoadingGuidancePresent?: boolean;
+    repoContextLoadingGuidanceInjected?: boolean;
+    mandatoryRepoContextInjected?: boolean;
+    mandatoryRepoContextInjectedCount?: number;
+    mandatoryRepoContextSkippedProviderNativeCount?: number;
+    mandatoryRepoContextTargetLayer?: string;
+    resolvedModel?: string;
+    reasoningEffort?: string;
+    planMode?: boolean;
+    mcpServerNames?: string[];
+    envKeys?: string[];
+  };
 }
 
 interface PendingCodexTool {
@@ -48,6 +64,17 @@ export async function executeCodexNode(
   nodeContext?: string,
   feedbackContext?: string,
   abortSignal?: AbortSignal,
+  repoKnowledgeContext?: {
+    packetId: string;
+    repoId: string;
+    repoName?: string;
+    indexId?: string;
+    indexFreshness?: 'fresh' | 'stale' | 'partial' | 'missing';
+    systemPromptBlock?: string;
+    mandatoryContextInjectedCount?: number;
+    mandatoryContextSkippedProviderNativeCount?: number;
+    mandatoryContextTargetLayer?: string;
+  },
 ): Promise<CodexResult> {
   const start = Date.now();
   // Apply per-node overrides first, then agent defaults.
@@ -64,20 +91,25 @@ export async function executeCodexNode(
   // Resume by default unless explicitly disabled on the node
   const isResume = !!((nodeDef.resume_on_retry !== false) && sessionId);
 
-  let prompt = nodeDef.prompt ? renderTemplate(nodeDef.prompt, state) : '';
-  if (!isResume && role?.system) {
+  const renderedTaskPrompt = nodeDef.prompt ? renderTemplate(nodeDef.prompt, state) : '';
+  let prompt = nodeContext ? `${nodeContext}\n\n${renderedTaskPrompt}` : renderedTaskPrompt;
+  const repoContextLoadingGuidanceAlreadyPresent = hasRepoContextLoadingGuidance(role?.system);
+  let repoContextLoadingGuidancePresent = false;
+  let repoContextLoadingGuidanceInjected = false;
+  if (!isResume) {
     // Only prepend system prompt on first run — resume already has context.
     // Append artifact guidance idempotently so Codex agents are told to save
     // generated deliverables via allen_save_artifact (the MCP tool is reachable
     // via the synced Codex config). Non-interactive guidance is layered on top
     // so codex workflow runs can't call ask_user / delegate_to_agent (no chat
     // surface to resolve them on).
-    prompt = `${withNonInteractiveGuidance(withArtifactsGuidance(role.system))}\n\n${prompt}`;
+    const systemPrefix = withNonInteractiveGuidance(withMandatoryRepoContext(withArtifactsGuidance(withRepoContextLoadingGuidance(role?.system)), repoKnowledgeContext?.systemPromptBlock));
+    repoContextLoadingGuidancePresent = hasRepoContextLoadingGuidance(systemPrefix);
+    repoContextLoadingGuidanceInjected =
+      !repoContextLoadingGuidanceAlreadyPresent && repoContextLoadingGuidancePresent;
+    prompt = `${systemPrefix}\n\n${prompt}`;
   }
   prompt += buildOutputInstruction(nodeDef.outputs, nodeDef.output_format);
-  if (nodeContext) {
-    prompt += nodeContext;
-  }
   if (feedbackContext) {
     prompt += feedbackContext;
   }
@@ -121,7 +153,15 @@ export async function executeCodexNode(
     ...set('ALLEN_ARTIFACT_AGENT_EXECUTION_ID', executionId),
     ...set('ALLEN_ARTIFACT_PARENT_ID', executionId),
     ...set('ALLEN_PARENT_EXECUTION_ID', executionId),
+    ...set('ALLEN_PARENT_CALLER', nodeName),
     ...set('ALLEN_ROOT_EXECUTION_ID', rootExecutionId),
+    ...(repoKnowledgeContext ? [
+      ...set('ALLEN_REPO_KNOWLEDGE_PACKET_ID', repoKnowledgeContext.packetId),
+      ...set('ALLEN_REPO_KNOWLEDGE_REPO_ID', repoKnowledgeContext.repoId),
+      ...set('ALLEN_REPO_KNOWLEDGE_INDEX_ID', repoKnowledgeContext.indexId ?? ''),
+      ...set('ALLEN_REPO_KNOWLEDGE_REPO_NAME', repoKnowledgeContext.repoName ?? ''),
+      ...set('ALLEN_REPO_KNOWLEDGE_FRESHNESS', repoKnowledgeContext.indexFreshness ?? ''),
+    ] : []),
     // Re-state the registration-time vars: in some Codex versions the -c
     // override replaces the env dict wholesale, so omitting these would
     // strip out ALLEN_API_URL / JWT_ACCESS_SECRET and break MCP auth.
@@ -153,7 +193,19 @@ export async function executeCodexNode(
 
     const proc = spawn('codex', args, {
       cwd,
-      env: { ...process.env },
+      env: {
+        ...process.env,
+        ALLEN_PARENT_EXECUTION_ID: executionId,
+        ALLEN_PARENT_CALLER: nodeName,
+        ALLEN_ROOT_EXECUTION_ID: rootExecutionId,
+        ...(repoKnowledgeContext ? {
+          ALLEN_REPO_KNOWLEDGE_PACKET_ID: repoKnowledgeContext.packetId,
+          ALLEN_REPO_KNOWLEDGE_REPO_ID: repoKnowledgeContext.repoId,
+          ALLEN_REPO_KNOWLEDGE_INDEX_ID: repoKnowledgeContext.indexId ?? '',
+          ALLEN_REPO_KNOWLEDGE_REPO_NAME: repoKnowledgeContext.repoName ?? '',
+          ALLEN_REPO_KNOWLEDGE_FRESHNESS: repoKnowledgeContext.indexFreshness ?? '',
+        } : {}),
+      },
       stdio: ['pipe', 'pipe', 'pipe'],
     });
 
@@ -297,6 +349,21 @@ export async function executeCodexNode(
           },
           durationMs: Date.now() - start,
           toolCalls,
+          runtimeContext: {
+            cwd,
+            executionMode: 'cli',
+            systemPromptMode: 'prompt-prefix',
+            repoContextLoadingGuidancePresent,
+            repoContextLoadingGuidanceInjected,
+            mandatoryRepoContextInjected: Boolean(repoKnowledgeContext?.systemPromptBlock),
+            mandatoryRepoContextInjectedCount: repoKnowledgeContext?.mandatoryContextInjectedCount,
+            mandatoryRepoContextSkippedProviderNativeCount: repoKnowledgeContext?.mandatoryContextSkippedProviderNativeCount,
+            mandatoryRepoContextTargetLayer: repoKnowledgeContext?.mandatoryContextTargetLayer ?? (repoKnowledgeContext?.systemPromptBlock ? 'codex_prompt_instruction_prefix' : undefined),
+            resolvedModel: model,
+            reasoningEffort,
+            planMode: false,
+            mcpServerNames: [MCP_SERVER_NAME],
+          },
         });
       } catch (err: unknown) {
         reject(err);

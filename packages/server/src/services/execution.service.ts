@@ -24,6 +24,10 @@ import { ArtifactService } from './artifact.service.js';
 import { MonitoringService } from './self-healing-monitor.service.js';
 import { assertSelfHealingLinearConfig, isSelfHealingWorkflowName } from './self-healing-env.js';
 import { AgentActivityService, type PersistedActivityRow } from './agent-activity.service.js';
+import { RepoKnowledgeGraphService } from './repo-knowledge-graph.service.js';
+import { ContextEvaluationService } from './context-evaluation.service.js';
+import { ContextWorkflowEvaluationService } from './context-workflow-evaluation.service.js';
+import { hydrateTraceContextEvaluations } from './context-evaluation-trace-hydrator.js';
 
 /**
  * Build the in-process service hook bundle the engine passes to built-ins.
@@ -34,6 +38,7 @@ import { AgentActivityService, type PersistedActivityRow } from './agent-activit
 function buildEngineServices(db: Db): EngineConfig['services'] {
   const wsManager = new WorkspaceManager(db);
   const artifactService = new ArtifactService(db);
+  const repoKnowledge = new RepoKnowledgeGraphService(db);
   return {
     workspaces: {
       create: async (payload) => {
@@ -82,6 +87,10 @@ function buildEngineServices(db: Db): EngineConfig['services'] {
           nodeName: d.spawnContext?.nodeName,
         }));
       },
+    },
+    repoKnowledge: {
+      buildNodeContextPacket: (input) => repoKnowledge.buildNodeContextPacket(input),
+      recordContextUsage: (input) => repoKnowledge.recordContextUsage(input),
     },
   };
 }
@@ -633,6 +642,9 @@ export class ExecutionService {
       .catch(() => {})
       .finally(() => {
         runningEngines.delete(executionId);
+        this.enqueueWorkflowContextEvaluation(executionId).catch((err) => {
+          logger.warn('workflow context semantic evaluation enqueue failed', { executionId, error: (err as Error).message });
+        });
         // Auto-dequeue next waiting execution for this workflow
         this.dequeueNext(workflow.name).catch(() => {});
       });
@@ -955,14 +967,14 @@ export class ExecutionService {
       || row.source === 'spawn'
       || (!exec.workflowId && row.source === 'chat');
 
-    const [workflowDoc, traces, directChildren, interventions, logs, activity] = await Promise.all([
+    const [workflowDoc, traces, directChildren, interventions, logs, activity, contextWorkflowEvaluation] = await Promise.all([
       exec.workflowId && ObjectId.isValid(exec.workflowId)
         ? this.db.collection('workflows').findOne(
             { _id: new ObjectId(exec.workflowId) },
             { projection: { name: 1, parsed: 1 } },
           )
         : Promise.resolve(null),
-      this.stateManager.getTraces(id),
+      this.getTraces(id),
       this.getChildren(id, 'direct'),
       new InterventionService(this.db).listForWorkflowRun(id).catch(() => []),
       this.db
@@ -973,6 +985,7 @@ export class ExecutionService {
         .toArray()
         .catch(() => []),
       new AgentActivityService(this.db).listForRef(id, { limit: 50 }).catch(() => []),
+      new ContextWorkflowEvaluationService(this.db).getSummaryForExecution(id).catch(() => null),
     ]);
 
     await this.attachChatMetadataFromMessages([row]);
@@ -1062,6 +1075,7 @@ export class ExecutionService {
         failedNode: exec.failedNode ?? null,
         errorMessage: exec.errorMessage ?? null,
         isAgentExecution,
+        contextWorkflowEvaluation: contextWorkflowEvaluation ?? row.contextWorkflowEvaluation ?? null,
       },
       progress: {
         completed: completedCount,
@@ -1148,6 +1162,34 @@ export class ExecutionService {
     return this.stateManager.listFeedback(executionId);
   }
 
+  private async enqueueWorkflowContextEvaluation(executionId: string, reason = 'workflow_terminal', force = false): Promise<void> {
+    const exec = await this.stateManager.getExecution(executionId).catch(() => null);
+    if (!exec || (exec.status !== 'completed' && exec.status !== 'failed')) return;
+    const service = new ContextWorkflowEvaluationService(this.db);
+    const job = await service.enqueueForExecution(executionId, reason, { force });
+    if (!job) return;
+    service.runPendingWorkflowEvaluations(1).catch((err) => {
+      logger.warn('workflow context semantic evaluation failed', { executionId, error: (err as Error).message });
+    });
+  }
+
+  async rerunWorkflowContextEvaluation(executionId: string): Promise<Record<string, unknown> | null> {
+    const exec = await this.stateManager.getExecution(executionId).catch(() => null);
+    if (!exec) throw new Error('Execution not found');
+    if (exec.status !== 'completed' && exec.status !== 'failed') {
+      const err = new Error(`Can only rerun workflow context evaluation for terminal executions (was: ${exec.status})`);
+      (err as unknown as { statusCode: number }).statusCode = 409;
+      throw err;
+    }
+    const service = new ContextWorkflowEvaluationService(this.db);
+    const job = await service.enqueueForExecution(executionId, 'manual_rerun', { force: true });
+    if (!job) return null;
+    service.runPendingWorkflowEvaluations(1).catch((err) => {
+      logger.warn('manual workflow context semantic evaluation failed', { executionId, error: (err as Error).message });
+    });
+    return service.getSummaryForExecution(executionId);
+  }
+
   async appendFeedback(
     executionId: string,
     content: string,
@@ -1206,6 +1248,12 @@ export class ExecutionService {
       createdBy,
     };
     await this.stateManager.appendFeedback(executionId, entry);
+    new ContextEvaluationService(this.db).reevaluateExecution(executionId).catch((err) => {
+      logger.warn('context evaluation refresh after feedback failed', { executionId, error: (err as Error).message });
+    });
+    this.enqueueWorkflowContextEvaluation(executionId, 'feedback', true).catch((err) => {
+      logger.warn('workflow context semantic evaluation enqueue after feedback failed', { executionId, error: (err as Error).message });
+    });
     return entry;
   }
 
@@ -1516,17 +1564,24 @@ export class ExecutionService {
 
     engine.retryFromNode(workflow, executionId, nodeName)
       .catch(() => {})
-      .finally(() => runningEngines.delete(executionId));
+      .finally(() => {
+        runningEngines.delete(executionId);
+        this.enqueueWorkflowContextEvaluation(executionId, 'retry_terminal', true).catch((err) => {
+          logger.warn('workflow context semantic evaluation enqueue after retry failed', { executionId, error: (err as Error).message });
+        });
+      });
 
     return { id: executionId, status: 'running', retryingFrom: nodeName };
   }
 
   async getTraces(executionId: string): Promise<Record<string, unknown>[]> {
-    return this.stateManager.getTraces(executionId);
+    const traces = await this.stateManager.getTraces(executionId);
+    return hydrateTraceContextEvaluations(this.db, executionId, traces);
   }
 
   async getTracesByNode(executionId: string, node: string): Promise<Record<string, unknown>[]> {
-    return this.stateManager.getTracesByNode(executionId, node);
+    const traces = await this.stateManager.getTracesByNode(executionId, node);
+    return hydrateTraceContextEvaluations(this.db, executionId, traces);
   }
 
   async getTraceByAttempt(executionId: string, node: string, attempt: number): Promise<Record<string, unknown> | null> {
