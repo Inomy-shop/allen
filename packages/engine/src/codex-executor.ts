@@ -213,12 +213,12 @@ ${renderCurrentState()}
     if (!isResume) {
       // Only prepend system prompt on first run — resume already has context.
       // Repo-context, artifact, and non-interactive guidance are layered idempotently.
-      const systemPrefix = withNonInteractiveGuidance(
-        withMandatoryRepoContext(
-          withArtifactsGuidance(withRepoContextLoadingGuidance(role?.system)),
-          repoKnowledgeContext?.systemPromptBlock,
-        ),
-      );
+      let systemPrefix = withArtifactsGuidance(role?.system);
+      if (repoKnowledgeContext) {
+        systemPrefix = withRepoContextLoadingGuidance(systemPrefix);
+        systemPrefix = withMandatoryRepoContext(systemPrefix, repoKnowledgeContext.systemPromptBlock);
+      }
+      systemPrefix = withNonInteractiveGuidance(systemPrefix);
       repoContextLoadingGuidancePresent = hasRepoContextLoadingGuidance(systemPrefix);
       repoContextLoadingGuidanceInjected =
         !repoContextLoadingGuidanceAlreadyPresent && repoContextLoadingGuidancePresent;

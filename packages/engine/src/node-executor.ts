@@ -762,13 +762,15 @@ ${context}
       }
     } catch { /* org-context unavailable — fall back to plain system prompt */ }
   }
-  // Universal artifact and repo-context guidance. These helpers are
-  // idempotent and also work when an agent has no authored system prompt,
-  // which keeps the runtime contract visible to every workflow agent.
+  // Universal artifact guidance is always visible. Repo-context guidance is
+  // only visible when a repo knowledge packet exists; otherwise workflows with
+  // the context provider disabled should not ask agents to load repo context.
   const repoContextLoadingGuidanceAlreadyPresent = hasRepoContextLoadingGuidance(effectiveSystem);
   effectiveSystem = withArtifactsGuidance(effectiveSystem);
-  effectiveSystem = withRepoContextLoadingGuidance(effectiveSystem);
-  effectiveSystem = withMandatoryRepoContext(effectiveSystem, deps.repoKnowledgeContext?.systemPromptBlock);
+  if (deps.repoKnowledgeContext) {
+    effectiveSystem = withRepoContextLoadingGuidance(effectiveSystem);
+    effectiveSystem = withMandatoryRepoContext(effectiveSystem, deps.repoKnowledgeContext.systemPromptBlock);
+  }
   const repoContextLoadingGuidancePresent = hasRepoContextLoadingGuidance(effectiveSystem);
   const repoContextLoadingGuidanceInjected =
     !repoContextLoadingGuidanceAlreadyPresent && repoContextLoadingGuidancePresent;
@@ -883,6 +885,7 @@ ${context}
           mcpToolNames: discoveredMcpTools,
           disabledMcpTools,
           materializedNameSuffix: deps.repoKnowledgeContext?.systemPromptBlock ? `${deps.executionId ?? 'exec'}-${nodeName}-${deps.repoKnowledgeContext.packetId}` : undefined,
+          includeRepoContextLoadingGuidance: Boolean(deps.repoKnowledgeContext),
         },
         prompt: effectivePrompt,
         cwd,

@@ -26,6 +26,7 @@ describe('CogneeMemoryService', () => {
   let db: Db;
   let repoPath: string | undefined;
   let tempPaths: string[] = [];
+  const originalContextProvider = process.env.ALLEN_CONTEXT_PROVIDER;
 
   beforeAll(async () => {
     mongod = await MongoMemoryServer.create();
@@ -35,11 +36,14 @@ describe('CogneeMemoryService', () => {
   });
 
   afterAll(async () => {
+    if (originalContextProvider === undefined) delete process.env.ALLEN_CONTEXT_PROVIDER;
+    else process.env.ALLEN_CONTEXT_PROVIDER = originalContextProvider;
     await client.close();
     await mongod.stop();
   });
 
   beforeEach(async () => {
+    process.env.ALLEN_CONTEXT_PROVIDER = 'cognee';
     await db.dropDatabase();
     mocks.runCogneeSidecar.mockReset();
     mocks.runCogneeSidecar.mockResolvedValue({ diagnostics: [{ code: 'fake_cognee', severity: 'info' }] });

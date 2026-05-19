@@ -1,5 +1,6 @@
 import { createConfiguredContextReranker, type ContextReranker } from './repo-context-reranker.js';
 import { CogneeMemoryProvider } from './repo-context-cognee-provider.js';
+import { configuredContextProvider } from './context-provider-config.js';
 import type { Db } from 'mongodb';
 
 export type RepoContextProvider = 'claude' | 'codex' | 'unknown';
@@ -292,13 +293,15 @@ export class RepoContextEngine {
 }
 
 export function createConfiguredKnowledgeProviders(options: { db?: Db } = {}): KnowledgeRetrievalProvider[] {
-  const provider = (process.env.ALLEN_CONTEXT_PROVIDER ?? 'cognee').toLowerCase();
+  const provider = configuredContextProvider();
+  if (!provider) return [];
   if (provider === 'cognee' || provider === 'cognee_memory') {
     const providers: KnowledgeRetrievalProvider[] = [new CogneeMemoryProvider(options.db)];
     if (contextProviderFallback() === 'graph') providers.push(new MandatoryGraphProvider(), new GraphKeywordMetadataProvider());
     return providers;
   }
-  return [new MandatoryGraphProvider(), new GraphKeywordMetadataProvider()];
+  if (provider === 'allen') return [new MandatoryGraphProvider(), new GraphKeywordMetadataProvider()];
+  return [];
 }
 
 function contextProviderFallback(): string {

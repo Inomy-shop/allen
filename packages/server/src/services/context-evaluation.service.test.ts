@@ -15,6 +15,7 @@ describe('ContextEvaluationService', () => {
   const originalSemanticEvaluator = process.env.ALLEN_CONTEXT_SEMANTIC_EVALUATOR;
   const originalSemanticMode = process.env.ALLEN_CONTEXT_SEMANTIC_MODE;
   const originalDeepEvalScript = process.env.ALLEN_DEEPEVAL_SCRIPT;
+  const originalContextProvider = process.env.ALLEN_CONTEXT_PROVIDER;
 
   beforeAll(async () => {
     mongo = await MongoMemoryServer.create();
@@ -24,6 +25,7 @@ describe('ContextEvaluationService', () => {
   });
 
   beforeEach(async () => {
+    process.env.ALLEN_CONTEXT_PROVIDER = 'graph';
     process.env.ALLEN_CONTEXT_SEMANTIC_EVALUATOR = originalSemanticEvaluator ?? '';
     if (originalSemanticMode === undefined) delete process.env.ALLEN_CONTEXT_SEMANTIC_MODE;
     else process.env.ALLEN_CONTEXT_SEMANTIC_MODE = originalSemanticMode;
@@ -49,6 +51,8 @@ describe('ContextEvaluationService', () => {
     else process.env.ALLEN_CONTEXT_SEMANTIC_MODE = originalSemanticMode;
     if (originalDeepEvalScript === undefined) delete process.env.ALLEN_DEEPEVAL_SCRIPT;
     else process.env.ALLEN_DEEPEVAL_SCRIPT = originalDeepEvalScript;
+    if (originalContextProvider === undefined) delete process.env.ALLEN_CONTEXT_PROVIDER;
+    else process.env.ALLEN_CONTEXT_PROVIDER = originalContextProvider;
     await client.close();
     await mongo.stop();
   });

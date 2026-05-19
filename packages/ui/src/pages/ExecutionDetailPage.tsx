@@ -9,7 +9,7 @@ import {
 } from 'lucide-react';
 import { useExecution, type TimelineEvent, type NodeState } from '../hooks/useExecution';
 import { useResizable } from '../hooks/useResizable';
-import { executions as api, authHeaders, interventions as interventionsApi, type RunStatus } from '../services/api';
+import { executions as api, authHeaders, interventions as interventionsApi, system as systemApi, type RunStatus } from '../services/api';
 import StatusBadge from '../components/common/StatusBadge';
 import CostDisplay from '../components/common/CostDisplay';
 import Select from '../components/common/Select';
@@ -777,6 +777,7 @@ function RunContextPanel({
   artifactCount,
   onRerunContextEvaluation,
   contextEvaluationBusy,
+  contextEngineEnabled,
 }: {
   runContext: RunStatus | null;
   execution: any;
@@ -784,13 +785,14 @@ function RunContextPanel({
   artifactCount: number | null;
   onRerunContextEvaluation?: () => void;
   contextEvaluationBusy?: boolean;
+  contextEngineEnabled?: boolean;
 }) {
   const [expanded, setExpanded] = useState(false);
   const percent = runContext?.progress.percent ?? 0;
   const phase = runContext?.progress.phase ?? execution.status;
   const workflowContextEval = runContext?.execution.contextWorkflowEvaluation;
   const workflowContextScore = workflowContextEval?.result?.scores?.overall;
-  const showWorkflowContextEval = Boolean(workflowContextEval || ['completed', 'failed', 'cancelled'].includes(String(execution.status)));
+  const showWorkflowContextEval = Boolean(contextEngineEnabled && (workflowContextEval || ['completed', 'failed', 'cancelled'].includes(String(execution.status))));
   return (
     <section className="shrink-0 border-b border-app bg-surface">
       <button
@@ -1548,6 +1550,7 @@ export default function ExecutionDetailPage() {
   const [artifactCount, setArtifactCount] = useState<number | null>(null);
   const [runContext, setRunContext] = useState<RunStatus | null>(null);
   const [contextEvaluationBusy, setContextEvaluationBusy] = useState(false);
+  const [contextEngineEnabled, setContextEngineEnabled] = useState(false);
   const [feedbackEntries, setFeedbackEntries] = useState<Array<{ id: string; content: string; targetNodes?: string[]; createdAt: string; createdBy?: string }>>([]);
   const [approvalModalOpen, setApprovalModalOpen] = useState(false);
 
@@ -1556,6 +1559,14 @@ export default function ExecutionDetailPage() {
   // whenever a new input request arrives or the execution resumes.
   const [inputDialogDismissed, setInputDialogDismissed] = useState(false);
   const lastInputNodeRef = useRef<string | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    systemApi.runtimeConfig()
+      .then((config) => { if (!cancelled) setContextEngineEnabled(config.contextEngine.enabled); })
+      .catch(() => { if (!cancelled) setContextEngineEnabled(false); });
+    return () => { cancelled = true; };
+  }, []);
+
   useEffect(() => {
     if (!id) return;
     let cancelled = false;
@@ -1767,7 +1778,7 @@ export default function ExecutionDetailPage() {
   }, [id, refresh]);
 
   const handleRerunContextEvaluation = useCallback(async () => {
-    if (!id) return;
+    if (!id || !contextEngineEnabled) return;
     setContextEvaluationBusy(true);
     try {
       let summary = await api.rerunWorkflowContextEvaluation(id);
@@ -1790,7 +1801,7 @@ export default function ExecutionDetailPage() {
     } finally {
       setContextEvaluationBusy(false);
     }
-  }, [id]);
+  }, [id, contextEngineEnabled]);
 
   const canAppendFeedback = ['completed', 'failed', 'cancelled'].includes(execution?.status);
 
@@ -2312,8 +2323,9 @@ export default function ExecutionDetailPage() {
               execution={execution}
               pendingIntervention={pendingIntervention}
               artifactCount={artifactCount}
-              onRerunContextEvaluation={handleRerunContextEvaluation}
+              onRerunContextEvaluation={contextEngineEnabled ? handleRerunContextEvaluation : undefined}
               contextEvaluationBusy={contextEvaluationBusy}
+              contextEngineEnabled={contextEngineEnabled}
             />
             <div className="flex-1 min-h-0 overflow-y-auto">
               {/*
@@ -2336,6 +2348,7 @@ export default function ExecutionDetailPage() {
                 allChildren={children ?? []}
                 descendantsMode={descendantsMode}
                 onToggleDescendants={toggleDescendants}
+                contextEngineEnabled={contextEngineEnabled}
               />
             </div>
           </div>

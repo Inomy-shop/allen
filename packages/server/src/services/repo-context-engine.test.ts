@@ -2,7 +2,7 @@ import { mkdtempSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSy
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execFileSync } from 'node:child_process';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
   GraphKeywordMetadataProvider,
   MandatoryGraphProvider,
@@ -13,6 +13,17 @@ import {
 import { summarizeInjection, WorkflowContextInjectionAdapter } from './workflow-context-injection-adapter.js';
 import { createConfiguredContextReranker, type ContextRerankInput, type ContextRerankResult, type ContextReranker } from './repo-context-reranker.js';
 import { CogneeMemoryProvider, runCogneeSidecar } from './repo-context-cognee-provider.js';
+
+const originalContextProvider = process.env.ALLEN_CONTEXT_PROVIDER;
+
+beforeEach(() => {
+  process.env.ALLEN_CONTEXT_PROVIDER = 'cognee';
+});
+
+afterEach(() => {
+  if (originalContextProvider === undefined) delete process.env.ALLEN_CONTEXT_PROVIDER;
+  else process.env.ALLEN_CONTEXT_PROVIDER = originalContextProvider;
+});
 
 describe('RepoContextEngine', () => {
   const nodes: KnowledgeNodeLike[] = [

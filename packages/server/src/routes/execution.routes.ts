@@ -2,6 +2,7 @@ import { Router, type Request, type Response } from 'express';
 import { ExecutionService } from '../services/execution.service.js';
 import { InterventionService } from '../services/intervention.service.js';
 import { RepoKnowledgeGraphService } from '../services/repo-knowledge-graph.service.js';
+import { isContextEngineEnabled } from '../services/context-provider-config.js';
 import { param } from '../types.js';
 import type { Db } from 'mongodb';
 import { UserService } from '../services/user.service.js';
@@ -161,6 +162,7 @@ export function executionRoutes(db: Db): Router {
   // Returns repo knowledge packets and usage traces captured for node attempts.
   router.get('/:id/context-usage', async (req: Request, res: Response) => {
     try {
+      if (!isContextEngineEnabled()) return res.status(409).json(contextProviderDisabledPayload());
       const executionId = param(req, 'id');
       res.json(await repoKnowledge.getExecutionContextUsageReport(executionId));
     } catch (err: unknown) {
@@ -404,6 +406,7 @@ export function executionRoutes(db: Db): Router {
   // POST /api/executions/:id/context-evaluation/workflow/rerun
   router.post('/:id/context-evaluation/workflow/rerun', async (req: Request, res: Response) => {
     try {
+      if (!isContextEngineEnabled()) return res.status(409).json(contextProviderDisabledPayload());
       const result = await service.rerunWorkflowContextEvaluation(param(req, 'id'));
       res.status(202).json(result ?? { status: 'disabled' });
     } catch (err: unknown) {
@@ -742,4 +745,11 @@ export function executionRoutes(db: Db): Router {
   });
 
   return router;
+}
+
+function contextProviderDisabledPayload(): Record<string, unknown> {
+  return {
+    error: 'Context provider is disabled. Set ALLEN_CONTEXT_PROVIDER to enable context engine flows.',
+    code: 'CONTEXT_PROVIDER_DISABLED',
+  };
 }

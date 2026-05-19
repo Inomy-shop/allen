@@ -252,6 +252,13 @@ export type AgentSpec = {
    * the same agent could overwrite each other.
    */
   materializedNameSuffix?: string;
+  /**
+   * Include Allen's repo-context loading protocol and usage schema in the
+   * materialized agent file. This must only be enabled for runs that have an
+   * active repo knowledge packet; otherwise global Claude agent files would
+   * tell agents to load repo context even when the context provider is off.
+   */
+  includeRepoContextLoadingGuidance?: boolean;
 };
 
 /** Slug the agent name so it forms a valid filename + subagent identifier. */
@@ -271,7 +278,11 @@ export function renderAgentFile(agent: AgentSpec): { subagentName: string; body:
   // skips a duplicate append in that case. Same for the non-interactive
   // guidance — materialized CLI subagents are spawned outside chat (workflow
   // / direct agent CLI), so ask_user / delegate_to_agent must be off-limits.
-  const sourceSystem = withNonInteractiveGuidance(withArtifactsGuidance(withRepoContextLoadingGuidance(agent.system)));
+  const systemWithArtifacts = withArtifactsGuidance(agent.system);
+  const systemWithRepoContext = agent.includeRepoContextLoadingGuidance
+    ? withRepoContextLoadingGuidance(systemWithArtifacts)
+    : systemWithArtifacts;
+  const sourceSystem = withNonInteractiveGuidance(systemWithRepoContext);
 
   // A line of three+ dashes in the body would prematurely terminate the YAML
   // frontmatter we're about to emit. Swap it for `***`, an equivalent markdown

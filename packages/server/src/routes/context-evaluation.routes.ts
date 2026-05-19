@@ -2,6 +2,7 @@ import { createHmac, timingSafeEqual } from 'node:crypto';
 import { Router, type Request, type Response } from 'express';
 import type { Db } from 'mongodb';
 import { runChatLLM } from '../services/chat-llm.js';
+import { isCogneeContextEnabled, isContextEngineEnabled } from '../services/context-provider-config.js';
 
 const MAX_CLOCK_SKEW_MS = 5 * 60_000;
 
@@ -10,6 +11,7 @@ export function internalContextEvaluationRoutes(db: Db): Router {
 
   router.post('/judge', async (req: Request, res: Response) => {
     try {
+      if (!isContextEngineEnabled()) return res.status(409).json(contextProviderDisabledPayload());
       const { body, rawBody } = parseSignedJsonBody(req.body);
       const prompt = typeof body.prompt === 'string' ? body.prompt : '';
       if (!prompt.trim()) return res.status(400).json({ error: 'prompt is required' });
@@ -44,6 +46,7 @@ export function internalContextEvaluationRoutes(db: Db): Router {
 
   router.post('/cognee-llm', async (req: Request, res: Response) => {
     try {
+      if (!isCogneeContextEnabled()) return res.status(409).json(contextProviderDisabledPayload('Cognee context provider is disabled.'));
       const { body, rawBody } = parseSignedJsonBody(req.body);
       const prompt = typeof body.prompt === 'string' ? body.prompt : '';
       if (!prompt.trim()) return res.status(400).json({ error: 'prompt is required' });
@@ -78,6 +81,7 @@ export function internalContextEvaluationRoutes(db: Db): Router {
 
   router.post('/cognee-llm/v1/chat/completions', async (req: Request, res: Response) => {
     try {
+      if (!isCogneeContextEnabled()) return res.status(409).json(contextProviderDisabledPayload('Cognee context provider is disabled.'));
       const { body, rawBody } = parseSignedJsonBody(req.body);
       const verification = verifyCogneeOpenAiCompatibleAuth(req, rawBody);
       if (!verification.ok) return res.status(verification.status).json({ error: verification.error });
@@ -117,6 +121,10 @@ export function internalContextEvaluationRoutes(db: Db): Router {
   });
 
   return router;
+}
+
+function contextProviderDisabledPayload(error = 'Context provider is disabled. Set ALLEN_CONTEXT_PROVIDER to enable context engine flows.'): Record<string, unknown> {
+  return { error, code: 'CONTEXT_PROVIDER_DISABLED' };
 }
 
 function parseSignedJsonBody(value: unknown): { body: Record<string, unknown>; rawBody: Buffer } {

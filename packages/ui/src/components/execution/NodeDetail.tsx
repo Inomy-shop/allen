@@ -419,6 +419,7 @@ interface Props {
   allChildren?: SpawnedChildRow[];
   descendantsMode?: boolean;
   onToggleDescendants?: (next: boolean) => void;
+  contextEngineEnabled?: boolean;
 }
 
 /**
@@ -689,6 +690,7 @@ type DataTab = 'input' | 'prompt' | 'response' | 'outputs' | 'inspector';
 export default function NodeDetail({
   nodeName, nodeState, trace, allTraces = [], waitingInput, onSubmitInput,
   spawnedChildren = [], allChildren = [], descendantsMode = false, onToggleDescendants,
+  contextEngineEnabled = true,
 }: Props) {
   const [formData, setFormData] = useState<Record<string, unknown>>({});
   const [expandViewer, setExpandViewer] = useState<{ title: string; content: string; mode?: ViewerMode } | null>(null);
@@ -1075,7 +1077,7 @@ export default function NodeDetail({
               )}
               {resolvedTab === 'inspector' && activeTrace && (
                 <div className="p-3 overflow-auto h-full">
-                  <NodeInspector trace={activeTrace as any} />
+                  <NodeInspector trace={activeTrace as any} contextEngineEnabled={contextEngineEnabled} />
                 </div>
               )}
               {/* Empty-state fallback: when every tab is empty (pending

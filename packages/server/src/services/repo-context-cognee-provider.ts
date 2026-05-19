@@ -15,6 +15,7 @@ import type {
 import { isRecord } from './repo-knowledge-graph-utils.js';
 import { normalizeUsageArray } from './repo-knowledge-graph-usage.js';
 import { resolveAllenPython } from './python-runtime.js';
+import { contextProviderDisabledError, isCogneeContextEnabled } from './context-provider-config.js';
 
 const COGNEE_INGEST_FORMAT = 'markdown_file_docmeta_v1';
 
@@ -24,6 +25,16 @@ export class CogneeMemoryProvider implements KnowledgeRetrievalProvider {
   constructor(private db?: Db) {}
 
   async retrieve(input: KnowledgeRetrievalInput): Promise<KnowledgeRetrievalResult> {
+    if (!isCogneeContextEnabled()) {
+      return {
+        providerId: this.providerId,
+        candidates: [],
+        selectedRefs: [],
+        rejectedRefs: [],
+        diagnostics: [{ code: 'cognee_context_provider_disabled', severity: 'info', message: 'Cognee context provider is disabled.' }],
+        trace: [],
+      };
+    }
     const status = await this.loadStatus(input.repoId);
     const output = await runCogneeSidecar('search', {
       datasetName: firstString(status?.datasetName) ?? cogneeDatasetName(input.repoId, input.repoName),
@@ -158,6 +169,7 @@ export async function runCogneeSidecar(
   onProgress?: (progress: CogneeSidecarProgress) => void,
   options: CogneeSidecarOptions = {},
 ): Promise<Record<string, unknown>> {
+  if (!isCogneeContextEnabled()) throw contextProviderDisabledError('Cognee context provider is disabled.');
   const python = resolveAllenPython();
   const script = resolveCogneeScript();
   const defaultTimeoutMs = action === 'ingest' ? DEFAULT_COGNEE_INGEST_TIMEOUT_MS : DEFAULT_COGNEE_SEARCH_TIMEOUT_MS;

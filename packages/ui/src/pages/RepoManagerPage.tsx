@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
-import { repos as repoApi, workflows as wfApi } from '../services/api';
+import { repos as repoApi, workflows as wfApi, system as systemApi } from '../services/api';
 import DeleteConfirmDialog from '../components/common/DeleteConfirmDialog';
 import {
   FolderGit2, Plus, RefreshCw, Trash2, Pencil, ScanSearch, X,
@@ -63,6 +63,12 @@ type CogneeStatus = {
   lastStartedAt?: string;
   lastCompletedAt?: string;
   updatedAt?: string;
+};
+
+type ContextRuntimeConfig = {
+  enabled: boolean;
+  provider: 'allen' | 'cognee' | 'cognee_memory' | null;
+  cogneeEnabled: boolean;
 };
 
 /* ── Add Dialog ─────────────────────────────────────────────────────────── */
@@ -435,6 +441,7 @@ export default function RepoManagerPage() {
   const [cogneeBuildingId, setCogneeBuildingId] = useState<string | null>(null);
   const [cogneeStoppingId, setCogneeStoppingId] = useState<string | null>(null);
   const [cogneeStatusByRepo, setCogneeStatusByRepo] = useState<Record<string, CogneeStatus>>({});
+  const [contextConfig, setContextConfig] = useState<ContextRuntimeConfig>({ enabled: false, provider: null, cogneeEnabled: false });
   const [deletingRepo, setDeletingRepo] = useState<{ id: string; name: string } | null>(null);
   const [configRepoId, setConfigRepoId] = useState<string | null>(null);
   const [wsCreateRepo, setWsCreateRepo] = useState<Repo | null>(null);
@@ -445,12 +452,20 @@ export default function RepoManagerPage() {
     setLoading(true);
     try {
       const list = await repoApi.list();
-      setRepoList(list);
-      const statusEntries = await Promise.all(list.map(async (repo: Repo) => {
-        const status = await repoApi.getCogneeStatus(repo._id).catch(() => ({ status: 'pending', documentCount: 0 }));
-        return [repo._id, status] as const;
+      const runtime = await systemApi.runtimeConfig().catch(() => ({
+        contextEngine: { enabled: false, provider: null, cogneeEnabled: false } as ContextRuntimeConfig,
       }));
-      setCogneeStatusByRepo(Object.fromEntries(statusEntries));
+      setContextConfig(runtime.contextEngine);
+      setRepoList(list);
+      if (runtime.contextEngine.cogneeEnabled) {
+        const statusEntries = await Promise.all(list.map(async (repo: Repo) => {
+          const status = await repoApi.getCogneeStatus(repo._id).catch(() => ({ status: 'pending', documentCount: 0 }));
+          return [repo._id, status] as const;
+        }));
+        setCogneeStatusByRepo(Object.fromEntries(statusEntries));
+      } else {
+        setCogneeStatusByRepo({});
+      }
     } catch { /* ignore */ }
     setLoading(false);
   }, []);
@@ -458,6 +473,7 @@ export default function RepoManagerPage() {
   useEffect(() => { refresh(); }, [refresh]);
 
   useEffect(() => {
+    if (!contextConfig.cogneeEnabled) return;
     const runningIds = Object.entries(cogneeStatusByRepo)
       .filter(([, status]) => isCogneeRunning(status))
       .map(([id]) => id);
@@ -475,7 +491,7 @@ export default function RepoManagerPage() {
       });
     }, 2000);
     return () => window.clearInterval(timer);
-  }, [cogneeStatusByRepo]);
+  }, [cogneeStatusByRepo, contextConfig.cogneeEnabled]);
 
   const handleDelete = async () => {
     if (!deletingRepo) return;
@@ -525,6 +541,7 @@ export default function RepoManagerPage() {
 
   const handleBuildCognee = async (e: React.MouseEvent, id: string, options?: { cleanRebuild?: boolean }) => {
     e.stopPropagation();
+    if (!contextConfig.cogneeEnabled) return;
     setCogneeBuildingId(id);
     try {
       const status = await repoApi.refreshCognee(id, options);
@@ -544,6 +561,7 @@ export default function RepoManagerPage() {
 
   const handleStopCognee = async (e: React.MouseEvent, id: string) => {
     e.stopPropagation();
+    if (!contextConfig.cogneeEnabled) return;
     setCogneeStoppingId(id);
     try {
       const status = await repoApi.stopCognee(id);
@@ -611,7 +629,7 @@ export default function RepoManagerPage() {
           {repoList.map((repo) => {
             const isScanning = scanningId === repo._id;
             const isArchived = repo.status === 'archived';
-            const cogneeStatus = cogneeStatusByRepo[repo._id];
+            const cogneeStatus = contextConfig.cogneeEnabled ? cogneeStatusByRepo[repo._id] : undefined;
             const isBuildRequestPending = cogneeBuildingId === repo._id;
             const isStopRequestPending = cogneeStoppingId === repo._id;
             const hasLiveBuild = isCogneeLiveBuild(cogneeStatus);
@@ -653,10 +671,12 @@ export default function RepoManagerPage() {
                   <span className="flex items-center gap-1">
                     <GitBranch className="w-3 h-3" />{repo.detected?.defaultBranch ?? 'main'}
                   </span>
-                  <span className="flex items-center gap-1" title={cogneeStatusTitle(cogneeStatus)}>
-                    <Sparkles className="w-3 h-3" />
-                    {contextStatusLabel(cogneeStatus)}
-                  </span>
+                  {contextConfig.cogneeEnabled && (
+                    <span className="flex items-center gap-1" title={cogneeStatusTitle(cogneeStatus)}>
+                      <Sparkles className="w-3 h-3" />
+                      {contextStatusLabel(cogneeStatus)}
+                    </span>
+                  )}
                   {repo.detected?.remoteUrl && (() => {
                     const sshMatch = repo.detected.remoteUrl.match(/^git@([^:]+):(.+?)(?:\.git)?$/);
                     const httpsUrl = sshMatch ? `https://${sshMatch[1]}/${sshMatch[2]}` : repo.detected.remoteUrl.replace(/\.git$/, '');
@@ -669,13 +689,15 @@ export default function RepoManagerPage() {
                     );
                   })()}
                 </div>
-                <CogneeProgress status={cogneeStatus} />
+                {contextConfig.cogneeEnabled && <CogneeProgress status={cogneeStatus} />}
 
                 {/* Actions row — always visible, ghost icons */}
                 <div className="flex items-center gap-0.5 pl-11 -ml-1 mt-auto">
-                  <button onClick={(e) => { e.stopPropagation(); setContextRepo(repo); }} className="p-1.5 rounded text-theme-muted hover:text-accent hover:bg-app-muted transition-colors" title="View Context">
-                    <FileText className="w-3.5 h-3.5" />
-                  </button>
+                  {contextConfig.enabled && (
+                    <button onClick={(e) => { e.stopPropagation(); setContextRepo(repo); }} className="p-1.5 rounded text-theme-muted hover:text-accent hover:bg-app-muted transition-colors" title="View Context">
+                      <FileText className="w-3.5 h-3.5" />
+                    </button>
+                  )}
                   <button onClick={(e) => { e.stopPropagation(); setWsCreateRepo(repo); }} className="p-1.5 rounded text-theme-muted hover:text-accent-green hover:bg-app-muted transition-colors" title="New Workspace">
                     <Monitor className="w-3.5 h-3.5" />
                   </button>
@@ -685,16 +707,18 @@ export default function RepoManagerPage() {
                   <button onClick={(e) => handleScan(e, repo._id)} disabled={isScanning} className="p-1.5 rounded text-theme-muted hover:text-theme-primary hover:bg-app-muted transition-colors" title="Scan">
                     {isScanning ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <ScanSearch className="w-3.5 h-3.5" />}
                   </button>
-                  {hasLiveBuild && (
+                  {contextConfig.cogneeEnabled && hasLiveBuild && (
                     <button onClick={(e) => handleStopCognee(e, repo._id)} disabled={isStopRequestPending} className="p-1.5 rounded text-theme-muted hover:text-accent-red hover:bg-accent-red/10 transition-colors" title="Stop the active Cognee context build">
                       {isStopRequestPending ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <X className="w-3.5 h-3.5" />}
                     </button>
                   )}
-                  <button onClick={(e) => handleBuildCognee(e, repo._id)} disabled={isBuildRequestPending || hasLiveBuild} className="btn btn-ghost btn-sm ml-1" title="Retry resumes the existing Cognee dataset and preserves already cognified documents">
-                    {(isBuildRequestPending || hasLiveBuild) ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Sparkles className="w-3.5 h-3.5" />}
-                    {isBuildRequestPending ? 'Building context' : cogneeActionLabel(cogneeStatus)}
-                  </button>
-                  {cogneeStatus && cogneeStatus.status !== 'pending' && !hasLiveBuild && (
+                  {contextConfig.cogneeEnabled && (
+                    <button onClick={(e) => handleBuildCognee(e, repo._id)} disabled={isBuildRequestPending || hasLiveBuild} className="btn btn-ghost btn-sm ml-1" title="Retry resumes the existing Cognee dataset and preserves already cognified documents">
+                      {(isBuildRequestPending || hasLiveBuild) ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Sparkles className="w-3.5 h-3.5" />}
+                      {isBuildRequestPending ? 'Building context' : cogneeActionLabel(cogneeStatus)}
+                    </button>
+                  )}
+                  {contextConfig.cogneeEnabled && cogneeStatus && cogneeStatus.status !== 'pending' && !hasLiveBuild && (
                     <button onClick={(e) => handleBuildCognee(e, repo._id, { cleanRebuild: true })} disabled={isBuildRequestPending} className="btn btn-ghost btn-sm" title="Clean rebuild creates a fresh Cognee dataset and does not continue the previous dataset">
                       Clean rebuild context
                     </button>
@@ -727,7 +751,7 @@ export default function RepoManagerPage() {
       />
       {configRepoId && <WorkspaceConfigEditor repoId={configRepoId} onClose={() => setConfigRepoId(null)} />}
       {wsCreateRepo && <QuickWorkspaceDialog repo={wsCreateRepo} onClose={() => setWsCreateRepo(null)} onCreated={(id) => { setWsCreateRepo(null); navigate(`/workspaces/${id}`); }} />}
-      {contextRepo && <RepoContextViewer repoId={contextRepo._id} repoName={contextRepo.name} onClose={() => setContextRepo(null)} />}
+      {contextRepo && contextConfig.enabled && <RepoContextViewer repoId={contextRepo._id} repoName={contextRepo.name} onClose={() => setContextRepo(null)} />}
     </div>
   );
 }
