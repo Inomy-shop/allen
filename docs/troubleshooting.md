@@ -264,8 +264,6 @@ Check:
 - Required workflow inputs are filled.
 - Claude Code CLI is installed and authenticated if the workflow uses agents.
 
-Start with `understand-and-plan` before running implementation workflows.
-
 ## Workflow Pauses Waiting for Input
 
 This can be expected. Human nodes and clarification gates create interventions/checkpoints.

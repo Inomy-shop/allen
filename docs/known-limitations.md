@@ -11,7 +11,6 @@ Allen is early alpha. These limitations are intentional to document current real
 ## Demo Experience
 
 - Allen ships without a bundled sample repository; the first workflow runs against a user-supplied repo.
-- New users should start with `understand-and-plan` before an implementation workflow.
 
 ## Sandboxing
 

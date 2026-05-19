@@ -10,7 +10,7 @@ body:
     attributes:
       label: What broke?
       description: Describe the Allen behavior that failed.
-      placeholder: "Example: The understand-and-plan workflow starts but the execution page never receives node log updates."
+      placeholder: "Example: The feature-plan-and-implement workflow starts but the execution page never receives node log updates."
     validations:
       required: true
   - type: dropdown
@@ -44,7 +44,7 @@ body:
         1. Start MongoDB locally (e.g. brew services start mongodb-community@7.0)
         2. Run npm run setup, then npm start
         3. Add repo /path/to/repo
-        4. Run packages/engine/workflows/understand-and-plan.yml with task "..."
+        4. Run packages/engine/workflows/feature-plan-and-implement.yml with task "..."
         5. Open the execution detail page
         6. Observe ...
     validations:
@@ -66,7 +66,7 @@ body:
     id: workflow
     attributes:
       label: Workflow or page
-      placeholder: "understand-and-plan, feature-plan-and-implement, /workspaces/:id, /executions/:id"
+      placeholder: "feature-plan-and-implement, bug-fix-by-severity, /workspaces/:id, /executions/:id"
   - type: input
     id: environment
     attributes:

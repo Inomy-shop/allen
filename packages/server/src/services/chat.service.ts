@@ -464,7 +464,7 @@ Examples:
 - "Hi" → answer directly; do not run a workflow or spawn an agent
 - "Review code in @my-repo" → load the matching routing playbook silently, compare workflows/agents/MCP tools, gather repo context, present review route/plan, ask confirmation, then create_workspace and spawn_agent if confirmed
 - "Implement a feature in @my-repo" → load the matching routing playbook silently, compare workflows/agents/MCP tools, inspect get_workflow(feature-plan-and-implement) if it fits, present plan and exact inputs, ask confirmation, then run_workflow if confirmed
-- "Fix this bug in @my-repo" → load the matching routing playbook silently, compare workflows/agents/MCP tools, inspect get_workflow(bug-investigate-and-fix) if it fits, present plan and exact inputs, ask confirmation, then run_workflow if confirmed
+- "Fix this bug in @my-repo" → load the matching routing playbook silently, compare workflows/agents/MCP tools, inspect get_workflow(bug-fix-by-severity) if it fits, present plan and exact inputs, ask confirmation, then run_workflow if confirmed
 - "Assign this to engineering lead" → load the matching routing playbook silently, verify the lead/agent target, present delegation target and task, ask confirmation, then delegate_to_agent if confirmed
 - "Run coding-reviewer on @my-repo" → load the matching routing playbook silently, verify the specialist target, present workspace/reviewer plan, ask confirmation, then create_workspace and spawn_agent if confirmed
 - "Work on LIN-123" → load the matching routing playbook silently, inspect the ticket via Linear if available, compare workflows/agents/MCP tools, present plan and exact workflow/agent inputs, ask confirmation, then execute if confirmed

@@ -1,21 +1,34 @@
 name: feature-plan-and-implement
 description: >
-  End-to-end feature workflow: clarify the ask, produce PRD + HLA + TDD with
-  per-doc agent audits, pause at one human gate for plan approval, then run
-  the implementation phase — developer orchestrator spawns specialists in
-  parallel, QA reviews coverage and runs tests, implementation-validator
-  checks the final diff against the PRD, docs are updated, security-aware
-  code review runs, PR opens, and a final summary is posted back to chat.
+  End-to-end feature workflow with artifact-only handoff:
+    1. Requirements analyst reads the raw ask, asks clarifying questions
+       via human gate if the request is ambiguous, then produces the PRD.
+    2. Doc-auditor audits the PRD.
+    3. Technical-designer produces the TDD from the PRD artifact.
+    4. Doc-auditor audits the TDD against the PRD artifact.
+    5. Optional human plan-approval gate (skipped when trusted_mode=true).
+    6. Code node creates an isolated git worktree.
+    7. Engineering-lead dispatches specialists AND self-validates the diff
+       in one node — no separate self-check.
+    8. QA writes/runs tests, implementation-validator checks the diff
+       against the PRD, docs are updated, security-aware code review runs,
+       PR opens, and a final summary is posted to chat.
 
-  Human touches per run (steady state): 3-4 total —
-    1. Initial ask
-    2. Clarification answer (if the ask is ambiguous)
-    3. Plan approval (unless trusted_mode=true)
-    4. PR merge on GitHub (external)
+  Artifact-read convention: every artifact URL is
+  http://.../api/artifacts/<id>/content. To read an artifact, use
+  mcp__allen__allen_get_artifact(artifact_id=<id>) — extract <id> from the
+  URL segment between /artifacts/ and /content, or use the upstream-
+  artifacts index the engine auto-injects into every agent's context.
+  Agents save with mcp__allen__allen_save_artifact.
+
+  Human touches per run (steady state): 2-3 total —
+    1. Clarification answers (only when produce_prd asks)
+    2. Plan approval (skipped when trusted_mode=true)
+    3. PR merge on GitHub (external)
 
   Escalations may add extra touches when agents can't self-correct.
 
-version: 1
+version: 2
 
 context:
   requires: [repo]
@@ -28,7 +41,7 @@ input:
     required: true
     widget: textarea
     label: Feature request
-    description: Describe the feature in plain English — what the user wants, why, and any constraints. This is the source of truth the doc-auditor validates every design decision against.
+    description: Describe the feature in plain English — what the user wants, why, and any constraints.
     placeholder: "e.g. Users should be able to bookmark their favorite workflows so they appear pinned at the top of the workflow list. Per-user, no cap."
   repo_path:
     type: string
@@ -42,83 +55,100 @@ input:
     default: false
     widget: checkbox
     label: Trusted mode (skip plan approval gate)
-    description: If enabled, skips the human plan-approval gate and auto-advances from TDD audit straight to implementation. Only enable for low-risk / repetitive changes where you trust the agents without reviewing the PRD/HLA/TDD.
+    description: If enabled, skips the human plan-approval gate after TDD audit. Only enable for low-risk repetitive changes.
   skip_regression:
     type: boolean
     required: false
     default: false
     widget: checkbox
     label: Skip regression tests
-    description: If enabled, regression tests are listed but not executed by QA. Non-regression tests always run. Use when regression is slow and you want to save ~5-10 minutes per run.
+    description: If enabled, regression tests are listed but not executed by QA.
   chat_session_id:
     type: string
     required: false
     widget: text
-    description: Originating chat session ID (auto-populated when kicked off from chat — leave blank when running from this form).
+    description: Originating chat session ID (auto-populated from chat).
   started_by_user_id:
     type: string
     required: false
     widget: text
-    description: User ID who started the run (auto-populated from chat — used for Slack DM routing of interventions).
+    description: User ID who started the run (for Slack DM routing of interventions).
 
 nodes:
   # ══════════════════════════════════════════════════════════════════════
-  # PHASE 1 — PLANNING
+  # PHASE 1 — PLANNING (artifact-only handoff)
   # ══════════════════════════════════════════════════════════════════════
 
-  clarify:
+  produce_prd:
     agent: requirements-analyst
-    # Explicit resume-on-retry: on retry the agent resumes its prior
-    # session so it remembers the questions it already asked. The
-    # retry_context delivers the user's answers into the resumed
-    # conversation — the agent sees its prior turn + new feedback.
     resume_on_retry: true
     prompt: |
-      You are in CLARIFICATION mode. Read the user's raw feature request and
-      decide whether it's clear enough to produce a PRD OR whether you need to
-      ask clarifying questions first.
+      You are the Product Manager. Read the raw user request and either:
+        (a) ask 1-3 clarifying questions if the ask is ambiguous, OR
+        (b) produce the full PRD as a markdown artifact.
 
       USER REQUEST: {{user_request}}
-      REPO PATH: {{repo_path}}
+      REPO PATH:    {{repo_path}}
 
-      Scan the repo briefly to understand what already exists — this helps you
-      ask informed clarifying questions (e.g., "this API already exists in
-      routes/teams.ts, did you mean to extend it or add a new one?").
+      Scan the repo briefly to ground your understanding before deciding —
+      e.g. "this API already exists in routes/teams.ts, did you mean to
+      extend it or add a new one?".
 
-      You are allowed up to 3 clarification rounds before you must commit.
+      You have up to 3 clarification rounds. Round 3 is your last chance
+      to ask — after that, commit to the best interpretation and produce
+      the PRD.
 
-      If the request is UNCLEAR, emit 1-3 concrete, answerable questions:
-        ```json
-        {
-          "clarifying_questions": [
-            "Per-user or per-workspace bookmarks?",
-            "Pinned to top, or separate section?",
-            "Is there a cap on count?"
-          ],
-          "ready_to_produce_prd": false,
-          "refined_request": ""
-        }
-        ```
+      ─────────────────────────────────────────────────────────────────
+      PATH A — REQUEST IS UNCLEAR
+      ─────────────────────────────────────────────────────────────────
+      Emit 1-3 concrete, answerable questions. Do NOT save an artifact.
 
-      If the request is CLEAR (or after you've received enough answers to
-      resolve ambiguity), synthesize everything you know — the original ask
-      AND all Q&A from prior rounds — into a single coherent specification.
-      This `refined_request` is what the PRD producer reads. Do NOT just
-      parrot the original; incorporate every clarification answer:
-        ```json
-        {
-          "clarifying_questions": [],
-          "ready_to_produce_prd": true,
-          "refined_request": "Users should be able to bookmark workflows (per-user, no cap). Bookmarked workflows appear pinned at the top of the workflow list page, sorted by bookmark time. A bookmark icon toggles the state. Backend: new bookmarks collection with userId + workflowId. Frontend: star icon on each workflow card."
-        }
-        ```
+      ```json
+      {
+        "ready_to_produce_prd": false,
+        "clarifying_questions": [
+          "Per-user or per-workspace bookmarks?",
+          "Pinned to top, or separate section?"
+        ],
+        "prd_artifact_url": ""
+      }
+      ```
 
-      Round 3 is your last chance to ask. After round 3, commit to the best
-      interpretation and emit refined_request with ready_to_produce_prd=true.
+      ─────────────────────────────────────────────────────────────────
+      PATH B — REQUEST IS CLEAR (or round 3 forces commit)
+      ─────────────────────────────────────────────────────────────────
+      Produce the full PRD. It must include: user stories, acceptance
+      criteria (Given/When/Then), edge cases, out-of-scope items, affected
+      areas, risks, assumptions, non-functional requirements, open
+      questions.
+
+      TRACEABILITY CONTRACT:
+        - Every requirement: stable id REQ-001, REQ-002, ...
+        - Every acceptance criterion: stable id AC-001 referencing a REQ.
+        - Every edge case: EC-001. Every NFR: NFR-001.
+
+      Save the FULL PRD as a markdown artifact:
+        mcp__allen__allen_save_artifact("prd/requirements.md", <markdown>, content_type="markdown", overwrite=true)
+      Copy the returned `publicUrl` into the JSON below as `prd_artifact_url`.
+
+      Keep PRD body INSIDE the artifact. JSON carries only the URL + bool.
+
+      ```json
+      {
+        "ready_to_produce_prd": true,
+        "clarifying_questions": [],
+        "prd_artifact_url": "<publicUrl from allen_save_artifact>"
+      }
+      ```
+
+      {{#if retry_context}}
+      RETRY FEEDBACK (from clarification answers OR PRD-audit revise):
+      {{retry_context}}
+      {{/if}}
     outputs:
-      clarifying_questions: "Array of clarifying questions. Empty when the ask is clear enough to proceed."
-      ready_to_produce_prd: "Boolean — true if no clarification needed."
-      refined_request: "Synthesized specification incorporating the original ask + all Q&A answers. Only populated when ready_to_produce_prd=true."
+      ready_to_produce_prd: "Boolean — true when PRD artifact saved; false when clarifying_questions are returned."
+      clarifying_questions: "Array of clarifying questions. Empty when ready_to_produce_prd=true."
+      prd_artifact_url: "Public URL of the PRD markdown artifact. Empty string when ready_to_produce_prd=false."
 
   clarify_human:
     type: human
@@ -127,408 +157,125 @@ nodes:
         label: "Answers to clarifying questions"
         type: textarea
         required: true
-    outputs:
-      answers: "Free-text answers to the clarifying questions."
     prompt: |
-      The agent needs clarification before producing the PRD.
+      The product manager needs clarification before producing the PRD.
 
       Original request: {{user_request}}
 
       Questions to answer:
       {{clarifying_questions}}
 
-      Please answer each question in order. The agent will incorporate
-      your answers into the PRD.
-
-  produce_prd:
-    agent: requirements-analyst
-    resume_on_retry: true
-    prompt: |
-      Produce the Requirements Document (PRD) for this feature.
-
-      {{#if refined_request}}
-      REFINED SPECIFICATION (from clarification):
-      {{refined_request}}
-      {{/if}}
-
-      ORIGINAL USER REQUEST: {{user_request}}
-      REPO PATH: {{repo_path}}
-
-      Walk through your standard requirements decomposition and output a
-      complete PRD with: user stories, acceptance criteria (Given/When/Then),
-      edge cases, out-of-scope items, affected areas, risks, assumptions,
-      non-functional requirements, and any remaining open questions.
-
-      TRACEABILITY CONTRACT:
-        - Every requirement MUST have a stable id: REQ-001, REQ-002, ...
-        - Every acceptance criterion MUST have a stable id: AC-001, AC-002, ...
-        - Every edge case MUST have a stable id: EC-001, EC-002, ...
-        - Every non-functional requirement MUST have a stable id:
-          NFR-001, NFR-002, ...
-        - Each acceptance criterion must reference the requirement id it
-          validates. Do not emit unnumbered acceptance criteria.
-
-      Use the refined_request as your primary input if present — it
-      incorporates the user's original ask plus all clarification answers.
-      Fall back to user_request only if no clarification occurred.
-
-      ARTIFACT + OUTPUT CONTRACT:
-      Before emitting your JSON output, save the full PRD as a public
-      markdown artifact so the human gate and downstream nodes can link
-      to it:
-        allen_save_artifact("prd/requirements.md", <prd markdown>, content_type="markdown", overwrite=true)
-      The tool returns an object shaped like
-        { artifactId, url, publicUrl, rootType, rootId, filename, sizeBytes, overwritten }
-      Copy the `publicUrl` field (full http://host/api/artifacts/<id>/content
-      URL — human-clickable and fetchable with WebFetch/curl) into the
-      JSON block as `prd_artifact_url`. Do NOT use `url` (relative path
-      only) or `artifactId` (opaque id).
-
-      End your response with a fenced JSON block containing EXACTLY these
-      top-level keys (the engine extracts by key name — wrong names = lost data):
-
-      ```json
-      {
-        "prd_markdown": "<your full PRD as a markdown string>",
-        "prd_artifact_url": "<url returned by allen_save_artifact>",
-        "prd_json": {
-          "requirements": [{ "id": "REQ-001", "...": "..." }],
-          "acceptance_criteria": [{ "id": "AC-001", "requirement_id": "REQ-001", "...": "..." }],
-          "edge_cases": [{ "id": "EC-001", "...": "..." }],
-          "assumptions": [...],
-          "risks": [...],
-          "open_questions": [...],
-          "out_of_scope": [...],
-          "non_functional_requirements": [{ "id": "NFR-001", "...": "..." }]
-        }
-      }
-      ```
-
-      {{#if retry_context}}
-      RETRY FEEDBACK from doc-auditor:
-      {{retry_context}}
-      {{/if}}
-    outputs:
-      prd_markdown: "Full PRD as markdown."
-      prd_artifact_url: "Public URL of the PRD markdown artifact (returned by allen_save_artifact)."
-      prd_json: "Structured PRD with requirements, acceptance_criteria, edge_cases, assumptions, risks, open_questions, out_of_scope, non_functional_requirements."
+      Please answer each question in order. The PM will incorporate your
+      answers and either ask follow-ups or produce the PRD.
 
   audit_prd:
     agent: doc-auditor
     resume_on_retry: true
     prompt: |
-      Audit this PRD against the user's original request for intent fidelity.
+      Audit the PRD against the user's original request for intent fidelity.
 
       ORIGINAL USER REQUEST: {{user_request}}
 
-      PRD TO AUDIT:
-      {{prd_markdown}}
+      📄 PRD ARTIFACT (fetch via mcp__allen__allen_get_artifact):
+      {{prd_artifact_url}}
 
       Judge: does this PRD answer what the user asked for? Are stories,
-      acceptance criteria, and edge cases covered? Flag drift, not technical
-      correctness — that's the validator's job later.
+      acceptance criteria, and edge cases covered? Flag intent drift only —
+      technical correctness is the validator's job later.
 
-      Return your verdict as a JSON block with these EXACT keys:
+      End with a fenced JSON block:
       ```json
       {
         "prd_audit_verdict": "approve | revise | escalate",
-        "prd_audit_issues": [],
-        "prd_audit_rationale": "..."
+        "prd_audit_rationale": "one paragraph"
       }
       ```
     outputs:
-      prd_audit_verdict: "One of: approve, revise, escalate"
-      prd_audit_issues: "Array of {severity, description, suggested_fix} — empty when approve"
-      prd_audit_rationale: "One-paragraph rationale for the verdict"
-
-  produce_hla:
-    agent: solution-architect
-    resume_on_retry: true
-    prompt: |
-      Produce the High-Level Architecture (HLA) for this feature.
-
-      APPROVED PRD:
-      {{prd_markdown}}
-
-      ORIGINAL USER REQUEST: {{user_request}}
-      REPO PATH: {{repo_path}}
-
-      EXISTING CODEBASE AWARENESS (MANDATORY):
-      Before designing anything, understand the existing system:
-        1. Read the repo's package.json / go.mod / Cargo.toml / requirements.txt
-           to learn the tech stack, frameworks, and dependencies already in use.
-        2. Scan the directory structure to understand the existing patterns —
-           route/controller/service layers, model locations, config conventions.
-        3. Look at 2-3 existing features similar in scope to identify how the
-           repo handles: routing, data access, validation, error handling,
-           authentication, and testing.
-
-      YOUR DESIGN MUST FIT THE EXISTING ARCHITECTURE unless:
-        - The existing patterns genuinely cannot accommodate the feature
-          (explain WHY in your tradeoffs section).
-        - A simpler solution exists that would reduce complexity compared to
-          forcing the feature into the current patterns (justify the departure).
-        - The feature requires infrastructure the repo doesn't have yet (call
-          this out explicitly as new infra with a migration/rollout plan).
-
-      If the repo uses Express + MongoDB + service layer, your HLA uses
-      Express + MongoDB + service layer. If the repo has a React frontend
-      with a specific state management pattern, you follow it. Do NOT
-      propose new frameworks, ORMs, or architectural styles unless the
-      existing ones are fundamentally insufficient for this feature.
-
-      Follow your 8-section contract: system overview, components, data flow,
-      technology choices with rationale, non-functional requirements, risks
-      and mitigations, tradeoffs considered, out of scope.
-
-      TRACEABILITY CONTRACT:
-        - Every HLA component, data flow, risk mitigation, and NFR mapping
-          must reference the PRD ids it supports: REQ-xxx, AC-xxx, EC-xxx,
-          or NFR-xxx.
-        - If an HLA decision does not map to a PRD id, mark it as
-          "implementation support" and explain why it is necessary.
-        - Do not invent new requirements in the HLA. Send gaps back through
-          the audit/retry path instead.
-
-      ARTIFACT + OUTPUT CONTRACT:
-      Before emitting your JSON output, save the full HLA as a public
-      markdown artifact so the human gate and downstream nodes can link
-      to it:
-        allen_save_artifact("hla/architecture.md", <hla markdown>, content_type="markdown", overwrite=true)
-      The tool returns an object shaped like
-        { artifactId, url, publicUrl, rootType, rootId, filename, sizeBytes, overwritten }
-      Copy the `publicUrl` field (full http://host/api/artifacts/<id>/content
-      URL — human-clickable and fetchable with WebFetch/curl) into the
-      JSON block as `hla_artifact_url`. Do NOT use `url` (relative path
-      only) or `artifactId` (opaque id).
-
-      End your response with a fenced JSON block containing EXACTLY these
-      top-level keys (the engine extracts by key name — wrong names = lost data):
-
-      ```json
-      {
-        "hla_markdown": "<your full HLA as a markdown string>",
-        "hla_artifact_url": "<url returned by allen_save_artifact>",
-        "hla_json": {
-          "components": [...],
-          "data_flow_summary": "...",
-          "tech_choices": [...],
-          "non_functional_requirements": [...],
-          "risks": [...],
-          "build_vs_buy": [...],
-          "traceability_matrix": [
-            { "design_item": "...", "prd_ids": ["REQ-001", "AC-001"] }
-          ],
-          "confidence": 0.95
-        }
-      }
-      ```
-
-      {{#if retry_context}}
-      RETRY FEEDBACK from doc-auditor:
-      {{retry_context}}
-      {{/if}}
-    outputs:
-      hla_markdown: "Full HLA as markdown."
-      hla_artifact_url: "Public URL of the HLA markdown artifact (returned by allen_save_artifact)."
-      hla_json: "Structured HLA with components, data_flow_summary, tech_choices, non_functional_requirements, risks, build_vs_buy, confidence."
-
-  audit_hla:
-    agent: doc-auditor
-    resume_on_retry: true
-    prompt: |
-      Audit this HLA against the user's original request AND the approved PRD.
-
-      ORIGINAL USER REQUEST: {{user_request}}
-
-      APPROVED PRD:
-      {{prd_markdown}}
-
-      HLA TO AUDIT:
-      {{hla_markdown}}
-
-      Judge: does every HLA component, tech choice, and NFR trace to the PRD?
-      Are the risks this kind of change usually has identified? Is the HLA
-      consistent with the PRD?
-
-      Return your verdict as a JSON block with these EXACT keys:
-      ```json
-      {
-        "hla_audit_verdict": "approve | revise | escalate",
-        "hla_audit_issues": [],
-        "hla_audit_rationale": "..."
-      }
-      ```
-    outputs:
-      hla_audit_verdict: "approve | revise | escalate"
-      hla_audit_issues: "Structured issues."
-      hla_audit_rationale: "One paragraph."
+      prd_audit_verdict: "approve | revise | escalate"
+      prd_audit_rationale: "One-paragraph rationale; used in retry_context + escalation display."
 
   produce_tdd:
     agent: technical-designer
     resume_on_retry: true
     prompt: |
-      Produce the Technical Design Document (TDD) for this feature.
+      Produce the Technical Design Document (TDD) from the approved PRD.
 
-      APPROVED PRD:
-      {{prd_markdown}}
-
-      APPROVED HLA:
-      {{hla_markdown}}
+      📄 PRD ARTIFACT (fetch via mcp__allen__allen_get_artifact — primary input):
+      {{prd_artifact_url}}
 
       ORIGINAL USER REQUEST: {{user_request}}
-      REPO PATH: {{repo_path}}
+      REPO PATH:             {{repo_path}}
 
       EXISTING CODEBASE AWARENESS (MANDATORY):
-      Before writing any technical spec, understand how the repo actually works:
-        1. Read the existing data models / schemas — what ORM/ODM does the
-           repo use? What naming conventions? What field patterns?
-        2. Read 2-3 existing API route files to understand the route →
-           controller → service → data-access chain the repo follows.
-        3. Check the existing error handling pattern — does the repo use
-           custom error classes? HTTP status conventions? Error response shape?
-        4. Check test patterns — unit vs integration, test runner, mock
-           conventions, fixture patterns.
+        1. Read package.json / go.mod / Cargo.toml / requirements.txt to
+           learn the tech stack already in use.
+        2. Scan the directory structure to understand existing patterns
+           (route/controller/service split, model locations, conventions).
+        3. Look at 2-3 features similar in scope: routing, data access,
+           validation, error handling, auth, testing patterns.
 
-      YOUR DESIGN MUST FOLLOW THE EXISTING PATTERNS unless:
-        - The existing patterns genuinely cannot express this feature's
-          requirements (explain WHY in your design).
-        - A simpler alternative reduces overall complexity compared to
-          forcing the feature into the current structure (justify the departure
-          with concrete complexity comparison).
-        - The feature requires new infrastructure not present in the repo
-          (call this out explicitly and include a rollout plan).
+      YOUR DESIGN MUST FIT THE EXISTING ARCHITECTURE unless the existing
+      patterns genuinely cannot accommodate the feature (justify any
+      departure with a concrete complexity comparison).
 
-      Examples of what "follow existing patterns" means:
-        - If the repo defines routes in `src/routes/<resource>.routes.ts` with
-          a service in `src/services/<resource>.service.ts`, your new endpoints
-          MUST follow that same split — not invent a controller layer.
-        - If the repo uses Mongoose schemas, your data models use Mongoose
-          schemas — not Prisma or raw MongoDB driver.
-        - If the repo's error responses are `{ error: string }`, yours are too
-          — not `{ message, code, details }` unless you're migrating everything.
-        - If the repo has no WebSocket infra and the feature can work with
-          polling, use polling.
-
-      Follow your section contract: data models, API contracts, sequence
-      diagrams, error taxonomy, observability plan, UI changes, implementation
-      flags (has_backend_changes / has_frontend_changes).
+      Include: data models, API contracts, sequence diagrams, error
+      taxonomy, observability plan, UI changes.
 
       TRACEABILITY CONTRACT:
         - Every data model, API contract, UI change, validation rule, and
-          test strategy item must list the PRD ids it satisfies.
-        - Preserve the PRD ids exactly: REQ-xxx, AC-xxx, EC-xxx, NFR-xxx.
-        - Add a coverage matrix section mapping every AC id to concrete
+          test strategy item lists the PRD ids it satisfies (REQ/AC/EC/NFR).
+        - Add a coverage matrix mapping every AC id to concrete
           implementation touchpoints and intended tests.
-        - Do not leave any AC id unmapped. If an AC needs no code change,
-          mark it not_applicable with a reason.
+        - Mark any AC that needs no code change as not_applicable + reason.
 
-      ARTIFACT + OUTPUT CONTRACT:
-      Before emitting your JSON output, save the full TDD as a public
-      markdown artifact so the human gate and downstream nodes can link
-      to it:
-        allen_save_artifact("tdd/technical-design.md", <tdd markdown>, content_type="markdown", overwrite=true)
-      The tool returns an object shaped like
-        { artifactId, url, publicUrl, rootType, rootId, filename, sizeBytes, overwritten }
-      Copy the `publicUrl` field (full http://host/api/artifacts/<id>/content
-      URL — human-clickable and fetchable with WebFetch/curl) into the
-      JSON block as `tdd_artifact_url`. Do NOT use `url` (relative path
-      only) or `artifactId` (opaque id).
-
-      End your response with a fenced JSON block containing EXACTLY these
-      top-level keys (the engine extracts by key name — wrong names = lost data):
+      Save the FULL TDD as a markdown artifact:
+        mcp__allen__allen_save_artifact("tdd/technical-design.md", <markdown>, content_type="markdown", overwrite=true)
+      Copy the returned `publicUrl` into JSON as `tdd_artifact_url`.
 
       ```json
       {
-        "tdd_markdown": "<your full TDD as a markdown string>",
-        "tdd_artifact_url": "<url returned by allen_save_artifact>",
-        "tdd_json": {
-          "data_models": [...],
-          "api_contracts": [...],
-          "error_taxonomy": [...],
-          "observability": {...},
-          "coverage_matrix": [
-            { "ac_id": "AC-001", "implementation_touchpoints": [...], "intended_tests": [...] }
-          ],
-          "has_backend_changes": true,
-          "has_frontend_changes": false
-        },
-        "has_backend_changes": true,
-        "has_frontend_changes": false
+        "tdd_artifact_url": "<publicUrl from allen_save_artifact>"
       }
       ```
 
-      IMPORTANT: `tdd_markdown`, `tdd_artifact_url`, and `tdd_json` MUST
-      be top-level keys in your JSON. Do NOT nest them under a `tdd`
-      wrapper. The downstream audit node reads `{{tdd_markdown}}`
-      directly from state.
-
       {{#if retry_context}}
-      RETRY FEEDBACK from doc-auditor:
+      RETRY FEEDBACK (from TDD-audit revise OR plan-gate request_changes):
       {{retry_context}}
       {{/if}}
     outputs:
-      tdd_markdown: "Full TDD as markdown."
-      tdd_artifact_url: "Public URL of the TDD markdown artifact (returned by allen_save_artifact)."
-      tdd_json: "Structured TDD with data_models, api_contracts, error_taxonomy, observability, has_backend_changes, has_frontend_changes."
-      has_backend_changes: "Boolean from TDD JSON."
-      has_frontend_changes: "Boolean from TDD JSON."
+      tdd_artifact_url: "Public URL of the TDD markdown artifact. Downstream nodes fetch via mcp__allen__allen_get_artifact."
 
   audit_tdd:
     agent: doc-auditor
     resume_on_retry: true
     prompt: |
-      Audit this TDD against the approved PRD and HLA.
+      Audit the TDD against the approved PRD.
 
       ORIGINAL USER REQUEST: {{user_request}}
 
-      APPROVED PRD:
-      {{prd_markdown}}
+      📄 PRD ARTIFACT (fetch via mcp__allen__allen_get_artifact):
+      {{prd_artifact_url}}
 
-      APPROVED HLA:
-      {{hla_markdown}}
+      📄 TDD ARTIFACT (fetch via mcp__allen__allen_get_artifact):
+      {{tdd_artifact_url}}
 
-      TDD TO AUDIT:
-      {{tdd_markdown}}
+      Judge: does every API contract and data model trace to a PRD id?
+      Does every endpoint satisfy at least one acceptance criterion? Are
+      the models and APIs internally consistent?
 
-      Judge: does every API contract and data model trace to the HLA? Does
-      every endpoint satisfy at least one PRD acceptance criterion? Are the
-      models and APIs internally consistent?
-
-      Return your verdict as a JSON block with these EXACT keys:
+      End with a fenced JSON block:
       ```json
       {
         "tdd_audit_verdict": "approve | revise | escalate",
-        "tdd_audit_issues": [],
-        "tdd_audit_rationale": "..."
+        "tdd_audit_rationale": "one paragraph"
       }
       ```
     outputs:
       tdd_audit_verdict: "approve | revise | escalate"
-      tdd_audit_issues: "Structured issues."
-      tdd_audit_rationale: "One paragraph."
+      tdd_audit_rationale: "One paragraph; used in retry_context + escalation display."
 
   plan_approval_gate:
     type: human
-    prompt: |
-      ✅ All three design docs are produced and audited. Review and approve
-      to start implementation.
-
-      USER REQUEST: {{user_request}}
-
-      📋 Requirements: {{prd_artifact_url}}
-      🏗️ Architecture: {{hla_artifact_url}}
-      🔧 Technical Design: {{tdd_artifact_url}}
-
-      has_backend_changes: {{has_backend_changes}}
-      has_frontend_changes: {{has_frontend_changes}}
-
-      All three docs passed agent audit (no critical issues).
-
-      Decision:
-        approve         → advance to implementation
-        request_changes → loop back to the producer (pick scope)
-        reject          → abandon the workflow
     fields:
       - name: decision
         label: "Decision"
@@ -536,30 +283,37 @@ nodes:
         options: [approve, request_changes, reject]
         required: true
       - name: scope
-        label: "Scope (only used for request_changes)"
+        label: "Scope (only for request_changes)"
         type: select
-        options: [requirements, architecture, technical_design, all]
+        options: [requirements, technical_design, all]
         required: false
       - name: feedback
         label: "Feedback (required for request_changes)"
         type: textarea
         required: false
-    outputs:
-      decision: "approve | request_changes | reject"
-      scope: "requirements | architecture | technical_design | all — only set when decision == 'request_changes'"
-      feedback: "Free-text feedback, required when decision == 'request_changes'"
+    prompt: |
+      ✅ PRD and TDD are produced and audited. Review and approve to start
+      implementation.
+
+      USER REQUEST: {{user_request}}
+
+      📋 Requirements:     {{prd_artifact_url}}
+      🔧 Technical Design: {{tdd_artifact_url}}
+
+      Both passed agent audit.
+
+      Decision:
+        approve         → advance to implementation
+        request_changes → loop back to the producer (pick scope)
+        reject          → abandon the workflow
 
   # ══════════════════════════════════════════════════════════════════════
   # PHASE 2 — IMPLEMENTATION
   # ══════════════════════════════════════════════════════════════════════
 
-  # Dedicated workspace-creation node — runs ONCE before implement on
-  # the forward path out of planning. The engineering-lead used to
-  # create the workspace inline in its prompt, but that coupled plan
-  # dispatch to workspace setup and caused duplicate worktrees on
-  # retry. Now the code-node creates the worktree exactly once; retries
-  # back to `implement` skip this node and reuse the existing
-  # worktree_path carried in state.
+  # Dedicated workspace-creation node — runs ONCE on the forward path
+  # out of planning. Retries back to `implement` skip this node and reuse
+  # the existing worktree.
   create_workspace:
     type: code
     function: create-workspace
@@ -568,185 +322,99 @@ nodes:
       timeout_sec: 600
     outputs:
       workspace_id: "Internal Allen workspace identifier."
-      worktree_path: "Absolute path to the isolated git worktree the specialists will work inside."
-      branch: "Generated branch name (e.g. allen/feature-<stamp>)."
+      worktree_path: "Absolute path to the isolated git worktree."
+      branch: "Generated branch name."
       branch_name: "Alias of `branch` — downstream nodes read {{branch_name}}."
-      base_branch: "Branch the worktree was cut from (repo default)."
-      status: "Workspace setup status — 'active' or 'running' on success."
-      repo_path: "Alias of worktree_path — overwrites the input repo_path so downstream agents operate inside the worktree."
+      base_branch: "Branch the worktree was cut from."
+      status: "Workspace setup status."
+      repo_path: "Alias of worktree_path — overwrites input repo_path so downstream agents operate inside the worktree."
 
   implement:
     agent: engineering-lead
-    # Resume across retries: qa-fail / validator-fail / code-review-fail
-    # each loops back here with retry_context. The engineering-lead's
-    # session persists across those retries so it remembers the plan it
-    # produced and which specialists ran. That lets retries act as "fix
-    # what broke" rather than "re-do everything from scratch".
     resume_on_retry: true
-    # Scoped implementation-only dispatch. The workspace is already
-    # provisioned by the upstream `create_workspace` code node. The
-    # engineering-lead produces the file-level plan from the approved
-    # PRD/HLA/TDD, reuses the existing worktree, and dispatches
-    # specialists via spawn_agent. It MUST NOT call create_workspace or
-    # run downstream QA/docs/review responsibilities.
     prompt: |
       SCOPE: implementation_only
       qa_handled_downstream: true
       review_handled_downstream: true
       docs_handled_downstream: true
 
-      This is the implementation node of feature-plan-and-implement.
-      PRD/HLA/TDD have already been produced and audited upstream.
-      The workspace has already been created upstream.
-      Your job is ONLY to translate the approved design into a file-level
-      plan and dispatch implementation specialists inside the existing
-      worktree. Stop after implementation specialists finish and emit your
-      implementation summary. Do NOT run QA, code review, security review,
-      documentation updates, PR creation, or final summary; downstream
-      workflow nodes handle those.
-
       You are the Engineering Lead. Translate the approved design into a
-      file-level plan, then dispatch specialists through spawn_agent
-      inside the worktree that was ALREADY created upstream. You DO NOT
-      write code yourself.
+      file-level plan, dispatch specialists, and self-validate the diff.
+      You DO NOT write code yourself.
 
-      APPROVED PRD MARKDOWN:
-      {{prd_markdown}}
+      📄 PRD ARTIFACT (fetch via mcp__allen__allen_get_artifact):
+      {{prd_artifact_url}}
 
-      APPROVED HLA MARKDOWN:
-      {{hla_markdown}}
-
-      APPROVED TDD MARKDOWN:
-      {{tdd_markdown}}
-
-      Artifact references for downstream traceability:
-        PRD URL: {{prd_artifact_url}}
-        HLA URL: {{hla_artifact_url}}
-        TDD URL: {{tdd_artifact_url}}
+      📄 TDD ARTIFACT (fetch via mcp__allen__allen_get_artifact):
+      {{tdd_artifact_url}}
 
       USER REQUEST: {{user_request}}
 
       EXISTING WORKSPACE (do NOT create a new one):
         worktree_path: {{worktree_path}}
         branch_name:   {{branch_name}}
-        workspace_id:  {{workspace_id}}
-        base_branch:   {{base_branch}}
 
       Step-by-step:
-        1. Read the inline PRD, HLA, and TDD markdown above.
-        2. Spawn codebase-navigator with repo_path={{worktree_path}}
-           in READ-ONLY mode to inspect the files TDD touches, identify
-           existing patterns, dependency order, and validation commands.
-           Treat the worktree as the target repo; it's an isolated clone.
-           The navigator MUST NOT edit files, create tests, run formatters
-           that write files, commit, push, or patch anything. All code
-           changes must be done only by backend-developer, frontend-developer,
-           devops-engineer, or security-specialist.
-        3. Build the plan (file entries with
-           specialist hints, validation commands, risks).
-        4. DO NOT call create_workspace. The worktree above already
-           exists — all specialists must work inside {{worktree_path}}.
-        5. For each specialist group, spawn_agent with repo_path={{worktree_path}}
-           and the plan slice in the prompt. Parallelise safe batches;
-           serialise conflicts.
-        6. Wait on each batch, retry each specialist once on failure,
-           aggregate files_changed.
-        7. Stop here. Emit a JSON output block including
-           implementation_plan_json, ac_coverage_matrix,
-           specialist_assignments, conflict_plan, validation_commands,
-           self_check, specialists_used, batches, files_changed,
-           any_failures, failure_details. For qa_review, mark
-           qa_lead/code_review/security_review/docs_review as "not_run"
-           because downstream workflow nodes own those stages.
+        1. Fetch the PRD and TDD artifacts.
+        2. Spawn codebase-navigator (READ-ONLY) with repo_path={{worktree_path}}
+           to identify existing patterns, dependency order, validation commands.
+           The navigator MUST NOT edit files, commit, push, or run formatters
+           that write. Code changes come from backend-developer,
+           frontend-developer, devops-engineer, or security-specialist only.
+        3. Build the implementation plan with file-level items, specialist
+           assignments, AC coverage matrix, conflict plan, validation commands.
+        4. For each specialist group, spawn_agent with repo_path={{worktree_path}}.
+           Parallelise safe batches; serialise file conflicts.
+        5. Wait on each batch, retry each specialist once on failure.
+        6. SELF-VALIDATE before returning:
+           a. `git diff --name-only` to confirm planned files were touched.
+           b. For each PRD acceptance criterion, verify at least one plan
+              item has implementation evidence in the diff (or is marked
+              not_applicable with reason).
+           c. Confirm codebase-navigator did not write files.
+           d. Enumerate the build/lint/typecheck commands QA must run.
+
+      Save the FULL plan + self-validation as a markdown artifact:
+        mcp__allen__allen_save_artifact("implementation/plan.md", <markdown>, content_type="markdown", overwrite=true)
+      The artifact must contain: implementation_plan, ac_coverage_matrix,
+      specialist_assignments, conflict_plan, validation_commands, and a
+      "## Self-validation" section with per-AC verdict, unassigned items,
+      specialist failures, and navigator findings.
+
+      Copy the returned `publicUrl` into JSON as `implementation_plan_artifact_url`.
+
+      Verdict:
+        pass     → every planned file touched, every AC has evidence (or
+                   not_applicable+reason), no specialist failures, no
+                   navigator writes. QA can start.
+        fail     → some planned work missing or specialists failed; the
+                   issues are recoverable on retry. Workflow loops you back.
+        escalate → unrecoverable: contradiction between PRD/TDD and worktree,
+                   missing repo infrastructure, etc.
+
+      ```json
+      {
+        "implementation_plan_artifact_url": "<publicUrl from allen_save_artifact>",
+        "implement_verdict": "pass | fail | escalate",
+        "implement_failure_details": "short string (only when fail/escalate; empty on pass)"
+      }
+      ```
 
       HARD RULES:
         - NEVER edit files yourself. Use spawn_agent for every change.
         - ALWAYS pass repo_path={{worktree_path}} to every spawn_agent call.
         - NEVER call create_workspace — the workspace is already provisioned.
-        - NEVER run QA, code review, security review, docs update, PR creation,
-          or summary from this node.
-        - NEVER use codebase-navigator to write code. If navigator reports
-          that it edited files, set any_failures=true and explain it in
-          failure_details.
-        - Do not return success unless every PRD acceptance criterion / TDD
-          contract is assigned to at least one concrete plan item or explicitly
-          marked not_applicable with a reason.
+        - NEVER run QA, code review, security review, docs update, PR
+          creation, or summary from this node.
 
       {{#if retry_context}}
       RETRY FEEDBACK:
       {{retry_context}}
       {{/if}}
     outputs:
-      implementation_plan_json: "The full implementation plan JSON — auto-captured as implementation_plan.json."
-      ac_coverage_matrix: "Array mapping each PRD acceptance criterion / requirement id to plan items, owner specialists, files, and expected validation evidence."
-      specialist_assignments: "Array of specialist dispatches with owner, owned files, plan items, status, and returned evidence."
-      conflict_plan: "Array describing file conflicts and serialization decisions."
-      validation_commands: "Commands discovered for build/lint/typecheck/tests and which node/specialist is responsible for running them."
-      self_check: "Engineering lead's pre-QA completeness check with verdict, missing_ac_items, unassigned_plan_items, specialist_failures, and navigator_write_findings."
-      files_changed: "List of all files the specialists touched."
-      any_failures: "Boolean — true if any specialist returned a non-recoverable failure."
-      failure_details: "Structured details per failing specialist. Empty on success."
-
-  implementation_self_check:
-    agent: implementation-self-checker
-    resume_on_retry: false
-    prompt: |
-      Run a read-only implementation completeness check before QA starts.
-
-      This is NOT product validation and NOT code review. Your job is to
-      determine whether implementation specialists completed the planned
-      work and whether QA has enough complete evidence to proceed.
-
-      APPROVED PRD URL: {{prd_artifact_url}}
-      APPROVED HLA URL: {{hla_artifact_url}}
-      APPROVED TDD URL: {{tdd_artifact_url}}
-      (Fetch each URL with WebFetch/curl to read the document content.)
-
-      WORKTREE PATH: {{worktree_path}}
-      IMPLEMENTATION PLAN: {{implementation_plan_json}}
-      AC COVERAGE MATRIX FROM ENGINEERING LEAD: {{ac_coverage_matrix}}
-      SPECIALIST ASSIGNMENTS: {{specialist_assignments}}
-      CONFLICT PLAN: {{conflict_plan}}
-      VALIDATION COMMANDS: {{validation_commands}}
-      ENGINEERING SELF CHECK: {{self_check}}
-      FILES CHANGED BY ENGINEERING LEAD: {{files_changed}}
-      ANY FAILURES: {{any_failures}}
-      FAILURE DETAILS: {{failure_details}}
-
-      Mandatory full-check rules:
-        1. Read the PRD/HLA/TDD and current git diff.
-        2. Check every acceptance criterion / requirement id from the PRD.
-        3. Check every plan item from implementation_plan_json.
-        4. Check every specialist assignment result.
-        5. Check files_changed against git diff --name-only.
-        6. Check that codebase-navigator did not write files. If it did,
-           fail and report navigator_write_findings.
-        7. Continue after finding the first problem. Return ALL missing ACs,
-           unassigned plan items, specialist failures, validation handoff gaps,
-           and evidence gaps in one response.
-        8. Do not edit files or run commands that mutate the worktree.
-
-      Verdict:
-        pass     → QA can start.
-        fail     → implementation must run again with your failure_details.
-        escalate → the design/plan is contradictory or evidence cannot be
-                   obtained from the worktree.
-
-      {{#if retry_context}}
-      RETRY FEEDBACK:
-      {{retry_context}}
-      {{/if}}
-    outputs:
-      implementation_self_check_verdict: "pass | fail | escalate."
-      ac_coverage_matrix: "Verified matrix of AC/requirement id to planned files, actual files, evidence, and status."
-      plan_items_checked: "Array of plan items with owner, status, and evidence."
-      missing_ac_items: "All acceptance criteria / requirement ids with missing or partial implementation evidence."
-      unassigned_plan_items: "Plan items without a valid owner or without implementation evidence."
-      specialist_failures: "Specialist failures or incomplete specialist results."
-      navigator_write_findings: "Evidence that codebase-navigator changed files, if any."
-      validation_handoff_gaps: "Build/lint/type/test commands that were not run or not handed off to QA."
-      files_changed_verified: "Boolean indicating files_changed matches git diff evidence."
-      failure_details: "Complete failure details for implementation retry. Empty on pass."
+      implementation_plan_artifact_url: "Public URL of the implementation plan + self-validation markdown artifact."
+      implement_verdict: "pass | fail | escalate — drives downstream routing."
+      implement_failure_details: "Short failure description (only when verdict is fail or escalate). Used in implement self-retry retry_context."
 
   qa:
     agent: qa-lead
@@ -754,37 +422,44 @@ nodes:
     retries: 1
     prompt: |
       You are the QA orchestrator. Drive the ENTIRE quality loop in one
-      call: spawn test-writer to write tests, run them, check coverage,
-      fix or delegate back on failure, repeat until green. You never
-      return partial results — you only return when quality is pass,
-      fail (delegate back to engineering-lead), or escalate.
+      call: spawn test-writer, run tests, check coverage, fix or delegate
+      back on failure, repeat until green. Return only when verdict is
+      pass, fail (delegate back to engineering-lead), or escalate.
 
-      APPROVED PRD URL: {{prd_artifact_url}}
-      APPROVED HLA URL: {{hla_artifact_url}}
-      APPROVED TDD URL: {{tdd_artifact_url}}
-      (Fetch each URL with WebFetch/curl to read the document content.)
+      📄 PRD ARTIFACT (fetch via mcp__allen__allen_get_artifact):
+      {{prd_artifact_url}}
 
-      WORKTREE PATH: {{worktree_path}}
-      FILES CHANGED BY ENGINEERING LEAD: {{files_changed}}
-      SKIP REGRESSION: {{skip_regression}}
+      📄 TDD ARTIFACT (fetch via mcp__allen__allen_get_artifact):
+      {{tdd_artifact_url}}
+
+      📄 IMPLEMENTATION PLAN ARTIFACT (fetch via mcp__allen__allen_get_artifact):
+      {{default implementation_plan_artifact_url "(implement node escalated before saving plan — work from the worktree diff directly; build the test plan from PRD acceptance criteria alone)"}}
+
+      WORKTREE PATH:    {{worktree_path}}
+      SKIP REGRESSION:  {{skip_regression}}
 
       Follow your five-rule contract:
-        1. Spawn test-writer with the PRD's acceptance criteria.
+        1. Fetch the artifacts, spawn test-writer with the PRD's ACs.
         2. Run build + lint + tests inside {{worktree_path}}.
         3. Verify coverage against the PRD's acceptance criteria.
         4. Loop until green (max 3 write-run-verify cycles).
-        5. Emit your structured JSON verdict.
+        5. Save the full QA report as a markdown artifact, emit verdict.
 
-      FULL-SWEEP REQUIREMENT:
-        - Do not stop at the first broken test, missing test, or failed AC.
-        - Inspect all AC ids from the PRD and return every uncovered or
-          failing AC in one response.
-        - Run or enumerate all configured validation commands. If one command
-          fails early, still inspect the remaining commands where possible.
-        - failure_details must be an array/object with all failures grouped by
-          build, lint, unit, integration, regression, and AC coverage.
+      Save the full QA report:
+        mcp__allen__allen_save_artifact("qa/report.md", <markdown>, content_type="markdown", overwrite=true)
+      The artifact must hold: build/lint/unit/integration verdicts, test
+      files, coverage matrix, failure details, cycles used.
+      Copy `publicUrl` into JSON as `qa_artifact_url`.
 
       ALWAYS pass repo_path={{worktree_path}} to every spawn_agent call.
+
+      ```json
+      {
+        "qa_verdict": "pass | fail | escalate",
+        "qa_artifact_url": "<publicUrl from allen_save_artifact>",
+        "qa_failure_details": "short string when verdict is fail or escalate (empty on pass)"
+      }
+      ```
 
       {{#if retry_context}}
       RETRY FEEDBACK:
@@ -792,12 +467,8 @@ nodes:
       {{/if}}
     outputs:
       qa_verdict: "pass | fail | escalate"
-      test_files: "List of test files produced or touched."
-      covered_acceptance_criteria: "List of ACs with passing tests."
-      uncovered_acceptance_criteria: "List of ACs without tests (empty on pass)."
-      cycles_used: "Number of write-run-verify cycles."
-      failure_target: "engineering-lead | test-writer | null"
-      failure_details: "Details when verdict is fail or escalate."
+      qa_artifact_url: "Public URL of the full QA report markdown."
+      qa_failure_details: "Short failure description; used in qa→implement retry_context."
 
   implementation_validator:
     agent: implementation-validator
@@ -809,35 +480,39 @@ nodes:
       REMEMBER: PRD is the source of truth. TDD deviations are
       informational, not blocking, as long as the PRD is still satisfied.
 
-      APPROVED PRD: {{prd_artifact_url}}
-      APPROVED HLA: {{hla_artifact_url}}
-      APPROVED TDD: {{tdd_artifact_url}}
-      (Fetch each URL with WebFetch/curl to read the document content.)
+      📄 PRD ARTIFACT:                  {{prd_artifact_url}}
+      📄 TDD ARTIFACT:                  {{tdd_artifact_url}}
+      📄 IMPLEMENTATION PLAN ARTIFACT:  {{default implementation_plan_artifact_url "(implement node escalated before saving plan — validate the worktree diff against PRD acceptance criteria directly)"}}
+      📄 QA REPORT ARTIFACT:            {{default qa_artifact_url "(qa node escalated before saving report — no QA evidence available; rely on diff + PRD only)"}}
+      (Fetch each via mcp__allen__allen_get_artifact.)
 
-      IMPLEMENTATION PLAN: {{implementation_plan_json}}
       WORKTREE PATH: {{worktree_path}}
 
-      Run your blocking-checks list + informational-checks list against the
-      current diff in the worktree. End with your structured JSON verdict.
+      Run your blocking-checks + informational-checks list against the
+      current diff. Check every PRD AC id, edge case id, and NFR id —
+      return ALL blocking violations and informational deviations in one
+      response, grouped by id.
 
-      FULL-SWEEP REQUIREMENT:
-        - Do not stop at the first blocking violation.
-        - Check every PRD AC id, edge case id, and NFR id before returning.
-        - Return all blocking violations and all informational deviations in
-          one response, grouped by id/rule.
-        - If a retry_context is present, re-check the entire PRD, not only the
-          previous failure list. Previously fixed issues should be marked
-          resolved only if the current diff proves it.
+      Save the full validator report:
+        mcp__allen__allen_save_artifact("validator/report.md", <markdown>, content_type="markdown", overwrite=true)
+      The artifact must hold: blocking_violations (with evidence),
+      informational_deviations, per-AC verdict, validator confidence.
+      Copy `publicUrl` into JSON as `validator_artifact_url`.
+
+      ```json
+      {
+        "prd_satisfied": true,
+        "validator_artifact_url": "<publicUrl from allen_save_artifact>"
+      }
+      ```
 
       {{#if retry_context}}
-      RETRY FEEDBACK from a previous validator loop:
+      RETRY FEEDBACK from prior validator loop:
       {{retry_context}}
       {{/if}}
     outputs:
-      prd_satisfied: "Boolean."
-      blocking_violations: "Array of blocking violations — PRD-breaking."
-      informational_deviations: "Array of TDD drifts that still satisfy the PRD."
-      validator_confidence: "Float 0-1."
+      prd_satisfied: "Boolean — drives routing to update_docs (true) or back to implement (false)."
+      validator_artifact_url: "Public URL of the full validator report markdown."
 
   update_docs:
     agent: documentation-writer
@@ -845,51 +520,72 @@ nodes:
     prompt: |
       MODE: update_docs
 
-      Update the in-repo technical documentation to reflect the changes in
-      the current diff.
+      Update the in-repo technical documentation to reflect the changes
+      in the current diff.
+
+      📄 PRD ARTIFACT: {{prd_artifact_url}}
+      📄 TDD ARTIFACT: {{tdd_artifact_url}}
+      (Fetch each via mcp__allen__allen_get_artifact.)
 
       WORKTREE PATH: {{worktree_path}}
-      FILES CHANGED: {{files_changed}}
-      PRD URL: {{prd_artifact_url}}
-      HLA URL: {{hla_artifact_url}}
-      TDD URL: {{tdd_artifact_url}}
 
       Follow your 7-rule contract: discover docs, match to changed modules,
       update to match reality, match existing style, no speculation,
       graceful no-op if repo has no docs, run the doc linter.
 
-      End with a JSON block per your Mode 1 output contract.
+      The docs are committed to the worktree alongside the implementation
+      diff. Emit a small JSON status block so the run record carries an
+      explicit signal that this node executed (no downstream edge consumes it):
+
+      ```json
+      {
+        "docs_updated": true
+      }
+      ```
     outputs:
-      docs_updated: "Boolean."
-      doc_files: "Files updated."
+      docs_updated: "Boolean — true when at least one doc file was changed or the repo was checked and had no docs to update. Informational only; no edge consumes this."
 
   code_review:
     agent: code-reviewer
     resume_on_retry: true
     retries: 1
     prompt: |
-      Review the full diff in the worktree, INCLUDING doc changes from the
-      update_docs node.
+      Review the full diff in the worktree, INCLUDING doc changes from
+      the upstream update_docs node.
+
+      📄 PRD ARTIFACT:                  {{prd_artifact_url}}
+      📄 TDD ARTIFACT:                  {{tdd_artifact_url}}
+      📄 IMPLEMENTATION PLAN ARTIFACT:  {{implementation_plan_artifact_url}}
+      📄 QA REPORT ARTIFACT:            {{qa_artifact_url}}
+      📄 VALIDATOR REPORT ARTIFACT:     {{validator_artifact_url}}
+      (Fetch each via mcp__allen__allen_get_artifact.)
 
       WORKTREE PATH: {{worktree_path}}
-      BRANCH: {{branch_name}}
-      FILES CHANGED: {{files_changed}}
+      BRANCH:        {{branch_name}}
 
       Run your full 15-point rubric: correctness, conventions, performance,
-      test quality, readability, type safety, security checklist (8 points),
-      and doc-code drift.
+      test quality, readability, type safety, security checklist (8
+      points), and doc-code drift.
 
-      End with a JSON block: review_verdict, review_feedback,
-      security_findings, doc_drift_findings.
+      Save the full review markdown:
+        mcp__allen__allen_save_artifact("review/code-review.md", <markdown>, content_type="markdown", overwrite=true)
+      The artifact must hold review_feedback, security_findings, and
+      doc_drift_findings. Copy `publicUrl` into JSON as `code_review_artifact_url`.
+
+      ```json
+      {
+        "review_verdict": "APPROVED | REQUEST_CHANGES",
+        "code_review_artifact_url": "<publicUrl from allen_save_artifact>"
+      }
+      ```
 
       {{#if retry_context}}
       RETRY FEEDBACK:
       {{retry_context}}
       {{/if}}
     outputs:
-      review_verdict: "APPROVED or REQUEST_CHANGES"
-      review_feedback: "Markdown review notes."
-      security_findings: "Array of security issues (may be empty)."
+      review_verdict: "APPROVED | REQUEST_CHANGES"
+      code_review_artifact_url: "Public URL of the full review markdown."
 
   open_pr:
     agent: pr-creator
@@ -899,31 +595,27 @@ nodes:
 
       WORKFLOW TYPE: feature
       WORKTREE PATH: {{worktree_path}}
-      BRANCH NAME: {{branch_name}}
-      USER REQUEST: {{user_request}}
+      BRANCH NAME:   {{branch_name}}
+      USER REQUEST:  {{user_request}}
 
-      PRD URL: {{prd_artifact_url}}
-      HLA URL: {{hla_artifact_url}}
-      TDD URL: {{tdd_artifact_url}}
+      📄 ARTIFACTS (mcp__allen__allen_get_artifact any you need to populate the PR body):
+        PRD:                 {{prd_artifact_url}}
+        TDD:                 {{tdd_artifact_url}}
+        IMPLEMENTATION PLAN: {{implementation_plan_artifact_url}}
+        QA REPORT:           {{qa_artifact_url}}
+        VALIDATOR REPORT:    {{validator_artifact_url}}
+        CODE REVIEW:         {{code_review_artifact_url}}
 
-      VALIDATOR VERDICT: prd_satisfied={{prd_satisfied}}
-      INFORMATIONAL DEVIATIONS: {{informational_deviations}}
-      CODE REVIEW SUMMARY: {{review_feedback}}
-      SECURITY FINDINGS: {{security_findings}}
-      FILES CHANGED: {{files_changed}}
+      Follow your PR-creation contract: stage, commit, push, gh pr create,
+      handle errors at each step. Link to the artifact URLs in the PR body.
 
-      Follow your PR-creation contract: stage, commit, push, gh pr
-      create, handle errors at each step (already-exists, non-fast-
-      forward, auth, empty branch), and return a structured JSON
-      result with pr_url and status. If you can recover from a
-      transient error, do so. If you hit a hard failure, emit the
-      failed-status JSON with actionable error details so the
-      summary node can surface them.
+      ```json
+      {
+        "pr_url": "<created or reused PR URL, or null on failure>"
+      }
+      ```
     outputs:
       pr_url: "The created (or reused) PR URL, or null on failure."
-      commit_hash: "Git SHA of the commit pushed."
-      status: "created | reused_existing | failed"
-      error: "Error message when status is failed."
 
   summary:
     agent: documentation-writer
@@ -935,33 +627,36 @@ nodes:
       run. Post it back to the chat session AND upload as a public .md.
 
       USER REQUEST: {{user_request}}
-      PR URL: {{pr_url}}
-      BRANCH: {{branch_name}}
-      WORKTREE PATH: {{worktree_path}}
-      PRD URL: {{prd_artifact_url}}
-      HLA URL: {{hla_artifact_url}}
-      TDD URL: {{tdd_artifact_url}}
-      IMPLEMENTATION PLAN: {{implementation_plan_json}}
-      VALIDATOR VERDICT: prd_satisfied={{prd_satisfied}}, informational_deviations={{informational_deviations}}
-      QA VERDICT: {{qa_verdict}}
-      COVERED ACCEPTANCE CRITERIA: {{covered_acceptance_criteria}}
-      FILES CHANGED: {{files_changed}}
-      CODE REVIEW: {{review_feedback}}
+      PR URL:       {{pr_url}}
+      BRANCH:       {{branch_name}}
+      WORKTREE:     {{worktree_path}}
 
-      Follow your Mode 2 contract — include the traceability spine
-      (acceptance criteria → tests → files), file-by-file rationale, minor
-      validator deviations, skipped regression tests, follow-ups.
+      📄 ARTIFACTS (mcp__allen__allen_get_artifact when you need detail):
+        PRD:                 {{prd_artifact_url}}
+        TDD:                 {{tdd_artifact_url}}
+        IMPLEMENTATION PLAN: {{implementation_plan_artifact_url}}
+        QA REPORT:           {{qa_artifact_url}}
+        VALIDATOR REPORT:    {{validator_artifact_url}}
+        CODE REVIEW:         {{code_review_artifact_url}}
 
-      End with a JSON block per your Mode 2 output contract.
+      Follow your Mode 2 contract: include the traceability spine (AC →
+      tests → files), file-by-file rationale, minor deviations, follow-ups.
+
+      Save the final summary:
+        mcp__allen__allen_save_artifact("summary/final.md", <markdown>, content_type="markdown", overwrite=true)
+      Copy `publicUrl` into JSON as `summary_artifact_url`.
+
+      ```json
+      {
+        "summary_artifact_url": "<publicUrl>"
+      }
+      ```
     outputs:
-      summary_markdown: "Full summary as markdown."
-      summary_url: "Public .md URL."
-      workflow_verdict: "success or partial_success_with_manual_review"
+      summary_artifact_url: "Public URL of the final summary markdown — workflow's primary deliverable to the user."
 
-  # Unified escalation review — every agent's `escalate` verdict routes here
-  # instead of silently ending. The user sees what escalated, gets the
-  # full context, and picks retry / override / abandon. Replaces the
-  # previous pattern where audit_{prd,hla,tdd} and qa all dead-ended at END.
+  # Unified escalation review — every agent's `escalate` verdict and every
+  # retry exhaustion routes here. The human sees what escalated, gets the
+  # full artifact context, and picks retry / override / abandon.
   escalation_review:
     type: human
     fields:
@@ -974,187 +669,155 @@ nodes:
         label: "Feedback for the agent (required for retry)"
         type: textarea
         required: false
-    outputs:
-      decision: "retry_with_feedback | override_and_continue | abandon"
-      feedback: "Free-text feedback passed to the agent on retry"
     prompt: |
-      🔴 The workflow paused because an agent escalated. It gave up on
-      producing a clean verdict after its retry budget and is handing
-      the decision to you.
+      🔴 The workflow paused because an agent escalated or a retry budget
+      ran out. It's handing the decision to you.
 
       ORIGINAL REQUEST:
       {{user_request}}
 
-      ── Escalation context (only the relevant rows are filled) ──
+      ── Status (only relevant rows are filled) ──
 
-      PRD AUDIT:     {{prd_audit_verdict}}
-      {{prd_audit_rationale}}
-      issues: {{prd_audit_issues}}
+      EXHAUSTED FROM:  {{default __retry_exhausted_from "(direct escalate — no retry budget hit)"}}
 
-      HLA AUDIT:     {{hla_audit_verdict}}
-      {{hla_audit_rationale}}
-      issues: {{hla_audit_issues}}
+      PRD AUDIT:        {{default prd_audit_verdict "—"}} — {{default prd_audit_rationale "(not run yet)"}}
+      TDD AUDIT:        {{default tdd_audit_verdict "—"}} — {{default tdd_audit_rationale "(not run yet)"}}
 
-      TDD AUDIT:     {{tdd_audit_verdict}}
-      {{tdd_audit_rationale}}
-      issues: {{tdd_audit_issues}}
+      IMPLEMENT:        {{default implement_verdict "—"}} — {{default implement_failure_details "(not run yet)"}}
+      QA:               {{default qa_verdict "—"}} — {{default qa_failure_details "(not run yet)"}}
+      PRD SATISFIED:    {{default prd_satisfied "(not validated yet)"}}
+      REVIEW:           {{default review_verdict "(not reviewed yet)"}}
 
-      IMPLEMENTATION SELF-CHECK: {{implementation_self_check_verdict}}
-      missing AC items: {{missing_ac_items}}
-      unassigned plan items: {{unassigned_plan_items}}
-      specialist failures: {{specialist_failures}}
-      navigator write findings: {{navigator_write_findings}}
-      validation handoff gaps: {{validation_handoff_gaps}}
-
-      QA VERDICT:    {{qa_verdict}}
-      cycles used: {{cycles_used}}
-      failure details: {{failure_details}}
+      📄 Artifacts so far:
+        PRD:                 {{default prd_artifact_url "(not produced yet)"}}
+        TDD:                 {{default tdd_artifact_url "(not produced yet)"}}
+        IMPLEMENTATION PLAN: {{default implementation_plan_artifact_url "(not produced yet)"}}
+        QA REPORT:           {{default qa_artifact_url "(not run yet)"}}
+        VALIDATOR REPORT:    {{default validator_artifact_url "(not run yet)"}}
+        CODE REVIEW:         {{default code_review_artifact_url "(not run yet)"}}
 
       ── Your decision ──
-
-      retry_with_feedback  — loop back to the failing stage with your
-                             feedback as retry_context. The agent will
-                             see your feedback verbatim.
-      override_and_continue — bypass the escalating agent's verdict and
-                             advance to the next stage anyway. Use this
-                             when the escalation is overly cautious and
-                             you're willing to accept the risk.
-      abandon              — end the run. Artifacts produced so far are
-                             preserved and browsable on the execution
-                             page; no PR is opened.
+        retry_with_feedback  — loop back to the failing node with your
+                               feedback. Retry counters reset.
+        override_and_continue — bypass the failing stage and advance to
+                               the next happy-path node.
+        abandon              — end the run. Artifacts preserved.
 
 edges:
-  - { from: START, to: clarify }
-  - { from: clarify, to: produce_prd, condition: "ready_to_produce_prd == true" }
-  - { from: clarify, to: clarify_human, condition: "ready_to_produce_prd != true" }
-  # After the user answers, loop back to clarify so the agent can
-  # incorporate the answers and decide if more questions are needed or
-  # if the request is now clear enough to produce the PRD. Max 3 rounds
-  # (the clarify prompt tells the agent to commit after round 3).
-  #
-  # The agent's session is RESUMED (resume_on_retry default=true) so it
-  # remembers what questions it asked. The retry_context delivers the
-  # user's answers into the resumed conversation — the agent sees its
-  # prior questions in session history, then receives the answers below,
-  # and either emits ready_to_produce_prd=true or asks follow-ups.
+  # ──────────────────────────────────────────────────────────────────────
+  # Planning phase
+  # ──────────────────────────────────────────────────────────────────────
+  - { from: START, to: produce_prd }
+  - { from: produce_prd, to: audit_prd,     condition: "ready_to_produce_prd == true" }
+  - { from: produce_prd, to: clarify_human, condition: "ready_to_produce_prd != true" }
+
+  # The PM's session is RESUMED so it remembers the questions it asked.
+  # max_retries=3 matches the prompt's 3-round budget.
   - from: clarify_human
-    to: clarify
+    to: produce_prd
     max_retries: 3
     retry_context: |
       The user answered your clarifying questions:
 
       {{answers}}
 
-      Based on these answers, decide:
-      - If the request is now clear enough → emit ready_to_produce_prd=true
-      - If you still need clarification → emit new clarifying_questions (you have {{__retry_attempt}} of 3 rounds used)
-  - { from: produce_prd, to: audit_prd }
-  - { from: audit_prd, to: produce_hla, condition: "prd_audit_verdict == 'approve'" }
-  - { from: audit_prd, to: produce_prd, condition: "prd_audit_verdict == 'revise'", max_retries: 2, retry_context: "PRD audit feedback:\n{{prd_audit_rationale}}\n{{prd_audit_issues}}" }
-  - { from: audit_prd, to: escalation_review, condition: "prd_audit_verdict == 'escalate'" }
-  - { from: produce_hla, to: audit_hla }
-  - { from: audit_hla, to: produce_tdd, condition: "hla_audit_verdict == 'approve'" }
-  - { from: audit_hla, to: produce_hla, condition: "hla_audit_verdict == 'revise'", max_retries: 2, retry_context: "HLA audit feedback:\n{{hla_audit_rationale}}\n{{hla_audit_issues}}" }
-  - { from: audit_hla, to: escalation_review, condition: "hla_audit_verdict == 'escalate'" }
+      Decide:
+        - If the request is now clear enough → emit ready_to_produce_prd=true
+          with a saved PRD artifact.
+        - If you still need clarification → emit new clarifying_questions
+          (you have used {{__retry_attempt}} of 3 rounds).
+
+  - { from: audit_prd, to: produce_tdd,        condition: "prd_audit_verdict == 'approve'" }
+  - { from: audit_prd, to: produce_prd,        condition: "prd_audit_verdict == 'revise'", max_retries: 2, retry_context: "PRD audit feedback:\n{{prd_audit_rationale}}" }
+  - { from: audit_prd, to: escalation_review,  condition: "prd_audit_verdict == 'escalate'" }
+
   - { from: produce_tdd, to: audit_tdd }
-  # Forward paths to implementation go through `create_workspace` so the
-  # worktree is provisioned exactly once per run. Retry edges loop back
-  # directly to `implement` (see below) and reuse the existing worktree.
+
   - { from: audit_tdd, to: create_workspace,   condition: "tdd_audit_verdict == 'approve' AND trusted_mode == true" }
   - { from: audit_tdd, to: plan_approval_gate, condition: "tdd_audit_verdict == 'approve' AND trusted_mode != true" }
-  - { from: audit_tdd, to: produce_tdd, condition: "tdd_audit_verdict == 'revise'", max_retries: 2, retry_context: "TDD audit feedback:\n{{tdd_audit_rationale}}\n{{tdd_audit_issues}}" }
-  - { from: audit_tdd, to: escalation_review, condition: "tdd_audit_verdict == 'escalate'" }
-  # Gate routing — the user picks approve / request_changes / reject.
-  # request_changes loops back to the producer for the chosen scope.
+  - { from: audit_tdd, to: produce_tdd,        condition: "tdd_audit_verdict == 'revise'", max_retries: 2, retry_context: "TDD audit feedback:\n{{tdd_audit_rationale}}" }
+  - { from: audit_tdd, to: escalation_review,  condition: "tdd_audit_verdict == 'escalate'" }
+
   - { from: plan_approval_gate, to: create_workspace, condition: "decision == 'approve'" }
-  - { from: create_workspace, to: implement }
-  - { from: plan_approval_gate, to: END, condition: "decision == 'reject'" }
-  - { from: plan_approval_gate, to: produce_prd, condition: "decision == 'request_changes' AND scope == 'requirements'", max_retries: 2, retry_context: "Human feedback on PRD:\n{{feedback}}" }
-  - { from: plan_approval_gate, to: produce_hla, condition: "decision == 'request_changes' AND scope == 'architecture'", max_retries: 2, retry_context: "Human feedback on HLA:\n{{feedback}}" }
+  - { from: plan_approval_gate, to: END,              condition: "decision == 'reject'" }
+  - { from: plan_approval_gate, to: produce_prd, condition: "decision == 'request_changes' AND scope == 'requirements'",     max_retries: 2, retry_context: "Human feedback on PRD:\n{{feedback}}" }
   - { from: plan_approval_gate, to: produce_tdd, condition: "decision == 'request_changes' AND scope == 'technical_design'", max_retries: 2, retry_context: "Human feedback on TDD:\n{{feedback}}" }
-  - { from: plan_approval_gate, to: produce_prd, condition: "decision == 'request_changes' AND scope == 'all'", max_retries: 2, retry_context: "Human feedback (full redesign):\n{{feedback}}" }
-  - { from: implement, to: implementation_self_check, condition: "any_failures != true" }
-  - { from: implement, to: escalation_review, condition: "any_failures == true" }
-  - { from: implementation_self_check, to: qa, condition: "implementation_self_check_verdict == 'pass'" }
-  - { from: implementation_self_check, to: implement, condition: "implementation_self_check_verdict == 'fail'", max_retries: 2, retry_context: "Implementation self-check failed — complete ALL missing items before returning:\n{{failure_details}}\n\nMissing AC items:\n{{missing_ac_items}}\n\nUnassigned plan items:\n{{unassigned_plan_items}}\n\nSpecialist failures:\n{{specialist_failures}}\n\nNavigator write findings:\n{{navigator_write_findings}}\n\nValidation handoff gaps:\n{{validation_handoff_gaps}}" }
-  - { from: implementation_self_check, to: escalation_review, condition: "implementation_self_check_verdict == 'escalate'" }
+  - { from: plan_approval_gate, to: produce_prd, condition: "decision == 'request_changes' AND scope == 'all'",              max_retries: 2, retry_context: "Human feedback (full redesign):\n{{feedback}}" }
+
+  # ──────────────────────────────────────────────────────────────────────
+  # Implementation phase
+  # ──────────────────────────────────────────────────────────────────────
+  - { from: create_workspace, to: implement }
+
+  - { from: implement, to: qa,                 condition: "implement_verdict == 'pass'" }
+  - { from: implement, to: implement,          condition: "implement_verdict == 'fail'", max_retries: 2, retry_context: "Implement self-validation failed:\n{{implement_failure_details}}\nPlan + self-check: {{implementation_plan_artifact_url}}" }
+  - { from: implement, to: escalation_review,  condition: "implement_verdict == 'escalate'" }
+
   - { from: qa, to: implementation_validator, condition: "qa_verdict == 'pass'" }
-  - { from: qa, to: implement, condition: "qa_verdict == 'fail'", max_retries: 2, retry_context: "QA failed — build/lint/tests broken:\n{{failure_details}}" }
-  - { from: qa, to: escalation_review, condition: "qa_verdict == 'escalate'" }
+  - { from: qa, to: implement,                condition: "qa_verdict == 'fail'", max_retries: 2, retry_context: "QA failed. Summary:\n{{qa_failure_details}}\nFull report: {{qa_artifact_url}}" }
+  - { from: qa, to: escalation_review,        condition: "qa_verdict == 'escalate'" }
+
   - { from: implementation_validator, to: update_docs, condition: "prd_satisfied == true" }
-  - { from: implementation_validator, to: implement, condition: "prd_satisfied != true", max_retries: 2, retry_context: "Validator found blocking violations:\n{{blocking_violations}}" }
+  - { from: implementation_validator, to: implement,   condition: "prd_satisfied != true", max_retries: 2, retry_context: "Validator blocked. See {{validator_artifact_url}}" }
+
   - { from: update_docs, to: code_review }
-  - { from: code_review, to: open_pr, condition: "review_verdict == 'APPROVED'" }
-  - { from: code_review, to: implement, condition: "review_verdict == 'REQUEST_CHANGES'", max_retries: 2, retry_context: "Review feedback:\n{{review_feedback}}" }
+
+  - { from: code_review, to: open_pr,   condition: "review_verdict == 'APPROVED'" }
+  - { from: code_review, to: implement, condition: "review_verdict == 'REQUEST_CHANGES'", max_retries: 2, retry_context: "Code review requested changes. See {{code_review_artifact_url}}" }
+
   - { from: open_pr, to: summary }
   - { from: summary, to: END }
 
-  # ══════════════════════════════════════════════════════════════════════
+  # ──────────────────────────────────────────────────────────────────────
   # RETRY-EXHAUSTION FALLBACKS — when a retry edge's budget is spent,
-  # the engine skips that edge and sets state.__retry_exhausted_from to
-  # the source node name. These condition-only edges are guarded by
-  # that flag so they ONLY fire after exhaustion — they don't fan out
-  # in parallel with an active retry.
-  # ══════════════════════════════════════════════════════════════════════
+  # the engine sets state.__retry_exhausted_from to the source node name.
+  # These condition-only edges fire ONLY after exhaustion so they don't
+  # fan out in parallel with an active retry.
+  # ──────────────────────────────────────────────────────────────────────
   - { from: clarify_human,            to: escalation_review, condition: "ready_to_produce_prd != true AND __retry_exhausted_from == 'clarify_human'" }
   - { from: audit_prd,                to: escalation_review, condition: "prd_audit_verdict == 'revise' AND __retry_exhausted_from == 'audit_prd'" }
-  - { from: audit_hla,                to: escalation_review, condition: "hla_audit_verdict == 'revise' AND __retry_exhausted_from == 'audit_hla'" }
   - { from: audit_tdd,                to: escalation_review, condition: "tdd_audit_verdict == 'revise' AND __retry_exhausted_from == 'audit_tdd'" }
   - { from: plan_approval_gate,       to: escalation_review, condition: "decision == 'request_changes' AND __retry_exhausted_from == 'plan_approval_gate'" }
-  - { from: implementation_self_check, to: escalation_review, condition: "implementation_self_check_verdict == 'fail' AND __retry_exhausted_from == 'implementation_self_check'" }
+  - { from: implement,                to: escalation_review, condition: "implement_verdict == 'fail' AND __retry_exhausted_from == 'implement'" }
   - { from: qa,                       to: escalation_review, condition: "qa_verdict == 'fail' AND __retry_exhausted_from == 'qa'" }
   - { from: implementation_validator, to: escalation_review, condition: "prd_satisfied != true AND __retry_exhausted_from == 'implementation_validator'" }
   - { from: code_review,              to: escalation_review, condition: "review_verdict == 'REQUEST_CHANGES' AND __retry_exhausted_from == 'code_review'" }
 
-  # ══════════════════════════════════════════════════════════════════════
+  # ──────────────────────────────────────────────────────────────────────
   # escalation_review outgoing
-  # ══════════════════════════════════════════════════════════════════════
-  # Conditions OR on BOTH the agent-escalate case and the retry-
-  # exhaustion case (e.g. prd_audit_verdict == 'revise' OR 'escalate')
-  # so the same edge handles both failure modes for a given stage.
-  #
-  # No max_retries on retry edges — the human is the retry controller;
-  # they pick abandon when they're done. An unbounded agent loop would
-  # be a footgun; an unbounded human-gated loop is just "I keep asking
-  # the user to help".
+  # Conditions OR on BOTH the agent-escalate case and the retry-exhaustion
+  # case so the same edge handles both failure modes per stage.
+  # No max_retries — the human is the retry controller.
+  # ──────────────────────────────────────────────────────────────────────
   - { from: escalation_review, to: END, condition: "decision == 'abandon'" }
 
-  # retry_with_feedback
-  - { from: escalation_review, to: clarify,     condition: "decision == 'retry_with_feedback' AND ready_to_produce_prd != true", retry_context: "Human intervened on clarification exhaustion. Commit to the best interpretation and emit ready_to_produce_prd=true with refined_request. Feedback:\n{{feedback}}" }
+  # retry_with_feedback — route back to the failing stage with feedback.
+  - { from: escalation_review, to: produce_prd, condition: "decision == 'retry_with_feedback' AND __retry_exhausted_from == 'clarify_human'",        retry_context: "Human intervened on clarification exhaustion. Commit to the best interpretation and produce a PRD. Feedback:\n{{feedback}}" }
   - { from: escalation_review, to: produce_prd, condition: "decision == 'retry_with_feedback' AND (prd_audit_verdict == 'escalate' OR prd_audit_verdict == 'revise')", retry_context: "Human intervened on PRD audit failure. Feedback:\n{{feedback}}" }
-  - { from: escalation_review, to: produce_hla, condition: "decision == 'retry_with_feedback' AND (hla_audit_verdict == 'escalate' OR hla_audit_verdict == 'revise')", retry_context: "Human intervened on HLA audit failure. Feedback:\n{{feedback}}" }
   - { from: escalation_review, to: produce_tdd, condition: "decision == 'retry_with_feedback' AND (tdd_audit_verdict == 'escalate' OR tdd_audit_verdict == 'revise')", retry_context: "Human intervened on TDD audit failure. Feedback:\n{{feedback}}" }
-  # The condition-parser maps undefined identifiers to `false`, so
-  # `prd_satisfied != true` AND `prd_satisfied == false` BOTH fan out
-  # whenever prd_satisfied has never been set. Guard the validator branch
-  # with `__retry_exhausted_from == 'implementation_validator'` instead —
-  # that flag is only ever set after validator retries exhaust.
-  - { from: escalation_review, to: implement,   condition: "decision == 'retry_with_feedback' AND (any_failures == true OR implementation_self_check_verdict == 'escalate' OR implementation_self_check_verdict == 'fail' OR qa_verdict == 'escalate' OR qa_verdict == 'fail' OR __retry_exhausted_from == 'implementation_validator' OR review_verdict == 'REQUEST_CHANGES')", retry_context: "Human intervened on implementation/self-check/validation/review failure. Feedback:\n{{feedback}}" }
-  # Plan-approval-gate request_changes exhaustion — route back to the
-  # producer for whichever scope the human last picked. Guarded by the
-  # exhaustion source so these don't fan out with audit-driven retries
-  # when `scope` happens to be a leftover value from an earlier
-  # plan_approval_gate visit.
-  - { from: escalation_review, to: produce_prd, condition: "decision == 'retry_with_feedback' AND __retry_exhausted_from == 'plan_approval_gate' AND scope == 'requirements'", retry_context: "Human intervened on plan-approval request_changes exhaustion. Feedback:\n{{feedback}}" }
-  - { from: escalation_review, to: produce_hla, condition: "decision == 'retry_with_feedback' AND __retry_exhausted_from == 'plan_approval_gate' AND scope == 'architecture'", retry_context: "Human intervened on plan-approval request_changes exhaustion. Feedback:\n{{feedback}}" }
-  - { from: escalation_review, to: produce_tdd, condition: "decision == 'retry_with_feedback' AND __retry_exhausted_from == 'plan_approval_gate' AND scope == 'technical_design'", retry_context: "Human intervened on plan-approval request_changes exhaustion. Feedback:\n{{feedback}}" }
-  - { from: escalation_review, to: produce_prd, condition: "decision == 'retry_with_feedback' AND __retry_exhausted_from == 'plan_approval_gate' AND scope == 'all'", retry_context: "Human intervened on plan-approval request_changes exhaustion (all scope). Feedback:\n{{feedback}}" }
+
+  # Plan-approval exhaustion retry — route back to the producer for the
+  # scope the human last picked. Guarded by exhaustion source so these
+  # don't fan out with audit-driven retries.
+  - { from: escalation_review, to: produce_prd, condition: "decision == 'retry_with_feedback' AND __retry_exhausted_from == 'plan_approval_gate' AND scope == 'requirements'",     retry_context: "Human intervened on plan-approval exhaustion. Feedback:\n{{feedback}}" }
+  - { from: escalation_review, to: produce_tdd, condition: "decision == 'retry_with_feedback' AND __retry_exhausted_from == 'plan_approval_gate' AND scope == 'technical_design'", retry_context: "Human intervened on plan-approval exhaustion. Feedback:\n{{feedback}}" }
+  - { from: escalation_review, to: produce_prd, condition: "decision == 'retry_with_feedback' AND __retry_exhausted_from == 'plan_approval_gate' AND scope == 'all'",              retry_context: "Human intervened on plan-approval exhaustion (all scope). Feedback:\n{{feedback}}" }
+
+  # Implementation-side retries. The condition-parser maps undefined
+  # identifiers to false, so `prd_satisfied != true` AND
+  # `prd_satisfied == false` BOTH fan out whenever prd_satisfied has
+  # never been set. Guard validator branch with the exhaustion flag.
+  - { from: escalation_review, to: implement, condition: "decision == 'retry_with_feedback' AND (implement_verdict == 'escalate' OR implement_verdict == 'fail' OR qa_verdict == 'escalate' OR qa_verdict == 'fail' OR __retry_exhausted_from == 'implementation_validator' OR review_verdict == 'REQUEST_CHANGES')", retry_context: "Human intervened on implementation/qa/validation/review failure. Feedback:\n{{feedback}}" }
 
   # override_and_continue — advance past the failing stage. Paths that
-  # reach implementation for the FIRST time go through create_workspace
-  # so the worktree is provisioned; paths that have already implemented
-  # (qa / validator / review overrides) skip straight to their next
-  # node and reuse the existing worktree.
-  - { from: escalation_review, to: produce_hla,             condition: "decision == 'override_and_continue' AND (prd_audit_verdict == 'escalate' OR prd_audit_verdict == 'revise')" }
-  - { from: escalation_review, to: produce_tdd,             condition: "decision == 'override_and_continue' AND (hla_audit_verdict == 'escalate' OR hla_audit_verdict == 'revise')" }
-  - { from: escalation_review, to: create_workspace,        condition: "decision == 'override_and_continue' AND (tdd_audit_verdict == 'escalate' OR tdd_audit_verdict == 'revise') AND trusted_mode == true" }
-  - { from: escalation_review, to: plan_approval_gate,      condition: "decision == 'override_and_continue' AND (tdd_audit_verdict == 'escalate' OR tdd_audit_verdict == 'revise') AND trusted_mode != true" }
+  # reach implementation for the FIRST time go through create_workspace.
+  # Paths that have already implemented skip to the next downstream node.
+  - { from: escalation_review, to: produce_tdd,              condition: "decision == 'override_and_continue' AND (prd_audit_verdict == 'escalate' OR prd_audit_verdict == 'revise')" }
+  - { from: escalation_review, to: create_workspace,         condition: "decision == 'override_and_continue' AND (tdd_audit_verdict == 'escalate' OR tdd_audit_verdict == 'revise') AND trusted_mode == true" }
+  - { from: escalation_review, to: plan_approval_gate,       condition: "decision == 'override_and_continue' AND (tdd_audit_verdict == 'escalate' OR tdd_audit_verdict == 'revise') AND trusted_mode != true" }
+  - { from: escalation_review, to: qa,                       condition: "decision == 'override_and_continue' AND (implement_verdict == 'escalate' OR implement_verdict == 'fail')" }
   - { from: escalation_review, to: implementation_validator, condition: "decision == 'override_and_continue' AND (qa_verdict == 'escalate' OR qa_verdict == 'fail')" }
-  - { from: escalation_review, to: qa,                       condition: "decision == 'override_and_continue' AND (implementation_self_check_verdict == 'escalate' OR implementation_self_check_verdict == 'fail')" }
-  - { from: escalation_review, to: update_docs,             condition: "decision == 'override_and_continue' AND __retry_exhausted_from == 'implementation_validator'" }
-  - { from: escalation_review, to: open_pr,                 condition: "decision == 'override_and_continue' AND review_verdict == 'REQUEST_CHANGES'" }
-  # For plan-approval and clarify exhaustions, overriding advances the
-  # happy path (create_workspace → implement / produce_prd respectively).
-  # The clarify override says "just try with what we have".
-  - { from: escalation_review, to: create_workspace, condition: "decision == 'override_and_continue' AND __retry_exhausted_from == 'plan_approval_gate'" }
-  - { from: escalation_review, to: produce_prd,      condition: "decision == 'override_and_continue' AND __retry_exhausted_from == 'clarify_human'" }
+  - { from: escalation_review, to: update_docs,              condition: "decision == 'override_and_continue' AND __retry_exhausted_from == 'implementation_validator'" }
+  - { from: escalation_review, to: open_pr,                  condition: "decision == 'override_and_continue' AND review_verdict == 'REQUEST_CHANGES'" }
+  - { from: escalation_review, to: create_workspace,         condition: "decision == 'override_and_continue' AND __retry_exhausted_from == 'plan_approval_gate'" }
+  - { from: escalation_review, to: produce_prd,              condition: "decision == 'override_and_continue' AND __retry_exhausted_from == 'clarify_human'" }

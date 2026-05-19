@@ -125,18 +125,16 @@ npm run health
 Use a disposable or non-critical repository for the first run — agents inspect files, and implementation workflows can write code, create branches, and open PRs.
 
 1. Register a repository (local path, or clone from a GitHub SSH URL) on the Agents → Repos screen.
-2. Open **Workflows** and choose `understand-and-plan`.
-3. Select the repo and enter a bounded task (e.g. "Add a CSV export button to the executions list").
-4. Watch the execution: timeline, node logs, tool calls, artifacts, and the final plan.
-5. Once you trust the output, try an implementation workflow (`feature-plan-and-implement`, `bug-investigate-and-fix`).
+2. Open **Workflows** and choose `bug-fix-by-severity`.
+3. Select the repo and enter a bug report (e.g. "Clicking Delete on an empty workflow crashes the UI with 'Cannot read property id of undefined'").
+4. Watch the execution: timeline, node logs, tool calls, artifacts, and the opened PR.
+5. Once you trust the output, try `feature-plan-and-implement` for a new-feature run.
 
 Built-in workflows in `packages/engine/workflows/`:
 
 | Workflow | Purpose |
 |---|---|
-| `understand-and-plan.yml` | Explore a repo and produce a grounded implementation plan. |
 | `feature-plan-and-implement.yml` | Clarify requirements, write PRD/HLD/TDD, implement, validate, open a PR. |
-| `bug-investigate-and-fix.yml` | Reproduce, diagnose, fix, test, review, and summarize a bug. |
 | `bug-fix-by-severity.yml` | Triage a bug by severity and dispatch the appropriate fix path. |
 | `prd-tdd-design-by-severity.yml` | Generate product + technical design documents scaled to severity. |
 | `milestone-implementation-from-prd-tdd.yml` | Implement milestones from existing PRD/TDD docs. |
@@ -164,7 +162,7 @@ See [`docs/first-workflow.md`](docs/first-workflow.md) for a step-by-step walkth
 
 **Cron / scheduled work.** Six built-in jobs (repo scan/pull, PR sync, MCP bundle cleanup, CodeRabbit sweep, hourly self-healing monitor) plus user-created scheduled agent/workflow runs via the Schedules page.
 
-**Self-healing monitoring.** An hourly agent-led scan inspects Allen's own runtime records, fingerprints and deduplicates incidents, files Linear tickets, and can auto-dispatch `bug-investigate-and-fix`. See [`docs/SELF_HEALING_MONITORING.md`](docs/SELF_HEALING_MONITORING.md).
+**Self-healing monitoring.** An hourly agent-led scan inspects Allen's own runtime records, fingerprints and deduplicates incidents, files Linear tickets, and can auto-dispatch `bug-fix-by-severity`. See [`docs/SELF_HEALING_MONITORING.md`](docs/SELF_HEALING_MONITORING.md).
 
 **Learnings & memory.** Agents record learnings (facts, patterns, mistakes) scoped to global / workflow / context / agent. Relevant learnings are retrieved by embedding similarity and injected into future prompts.
 

@@ -314,7 +314,7 @@ Return issue identifiers, titles, state, owner, dates, links, and any assumption
     priority: 84,
     allowedRoutes: ['direct_answer', 'data_query', 'spawn_agent', 'delegate_to_agent', 'run_workflow'],
     relatedAgents: ['bug-investigator', 'codebase-navigator', 'engineering-lead'],
-    relatedWorkflows: ['bug-investigate-and-fix'],
+    relatedWorkflows: ['bug-fix-by-severity'],
     body: `# Issue Investigation
 
 ## When to use
@@ -339,12 +339,12 @@ Return evidence checked, findings, confidence, unknowns, and recommended route i
     name: 'bug-fix-routing',
     displayName: 'Bug Fix Routing',
     category: 'implementation',
-    description: 'Route bug fixes to a direct specialist for small fixes, bug-fix-by-severity for severity-gated full pipelines, or bug-investigate-and-fix for the legacy always-full pipeline.',
+    description: 'Route bug fixes to a direct specialist for small fixes or bug-fix-by-severity for severity-gated full pipelines.',
     triggers: ['fix bug', 'bug', 'broken', 'regression', 'production issue', 'crash', 'error'],
     excludes: ['add feature', 'new workflow'],
     priority: 82,
     allowedRoutes: ['spawn_agent', 'delegate_to_agent', 'run_workflow'],
-    relatedWorkflows: ['bug-fix-by-severity', 'bug-investigate-and-fix'],
+    relatedWorkflows: ['bug-fix-by-severity'],
     relatedAgents: ['backend-developer', 'frontend-developer', 'bug-investigator', 'engineering-lead'],
     body: `# Bug Fix Routing
 
@@ -359,8 +359,7 @@ Confirm repo, reproduction clues, failing behavior, affected surface, and availa
 
 ## Routing
 - Small, obvious, low-risk bug with narrow files: create/reuse workspace, spawn the right specialist such as backend-developer or frontend-developer, then continue to PR.
-- Bug needing investigation but where severity is unknown up front (default lane): run bug-fix-by-severity. The investigator classifies severity as small | medium | large and the workflow auto-skips heavier gates for smaller bugs (small skips qa + implementation_validator; medium skips implementation_validator; large runs the full pipeline).
-- Bug where you explicitly want the full pipeline regardless of size (high-risk surface, security-sensitive, or for parity with historical runs): run bug-investigate-and-fix.
+- Bug needing investigation: run bug-fix-by-severity. The investigator classifies severity as small | medium | large and the workflow auto-skips heavier gates for smaller bugs (small skips qa + implementation_validator; medium skips implementation_validator; large runs the full pipeline).
 - Cross-team operational bug: delegate to engineering-lead or devops-engineer.
 
 ## Output
@@ -375,7 +374,7 @@ State selected route, why direct specialist or workflow is appropriate, required
     excludes: ['fix bug', 'resolve pr comments'],
     priority: 80,
     allowedRoutes: ['spawn_agent', 'delegate_to_agent', 'run_workflow', 'direct_answer'],
-    relatedWorkflows: ['feature-plan-and-implement', 'understand-and-plan'],
+    relatedWorkflows: ['feature-plan-and-implement'],
     relatedAgents: ['product-manager', 'engineering-lead', 'backend-developer', 'frontend-developer'],
     body: `# Feature Routing
 
@@ -391,7 +390,7 @@ Identify repo, affected product area, expected behavior, existing implementation
 ## Routing
 - Tiny low-risk tweak: direct specialist in workspace, then PR.
 - Normal or large feature, cross-cutting change, uncertain design, multiple surfaces, or work needing PRD/HLA/TDD/QA/review/PR: run feature-plan-and-implement.
-- Planning-only request: run understand-and-plan or answer directly if no repo grounding is needed.
+- Planning-only request: answer directly if no repo grounding is needed.
 - Product-heavy ambiguity: delegate to product-manager or engineering lead.
 
 ## Output
