@@ -64,7 +64,7 @@ On first boot, it backfills the most recent 24 hours.
 7. `allen-incident-router` creates or updates Linear issues through Linear MCP
    tools. Backend code does not directly create the Linear ticket.
 8. `allen-incident-router` chooses the bug-fix route and starts the
-   `bug-investigate-and-fix` workflow through Allen MCP `run_workflow`.
+   `bug-fix-by-severity` workflow through Allen MCP `run_workflow`.
 9. The bug-fix workflow creates an isolated worktree, diagnoses the issue,
    implements the fix, validates it, and opens a PR.
 10. Agents write Linear metadata, routing, dispatch execution ID, evidence, and
@@ -160,18 +160,18 @@ The following workflows are seeded from `packages/engine/workflows/`:
 
 - `self-healing-incident-triage`
 - `allen-self-healing-monitor-hourly`
-- `bug-investigate-and-fix`
+- `bug-fix-by-severity`
 
 Routing defaults:
 
 | Root Cause Area | Repair Target |
 |---|---|
-| `memory_system` | `bug-investigate-and-fix` |
-| `tool_integration` | `bug-investigate-and-fix` |
-| `workflow_definition` | `bug-investigate-and-fix` |
-| `agent_prompt` | `bug-investigate-and-fix` |
-| `instruction_bug` | `bug-investigate-and-fix` |
-| `allen_repo` | `bug-investigate-and-fix` |
+| `memory_system` | `bug-fix-by-severity` |
+| `tool_integration` | `bug-fix-by-severity` |
+| `workflow_definition` | `bug-fix-by-severity` |
+| `agent_prompt` | `bug-fix-by-severity` |
+| `instruction_bug` | `bug-fix-by-severity` |
+| `allen_repo` | `bug-fix-by-severity` |
 | `unknown` | `allen-incident-router` |
 
 ## API

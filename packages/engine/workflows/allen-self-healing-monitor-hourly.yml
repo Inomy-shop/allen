@@ -216,7 +216,7 @@ nodes:
 
       Ticket content must include evidence reviewed, affected links/ids,
       suspected root cause, whether code/prompt/instruction/workflow/memory
-      changes may be needed, and whether bug-investigate-and-fix or triage is
+      changes may be needed, and whether bug-fix-by-severity or triage is
       recommended.
 
       Do not call backend LinearService. Linear work must happen through Linear
@@ -243,15 +243,15 @@ nodes:
       If auto_dispatch is false, record routing recommendations only.
 
       Routing map:
-      - memory_system -> bug-investigate-and-fix
-      - tool_integration -> bug-investigate-and-fix
-      - workflow_definition -> bug-investigate-and-fix
-      - agent_prompt or instruction_bug -> bug-investigate-and-fix
-      - allen_repo -> bug-investigate-and-fix
+      - memory_system -> bug-fix-by-severity
+      - tool_integration -> bug-fix-by-severity
+      - workflow_definition -> bug-fix-by-severity
+      - agent_prompt or instruction_bug -> bug-fix-by-severity
+      - allen_repo -> bug-fix-by-severity
       - unknown -> self-healing-incident-triage
 
       Before dispatching, call mcp__allen__allen_monitoring_resolve_repo_path.
-      Dispatch with mcp__allen__run_workflow. For bug-investigate-and-fix, pass:
+      Dispatch with mcp__allen__run_workflow. For bug-fix-by-severity, pass:
       - repo_path: resolved Allen repo path
       - bug_report: a concise synthesized report containing incident
         id/fingerprint, Linear id/identifier/url, source_type, root_cause_area,
@@ -266,7 +266,7 @@ nodes:
       End with JSON: repair_routes[], repair_executions[], not_dispatched[].
     outputs:
       repair_routes: "Chosen bug-fix or triage routes."
-      repair_executions: "bug-investigate-and-fix execution ids."
+      repair_executions: "bug-fix-by-severity execution ids."
       not_dispatched: "Routes not dispatched with reasons."
 
   close_scan:
@@ -287,7 +287,7 @@ nodes:
       "hourly-agent" and last_successful_scan_at={{until}} only after you have
       recorded incident/ticket/dispatch status.
 
-      Summarize what happened. If bug-investigate-and-fix failed to start
+      Summarize what happened. If bug-fix-by-severity failed to start
       because of Allen itself, create a follow-up monitoring incident through
       mcp__allen__allen_monitoring_upsert_incident.
 

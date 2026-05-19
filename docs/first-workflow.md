@@ -1,6 +1,6 @@
 # First Workflow
 
-This guide gets Allen from a local checkout to one useful workflow result: a repo-grounded implementation plan from `understand-and-plan`.
+This guide gets Allen from a local checkout to one useful workflow result: a repo-grounded bug fix produced by `bug-fix-by-severity`.
 
 Use a disposable or non-critical repository for the first run. Allen can spawn agents that inspect files and later workflows can write code.
 
@@ -118,20 +118,20 @@ If you see `Hi <your-username>! You've successfully authenticated…`, the clone
 
 > **Note**: Repo cloning uses SSH and needs an SSH key on the host. `ALLEN_GITHUB_PERSONAL_ACCESS_TOKEN` is used by the `gh` CLI for PR creation, PR review resolution, and similar workflows, and is optional for registering repos.
 
-## 7. Run `understand-and-plan`
+## 7. Run `bug-fix-by-severity`
 
 Open Workflows and choose:
 
 ```text
-understand-and-plan
+bug-fix-by-severity
 ```
 
 Inputs:
 
-- `task`: a clear bounded task, such as "Add a CSV export button to the executions list."
+- `bug_report`: a clear description of the bug — symptoms, repro steps, error messages, and stack traces if you have them. Example: "Clicking Delete on an empty workflow crashes the UI with 'Cannot read property id of undefined'. Reproduced on Chrome 120."
 - `repo_path`: the registered repository.
 
-Start the run.
+Start the run. The investigator will classify the bug as small / medium / large and route through a proportionate fix pipeline. Expect one human approval gate after root-cause and fix-scope are proposed.
 
 ## 8. Review the Result
 
@@ -142,16 +142,13 @@ Open the execution detail page and inspect:
 - Template bindings.
 - State outputs.
 - Artifacts, if generated.
-- Final plan.
-
-The expected first value is not a code change. It is a grounded implementation plan that shows Allen can inspect the repo and produce useful next steps.
+- The opened PR (for small/medium/large severities that complete).
 
 ## 9. Next Workflows
 
-After the planning workflow succeeds, try one of:
+After the first workflow succeeds, try one of:
 
-- `feature-plan-and-implement` for a controlled implementation workflow.
-- `bug-investigate-and-fix` for a reproducible bug.
+- `feature-plan-and-implement` for a new feature with PRD/HLD/TDD and implementation.
 - `resolve-pr-reviews` for a GitHub PR review sweep.
 
 Review workflow YAML before running implementation workflows. They can create branches, modify files, run tests, and interact with external tools depending on available credentials.

@@ -121,9 +121,7 @@ async function main(): Promise<void> {
       OrgSeedService.seedAgentNames,
       [
         'feature-plan-and-implement',
-        'bug-investigate-and-fix',
         'resolve-pr-reviews',
-        'understand-and-plan',
         'allen-self-healing-monitor-hourly',
         'self-healing-incident-triage',
       ],
