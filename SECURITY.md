@@ -32,7 +32,7 @@ Allen is pre-release. Security fixes target `main` until versioned releases are 
 - Run Allen only against repositories and systems you are allowed to modify.
 - Use dedicated workspace directories for agent work.
 - Review workflow YAML in `packages/engine/workflows/` before running it.
-- Review agent definitions in `packages/engine/agents.yml` before granting tool access.
+- Review agent definitions before granting tool access — the production org is seeded from `packages/server/src/services/org-seed.ts`; `packages/engine/agents.yml` holds the engine's built-in defaults.
 - Keep `.env`, API keys, OAuth tokens, SSH keys, model-provider credentials, and MCP credentials out of git.
 - Use least-privilege credentials for GitHub, Linear, Slack, Anthropic, and MCP servers.
 - Rotate `JWT_ACCESS_SECRET`, `JWT_REFRESH_SECRET`, provider keys, and integration tokens if exposed.
@@ -55,7 +55,8 @@ The highest-risk areas are:
 - `packages/engine/src/node-executor.ts`
 - `packages/engine/src/mcp-loader.ts`
 - `packages/engine/src/mcp-install.ts`
-- `packages/engine/agents.yml`
+- `packages/server/src/services/org-seed.ts` (seeded agent org)
+- `packages/engine/agents.yml` (engine built-in agents)
 - `packages/engine/workflows/`
 
 Changes in these areas should include focused tests and a clear explanation of safety impact.

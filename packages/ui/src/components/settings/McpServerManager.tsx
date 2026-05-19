@@ -651,7 +651,7 @@ function AddFromRepo({ onAdded, onClose }: { onAdded: () => void; onClose: () =>
           <Field label="Name">
             <input
               type="text"
-              placeholder="e.g. inomy-postgres"
+              placeholder="e.g. my-postgres"
               value={name}
               onChange={(e) => setName(e.target.value)}
               className="w-full px-2.5 py-1.5 rounded-md border border-app bg-app-card text-theme-primary text-sm font-mono placeholder:text-theme-subtle focus:outline-none focus:border-accent-blue/60"

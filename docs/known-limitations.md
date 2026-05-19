@@ -4,16 +4,14 @@ Allen is early alpha. These limitations are intentional to document current real
 
 ## Setup
 
-- There is no complete one-command setup yet.
-- MongoDB must be installed and running locally before starting Allen.
+- `npm run setup` is a one-command bootstrap on macOS (it installs MongoDB via Homebrew, the Claude Code CLI, dependencies, and generates `.env`). On Linux it checks for MongoDB and prints install instructions rather than installing it; native Windows is unsupported (use WSL2).
 - The server and UI run together with `npm start` for local development.
-- Fresh-machine setup still needs validation across macOS, Linux, and cloud VMs.
+- Setup is primarily validated on macOS. Linux and cloud-VM environments are supported but less exercised.
 
 ## Demo Experience
 
-- There is no bundled toy repository yet.
-- The first useful workflow currently requires a local repository supplied by the user.
-- New users should start with `understand-and-plan`, not an implementation workflow.
+- Allen ships without a bundled sample repository; the first workflow runs against a user-supplied repo.
+- New users should start with `understand-and-plan` before an implementation workflow.
 
 ## Sandboxing
 
@@ -31,7 +29,7 @@ Allen is early alpha. These limitations are intentional to document current real
 
 ## Deployment
 
-- There is no shipped containerization or one-command deploy path. The repo is currently optimized for local development with a locally-running MongoDB.
+- Allen ships no containerization or one-command deploy path. It is built for local development against a locally-running MongoDB.
 - Production deployment, TLS, domains, process supervision, and persistent storage need explicit operator setup.
 
 ## Agent Execution
@@ -62,12 +60,12 @@ Allen is early alpha. These limitations are intentional to document current real
 
 ## Tests and CI
 
-- CI currently covers build, lint, and Vitest tests.
+- CI covers build, lint, and Vitest tests.
 - Playwright e2e tests are not in the default CI workflow because they need MongoDB, browser setup, live app processes, filesystem state, and Claude CLI for some specs.
 - E2E tests can create real workspace and database state.
 
 ## Documentation
 
-- Architecture, troubleshooting, security, limitations, and first-workflow docs now exist, but screenshots, demo videos, and deeper deployment docs are still missing.
-- API-level documentation is not complete.
-- Workflow authoring documentation is not complete.
+- Screenshots, demo videos, and deeper deployment guides are not included.
+- API-level reference documentation is incomplete.
+- Workflow-authoring documentation is incomplete.

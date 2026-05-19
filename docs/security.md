@@ -11,13 +11,13 @@ Allen assumes the operator controls:
 - The credentials provided to Allen.
 - The workflow YAML and agent definitions being run.
 
-Allen does not currently provide a hardened sandbox for hostile code or untrusted workflows.
+Allen does not provide a hardened sandbox for hostile code or untrusted workflows.
 
 ## Workspaces
 
 Agents should work inside dedicated workspaces, not arbitrary filesystem paths.
 
-Workspace protections currently include:
+Workspace protections include:
 
 - Workspace-specific worktree paths.
 - Workspace context injected into agent prompts.
@@ -46,7 +46,7 @@ Relevant settings:
 - `ALLEN_SYSTEM_PROMPT_MODE=append|custom`
 - `ALLEN_AGENT_SKIP_LEARNINGS=true|false`
 
-CLI mode can use local developer auth and tools. SDK mode uses the SDK path for contexts where CLI repo execution is not appropriate.
+CLI mode runs agents through the local Claude Code CLI (local developer auth and tools). SDK mode runs them in-process. Select the mode with `ALLEN_AGENT_EXECUTION_MODE`.
 
 Review these before changing execution behavior:
 
@@ -70,7 +70,7 @@ Optional — set only the integrations you use:
 - `ALLEN_GITHUB_PERSONAL_ACCESS_TOKEN` for GitHub CLI calls and PR review workflows.
 - `ALLEN_LINEAR_ACCESS_TOKEN` for Linear ticket workflows.
 - `ALLEN_SLACK_BOT_TOKEN`, `ALLEN_SLACK_SIGNING_SECRET`, `ALLEN_SLACK_TEAM_ID` for Slack.
-- MCP credentials such as `ALLEN_POSTGRES_CONNECTION_STRING`, `ALLEN_MONGODB_CONNECTION_STRING`. The MCP loader strips the `ALLEN_` prefix when it forwards values to the MCP subprocess.
+- MCP server credentials, supplied per server as `ALLEN_<KEY>` (for example, an MCP that needs `POSTGRES_CONNECTION_STRING` reads it from `ALLEN_POSTGRES_CONNECTION_STRING`). The MCP loader strips the `ALLEN_` prefix when forwarding the value to the MCP subprocess, and forwards only the keys that server explicitly declares.
 
 Do not commit `.env`, tokens, API keys, customer data, private prompts, or copied repo contents.
 
@@ -147,7 +147,7 @@ Allen can create PRs, post Slack messages, read Linear tickets, and run tools de
 
 ## Security Checklist Before Public Use
 
-- Replace default admin credentials.
+- Create the first admin through the UI onboarding screen, then use a strong password.
 - Generate strong JWT secrets (`npm run setup` does this on first run).
 - Keep `.env` out of git.
 - Run secret scanning before publishing the repository.
