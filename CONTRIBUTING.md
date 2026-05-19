@@ -5,7 +5,7 @@ Allen coordinates coding agents, workspaces, workflow traces, artifacts, and int
 ## Good Contribution Areas
 
 - Workflow YAML in `packages/engine/workflows/`.
-- Agent definitions and routing behavior in `packages/engine/agents.yml` and `packages/engine/router.yml`.
+- The production agent org seeded in `packages/server/src/services/org-seed.ts` (6 teams, 20+ agents); the engine fallback set in `packages/engine/agents.yml` and routing in `packages/engine/router.yml`.
 - Engine behavior in `packages/engine/src/`: validation, state, outputs, templates, parallel execution, MCP loading, and agent execution.
 - Server behavior in `packages/server/src/`: auth, repos, workspaces, executions, chat, artifacts, integrations, streams, and cron.
 - UI behavior in `packages/ui/src/`: workflow builder, execution detail, workspaces, chat, repos, settings, tickets, and admin pages.

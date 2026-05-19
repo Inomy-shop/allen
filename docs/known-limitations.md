@@ -4,10 +4,9 @@ Allen is early alpha. These limitations are intentional to document current real
 
 ## Setup
 
-- There is no complete one-command setup yet.
-- MongoDB must be installed and running locally before starting Allen.
+- `npm run setup` is a one-command bootstrap on macOS (it installs MongoDB via Homebrew, the Claude Code CLI, dependencies, and generates `.env`). On Linux it checks for MongoDB and prints install instructions rather than installing it; native Windows is unsupported (use WSL2).
 - The server and UI run together with `npm start` for local development.
-- Fresh-machine setup still needs validation across macOS, Linux, and cloud VMs.
+- Fresh-machine setup is best-tested on macOS; Linux and cloud-VM paths still need broader validation.
 
 ## Demo Experience
 

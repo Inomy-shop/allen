@@ -35,7 +35,7 @@ The workflow runtime.
 Responsibilities:
 
 - Load workflows from `packages/engine/workflows/`.
-- Load agents from `packages/engine/agents.yml`.
+- Load the fallback agent/router definitions from `packages/engine/agents.yml` and `router.yml`. (The live production agent org is seeded into MongoDB by the server — see [The Seeded Org](#the-seeded-org).)
 - Validate YAML workflow structure.
 - Render templates and track template bindings.
 - Execute human, agent, built-in, condition, and parallel nodes.
@@ -54,7 +54,7 @@ Important files:
 - `src/condition-parser.ts` - condition node evaluation.
 - `src/template.ts` - template rendering and binding capture for node inputs.
 - `src/router.ts` - agent routing rules consumed by chat and built-in nodes.
-- `src/agents-loader.ts` and `agents.yml` - agent definitions for teams and specialists.
+- `src/agents-loader.ts` and `agents.yml` - fallback agent definitions. The authoritative production org (6 teams, 20+ agents) is seeded by `packages/server/src/services/org-seed.ts` into the `agents` and `teams` collections.
 - `src/mcp-loader.ts` and `src/mcp-install.ts` - MCP server loading, installation, and `ALLEN_`-prefix env mapping. Supports both Node.js (`.ts`/`.js`/`.mjs`) and Python (`.py`) entry files. Python MCPs get a per-MCP virtual environment at `<ALLEN_HOME>/venvs/<mcpId>/` with `requirements.txt` auto-installed on first spawn (`ensurePythonVenv`). Setting a manual **Command** override opts out of venv management; the user takes ownership of the interpreter.
 - `src/output-extractor.ts` - output parsing from model responses.
 - `src/state-manager.ts` - persisted execution state.
@@ -64,7 +64,7 @@ Important files:
 - `src/paths.ts` - resolves `ALLEN_HOME` and `WORKSPACE_BASE_DIR`.
 - `src/model-alias.ts` - resolves `ALLEN_MODEL_HAIKU/SONNET/OPUS` overrides.
 - `src/validator.ts` and `src/types.ts` - workflow YAML schema and types.
-- `workflows/*.yml` - runnable workflows (`understand-and-plan`, `bug-investigate-and-fix`, `feature-plan-and-implement`, `resolve-pr-reviews`).
+- `workflows/*.yml` - nine runnable workflows: `understand-and-plan`, `feature-plan-and-implement`, `bug-investigate-and-fix`, `bug-fix-by-severity`, `prd-tdd-design-by-severity`, `milestone-implementation-from-prd-tdd`, `resolve-pr-reviews`, `self-healing-incident-triage`, `allen-self-healing-monitor-hourly`.
 
 ### `packages/server`
 
@@ -155,22 +155,44 @@ Key chat UI components:
 - `src/components/chat/MentionAutocomplete.tsx` - autocomplete dropdown with two modes: **default** (workflows, repos, agents filtered by query) and **linear** (activated by `@linear`, shows the user's assigned active tickets with priority dots and state badges).
 - `src/services/api.ts` `linear` object - typed wrappers for all `/api/linear/*` endpoints including the `assignee: 'me'` filter shorthand.
 
+## The Seeded Org
+
+On startup `packages/server/src/services/org-seed.ts` idempotently seeds the agent organization into the `teams` and `agents` MongoDB collections. This — not `packages/engine/agents.yml` — is the agent set Allen runs in production. `agents.yml` is a smaller fallback used only when the seeded set is unavailable.
+
+Six teams (lead → parent):
+
+| Team | Lead | Parent | Notable members |
+|---|---|---|---|
+| `executive` | `ceo` | — | the CEO orchestrator |
+| `product` | `product-manager` | executive | `requirements-analyst`, `acceptance-tester`, `brainstormer` |
+| `engineering` | `engineering-lead` | executive | `backend-developer`, `frontend-developer`, `devops-engineer`, `pr-creator`, `code-reviewer`, `security-specialist`, `documentation-writer`, `codebase-navigator` |
+| `quality` | `qa-lead` | executive | `test-planner`, `test-writer` |
+| `meta` | `team-builder-agent` | — | `agent-builder-agent`, `workflow-builder-agent`, `research-agent`, `planner-agent`, `repo-scanner` |
+| `unassigned` | `unassigned-coordinator` | executive | holding area for imported/created agents |
+
+Agent categories:
+
+- **Team leads / orchestrators** — no filesystem access; plan and delegate (`ceo`, `product-manager`, `engineering-lead`, `qa-lead`, `team-builder-agent`, `unassigned-coordinator`).
+- **Specialist / technical agents** — filesystem + terminal; do the hands-on work (developers, reviewer, security, docs, navigator, testers, analysts, plus supporting agents like `bug-investigator`, `solution-architect`, `technical-designer`, `implementation-validator`, `pr-review-bot`, `pr-workspace-resolver`).
+- **Automation / monitoring agents** — Allen-internal self-healing: `allen-monitoring-agent`, `allen-incident-router`, `allen-memory-diagnostician`, `allen-tooling-diagnostician`, `allen-workflow-diagnostician`, `allen-prompt-instruction-diagnostician`.
+
+Re-seeding is idempotent. Set `SEED_OVERRIDE=true` to refresh existing seeded rows from code on next boot.
+
 ## Data Model
 
-MongoDB stores operational state for Allen. Collections are created and indexed by server startup code.
+MongoDB stores all operational state. Collections are created and indexed by server startup code (`packages/server/src/database/indexes.ts`). The main collections:
 
-Key domains:
-
-- Users and refresh tokens.
-- Teams and agents.
-- Workflow definitions and execution records.
-- Execution logs and state.
-- Repos and workspace metadata.
-- Chat sessions and agent conversation state. Automation sessions (`source: 'automation'`) carry a sparse-unique `automationKey` index on `chat_sessions` (one persistent thread per cron job). The linked session's `_id` is stored as `cron_jobs.linkedChatSessionId` and is never overwritten by seed updates.
-- Artifacts and uploaded files.
-- Integration configuration.
-- MCP server records and health state.
-- Cron jobs and alerts.
+- **Auth** — `users`, `refresh_tokens` (TTL auto-purge), `bootstrap_locks` (first-admin race guard).
+- **Org** — `teams`, `agents`, `skills`.
+- **Workflows & executions** — `workflows`, `executions`, `execution_traces`, `execution_logs`, `execution_failure_reports`, `checkpoints`.
+- **Chat** — `chat_sessions` (automation sessions carry a sparse-unique `automationKey`; the linked `_id` is stored as `cron_jobs.linkedChatSessionId` and never overwritten by seed updates), `chat_messages`, `agent_conversations` (delegation threads), `agent_activity` (7-day TTL).
+- **Docs & checkpoints** — `design_docs` (PRD/HLD/TDD), `workflow_interventions`.
+- **Repos & workspaces** — `repos`, `repo_contexts`, `pull_requests`, `workspaces`, `workspace_configs`.
+- **MCP & secrets** — `mcp_servers`, `secrets`.
+- **Scheduling & alerts** — `cron_jobs`, `cron_runs` (90-day TTL), `alerts`.
+- **Learning** — `learnings`, `memory_injection_audits`.
+- **Self-healing** — `monitoring_incidents` (unique `fingerprint`), `monitoring_scan_state`, `monitoring_events`, `monitoring_evidence_bundles`.
+- **Slack** — `slack_thread_mappings`, `slack_processed_events` (24h TTL idempotency).
 
 ## Workflow Lifecycle
 
@@ -270,6 +292,19 @@ Cron jobs with `target.type === 'agent'` and `target.agentName === job.name` fol
 The persistent linked chat thread accumulates every run's output in one scrollable session, visible directly at `/chat/<sessionId>`.
 
 No agent-targeted automation jobs ship as built-ins. Users can author their own automation agents and create cron jobs that target them through the UI.
+
+### Built-in cron jobs
+
+`cron-seed.service.ts` seeds six system jobs:
+
+| Name | Schedule | Purpose |
+|---|---|---|
+| `repo-scan-daily` | `0 5 * * *` | Re-scan repos whose HEAD changed. |
+| `repo-pull-30min` | `*/30 * * * *` | `git pull` origin for registered repos. |
+| `pr-sync-30min` | `*/30 * * * *` | Sync PR list via `gh pr list`. |
+| `mcp-bundle-cleanup-hourly` | `0 * * * *` | Delete orphaned uploaded MCP bundles >24h old. |
+| `coderabbit-sweep-15min` | `*/15 * * * *` | Resolve outstanding CodeRabbit PR comments. |
+| `allen-self-healing-monitor-hourly` | `17 * * * *` | Launch the hourly self-healing monitor workflow. |
 
 ## Runtime Ports
 

@@ -28,13 +28,15 @@ npm run setup
 
 This:
 
-- Checks Node.js 22+ and npm 10+.
-- Installs MongoDB 7 (macOS via Homebrew) or prints install instructions for your OS, then starts it.
-- Installs the Claude Code CLI globally if missing (`npm install -g @anthropic-ai/claude-code`).
+- Checks Node.js 22+, npm 10+, and git.
+- Installs MongoDB 7 (macOS via Homebrew) or prints install instructions for your OS, then ensures it is reachable.
+- Installs the standalone Claude Code CLI via the official installer (`curl -fsSL https://claude.ai/install.sh | bash`) if missing or if the one on `PATH` lacks `--agent` support. (The npm `@anthropic-ai/claude-code` package is deliberately not used — it lacks the `--agent` flag the engine requires.)
+- Installs the Codex CLI via `npm install -g @openai/codex` if missing.
 - Runs `npm install`.
-- Creates `.env` from `.env.example` and fills in fresh `JWT_ACCESS_SECRET` and `JWT_REFRESH_SECRET` values.
+- Creates `.env` from `.env.example`, fills in fresh `JWT_ACCESS_SECRET` / `JWT_REFRESH_SECRET`, and auto-pins `CLAUDE_BIN` to the verified standalone CLI.
+- Runs `npm run health` and reports PASS/FAIL per dependency.
 
-Re-running it is safe.
+Re-running it is safe — it skips completed work and preserves your `.env`.
 
 Optional `.env` overrides for predictable local state:
 

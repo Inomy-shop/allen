@@ -70,7 +70,7 @@ Optional — set only the integrations you use:
 - `ALLEN_GITHUB_PERSONAL_ACCESS_TOKEN` for GitHub CLI calls and PR review workflows.
 - `ALLEN_LINEAR_ACCESS_TOKEN` for Linear ticket workflows.
 - `ALLEN_SLACK_BOT_TOKEN`, `ALLEN_SLACK_SIGNING_SECRET`, `ALLEN_SLACK_TEAM_ID` for Slack.
-- MCP credentials such as `ALLEN_POSTGRES_CONNECTION_STRING`, `ALLEN_MONGODB_CONNECTION_STRING`. The MCP loader strips the `ALLEN_` prefix when it forwards values to the MCP subprocess.
+- MCP server credentials, supplied per server as `ALLEN_<KEY>` (for example, an MCP that needs `POSTGRES_CONNECTION_STRING` reads it from `ALLEN_POSTGRES_CONNECTION_STRING`). The MCP loader strips the `ALLEN_` prefix when forwarding the value to the MCP subprocess, and forwards only the keys that server explicitly declares.
 
 Do not commit `.env`, tokens, API keys, customer data, private prompts, or copied repo contents.
 
@@ -147,7 +147,7 @@ Allen can create PRs, post Slack messages, read Linear tickets, and run tools de
 
 ## Security Checklist Before Public Use
 
-- Replace default admin credentials.
+- Create the first admin through the UI onboarding screen (there are no default/seeded admin credentials).
 - Generate strong JWT secrets (`npm run setup` does this on first run).
 - Keep `.env` out of git.
 - Run secret scanning before publishing the repository.
