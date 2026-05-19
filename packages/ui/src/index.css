@@ -5557,7 +5557,7 @@
   }
 
   .ch-msg-head {
-    display: none;
+    display: flex;
     align-items: baseline;
     gap: 10px;
     margin-bottom: 4px;

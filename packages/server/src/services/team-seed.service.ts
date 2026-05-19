@@ -414,8 +414,8 @@ RULES:
     type: 'technical', // internal — invoked headlessly by the repo context scanner service
     icon: 'database',
     color: '#6366f1',
-    provider: 'claude-cli',
-    model: 'sonnet',
+    provider: 'codex',
+    model: 'gpt-5.5',
     tools: [],
     capabilities: ['repo-analysis', 'codebase-summary'],
     personality: 'Methodical code archaeologist. Reads only what is necessary, summarizes precisely, never invents.',

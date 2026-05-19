@@ -27,6 +27,7 @@ import {
   type TeamDialogMode,
 } from '../components/agents/TeamDialogs';
 import { AgentCard } from '../components/agents/AgentCard';
+import RepoManagerPage from './RepoManagerPage';
 
 type Agent = Record<string, unknown>;
 type Selection = { kind: 'overview' } | { kind: 'team'; name: string } | { kind: 'unassigned' };
@@ -460,11 +461,9 @@ export default function RoleManagerPage() {
 
   // Team data
   const [allTeams, setAllTeams] = useState<Team[]>([]);
-  const [repoList, setRepoList] = useState<any[]>([]);
-  const [repoLoading, setRepoLoading] = useState(true);
   const [skillList, setSkillList] = useState<SkillRecord[]>([]);
   const [skillsLoading, setSkillsLoading] = useState(true);
-  const sectionParam = searchParams.get('section');
+  const sectionParam = searchParams.get('section') ?? searchParams.get('tab');
   const librarySection: LibrarySection =
     sectionParam === 'skills'
       || sectionParam === 'repos'
@@ -507,21 +506,6 @@ export default function RoleManagerPage() {
     }
   }, []);
   useEffect(() => { void reloadActivity(); }, [reloadActivity]);
-
-  const reloadRepos = useCallback(async () => {
-    setRepoLoading(true);
-    try {
-      const list = await reposApi.list();
-      setRepoList((list ?? []).slice().sort((a: any, b: any) =>
-        String(a.name ?? '').localeCompare(String(b.name ?? '')),
-      ));
-    } catch {
-      setRepoList([]);
-    } finally {
-      setRepoLoading(false);
-    }
-  }, []);
-  useEffect(() => { void reloadRepos(); }, [reloadRepos]);
 
   const reloadSkills = useCallback(async () => {
     setSkillsLoading(true);
@@ -853,13 +837,7 @@ export default function RoleManagerPage() {
           />
         )}
         {librarySection === 'repos' && (
-          <LibraryReposPane
-            repos={repoList}
-            loading={repoLoading}
-            onRefresh={reloadRepos}
-            onAdd={() => navigate('/repos')}
-            onOpen={() => navigate('/repos')}
-          />
+          <RepoManagerPage />
         )}
         {librarySection === 'integrations' && <LibraryIntegrationsPane />}
       </main>

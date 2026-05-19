@@ -2,13 +2,14 @@ import { useEffect, useRef, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { RotateCcw, Check, Palette, Type, Sparkles, Server, User, Eye,
   Bot, Brain, Zap, Cpu, Atom, Terminal, Code, Rocket, Shield, Hexagon, Flame, Monitor, Moon, Sun,
-  Bell, Keyboard, ShieldCheck, BarChart3, ChevronDown,
+  Bell, Keyboard, ShieldCheck, BarChart3, CalendarClock, ChevronDown,
 } from 'lucide-react';
 import McpServerManager from '../components/settings/McpServerManager';
 import { useAuthStore } from '../stores/authStore';
 import UsersAdminPage from './UsersAdminPage';
 import MonitoringPage from './MonitoringPage';
 import LearningsPage from './LearningsPage';
+import CronManagerPage from './CronManagerPage';
 import {
   useSettingsStore,
   THEME_PRESETS,
@@ -32,6 +33,7 @@ const TABS = [
   { id: 'appearance', label: 'Appearance', icon: Palette, adminOnly: false },
   { id: 'shortcuts', label: 'Shortcuts', icon: Keyboard, adminOnly: false },
   { id: 'notifications', label: 'Notifications', icon: Bell, adminOnly: false },
+  { id: 'schedules', label: 'Scheduled Jobs', icon: CalendarClock, adminOnly: false },
   { id: 'analytics', label: 'Analytics', icon: BarChart3, adminOnly: false },
   { id: 'learnings', label: 'Learnings', icon: Brain, adminOnly: false },
   { id: 'users', label: 'Users', icon: ShieldCheck, adminOnly: true },
@@ -616,6 +618,14 @@ function NotificationsTab() {
   );
 }
 
+function SchedulesTab() {
+  return (
+    <div className="settings-body wide settings-embedded-page">
+      <CronManagerPage />
+    </div>
+  );
+}
+
 function AnalyticsTab() {
   return (
     <div className="settings-body wide settings-embedded-page">
@@ -650,6 +660,7 @@ const TAB_COMPONENTS: Record<TabId, React.FC> = {
   appearance: AppearanceTab,
   shortcuts: ShortcutsTab,
   notifications: NotificationsTab,
+  schedules: SchedulesTab,
   analytics: AnalyticsTab,
   learnings: LearningsTab,
   users: UsersTab,
