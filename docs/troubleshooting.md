@@ -4,7 +4,7 @@ This guide covers common Allen setup and runtime failures.
 
 ## `npm run setup` Fails
 
-The setup script runs eight checks in order, bails on the first hard failure with a coloured error line, and is safe to re-run after you fix whatever it complained about. Skip to the section below that matches the line the script printed in red.
+The setup script runs an ordered sequence of dependency checks, bails on the first hard failure with a coloured error line, and is safe to re-run after you fix whatever it complained about. Skip to the row below that matches the line the script printed in red.
 
 | Step | Failure mode | Fix |
 |---|---|---|
