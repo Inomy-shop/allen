@@ -37,25 +37,61 @@ have() { command -v "$1" >/dev/null 2>&1; }
 
 # ---------------------------------------------------------------------------
 # Node.js 22+
+#
+# If Node is missing or older than 22, install Node 22 via nvm (per-user, no
+# sudo, does not touch any system Node). nvm itself is bootstrapped if absent.
 # ---------------------------------------------------------------------------
+NVM_DIR_DEFAULT="${NVM_DIR:-$HOME/.nvm}"
+
+load_nvm() {
+  export NVM_DIR="$NVM_DIR_DEFAULT"
+  # shellcheck disable=SC1090
+  [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh" >/dev/null 2>&1
+  command -v nvm >/dev/null 2>&1
+}
+
+install_node_22_via_nvm() {
+  if ! load_nvm; then
+    warn "nvm not found — installing nvm (per-user, no sudo)..."
+    if have curl; then
+      curl -fsSL https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.1/install.sh | bash >/dev/null 2>&1 || true
+    elif have wget; then
+      wget -qO- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.1/install.sh | bash >/dev/null 2>&1 || true
+    else
+      err "Neither curl nor wget is available to bootstrap nvm."
+      warn "Install Node 22+ manually (https://nodejs.org/ or nvm/fnm), then re-run."
+      exit 1
+    fi
+    if ! load_nvm; then
+      err "nvm bootstrap failed."
+      warn "Install Node 22+ manually (https://nodejs.org/ or nvm/fnm), then re-run."
+      exit 1
+    fi
+    ok "Installed nvm into $NVM_DIR"
+  fi
+  warn "Installing Node 22 via nvm..."
+  if nvm install 22 >/dev/null 2>&1 && nvm use 22 >/dev/null 2>&1 && nvm alias default 22 >/dev/null 2>&1; then
+    ok "Node $(node -v) (via nvm)"
+    warn "nvm sets Node per-shell. If a later step can't find Node, open a new shell (or run: nvm use 22) and re-run this script."
+  else
+    err "nvm failed to install Node 22."
+    warn "Install Node 22+ manually (https://nodejs.org/ or nvm/fnm), then re-run."
+    exit 1
+  fi
+}
+
 step "Checking Node.js (need 22+)"
 if have node; then
   NODE_MAJOR="$(node -p 'process.versions.node.split(".")[0]')"
   if [ "$NODE_MAJOR" -ge 22 ]; then
     ok "Node $(node -v)"
   else
-    err "Node $(node -v) found; Allen needs 22+."
-    warn "Install Node 22+ via nvm (https://github.com/nvm-sh/nvm), fnm, or your OS package manager, then re-run."
-    exit 1
+    warn "Node $(node -v) found; Allen needs 22+. Installing Node 22 via nvm..."
+    install_node_22_via_nvm
   fi
 else
-  err "Node.js not found."
-  if [ "$PLATFORM" = "macos" ] && have brew; then
-    warn "Install with: brew install node@22  (then add it to PATH per brew's instructions)"
-  else
-    warn "Install Node 22+ from https://nodejs.org/ or via nvm/fnm, then re-run."
-  fi
-  exit 1
+  warn "Node.js not found. Installing Node 22 via nvm..."
+  install_node_22_via_nvm
 fi
 
 # ---------------------------------------------------------------------------
@@ -336,8 +372,9 @@ if [ "$HEALTH_OK" -eq 1 ]; then
   cat <<EOF
 
   All runtime deps look good. Next:
-    1. Start Allen:                                  ${C_BOLD}npm start${C_RESET}
-    2. Open ${C_BOLD}http://localhost:5173${C_RESET} and complete the onboarding screens
+    1. Build all packages:                           ${C_BOLD}npm run build${C_RESET}
+    2. Start Allen:                                  ${C_BOLD}npm start${C_RESET}
+    3. Open ${C_BOLD}http://localhost:5173${C_RESET} and complete the onboarding screens
        (account → health → repository → first workflow).
 
   Allen will be available at:
@@ -354,6 +391,7 @@ else
     - Re-run the health check:                       ${C_BOLD}npm run health${C_RESET}
 
   Once health is green:
+    - Build all packages:                            ${C_BOLD}npm run build${C_RESET}
     - Start Allen:                                   ${C_BOLD}npm start${C_RESET}
     - Open ${C_BOLD}http://localhost:5173${C_RESET} and complete onboarding.
 

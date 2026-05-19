@@ -2,13 +2,13 @@
 
 This guide covers common Allen setup and runtime failures.
 
-## `npm run setup` Fails
+## Setup Script Fails
 
-The setup script runs an ordered sequence of dependency checks, bails on the first hard failure with a coloured error line, and is safe to re-run after you fix whatever it complained about. Skip to the row below that matches the line the script printed in red.
+`./scripts/setup.sh` runs an ordered sequence of dependency checks, bails on the first hard failure with a coloured error line, and is safe to re-run after you fix whatever it complained about. Skip to the row below that matches the line the script printed in red.
 
 | Step | Failure mode | Fix |
 |---|---|---|
-| Node.js ≥ 22 | `Node vXX.YY.ZZ found; Allen needs 22+` | Install Node 22+ via [nvm](https://github.com/nvm-sh/nvm), [fnm](https://github.com/Schniz/fnm), Homebrew (`brew install node@22`), or your OS package manager, then re-run. |
+| Node.js ≥ 22 | `nvm bootstrap failed` or `nvm failed to install Node 22` | The script installs Node 22 via nvm automatically (bootstrapping nvm if absent). If that failed, it usually means no `curl`/`wget` to fetch nvm, or a restricted network. Install Node 22 manually ([nvm](https://github.com/nvm-sh/nvm), [fnm](https://github.com/Schniz/fnm), Homebrew `brew install node@22`, or your OS package manager), then re-run. After an nvm install you may need a new shell (or `nvm use 22`) before re-running. |
 | npm ≥ 10 | warns only | If npm is on 9 or lower: `npm install -g npm@10`. |
 | Git | `git not found` | macOS: `xcode-select --install` or `brew install git`. Linux: `sudo apt install git` / `sudo dnf install git`. Windows: install [Git for Windows](https://git-scm.com/downloads). |
 | MongoDB 7 (install) | `MongoDB not found` | macOS without Homebrew: install [Homebrew](https://brew.sh), re-run. Linux: follow the [MongoDB Linux install guide](https://www.mongodb.com/docs/manual/administration/install-on-linux/), re-run. Windows: install from [mongodb.com/try/download/community](https://www.mongodb.com/try/download/community), re-run. |
@@ -19,7 +19,7 @@ The setup script runs an ordered sequence of dependency checks, bails on the fir
 | `CLAUDE_BIN` resolution | warns: `Could not find any claude binary with --agent support` | The npm-distributed Claude Agent SDK does NOT include the `--agent <name>` flag that Allen needs. Install the standalone CLI per the [official quickstart](https://docs.claude.com/en/docs/claude-code/quickstart), then re-run setup. See [Claude Code CLI Not Found](#claude-code-cli-not-found) for the long-form explanation. |
 | Health check | `Health check reported issues` (yellow, not red) | Setup completed but at least one required check failed in the final `npm run health`. Usually means Claude Code is installed but not authenticated yet — run `claude` interactively (and `codex` if you want it), then `npm run health` to confirm. |
 
-After fixing any of these, just re-run `npm run setup`. The script is idempotent — checks that already passed are re-confirmed as no-ops, and your `.env` (with generated JWT secrets and pinned `CLAUDE_BIN`) is preserved.
+After fixing any of these, just re-run `./scripts/setup.sh`. The script is idempotent — checks that already passed are re-confirmed as no-ops, and your `.env` (with generated JWT secrets and pinned `CLAUDE_BIN`) is preserved.
 
 ## `npm install` Fails
 
@@ -199,7 +199,7 @@ If the only match is under `node_modules/.bin/` (or under your npm prefix, e.g. 
 curl -fsSL https://claude.ai/install.sh | bash
 
 # Re-run setup — it will detect, verify, and pin the new binary in .env:
-npm run setup
+./scripts/setup.sh
 ```
 
 After install, the script writes `CLAUDE_BIN=/Users/you/.local/bin/claude` to `.env`. To set it manually:

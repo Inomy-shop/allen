@@ -4,8 +4,8 @@ Allen is early alpha. These limitations are intentional to document current real
 
 ## Setup
 
-- `npm run setup` is a one-command bootstrap on macOS (it installs MongoDB via Homebrew, the Claude Code CLI, dependencies, and generates `.env`). On Linux it checks for MongoDB and prints install instructions rather than installing it; native Windows is unsupported (use WSL2).
-- The server and UI run together with `npm start` for local development.
+- `./scripts/setup.sh` is a one-command bootstrap on macOS (it installs Node 22 via nvm if needed, MongoDB via Homebrew, the Claude Code CLI, dependencies, and generates `.env`). On Linux it installs Node 22 via nvm but checks for MongoDB and prints install instructions rather than installing it; native Windows is unsupported (use WSL2).
+- Run with `npm run build` then `npm start` — packages compile to `dist/` and the engine is consumed as a built dependency.
 - Setup is primarily validated on macOS. Linux and cloud-VM environments are supported but less exercised.
 
 ## Demo Experience

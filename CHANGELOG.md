@@ -12,7 +12,7 @@ Allen is currently pre-release, so behavior can change between commits. Versione
 - `paginationViewModel()` pure function (exported from `ExecutionListPage.tsx`) computes `{ visible, pageCount, currentPageLabel, prevDisabled, nextDisabled }` from `{ page, total, pageSize }` with no DOM dependency, enabling isolated unit tests.
 - **Automation agent infrastructure** — cron jobs with `target.agentName === job.name` now get a persistent linked chat session (one `chat_sessions` document per job, keyed by a sparse-unique `automationKey` index). On each dispatch, `CronService.ensureLinkedSession()` upserts the session race-safely and injects `AUTOMATION_CONTEXT` (session ID, 5-min JWT token, message URL) into the agent prompt so it can POST results back via the new `POST /api/chat/sessions/:id/automation-message` endpoint. `cron_jobs.linkedChatSessionId` is persisted on first creation and excluded from `SEED_OVERRIDE` updates. `signAccessToken` extended with an optional `expiresIn` override so automation tokens (`'5m'`) do not leak a long-lived credential into the `chat_messages` collection.
 
-- `npm run setup` script that verifies Node 22+, npm 10+, and git; installs MongoDB 7 (Homebrew on macOS) and ensures it is reachable; installs the standalone Claude Code CLI via the official installer (verifying `--agent` support) and the Codex CLI via npm when missing; runs `npm install`; creates `.env` with freshly generated JWT secrets and an auto-pinned `CLAUDE_BIN`; and finishes with `npm run health`.
+- `scripts/setup.sh` (run directly as `./scripts/setup.sh`) that installs Node 22 via nvm when Node is missing or older than 22; verifies npm 10+ and git; installs MongoDB 7 (Homebrew on macOS) and ensures it is reachable; installs the standalone Claude Code CLI via the official installer (verifying `--agent` support) and the Codex CLI via npm when missing; runs `npm install`; creates `.env` with freshly generated JWT secrets and an auto-pinned `CLAUDE_BIN`; and finishes with `npm run health`.
 - `npm start` as the canonical command to run the full Allen stack locally.
 - Documentation for the two repo registration flows (local path and clone-via-SSH), the Linear ticket dispatch flow, and the workflow creation paths (visual builder vs. seed YAML).
 - Troubleshooting entry for "Codex CLI Not Found".
@@ -28,7 +28,7 @@ Allen is currently pre-release, so behavior can change between commits. Versione
 ### Changed
 
 - Replaced the prior Docker-Compose-based MongoDB workflow with a locally-installed MongoDB 7 (auto-installed on macOS by the setup script).
-- Documentation updated to use `npm run setup` and `npm start` instead of manual `npm install` + `docker compose up` + `npm run dev`.
+- Documentation updated to use `./scripts/setup.sh` then `npm run build` + `npm start` instead of manual `npm install` + `docker compose up` + `npm run dev`.
 - `.env.example` reorganized into a required block (server, MongoDB URI, JWT signing keys) and clearly labelled optional blocks for agent execution knobs and GitHub / Linear / Slack / MCP integration credentials. The first admin is created from the UI onboarding screen on first launch.
 - Documentation simplified to source all integration credentials from `.env`; references to the encrypted Allen Secrets store and `ALLEN_MASTER_KEY` removed.
 
