@@ -198,7 +198,7 @@ See [`docs/architecture.md`](docs/architecture.md) for the full breakdown.
 
 ## Configuration
 
-All configuration is environment variables in `.env` (created from `.env.example` by setup). Required to boot: `PORT`, `MONGODB_URI`, `JWT_ACCESS_SECRET`, `JWT_REFRESH_SECRET`. Everything else is optional and grouped in `.env.example`: token lifetimes, public URL, paths/agent-execution, and GitHub/Linear/Slack/MCP credentials. The first admin is created through the UI onboarding screen, not via env vars.
+All configuration is environment variables in `.env` (created from `.env.example` by setup). Required to boot: `PORT`, `MONGODB_URI`, `JWT_ACCESS_SECRET`, `JWT_REFRESH_SECRET`. Everything else is optional and grouped in `.env.example`: token lifetimes, public URL, paths/agent-execution, and GitHub/Linear/Slack/MCP credentials. The first admin account is created interactively in the UI onboarding screen on first launch.
 
 ## Integrations
 
