@@ -35,7 +35,7 @@ The workflow runtime.
 Responsibilities:
 
 - Load workflows from `packages/engine/workflows/`.
-- Load the fallback agent/router definitions from `packages/engine/agents.yml` and `router.yml`. (The live production agent org is seeded into MongoDB by the server — see [The Seeded Org](#the-seeded-org).)
+- Load the engine's built-in agent and router definitions from `packages/engine/agents.yml` and `router.yml`. (Allen's production agent org is seeded into MongoDB by the server — see [The Seeded Org](#the-seeded-org).)
 - Validate YAML workflow structure.
 - Render templates and track template bindings.
 - Execute human, agent, built-in, condition, and parallel nodes.
@@ -54,7 +54,7 @@ Important files:
 - `src/condition-parser.ts` - condition node evaluation.
 - `src/template.ts` - template rendering and binding capture for node inputs.
 - `src/router.ts` - agent routing rules consumed by chat and built-in nodes.
-- `src/agents-loader.ts` and `agents.yml` - fallback agent definitions. The authoritative production org (6 teams, 20+ agents) is seeded by `packages/server/src/services/org-seed.ts` into the `agents` and `teams` collections.
+- `src/agents-loader.ts` and `agents.yml` - the engine's built-in agent definitions. The production org (6 teams, 20+ agents) is seeded by `packages/server/src/services/org-seed.ts` into the `agents` and `teams` collections.
 - `src/mcp-loader.ts` and `src/mcp-install.ts` - MCP server loading, installation, and `ALLEN_`-prefix env mapping. Supports both Node.js (`.ts`/`.js`/`.mjs`) and Python (`.py`) entry files. Python MCPs get a per-MCP virtual environment at `<ALLEN_HOME>/venvs/<mcpId>/` with `requirements.txt` auto-installed on first spawn (`ensurePythonVenv`). Setting a manual **Command** override opts out of venv management; the user takes ownership of the interpreter.
 - `src/output-extractor.ts` - output parsing from model responses.
 - `src/state-manager.ts` - persisted execution state.
@@ -157,7 +157,7 @@ Key chat UI components:
 
 ## The Seeded Org
 
-On startup `packages/server/src/services/org-seed.ts` idempotently seeds the agent organization into the `teams` and `agents` MongoDB collections. This — not `packages/engine/agents.yml` — is the agent set Allen runs in production. `agents.yml` is a smaller fallback used only when the seeded set is unavailable.
+On startup `packages/server/src/services/org-seed.ts` idempotently seeds the agent organization into the `teams` and `agents` MongoDB collections — this is the agent set Allen runs in production. `packages/engine/agents.yml` holds the engine's built-in default agents, used for development and when the database has not been seeded.
 
 Six teams (lead → parent):
 

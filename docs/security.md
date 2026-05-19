@@ -11,13 +11,13 @@ Allen assumes the operator controls:
 - The credentials provided to Allen.
 - The workflow YAML and agent definitions being run.
 
-Allen does not currently provide a hardened sandbox for hostile code or untrusted workflows.
+Allen does not provide a hardened sandbox for hostile code or untrusted workflows.
 
 ## Workspaces
 
 Agents should work inside dedicated workspaces, not arbitrary filesystem paths.
 
-Workspace protections currently include:
+Workspace protections include:
 
 - Workspace-specific worktree paths.
 - Workspace context injected into agent prompts.
@@ -46,7 +46,7 @@ Relevant settings:
 - `ALLEN_SYSTEM_PROMPT_MODE=append|custom`
 - `ALLEN_AGENT_SKIP_LEARNINGS=true|false`
 
-CLI mode can use local developer auth and tools. SDK mode uses the SDK path for contexts where CLI repo execution is not appropriate.
+CLI mode runs agents through the local Claude Code CLI (local developer auth and tools). SDK mode runs them in-process. Select the mode with `ALLEN_AGENT_EXECUTION_MODE`.
 
 Review these before changing execution behavior:
 

@@ -63,7 +63,7 @@ You only need **Node.js 22+** to begin. `npm run setup` checks for and (where po
 - Node.js 22+ and npm 10+
 - Git
 - MongoDB 7 (auto-installed on macOS via Homebrew; install instructions printed for other OSes)
-- **Claude Code CLI — required.** Installed via the official standalone installer (`curl -fsSL https://claude.ai/install.sh | bash`). The npm `@anthropic-ai/claude-code` package is *not* used for agent execution — it lacks the `--agent` flag Allen's engine requires. You need an Anthropic account to authenticate it.
+- **Claude Code CLI — required.** Installed via the official standalone installer (`curl -fsSL https://claude.ai/install.sh | bash`); the engine drives it with its `--agent` flag. You need an Anthropic account to authenticate it.
 - **Codex CLI — optional.** Installed via `npm install -g @openai/codex`. Allen's chat defaults to Codex; set `ALLEN_DEFAULT_CHAT_PROVIDER=claude-cli` in `.env` to use Claude Code for chat instead and skip the OpenAI account entirely.
 
 Supported platforms: macOS and Linux (and WSL2 on Windows). Native Windows is not supported.
@@ -179,7 +179,7 @@ Allen is a TypeScript monorepo using npm workspaces and Turbo.
 - **`packages/ui`** — React 18 + Vite + Tailwind frontend: dashboard/chat, executions, workflows + visual builder, workspaces, agents/teams/skills/repos, tickets, pull requests, schedules, interventions, settings, and the onboarding flow.
 - **`e2e`** — Playwright coverage across workspaces, terminals, chat, executions, repo management, and rendered UI.
 
-> Note: the real production agent set is **seeded into MongoDB by `packages/server/src/services/org-seed.ts`** (6 teams, 20+ agents). `packages/engine/agents.yml` is a smaller fallback/reference set.
+> Note: Allen's production agent org is **seeded into MongoDB by `packages/server/src/services/org-seed.ts`** (6 teams, 20+ agents). `packages/engine/agents.yml` holds the engine's built-in default agents.
 
 See [`docs/architecture.md`](docs/architecture.md) for the full breakdown.
 
@@ -198,13 +198,13 @@ See [`docs/architecture.md`](docs/architecture.md) for the full breakdown.
 
 ## Configuration
 
-All configuration is environment variables in `.env` (created from `.env.example` by setup). Required to boot: `PORT`, `MONGODB_URI`, `JWT_ACCESS_SECRET`, `JWT_REFRESH_SECRET`. Everything else is optional and grouped in `.env.example`: token lifetimes, public URL, paths/agent-execution, and GitHub/Linear/Slack/MCP credentials. The first admin account is created interactively in the UI onboarding screen on first launch.
+All configuration is environment variables in `.env` (created from `.env.example` by setup). Required to boot: `PORT`, `MONGODB_URI`, `JWT_ACCESS_SECRET`, `JWT_REFRESH_SECRET`. Everything else is optional and grouped in `.env.example`: token lifetimes, public URL, paths/agent-execution, and GitHub/Linear/Slack/MCP credentials. Create the first admin in the UI onboarding screen on first launch.
 
 ## Integrations
 
 | Integration | Env vars | What it enables |
 |---|---|---|
-| **GitHub** | `ALLEN_GITHUB_PERSONAL_ACCESS_TOKEN` | `gh` CLI calls, PR sync, PR review resolution. Not used to clone repos (clone is SSH). |
+| **GitHub** | `ALLEN_GITHUB_PERSONAL_ACCESS_TOKEN` | `gh` CLI calls, PR sync, and PR review resolution. (Repo cloning uses SSH.) |
 | **Linear** | `ALLEN_LINEAR_ACCESS_TOKEN` | Read projects/issues, dispatch tickets to agents/workflows. Issue write-back is via the Linear MCP server. |
 | **Slack** | `ALLEN_SLACK_BOT_TOKEN`, `ALLEN_SLACK_SIGNING_SECRET`, `ALLEN_SLACK_TEAM_ID` | Drive an Allen chat session from a Slack thread; post responses back. |
 | **MCP servers** | `ALLEN_<KEY>` per server | Extra agent tools (Postgres, custom Node/Python MCP servers, etc.). |

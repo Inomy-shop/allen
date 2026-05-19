@@ -11,7 +11,7 @@ Use a disposable or non-critical repository for the first run. Allen can spawn a
 - An Anthropic account for Claude Code
 - An OpenAI account for Codex (Allen's chat defaults to Codex)
 
-The setup script handles MongoDB, both CLIs (`@anthropic-ai/claude-code` and `@openai/codex`), `npm install`, and `.env` generation.
+The setup script installs MongoDB, the Claude Code CLI, the Codex CLI, dependencies, and generates `.env`.
 
 ## 1. Clone Allen
 
@@ -54,7 +54,7 @@ claude    # log in with your Anthropic account
 codex     # log in with your OpenAI account
 ```
 
-After the first login each CLI persists auth on disk. Skip a CLI if you do not plan to use the corresponding feature, but note that chat will fail without Codex unless you switch the default with `ALLEN_DEFAULT_CHAT_PROVIDER=claude-cli` in `.env` (or pick a different provider in the chat UI).
+After the first login each CLI persists auth on disk. Chat uses Codex by default; to use Claude Code for chat instead, set `ALLEN_DEFAULT_CHAT_PROVIDER=claude-cli` in `.env` (or pick a provider in the chat UI). Skip a CLI you do not plan to use.
 
 ## 4. Start Allen
 
@@ -116,7 +116,7 @@ ssh -T git@github.com
 
 If you see `Hi <your-username>! You've successfully authenticated…`, the clone option will work. If not, follow GitHub's docs to add an SSH key, then retry.
 
-> **Note**: `ALLEN_GITHUB_PERSONAL_ACCESS_TOKEN` is **not** used to clone repos — it is only used by the `gh` CLI for PR creation, PR review resolution, and similar workflows. You can register repos without setting that token at all.
+> **Note**: Repo cloning uses SSH and needs an SSH key on the host. `ALLEN_GITHUB_PERSONAL_ACCESS_TOKEN` is used by the `gh` CLI for PR creation, PR review resolution, and similar workflows, and is optional for registering repos.
 
 ## 7. Run `understand-and-plan`
 
@@ -178,8 +178,8 @@ Prerequisites:
 Flow in the UI:
 
 1. Open the Tickets page. If Linear is not connected, the page tells you which `.env` key is missing.
-2. Pick an issue. Click **Assign agent** to mark a preferred agent (`PATCH /api/linear/issues/:id/assign-agent`). This is just a marker — nothing runs yet.
+2. Pick an issue. Click **Assign agent** to mark a preferred agent (`PATCH /api/linear/issues/:id/assign-agent`). This records the assignment only; dispatch (step 3) starts the run.
 3. Click **Dispatch** (`POST /api/linear/issues/:id/dispatch`). Provide the agent name, a registered repo, and any extra instructions. Allen creates a workspace from that repo, waits for it to be ready, then spawns the agent with the ticket title/body as the prompt.
 4. The dispatch returns immediately with a `pending` assignment. The Tickets page polls `/api/linear/issues/:id` to show progress; click through to the workspace or execution page to watch the run.
 
-Allen never writes back to Linear — it only reads issues and tracks assignment locally. If you want the agent to comment on the Linear issue, build that into the workflow itself using the Linear MCP server.
+Allen reads Linear issues and tracks agent assignment locally. To have an agent comment on or update a Linear issue, build that into the workflow using the Linear MCP server.

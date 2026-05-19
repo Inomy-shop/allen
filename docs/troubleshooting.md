@@ -238,7 +238,7 @@ codex   # log in once with your OpenAI account
 
 If your global npm prefix is not on `PATH`, either fix `PATH` (e.g. `npm config get prefix` and add the `bin` directory) or run setup again with the script's recommended prefix.
 
-If you don't want to install Codex, switch Allen's default chat provider by setting `ALLEN_DEFAULT_CHAT_PROVIDER=claude-cli` in `.env` and restarting. New chat sessions and the UI provider picker will pick `claude-cli` instead. Workflow nodes that require Codex specifically will still fail.
+To run Allen without Codex, set `ALLEN_DEFAULT_CHAT_PROVIDER=claude-cli` in `.env` and restart. New chat sessions and the UI provider picker then default to `claude-cli`. Codex is required only for workflow nodes that specifically use it.
 
 ## Agent Hangs on Trust Prompt
 
