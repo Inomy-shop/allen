@@ -93,22 +93,6 @@ const SEED_JOBS: Omit<CronJob, '_id' | 'nextRunAt' | 'lastRunAt' | 'lastRunStatu
     createdBy: 'seed',
   },
   {
-    name: 'daily-status-prep',
-    displayName: 'Daily Status Prep',
-    description:
-      'Generates a weekday morning briefing 30 minutes before the 10 AM ET daily status call and posts it to a persistent chat thread and Slack.',
-    enabled: true,
-    schedule: '30 9 * * 1-5',
-    timezone: 'America/New_York',
-    target: {
-      type: 'agent' as const,
-      agentName: 'daily-status-prep',
-      prompt: 'Generate the Daily Status Prep report for today. Context will be injected automatically.',
-    },
-    isBuiltIn: true,
-    createdBy: 'seed' as const,
-  },
-  {
     name: 'allen-self-healing-monitor-hourly',
     displayName: 'Allen Self-Healing Monitor',
     description:

@@ -3,7 +3,7 @@
  * separate because the UI package cannot import from the server-side
  * engine package.
  *
- * Keep these in sync with packages/engine/src/brand.ts. See RENAME.md.
+ * Keep these in sync with packages/engine/src/brand.ts.
  */
 
 export const BRAND_NAME = 'Allen';

@@ -111,15 +111,15 @@ class TestableCronService extends CronService {
 function makeJob(overrides: Partial<CronJob> = {}): CronJob {
   return {
     _id: makeOid(),
-    name: 'daily-status-prep',
-    displayName: 'Daily Status Prep',
+    name: 'sample-automation',
+    displayName: 'Sample Automation',
     description: 'test job',
     enabled: true,
     schedule: '30 9 * * 1-5',
     timezone: 'America/New_York',
     target: {
       type: 'agent',
-      agentName: 'daily-status-prep',
+      agentName: 'sample-automation',
       prompt: 'Generate the report.',
     },
     lastRunAt: null,
@@ -155,9 +155,9 @@ describe('CronService.ensureLinkedSession', () => {
     const sessions = db.stores.chat_sessions;
     expect(sessions).toHaveLength(1);
     const session = sessions[0] as any;
-    expect(session.automationKey).toBe('daily-status-prep');
+    expect(session.automationKey).toBe('sample-automation');
     expect(session.source).toBe('automation');
-    expect(session.title).toBe('Daily Status Prep');
+    expect(session.title).toBe('Sample Automation');
   });
 
   it('returns the same session id on a second call (idempotent)', async () => {
@@ -176,7 +176,7 @@ describe('CronService.ensureLinkedSession', () => {
   it('reuses an existing session when the cron_jobs row already has linkedChatSessionId', async () => {
     const existingOid = makeOid();
     const db = makeDb(
-      [{ _id: existingOid, automationKey: 'daily-status-prep', source: 'automation', title: 'Daily Status Prep' }],
+      [{ _id: existingOid, automationKey: 'sample-automation', source: 'automation', title: 'Sample Automation' }],
     );
     const service = new TestableCronService(db as any);
     const job = makeJob({ linkedChatSessionId: String(existingOid) });
@@ -207,9 +207,9 @@ describe('CronService.ensureLinkedSession', () => {
     const existingOid = makeOid();
     const existingSession = {
       _id: existingOid,
-      automationKey: 'daily-status-prep',
+      automationKey: 'sample-automation',
       source: 'automation',
-      title: 'Daily Status Prep',
+      title: 'Sample Automation',
     };
 
     const cronJobsStore: Record<string, unknown>[] = [];
@@ -257,7 +257,7 @@ describe('CronService.ensureLinkedSession', () => {
 
   it('recovers stale pointer — creates new session when old was deleted', async () => {
     // Job already has a linkedChatSessionId pointing to a deleted session.
-    // The chat_sessions collection has no doc with automationKey='daily-status-prep',
+    // The chat_sessions collection has no doc with automationKey='sample-automation',
     // so ensureLinkedSession should upsert a brand-new session.
     const cronJobsStore: Record<string, unknown>[] = [];
     const db = makeDb([], cronJobsStore); // empty chat_sessions store

@@ -159,9 +159,9 @@ describe('ChatService.appendAutomationMessage()', () => {
     db = makeDb([
       {
         _id: oid,
-        title: 'Daily Status Prep',
+        title: 'Sample Automation',
         source: 'automation',
-        automationKey: 'daily-status-prep',
+        automationKey: 'sample-automation',
         status: 'active',
         messageCount: 0,
         createdAt: new Date(),

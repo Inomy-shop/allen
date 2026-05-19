@@ -11,8 +11,6 @@ Allen is currently pre-release, so behavior can change between commits. Versione
 - Activity page (`ExecutionListPage`) now paginates the execution list server-side: 50 executions per page, `?page=N` URL state, Previous / Next controls with a "Page X of Y" label. Controls are hidden when the total count fits on one page.
 - `paginationViewModel()` pure function (exported from `ExecutionListPage.tsx`) computes `{ visible, pageCount, currentPageLabel, prevDisabled, nextDisabled }` from `{ page, total, pageSize }` with no DOM dependency, enabling isolated unit tests.
 - **Automation agent infrastructure** — cron jobs with `target.agentName === job.name` now get a persistent linked chat session (one `chat_sessions` document per job, keyed by a sparse-unique `automationKey` index). On each dispatch, `CronService.ensureLinkedSession()` upserts the session race-safely and injects `AUTOMATION_CONTEXT` (session ID, 5-min JWT token, message URL) into the agent prompt so it can POST results back via the new `POST /api/chat/sessions/:id/automation-message` endpoint. `cron_jobs.linkedChatSessionId` is persisted on first creation and excluded from `SEED_OVERRIDE` updates. `signAccessToken` extended with an optional `expiresIn` override so automation tokens (`'5m'`) do not leak a long-lived credential into the `chat_messages` collection.
-- **`daily-status-prep` cron job** — weekday morning automation (schedule `30 9 * * 1-5` ET) that fires the `daily-status-prep` agent 30 minutes before the 10 AM ET daily call and posts a 6-section briefing to its linked chat thread and the configured Slack status channel.
-- **Dashboard Automations panel** — displays configured automation jobs above in-flight work. Each card shows last-run status (with animated `Loader2` spinner + `glow-running` badge while running), next-run time, and a `View Report →` link to the linked chat thread.
 
 - `npm run setup` script that verifies Node 22+, installs MongoDB 7 (Homebrew on macOS), the Claude Code CLI, and the Codex CLI when missing, runs `npm install`, and creates `.env` with freshly generated JWT secrets.
 - `npm start` as the canonical command to run the full Allen stack locally.
@@ -31,10 +29,11 @@ Allen is currently pre-release, so behavior can change between commits. Versione
 
 - Replaced the prior Docker-Compose-based MongoDB workflow with a locally-installed MongoDB 7 (auto-installed on macOS by the setup script).
 - Documentation updated to use `npm run setup` and `npm start` instead of manual `npm install` + `docker compose up` + `npm run dev`.
-- `.env.example` reorganized into a required block (server, MongoDB URI, admin bootstrap, JWT signing keys) and clearly labelled optional blocks for agent execution knobs and GitHub / Linear / Slack / MCP integration credentials.
+- `.env.example` reorganized into a required block (server, MongoDB URI, JWT signing keys) and clearly labelled optional blocks for agent execution knobs and GitHub / Linear / Slack / MCP integration credentials. The first admin is created from the UI onboarding screen on first launch.
 - Documentation simplified to source all integration credentials from `.env`; references to the encrypted Allen Secrets store and `ALLEN_MASTER_KEY` removed.
 
 ### Removed
 
 - `docker-compose.yml`. Allen now runs against a local MongoDB; container images for the server and UI are not yet supported.
 - Encrypted Allen Secrets store: `packages/server/src/services/secret.service.ts`, `services/encryption.ts`, `routes/secret.routes.ts`, the `/api/secrets` HTTP route, the `secrets` MongoDB collection wiring, the legacy `@secret:KEY` MCP env resolution path, and `ALLEN_MASTER_KEY`. All integration credentials are now read directly from `.env` via `process.env`.
+- `daily-status-prep` built-in agent, its seeded cron job (`30 9 * * 1-5` ET), and the Dashboard "Automations" panel that rendered its run status. The agent's prompt was specific to one organization (referenced an internal Slack channel by ID); the underlying automation-agent infrastructure (linked chat sessions, `AUTOMATION_CONTEXT` injection, `appendAutomationMessage` endpoint) remains so users can author their own automation agents and cron jobs.

@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { ArrowRight, Clock3, Loader2, Zap } from 'lucide-react';
-import { agents as agentsApi, chat as chatApi, crons, executions, interventions, repos as reposApi } from '../services/api';
+import { ArrowRight, Zap } from 'lucide-react';
+import { agents as agentsApi, chat as chatApi, executions, interventions, repos as reposApi } from '../services/api';
 import { pullRequests } from '../services/workspaceService';
 import { useAuthStore } from '../stores/authStore';
 import ChatInput, { type ReasoningEffortValue, type RepoOption } from '../components/chat/ChatInput';
@@ -117,16 +117,6 @@ function timeAgo(dateStr?: string): string {
   if (hr < 24) return `${hr}h ago`;
   const day = Math.floor(hr / 24);
   return `${day}d ago`;
-}
-
-function timeUntil(dateStr?: string): string {
-  if (!dateStr) return '';
-  const ms = new Date(dateStr).getTime() - Date.now();
-  if (ms < 0) return 'overdue';
-  if (ms < 60_000) return 'in <1 min';
-  if (ms < 3_600_000) return `in ${Math.round(ms / 60_000)} min`;
-  if (ms < 86_400_000) return `in ${Math.round(ms / 3_600_000)} hr`;
-  return `in ${Math.round(ms / 86_400_000)} day(s)`;
 }
 
 function isActiveRun(run: ExecutionItem): boolean {
@@ -457,59 +447,6 @@ function TaskRefs({ run }: { run: ExecutionItem }) {
   );
 }
 
-function DailyStatusPrepCard({ job }: { job: any | null }) {
-  if (!job) {
-    return (
-      <div className="mw-automation-card muted">
-        <div>
-          <div className="mw-automation-title">Daily Status Prep</div>
-          <div className="mw-automation-meta">Not configured yet</div>
-        </div>
-      </div>
-    );
-  }
-
-  const { displayName, lastRunAt, nextRunAt, lastRunStatus, runStatus, linkedChatSessionId } = job;
-
-  let badgeClass = '';
-  let badgeText = 'Never run';
-  if (runStatus === 'running') {
-    badgeClass = 'badge-info';
-    badgeText = 'Generating…';
-  } else if (lastRunStatus === 'success') {
-    badgeClass = 'badge-ok';
-    badgeText = 'Ready';
-  } else if (lastRunStatus === 'failed') {
-    badgeClass = 'badge-err';
-    badgeText = 'Failed';
-  } else if (lastRunStatus === 'skipped') {
-    badgeClass = 'badge-muted';
-    badgeText = 'Skipped';
-  } else {
-    badgeClass = 'badge-muted';
-    badgeText = 'Never run';
-  }
-
-  return (
-    <div className={`mw-automation-card r-open-area ${lastRunStatus === 'failed' ? 'failed' : ''}`}>
-      <div className="mw-automation-main">
-        <div className="mw-automation-title">{displayName || 'Daily Status Prep'}</div>
-        <span className={`badge ${badgeClass}${runStatus === 'running' ? ' glow-running' : ''}`.trim()}>
-          {runStatus === 'running' && <Loader2 className="inline animate-spin" style={{ width: '12px', height: '12px', marginRight: '4px', verticalAlign: 'middle' }} />}
-          {badgeText}
-        </span>
-      </div>
-      <div className="mw-automation-meta">
-        <span>{lastRunAt ? `Last run ${timeAgo(lastRunAt)}` : 'Never run'}</span>
-        {nextRunAt ? <span>Next {timeUntil(nextRunAt)}</span> : null}
-        {linkedChatSessionId ? (
-          <Link className="link" to={`/chat/${linkedChatSessionId}`}>View Report →</Link>
-        ) : null}
-      </div>
-    </div>
-  );
-}
-
 export default function DashboardPage() {
   const navigate = useNavigate();
   const user = useAuthStore((s) => s.user);
@@ -530,8 +467,6 @@ export default function DashboardPage() {
     reasoningEffort?: ReasoningEffortValue | null;
     planMode?: boolean | null;
   }>({});
-  const [cronJobs, setCronJobs] = useState<any[]>([]);
-
   async function load() {
     try {
       const [pending, execs, prs] = await Promise.all([
@@ -554,18 +489,6 @@ export default function DashboardPage() {
     return () => clearInterval(interval);
   }, []);
 
-  // NFR-006: cron state changes slowly (job completes once per run).
-  // Load on mount and refresh every 30 s, independent of the 10 s exec poll.
-  useEffect(() => {
-    function loadCrons() {
-      crons.list().catch(() => []).then((data) => {
-        setCronJobs(Array.isArray(data) ? data : []);
-      });
-    }
-    loadCrons();
-    const cronInterval = setInterval(loadCrons, 30_000);
-    return () => clearInterval(cronInterval);
-  }, []);
 
   useEffect(() => {
     chatApi.providers().then((list) => {
@@ -615,7 +538,6 @@ export default function DashboardPage() {
     [pendingInterventions, runs],
   );
   const firstName = (user?.name || user?.email?.split('@')[0] || 'there').split(/\s+/)[0];
-  const dailyStatusJob = cronJobs.find((j: any) => j.name === 'daily-status-prep') ?? null;
   const activePreview = inFlight.slice(0, 3);
   const recentPreview = recent.slice(0, 4);
   const approvalPreview = humanApprovals.slice(0, 3);
@@ -649,9 +571,6 @@ export default function DashboardPage() {
               <p className="sub">
                 {humanApprovals.length} approvals · {inFlight.length} running · {recent.length} recent
               </p>
-            </div>
-            <div className="mw-pulse">
-              <span><Clock3 className="h-3.5 w-3.5" /> {dailyStatusJob?.nextRunAt ? `Next status ${timeUntil(dailyStatusJob.nextRunAt)}` : 'No status scheduled'}</span>
             </div>
           </div>
 
@@ -729,16 +648,6 @@ export default function DashboardPage() {
         </section>
 
         <div className="mw-soft-grid">
-          <section className="mw-sec">
-            <header className="mw-sec-h">
-              <div>
-                <h3>Automations</h3>
-                <p>Scheduled work</p>
-              </div>
-            </header>
-            <DailyStatusPrepCard job={dailyStatusJob} />
-          </section>
-
           <section className="mw-sec">
             <header className="mw-sec-h">
               <div>

@@ -2026,8 +2026,8 @@ RULES:
 
   /**
    * Append a message authored by the automation system to an existing chat session.
-   * Used by the daily-status-prep (and future automation) agents to post their
-   * generated content into a persistent linked chat thread.
+   * Used by automation agents to post their generated content into a
+   * persistent linked chat thread.
    *
    * Called from POST /api/chat/sessions/:id/automation-message (internal endpoint,
    * token minted by buildInternalApiHeaders in cron.service.ts).

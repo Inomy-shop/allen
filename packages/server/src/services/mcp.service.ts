@@ -7,10 +7,8 @@
 import type { Db } from 'mongodb';
 import { ObjectId } from 'mongodb';
 
-// Secrets model has been removed. MCP env/args come from Allen's root .env
-// via the ALLEN_ prefix convention — see mcp-loader.ts for the resolution
-// rules. The `@secret:KEY` reference format, encrypted secrets collection,
-// and per-MCP secret CRUD are all gone.
+// MCP env/args come from Allen's root .env via the ALLEN_ prefix convention.
+// See mcp-loader.ts for the resolution rules.
 
 // ── Types ──
 
@@ -70,7 +68,7 @@ export interface McpServerRecord {
   // stdio
   command?: string;
   args?: string[];
-  /** @deprecated legacy literal env (may contain `@secret:KEY` refs). Prefer envKeys. */
+  /** @deprecated legacy literal env passthrough on existing records. Prefer envKeys for new servers. */
   env?: Record<string, string>;
 
   // sse / http
