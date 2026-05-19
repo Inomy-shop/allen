@@ -16,6 +16,7 @@ describe('ContextWorkflowEvaluationService', () => {
   const originalMode = process.env.ALLEN_CONTEXT_SEMANTIC_MODE;
   const originalScript = process.env.ALLEN_DEEPEVAL_WORKFLOW_SCRIPT;
   const originalSecret = process.env.JWT_ACCESS_SECRET;
+  const originalContextProvider = process.env.ALLEN_CONTEXT_PROVIDER;
   let fakeScript: string;
 
   beforeAll(async () => {
@@ -30,6 +31,7 @@ describe('ContextWorkflowEvaluationService', () => {
     process.env.ALLEN_CONTEXT_SEMANTIC_EVALUATOR = 'deepeval';
     process.env.ALLEN_DEEPEVAL_WORKFLOW_SCRIPT = fakeScript;
     process.env.JWT_ACCESS_SECRET = 'test-secret';
+    process.env.ALLEN_CONTEXT_PROVIDER = 'allen';
     delete process.env.ALLEN_CONTEXT_SEMANTIC_MODE;
     await Promise.all([
       db.collection('executions').deleteMany({}),
@@ -50,6 +52,8 @@ describe('ContextWorkflowEvaluationService', () => {
     else process.env.ALLEN_DEEPEVAL_WORKFLOW_SCRIPT = originalScript;
     if (originalSecret === undefined) delete process.env.JWT_ACCESS_SECRET;
     else process.env.JWT_ACCESS_SECRET = originalSecret;
+    if (originalContextProvider === undefined) delete process.env.ALLEN_CONTEXT_PROVIDER;
+    else process.env.ALLEN_CONTEXT_PROVIDER = originalContextProvider;
     await client.close();
     await mongo.stop();
   });

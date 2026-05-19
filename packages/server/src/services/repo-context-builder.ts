@@ -16,7 +16,6 @@
 import { dirname } from 'node:path';
 import type { Db } from 'mongodb';
 import { RepoContextScannerService } from './repo-context-scanner.service.js';
-import { isContextEngineEnabled } from './context-provider-config.js';
 
 /**
  * Build the markdown context block to inject into an agent's system prompt.
@@ -31,7 +30,6 @@ import { isContextEngineEnabled } from './context-provider-config.js';
  *                  or any subdirectory of one of those.
  */
 export async function buildRepoContextBlock(db: Db, pathHint: string | undefined): Promise<string> {
-  if (!isContextEngineEnabled()) return '';
   if (!pathHint || pathHint === '/tmp' || pathHint === '/tmp/allen') return '';
 
   const repo = await resolveRepoFromPath(db, pathHint);
