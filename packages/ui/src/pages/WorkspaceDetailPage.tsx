@@ -1215,7 +1215,7 @@ export default function WorkspaceDetailPage() {
 
               {/* Repo config link */}
               <div className="text-[10px] text-theme-subtle pt-2 border-t border-app">
-                To edit setup scripts, services, or env files, go to <a href="/repos" className="text-accent hover:underline">Repos → {workspace.repoName} → Workspace</a>
+                To edit setup scripts, services, or env files, go to <a href="/agents?section=repos" className="text-accent hover:underline">Repos → {workspace.repoName} → Workspace</a>
               </div>
             </div>
           </div>

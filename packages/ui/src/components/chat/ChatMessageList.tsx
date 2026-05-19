@@ -195,7 +195,27 @@ function TypingDots() {
 function formatTime(dateStr?: string): string {
   if (!dateStr) return '';
   const d = new Date(dateStr);
-  return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  if (Number.isNaN(d.getTime())) return '';
+  return d.toLocaleString([], {
+    month: 'short',
+    day: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+  });
+}
+
+function formatTimestampTitle(dateStr?: string): string {
+  if (!dateStr) return '';
+  const d = new Date(dateStr);
+  if (Number.isNaN(d.getTime())) return '';
+  return d.toLocaleString([], {
+    year: 'numeric',
+    month: 'long',
+    day: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+  });
 }
 
 function formatClock(dateStr?: string | null): string {
@@ -2025,7 +2045,9 @@ export default function ChatMessageList({ messages, streamText, thinkingText, st
               <span className="ch-msg-who">
                 {msg.role === 'user' ? senderLabel : assistantDisplayName(activeAgent ? agentMap[activeAgent] : undefined)}
               </span>
-              {msg.createdAt && <span className="ch-msg-ts">{formatTime(msg.createdAt)}</span>}
+              <span className="ch-msg-ts" title={formatTimestampTitle(msg.createdAt)}>
+                {formatTime(msg.createdAt)}
+              </span>
               {msg.role !== 'user' && msg.costUsd != null && msg.costUsd > 0 && <span className="ch-msg-ts">${msg.costUsd.toFixed(4)}</span>}
               {msg.role !== 'user' && msg.durationMs != null && msg.durationMs > 0 && <span className="ch-msg-ts">{(msg.durationMs / 1000).toFixed(1)}s</span>}
             </div>

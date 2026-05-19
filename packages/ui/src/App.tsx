@@ -113,6 +113,7 @@ const COMMANDS: CommandItem[] = [
   { id: 'tickets', label: 'Open Linear tickets', group: 'Sources', to: '/tickets', icon: Ticket },
   { id: 'pulls', label: 'Open pull requests', group: 'Sources', to: '/pull-requests', icon: GitPullRequest },
   { id: 'workspaces', label: 'Open workspaces', group: 'Code', to: '/workspaces', icon: FolderGit2 },
+  { id: 'schedules', label: 'Open scheduled jobs', group: 'Settings', to: '/settings/schedules', icon: Settings },
   { id: 'analytics', label: 'Open analytics', group: 'Settings', to: '/settings/analytics', icon: Settings },
   { id: 'learnings', label: 'Open learnings', group: 'Settings', to: '/settings/learnings', icon: Settings },
   { id: 'workflows', label: 'Open workflows', group: 'Library', to: '/workflows', icon: GitBranch },

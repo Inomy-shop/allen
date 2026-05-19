@@ -11,14 +11,12 @@ import ExecutionListPage from './pages/ExecutionListPage';
 import ExecutionDetailPage from './pages/ExecutionDetailPage';
 import DashboardPage from './pages/DashboardPage';
 import RoleManagerPage from './pages/RoleManagerPage';
-import RepoManagerPage from './pages/RepoManagerPage';
 import SettingsPage from './pages/SettingsPage';
 import ChatPage from './pages/ChatPage';
 import ThreadsPage from './pages/ThreadsPage';
 import WorkspaceListPage from './pages/WorkspaceListPage';
 import PullRequestListPage from './pages/PullRequestListPage';
 import PullRequestDetailPage from './pages/PullRequestDetailPage';
-import CronManagerPage from './pages/CronManagerPage';
 import InterventionsPage from './pages/InterventionsPage';
 import TicketsPage from './pages/TicketsPage';
 import LoginPage from './pages/LoginPage';
@@ -52,7 +50,7 @@ const router = createBrowserRouter([
           { path: 'workflows/new', element: <WorkflowBuilderPage /> },
           { path: 'workflows/:id', element: <WorkflowDetailPage /> },
           { path: 'workflows/:id/edit', element: <WorkflowBuilderPage /> },
-          { path: 'repos', element: <RepoManagerPage /> },
+          { path: 'repos', element: <Navigate to="/agents?section=repos" replace /> },
           { path: 'learnings', element: <Navigate to="/settings/learnings" replace /> },
           { path: 'executions', element: <ExecutionListPage /> },
           { path: 'executions/:id', element: <ExecutionDetailPage /> },
@@ -66,7 +64,7 @@ const router = createBrowserRouter([
           { path: 'workspaces/:id', element: <WorkspaceListPage /> },
           { path: 'pull-requests', element: <PullRequestListPage /> },
           { path: 'pull-requests/:id', element: <PullRequestDetailPage /> },
-          { path: 'crons', element: <CronManagerPage /> },
+          { path: 'crons', element: <Navigate to="/settings/schedules" replace /> },
           { path: 'tickets', element: <TicketsPage /> },
           { path: 'monitoring', element: <Navigate to="/settings/analytics" replace /> },
           { path: 'interventions', element: <InterventionsPage /> },

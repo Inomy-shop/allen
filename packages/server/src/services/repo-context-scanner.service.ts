@@ -18,7 +18,7 @@
  */
 
 import type { Collection, Db, ObjectId } from 'mongodb';
-import { withArtifactsGuidance, withNonInteractiveGuidance } from '@allen/engine';
+import { MCP_SERVER_NAME, withArtifactsGuidance, withNonInteractiveGuidance } from '@allen/engine';
 
 /** Bump when scanner prompt or storage shape changes meaningfully. */
 export const SCAN_VERSION = 1;
@@ -128,6 +128,7 @@ export class RepoContextScannerService {
     let error: string | undefined;
     let prompt = '';
     let model = 'sonnet';
+    let provider: 'claude-cli' | 'codex' = 'claude-cli';
     let toolCalls: { tool: string; args: Record<string, unknown> }[] = [];
     const branchNotes: string[] = [];
 
@@ -153,8 +154,13 @@ export class RepoContextScannerService {
       const agent = await this.db.collection('agents').findOne({ name: 'repo-scanner' });
       if (!agent) throw new Error('repo-scanner agent not seeded');
 
-      const { normalizeModelAlias } = await import('@allen/engine');
-      model = normalizeModelAlias((agent.model as string) ?? 'sonnet') ?? 'sonnet';
+      provider = normalizeAgentProvider(agent.provider as string | undefined);
+      if (provider === 'codex') {
+        model = (agent.model as string | undefined) ?? 'default';
+      } else {
+        const { normalizeModelAlias } = await import('@allen/engine');
+        model = normalizeModelAlias((agent.model as string) ?? 'sonnet') ?? 'sonnet';
+      }
 
       // Trace the scan as an agent execution — same shape as chat:spawn_agent
       // so the UI renders the agent execution view with tool calls and logs.
@@ -166,7 +172,7 @@ export class RepoContextScannerService {
         status: 'running',
         source: 'chat',
         input: { prompt: `repo-scan: ${repoName}`, agent_name: 'repo-scanner', repo_path: repoPath },
-        meta: { cwd: repoPath, provider: 'claude', model, spawnedBy: 'repo-context-scanner' },
+        meta: { cwd: repoPath, provider, model, spawnedBy: 'repo-context-scanner' },
         state: {},
         sessions: {},
         retryCounts: {},
@@ -185,10 +191,6 @@ export class RepoContextScannerService {
       };
       liveLog({ type: 'started', content: `Repo scan for ${repoName} in ${repoPath}` });
 
-      // Run the agent headlessly through the Claude CLI by default. Operators
-      // can force SDK mode with ALLEN_AGENT_EXECUTION_MODE=sdk.
-      const { query } = await import('@anthropic-ai/claude-code');
-      const { queryViaCli } = await import('@allen/engine');
       const abortController = new AbortController();
       const timer = setTimeout(() => abortController.abort(), SCAN_TIMEOUT_MS);
 
@@ -197,65 +199,84 @@ export class RepoContextScannerService {
         : '';
       prompt = `Scan the repository "${repoName}" at the current working directory and produce the comprehensive markdown context document per your system prompt. Be thorough — read each significant module. The repo path is: ${repoPath}${branchPreamble}`;
 
-      const sdkOptions: Record<string, unknown> = {
-        model,
-        permissionMode: 'bypassPermissions',
-        cwd: repoPath,
-        customSystemPrompt: withNonInteractiveGuidance(withArtifactsGuidance(agent.system as string)),
-        abortController,
-      };
-      const executionMode = process.env.ALLEN_AGENT_EXECUTION_MODE === 'sdk' ? 'sdk' : 'cli';
-      const messageStream = executionMode === 'cli'
-        ? queryViaCli({
-            agent: {
-              name: 'repo-scanner',
-              description: agent.description as string | undefined,
-              system: withNonInteractiveGuidance(withArtifactsGuidance(agent.system as string)),
-              model,
-              tools: Array.isArray(agent.tools) ? agent.tools as string[] : undefined,
-            },
-            prompt,
-            cwd: repoPath,
-            model,
-            permissionMode: 'bypassPermissions',
-            abortSignal: abortController.signal,
-            stderr: (chunk) => liveLog({ type: 'tool_start', tool: 'claude-cli stderr', content: chunk.slice(0, 4000) }),
-          })
-        : query({ prompt, options: sdkOptions as any });
-
       let finalText = '';
       toolCalls = [];
       try {
-        for await (const msg of messageStream) {
-          if (msg.type === 'assistant') {
-            const blocks = (msg as any).message?.content as Array<{ type: string; text?: string; name?: string; input?: unknown }> ?? [];
-            const text = blocks.filter((b) => b.type === 'text').map((b) => b.text ?? '').join('');
-            if (text) {
-              finalText = text;
-              liveLog({ type: 'text', content: text.slice(-300) });
-            }
-            // Capture tool calls for the trace
-            for (const block of blocks) {
-              if (block.type === 'tool_use' && block.name) {
-                const args = (block.input as Record<string, unknown>) ?? {};
-                toolCalls.push({ tool: block.name, args });
-                const desc = block.name === 'Bash' ? `$ ${(args.command as string ?? '').slice(0, 150)}` :
-                  block.name === 'Read' ? `Read ${args.file_path ?? ''}` :
-                  block.name === 'Grep' ? `Search: ${args.pattern ?? ''}` :
-                  block.name === 'Glob' ? `Find: ${args.pattern ?? ''}` :
-                  `${block.name}`;
-                liveLog({ type: 'tool_start', tool: block.name, content: desc });
+        if (provider === 'codex') {
+          const result = await runCodexRepoScanner({
+            agentName: 'repo-scanner',
+            system: withNonInteractiveGuidance(withArtifactsGuidance(agent.system as string)),
+            prompt,
+            cwd: repoPath,
+            model,
+            reasoningEffort: agent.reasoningEffort as string | undefined,
+            abortSignal: abortController.signal,
+            liveLog,
+          });
+          finalText = result.text;
+          toolCalls = result.toolCalls;
+        } else {
+          // Run the agent headlessly through the Claude CLI by default. Operators
+          // can force SDK mode with ALLEN_AGENT_EXECUTION_MODE=sdk.
+          const { query } = await import('@anthropic-ai/claude-code');
+          const { queryViaCli } = await import('@allen/engine');
+          const sdkOptions: Record<string, unknown> = {
+            model,
+            permissionMode: 'bypassPermissions',
+            cwd: repoPath,
+            customSystemPrompt: withNonInteractiveGuidance(withArtifactsGuidance(agent.system as string)),
+            abortController,
+          };
+          const executionMode = process.env.ALLEN_AGENT_EXECUTION_MODE === 'sdk' ? 'sdk' : 'cli';
+          const messageStream = executionMode === 'cli'
+            ? queryViaCli({
+                agent: {
+                  name: 'repo-scanner',
+                  description: agent.description as string | undefined,
+                  system: withNonInteractiveGuidance(withArtifactsGuidance(agent.system as string)),
+                  model,
+                  tools: Array.isArray(agent.tools) ? agent.tools as string[] : undefined,
+                },
+                prompt,
+                cwd: repoPath,
+                model,
+                permissionMode: 'bypassPermissions',
+                abortSignal: abortController.signal,
+                stderr: (chunk) => liveLog({ type: 'tool_start', tool: 'claude-cli stderr', content: chunk.slice(0, 4000) }),
+              })
+            : query({ prompt, options: sdkOptions as any });
+
+          for await (const msg of messageStream) {
+            if (msg.type === 'assistant') {
+              const blocks = (msg as any).message?.content as Array<{ type: string; text?: string; name?: string; input?: unknown }> ?? [];
+              const text = blocks.filter((b) => b.type === 'text').map((b) => b.text ?? '').join('');
+              if (text) {
+                finalText = text;
+                liveLog({ type: 'text', content: text.slice(-300) });
+              }
+              // Capture tool calls for the trace
+              for (const block of blocks) {
+                if (block.type === 'tool_use' && block.name) {
+                  const args = (block.input as Record<string, unknown>) ?? {};
+                  toolCalls.push({ tool: block.name, args });
+                  const desc = block.name === 'Bash' ? `$ ${((args.command as string) ?? '').slice(0, 150)}` :
+                    block.name === 'Read' ? `Read ${args.file_path ?? ''}` :
+                    block.name === 'Grep' ? `Search: ${args.pattern ?? ''}` :
+                    block.name === 'Glob' ? `Find: ${args.pattern ?? ''}` :
+                    `${block.name}`;
+                  liveLog({ type: 'tool_start', tool: block.name, content: desc });
+                }
               }
             }
-          }
-          if ((msg as any).type === 'tool_result' || ((msg as any).message?.role === 'tool')) {
-            const toolName = (msg as any).tool_name ?? (msg as any).name ?? '';
-            liveLog({ type: 'tool_done', tool: toolName });
-          }
-          if (msg.type === 'result') {
-            costUsd = (msg as any).total_cost_usd ?? 0;
-            if ((msg as any).subtype === 'success' && (msg as any).result) {
-              finalText = (msg as any).result;
+            if ((msg as any).type === 'tool_result' || ((msg as any).message?.role === 'tool')) {
+              const toolName = (msg as any).tool_name ?? (msg as any).name ?? '';
+              liveLog({ type: 'tool_done', tool: toolName });
+            }
+            if (msg.type === 'result') {
+              costUsd = (msg as any).total_cost_usd ?? 0;
+              if ((msg as any).subtype === 'success' && (msg as any).result) {
+                finalText = (msg as any).result;
+              }
             }
           }
         }
@@ -524,6 +545,163 @@ async function runGit(cwd: string, args: string[]): Promise<{ stdout: string; st
     proc.on('close', (code) => resolveP({ stdout, stderr, code: code ?? 1 }));
     proc.on('error', () => resolveP({ stdout, stderr, code: 1 }));
   });
+}
+
+function normalizeAgentProvider(provider?: string): 'claude-cli' | 'codex' {
+  return provider === 'codex' ? 'codex' : 'claude-cli';
+}
+
+async function runCodexRepoScanner(opts: {
+  agentName: string;
+  system: string;
+  prompt: string;
+  cwd: string;
+  model: string;
+  reasoningEffort?: string;
+  abortSignal?: AbortSignal;
+  liveLog: (entry: { type: string; tool?: string; command?: string; content?: string }) => void;
+}): Promise<{ text: string; toolCalls: { tool: string; args: Record<string, unknown> }[] }> {
+  const { spawn } = await import('node:child_process');
+  const args: string[] = ['exec', '--json', '--dangerously-bypass-approvals-and-sandbox', '--skip-git-repo-check'];
+  if (opts.model && opts.model !== 'default') {
+    args.push('-c', `model="${opts.model}"`);
+  }
+  if (opts.reasoningEffort && opts.reasoningEffort !== 'off') {
+    const effort = opts.reasoningEffort === 'max' ? 'high' : opts.reasoningEffort;
+    args.push('-c', `model_reasoning_effort="${effort}"`);
+  }
+
+  const mcpEnv = {
+    ALLEN_ARTIFACT_ROOT_TYPE: 'agent',
+    ALLEN_ARTIFACT_ROOT_ID: opts.agentName,
+    ALLEN_ARTIFACT_AGENT_NAME: opts.agentName,
+    ALLEN_API_URL: `http://localhost:${process.env.PORT ?? '4023'}`,
+    ALLEN_PUBLIC_URL: process.env.ALLEN_PUBLIC_URL ?? `http://localhost:${process.env.PORT ?? '4023'}`,
+    JWT_ACCESS_SECRET: process.env.JWT_ACCESS_SECRET ?? '',
+  };
+  for (const [key, value] of Object.entries(mcpEnv)) {
+    args.push('-c', `mcp_servers.${MCP_SERVER_NAME}.env.${key}="${value.replace(/"/g, '\\"')}"`);
+  }
+
+  args.push(`${opts.system}\n\n${opts.prompt}`);
+
+  return new Promise((resolveP, rejectP) => {
+    const proc = spawn('codex', args, {
+      cwd: opts.cwd,
+      env: { ...process.env, ...mcpEnv },
+      stdio: ['pipe', 'pipe', 'pipe'],
+    });
+    proc.stdin.end();
+
+    let text = '';
+    let stdoutBuf = '';
+    let stderrTail = '';
+    const toolCalls: { tool: string; args: Record<string, unknown> }[] = [];
+    let settled = false;
+
+    const settle = (fn: () => void) => {
+      if (settled) return;
+      settled = true;
+      fn();
+    };
+
+    const abort = () => {
+      try { proc.kill('SIGTERM'); } catch {}
+      settle(() => rejectP(new Error('Execution cancelled')));
+    };
+    if (opts.abortSignal) {
+      if (opts.abortSignal.aborted) {
+        abort();
+        return;
+      }
+      opts.abortSignal.addEventListener('abort', abort, { once: true });
+    }
+
+    proc.stderr.on('data', (chunk: Buffer) => {
+      stderrTail += chunk.toString();
+      if (stderrTail.length > 4000) stderrTail = stderrTail.slice(-4000);
+    });
+
+    proc.stdout.on('data', (chunk: Buffer) => {
+      stdoutBuf += chunk.toString();
+      const lines = stdoutBuf.split('\n');
+      stdoutBuf = lines.pop() ?? '';
+      for (const line of lines) {
+        if (!line.trim()) continue;
+        try {
+          const evt = JSON.parse(line);
+          if (evt.type === 'item.completed' && evt.item?.type === 'agent_message') {
+            const nextText = evt.item.text
+              ?? evt.item.content?.filter((c: any) => c.type === 'output_text').map((c: any) => c.text).join('')
+              ?? '';
+            if (nextText) {
+              text = nextText;
+              opts.liveLog({ type: 'text', content: nextText.slice(-300) });
+            }
+          }
+          if (evt.type === 'item.started' && (evt.item?.type === 'mcp_tool_call' || evt.item?.type === 'collab_tool_call')) {
+            const tool = codexToolName(evt.item);
+            const toolArgs = (evt.item.arguments ?? evt.item.input ?? {}) as Record<string, unknown>;
+            toolCalls.push({ tool, args: toolArgs });
+            opts.liveLog({ type: 'tool_start', tool, content: codexToolDescription(tool, toolArgs) });
+          }
+          if (evt.type === 'item.completed' && evt.item?.type === 'function_call') {
+            const tool = evt.item.name ?? 'function_call';
+            const toolArgs = parseCodexArgs(evt.item.arguments);
+            toolCalls.push({ tool, args: toolArgs });
+            opts.liveLog({ type: 'tool_done', tool, content: codexToolDescription(tool, toolArgs) });
+          }
+          if (evt.type === 'item.completed' && evt.item?.type === 'command_execution') {
+            const command = String(evt.item.command ?? '');
+            const toolArgs = { command };
+            toolCalls.push({ tool: 'Bash', args: toolArgs });
+            opts.liveLog({ type: 'tool_done', tool: 'Bash', command, content: evt.item.exit_code != null ? `exit ${evt.item.exit_code}` : undefined });
+          }
+        } catch {
+          // Ignore non-JSON noise; Codex should emit JSONL, but stderr carries diagnostics.
+        }
+      }
+    });
+
+    proc.on('error', (err) => {
+      settle(() => rejectP(new Error(`Failed to spawn codex: ${err.message}. Is codex CLI installed?`)));
+    });
+    proc.on('close', (code, signal) => {
+      if (opts.abortSignal) opts.abortSignal.removeEventListener('abort', abort);
+      if (settled) return;
+      if (code != null && code !== 0) {
+        settle(() => rejectP(new Error(`codex exited code=${code} signal=${signal ?? 'null'}${stderrTail ? `; stderr tail: ${stderrTail}` : ''}`)));
+        return;
+      }
+      settle(() => resolveP({ text, toolCalls }));
+    });
+  });
+}
+
+function codexToolName(item: any): string {
+  const server = item.server ?? item.serverLabel ?? '';
+  const tool = item.tool ?? item.name ?? 'tool';
+  return server ? `mcp__${server}__${tool}` : tool;
+}
+
+function parseCodexArgs(raw: unknown): Record<string, unknown> {
+  if (!raw) return {};
+  if (typeof raw === 'object') return raw as Record<string, unknown>;
+  if (typeof raw !== 'string') return {};
+  try {
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed === 'object' ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+function codexToolDescription(tool: string, args: Record<string, unknown>): string {
+  if (tool === 'Bash' || tool === 'shell' || tool === 'exec_command') return `$ ${String(args.command ?? '').slice(0, 150)}`;
+  if (tool.includes('read') || tool === 'Read') return `Read ${args.file_path ?? args.path ?? ''}`;
+  if (tool.includes('grep') || tool === 'Grep') return `Search: ${args.pattern ?? args.query ?? ''}`;
+  if (tool.includes('glob') || tool === 'Glob') return `Find: ${args.pattern ?? ''}`;
+  return tool;
 }
 
 /** Defense-in-depth secret redaction over the agent output. */
