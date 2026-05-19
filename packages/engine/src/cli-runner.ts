@@ -55,6 +55,17 @@ export type CliQueryOptions = {
   /** Called once with the spawned child PID (used by callers that record
    *  meta.pid in the executions doc for the zombie reconciler). */
   onPid?: (pid: number) => void;
+  /** Called after the Claude agent markdown file is rendered and written. */
+  onMaterializedAgentFile?: (metadata: MaterializedAgentFileMetadata) => void;
+};
+
+export type MaterializedAgentFileMetadata = {
+  subagentName: string;
+  path: string;
+  sha256: string;
+  byteLength: number;
+  containsMandatoryRepoContext: boolean;
+  createdAt: Date;
 };
 
 /**
@@ -100,6 +111,14 @@ function resolveClaudeBinary(): string {
  */
 export async function* queryViaCli(opts: CliQueryOptions): AsyncGenerator<any, void, void> {
   const materialized: MaterializedAgent = writeAgentFile(opts.agent);
+  opts.onMaterializedAgentFile?.({
+    subagentName: materialized.subagentName,
+    path: materialized.path,
+    sha256: materialized.sha256,
+    byteLength: materialized.byteLength,
+    containsMandatoryRepoContext: materialized.containsMandatoryRepoContext,
+    createdAt: materialized.createdAt,
+  });
 
   const claudeBin = resolveClaudeBinary();
 

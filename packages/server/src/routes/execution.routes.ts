@@ -1,6 +1,7 @@
 import { Router, type Request, type Response } from 'express';
 import { ExecutionService } from '../services/execution.service.js';
 import { InterventionService } from '../services/intervention.service.js';
+import { RepoKnowledgeGraphService } from '../services/repo-knowledge-graph.service.js';
 import { param } from '../types.js';
 import type { Db } from 'mongodb';
 import { UserService } from '../services/user.service.js';
@@ -11,6 +12,7 @@ export function executionRoutes(db: Db): Router {
   const service = new ExecutionService(db);
   const interventionService = new InterventionService(db);
   const userService = new UserService(db);
+  const repoKnowledge = new RepoKnowledgeGraphService(db);
 
   // POST /api/executions
   router.post('/', async (req: AuthedRequest, res: Response) => {
@@ -152,6 +154,17 @@ export function executionRoutes(db: Db): Router {
     } catch (err: unknown) {
       const status = (err as Error).message === 'Execution not found' ? 404 : 500;
       res.status(status).json({ error: (err as Error).message });
+    }
+  });
+
+  // GET /api/executions/:id/context-usage
+  // Returns repo knowledge packets and usage traces captured for node attempts.
+  router.get('/:id/context-usage', async (req: Request, res: Response) => {
+    try {
+      const executionId = param(req, 'id');
+      res.json(await repoKnowledge.getExecutionContextUsageReport(executionId));
+    } catch (err: unknown) {
+      res.status(500).json({ error: (err as Error).message });
     }
   });
 
@@ -385,6 +398,17 @@ export function executionRoutes(db: Db): Router {
       res.json(result);
     } catch (err: unknown) {
       res.status(500).json({ error: (err as Error).message });
+    }
+  });
+
+  // POST /api/executions/:id/context-evaluation/workflow/rerun
+  router.post('/:id/context-evaluation/workflow/rerun', async (req: Request, res: Response) => {
+    try {
+      const result = await service.rerunWorkflowContextEvaluation(param(req, 'id'));
+      res.status(202).json(result ?? { status: 'disabled' });
+    } catch (err: unknown) {
+      const status = (err as { statusCode?: number }).statusCode ?? 500;
+      res.status(status).json({ error: (err as Error).message });
     }
   });
 

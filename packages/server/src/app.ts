@@ -43,6 +43,7 @@ import { CronService } from './services/cron.service.js';
 import { seedCronJobs } from './services/cron-seed.service.js';
 import { createRepoScanIfChangedAction } from './services/repo-context-scanner.service.js';
 import { RepoService, createRepoPullAllAction } from './services/repo.service.js';
+import { createRepoKnowledgeGraphIndexIfChangedAction } from './services/repo-knowledge-graph.service.js';
 import { createPrSyncAllAction } from './services/pull-request.service.js';
 import { createMcpBundleCleanupAction } from './services/mcp-bundle.service.js';
 import { createSelfHealingMonitorScanAction } from './services/self-healing-monitor.service.js';
@@ -52,6 +53,7 @@ import { designDocRoutes } from './routes/design-doc.routes.js';
 import { interventionRoutes } from './routes/intervention.routes.js';
 import { linearRoutes } from './routes/linear.routes.js';
 import { monitoringRoutes } from './routes/monitoring.routes.js';
+import { internalContextEvaluationRoutes } from './routes/context-evaluation.routes.js';
 import { authRoutes } from './routes/auth.routes.js';
 import { systemRoutes } from './routes/system.routes.js';
 import { userRoutes } from './routes/users.routes.js';
@@ -139,6 +141,7 @@ async function main(): Promise<void> {
   // Boot the cron scheduler + register system actions
   const cronService = new CronService(db);
   cronService.registerSystemAction(createRepoScanIfChangedAction(db));
+  cronService.registerSystemAction(createRepoKnowledgeGraphIndexIfChangedAction(db));
   cronService.registerSystemAction(createRepoPullAllAction(db));
   cronService.registerSystemAction(createPrSyncAllAction(db));
   cronService.registerSystemAction(createMcpBundleCleanupAction(db));
@@ -183,6 +186,12 @@ async function main(): Promise<void> {
   // Slack webhook needs the raw body for HMAC signature verification.
   // Mount BEFORE express.json() so the body isn't pre-parsed.
   app.use('/api/slack', express.raw({ type: 'application/json', limit: '5mb' }), slackRoutes(db));
+
+  // Internal context-evaluation judge endpoint. It is HMAC-protected and
+  // mounted before auth so Python sidecars can call back into the server
+  // without minting browser/API bearer tokens. Mount it before express.json()
+  // so HMAC verification uses the exact bytes signed by the Python sidecar.
+  app.use('/api/internal/context-evaluation', express.raw({ type: 'application/json', limit: '10mb' }), internalContextEvaluationRoutes(db));
 
   app.use(express.json({ limit: '10mb' }));
 

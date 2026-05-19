@@ -4,7 +4,36 @@ import {
   Settings, GitBranch, Zap, BookOpen, Wrench, Eye,
 } from 'lucide-react';
 
+type ContextRefProviderMetadata = {
+  chunkId?: unknown;
+  cogneeChunkId?: unknown;
+  chunkIndex?: unknown;
+  documentRole?: unknown;
+  containsCodeBlocks?: unknown;
+  sourceMetadata?: {
+    path?: unknown;
+    fileHash?: unknown;
+    branch?: unknown;
+    headSha?: unknown;
+  };
+};
+
+type ContextInjectionRefSummary = {
+  refId?: string;
+  path?: string;
+  kind?: string;
+  title?: string;
+  providerId?: string;
+  source?: string;
+  itemType?: string;
+  grounding?: string;
+  contentSha256?: string;
+  skipReason?: string;
+  providerMetadata?: ContextRefProviderMetadata;
+};
+
 interface Trace {
+  executionTraceId?: string;
   node: string;
   attempt: number;
   status: string;
@@ -21,8 +50,46 @@ interface Trace {
   routingDecision?: { expression: string; result: unknown };
   runtimeContext?: {
     cwd?: string; executionMode?: string; systemPromptMode?: string;
+    repoContextLoadingGuidancePresent?: boolean; repoContextLoadingGuidanceInjected?: boolean;
+    mandatoryRepoContextInjected?: boolean; mandatoryRepoContextInjectedCount?: number;
+    mandatoryRepoContextSkippedProviderNativeCount?: number; mandatoryRepoContextTargetLayer?: string;
     resolvedModel?: string; reasoningEffort?: string; planMode?: boolean;
     mcpServerNames?: string[]; envKeys?: string[];
+  };
+  repoKnowledgeInjected?: {
+    packetId?: string; repoName?: string; indexId?: string; indexFreshness?: string;
+    mandatoryCount?: number; recommendedCount?: number; preselectedContextCount?: number; selectedContextCount?: number;
+    retrievalProviders?: string[];
+    mandatoryContextInjected?: boolean; mandatoryContextInjectedCount?: number;
+    mandatoryContextSkippedProviderNativeCount?: number; mandatoryContextSkippedOversizeCount?: number;
+    mandatoryContextTargetLayer?: string; systemPromptContextInjected?: boolean;
+    contextInjection?: {
+      injectionId?: string; provider?: string; targetLayer?: string;
+      injectedCount?: number; skippedProviderNativeCount?: number; skippedOversizeCount?: number;
+      skippedMissingCount?: number; skippedUntrackedCount?: number; totalChars?: number;
+      injectedRefs?: ContextInjectionRefSummary[];
+      skippedRefs?: ContextInjectionRefSummary[];
+      skippedProviderNativeRefs?: ContextInjectionRefSummary[];
+    };
+  };
+  contextEvaluation?: {
+    traceId?: string; status?: string;
+    scores?: { precision?: number; completeness?: number; usefulness?: number; groundedness?: number; correctness?: number; bloat?: number; overall?: number };
+    semantic?: { provider?: string; status?: string; mode?: string; scores?: Record<string, number>; error?: string; completedAt?: string; reason?: string };
+    diagnostics?: Array<{ code?: string; severity?: string; message?: string; refId?: string; path?: string }>;
+    feedbackEvidenceCount?: number;
+  };
+  contextEvaluationMissingReason?: string;
+  workflowContextFinding?: {
+    executionId?: string;
+    nodeName?: string;
+    attempt?: number;
+    source?: string;
+    fallbackReason?: string;
+    identityNormalized?: boolean;
+    status?: string;
+    scores?: Record<string, number>;
+    summary?: string;
   };
   learningsInjected?: Array<{ id?: string; content: string; contextTags?: string[] }>;
   agentOverrides?: {
@@ -73,6 +140,12 @@ export default function NodeInspector({ trace, workflowEdges }: Props) {
               ['cwd', trace.runtimeContext.cwd],
               ['execution mode', trace.runtimeContext.executionMode],
               ['system-prompt mode', trace.runtimeContext.systemPromptMode],
+              ['repo context guidance present', trace.runtimeContext.repoContextLoadingGuidancePresent == null ? undefined : (trace.runtimeContext.repoContextLoadingGuidancePresent ? 'yes' : 'no')],
+              ['repo context guidance injected', trace.runtimeContext.repoContextLoadingGuidanceInjected == null ? undefined : (trace.runtimeContext.repoContextLoadingGuidanceInjected ? 'yes' : 'no')],
+              ['mandatory context injected', trace.runtimeContext.mandatoryRepoContextInjected == null ? undefined : (trace.runtimeContext.mandatoryRepoContextInjected ? 'yes' : 'no')],
+              ['mandatory context count', trace.runtimeContext.mandatoryRepoContextInjectedCount],
+              ['provider-native skipped', trace.runtimeContext.mandatoryRepoContextSkippedProviderNativeCount],
+              ['mandatory context layer', trace.runtimeContext.mandatoryRepoContextTargetLayer],
               ['resolved model', trace.runtimeContext.resolvedModel],
               ['reasoning effort', trace.runtimeContext.reasoningEffort],
               ['plan mode', trace.runtimeContext.planMode ? 'on' : 'off'],
@@ -80,6 +153,118 @@ export default function NodeInspector({ trace, workflowEdges }: Props) {
             ]}
           />
         ) : <Empty>No runtime context captured (pre-Phase-2 trace).</Empty>}
+      </Section>
+
+      <Section icon={BookOpen} title="Repo context injection" defaultOpen={Boolean(trace.repoKnowledgeInjected?.mandatoryContextInjected)}>
+        {trace.repoKnowledgeInjected ? (
+          <div className="space-y-2">
+            <KeyValueGrid
+              rows={[
+                ['packet', trace.repoKnowledgeInjected.packetId],
+                ['repo', trace.repoKnowledgeInjected.repoName],
+                ['index', trace.repoKnowledgeInjected.indexId],
+                ['freshness', trace.repoKnowledgeInjected.indexFreshness],
+                ['retrieval providers', (trace.repoKnowledgeInjected.retrievalProviders ?? []).join(', ') || undefined],
+                ['selected refs', trace.repoKnowledgeInjected.selectedContextCount],
+                ['mandatory refs', trace.repoKnowledgeInjected.mandatoryCount],
+                ['recommended refs', trace.repoKnowledgeInjected.recommendedCount],
+                ['system injected', trace.repoKnowledgeInjected.systemPromptContextInjected == null ? undefined : (trace.repoKnowledgeInjected.systemPromptContextInjected ? 'yes' : 'no')],
+                ['full bodies injected', trace.repoKnowledgeInjected.mandatoryContextInjectedCount],
+                ['provider-native skipped', trace.repoKnowledgeInjected.mandatoryContextSkippedProviderNativeCount],
+                ['oversize skipped', trace.repoKnowledgeInjected.mandatoryContextSkippedOversizeCount],
+                ['target layer', trace.repoKnowledgeInjected.mandatoryContextTargetLayer],
+              ]}
+            />
+            {trace.repoKnowledgeInjected.contextInjection?.injectedRefs?.length ? (
+              <div className="space-y-1">
+                <div className="overline">Injected full bodies</div>
+                {trace.repoKnowledgeInjected.contextInjection.injectedRefs.map((r, i) => (
+                  <div key={r.refId ?? i} className="text-[11px] font-mono text-theme-secondary border border-app rounded-md p-1.5">
+                    <span className="text-theme-primary">{r.path ?? r.title ?? r.refId}</span>
+                    <span className="text-theme-subtle"> · {r.kind} · {r.itemType ?? 'repo_file'} · {r.grounding ?? 'repo_backed'} · {r.providerId ?? r.source ?? 'context'}</span>
+                    {contextRefAuditLine(r) && <div className="mt-1 text-theme-subtle">{contextRefAuditLine(r)}</div>}
+                  </div>
+                ))}
+              </div>
+            ) : null}
+            {trace.repoKnowledgeInjected.contextInjection?.skippedProviderNativeRefs?.length ? (
+              <div className="space-y-1">
+                <div className="overline">Provider-native refs</div>
+                {trace.repoKnowledgeInjected.contextInjection.skippedProviderNativeRefs.map((r, i) => (
+                  <div key={r.refId ?? i} className="text-[11px] font-mono text-theme-secondary border border-app rounded-md p-1.5">
+                    <span className="text-theme-primary">{r.path ?? r.title ?? r.refId}</span>
+                    <span className="text-theme-subtle"> · already loaded by provider · {r.itemType ?? 'repo_file'} · {r.providerId ?? 'provider-native'}</span>
+                    {contextRefAuditLine(r) && <div className="mt-1 text-theme-subtle">{contextRefAuditLine(r)}</div>}
+                  </div>
+                ))}
+              </div>
+            ) : null}
+            {trace.repoKnowledgeInjected.contextInjection?.skippedRefs?.length ? (
+              <div className="space-y-1">
+                <div className="overline">Skipped refs</div>
+                {trace.repoKnowledgeInjected.contextInjection.skippedRefs.map((r, i) => (
+                  <div key={`${r.refId ?? i}-skipped`} className="text-[11px] font-mono text-theme-secondary border border-app rounded-md p-1.5">
+                    <span className="text-theme-primary">{r.path ?? r.title ?? r.refId}</span>
+                    <span className="text-theme-subtle"> · {r.kind} · {r.itemType ?? 'repo_file'} · {r.skipReason ?? 'skipped'} · {r.providerId ?? 'context'}</span>
+                    {contextRefAuditLine(r) && <div className="mt-1 text-theme-subtle">{contextRefAuditLine(r)}</div>}
+                  </div>
+                ))}
+              </div>
+            ) : null}
+          </div>
+        ) : <Empty>No repo knowledge packet captured.</Empty>}
+      </Section>
+
+      <Section icon={CheckCircle} title="Context quality evaluation" defaultOpen={Boolean(trace.contextEvaluation || trace.workflowContextFinding)}>
+        {trace.contextEvaluation ? (
+          <div className="space-y-2">
+            <KeyValueGrid
+              rows={[
+                ['status', trace.contextEvaluation.status],
+                ['overall', formatScore(trace.contextEvaluation.scores?.overall)],
+                ['precision', formatScore(trace.contextEvaluation.scores?.precision)],
+                ['completeness', formatScore(trace.contextEvaluation.scores?.completeness)],
+                ['usefulness', formatScore(trace.contextEvaluation.scores?.usefulness)],
+                ['groundedness', formatScore(trace.contextEvaluation.scores?.groundedness)],
+                ['correctness', formatScore(trace.contextEvaluation.scores?.correctness)],
+                ['bloat', formatScore(trace.contextEvaluation.scores?.bloat)],
+                ['semantic provider', trace.contextEvaluation.semantic?.provider],
+                ['semantic status', trace.contextEvaluation.semantic?.status],
+                ['semantic mode', trace.contextEvaluation.semantic?.mode],
+                ['semantic completed', trace.contextEvaluation.semantic?.completedAt],
+                ['semantic reason', trace.contextEvaluation.semantic?.reason],
+                ['feedback evidence', trace.contextEvaluation.feedbackEvidenceCount],
+              ]}
+            />
+            {trace.contextEvaluation.semantic?.error && (
+              <div className="text-[11px] font-mono text-accent-red border border-accent-red/30 rounded-md p-1.5">
+                {trace.contextEvaluation.semantic.error}
+              </div>
+            )}
+            {trace.contextEvaluation.diagnostics?.length ? (
+              <div className="space-y-1">
+                <div className="overline">Evaluation diagnostics</div>
+                {trace.contextEvaluation.diagnostics.map((d, i) => (
+                  <div key={`${d.code ?? i}-eval`} className="text-[11px] font-mono text-theme-secondary border border-app rounded-md p-1.5">
+                    <span className="text-theme-primary">{d.code ?? 'diagnostic'}</span>
+                    <span className="text-theme-subtle"> · {d.severity ?? 'info'} · {d.message ?? ''}</span>
+                    {(d.refId || d.path) && <div className="mt-1 text-theme-subtle">{[d.refId, d.path].filter(Boolean).join(' · ')}</div>}
+                  </div>
+                ))}
+              </div>
+            ) : null}
+            {trace.workflowContextFinding && (
+              <WorkflowContextFinding finding={trace.workflowContextFinding} />
+            )}
+          </div>
+        ) : (
+          <div className="space-y-2">
+            {trace.workflowContextFinding ? (
+              <WorkflowContextFinding finding={trace.workflowContextFinding} />
+            ) : null}
+            <Empty>{trace.contextEvaluationMissingReason ?? 'No context quality evaluation captured.'}</Empty>
+          </div>
+        )}
       </Section>
 
       <Section icon={Zap} title="Agent overrides">
@@ -262,6 +447,43 @@ function Empty({ children }: { children: React.ReactNode }) {
   return <div className="text-[11px] text-theme-subtle font-body italic">{children}</div>;
 }
 
+function WorkflowContextFinding({ finding }: { finding: NonNullable<Trace['workflowContextFinding']> }) {
+  return (
+    <div className="rounded-md border border-accent-blue/30 bg-accent-blue/5 p-2">
+      <div className="overline mb-1">Workflow semantic finding</div>
+      <KeyValueGrid
+        rows={[
+          ['status', finding.status],
+          ['source', finding.source],
+          ['attempt', finding.attempt],
+          ['fallback reason', finding.fallbackReason],
+          ['identity normalized', finding.identityNormalized == null ? undefined : (finding.identityNormalized ? 'yes' : 'no')],
+          ['overall', formatScore(finding.scores?.overall)],
+        ]}
+      />
+      {finding.summary && (
+        <div className="mt-2 max-h-[160px] overflow-y-auto rounded border border-app bg-surface/60 p-2 text-[11px] text-theme-secondary font-body leading-relaxed whitespace-pre-wrap">
+          {finding.summary}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function contextRefAuditLine(ref: ContextInjectionRefSummary): string | undefined {
+  const metadata = ref.providerMetadata;
+  if (!metadata) return undefined;
+  const source = metadata.sourceMetadata;
+  const parts = [
+    metadata.cogneeChunkId || metadata.chunkId ? `chunk ${String(metadata.cogneeChunkId ?? metadata.chunkId)}` : undefined,
+    metadata.chunkIndex !== undefined ? `index ${String(metadata.chunkIndex)}` : undefined,
+    metadata.documentRole ? `role ${String(metadata.documentRole)}` : undefined,
+    source?.path ? `source ${String(source.path)}` : undefined,
+    source?.fileHash ? `hash ${String(source.fileHash).slice(0, 12)}` : undefined,
+  ].filter(Boolean);
+  return parts.length ? parts.join(' · ') : undefined;
+}
+
 function KeyValueGrid({ rows }: { rows: Array<[string, unknown, string?]> }) {
   return (
     <div className="space-y-1">
@@ -347,6 +569,10 @@ function getDownstreamNodes(edges: NonNullable<Props['workflowEdges']>, node: st
     }
   }
   return Array.from(down);
+}
+
+function formatScore(value?: number): string | undefined {
+  return typeof value === 'number' ? `${Math.round(value * 100)}%` : undefined;
 }
 
 function previewValue(v: unknown): string {

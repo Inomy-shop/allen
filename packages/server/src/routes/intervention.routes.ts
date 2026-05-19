@@ -28,6 +28,7 @@ import {
   type InterventionStatus,
 } from '../services/intervention.service.js';
 import { ExecutionService } from '../services/execution.service.js';
+import { ContextEvaluationService } from '../services/context-evaluation.service.js';
 import { param } from '../types.js';
 
 export function interventionRoutes(db: Db): Router {
@@ -245,6 +246,9 @@ export function interventionRoutes(db: Db): Router {
               answered_by_user_id,
               retry_triggered,
             });
+            new ContextEvaluationService(db).reevaluateExecution(existing.workflow_run_id).catch((err) => {
+              console.warn('[intervention.respond] context evaluation refresh failed:', (err as Error).message);
+            });
 
             await clearChatPendingQuestionForIntervention(
               db,
@@ -310,6 +314,9 @@ export function interventionRoutes(db: Db): Router {
         answer,
         answered_by_user_id,
         retry_triggered,
+      });
+      new ContextEvaluationService(db).reevaluateExecution(existing.workflow_run_id).catch((err) => {
+        console.warn('[intervention.respond] context evaluation refresh failed:', (err as Error).message);
       });
 
       await clearChatPendingQuestionForIntervention(

@@ -4,12 +4,13 @@
  * ALLEN_AGENT_EXECUTION_MODE=cli. The file lives outside any repo, so it's
  * never tracked by git, and is rewritten + cleaned up around every spawn.
  *
- * Concurrency model: two parallel calls for the same agent will write
- * byte-identical bodies, so overwrite-always is safe. The file body depends
- * on `system` and optional frontmatter fields — not on per-execution data —
- * so same-agent concurrent executions don't corrupt each other.
+ * Concurrency model: static calls for the same agent write byte-identical
+ * bodies, so overwrite-always is safe. Callers that include per-execution
+ * system content must pass materializedNameSuffix so parallel runs do not
+ * overwrite each other's dynamic agent file.
  */
 import { existsSync, mkdirSync, unlinkSync, writeFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
 import { homedir } from 'node:os';
 import { resolve as resolvePath } from 'node:path';
 import { expandToClaudeTools } from './tool-mapping.js';
@@ -74,6 +75,78 @@ Prefer \`allen_save_artifact\` for anything belonging to this run. Use \`upload_
 /** Sentinel used by the idempotent injector. Cheap substring check. */
 const ARTIFACTS_GUIDANCE_SENTINEL = 'allen_save_artifact';
 
+export const REPO_CONTEXT_LOADING_GUIDANCE = `
+
+<repo_context_loading_protocol priority="mandatory">
+  <purpose>
+    During analysis, implementation, QA, review, or documentation in a registered repo,
+    use the repo context graph as a triage index. Load relevant full bodies before relying
+    on repo-specific instructions, knowledge, skills, docs, runbooks, or production notes.
+  </purpose>
+
+  <tool_use_rules>
+    <rule>First inspect any allen_mandatory_repo_context block in your system instructions. Files inside full_body_context have already been loaded by Allen and are source material for this task.</rule>
+    <rule>Provider-native refs in the mandatory context manifest are expected to be loaded by Claude/Codex from the repo's native instruction mechanism; use them as provider-loaded instructions and do not duplicate-load them unless you need to verify contents.</rule>
+    <rule>Selected refs and summaries outside full_body_context are relevance hints only, not source material.</rule>
+    <rule>Mandatory or baseline refs that are not already present in full_body_context and are not provider-native must be loaded with the Allen MCP loader before analysis, implementation, QA, review, or documentation unless the task is explicitly unrelated; if unrelated, report the ref in context_skipped with the reason.</rule>
+    <rule>Before any selected ref, summary, skill, production note, instruction file, doc, or runbook affects reasoning, code, tests, QA, review, or docs, ensure the complete body is available either from allen_mandatory_repo_context or from an Allen MCP body-loader call.</rule>
+    <rule>Use command profile context when the task involves tests, validation, package scripts, CI, Docker, deployment, runtime packaging, or dependency behavior. Do not treat command profiles as universally mandatory for unrelated investigation, design, review, or documentation work.</rule>
+    <rule>For file-backed instruction files, context files, docs, runbooks, and production notes, call get_repo_context_body, shown by some clients as mcp__allen__get_repo_context_body.</rule>
+    <rule>For skills, call get_repo_skill_body, shown by some clients as mcp__allen__get_repo_skill_body.</rule>
+    <rule>If selected context does not cover the task, call search_repo_knowledge, shown by some clients as mcp__allen__search_repo_knowledge, with the module, file path, domain term, or task concept. Load any relevant returned body before relying on it.</rule>
+    <rule>Do this before making code changes, final recommendations, QA conclusions, or review findings that depend on repo-specific practices.</rule>
+    <rule>Do not treat a packet summary as sufficient context. The summary only decides whether the full file body needs to be loaded or whether the system-injected body already covers it.</rule>
+  </tool_use_rules>
+
+  <reporting_rules>
+    <rule>The repo_context_usage object is audit data used by Allen for deterministic context relevance scoring. Do not use it as a narrative activity log.</rule>
+    <rule>Every context_preselected, context_summary_used, context_loaded, context_applied, and context_skipped row MUST be an object with a refId. String rows, path-only rows, and source-code file paths are invalid for repo context usage audit.</rule>
+    <rule>Report context_preselected for refs you considered from the injected selection.</rule>
+    <rule>Report context_summary_used only for refs whose summaries you inspected for relevance but did not rely on.</rule>
+    <rule>Report context_loaded only when you actually called get_repo_context_body/get_repo_skill_body successfully, or when the ref was present in allen_mandatory_repo_context full_body_context.</rule>
+    <rule>Report context_applied only when a successfully loaded or system-injected full body changed or confirmed reasoning, code, tests, QA, review, or docs.</rule>
+    <rule>Do not report normal source-code Read, Grep, or shell file inspection as context_loaded; those are code inspection, not repo knowledge body loading.</rule>
+    <rule>If a relevant ref could not be loaded, report it in context_skipped with the reason instead of claiming it was loaded.</rule>
+  </reporting_rules>
+  <repo_context_usage_schema>
+{
+  "repo_context_usage": {
+    "module_identified": "module/files you worked on, or null",
+    "context_preselected": [{"refId": "Allen-selected knowledge ref id", "source": "runtime_preselected", "reason": "why you considered or ignored it"}],
+    "context_summary_used": [{"refId": "Allen-selected knowledge ref id", "reason": "inspected packet summary for relevance only; did not rely on it for final work"}],
+    "context_loaded": [{"refId": "knowledge ref id", "kind": "instruction_file|context_file|doc|runbook|production_note|skill|skill_body|context_body|provider_text", "source": "allen_system_injection|get_repo_context_body|get_repo_skill_body", "reason": "why the full body was loaded"}],
+    "context_applied": [{"refId": "knowledge ref id", "source": "allen_system_injection|get_repo_context_body|get_repo_skill_body", "summary": "how the loaded full body affected the work"}],
+    "context_skipped": [{"refId": "Allen-selected knowledge ref id", "reason": "why not relevant or unavailable"}],
+    "validation_performed": ["commands/checks/source files inspected; this is not repo context loading"]
+  }
+}
+  </repo_context_usage_schema>
+</repo_context_loading_protocol>
+`;
+
+const REPO_CONTEXT_LOADING_GUIDANCE_SENTINEL = '<repo_context_loading_protocol';
+const MANDATORY_REPO_CONTEXT_SENTINEL = '<allen_mandatory_repo_context';
+
+export function hasRepoContextLoadingGuidance(systemPrompt: string | undefined): boolean {
+  return (systemPrompt ?? '').includes(REPO_CONTEXT_LOADING_GUIDANCE_SENTINEL);
+}
+
+export function withRepoContextLoadingGuidance(systemPrompt: string | undefined): string {
+  const s = systemPrompt ?? '';
+  return hasRepoContextLoadingGuidance(s) ? s : `${REPO_CONTEXT_LOADING_GUIDANCE}${s}`;
+}
+
+export function hasMandatoryRepoContext(systemPrompt: string | undefined): boolean {
+  return (systemPrompt ?? '').includes(MANDATORY_REPO_CONTEXT_SENTINEL);
+}
+
+export function withMandatoryRepoContext(systemPrompt: string | undefined, mandatoryContextBlock?: string): string {
+  const s = systemPrompt ?? '';
+  const block = mandatoryContextBlock?.trim();
+  if (!block || hasMandatoryRepoContext(s)) return s;
+  return `${block}\n\n${s}`;
+}
+
 /**
  * Append ARTIFACTS_GUIDANCE to a system prompt, but only if it isn't already
  * there. Single helper so every agent call site (chat spawn, delegate, workflow
@@ -133,6 +206,14 @@ export type MaterializedAgent = {
   subagentName: string;
   /** absolute path to the rendered .md file. */
   path: string;
+  /** SHA-256 of the exact rendered markdown body written to disk. */
+  sha256: string;
+  /** UTF-8 byte length of the exact rendered markdown body. */
+  byteLength: number;
+  /** Whether the rendered body contains Allen's mandatory repo context block. */
+  containsMandatoryRepoContext: boolean;
+  /** Timestamp captured immediately after the file body was rendered. */
+  createdAt: Date;
   /** idempotent unlink — never throws. */
   cleanup: () => void;
 };
@@ -164,6 +245,13 @@ export type AgentSpec = {
   disabledAllenMcpTools?: string[];
   /** Disabled MCP tools by server name, using bare tool names. */
   disabledMcpTools?: Record<string, string[]>;
+  /**
+   * Per-execution suffix for materialized Claude CLI agent files. Dynamic
+   * system prompt content such as Allen mandatory repo context must not be
+   * written to the shared allen-<agent>.md filename because parallel runs of
+   * the same agent could overwrite each other.
+   */
+  materializedNameSuffix?: string;
 };
 
 /** Slug the agent name so it forms a valid filename + subagent identifier. */
@@ -173,7 +261,8 @@ function slugify(s: string): string {
 
 /** Render the markdown file body (frontmatter + prompt body). */
 export function renderAgentFile(agent: AgentSpec): { subagentName: string; body: string } {
-  const subagentName = `allen-${slugify(agent.name)}`;
+  const suffix = agent.materializedNameSuffix ? `-${slugify(agent.materializedNameSuffix)}` : '';
+  const subagentName = `allen-${slugify(agent.name)}${suffix}`;
   const description = agent.description ?? `Allen agent: ${agent.name}`;
 
   // Inject the artifact guidance idempotently. Some callers (chat-tools.ts
@@ -182,7 +271,7 @@ export function renderAgentFile(agent: AgentSpec): { subagentName: string; body:
   // skips a duplicate append in that case. Same for the non-interactive
   // guidance — materialized CLI subagents are spawned outside chat (workflow
   // / direct agent CLI), so ask_user / delegate_to_agent must be off-limits.
-  const sourceSystem = withNonInteractiveGuidance(withArtifactsGuidance(agent.system));
+  const sourceSystem = withNonInteractiveGuidance(withArtifactsGuidance(withRepoContextLoadingGuidance(agent.system)));
 
   // A line of three+ dashes in the body would prematurely terminate the YAML
   // frontmatter we're about to emit. Swap it for `***`, an equivalent markdown
@@ -257,10 +346,15 @@ export function writeAgentFile(agent: AgentSpec): MaterializedAgent {
   mkdirSync(outDir, { recursive: true });
   const path = resolvePath(outDir, `${subagentName}.md`);
   writeFileSync(path, body, 'utf8');
+  const bodyBuffer = Buffer.from(body, 'utf8');
 
   return {
     subagentName,
     path,
+    sha256: createHash('sha256').update(bodyBuffer).digest('hex'),
+    byteLength: bodyBuffer.byteLength,
+    containsMandatoryRepoContext: hasMandatoryRepoContext(body),
+    createdAt: new Date(),
     cleanup() {
       try {
         if (existsSync(path)) unlinkSync(path);

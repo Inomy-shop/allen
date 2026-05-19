@@ -14,7 +14,8 @@ import { evaluateCondition } from './condition-parser.js';
 import { executeCodexNode } from './codex-executor.js';
 import { buildToolCallRecord, type ToolCallRecord } from './tool-call.js';
 import { normalizeModelAlias } from './model-alias.js';
-import { withArtifactsGuidance, withNonInteractiveGuidance } from './agent-file-writer.js';
+import { hasRepoContextLoadingGuidance, withArtifactsGuidance, withMandatoryRepoContext, withNonInteractiveGuidance, withRepoContextLoadingGuidance } from './agent-file-writer.js';
+import type { MaterializedAgentFileMetadata } from './cli-runner.js';
 import { statSync, mkdirSync } from 'node:fs';
 
 /** Agent-safe fallback cwd. Kept in sync with chat-providers.ts's
@@ -22,6 +23,7 @@ import { statSync, mkdirSync } from 'node:fs';
  * import from the server package. Never fall back to process.cwd() because
  * that's the server's source tree. */
 const AGENT_FALLBACK_CWD = '/tmp/allen';
+const ENABLE_REPO_CONTEXT_LOADING_COMPLIANCE_RETRY = false;
 
 /**
  * Resolve the session key for a node.
@@ -81,6 +83,17 @@ export interface NodeExecutorDeps {
   runWorkflow: (workflow: WorkflowDef, input: Record<string, unknown>) => Promise<Record<string, unknown>>;
   executionId?: string;
   nodeContext?: string;
+  repoKnowledgeContext?: {
+    packetId: string;
+    repoId: string;
+    repoName?: string;
+    indexId?: string;
+    indexFreshness?: 'fresh' | 'stale' | 'partial' | 'missing';
+    systemPromptBlock?: string;
+    mandatoryContextInjectedCount?: number;
+    mandatoryContextSkippedProviderNativeCount?: number;
+    mandatoryContextTargetLayer?: string;
+  };
   /** Accumulated post-run feedback for this workflow execution. */
   feedbackContext?: string;
   db?: import('mongodb').Db;
@@ -186,7 +199,21 @@ export interface NodeResult {
   runtimeContext?: {
     cwd?: string;
     executionMode?: 'sdk' | 'cli';
-    systemPromptMode?: 'append' | 'custom';
+    systemPromptMode?: 'append' | 'custom' | 'prompt-prefix';
+    repoContextLoadingGuidancePresent?: boolean;
+    repoContextLoadingGuidanceInjected?: boolean;
+    mandatoryRepoContextInjected?: boolean;
+    mandatoryRepoContextInjectedCount?: number;
+    mandatoryRepoContextSkippedProviderNativeCount?: number;
+    mandatoryRepoContextTargetLayer?: string;
+    materializedAgentFile?: {
+      subagentName: string;
+      path: string;
+      sha256: string;
+      byteLength: number;
+      containsMandatoryRepoContext: boolean;
+      createdAt: Date;
+    };
     resolvedModel?: string;
     reasoningEffort?: string;
     planMode?: boolean;
@@ -231,10 +258,13 @@ export async function executeNode(
   deps: NodeExecutorDeps,
 ): Promise<NodeResult> {
   const type: NodeType = nodeDef.type ?? 'agent';
+  const effectiveNodeDef = type === 'agent' && deps.repoKnowledgeContext
+    ? withRepoContextUsageOutput(nodeDef)
+    : nodeDef;
 
   switch (type) {
     case 'agent': {
-      const role = nodeDef.agent ? deps.agents[nodeDef.agent] : undefined;
+      const role = effectiveNodeDef.agent ? deps.agents[effectiveNodeDef.agent] : undefined;
       // Effective provider: per-node override wins over agent default.
       // This lets a workflow cross-override a Claude agent to run on Codex
       // (or vice versa) without mutating the agent document.
@@ -249,7 +279,7 @@ export async function executeNode(
         const existingSession = sessions[resolveSessionKey(nodeName, nodeDef, state)];
         return executeCodexNode(
           nodeName,
-          nodeDef,
+          effectiveNodeDef,
           state,
           role,
           deps.emitter,
@@ -258,21 +288,132 @@ export async function executeNode(
           deps.nodeContext,
           deps.feedbackContext,
           deps.abortSignal,
+          deps.repoKnowledgeContext,
         );
       }
-      return executeAgentNode(nodeName, nodeDef, state, sessions, deps);
+      return executeAgentNode(nodeName, effectiveNodeDef, state, sessions, deps);
     }
     case 'code':
-      return executeCodeNode(nodeName, nodeDef, state, deps);
+      return executeCodeNode(nodeName, effectiveNodeDef, state, deps);
     case 'human':
-      return executeHumanNode(nodeName, nodeDef, state, deps);
+      return executeHumanNode(nodeName, effectiveNodeDef, state, deps);
     case 'workflow':
-      return executeWorkflowNode(nodeName, nodeDef, state, deps);
+      return executeWorkflowNode(nodeName, effectiveNodeDef, state, deps);
     case 'condition':
-      return executeConditionNode(nodeName, nodeDef, state);
+      return executeConditionNode(nodeName, effectiveNodeDef, state);
     default:
       throw new Error(`Unknown node type: ${type}`);
   }
+}
+
+function withRepoContextUsageOutput(nodeDef: NodeDef): NodeDef {
+  if (nodeDef.output_format === 'freeform') return nodeDef;
+  const outputs = { ...(nodeDef.outputs ?? {}) };
+  if (!outputs.repo_context_usage) {
+    outputs.repo_context_usage = 'Repo context usage report following the injected system repo_context_usage contract.';
+  }
+  return { ...nodeDef, outputs };
+}
+
+function shouldRetryForRepoContextLoadingCompliance(
+  outputs: Record<string, unknown>,
+  rawResponse: string | undefined,
+  toolCalls: ToolCallRecord[],
+  repoKnowledgeContext: NodeExecutorDeps['repoKnowledgeContext'],
+  sessionId?: string,
+): boolean {
+  if (!ENABLE_REPO_CONTEXT_LOADING_COMPLIANCE_RETRY) return false;
+  if (!repoKnowledgeContext?.packetId || !sessionId) return false;
+  if (toolCalls.some(isRepoContextLoaderToolCall)) return false;
+  const usage = findRepoContextUsage(outputs) ?? findRepoContextUsageInText(rawResponse);
+  if (!usage) return false;
+  if (normalizeUsageRows(usage.context_loaded).length > 0 || normalizeUsageRows(usage.context_applied).length > 0) {
+    return true;
+  }
+  return [...normalizeUsageRows(usage.context_preselected), ...normalizeUsageRows(usage.context_summary_used)]
+    .some((row) => contextUsageReasonImpliesReliance(row));
+}
+
+function isRepoContextLoaderToolCall(call: ToolCallRecord): boolean {
+  const tool = String(call.tool ?? '');
+  return tool === 'get_repo_context_body' ||
+    tool === 'get_repo_skill_body' ||
+    tool.endsWith('__get_repo_context_body') ||
+    tool.endsWith('__get_repo_skill_body');
+}
+
+function buildRepoContextLoadingCompliancePrompt(requiredOutputs: string[], outputs: Record<string, unknown>): string {
+  const previous = JSON.stringify(outputs, null, 2).slice(0, 12000);
+  return `Repo context loading compliance retry.
+
+Your previous response reported or relied on repo context selection/summary, but this session has no recorded Allen MCP body-loader calls.
+
+Before finalizing:
+- Review the repo context selection already present in this session.
+- For every selected ref, summary, skill, production note, instruction file, doc, or runbook that is relevant enough to influence your reasoning, code, tests, QA, review, or docs, call get_repo_context_body or get_repo_skill_body and read the complete body.
+- If selected context is insufficient, call search_repo_knowledge, then load any relevant returned full body.
+- If a ref is not relevant, do not load it; put it in context_skipped with a clear reason.
+- Do not report Read/Grep/source-code inspection as context_loaded.
+- Report context_loaded/context_applied only for successful get_repo_context_body/get_repo_skill_body calls.
+
+Previous extracted output:
+\`\`\`json
+${previous}
+\`\`\`
+
+Respond with ONLY a JSON code block. Include any keys you need to correct. Required workflow output keys are:
+${requiredOutputs.map((key) => `- ${key}`).join('\n')}
+
+It is acceptable to return only repo_context_usage if the other outputs remain unchanged.`;
+}
+
+function findRepoContextUsage(value: unknown, depth = 0): Record<string, unknown> | undefined {
+  if (depth > 8 || typeof value !== 'object' || value === null) return undefined;
+  const record = value as Record<string, unknown>;
+  if (typeof record.repo_context_usage === 'object' && record.repo_context_usage !== null) {
+    return record.repo_context_usage as Record<string, unknown>;
+  }
+  if ('context_preselected' in record || 'context_summary_used' in record || 'context_loaded' in record || 'context_applied' in record) {
+    return record;
+  }
+  for (const child of Object.values(record)) {
+    const found = findRepoContextUsage(child, depth + 1);
+    if (found) return found;
+  }
+  return undefined;
+}
+
+function findRepoContextUsageInText(rawResponse?: string): Record<string, unknown> | undefined {
+  if (!rawResponse) return undefined;
+  for (const match of rawResponse.matchAll(/```json\s*([\s\S]*?)```/gi)) {
+    try {
+      const parsed = JSON.parse(match[1]);
+      const usage = findRepoContextUsage(parsed);
+      if (usage) return usage;
+    } catch {}
+  }
+  const body = rawResponse.match(/\{[\s\S]*\}/)?.[0];
+  if (body) {
+    try {
+      return findRepoContextUsage(JSON.parse(body));
+    } catch {}
+  }
+  return undefined;
+}
+
+function normalizeUsageRows(value: unknown): Array<Record<string, unknown>> {
+  return Array.isArray(value)
+    ? value.filter((item): item is Record<string, unknown> => typeof item === 'object' && item !== null)
+    : [];
+}
+
+function contextUsageReasonImpliesReliance(row: Record<string, unknown>): boolean {
+  const text = String(row.reason ?? row.summary ?? row.value ?? '').toLowerCase();
+  if (!text) return false;
+  if (/not relevant|irrelevant|skipped|did not rely|not relied|relevance only|triage only|orientation only|not used for final/.test(text)) {
+    return false;
+  }
+  return /reviewed|confirmed|used|inspected|scanned|followed|applied|pointed|directed|influence|must follow|loaded via read|loaded actual file|final work/.test(text);
 }
 
 async function executeAgentNode(
@@ -494,11 +635,9 @@ ${renderCurrentState()}
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`;
   } else {
     // Full prompt — fresh run (first attempt) or retry with a reset session.
-    prompt = nodeDef.prompt ? renderTemplate(nodeDef.prompt, state) : '';
+    const renderedTaskPrompt = nodeDef.prompt ? renderTemplate(nodeDef.prompt, state) : '';
+    prompt = deps.nodeContext ? `${deps.nodeContext}\n\n${renderedTaskPrompt}` : renderedTaskPrompt;
     prompt += buildOutputInstruction(nodeDef.outputs, nodeDef.output_format);
-    if (deps.nodeContext) {
-      prompt += deps.nodeContext;
-    }
 
     // Retry with no session resume — we can't rely on prior context, so
     // still append the feedback block after the full re-rendered prompt.
@@ -577,6 +716,13 @@ ${context}
     ALLEN_ARTIFACT_AGENT_NAME: nodeDef.agent ?? '',
     ALLEN_ARTIFACT_AGENT_EXECUTION_ID: deps.executionId ?? '',
     ALLEN_ARTIFACT_PARENT_ID: deps.executionId ?? '',
+    ...(deps.repoKnowledgeContext ? {
+      ALLEN_REPO_KNOWLEDGE_PACKET_ID: deps.repoKnowledgeContext.packetId,
+      ALLEN_REPO_KNOWLEDGE_REPO_ID: deps.repoKnowledgeContext.repoId,
+      ALLEN_REPO_KNOWLEDGE_INDEX_ID: deps.repoKnowledgeContext.indexId ?? '',
+      ALLEN_REPO_KNOWLEDGE_REPO_NAME: deps.repoKnowledgeContext.repoName ?? '',
+      ALLEN_REPO_KNOWLEDGE_FRESHNESS: deps.repoKnowledgeContext.indexFreshness ?? '',
+    } : {}),
   };
 
   // Load MCP servers so agent nodes can access Linear, Postgres, etc.
@@ -616,21 +762,28 @@ ${context}
       }
     } catch { /* org-context unavailable — fall back to plain system prompt */ }
   }
-  // Universal artifact guidance — every workflow agent (Claude SDK, Claude
-  // CLI, Codex below) gets the instruction to save deliverables via
-  // allen_save_artifact. Idempotent: skipped if already present.
-  if (effectiveSystem !== undefined) effectiveSystem = withArtifactsGuidance(effectiveSystem);
+  // Universal artifact and repo-context guidance. These helpers are
+  // idempotent and also work when an agent has no authored system prompt,
+  // which keeps the runtime contract visible to every workflow agent.
+  const repoContextLoadingGuidanceAlreadyPresent = hasRepoContextLoadingGuidance(effectiveSystem);
+  effectiveSystem = withArtifactsGuidance(effectiveSystem);
+  effectiveSystem = withRepoContextLoadingGuidance(effectiveSystem);
+  effectiveSystem = withMandatoryRepoContext(effectiveSystem, deps.repoKnowledgeContext?.systemPromptBlock);
+  const repoContextLoadingGuidancePresent = hasRepoContextLoadingGuidance(effectiveSystem);
+  const repoContextLoadingGuidanceInjected =
+    !repoContextLoadingGuidanceAlreadyPresent && repoContextLoadingGuidancePresent;
   // Non-interactive guidance — workflow node runs have no live user and no
   // delegation thread surface, so ask_user / delegate_to_agent must be
   // disabled. Goes last so it overrides any "use delegate_to_agent" line
   // that came in via role.system or the org-chart block above.
-  if (effectiveSystem !== undefined) effectiveSystem = withNonInteractiveGuidance(effectiveSystem);
+  effectiveSystem = withNonInteractiveGuidance(effectiveSystem);
 
   // Captured across all callAgent invocations for this node. First-seen
   // init message's `tools` array — the agent's full tool allowlist. Used
   // to populate NodeResult.toolsAvailable so the UI can diff against the
   // set of tools actually invoked.
   let capturedToolsAvailable: string[] | undefined;
+  let materializedAgentFile: MaterializedAgentFileMetadata | undefined;
 
   /**
    * Shared helper to call the Claude Code SDK with the agent's full context.
@@ -729,6 +882,7 @@ ${context}
           tools: Array.isArray((role as any)?.tools) ? (role as any).tools : undefined,
           mcpToolNames: discoveredMcpTools,
           disabledMcpTools,
+          materializedNameSuffix: deps.repoKnowledgeContext?.systemPromptBlock ? `${deps.executionId ?? 'exec'}-${nodeName}-${deps.repoKnowledgeContext.packetId}` : undefined,
         },
         prompt: effectivePrompt,
         cwd,
@@ -738,6 +892,22 @@ ${context}
         env: { ...process.env, ...spawnContextEnv },
         mcpServers: mcpServers && Object.keys(mcpServers).length > 0 ? (mcpServers as Record<string, unknown>) : undefined,
         abortSignal: deps.abortSignal,
+        onMaterializedAgentFile: (metadata) => {
+          materializedAgentFile = metadata;
+          emitLog(deps, nodeName, {
+            level: 'info',
+            category: 'system',
+            message: `[claude-cli] Materialized agent file ${metadata.subagentName}`,
+            data: {
+              subagentName: metadata.subagentName,
+              path: metadata.path,
+              sha256: metadata.sha256,
+              byteLength: metadata.byteLength,
+              containsMandatoryRepoContext: metadata.containsMandatoryRepoContext,
+              createdAt: metadata.createdAt,
+            },
+          });
+        },
         stderr: (chunk) => emitLog(deps, nodeName, { level: 'debug', category: 'system', message: `[claude-cli stderr] ${chunk.slice(0, 4000)}` }),
       });
     } else {
@@ -1142,6 +1312,48 @@ Use auto-gate only if the original prompt's workflow context explicitly allowed 
       message: `[extraction] All strategies failed — downstream conditions will evaluate missing values as false`,
     });
   }
+
+  if (shouldRetryForRepoContextLoadingCompliance(outputs, rawResponse, allToolCalls, deps.repoKnowledgeContext, sessionId)) {
+    emitLog(deps, nodeName, {
+      level: 'warn',
+      category: 'system',
+      message: `[repo-context] No repo context body-loader calls found after reported context use; resuming agent once for context-loading compliance`,
+    });
+    const contextRetryPrompt = buildRepoContextLoadingCompliancePrompt(requiredOutputs, outputs);
+    try {
+      const retry = await callAgent({
+        promptText: contextRetryPrompt,
+        resumeSession: sessionId,
+        emitText: true,
+      });
+
+      if (retry.sessionId) sessionId = retry.sessionId;
+      if (retry.cost != null) actualCost = (actualCost ?? 0) + retry.cost;
+      turns += retry.turns;
+      allToolCalls.push(...retry.toolCalls);
+
+      if (retry.text) {
+        rawResponse += '\n\n--- Repo context loading compliance retry ---\n' + retry.text;
+        const retryOutputs = await extractOutputs(retry.text, nodeDef, extractLog, /*skipLLMFallback*/ true);
+        outputs = { ...outputs, ...retryOutputs };
+        emitLog(deps, nodeName, {
+          level: 'info',
+          category: 'system',
+          message: `[repo-context] Compliance retry completed — extracted [${Object.keys(retryOutputs).join(', ') || 'none'}]`,
+        });
+      }
+    } catch (err) {
+      const msg = (err as Error).message;
+      if (deps.abortSignal?.aborted || /exited with code 143|SIGTERM/i.test(msg)) {
+        throw new Error('Execution cancelled');
+      }
+      emitLog(deps, nodeName, {
+        level: 'warn',
+        category: 'system',
+        message: `[repo-context] Compliance retry failed: ${msg}`,
+      });
+    }
+  }
   // ───────────────────────────────────────────────────────────────────────
 
   // ── Phase 2: build the trace enrichments bundle ────────────────────────
@@ -1174,6 +1386,13 @@ Use auto-gate only if the original prompt's workflow context explicitly allowed 
     cwd,
     executionMode: executionMode2,
     systemPromptMode: systemPromptMode2,
+    repoContextLoadingGuidancePresent,
+    repoContextLoadingGuidanceInjected,
+    mandatoryRepoContextInjected: Boolean(deps.repoKnowledgeContext?.systemPromptBlock),
+    mandatoryRepoContextInjectedCount: deps.repoKnowledgeContext?.mandatoryContextInjectedCount,
+    mandatoryRepoContextSkippedProviderNativeCount: deps.repoKnowledgeContext?.mandatoryContextSkippedProviderNativeCount,
+    mandatoryRepoContextTargetLayer: deps.repoKnowledgeContext?.mandatoryContextTargetLayer,
+    materializedAgentFile,
     resolvedModel: resolvedModel2,
     reasoningEffort: resolvedEffort2,
     planMode: resolvedPlanMode2,

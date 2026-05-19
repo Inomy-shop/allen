@@ -216,6 +216,57 @@ export interface RunStatus {
     failedNode?: string | null;
     errorMessage?: string | null;
     isAgentExecution?: boolean;
+    contextWorkflowEvaluation?: {
+      jobId?: string;
+      provider?: string;
+      mode?: string;
+      status?: string;
+      attempts?: number;
+      maxAttempts?: number;
+      stale?: boolean;
+      staleReason?: string;
+      latestWorkflowChangeAt?: string | null;
+      evaluatedAt?: string | null;
+      completedAt?: string | null;
+      error?: string;
+      audit?: {
+        promptPreview?: string;
+        promptChars?: number;
+        promptSha256?: string;
+        evidencePayload?: Record<string, unknown>;
+        packedEvidencePayload?: Record<string, unknown>;
+        evidenceTruncated?: boolean;
+        evidenceStats?: Record<string, unknown>;
+        rawJudgeResponse?: string;
+        judgeProvider?: string;
+        judgeModel?: string;
+        judgeDurationMs?: number;
+        judgeCostUsd?: number;
+      };
+      result?: {
+        status?: string;
+        scores?: Record<string, number>;
+        summary?: string;
+        diagnostics?: Array<{ code?: string; severity?: string; message?: string }>;
+        nodeFindings?: Array<{
+          executionId?: string;
+          nodeName?: string;
+          attempt?: number;
+          source?: string;
+          fallbackReason?: string;
+          identityNormalized?: boolean;
+          status?: string;
+          scores?: Record<string, number>;
+          summary?: string;
+        }>;
+        evaluationCoverage?: {
+          expectedNodeFindings?: number;
+          returnedNodeFindings?: number;
+          fallbackNodeFindings?: number;
+          missingNodeFindings?: Array<{ executionId?: string; nodeName?: string; attempt?: number; reason?: string }>;
+        };
+      };
+    } | null;
   };
   progress: {
     completed: number;
@@ -440,6 +491,8 @@ export const executions = {
   },
   retryFrom: (id: string, node: string) =>
     request<any>(`/executions/${id}/retry-from/${node}`, { method: 'POST' }),
+  rerunWorkflowContextEvaluation: (id: string) =>
+    request<any>(`/executions/${id}/context-evaluation/workflow/rerun`, { method: 'POST' }),
   /**
    * Checkpoint inspection + editing + resume/fork from a specific checkpoint.
    */
@@ -652,6 +705,12 @@ export const repos = {
     request<any>(`/repos/${id}/scan`, { method: 'POST' }),
   pull: (id: string, rescan = false) =>
     request<any>(`/repos/${id}/pull`, { method: 'POST', body: JSON.stringify({ rescan }) }),
+  getCogneeStatus: (id: string) =>
+    request<any>(`/repos/${id}/cognee`),
+  refreshCognee: (id: string, options?: { cleanRebuild?: boolean }) =>
+    request<any>(`/repos/${id}/cognee/refresh`, { method: 'POST', body: JSON.stringify({ pullLatest: true, cleanRebuild: options?.cleanRebuild === true }) }),
+  stopCognee: (id: string) =>
+    request<any>(`/repos/${id}/cognee/stop`, { method: 'POST' }),
   getAllFiles: (id: string) => request<any[]>(`/repos/${id}/all-files`),
   getFile: (id: string, path: string) => request<any>(`/repos/${id}/file/${path}`),
   context: (id: string) =>

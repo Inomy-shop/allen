@@ -33,6 +33,21 @@ const SEED_JOBS: Omit<CronJob, '_id' | 'nextRunAt' | 'lastRunAt' | 'lastRunStatu
     createdBy: 'seed',
   },
   {
+    name: 'repo-knowledge-graph-index-daily',
+    displayName: 'Daily Repo Knowledge Graph Index',
+    description:
+      'Builds or refreshes structured repo knowledge graph indexes for active repos whose base-branch HEAD has changed.',
+    enabled: true,
+    schedule: '30 5 * * *',
+    timezone: 'UTC',
+    target: {
+      type: 'system',
+      systemAction: 'repo-knowledge-graph-index-if-changed',
+    },
+    isBuiltIn: true,
+    createdBy: 'seed',
+  },
+  {
     name: 'repo-pull-30min',
     displayName: 'Repo Pull (every 30 min)',
     description:
