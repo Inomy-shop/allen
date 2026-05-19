@@ -1,7 +1,9 @@
 import { createHash } from 'node:crypto';
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { renderAgentFile, REPO_CONTEXT_LOADING_GUIDANCE, writeAgentFile } from './agent-file-writer.js';
+import { renderAgentFile, REPO_CONTEXT_LOADING_GUIDANCE, writeAgentFile } from '../src/agent-file-writer.js';
 
 describe('agent file materialization audit metadata', () => {
   it('does not include repo context loading guidance by default', () => {
@@ -44,9 +46,12 @@ describe('agent file materialization audit metadata', () => {
     };
     const expectedBody = renderAgentFile(agent).body;
     const expectedHash = createHash('sha256').update(Buffer.from(expectedBody, 'utf8')).digest('hex');
-    const materialized = writeAgentFile(agent);
+    const originalHome = process.env.HOME;
+    process.env.HOME = mkdtempSync(join(tmpdir(), 'allen-agent-file-writer-'));
+    let materialized: ReturnType<typeof writeAgentFile> | undefined;
 
     try {
+      materialized = writeAgentFile(agent);
       const actualBody = readFileSync(materialized.path, 'utf8');
       expect(actualBody).toBe(expectedBody);
       expect(materialized.sha256).toBe(expectedHash);
@@ -54,9 +59,12 @@ describe('agent file materialization audit metadata', () => {
       expect(materialized.containsMandatoryRepoContext).toBe(true);
       expect(materialized.createdAt).toBeInstanceOf(Date);
     } finally {
-      materialized.cleanup();
+      materialized?.cleanup();
+      if (originalHome === undefined) delete process.env.HOME;
+      else process.env.HOME = originalHome;
     }
 
-    expect(existsSync(materialized.path)).toBe(false);
+    expect(materialized).toBeDefined();
+    expect(existsSync(materialized!.path)).toBe(false);
   });
 });

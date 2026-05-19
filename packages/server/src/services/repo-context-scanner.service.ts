@@ -19,7 +19,6 @@
 
 import type { Collection, Db, ObjectId } from 'mongodb';
 import { MCP_SERVER_NAME, withArtifactsGuidance, withNonInteractiveGuidance } from '@allen/engine';
-import { isContextEngineEnabled } from './context-provider-config.js';
 
 /** Bump when scanner prompt or storage shape changes meaningfully. */
 export const SCAN_VERSION = 1;
@@ -95,7 +94,6 @@ export class RepoContextScannerService {
    * no-op (caller will see the in-progress status reflected on the repos doc).
    */
   async scheduleScan(repoId: string): Promise<{ scheduled: boolean; reason?: string }> {
-    if (!isContextEngineEnabled()) return { scheduled: false, reason: 'Context provider is disabled' };
     const { ObjectId } = await import('mongodb');
     const repo = await this.repos.findOne({ _id: new ObjectId(repoId) });
     if (!repo) return { scheduled: false, reason: 'Repo not found' };

@@ -11,6 +11,7 @@
 import type { Db } from 'mongodb';
 import { computeNextRun } from './cron.service.js';
 import type { CronJob } from './cron.types.js';
+import { isGraphContextEnabled } from './context-provider-config.js';
 import { getSelfHealingLinearConfig } from './self-healing-env.js';
 import { isSeedOverrideEnabled } from './seed-policy.js';
 
@@ -162,8 +163,12 @@ export async function seedCronJobs(db: Db): Promise<number> {
   const col = db.collection('cron_jobs');
   const override = isSeedOverrideEnabled();
   let created = 0;
+  const graphContextEnabled = isGraphContextEnabled();
 
-  for (const seed of SEED_JOBS) {
+  for (const baseSeed of SEED_JOBS) {
+    const seed = baseSeed.name === 'repo-knowledge-graph-index-daily'
+      ? { ...baseSeed, enabled: graphContextEnabled }
+      : baseSeed;
     const existing = await col.findOne({ name: seed.name });
 
     if (!existing) {
@@ -195,6 +200,7 @@ export async function seedCronJobs(db: Db): Promise<number> {
             description: seed.description,
             schedule: seed.schedule,
             timezone: seed.timezone,
+            enabled: seed.enabled,
             target: seed.target,
             isBuiltIn: true,
             updatedAt: new Date(),

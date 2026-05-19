@@ -1,7 +1,7 @@
 import { createHmac, timingSafeEqual } from 'node:crypto';
 import { Router, type Request, type Response } from 'express';
 import type { Db } from 'mongodb';
-import { runChatLLM } from '../services/chat-llm.js';
+import { PROVIDERS, runChatLLM, type ChatProvider } from '../services/chat-llm.js';
 import { isCogneeContextEnabled, isContextEngineEnabled } from '../services/context-provider-config.js';
 
 const MAX_CLOCK_SKEW_MS = 5 * 60_000;
@@ -54,11 +54,13 @@ export function internalContextEvaluationRoutes(db: Db): Router {
       if (!verification.ok) return res.status(verification.status).json({ error: verification.error });
 
       let text = '';
+      const provider = resolveCogneeLlmProvider(body.provider);
+      const model = typeof body.model === 'string'
+        ? body.model
+        : process.env.ALLEN_COGNEE_LLM_MODEL ?? 'gpt-5.5';
       const result = await runChatLLM(db, {
-        provider: 'codex',
-        model: typeof body.model === 'string'
-          ? body.model
-          : process.env.ALLEN_COGNEE_LLM_MODEL ?? 'gpt-5.5',
+        provider,
+        model,
         systemPrompt: typeof body.systemPrompt === 'string' ? body.systemPrompt : '',
         messages: [{ role: 'user', content: prompt }],
         skipTools: true,
@@ -95,9 +97,11 @@ export function internalContextEvaluationRoutes(db: Db): Router {
         : typeof body.prompt === 'string' ? body.prompt : '';
       if (!prompt.trim()) return res.status(400).json({ error: 'messages or prompt is required' });
       let text = '';
+      const provider = resolveCogneeLlmProvider(body.provider);
+      const model = typeof body.model === 'string' ? body.model : process.env.ALLEN_COGNEE_LLM_MODEL ?? 'gpt-5.5';
       const result = await runChatLLM(db, {
-        provider: 'codex',
-        model: typeof body.model === 'string' ? body.model : process.env.ALLEN_COGNEE_LLM_MODEL ?? 'gpt-5.5',
+        provider,
+        model,
         systemPrompt: '',
         messages: [{ role: 'user', content: prompt }],
         skipTools: true,
@@ -121,6 +125,14 @@ export function internalContextEvaluationRoutes(db: Db): Router {
   });
 
   return router;
+}
+
+function resolveCogneeLlmProvider(override?: unknown): ChatProvider {
+  const raw = typeof override === 'string' && override.trim()
+    ? override.trim()
+    : process.env.ALLEN_COGNEE_LLM_PROVIDER ?? 'codex';
+  const normalized = raw === 'allen_codex' ? 'codex' : raw;
+  return (PROVIDERS.some((provider) => provider.provider === normalized) ? normalized : 'codex') as ChatProvider;
 }
 
 function contextProviderDisabledPayload(error = 'Context provider is disabled. Set ALLEN_CONTEXT_PROVIDER to enable context engine flows.'): Record<string, unknown> {
