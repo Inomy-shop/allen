@@ -22,7 +22,10 @@ export interface RepoValidationResult {
   name?: string;
   path?: string;
   clonePath?: string;
+  cloneUrl?: string;
   sshUrl?: string;
+  httpsUrl?: string;
+  requiresSsh?: boolean;
   branch?: string;
   detected?: {
     language: string[];
@@ -35,28 +38,36 @@ export interface RepoValidationResult {
 }
 
 /**
- * Parse a GitHub URL (HTTPS or SSH) into { sshUrl, repoName }.
+ * Parse a GitHub URL (HTTPS or SSH) into clone URL variants.
  * Accepts:
  *   https://github.com/owner/repo
  *   https://github.com/owner/repo.git
  *   github.com/owner/repo
  *   git@github.com:owner/repo.git
  */
-function parseGitHubUrl(input: string): { sshUrl: string; repoName: string } {
+function parseGitHubUrl(input: string): { sshUrl: string; httpsUrl: string; repoName: string } {
   const trimmed = input.trim().replace(/\/$/, '');
 
   // Already SSH: git@github.com:owner/repo.git
   const sshMatch = trimmed.match(/^git@([^:]+):([^/]+)\/([^/]+?)(?:\.git)?$/);
   if (sshMatch) {
     const [, host, owner, repo] = sshMatch;
-    return { sshUrl: `git@${host}:${owner}/${repo}.git`, repoName: repo };
+    return {
+      sshUrl: `git@${host}:${owner}/${repo}.git`,
+      httpsUrl: `https://${host}/${owner}/${repo}.git`,
+      repoName: repo,
+    };
   }
 
   // HTTPS: https://github.com/owner/repo or github.com/owner/repo
   const httpsMatch = trimmed.match(/^(?:https?:\/\/)?([^/]+)\/([^/]+)\/([^/]+?)(?:\.git)?$/);
   if (httpsMatch) {
     const [, host, owner, repo] = httpsMatch;
-    return { sshUrl: `git@${host}:${owner}/${repo}.git`, repoName: repo };
+    return {
+      sshUrl: `git@${host}:${owner}/${repo}.git`,
+      httpsUrl: `https://${host}/${owner}/${repo}.git`,
+      repoName: repo,
+    };
   }
 
   throw new Error(`Invalid repository URL: "${input}". Expected GitHub HTTPS or SSH URL.`);
@@ -65,6 +76,15 @@ function parseGitHubUrl(input: string): { sshUrl: string; repoName: string } {
 async function runGit(repoPath: string, args: string[], timeout = 5000): Promise<string> {
   const { stdout } = await exec('git', args, { cwd: repoPath, timeout });
   return stdout.trim();
+}
+
+async function canReadRepoOverHttps(httpsUrl: string): Promise<boolean> {
+  try {
+    await exec('git', ['ls-remote', '--exit-code', httpsUrl, 'HEAD'], { timeout: 12_000 });
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 export class RepoService {
@@ -263,14 +283,33 @@ export class RepoService {
       };
     }
 
-    let parsed: { sshUrl: string; repoName: string };
+    let parsed: { sshUrl: string; httpsUrl: string; repoName: string };
     try {
       parsed = parseGitHubUrl(url);
-      checks.push({ id: 'url', label: 'Repository URL', status: 'pass', detail: `Will clone ${parsed.sshUrl}.` });
     } catch (err) {
       checks.push({ id: 'url', label: 'Repository URL', status: 'fail', detail: (err as Error).message });
       return { ok: false, source: 'clone', checks };
     }
+
+    const httpsReadable = await canReadRepoOverHttps(parsed.httpsUrl);
+    const cloneUrl = httpsReadable ? parsed.httpsUrl : parsed.sshUrl;
+    const requiresSsh = !httpsReadable;
+    checks.push({
+      id: 'url',
+      label: 'Repository URL',
+      status: 'pass',
+      detail: httpsReadable
+        ? `HTTPS access works. Allen will clone ${parsed.httpsUrl}.`
+        : `HTTPS access was not available. Allen will clone ${parsed.sshUrl} with SSH access.`,
+    });
+    checks.push({
+      id: 'access',
+      label: 'Clone access',
+      status: httpsReadable ? 'pass' : 'warn',
+      detail: httpsReadable
+        ? 'No GitHub SSH key is required. This repo is readable over HTTPS, either because it is public or because HTTPS credentials are available.'
+        : 'This repo is not readable over HTTPS from this machine. Verify GitHub SSH before cloning.',
+    });
 
     const repoName = body.name?.trim() || parsed.repoName;
     const clonePath = join(resolveRepositoriesDir(), repoName);
@@ -305,7 +344,10 @@ export class RepoService {
       ok: checks.every(check => check.status !== 'fail'),
       source: 'clone',
       name: repoName,
+      cloneUrl,
       sshUrl: parsed.sshUrl,
+      httpsUrl: parsed.httpsUrl,
+      requiresSsh,
       clonePath,
       branch,
       checks,
@@ -314,9 +356,9 @@ export class RepoService {
 
   /**
    * Clone a repo from a GitHub URL and register it.
-   * 1. Parse URL → SSH clone URL + repo name
+   * 1. Parse URL → HTTPS/SSH clone URLs + repo name
    * 2. Check for duplicates (name in DB + directory on disk)
-   * 3. git clone via SSH to <ALLEN_HOME>/repositories/<repo-name>
+   * 3. git clone via HTTPS when readable, otherwise SSH, to <ALLEN_HOME>/repositories/<repo-name>
    * 4. git checkout the specified branch
    * 5. Scan the repo
    * 6. Save to DB
@@ -328,10 +370,12 @@ export class RepoService {
     description?: string;
     tags?: string[];
   }): Promise<Record<string, unknown>> {
-    const { sshUrl, repoName: parsedName } = parseGitHubUrl(body.url);
+    const { sshUrl, httpsUrl, repoName: parsedName } = parseGitHubUrl(body.url);
     const repoName = body.name?.trim() || parsedName;
     const branch = body.branch?.trim() || 'main';
     const clonePath = join(resolveRepositoriesDir(), repoName);
+    const httpsReadable = await canReadRepoOverHttps(httpsUrl);
+    const cloneUrl = httpsReadable ? httpsUrl : sshUrl;
 
     // Check if repo with same name already exists in DB
     const existingByName = await this.col.findOne({ name: repoName });
@@ -352,9 +396,9 @@ export class RepoService {
 
     // Clone
     try {
-      await exec('git', ['clone', sshUrl, clonePath], { timeout: 120_000 });
+      await exec('git', ['clone', cloneUrl, clonePath], { timeout: 120_000 });
     } catch (err: any) {
-      throw new Error(`Failed to clone ${sshUrl}: ${err.stderr || err.message}`);
+      throw new Error(`Failed to clone ${cloneUrl}: ${err.stderr || err.message}`);
     }
 
     // Checkout the specified branch
@@ -370,14 +414,14 @@ export class RepoService {
     const doc = {
       name: repoName,
       path: clonePath,
-      url: sshUrl,
+      url: cloneUrl,
       description: body.description?.trim() || '',
       detected: {
         language: scanResult.language,
         framework: scanResult.framework,
         packageManager: scanResult.packageManager,
         defaultBranch: branch,
-        remoteUrl: sshUrl,
+        remoteUrl: cloneUrl,
       },
       tags: body.tags ?? [],
       defaultWorkflow: undefined,
