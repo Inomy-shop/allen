@@ -483,6 +483,43 @@ describe('RepoKnowledgeGraphService context packets', () => {
     })).resolves.toBeNull();
   });
 
+  it('does not build packets or record usage when the context provider is disabled', async () => {
+    const previousProvider = process.env.ALLEN_CONTEXT_PROVIDER;
+    process.env.ALLEN_CONTEXT_PROVIDER = 'disabled';
+    const service = new RepoKnowledgeGraphService(db);
+    const usageBefore = await db.collection('context_usage_traces').countDocuments();
+    try {
+      await expect(service.buildNodeContextPacket({
+        executionId: 'exec-context-disabled',
+        workflowName: 'bug-investigate-and-fix',
+        nodeName: 'investigate',
+        nodeRole: 'bug-investigator',
+        attempt: 1,
+        state: { repo_path: repoPath },
+        prompt: 'Investigate a bug',
+      })).resolves.toBeNull();
+
+      await expect(service.recordContextUsage({
+        executionId: 'exec-context-disabled',
+        workflowName: 'bug-investigate-and-fix',
+        nodeName: 'investigate',
+        nodeRole: 'bug-investigator',
+        attempt: 1,
+        packetId: 'packet-disabled',
+        outputs: {
+          repo_context_usage: {
+            context_loaded: [{ refId: `${repoId}:prod-payments`, source: 'get_repo_context_body' }],
+          },
+        },
+      })).resolves.toBeNull();
+
+      await expect(db.collection('context_usage_traces').countDocuments()).resolves.toBe(usageBefore);
+    } finally {
+      if (previousProvider === undefined) delete process.env.ALLEN_CONTEXT_PROVIDER;
+      else process.env.ALLEN_CONTEXT_PROVIDER = previousProvider;
+    }
+  });
+
   it('builds a Cognee context packet without requiring a graph index', async () => {
     const previousProvider = process.env.ALLEN_CONTEXT_PROVIDER;
     const previousSidecar = process.env.ALLEN_COGNEE_SIDECAR_SCRIPT;
