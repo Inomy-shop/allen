@@ -8,6 +8,7 @@ import { normalizeUsageArray } from './repo-knowledge-graph-usage.js';
 import { firstString, isRecord } from './repo-knowledge-graph-utils.js';
 import { resolveAllenPython } from './python-runtime.js';
 import { isContextEngineEnabled } from './context-provider-config.js';
+import { resolveContextLlmConfig } from './context-llm-config.js';
 
 export type ContextEvaluationStatus = 'passed' | 'warning' | 'failed';
 export type SemanticEvaluationStatus = 'disabled' | 'queued' | 'running' | 'completed' | 'failed';
@@ -42,6 +43,10 @@ type SemanticEvaluation = {
   nextRetryAt?: Date;
   scores?: Partial<ScoreSet>;
   diagnostics?: Array<Record<string, unknown>>;
+  judgeProvider?: string;
+  judgeModel?: string;
+  modelProvider?: string;
+  model?: string;
   error?: string;
 };
 
@@ -109,6 +114,7 @@ export class ContextEvaluationService {
       semantic,
       diagnostics: deterministic.diagnostics,
       refScores: deterministic.refScores,
+      contextLifecycle: deterministic.contextLifecycle,
       feedbackEvidence,
       updatedAt: new Date(),
       createdAt: new Date(),
@@ -307,6 +313,9 @@ export class ContextEvaluationService {
       }).catch(() => null);
       if (evaluated) count += 1;
     }
+    if (count > 0) {
+      this.runPendingSemanticEvaluations(Math.max(10, count)).catch(() => undefined);
+    }
     return count;
   }
 
@@ -359,7 +368,7 @@ export class ContextEvaluationService {
     usageRow: Record<string, unknown>,
     trace: Record<string, unknown> | null,
     feedbackEvidence: Array<Record<string, unknown>>,
-  ): { scores: ScoreSet; diagnostics: Array<Record<string, unknown>>; refScores: Array<Record<string, unknown>> } {
+  ): { scores: ScoreSet; diagnostics: Array<Record<string, unknown>>; refScores: Array<Record<string, unknown>>; contextLifecycle: Array<Record<string, unknown>> } {
     const selectedRefs = normalizeUsageArray(packet.selectedRefs);
     const injectableRefs = normalizeUsageArray(packet.injectableRefs);
     const candidateRefs = normalizeUsageArray(packet.candidateRefs);
@@ -367,13 +376,17 @@ export class ContextEvaluationService {
     const availableRefs = normalizeUsageArray(packet.availableRefs);
     const injection = isRecord(packet.contextInjection) ? packet.contextInjection : {};
     const injectedRefs = normalizeUsageArray(injection.injectedRefs);
-    const providerNativeRefs = normalizeUsageArray(injection.skippedProviderNativeRefs);
+    const providerNativeRefs = [
+      ...normalizeUsageArray(injection.skippedProviderNativeRefs),
+      ...normalizeUsageArray(injection.providerNativeRefs),
+    ];
     const skippedRefs = normalizeUsageArray(injection.skippedRefs);
     const loaded = normalizeUsageArray(usageRow.loaded);
     const claimedUsed = normalizeUsageArray(usageRow.claimedUsed);
     const reportedLoaded = normalizeUsageArray(usageRow.reportedLoaded);
     const reportedApplied = normalizeUsageArray(usageRow.reportedApplied);
     const contextPreselected = normalizeUsageArray(usageRow.contextPreselected);
+    const sourceDiscovery = collectSourceDiscoveryEvidence(trace);
     const selectedIds = idSet(selectedRefs);
     const availableIds = new Set([...selectedIds, ...idSet(availableRefs), ...idSet(injectedRefs), ...idSet(providerNativeRefs)]);
     const loadedIds = idSet(loaded);
@@ -385,11 +398,22 @@ export class ContextEvaluationService {
     const expectedRefs = selectedRefs.filter((ref) => ref.mandatory === true || String(ref.reason ?? '').toLowerCase().includes('mandatory'));
     const expectedIds = idSet(expectedRefs);
     const satisfiedExpected = intersectionSize(expectedIds, new Set([...injectedIds, ...providerNativeIds, ...loadedIds, ...appliedIds]));
-    const usedSelected = intersectionSize(selectedIds, new Set([...loadedIds, ...appliedIds]));
-    const usefulSelected = intersectionSize(selectedIds, appliedIds);
-    const claimedWithEvidence = intersectionSize(claimedIds, new Set([...injectedIds, ...providerNativeIds, ...loadedIds]));
+    const satisfiedSelectedIds = new Set([...loadedIds, ...appliedIds]);
+    const sourceDiscoveredIds = new Set<string>();
+    for (const ref of selectedRefs) {
+      const id = refId(ref);
+      if (id && sourceDiscoverySatisfiesRef(ref, sourceDiscovery)) {
+        satisfiedSelectedIds.add(id);
+        sourceDiscoveredIds.add(id);
+      }
+    }
+    const guidanceSelectedRefs = selectedRefs.filter((ref) => !sourceDiscoveryCanSatisfyRef(ref));
+    const guidanceSelectedIds = idSet(guidanceSelectedRefs);
+    const usedSelected = intersectionSize(selectedIds, satisfiedSelectedIds);
+    const usefulSelected = intersectionSize(guidanceSelectedIds, appliedIds);
+    const claimedWithEvidence = intersectionSize(claimedIds, new Set([...injectedIds, ...providerNativeIds, ...loadedIds, ...sourceDiscoveredIds]));
     const invalidClaimIds = [...claimedIds].filter((id) => !availableIds.has(id));
-    const unverifiedClaimIds = [...claimedIds].filter((id) => availableIds.has(id) && !injectedIds.has(id) && !providerNativeIds.has(id) && !loadedIds.has(id));
+    const unverifiedClaimIds = [...claimedIds].filter((id) => availableIds.has(id) && !injectedIds.has(id) && !providerNativeIds.has(id) && !loadedIds.has(id) && !sourceDiscoveredIds.has(id));
     const unusedInjectedRefs = injectedRefs.filter((ref) => {
       const id = refId(ref);
       return id && !appliedIds.has(id);
@@ -416,12 +440,12 @@ export class ContextEvaluationService {
     const scores: ScoreSet = {
       precision: ratio(usedSelected, selectedRefs.length),
       completeness: ratio(satisfiedExpected, expectedRefs.length),
-      usefulness: ratio(usefulSelected, selectedRefs.length),
+      usefulness: ratio(usefulSelected, guidanceSelectedRefs.length),
       groundedness: ratio(claimedWithEvidence, claimedIds.size),
       correctness: ratio(Math.max(0, claimedIds.size - invalidClaimIds.length - unverifiedClaimIds.length), claimedIds.size),
-      bloat: ratio(unusedInjectedRefs.length, injectedRefs.length),
+      bloat: injectedRefs.length > 0 ? ratio(unusedInjectedRefs.length, injectedRefs.length) : 0,
       candidateRecall: ratio(selectedRefs.length + rejectedRefs.length, candidateRefs.length || selectedRefs.length + rejectedRefs.length),
-      selectionPrecision: ratio(usefulSelected, selectedRefs.length),
+      selectionPrecision: ratio(usedSelected, selectedRefs.length),
       injectionPrecision: ratio(injectedRefs.length - unusedInjectedRefs.length, injectedRefs.length),
       injectableFulfillment: ratio(injectableRefs.length - unresolvedInjectableRefs.length, injectableRefs.length),
       manifestCompliance: ratio(Math.max(0, claimedIds.size - manifestOnlyClaimIds.length), claimedIds.size),
@@ -432,10 +456,11 @@ export class ContextEvaluationService {
     scores.overall = round((scores.precision + scores.completeness + scores.usefulness + scores.groundedness + scores.correctness + (1 - scores.bloat) + scores.manifestCompliance) / 7);
 
     const diagnostics: Array<Record<string, unknown>> = [];
-    if (scores.precision < 0.5 && selectedRefs.length > 0) diagnostics.push(diagnostic('low_context_precision', 'warn', `Only ${usedSelected}/${selectedRefs.length} selected refs had load/apply evidence.`));
+    if (scores.precision < 0.5 && selectedRefs.length > 0) diagnostics.push(diagnostic('low_context_precision', 'warn', `Only ${usedSelected}/${selectedRefs.length} selected refs had load/apply/source-discovery evidence.`));
     if (scores.completeness < 1 && expectedRefs.length > 0) diagnostics.push(diagnostic('missing_mandatory_context', 'warn', `Only ${satisfiedExpected}/${expectedRefs.length} mandatory refs were injected, provider-native, loaded, or applied.`));
     if (invalidClaimIds.length > 0) diagnostics.push(diagnostic('context_claimed_but_not_selected', 'warn', `Usage claims referenced refs outside selected/available context: ${invalidClaimIds.join(', ')}`, { refIds: invalidClaimIds }));
-    if (unverifiedClaimIds.length > 0) diagnostics.push(diagnostic('unverified_context_claim', 'warn', `Usage claims lacked injection or body-load evidence: ${unverifiedClaimIds.join(', ')}`, { refIds: unverifiedClaimIds }));
+    if (providerNativeRefs.length > 0) diagnostics.push(diagnostic('provider_native_context_available', 'info', `${providerNativeRefs.length} provider-native refs were available through the agent runtime and were not duplicated into Allen full-body injection.`, { refIds: providerNativeRefs.map(refId).filter(Boolean) }));
+    if (unverifiedClaimIds.length > 0) diagnostics.push(diagnostic('unverified_context_claim', 'warn', `Usage claims lacked injection, provider-native, body-load, or source-discovery evidence: ${unverifiedClaimIds.join(', ')}`, { refIds: unverifiedClaimIds }));
     if (unusedInjectedRefs.length > 0) diagnostics.push(diagnostic('injected_context_unused', 'info', `${unusedInjectedRefs.length}/${injectedRefs.length} injected refs had no applied-context evidence.`, { refIds: unusedInjectedRefs.map(refId).filter(Boolean) }));
     if (unresolvedInjectableRefs.length > 0) diagnostics.push(diagnostic('injectable_context_not_injected', 'warn', `${unresolvedInjectableRefs.length}/${injectableRefs.length} injectable refs were not injected or provider-native.`, { refIds: unresolvedInjectableRefs.map(refId).filter(Boolean) }));
     if (scores.bloat > 0.5 && injectedRefs.length > 1) diagnostics.push(diagnostic('context_budget_bloat', 'warn', 'Most injected refs were not applied by the agent.'));
@@ -463,11 +488,23 @@ export class ContextEvaluationService {
         injectable: Boolean(id && injectableIds.has(id)),
         loaded: Boolean(id && loadedIds.has(id)),
         applied: Boolean(id && appliedIds.has(id)),
-        score: Boolean(id && appliedIds.has(id)) ? 1 : Boolean(id && loadedIds.has(id)) ? 0.7 : Boolean(id && injectedIds.has(id)) ? 0.4 : 0,
+        sourceDiscovered: sourceDiscoverySatisfiesRef(ref, sourceDiscovery),
+        score: Boolean(id && appliedIds.has(id)) ? 1 : Boolean(id && loadedIds.has(id)) ? 0.7 : sourceDiscoverySatisfiesRef(ref, sourceDiscovery) ? 0.7 : Boolean(id && providerNativeIds.has(id)) ? 0.6 : Boolean(id && injectedIds.has(id)) ? 0.4 : 0,
       };
     });
+    const contextLifecycle = buildContextLifecycle({
+      selectedRefs,
+      injectableRefs,
+      injectedRefs,
+      providerNativeRefs,
+      loadedRefs: loaded,
+      appliedRefs: claimedUsed,
+      rejectedRefs,
+      skippedRefs,
+      sourceDiscovery,
+    });
 
-    return { scores, diagnostics, refScores };
+    return { scores, diagnostics, refScores, contextLifecycle };
   }
 
   private feedbackDiagnostics(feedbackEvidence: Array<Record<string, unknown>>, selectedIds: Set<string>, injectedIds: Set<string>): Array<Record<string, unknown>> {
@@ -492,15 +529,44 @@ export class ContextEvaluationService {
     deterministic: { scores: ScoreSet; diagnostics: Array<Record<string, unknown>>; refScores: Array<Record<string, unknown>> },
     feedbackEvidence: Array<Record<string, unknown>>,
   ): Promise<SemanticEvaluation> {
+    const llm = resolveContextLlmConfig({ purpose: 'semantic_judge' });
     const payload = {
       taskPrompt: firstString(packet.prompt, (trace?.output as Record<string, unknown> | undefined)?.prompt),
       finalOutput: firstString(trace?.rawResponse, JSON.stringify(trace?.output ?? {})),
       nodeRole: packet.nodeRole,
+      nodeName: packet.nodeName,
+      retrievalProviders: packet.retrievalProviders ?? [],
+      contextInjection: packet.contextInjection,
       selectedRefs: normalizeUsageArray(packet.selectedRefs).slice(0, 20),
+      injectableRefs: normalizeUsageArray(packet.injectableRefs).slice(0, 20),
       injectedRefs: normalizeUsageArray((packet.contextInjection as Record<string, unknown> | undefined)?.injectedRefs).slice(0, 12),
+      providerNativeRefs: [
+        ...normalizeUsageArray((packet.contextInjection as Record<string, unknown> | undefined)?.skippedProviderNativeRefs),
+        ...normalizeUsageArray((packet.contextInjection as Record<string, unknown> | undefined)?.providerNativeRefs),
+      ].slice(0, 12),
+      contextLifecycle: buildContextLifecycle({
+        selectedRefs: normalizeUsageArray(packet.selectedRefs),
+        injectableRefs: normalizeUsageArray(packet.injectableRefs),
+        injectedRefs: normalizeUsageArray((packet.contextInjection as Record<string, unknown> | undefined)?.injectedRefs),
+        providerNativeRefs: [
+          ...normalizeUsageArray((packet.contextInjection as Record<string, unknown> | undefined)?.skippedProviderNativeRefs),
+          ...normalizeUsageArray((packet.contextInjection as Record<string, unknown> | undefined)?.providerNativeRefs),
+        ],
+        loadedRefs: normalizeUsageArray(usageRow.loaded),
+        appliedRefs: normalizeUsageArray(usageRow.claimedUsed),
+        rejectedRefs: normalizeUsageArray(packet.rejectedRefs),
+        skippedRefs: normalizeUsageArray((packet.contextInjection as Record<string, unknown> | undefined)?.skippedRefs),
+        sourceDiscovery: collectSourceDiscoveryEvidence(trace),
+      }).slice(0, 40),
+      sourceDiscoveryEvidence: collectSourceDiscoveryEvidence(trace).slice(0, 20),
       usage: usageRow,
       deterministic,
       feedbackEvidence,
+      judgeUrl: contextJudgeUrl(),
+      judgeSecret: contextJudgeSecret(),
+      provider: llm.provider,
+      model: llm.model,
+      timeoutMs: Number(process.env.ALLEN_DEEPEVAL_JUDGE_TIMEOUT_MS ?? 300_000),
     };
     const result = await runDeepEval(payload);
     return {
@@ -510,6 +576,10 @@ export class ContextEvaluationService {
       completedAt: new Date(),
       scores: isRecord(result.scores) ? result.scores as Partial<ScoreSet> : undefined,
       diagnostics: normalizeUsageArray(result.diagnostics),
+      judgeProvider: firstString(result.judgeProvider),
+      judgeModel: firstString(result.judgeModel),
+      modelProvider: firstString(result.modelProvider),
+      model: firstString(result.model),
     };
   }
 
@@ -638,6 +708,14 @@ function semanticRunningStaleBefore(now: Date): Date {
   return new Date(now.getTime() - safeTimeoutMs);
 }
 
+function semanticSidecarTimeoutMs(): number {
+  const explicit = Number(process.env.ALLEN_DEEPEVAL_TIMEOUT_MS);
+  if (Number.isFinite(explicit) && explicit > 0) return explicit;
+  const judge = Number(process.env.ALLEN_DEEPEVAL_JUDGE_TIMEOUT_MS ?? 300_000);
+  const safeJudge = Number.isFinite(judge) && judge > 0 ? judge : 300_000;
+  return safeJudge + 30_000;
+}
+
 function classifyFeedback(content: string): string {
   const value = content.toLowerCase();
   if (/missing|did not include|not included|forgot|should have used|should read|need(ed)? context|not aware/.test(value)) return 'missing_context';
@@ -646,6 +724,191 @@ function classifyFeedback(content: string): string {
   if (/stale|outdated|old instruction|no longer true/.test(value)) return 'stale_context';
   if (/context helped|used the context|guideline was useful|instruction was useful/.test(value)) return 'useful_context';
   return 'task_issue_not_context_related';
+}
+
+function collectSourceDiscoveryEvidence(trace: Record<string, unknown> | null | undefined): Array<Record<string, unknown>> {
+  const calls = normalizeUsageArray(trace?.toolCalls);
+  return calls
+    .flatMap((call): Array<Record<string, unknown>> => {
+      const tool = firstString(call.tool, call.name);
+      if (!tool || !isSourceDiscoveryTool(tool, call)) return [];
+      const args = isRecord(call.args) ? call.args : {};
+      const paths = extractToolPaths(args, call);
+      const command = firstString(args.command, args.cmd, call.command, call.content);
+      return [{
+        tool,
+        paths,
+        commandPreview: command ? command.slice(0, 300) : undefined,
+        toolUseId: firstString(call.toolUseId, call.toolCallId, call.id),
+      }];
+    });
+}
+
+function isSourceDiscoveryTool(tool: string, call: Record<string, unknown>): boolean {
+  const lower = tool.toLowerCase();
+  if (/(^|__)(read|grep|glob|ls|find)$/.test(lower)) return true;
+  if (/(^|__)(bash|shell|exec_command)$/.test(lower)) {
+    const args = isRecord(call.args) ? call.args : {};
+    const command = firstString(args.command, args.cmd, call.command, call.content) ?? '';
+    return /\b(rg|grep|find|ls|sed|cat|head|tail|git\s+(show|diff|grep))\b/.test(command);
+  }
+  return false;
+}
+
+function extractToolPaths(args: Record<string, unknown>, call: Record<string, unknown>): string[] {
+  const values = [
+    args.path,
+    args.file_path,
+    args.filePath,
+    args.absolute_path,
+    args.relative_path,
+    args.relativePath,
+    args.glob,
+    args.pattern,
+    call.path,
+  ];
+  const paths = values.flatMap((value) => typeof value === 'string' ? [value] : Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string') : []);
+  const command = firstString(args.command, args.cmd, call.command, call.content);
+  if (command) paths.push(...extractPathLikeTokens(command));
+  return Array.from(new Set(paths.map((path) => path.trim()).filter(Boolean))).slice(0, 20);
+}
+
+function extractPathLikeTokens(command: string): string[] {
+  const matches = command.match(/[A-Za-z0-9_./@-]+\.(?:ts|tsx|js|jsx|py|java|go|rs|rb|php|css|scss|html|json|ya?ml|md|sql|sh|bash|zsh|toml|ini|env|Dockerfile)|(?:^|\s)(?:src|packages|apps|tests|test|docs|e2e|\\.claude|\\.github)\/[A-Za-z0-9_./@-]+/g) ?? [];
+  return matches.map((match) => match.trim());
+}
+
+function sourceDiscoveryCanSatisfyRef(ref: Record<string, unknown>): boolean {
+  const itemType = firstString(ref.itemType);
+  const kind = firstString(ref.kind);
+  const path = firstString(ref.path);
+  if (kind === 'source_file' || itemType === 'repo_file' || itemType === 'repo_chunk') return true;
+  if (!path) return false;
+  return /\.(ts|tsx|js|jsx|py|java|go|rs|rb|php|css|scss|html|sql|sh|bash|zsh|json|ya?ml|toml)$/i.test(path)
+    || /(^|\/)(src|packages|apps|tests?|e2e)\//.test(path);
+}
+
+function sourceDiscoverySatisfiesRef(ref: Record<string, unknown>, evidence: Array<Record<string, unknown>>): boolean {
+  if (!sourceDiscoveryCanSatisfyRef(ref)) return false;
+  const path = firstString(ref.path);
+  if (!path || evidence.length === 0) return false;
+  const normalizedPath = normalizeRepoPath(path);
+  const basename = normalizedPath.split('/').pop();
+  return evidence.some((item) => {
+    const paths = Array.isArray(item.paths) ? item.paths.filter((value): value is string => typeof value === 'string') : [];
+    const command = firstString(item.commandPreview) ?? '';
+    return paths.some((candidate) => pathsOverlap(normalizedPath, normalizeRepoPath(candidate)))
+      || command.includes(path)
+      || Boolean(basename && command.includes(basename));
+  });
+}
+
+function pathsOverlap(a: string, b: string): boolean {
+  if (!a || !b) return false;
+  return a === b || a.endsWith(`/${b}`) || b.endsWith(`/${a}`) || a.includes(`/${b}/`) || b.includes(`/${a}/`);
+}
+
+function normalizeRepoPath(path: string): string {
+  return path.replace(/\\/g, '/').replace(/^.*?((?:packages|apps|src|tests?|e2e|docs|\.claude|\.github)\/)/, '$1').replace(/^\.\//, '');
+}
+
+function buildContextLifecycle(input: {
+  selectedRefs: Array<Record<string, unknown>>;
+  injectableRefs: Array<Record<string, unknown>>;
+  injectedRefs: Array<Record<string, unknown>>;
+  providerNativeRefs: Array<Record<string, unknown>>;
+  loadedRefs: Array<Record<string, unknown>>;
+  appliedRefs: Array<Record<string, unknown>>;
+  rejectedRefs: Array<Record<string, unknown>>;
+  skippedRefs: Array<Record<string, unknown>>;
+  sourceDiscovery: Array<Record<string, unknown>>;
+}): Array<Record<string, unknown>> {
+  const byId = new Map<string, Record<string, unknown>>();
+  const ensure = (ref: Record<string, unknown>): Record<string, unknown> | null => {
+    const id = refId(ref);
+    if (!id) return null;
+    const existing = byId.get(id) ?? lifecycleBase(ref);
+    byId.set(id, existing);
+    return existing;
+  };
+  for (const ref of input.selectedRefs) {
+    const row = ensure(ref);
+    if (row) row.selected = true;
+  }
+  for (const ref of input.injectableRefs) {
+    const row = ensure(ref);
+    if (row) row.injectable = true;
+  }
+  for (const ref of input.injectedRefs) {
+    const row = ensure(ref);
+    if (row) row.injected = true;
+  }
+  for (const ref of input.providerNativeRefs) {
+    const row = ensure(ref);
+    if (row) {
+      row.providerNative = true;
+      row.skipReason ??= 'provider_native';
+    }
+  }
+  for (const ref of input.loadedRefs) {
+    const row = ensure(ref);
+    if (row) row.loaded = true;
+  }
+  for (const ref of input.appliedRefs) {
+    const row = ensure(ref);
+    if (row) row.applied = true;
+  }
+  for (const ref of input.rejectedRefs) {
+    const row = ensure(ref);
+    if (row) row.rejected = true;
+  }
+  for (const ref of input.skippedRefs) {
+    const row = ensure(ref);
+    if (row) {
+      row.skipped = true;
+      row.skipReason ??= firstString(ref.skipReason);
+    }
+  }
+  for (const ref of input.selectedRefs) {
+    const id = refId(ref);
+    if (!id) continue;
+    const row = byId.get(id);
+    if (row && sourceDiscoverySatisfiesRef(ref, input.sourceDiscovery)) row.sourceDiscovered = true;
+  }
+  return Array.from(byId.values()).map((row) => ({
+    selected: false,
+    injectable: false,
+    injected: false,
+    providerNative: false,
+    loaded: false,
+    applied: false,
+    sourceDiscovered: false,
+    rejected: false,
+    skipped: false,
+    ...row,
+  }));
+}
+
+function lifecycleBase(ref: Record<string, unknown>): Record<string, unknown> {
+  const metadata = isRecord(ref.providerMetadata) ? ref.providerMetadata : {};
+  const sourceMetadata = isRecord(metadata.sourceMetadata) ? metadata.sourceMetadata : {};
+  return {
+    refId: refId(ref),
+    providerId: firstString(ref.providerId),
+    path: firstString(ref.path, sourceMetadata.path),
+    kind: firstString(ref.kind),
+    itemType: firstString(ref.itemType),
+    title: firstString(ref.title),
+    reason: firstString(ref.reason),
+    skipReason: firstString(ref.skipReason),
+    score: ref.score,
+    injectionDecision: firstString(metadata.injectionDecision, metadata.injectionPolicy),
+    datasetName: firstString(metadata.datasetName),
+    cogneeChunkId: firstString(metadata.cogneeChunkId, metadata.chunkId),
+    cogneeDataId: firstString(metadata.cogneeDataId, sourceMetadata.cogneeDataId),
+    chunkIndex: metadata.chunkIndex,
+    contentSha256: firstString(ref.contentSha256),
+  };
 }
 
 function refId(row: Record<string, unknown>): string | undefined {
@@ -685,7 +948,7 @@ async function runDeepEval(payload: Record<string, unknown>): Promise<Record<str
     const timer = setTimeout(() => {
       child.kill('SIGTERM');
       reject(new Error('DeepEval semantic evaluator timed out'));
-    }, Number(process.env.ALLEN_DEEPEVAL_TIMEOUT_MS ?? 120_000));
+    }, semanticSidecarTimeoutMs());
     child.stdout.on('data', (chunk: Buffer) => (stdout += chunk.toString()));
     child.stderr.on('data', (chunk: Buffer) => (stderr += chunk.toString()));
     child.on('error', (err) => {
@@ -716,4 +979,14 @@ function resolveDeepEvalScript(): string {
     join(process.cwd(), 'src/scripts/deepeval-context-evaluator.py'),
   ];
   return candidates.find((candidate) => existsSync(candidate)) ?? candidates[0];
+}
+
+function contextJudgeUrl(): string {
+  if (process.env.ALLEN_CONTEXT_EVAL_JUDGE_URL) return process.env.ALLEN_CONTEXT_EVAL_JUDGE_URL;
+  const base = process.env.ALLEN_INTERNAL_API_URL ?? `http://127.0.0.1:${process.env.PORT ?? '4000'}`;
+  return `${base.replace(/\/+$/, '')}/api/internal/context-evaluation/judge`;
+}
+
+function contextJudgeSecret(): string | undefined {
+  return process.env.ALLEN_CONTEXT_LLM_SECRET ?? process.env.ALLEN_CONTEXT_EVAL_JUDGE_SECRET ?? process.env.JWT_ACCESS_SECRET;
 }

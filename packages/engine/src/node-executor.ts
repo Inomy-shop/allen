@@ -350,7 +350,7 @@ Your previous response reported or relied on repo context selection/summary, but
 
 Before finalizing:
 - Review the repo context selection already present in this session.
-- For every selected ref, summary, skill, production note, instruction file, doc, or runbook that is relevant enough to influence your reasoning, code, tests, QA, review, or docs, call get_repo_context_body or get_repo_skill_body and read the complete body.
+- For every selected ref, summary, skill, production note, instruction file, doc, runbook, or Cognee ref that is relevant enough to influence your reasoning, code, tests, QA, review, or docs, call get_repo_context_body or get_repo_skill_body and read the complete body.
 - If selected context is insufficient, call search_repo_knowledge, then load any relevant returned full body.
 - If a ref is not relevant, do not load it; put it in context_skipped with a clear reason.
 - Do not report Read/Grep/source-code inspection as context_loaded.

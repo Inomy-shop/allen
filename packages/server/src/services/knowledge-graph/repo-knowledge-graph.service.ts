@@ -26,6 +26,7 @@ import {
   type UsageToolCall,
 } from './repo-knowledge-graph.types.js';
 import { buildIndexerUserPrompt, buildKnowledgeCandidateInventory, buildSpawnedAgentRoleInventory, buildWorkflowRoleInventory, workflowRoleGuidance } from './repo-knowledge-graph-indexer.js';
+import { resolveContextLlmConfig } from '../context-llm-config.js';
 import {
   collectCurrentFiles,
   gitHeadSha,
@@ -80,6 +81,26 @@ const SEARCH_REPO_KNOWLEDGE_LIMIT = 12;
 
 function normalizeGraphMode(value: unknown): KnowledgeGraphMode | null {
   if (value === 'full_graph' || value === 'mandatory_context_map') return value;
+  return null;
+}
+
+function isCogneeRefId(refId: string): boolean {
+  return /^cognee(?::|$)/i.test(refId);
+}
+
+function findPacketRef(packet: Record<string, unknown> | null | undefined, refId: string): Record<string, unknown> | null {
+  if (!packet) return null;
+  const sections = [
+    packet.selectedRefs,
+    packet.injectableRefs,
+    isRecord(packet.contextInjection) ? packet.contextInjection.injectedRefs : undefined,
+    isRecord(packet.contextInjection) ? packet.contextInjection.skippedRefs : undefined,
+  ];
+  for (const section of sections) {
+    for (const item of normalizeUsageArray(section)) {
+      if (firstString(item.refId, item.ref_id, item.id) === refId) return item;
+    }
+  }
   return null;
 }
 
@@ -746,17 +767,37 @@ export class RepoKnowledgeGraphService {
     path: string;
     content: string;
     tokenEstimate: number;
+    providerId?: string;
+    providerMetadata?: Record<string, unknown>;
+    bodySource?: string;
   }> {
-    if (!isGraphContextEnabled()) throw contextProviderDisabledError('Allen context provider is disabled.');
+    if (!isContextEngineEnabled()) throw contextProviderDisabledError('Allen context provider is disabled.');
     const repo = await resolveRepoFromPath(this.db, input.repoPath);
     if (!repo) throw new Error('Repo not found');
     const repoId = String(repo._id);
+    const refId = input.refId?.trim();
+    const requestedPath = input.contextPath?.trim();
+    if (refId) {
+      const cogneeBody = await this.getCogneeContextBodyFromPacket({
+        repoId,
+        repoName: String(repo.name ?? ''),
+        repoPath: input.repoPath,
+        registeredRepoPath: String(repo.path ?? input.repoPath),
+        refId,
+      });
+      if (cogneeBody) return cogneeBody;
+      if (isCogneeRefId(refId)) {
+        throw new Error(`Cognee ref not found in persisted context packets: ${refId}`);
+      }
+    }
+
+    if (!isGraphContextEnabled() && !requestedPath) {
+      throw new Error(`Ref ${refId ?? ''} is not a Cognee ref and Allen graph context is not enabled`);
+    }
     const index = await this.getLatestIndex(repoId);
     if (!index) throw new Error('No knowledge graph index found for repo');
     const indexId = String(index.indexId);
 
-    const refId = input.refId?.trim();
-    const requestedPath = input.contextPath?.trim();
     const node = refId
       ? await this.nodes.findOne({ repoId, indexId, id: refId })
       : requestedPath
@@ -791,6 +832,90 @@ export class RepoKnowledgeGraphService {
       path: contextPath,
       content,
       tokenEstimate: Math.ceil(content.length / 4),
+      bodySource: 'allen_knowledge_graph',
+    };
+  }
+
+  private async getCogneeContextBodyFromPacket(input: {
+    repoId: string;
+    repoName?: string;
+    repoPath: string;
+    registeredRepoPath: string;
+    refId: string;
+  }): Promise<{
+    repoId: string;
+    repoName?: string;
+    indexId: string;
+    refId?: string;
+    kind?: KnowledgeNodeKind;
+    title?: string;
+    path: string;
+    content: string;
+    tokenEstimate: number;
+    providerId?: string;
+    providerMetadata?: Record<string, unknown>;
+    bodySource?: string;
+  } | null> {
+    const packet = await this.packets.findOne(
+      {
+        repoId: input.repoId,
+        $or: [
+          { 'selectedRefs.refId': input.refId },
+          { 'injectableRefs.refId': input.refId },
+          { 'contextInjection.injectedRefs.refId': input.refId },
+        ],
+      },
+      { sort: { createdAt: -1 } },
+    );
+    const ref = findPacketRef(packet, input.refId);
+    if (!ref) return null;
+    const providerId = firstString(ref.providerId);
+    if (providerId !== 'cognee_memory' && !isCogneeRefId(input.refId)) return null;
+
+    const metadata = isRecord(ref.providerMetadata) ? ref.providerMetadata : {};
+    const sourceMetadata = isRecord(metadata.sourceMetadata) ? metadata.sourceMetadata : {};
+    const path = sanitizeRepoRelativePath(firstString(ref.path, sourceMetadata.path) ?? '');
+    const content = firstString(ref.content);
+    if (content) {
+      return {
+        repoId: input.repoId,
+        repoName: input.repoName,
+        indexId: firstString(packet?.indexId) ?? 'cognee',
+        refId: input.refId,
+        kind: normalizeKind(firstString(ref.kind) ?? 'historical_learning') as KnowledgeNodeKind,
+        title: firstString(ref.title),
+        path: path || input.refId,
+        content,
+        tokenEstimate: Math.ceil(content.length / 4),
+        providerId,
+        providerMetadata: metadata,
+        bodySource: 'cognee_context_packet_chunk',
+      };
+    }
+    if (!path) return null;
+
+    const requestedBase = input.repoPath && existsSync(join(input.repoPath, path))
+      ? input.repoPath
+      : input.registeredRepoPath;
+    const absolutePath = join(requestedBase, path);
+    if (!isPathInside(requestedBase, absolutePath)) throw new Error('Resolved Cognee source path escapes repo root');
+    if (!(await isGitTracked(requestedBase, path))) {
+      throw new Error(`Cognee source file is not git-tracked in repo: ${path}`);
+    }
+    const fallbackContent = await readFile(absolutePath, 'utf8');
+    return {
+      repoId: input.repoId,
+      repoName: input.repoName,
+      indexId: firstString(packet?.indexId) ?? 'cognee',
+      refId: input.refId,
+      kind: normalizeKind(firstString(ref.kind) ?? 'doc') as KnowledgeNodeKind,
+      title: firstString(ref.title),
+      path,
+      content: fallbackContent,
+      tokenEstimate: Math.ceil(fallbackContent.length / 4),
+      providerId,
+      providerMetadata: metadata,
+      bodySource: 'cognee_source_file_fallback',
     };
   }
 
@@ -855,7 +980,10 @@ export class RepoKnowledgeGraphService {
       headSha = await gitHeadSha(repoPath);
       const agent = await this.db.collection('agents').findOne({ name: 'repo-knowledge-graph-indexer' });
       if (!agent) throw new Error('repo-knowledge-graph-indexer agent not seeded');
-      model = normalizeModelAlias((agent.model as string) ?? 'sonnet') ?? 'sonnet';
+      const contextLlm = resolveContextLlmConfig({ purpose: 'knowledge_graph_indexer' });
+      model = contextLlm.provider === 'claude-cli'
+        ? normalizeModelAlias(contextLlm.model) ?? normalizeModelAlias((agent.model as string) ?? 'sonnet') ?? 'sonnet'
+        : normalizeModelAlias((agent.model as string) ?? 'sonnet') ?? 'sonnet';
 
       await this.db.collection('executions').insertOne({
         id: executionId,
@@ -865,7 +993,16 @@ export class RepoKnowledgeGraphService {
         status: 'running',
         source: 'chat',
         input: { prompt: `repo-knowledge-graph-index: ${repoName}; mode: ${graphMode}`, agent_name: 'repo-knowledge-graph-indexer', repo_path: repoPath, graph_mode: graphMode },
-        meta: { cwd: repoPath, provider: 'claude', model, spawnedBy: 'repo-knowledge-graph-indexer', graphMode },
+        meta: {
+          cwd: repoPath,
+          provider: 'claude',
+          model,
+          spawnedBy: 'repo-knowledge-graph-indexer',
+          graphMode,
+          contextLlmProvider: contextLlm.provider,
+          contextLlmModel: contextLlm.model,
+          contextLlmApplied: contextLlm.provider === 'claude-cli',
+        },
         state: {},
         sessions: {},
         retryCounts: {},

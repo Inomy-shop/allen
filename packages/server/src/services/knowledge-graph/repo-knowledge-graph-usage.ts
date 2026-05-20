@@ -522,6 +522,14 @@ export function addSystemInjectedContextUsage(usage: ParsedUsage, packet: Record
   if (injectedRefs.length === 0) return;
 
   usage.loaded = mergeUsageArrays(usage.loaded, injectedRefs);
+  const verifiedLoadedRefIds = new Set(usage.loaded.map((item) => firstString(item.refId, item.ref_id)).filter((id): id is string => Boolean(id)));
+  usage.applied = mergeUsageArrays(
+    usage.applied,
+    usage.reportedApplied.filter((item) => {
+      const refId = firstString(item.refId, item.ref_id);
+      return Boolean(refId && verifiedLoadedRefIds.has(refId));
+    }),
+  );
   for (const ref of injectedRefs) {
     if (ref.kind === 'skill' || ref.kind === 'skill_reference') {
       usage.skillBodyLoads = mergeUsageArrays(usage.skillBodyLoads, [{ ...ref, kind: 'skill_body' }]);

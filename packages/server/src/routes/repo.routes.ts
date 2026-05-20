@@ -226,10 +226,10 @@ export function repoRoutes(db: Db): Router {
     }
   });
 
-  // GET /api/repos/context-body?path=...&refId=... — load full repo context file by graph ref.
+  // GET /api/repos/context-body?path=...&refId=... — load full repo context file or selected Cognee ref.
   router.get('/context-body', async (req: Request, res: Response) => {
     try {
-      if (!isGraphContextEnabled()) return res.status(409).json(contextProviderDisabledPayload('Allen context provider is disabled.'));
+      if (!isContextEngineEnabled()) return res.status(409).json(contextProviderDisabledPayload('Allen context provider is disabled.'));
       const path = String(req.query.path ?? '');
       const refId = req.query.refId ? String(req.query.refId) : undefined;
       const contextPath = req.query.contextPath ? String(req.query.contextPath) : undefined;

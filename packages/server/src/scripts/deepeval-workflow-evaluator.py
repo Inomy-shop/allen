@@ -6,6 +6,7 @@ Input is a JSON object on stdin:
     "prompt": "...",
     "judgeUrl": "http://127.0.0.1:4000/api/internal/context-evaluation/judge",
     "judgeSecret": "...",
+    "provider": "codex",
     "model": "gpt-5.5",
     "timeoutMs": 300000
   }
@@ -32,9 +33,10 @@ from typing import Any, Dict, Optional
 class AllenDeepEvalJudge:
     """DeepEval-compatible LLM adapter backed by Allen's internal judge API."""
 
-    def __init__(self, judge_url: str, judge_secret: str, model: str, timeout_ms: int) -> None:
+    def __init__(self, judge_url: str, judge_secret: str, provider: str, model: str, timeout_ms: int) -> None:
         self.judge_url = judge_url
         self.judge_secret = judge_secret.encode("utf-8")
+        self.provider = provider
         self.model = model
         self.timeout_s = max(1, timeout_ms / 1000)
         self.last_response: Dict[str, Any] = {}
@@ -43,10 +45,10 @@ class AllenDeepEvalJudge:
         return self
 
     def get_model_name(self) -> str:
-        return f"allen-codex/{self.model}"
+        return f"allen-{self.provider}/{self.model}"
 
     def generate(self, prompt: str, schema: Optional[Any] = None) -> Any:
-        body = json.dumps({"prompt": prompt, "model": self.model}, separators=(",", ":")).encode("utf-8")
+        body = json.dumps({"prompt": prompt, "provider": self.provider, "model": self.model}, separators=(",", ":")).encode("utf-8")
         timestamp = str(int(time.time()))
         signature = hmac.new(self.judge_secret, timestamp.encode("utf-8") + b"." + body, hashlib.sha256).hexdigest()
         request = urllib.request.Request(
@@ -96,6 +98,7 @@ def main() -> None:
     prompt = str(payload.get("prompt") or "")
     judge_url = str(payload.get("judgeUrl") or "")
     judge_secret = str(payload.get("judgeSecret") or "")
+    provider = str(payload.get("provider") or "codex")
     model = str(payload.get("model") or "gpt-5.5")
     timeout_ms = int(payload.get("timeoutMs") or 300000)
     if not prompt or not judge_url or not judge_secret:
@@ -106,12 +109,12 @@ def main() -> None:
     except Exception as exc:
         raise SystemExit(f"DeepEval is not installed or failed to import: {exc}") from exc
 
-    judge = AllenDeepEvalJudge(judge_url, judge_secret, model, timeout_ms)
+    judge = AllenDeepEvalJudge(judge_url, judge_secret, provider, model, timeout_ms)
     text = judge.generate(prompt)
     result = parse_json_object(text)
     result.setdefault("provider", "deepeval")
     result.setdefault("runner", "python_deepeval")
-    result.setdefault("modelProvider", "allen_codex")
+    result.setdefault("modelProvider", f"allen_{provider}")
     result.setdefault("model", judge.get_model_name())
     result.setdefault("rawJudgeResponse", text)
     result.setdefault("judgeProvider", judge.last_response.get("provider"))

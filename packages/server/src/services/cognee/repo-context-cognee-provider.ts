@@ -16,6 +16,7 @@ import { isRecord } from '../knowledge-graph/repo-knowledge-graph-utils.js';
 import { normalizeUsageArray } from '../knowledge-graph/repo-knowledge-graph-usage.js';
 import { resolveAllenPython } from '../python-runtime.js';
 import { contextProviderDisabledError, isCogneeContextEnabled } from '../context-provider-config.js';
+import { resolveContextLlmConfig } from '../context-llm-config.js';
 import {
   buildCogneeQuery,
   buildGraphExpansionQuery,
@@ -340,12 +341,13 @@ export async function runCogneeSidecar(
   const defaultTimeoutMs = action === 'ingest' ? DEFAULT_COGNEE_INGEST_TIMEOUT_MS : DEFAULT_COGNEE_SEARCH_TIMEOUT_MS;
   const timeoutMs = Number(options.timeoutMs ?? process.env.ALLEN_COGNEE_TIMEOUT_MS ?? defaultTimeoutMs);
   const effectiveTimeoutMs = Number.isFinite(timeoutMs) && timeoutMs > 0 ? timeoutMs : defaultTimeoutMs;
+  const llm = resolveContextLlmConfig({ purpose: 'cognee' });
   const body = {
     action,
     embeddingProvider: process.env.ALLEN_COGNEE_EMBEDDING_PROVIDER ?? 'local',
     embeddingModel: process.env.ALLEN_COGNEE_EMBEDDING_MODEL ?? 'BAAI/bge-small-en-v1.5',
-    llmProvider: process.env.ALLEN_COGNEE_LLM_PROVIDER ?? 'codex',
-    llmModel: process.env.ALLEN_COGNEE_LLM_MODEL ?? 'gpt-5.5',
+    llmProvider: llm.provider,
+    llmModel: llm.model,
     llmUrl: cogneeLlmUrl(),
     llmSecret: cogneeLlmSecret(),
     ...payload,
@@ -674,7 +676,7 @@ function cogneeLlmUrl(): string {
 }
 
 function cogneeLlmSecret(): string | undefined {
-  return process.env.ALLEN_COGNEE_LLM_SECRET ?? process.env.ALLEN_CONTEXT_EVAL_JUDGE_SECRET ?? process.env.JWT_ACCESS_SECRET;
+  return process.env.ALLEN_CONTEXT_LLM_SECRET ?? process.env.ALLEN_COGNEE_LLM_SECRET ?? process.env.ALLEN_CONTEXT_EVAL_JUDGE_SECRET ?? process.env.JWT_ACCESS_SECRET;
 }
 
 function firstString(...values: unknown[]): string | undefined {

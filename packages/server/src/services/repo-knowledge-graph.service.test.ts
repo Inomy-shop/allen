@@ -803,6 +803,63 @@ print(json.dumps({
     expect(stored?.contextBodyLoads).toHaveLength(1);
   });
 
+  it('loads Cognee selected refs through get_repo_context_body without a separate MCP tool', async () => {
+    const previous = process.env.ALLEN_CONTEXT_PROVIDER;
+    process.env.ALLEN_CONTEXT_PROVIDER = 'cognee';
+    await db.collection('node_context_packets').insertOne({
+      packetId: 'packet-cognee-body',
+      executionId: 'exec-cognee-body',
+      workflowName: 'bug-investigate-and-fix',
+      nodeName: 'implement',
+      nodeRole: 'backend-developer',
+      attempt: 1,
+      repoId: String(repoId),
+      repoName: 'fixture-repo',
+      indexId: 'index-1',
+      selectedRefs: [{
+        refId: 'cognee:chunk-payments',
+        kind: 'doc',
+        title: 'Payments Cognee Chunk',
+        path: 'docs/payments-production.md',
+        providerId: 'cognee_memory',
+        itemType: 'repo_chunk',
+        content: 'Cognee recalled exact payment chunk body.',
+        providerMetadata: {
+          datasetName: 'allen-fixture-repo-docmeta-v1',
+          cogneeChunkId: 'chunk-payments',
+          sourceMetadata: {
+            path: 'docs/payments-production.md',
+            fileHash: 'hash-payments',
+          },
+        },
+      }],
+      contextInjection: { injectedRefs: [], skippedRefs: [], totalChars: 0 },
+      createdAt: new Date(),
+    });
+
+    try {
+      const service = new RepoKnowledgeGraphService(db);
+      const result = await service.getContextBody({
+        repoPath,
+        refId: 'cognee:chunk-payments',
+      });
+
+      expect(result).toEqual(expect.objectContaining({
+        refId: 'cognee:chunk-payments',
+        providerId: 'cognee_memory',
+        bodySource: 'cognee_context_packet_chunk',
+        content: 'Cognee recalled exact payment chunk body.',
+        providerMetadata: expect.objectContaining({
+          cogneeChunkId: 'chunk-payments',
+          datasetName: 'allen-fixture-repo-docmeta-v1',
+        }),
+      }));
+    } finally {
+      if (previous === undefined) delete process.env.ALLEN_CONTEXT_PROVIDER;
+      else process.env.ALLEN_CONTEXT_PROVIDER = previous;
+    }
+  });
+
   it('stores summary-only usage separately from loaded context', async () => {
     const service = new RepoKnowledgeGraphService(db);
     await db.collection('node_context_packets').insertOne({

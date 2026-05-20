@@ -205,6 +205,92 @@ describe('ContextEvaluationService', () => {
       expect.objectContaining({ code: 'manifest_ref_used_without_load', refIds: ['manifest-ref'] }),
       expect.objectContaining({ code: 'graph_expansion_noise', rejectedCount: 1 }),
     ]));
+    expect(result?.contextLifecycle).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        refId: 'manifest-ref',
+        providerId: 'cognee_memory',
+        selected: true,
+        applied: true,
+        injected: false,
+        loaded: false,
+        injectionDecision: 'manifest_only',
+      }),
+      expect.objectContaining({
+        refId: 'graph-shadow-ref',
+        providerId: 'cognee_memory',
+        rejected: true,
+      }),
+    ]));
+  });
+
+  it('treats provider-native mandatory refs as available without Allen body injection', async () => {
+    await db.collection('node_context_packets').insertOne({
+      packetId: 'packet-provider-native',
+      executionId: 'exec-provider-native',
+      workflowName: 'bug-investigate-and-fix',
+      nodeName: 'review',
+      nodeRole: 'code-reviewer',
+      attempt: 1,
+      repoId: 'repo-1',
+      repoName: 'fixture-repo',
+      indexId: 'index-1',
+      selectedRefs: [{
+        refId: 'repo:claude-md',
+        kind: 'instruction_file',
+        mandatory: true,
+        path: '.claude/CLAUDE.md',
+        providerId: 'mandatory_graph',
+      }],
+      contextInjection: {
+        injectedRefs: [],
+        skippedProviderNativeRefs: [{
+          refId: 'repo:claude-md',
+          kind: 'instruction_file',
+          mandatory: true,
+          path: '.claude/CLAUDE.md',
+          providerId: 'mandatory_graph',
+          skipReason: 'provider_native',
+        }],
+        totalChars: 0,
+      },
+      createdAt: new Date(),
+    });
+    await db.collection('context_usage_traces').insertOne({
+      traceId: 'usage-provider-native',
+      executionId: 'exec-provider-native',
+      workflowName: 'bug-investigate-and-fix',
+      nodeName: 'review',
+      nodeRole: 'code-reviewer',
+      attempt: 1,
+      packetId: 'packet-provider-native',
+      loaded: [],
+      claimedUsed: [],
+      reportedLoaded: [],
+      reportedApplied: [],
+      skipped: [],
+      validationPerformed: [],
+      createdAt: new Date(),
+    });
+
+    const service = new ContextEvaluationService(db);
+    const result = await service.evaluateUsageTrace({
+      executionId: 'exec-provider-native',
+      nodeName: 'review',
+      attempt: 1,
+      packetId: 'packet-provider-native',
+      usageTraceId: 'usage-provider-native',
+    });
+
+    expect(result?.scores).toEqual(expect.objectContaining({ completeness: 1 }));
+    expect(result?.diagnostics).toEqual(expect.arrayContaining([
+      expect.objectContaining({ code: 'provider_native_context_available', refIds: ['repo:claude-md'] }),
+    ]));
+    expect(result?.refScores).toEqual(expect.arrayContaining([
+      expect.objectContaining({ refId: 'repo:claude-md', providerNative: true, score: 0.6 }),
+    ]));
+    expect(result?.contextLifecycle).toEqual(expect.arrayContaining([
+      expect.objectContaining({ refId: 'repo:claude-md', providerNative: true, selected: true, skipReason: 'provider_native' }),
+    ]));
   });
 
   it('flags injectable refs that were selected for injection but never packed', async () => {
@@ -471,6 +557,111 @@ print(json.dumps({"scores": {"precision": 0.8, "groundedness": 0.9}, "diagnostic
       attempts: 2,
       scores: expect.objectContaining({ usefulness: 1 }),
     }));
+  });
+
+  it('treats direct source file inspection as evidence for source refs', async () => {
+    await db.collection('node_context_packets').insertOne({
+      packetId: 'packet-source-discovery',
+      executionId: 'exec-source-discovery',
+      workflowName: 'bug-investigate-and-fix',
+      nodeName: 'investigate',
+      nodeRole: 'bug-investigator',
+      attempt: 1,
+      repoId: 'repo-1',
+      repoName: 'fixture-repo',
+      indexId: 'index-1',
+      selectedRefs: [{
+        refId: 'source-ref',
+        kind: 'source_file',
+        itemType: 'repo_file',
+        path: 'packages/server/src/services/vendor.service.ts',
+        providerId: 'cognee_memory',
+        providerMetadata: { injectionPolicy: 'manifest_only' },
+      }],
+      contextInjection: { injectedRefs: [], totalChars: 0 },
+      createdAt: new Date(),
+    });
+    await db.collection('context_usage_traces').insertOne({
+      traceId: 'usage-source-discovery',
+      executionId: 'exec-source-discovery',
+      workflowName: 'bug-investigate-and-fix',
+      nodeName: 'investigate',
+      nodeRole: 'bug-investigator',
+      attempt: 1,
+      packetId: 'packet-source-discovery',
+      loaded: [],
+      claimedUsed: [],
+      reportedLoaded: [],
+      reportedApplied: [],
+      skipped: [],
+      validationPerformed: [],
+      createdAt: new Date(),
+    });
+    await db.collection('execution_traces').insertOne({
+      executionId: 'exec-source-discovery',
+      node: 'investigate',
+      agent: 'bug-investigator',
+      type: 'agent',
+      attempt: 1,
+      rawResponse: 'Inspected vendor.service.ts and found the root cause.',
+      toolCalls: [{
+        tool: 'Read',
+        args: { path: 'packages/server/src/services/vendor.service.ts' },
+        toolUseId: 'read-1',
+      }],
+    });
+
+    const service = new ContextEvaluationService(db);
+    const result = await service.evaluateUsageTrace({
+      executionId: 'exec-source-discovery',
+      nodeName: 'investigate',
+      attempt: 1,
+      packetId: 'packet-source-discovery',
+      usageTraceId: 'usage-source-discovery',
+    });
+
+    expect(result?.scores).toEqual(expect.objectContaining({
+      precision: 1,
+      usefulness: 1,
+      selectionPrecision: 1,
+      bloat: 0,
+    }));
+    expect(result?.refScores).toEqual(expect.arrayContaining([
+      expect.objectContaining({ refId: 'source-ref', sourceDiscovered: true, score: 0.7 }),
+    ]));
+    expect((result?.diagnostics as Array<{ code: string }>).map((diag) => diag.code)).not.toContain('low_context_precision');
+  });
+
+  it('drains queued per-node semantic evaluations after reevaluating an execution', async () => {
+    process.env.ALLEN_CONTEXT_SEMANTIC_EVALUATOR = 'deepeval';
+    process.env.ALLEN_CONTEXT_SEMANTIC_MODE = 'per_node';
+    process.env.ALLEN_DEEPEVAL_SCRIPT = writeDeepEvalScript(`
+import json
+print(json.dumps({"scores": {"precision": 1, "usefulness": 1}, "diagnostics": [{"code": "semantic_drained", "severity": "info"}]}))
+`);
+    await insertEvaluationFixture(db, {
+      executionId: 'exec-reeval-drain',
+      packetId: 'packet-reeval-drain',
+      usageTraceId: 'usage-reeval-drain',
+    });
+
+    const service = new ContextEvaluationService(db);
+    await expect(service.reevaluateExecution('exec-reeval-drain')).resolves.toBe(1);
+
+    const deadline = Date.now() + 5000;
+    let stored = await db.collection('context_evaluation_traces').findOne({ packetId: 'packet-reeval-drain' });
+    while (stored?.semantic?.status !== 'completed' && Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      stored = await db.collection('context_evaluation_traces').findOne({ packetId: 'packet-reeval-drain' });
+    }
+
+    expect(stored?.semantic).toEqual(expect.objectContaining({
+      status: 'completed',
+      scores: expect.objectContaining({ precision: 1, usefulness: 1 }),
+    }));
+    expect(stored?.diagnostics).toEqual(expect.arrayContaining([
+      expect.objectContaining({ code: 'semantic_drained' }),
+    ]));
   });
 
   it('rolls node evaluations into execution-level averages and diagnostics', () => {

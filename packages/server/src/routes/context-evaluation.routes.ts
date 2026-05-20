@@ -1,7 +1,8 @@
 import { createHmac, timingSafeEqual } from 'node:crypto';
 import { Router, type Request, type Response } from 'express';
 import type { Db } from 'mongodb';
-import { PROVIDERS, runChatLLM, type ChatProvider } from '../services/chat-llm.js';
+import { runChatLLM } from '../services/chat-llm.js';
+import { resolveContextLlmConfig } from '../services/context-llm-config.js';
 import { isCogneeContextEnabled, isContextEngineEnabled } from '../services/context-provider-config.js';
 
 const MAX_CLOCK_SKEW_MS = 5 * 60_000;
@@ -19,15 +20,18 @@ export function internalContextEvaluationRoutes(db: Db): Router {
       if (!verification.ok) return res.status(verification.status).json({ error: verification.error });
 
       let text = '';
+      const llm = resolveContextLlmConfig({
+        purpose: 'semantic_judge',
+        providerOverride: body.provider,
+        modelOverride: body.model,
+      });
       const result = await runChatLLM(db, {
-        provider: 'codex',
-        model: typeof body.model === 'string'
-          ? body.model
-          : process.env.ALLEN_CONTEXT_SEMANTIC_JUDGE_MODEL ?? 'gpt-5.5',
+        provider: llm.provider,
+        model: llm.model,
         systemPrompt: '',
         messages: [{ role: 'user', content: prompt }],
         skipTools: true,
-        cwd: process.env.ALLEN_CONTEXT_SEMANTIC_JUDGE_CWD ?? '/tmp/allen/context-evaluator',
+        cwd: llm.cwd,
         onText: (chunk) => { text = chunk; },
         onToolStart: () => undefined,
         onToolResult: () => undefined,
@@ -50,21 +54,22 @@ export function internalContextEvaluationRoutes(db: Db): Router {
       const { body, rawBody } = parseSignedJsonBody(req.body);
       const prompt = typeof body.prompt === 'string' ? body.prompt : '';
       if (!prompt.trim()) return res.status(400).json({ error: 'prompt is required' });
-      const verification = verifyJudgeSignature(req, rawBody, process.env.ALLEN_COGNEE_LLM_SECRET);
+      const verification = verifyJudgeSignature(req, rawBody, process.env.ALLEN_CONTEXT_LLM_SECRET ?? process.env.ALLEN_COGNEE_LLM_SECRET);
       if (!verification.ok) return res.status(verification.status).json({ error: verification.error });
 
       let text = '';
-      const provider = resolveCogneeLlmProvider(body.provider);
-      const model = typeof body.model === 'string'
-        ? body.model
-        : process.env.ALLEN_COGNEE_LLM_MODEL ?? 'gpt-5.5';
+      const llm = resolveContextLlmConfig({
+        purpose: 'cognee',
+        providerOverride: body.provider,
+        modelOverride: body.model,
+      });
       const result = await runChatLLM(db, {
-        provider,
-        model,
+        provider: llm.provider,
+        model: llm.model,
         systemPrompt: typeof body.systemPrompt === 'string' ? body.systemPrompt : '',
         messages: [{ role: 'user', content: prompt }],
         skipTools: true,
-        cwd: process.env.ALLEN_COGNEE_LLM_CWD ?? '/tmp/allen/cognee-llm',
+        cwd: llm.cwd,
         onText: (chunk) => { text = chunk; },
         onToolStart: () => undefined,
         onToolResult: () => undefined,
@@ -97,15 +102,18 @@ export function internalContextEvaluationRoutes(db: Db): Router {
         : typeof body.prompt === 'string' ? body.prompt : '';
       if (!prompt.trim()) return res.status(400).json({ error: 'messages or prompt is required' });
       let text = '';
-      const provider = resolveCogneeLlmProvider(body.provider);
-      const model = typeof body.model === 'string' ? body.model : process.env.ALLEN_COGNEE_LLM_MODEL ?? 'gpt-5.5';
+      const llm = resolveContextLlmConfig({
+        purpose: 'cognee',
+        providerOverride: body.provider,
+        modelOverride: body.model,
+      });
       const result = await runChatLLM(db, {
-        provider,
-        model,
+        provider: llm.provider,
+        model: llm.model,
         systemPrompt: '',
         messages: [{ role: 'user', content: prompt }],
         skipTools: true,
-        cwd: process.env.ALLEN_COGNEE_LLM_CWD ?? '/tmp/allen/cognee-llm',
+        cwd: llm.cwd,
         onText: (chunk) => { text = chunk; },
         onToolStart: () => undefined,
         onToolResult: () => undefined,
@@ -127,14 +135,6 @@ export function internalContextEvaluationRoutes(db: Db): Router {
   return router;
 }
 
-function resolveCogneeLlmProvider(override?: unknown): ChatProvider {
-  const raw = typeof override === 'string' && override.trim()
-    ? override.trim()
-    : process.env.ALLEN_COGNEE_LLM_PROVIDER ?? 'codex';
-  const normalized = raw === 'allen_codex' ? 'codex' : raw;
-  return (PROVIDERS.some((provider) => provider.provider === normalized) ? normalized : 'codex') as ChatProvider;
-}
-
 function contextProviderDisabledPayload(error = 'Context provider is disabled. Set ALLEN_CONTEXT_PROVIDER to enable context engine flows.'): Record<string, unknown> {
   return { error, code: 'CONTEXT_PROVIDER_DISABLED' };
 }
@@ -153,7 +153,7 @@ function parseSignedJsonBody(value: unknown): { body: Record<string, unknown>; r
 }
 
 function verifyJudgeSignature(req: Request, rawBody: Buffer, overrideSecret?: string): { ok: true } | { ok: false; status: number; error: string } {
-  const secret = overrideSecret ?? process.env.ALLEN_CONTEXT_EVAL_JUDGE_SECRET ?? process.env.JWT_ACCESS_SECRET;
+  const secret = overrideSecret ?? process.env.ALLEN_CONTEXT_LLM_SECRET ?? process.env.ALLEN_CONTEXT_EVAL_JUDGE_SECRET ?? process.env.JWT_ACCESS_SECRET;
   if (!secret) return { ok: false, status: 503, error: 'context evaluation judge secret is not configured' };
   const timestamp = String(req.header('x-allen-context-eval-timestamp') ?? '');
   const signature = String(req.header('x-allen-context-eval-signature') ?? '');
@@ -176,7 +176,7 @@ function verifyJudgeSignature(req: Request, rawBody: Buffer, overrideSecret?: st
 }
 
 function verifyCogneeOpenAiCompatibleAuth(req: Request, rawBody: Buffer): { ok: true } | { ok: false; status: number; error: string } {
-  const secret = process.env.ALLEN_COGNEE_LLM_SECRET ?? process.env.ALLEN_CONTEXT_EVAL_JUDGE_SECRET ?? process.env.JWT_ACCESS_SECRET;
+  const secret = process.env.ALLEN_CONTEXT_LLM_SECRET ?? process.env.ALLEN_COGNEE_LLM_SECRET ?? process.env.ALLEN_CONTEXT_EVAL_JUDGE_SECRET ?? process.env.JWT_ACCESS_SECRET;
   const auth = String(req.header('authorization') ?? '');
   if (secret && auth === `Bearer ${secret}`) return { ok: true };
   return verifyJudgeSignature(req, rawBody, secret);
