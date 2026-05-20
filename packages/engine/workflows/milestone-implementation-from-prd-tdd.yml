@@ -1,18 +1,31 @@
 name: milestone-implementation-from-prd-tdd
 description: >
-  Milestone-based implementation workflow. Required inputs are task and repo_path. Optional PRD/TDD may be provided as
-  artifact URLs or inline text. The workflow creates a workspace, plans properly sized milestones, then implements one
-  milestone at a time. Each milestone includes implementation, test writing, validation, and code review before it can
-  be marked complete. After all milestones complete, a final implementation validator checks cross-milestone PRD/TDD
-  coverage, then PR creation and final summary run.
+  Milestone-based implementation workflow with simplified routing.
 
-  Artifact-read convention: artifact URLs in this workflow are
-  http://.../api/artifacts/<id>/content. To read an artifact, use
-  mcp__allen__allen_get_artifact(artifact_id=<id>) — extract <id> from the
-  URL (segment between /artifacts/ and /content), or use the
-  upstream-artifacts index the engine auto-injects into every agent's
-  context. Agents save with mcp__allen__allen_save_artifact.
-version: 4
+  Pipeline:
+    1. load_implementation_context normalizes PRD/TDD into resolved artifacts.
+    2. create_workspace creates an isolated git worktree.
+    3. milestone_planner produces an ordered, sized milestone plan.
+    4. select_next_milestone picks the next pending milestone.
+    5. milestone_implementer plans tasks INTERNALLY, dispatches specialists,
+       writes tests, self-judges, and self-repairs in a single call.
+    6. milestone_validator confirms the milestone and marks it complete
+       INTERNALLY on pass (no separate mark_complete node).
+    7. When all normal milestones are complete, final_implementation_validator
+       checks cross-milestone PRD/TDD coverage. On failure it emits a
+       self-contained final_repair milestone that loops back through the
+       implementer; on pass, pr_creator opens the PR.
+    8. final_summary posts the workflow's primary deliverable.
+
+  Routing flag: current_milestone_kind ∈ {normal, final_repair} determines
+  whether milestone_implementer routes to milestone_validator (normal) or
+  back to final_implementation_validator (final_repair).
+
+  Artifact-read convention: artifact URLs are
+  http://.../api/artifacts/<id>/content. Read with
+  mcp__allen__allen_get_artifact(artifact_id=<id>). Agents save with
+  mcp__allen__allen_save_artifact.
+version: 5
 context:
   requires:
     - repo
@@ -47,13 +60,13 @@ input:
     required: false
     widget: text
     label: PRD artifact URL (or combined PRD+TDD URL)
-    description: Optional URL to a markdown artifact. May contain PRD only, TDD only, or both combined. The normalizer fetches it. Use this slot for the combined case.
+    description: Optional URL to a markdown artifact. May contain PRD only, TDD only, or both combined.
   tdd_artifact_url:
     type: string
     required: false
     widget: text
     label: TDD artifact URL (only when separate from PRD)
-    description: Optional separate TDD artifact URL. Set only when the PRD and TDD are in DIFFERENT files. Leave blank when they're combined into prd_artifact_url.
+    description: Optional separate TDD artifact URL. Only set when PRD and TDD are in DIFFERENT files.
   context:
     type: string
     required: false
@@ -63,130 +76,67 @@ input:
 nodes:
   load_implementation_context:
     agent: requirements-analyst
-    prompt: >
-      Resolve the implementation handoff to TWO SEPARATE artifacts: one
-      PRD artifact, one TDD artifact. Whichever channel the user used to
-      deliver design content (inline in task, embedded URLs in task,
-      dedicated input fields, or any combination), this node outputs
-      ONE clean PRD URL and ONE clean TDD URL. Downstream nodes read
-      design from those two URLs SEPARATELY — PRD answers "what to build",
-      TDD answers "how to build".
+    prompt: |
+      Resolve the implementation handoff into TWO SEPARATE artifacts: one
+      PRD artifact, one TDD artifact. Whichever channel(s) the user used
+      (inline in task, embedded URLs in task, dedicated input fields, or
+      any combination), output ONE clean PRD URL and ONE clean TDD URL.
 
       Do NOT inline PRD or TDD body into your JSON output. Save as
       artifacts and return only URLs + small primitives.
 
-
       TASK (may include PRD/TDD inline AND/OR artifact URLs):
-
       {{task}}
 
-
       REPO PATH:
-
       {{repo_path}}
 
-
-      PRD ARTIFACT URL — dedicated input slot. May be PRD-only OR a
-      combined PRD+TDD file (user dropped it here for convenience):
-
+      PRD ARTIFACT URL (dedicated input — may be PRD-only OR combined):
       {{prd_artifact_url}}
 
-
-      TDD ARTIFACT URL — dedicated input slot. Only set when PRD/TDD are
-      in DIFFERENT files; leave blank when combined into prd_artifact_url:
-
+      TDD ARTIFACT URL (dedicated input — only set when separate file):
       {{tdd_artifact_url}}
 
-
       EXTRA CONTEXT:
-
       {{context}}
 
+      DESIGN SOURCES — collect from all of these channels:
+        A. `task` field — INLINE sections (heading-style) AND embedded
+           artifact URLs (`/api/artifacts/<id>/content`).
+        B. `prd_artifact_url` input.
+        C. `tdd_artifact_url` input.
 
-      DESIGN SOURCES — collect from any/all of these channels:
+      DE-DUPE: fetch the same URL only once.
+      CONFLICT: prefer dedicated input fields; flag divergence in a
+      "Caveats" section in the saved artifact.
 
-      A. The `task` field can include design content in TWO ways:
+      Save PRD with:
+        mcp__allen__allen_save_artifact("implementation/00a-prd.md", <markdown>, content_type="markdown", overwrite=true)
+      Put returned publicUrl in resolved_prd_artifact_url.
 
-         (a) INLINE sections. Markdown headings like "PRD", "Product
-             Requirements", "Acceptance Criteria", "Requirements" → PRD
-             content.
-             Headings like "TDD", "Technical Design", "Architecture",
-             "Schema", "API contracts", "Data flow" → TDD content.
+      Save TDD with:
+        mcp__allen__allen_save_artifact("implementation/00b-tdd.md", <markdown>, content_type="markdown", overwrite=true)
+      Put returned publicUrl in resolved_tdd_artifact_url.
 
-         (b) EMBEDDED URLs. The task may reference artifact URLs (e.g.
-             "implement the PRD at http://host/api/artifacts/abc/content").
-             Scan the task for URLs matching /api/artifacts/<id>/content
-             and fetch each one via mcp__allen__allen_get_artifact. Classify by content (PRD vs TDD).
+      MISSING rule: if a channel produced nothing, derive a minimal
+      doc from `task` + `context` and add a "## Caveats" section.
 
-      B. `prd_artifact_url` input — mcp__allen__allen_get_artifact. May be PRD-only or combined
-         PRD+TDD (split if combined).
-
-      C. `tdd_artifact_url` input — fetch IF set via mcp__allen__allen_get_artifact and different URL from
-         prd_artifact_url.
-
-      DE-DUPE: if the same URL appears in multiple channels, fetch once.
-
-      CONFLICT: if different channels each provide a "PRD" with divergent
-      content, prefer the dedicated input field (prd_artifact_url) over
-      task-embedded content. Flag the divergence in a "Caveats" section
-      of the saved PRD artifact. Same precedence for TDD.
-
-      WRITE THE PROPER ARTIFACTS:
-
-      1. PRD artifact. Save the resolved PRD content (extracted, merged
-         from the channels above, OR derived from task if nothing else):
-            mcp__allen__allen_save_artifact("implementation/00a-prd.md", <prd markdown>,
-                                content_type="markdown", overwrite=true)
-         Put the returned publicUrl in resolved_prd_artifact_url.
-
-      2. TDD artifact. Save the resolved TDD content:
-            mcp__allen__allen_save_artifact("implementation/00b-tdd.md", <tdd markdown>,
-                                content_type="markdown", overwrite=true)
-         Put the returned publicUrl in resolved_tdd_artifact_url.
-
-      MISSING rule:
-        - If NO PRD content found anywhere: derive a minimal PRD from
-          task + context, save it anyway, AND include a top-level
-          "## Caveats" section in the artifact noting "PRD derived from
-          task — no explicit PRD was provided" so the human knows to review.
-        - Same for TDD.
-
-      OPTIMIZATION:
-        - If `prd_artifact_url` is already a clean PRD-only artifact that
-          you can pass through unchanged, you may set
-          resolved_prd_artifact_url = prd_artifact_url instead of re-saving.
-          Same for TDD. Only re-save when you split a combined file,
-          extracted from inline task content, derived from scratch, or
-          merged divergent sources.
-
-      Extract small primitives (REQ IDs, AC IDs, constraints, risks) from
-      the resolved PRD and TDD for downstream routing.
-
-      Do not implement and do not create a workspace.
-
+      OPTIMIZATION: if `prd_artifact_url` is already PRD-only and clean,
+      you may pass it through unchanged. Same for TDD.
 
       End with a fenced JSON block containing EXACTLY these keys:
-
       ```json
       {
-        "normalized_task": "one-paragraph statement of what to build (NOT the full PRD/TDD body even if the raw task contained them)",
-        "resolved_prd_artifact_url": "<publicUrl of PRD artifact>",
-        "resolved_tdd_artifact_url": "<publicUrl of TDD artifact>"
+        "normalized_task": "one-paragraph statement of what to build",
+        "resolved_prd_artifact_url": "<publicUrl>",
+        "resolved_tdd_artifact_url": "<publicUrl>"
       }
       ```
-
-      All other detail lives inside the saved artifacts:
-        - PRD artifact MUST include sections for "Requirements" (with
-          stable REQ-IDs), "Acceptance criteria" (with AC-IDs mapped to
-          REQ-IDs), and any "Caveats" (missing/divergent inputs).
-        - TDD artifact MUST include "Constraints", "Risks", and any
-          "Caveats" sections.
-      Downstream nodes fetch these artifacts via mcp__allen__allen_get_artifact when they need detail.
-      Workflow state holds only the small routing primitives above.
     outputs:
-      normalized_task: One-paragraph cleaned task statement — used as a label/title in downstream prompts. NEVER the full PRD/TDD body.
-      resolved_prd_artifact_url: Public URL of the resolved PRD markdown. Always set. Contains Requirements + Acceptance Criteria + Caveats. Every downstream node fetches this via mcp__allen__allen_get_artifact.
-      resolved_tdd_artifact_url: Public URL of the resolved TDD markdown. Always set. Contains Constraints + Risks + Caveats. Every downstream node fetches this via mcp__allen__allen_get_artifact.
+      normalized_task: "One-paragraph cleaned task statement — used as a label in downstream prompts."
+      resolved_prd_artifact_url: "Public URL of the resolved PRD markdown. Always set."
+      resolved_tdd_artifact_url: "Public URL of the resolved TDD markdown. Always set."
+
   create_workspace:
     type: code
     function: create-workspace
@@ -194,608 +144,405 @@ nodes:
       wait_for_setup: true
       timeout_sec: 600
     outputs:
-      workspace_id: Internal Allen workspace identifier.
-      worktree_path: Absolute isolated git worktree path.
-      branch: Generated branch name.
-      branch_name: Alias of branch.
-      base_branch: Branch the worktree was cut from.
-      status: Workspace setup status.
-      repo_path: Alias of worktree_path for downstream agents.
+      workspace_id: "Internal Allen workspace identifier."
+      worktree_path: "Absolute isolated git worktree path."
+      branch: "Generated branch name."
+      branch_name: "Alias of branch."
+      base_branch: "Branch the worktree was cut from."
+      status: "Workspace setup status."
+      repo_path: "Alias of worktree_path."
+
   milestone_planner:
     agent: engineering-lead
-    prompt: >
-      Plan implementation milestones using the RALPH pattern. Produce milestones only, not all low-level tasks.
-
+    prompt: |
+      Plan implementation milestones using the RALPH pattern. Produce
+      milestones only, not low-level tasks.
 
       TASK:
-
       {{normalized_task}}
 
-
-      📄 PRD ARTIFACT — fetch via mcp__allen__allen_get_artifact for requirements (REQ-IDs), acceptance criteria (AC-IDs), and "what to build":
-
+      📄 PRD ARTIFACT (fetch via mcp__allen__allen_get_artifact for REQ/AC ids and "what to build"):
       {{resolved_prd_artifact_url}}
 
-
-      📄 TDD ARTIFACT — fetch via mcp__allen__allen_get_artifact for constraints, technical risks, and "how to build" (schema, APIs, files):
-
+      📄 TDD ARTIFACT (fetch via mcp__allen__allen_get_artifact for schema/APIs/files and "how to build"):
       {{resolved_tdd_artifact_url}}
 
-
       WORKTREE PATH:
-
       {{worktree_path}}
 
-
-      Milestone sizing rules — pick the count by sizing the work first:
-
-      STEP A — size the feature/bug. Read the PRD and TDD artifacts above
-      and classify the work as small / medium / large using these signals:
-
-        SMALL  — single-subsystem, ≤3 PRD requirements, ≤5 acceptance
-                 criteria, ≤5 files in the TDD, no schema/API changes,
-                 no migration, no security-sensitive surface, no
-                 cross-service contract.
-                 Examples: bug fix, copy/UI tweak, config flag, small
-                 helper, one-endpoint addition with no schema impact.
-
-        MEDIUM — single subsystem with contained blast radius. 4-8
-                 requirements, 6-12 AC, 6-12 files in TDD. May include
-                 one new endpoint OR one schema addition (not both).
-                 No cross-service migration.
-
-        LARGE  — cross-subsystem, regression risk, security/privacy
-                 sensitive, data migration, third-party contract, or
-                 broad feature surface. >8 requirements, >12 files in
-                 TDD, OR explicitly flagged risky in PRD/TDD.
-
-      STEP B — produce the exact milestone count from the table:
-
-        SMALL  → exactly 1 milestone covering the whole feature/bug.
-                 Bundle impl + tests + validation + review into one slice.
-        MEDIUM → 2 milestones. Typical split: (1) data layer / contracts,
-                 (2) handler / UI / integration. Or any other clean cut.
-        LARGE  → 3-5 milestones, picked by the size signals:
-                  • 3 if all the work fits in a single subsystem but
-                    touches many files / multiple AC.
-                  • 4 if the work spans two subsystems OR includes a
-                    migration + feature pair.
-                  • 5 if it spans three+ subsystems, has phased rollout,
-                    or has independent risk surfaces (security review,
-                    perf review, data migration verification).
-                 NEVER more than 5 — that's the workflow's loop budget.
-
-      Record your sizing decision in the SAVED milestone-plan artifact
-      under a "## Sizing rationale" section. Include the size class
-      (small/medium/large), the signals you used, and the chosen
-      milestone count. Example:
-        "MEDIUM — 6 requirements, 9 AC, 8 files touched, single schema
-        addition → 2 milestones."
-      Workflow state does NOT carry this rationale (it lives in the
-      artifact only — same rule as PRD/TDD content).
+      Milestone sizing rules:
+        STEP A — size the feature/bug as small | medium | large from PRD/TDD
+                 signals (requirement count, AC count, file count,
+                 schema/migration risk, security-sensitivity, etc.).
+        STEP B — milestone count:
+          SMALL  → 1 milestone (bundle impl + tests + validation).
+          MEDIUM → 2 milestones (data layer / surface; or any clean cut).
+          LARGE  → 3-5 milestones (one per subsystem or rollout phase).
+                   HARD CAP: never more than 5. The workflow's loop
+                   budget for cross-milestone progression is 5.
 
       Hard constraints:
+        - Every milestone includes impl, tests, validation, and review.
+        - Every requirement and AC maps to at least one milestone.
+        - Each milestone is independently verifiable.
+        - Do NOT split a SMALL ask into multiple milestones to "look thorough".
 
-      - HARD CAP: at most 5 milestones. The workflow's loop budget is 5.
-        Generating more will cause the run to halt after the 5th completes.
+      Save the full milestone plan:
+        mcp__allen__allen_save_artifact("implementation/01-milestone-plan.md", <markdown>, content_type="markdown", overwrite=true)
+      The artifact MUST include: the ordered milestone list (scope,
+      expected files, AC coverage, tests, validation, review checklist),
+      a "## Sizing rationale" section, and the requirement coverage
+      matrix. Workflow state holds only the status map + URL.
 
-      - Every milestone must include implementation, tests, validation, and code-review expectations.
-
-      - Every requirement and acceptance criterion must map to at least one milestone.
-
-      - Each milestone must be independently verifiable before moving on.
-
-      - Do NOT split a small bug/feature into multiple milestones to
-        "look thorough" — one milestone is the correct answer when the
-        sizing signals say SMALL.
-
-
-      Save with mcp__allen__allen_save_artifact using filename "implementation/01-milestone-plan.md", content_type="markdown",
-      overwrite=true. The artifact must contain the full ordered milestone
-      list (scope, expected files, AC coverage, tests, validation, review
-      checklist), the sizing rationale, and the requirement coverage matrix
-      — those details live in the artifact only, not in workflow state.
-      Put the returned publicUrl in milestone_plan_artifact_url.
-
-
-      End with JSON keys: milestone_state, milestone_plan_artifact_url.
+      End with a fenced JSON block containing EXACTLY these keys.
+      `milestone_state` MUST contain one entry per planned milestone,
+      all set to `"pending"` initially:
+      ```json
+      {
+        "milestone_state": { "MS-001": "pending", "MS-002": "pending" },
+        "milestone_plan_artifact_url": "<publicUrl from allen_save_artifact>"
+      }
+      ```
     outputs:
-      milestone_state: "Mutable status map only: { <milestone_id>: pending|in_progress|complete|blocked, repair_queue: [...] }. Keep small."
-      milestone_plan_artifact_url: Public artifact URL for full milestone plan. Downstream nodes fetch this via mcp__allen__allen_get_artifact when they need the full breakdown.
+      milestone_state: "Small mutable status map: { <milestone_id>: pending|in_progress|complete|blocked }."
+      milestone_plan_artifact_url: "Public artifact URL for full milestone plan."
+
   select_next_milestone:
     agent: engineering-lead
     resume_on_retry: false
-    prompt: >
-      Select the next unfinished milestone. Do not implement.
+    prompt: |
+      Pick the next milestone to work on. Do not implement.
 
-
-      📄 MILESTONE PLAN ARTIFACT (fetch via mcp__allen__allen_get_artifact for the full ordered milestone list):
-
+      📄 MILESTONE PLAN ARTIFACT (fetch via mcp__allen__allen_get_artifact for the full ordered list):
       {{milestone_plan_artifact_url}}
 
-
-      MILESTONE STATE (small status map):
-
+      MILESTONE STATE:
       {{milestone_state}}
 
+      Selection rules — evaluate IN THIS ORDER, return on first match:
+        1. PENDING — if at least one milestone has status `pending` or
+           `in_progress`, pick the FIRST such milestone in plan order.
+           Set milestone_selection_status = "pending" and emit
+           `current_milestone` + `current_milestone_id` +
+           `current_milestone_kind: normal`.
+        2. BLOCKED — else if at least one milestone has status `blocked`:
+           set milestone_selection_status = "blocked".
+        3. ALL_COMPLETE — else (every milestone is `complete`):
+           set milestone_selection_status = "all_complete".
+        Order matters: blocked is only reported when no pending work
+        remains; all_complete is only reported when nothing is blocked.
 
-      FINAL REPAIR MILESTONE, IF ANY:
+      End with a fenced JSON block containing EXACTLY:
+      ```json
+      {
+        "milestone_selection_status": "pending | all_complete | blocked",
+        "current_milestone_id": "MS-001 or empty when all_complete/blocked",
+        "current_milestone_kind": "normal",
+        "current_milestone": { },
+        "milestone_state": { }
+      }
+      ```
 
-      {{final_repair_milestone}}
+      {{#if retry_context}}
+      RETRY FEEDBACK (from human override after a blocked-selection escalation):
+      {{retry_context}}
 
-
-      Rules:
-
-      - If final_repair_milestone exists, select it as the current repair milestone.
-
-      - Otherwise pick the first milestone not complete and not blocked.
-
-      - If no milestone remains, set all_milestones_complete=true.
-
-      - If a milestone is too broad, split it in milestone_state before selecting.
-
-      - If a milestone is too tiny and adjacent to related work, merge it in milestone_state before selecting.
-
-
-      End with JSON keys: all_milestones_complete, current_milestone_id, current_milestone, milestone_state.
+      Apply the human's guidance when re-evaluating milestone_state. If the
+      feedback unblocks a previously-blocked milestone, advance that one.
+      {{/if}}
     outputs:
-      all_milestones_complete: Boolean — true when no milestone remains. Drives select_next_milestone's outgoing edge.
-      current_milestone_id: Selected milestone ID.
-      current_milestone: Selected milestone object (small).
-      milestone_state: Updated milestone status map.
-  milestone_task_planner:
-    agent: engineering-lead
-    prompt: >
-      Generate detailed tasks only for the selected milestone.
+      milestone_selection_status: "pending | all_complete | blocked — drives outgoing edge."
+      current_milestone_id: "ID of selected milestone (empty when all_complete or blocked)."
+      current_milestone_kind: "Always 'normal' here. The flag is set to 'final_repair' by final_implementation_validator on failure."
+      current_milestone: "The selected milestone object (small) sufficient for the implementer."
+      milestone_state: "Updated status map."
 
-
-      CURRENT MILESTONE:
-
-      {{current_milestone}}
-
-
-      TASK:
-
-      {{normalized_task}}
-
-
-      📄 PRD ARTIFACT (fetch via mcp__allen__allen_get_artifact for AC + behavior for this milestone):
-
-      {{resolved_prd_artifact_url}}
-
-
-      📄 TDD ARTIFACT (fetch via mcp__allen__allen_get_artifact for schema/API/file targets for this milestone):
-
-      {{resolved_tdd_artifact_url}}
-
-
-      WORKTREE PATH:
-
-      {{worktree_path}}
-
-
-      Output task categories:
-
-      - implementation_tasks
-
-      - test_tasks
-
-      - validation_tasks
-
-      - code_review_checklist
-
-
-      Rules:
-
-      - Do not include tasks outside the current milestone.
-
-      - Include expected files, owner specialist, commands to run, and acceptance criteria covered.
-
-      - If current milestone is too small or too large, adjust milestone_state and explain.
-
-
-      Save with mcp__allen__allen_save_artifact using filename
-      "implementation/milestones/{{current_milestone_id}}-task-plan.md",
-      content_type="markdown", overwrite=true. The artifact must contain
-      the FULL task breakdown (implementation_tasks, test_tasks,
-      validation_tasks, code_review_checklist) plus any split/merge scope
-      adjustment notes. Workflow state holds only the URL.
-      Put the returned publicUrl in milestone_task_plan_artifact_url.
-
-
-      End with JSON keys: milestone_task_plan_artifact_url, milestone_state.
-    outputs:
-      milestone_task_plan_artifact_url: Public artifact URL for current milestone task plan. Downstream nodes fetch this via mcp__allen__allen_get_artifact.
-      milestone_state: Updated milestone state.
-    session_key: milestone_task_planner:{{current_milestone_id}}
   milestone_implementer:
     agent: engineering-lead
     resume_on_retry: true
-    prompt: >
-      Orchestrate the full per-milestone implementation cycle in one node:
-      dispatch implementation specialists, spawn test-writer for the
-      milestone's tests, then spawn code-reviewer for the diff. Aggregate
-      results and emit one unified output.
-
+    prompt: |
+      Plan, implement, test, and self-validate the current milestone in
+      one node call. There is NO external self-loop — repair internally
+      until the milestone is `ready_for_validation` or `blocked`.
 
       WORKTREE PATH:
-
       {{worktree_path}}
 
-
+      CURRENT MILESTONE ID:   {{current_milestone_id}}
+      CURRENT MILESTONE KIND: {{current_milestone_kind}}
       CURRENT MILESTONE:
-
       {{current_milestone}}
 
-
-      📄 MILESTONE TASK PLAN ARTIFACT (fetch via mcp__allen__allen_get_artifact for the full implementation/test/validation/review task list):
-
-      {{milestone_task_plan_artifact_url}}
-
-
-      📄 PRD ARTIFACT — fetch via mcp__allen__allen_get_artifact for the AC the current milestone must satisfy:
-
+      📄 PRD ARTIFACT (fetch via mcp__allen__allen_get_artifact for AC the milestone must satisfy):
       {{resolved_prd_artifact_url}}
 
-
-      📄 TDD ARTIFACT — fetch via mcp__allen__allen_get_artifact for schema/API/file targets for the milestone:
-
+      📄 TDD ARTIFACT (fetch via mcp__allen__allen_get_artifact for schema/API/file targets):
       {{resolved_tdd_artifact_url}}
 
+      Step 1 — TASK PLAN (internal):
+        Break the milestone into implementation tasks, test tasks, and a
+        review checklist. Note expected files, owner specialists,
+        validation commands, and AC coverage. This planning lives in
+        your own context — do not save a separate task-plan artifact.
 
-      Step 1 — IMPLEMENTATION (dispatch via spawn_agent):
+      Step 2 — IMPLEMENT (spawn_agent):
+        Group tasks by specialty. Spawn backend-developer /
+        frontend-developer / devops-engineer / security-specialist with
+        repo_path={{worktree_path}}. Wait for each spawn. On a
+        specialist failure, retry that specialist ONCE with the error
+        as context.
 
-      - Group implementation_tasks by specialty.
+      Step 3 — TEST WRITING (spawn test-writer):
+        Spawn test-writer with repo_path={{worktree_path}} and the
+        milestone's AC ids + files changed. Tests must map to the
+        milestone's AC only — do not rewrite unrelated tests.
 
-      - Spawn the right specialist(s) per group: backend-developer,
-        frontend-developer, devops-engineer, security-specialist.
+      Step 4 — INTERNAL CODE REVIEW (spawn code-reviewer):
+        Spawn code-reviewer for the diff. If it returns REQUEST_CHANGES,
+        you MUST do ONE internal repair round (re-spawn the
+        implementation specialist with feedback, then re-spawn
+        code-reviewer once). If code-reviewer still returns
+        REQUEST_CHANGES after that single repair round, set
+        implementer_status = "blocked" and capture the unresolved findings
+        in `blockers`. Do NOT proceed to Step 5 with an unaddressed
+        REQUEST_CHANGES.
 
-      - Pass repo_path={{worktree_path}} and the milestone's specific
-        files/AC/tasks to each specialist.
+      Step 5 — SELF-VALIDATE (READ-ONLY):
+        - `git diff --name-only` to confirm planned files were touched.
+        - Each AC has at least one implementation touchpoint OR is marked
+          not_applicable with a reason.
+        - codebase-navigator (if you used one) did NOT write files.
+        - Build/lint/typecheck commands enumerable for the validator.
 
-      - Wait for each spawn via wait_for_execution. On specialist failure,
-        retry that specialist ONCE with the error output as context.
+        BUDGET: you may return to Step 2 AT MOST TWICE within this single
+        node call if self-validation surfaces fixable gaps. On the third
+        round of unresolved gaps, set implementer_status = "blocked" with
+        the remaining gaps captured in `blockers`. NEVER emit
+        `ready_for_validation` while a known gap remains.
 
-      - Collect: files changed, implementation notes.
+      Final verdict:
+        ready_for_validation → all steps green, downstream validator runs.
+        blocked              → unrecoverable inside this call (specialist
+                               cannot fix, missing infra, design
+                               contradiction). Capture in `blockers`.
 
+      Save the full implementation artifact:
+        mcp__allen__allen_save_artifact("implementation/milestones/{{current_milestone_id}}.md", <markdown>, content_type="markdown", overwrite=true)
+      The artifact MUST hold: the internal task plan, implementation
+      summary, test summary, review summary, self-validation summary,
+      and any blockers. Workflow state holds only the URL + routing
+      primitives.
 
-      Step 2 — TEST WRITING (spawn test-writer):
+      Copy `publicUrl` into JSON as `implementation_artifact_url`.
 
-      - Call spawn_agent with agent="test-writer" and repo_path={{worktree_path}}.
-
-      - Pass: current milestone, milestone test_tasks, files changed in Step 1,
-        and the acceptance_criteria for this milestone only.
-
-      - Test-writer must add/update unit/integration/e2e tests appropriate to
-        the milestone scope. Do not rewrite unrelated tests.
-
-      - Tests must map to current milestone acceptance criteria.
-
-      - Wait for completion. Collect: test files written/updated, AC coverage,
-        test notes.
-
-
-      Step 3 — INTERNAL CODE REVIEW (spawn code-reviewer):
-
-      - Call spawn_agent with agent="code-reviewer" and repo_path={{worktree_path}}.
-
-      - Pass: current milestone, files changed (impl + tests), validation
-        report context if available, and the milestone's review_checklist
-        from task plan.
-
-      - Code-reviewer applies the standard rubric: correctness against AC,
-        repo conventions, test quality, maintainability, security, and
-        no-scope-creep.
-
-      - Wait for completion. Collect: review_verdict (APPROVED | REQUEST_CHANGES),
-        findings, and any required repair items.
-
-      - If review_verdict is REQUEST_CHANGES, you MAY do ONE internal repair
-        round (re-spawn the implementation specialist with the review feedback
-        + re-spawn code-reviewer). If review still fails after the internal
-        round, emit milestone_self_judge="fail" and propagate the repair
-        items via milestone_review_repair_items.
-
-
-      Step 4 — SELF JUDGE:
-
-      - milestone_self_judge=pass when implementation status==implemented AND
-        test status==written AND review_verdict==APPROVED.
-
-      - milestone_self_judge=fail otherwise — downstream milestone_validator
-        will be skipped; workflow routes straight to milestone_repair_planner
-        with your review_repair_items in context.
-
+      End with JSON keys (exact):
+      ```json
+      {
+        "implementer_status": "ready_for_validation | blocked",
+        "current_milestone_id": "{{current_milestone_id}}",
+        "current_milestone_kind": "{{current_milestone_kind}}",
+        "milestone_files_changed": [],
+        "milestone_test_files": [],
+        "implementation_artifact_url": "<publicUrl>",
+        "implementation_summary": "short summary string",
+        "blockers": []
+      }
+      ```
 
       HARD RULES:
-
-      - Use only the existing worktree at {{worktree_path}}.
-
-      - Do not create a new workspace.
-
-      - Always pass repo_path={{worktree_path}} to every spawn_agent call.
-
-      - Implement only the current milestone — no unrelated scope.
-
-      - Do not open PR.
-
-
-      All detail from the implementation specialists, test-writer, and
-      code-reviewer (status messages, notes, full findings, blockers,
-      coverage) belongs in the artifacts each sub-agent saves. Your
-      top-level JSON output emits only the small routing primitives below.
-
-
-      End with JSON keys: milestone_files_changed, milestone_test_files,
-      milestone_review_verdict, milestone_review_repair_items,
-      milestone_self_judge, milestone_state.
-
+        - Use only the existing worktree at {{worktree_path}}.
+        - Do NOT create a new workspace.
+        - Always pass repo_path={{worktree_path}} to every spawn_agent.
+        - Implement only the current milestone — no unrelated scope.
+        - Do NOT open a PR.
+        - Preserve `current_milestone_kind` from input verbatim so
+          downstream routing works for both normal and final_repair.
 
       {{#if retry_context}}
-
-      REPAIR FEEDBACK FROM REPAIR PLANNER:
-
+      RETRY FEEDBACK:
       {{retry_context}}
-
       {{/if}}
     outputs:
-      milestone_files_changed: Files changed for current milestone (impl + tests). Small array of paths.
-      milestone_test_files: Test files added/changed by the spawned test-writer. Small array of paths.
-      milestone_review_verdict: APPROVED | REQUEST_CHANGES — from the spawned code-reviewer.
-      milestone_review_repair_items: Required repair items from the spawned code-reviewer (short list; full review in code-reviewer's artifact).
-      milestone_self_judge: pass | fail — composite verdict from impl + test + review steps. Drives routing.
-      milestone_state: Updated milestone status map.
+      implementer_status: "ready_for_validation | blocked — drives downstream routing."
+      current_milestone_id: "Passthrough: milestone id."
+      current_milestone_kind: "Passthrough: normal | final_repair — distinguishes which validator runs next."
+      milestone_files_changed: "Files changed for current milestone (impl + tests). Small array of paths."
+      milestone_test_files: "Test files added/changed. Small array of paths."
+      implementation_artifact_url: "Public URL of the full implementation artifact."
+      implementation_summary: "Short summary string for retry_context / escalation display."
+      blockers: "Structured blockers (empty when status=ready_for_validation)."
     session_key: milestone_implementer:{{current_milestone_id}}
+
   milestone_validator:
     agent: implementation-validator
     resume_on_retry: true
-    prompt: >
-      Validate only the current milestone implementation and tests.
-
+    prompt: |
+      Validate ONE normal milestone. On pass, mark the milestone complete
+      in `milestone_state`. There is NO separate mark-complete node.
 
       WORKTREE PATH:
-
       {{worktree_path}}
 
-
+      CURRENT MILESTONE ID: {{current_milestone_id}}
       CURRENT MILESTONE:
-
       {{current_milestone}}
 
+      📄 IMPLEMENTATION ARTIFACT (fetch via mcp__allen__allen_get_artifact for the full milestone work record):
+      {{implementation_artifact_url}}
 
-      📄 MILESTONE TASK PLAN ARTIFACT (fetch via mcp__allen__allen_get_artifact for the tasks the milestone was supposed to deliver):
-
-      {{milestone_task_plan_artifact_url}}
-
-
-      FILES CHANGED:
-
-      {{milestone_files_changed}}
-
-
-      TEST FILES:
-
-      {{milestone_test_files}}
-
-
-      📄 PRD ARTIFACT (fetch via mcp__allen__allen_get_artifact for acceptance criteria the milestone must satisfy):
-
+      📄 PRD ARTIFACT (fetch via mcp__allen__allen_get_artifact for AC the milestone must satisfy):
       {{resolved_prd_artifact_url}}
 
-
-      📄 TDD ARTIFACT (fetch via mcp__allen__allen_get_artifact for technical expectations: schema, API contracts):
-
+      📄 TDD ARTIFACT (fetch via mcp__allen__allen_get_artifact for schema/API/file expectations):
       {{resolved_tdd_artifact_url}}
 
+      FILES CHANGED: {{milestone_files_changed}}
+      TEST FILES:    {{milestone_test_files}}
 
       Rules:
+        - Run targeted validation commands where possible.
+        - Check the milestone's AC are implemented and tested.
+        - Check tests cover milestone behavior, no unrelated scope.
+        - Return ALL failures at once — full sweep, not first-fail.
 
-      - Run targeted validation commands for this milestone where possible.
+      Save the full validator report:
+        mcp__allen__allen_save_artifact("implementation/milestones/{{current_milestone_id}}-validation.md", <markdown>, content_type="markdown", overwrite=true)
+      Copy `publicUrl` into JSON as `validator_artifact_url`.
 
-      - Check implementation against milestone acceptance criteria.
+      On PASS:
+        - Update `milestone_state` so the current milestone status is
+          `complete`. Preserve every other milestone's status.
+        - Emit `milestone_validation_passed: true`.
+        - Leave `milestone_validation_failures` empty and `validator_feedback` empty.
 
-      - Check tests cover milestone behavior.
+      On FAIL:
+        - Emit `milestone_validation_passed: false`.
+        - Populate `milestone_validation_failures` with structured items:
+          [{ "requirement_id": "AC-001", "issue": "...", "expected_fix": "..." }]
+        - Set `validator_feedback` to one paragraph of concrete repair
+          instructions for the implementer.
 
-      - Check no unrelated scope was introduced.
+      End with JSON keys (exact). `milestone_state` MUST be the full
+      status map with the current milestone marked complete on pass —
+      NEVER emit an empty `{}` here, as that would wipe the workflow's
+      progress record:
+      ```json
+      {
+        "milestone_validation_passed": true,
+        "current_milestone_id": "{{current_milestone_id}}",
+        "current_milestone_kind": "{{current_milestone_kind}}",
+        "milestone_state": { "MS-001": "complete", "MS-002": "pending" },
+        "validator_artifact_url": "<publicUrl>",
+        "milestone_validation_failures": [],
+        "validator_feedback": ""
+      }
+      ```
 
-      - Return all failures at once.
-
-
-      Save the full validation report (verdict explanation, commands run +
-      output, per-AC verdict, scope-creep findings) as an artifact at
-      "implementation/milestones/{{current_milestone_id}}-validation.md",
-      content_type="markdown", overwrite=true. Workflow state only carries
-      the small routing primitives below.
-
-
-      End with JSON keys: milestone_validation_passed, milestone_validation_failures, milestone_state.
+      {{#if retry_context}}
+      RETRY FEEDBACK from prior validator visit (rare):
+      {{retry_context}}
+      {{/if}}
     outputs:
-      milestone_validation_passed: Boolean milestone validation verdict — drives routing to mark_complete or repair.
-      milestone_validation_failures: Short list of failures requiring repair. Full report is in the saved artifact.
-      milestone_state: Updated milestone status map.
+      milestone_validation_passed: "Boolean — drives outgoing edge."
+      current_milestone_id: "Passthrough."
+      current_milestone_kind: "Passthrough."
+      milestone_state: "Updated status map; the current milestone is marked complete on pass."
+      validator_artifact_url: "Public URL of full validator report."
+      milestone_validation_failures: "Structured failures for implementer's retry. Empty on pass."
+      validator_feedback: "Plain-text repair instructions used in retry_context. Empty on pass."
     session_key: milestone_validator:{{current_milestone_id}}
-  milestone_repair_planner:
-    agent: engineering-lead
-    resume_on_retry: true
-    prompt: >
-      Create focused repair tasks for the current milestone or final repair milestone.
 
-
-      CURRENT MILESTONE:
-
-      {{current_milestone}}
-
-
-      FINAL REPAIR MILESTONE, IF ANY:
-
-      {{final_repair_milestone}}
-
-
-      VALIDATION FAILURES:
-
-      {{milestone_validation_failures}}
-
-
-      REVIEW REPAIR ITEMS:
-
-      {{milestone_review_repair_items}}
-
-
-      FINAL VALIDATION BLOCKERS:
-
-      {{final_validation_blockers}}
-
-
-      Rules:
-
-      - If final_repair_milestone exists, use it as current_milestone.
-
-      - Repair tasks must stay focused on failed scope.
-
-      - Include implementation repairs, test repairs, validation checks, and review checks.
-
-      - Do not expand to unrelated milestones.
-
-
-      End with JSON keys: current_milestone_id, current_milestone, current_milestone_tasks, repair_task_summary,
-      milestone_state.
-    outputs:
-      current_milestone_id: Milestone or repair slice ID being repaired.
-      current_milestone: Milestone or repair slice object being repaired.
-      current_milestone_tasks: Updated repair task list.
-      repair_task_summary: Summary of repair work needed.
-      milestone_state: Updated milestone state.
-    session_key: milestone_repair_planner:{{current_milestone_id}}
-  mark_milestone_complete:
-    agent: engineering-lead
-    prompt: >
-      Mark current milestone complete. Reaches this node only when the
-      implementer self-judged pass AND the milestone_validator confirmed it.
-      The implementer's internal code-reviewer already APPROVED the diff
-      before self-judge passed.
-
-
-      CURRENT MILESTONE:
-
-      {{current_milestone}}
-
-
-      VALIDATION PASSED:
-
-      {{milestone_validation_passed}}
-
-
-      IMPLEMENTER SELF JUDGE:
-
-      {{milestone_self_judge}}
-
-
-      IMPLEMENTER REVIEW VERDICT (from internal code-reviewer spawn):
-
-      {{milestone_review_verdict}}
-
-
-      MILESTONE STATE:
-
-      {{milestone_state}}
-
-
-      Rules:
-
-      - Mark current milestone complete and accumulate it into milestone_state.
-
-      - Record files changed, tests written, commands run, and AC coverage.
-
-      - If for any reason validation or self-judge isn't pass, do not mark complete.
-
-
-      Save the completion summary as an artifact at
-      "implementation/milestones/{{current_milestone_id}}-completion.md"
-      with content_type="markdown", overwrite=true. The artifact is a
-      terminal record (not consumed downstream); workflow state holds only
-      the small routing primitives below.
-
-
-      End with JSON keys: milestone_state, completed_milestone_summary.
-    outputs:
-      milestone_state: Updated milestone status map with current milestone marked complete (when eligible).
-      completed_milestone_summary: Short one-paragraph summary — used in the retry_context for the next select_next_milestone iteration.
-    session_key: mark_milestone_complete:{{current_milestone_id}}
   final_implementation_validator:
     agent: implementation-validator
     resume_on_retry: true
-    prompt: >
-      Validate the complete implementation across all milestones. This is cross-milestone coverage validation, not QA or
-      code review.
-
+    prompt: |
+      Validate the COMPLETE implementation across all milestones. This
+      is cross-milestone coverage validation, not QA or code review.
 
       WORKTREE PATH:
-
       {{worktree_path}}
 
-
       TASK:
-
       {{normalized_task}}
 
-
-      📄 PRD ARTIFACT (mcp__allen__allen_get_artifact — every PRD requirement and AC must be implemented):
-
+      📄 PRD ARTIFACT (mcp__allen__allen_get_artifact — every REQ and AC must be implemented):
       {{resolved_prd_artifact_url}}
 
-
-      📄 TDD ARTIFACT (mcp__allen__allen_get_artifact — every TDD file/schema/API/test expectation must be covered):
-
+      📄 TDD ARTIFACT (mcp__allen__allen_get_artifact — every TDD expectation covered or marked not_applicable):
       {{resolved_tdd_artifact_url}}
 
-
-      📄 MILESTONE PLAN ARTIFACT (fetch via mcp__allen__allen_get_artifact for the full planned breakdown):
-
+      📄 MILESTONE PLAN ARTIFACT (mcp__allen__allen_get_artifact for the full planned breakdown):
       {{milestone_plan_artifact_url}}
 
-
       FINAL MILESTONE STATE (small status map):
-
       {{milestone_state}}
 
+      Checks:
+        - Every milestone is complete.
+        - Every PRD REQ and AC is implemented.
+        - Every TDD file/schema/API/data-flow expectation is addressed
+          or explicitly marked not_applicable with a reason.
+        - No milestone outputs conflict with each other.
+        - No TODO / stub / placeholder remains in touched files.
 
-      Validate:
+      Save the full validator report:
+        mcp__allen__allen_save_artifact("implementation/12-final-implementation-validation.md", <markdown>, content_type="markdown", overwrite=true)
+      Copy `publicUrl` into JSON as `final_validator_artifact_url`.
 
-      - every milestone is complete
+      On PASS:
+        ```json
+        {
+          "implementation_valid": true,
+          "final_validator_artifact_url": "<publicUrl>",
+          "final_validation_failures": []
+        }
+        ```
 
-      - every PRD requirement and acceptance criterion is implemented
+      On FAIL:
+        Emit a self-contained final-repair milestone that the implementer
+        can execute without additional context. Include the failing
+        requirement ids and what would make them pass. Set
+        `current_milestone_kind: final_repair` so the implementer's
+        downstream edge routes back here (NOT to milestone_validator).
 
-      - every TDD file/schema/API/data-flow/test expectation is addressed or explicitly not applicable
+        Pick a fresh repair id like `FINAL-REPAIR-1`, `FINAL-REPAIR-2`,
+        ...; never reuse a prior normal milestone id.
 
-      - milestone outputs do not conflict with each other
+        `milestone_state` MUST be the existing status map with the new
+        final-repair id added as `pending` — NEVER emit an empty `{}`,
+        which would wipe the completed-milestones record.
 
-      - no unresolved repair tasks remain
+        ```json
+        {
+          "implementation_valid": false,
+          "current_milestone_kind": "final_repair",
+          "current_milestone_id": "FINAL-REPAIR-1",
+          "current_milestone": {
+            "id": "FINAL-REPAIR-1",
+            "title": "Final validation repair",
+            "scope": "Fix global validation failures",
+            "requirements": [],
+            "validation_failures": []
+          },
+          "final_validator_artifact_url": "<publicUrl>",
+          "final_validation_failures": [],
+          "milestone_state": { "MS-001": "complete", "MS-002": "complete", "FINAL-REPAIR-1": "pending" }
+        }
+        ```
 
-      - no obvious TODO/stub/placeholder remains in touched files
-
-
-      If validation fails, create a focused final_repair_milestone, set implementation_valid=false, set
-      current_milestone_id to a fresh repair id like final-repair-1, and set current_milestone to that
-      final_repair_milestone so the repair loop starts in a fresh milestone session.
-
-      Save with mcp__allen__allen_save_artifact using filename "implementation/12-final-implementation-validation.md",
-      content_type="markdown", overwrite=true. Put the publicUrl in final_implementation_validation_artifact_url.
-
-
-      End with JSON keys: implementation_valid, final_validation_blockers,
-      final_repair_milestone, current_milestone_id, current_milestone,
-      final_implementation_validation_artifact_url, milestone_state.
-
-      The FULL cross-milestone validation report belongs in the saved
-      artifact, not in workflow state. Only routing primitives go in JSON.
+      {{#if retry_context}}
+      RETRY FEEDBACK from prior final-validation visit:
+      {{retry_context}}
+      {{/if}}
     outputs:
-      implementation_valid: Boolean — drives routing to pr_creator or milestone_repair_planner.
-      final_validation_blockers: Short list of blocking issues — consumed by milestone_repair_planner.
-      final_repair_milestone: Focused repair slice when implementation_valid=false — consumed by select_next_milestone.
-      final_implementation_validation_artifact_url: Public artifact URL for the full cross-milestone validation report.
-      milestone_state: Updated milestone status map.
-      current_milestone_id: Fresh final-repair-milestone ID when implementation_valid=false.
-      current_milestone: Fresh final-repair-milestone object when implementation_valid=false.
+      implementation_valid: "Boolean — drives outgoing edge."
+      current_milestone_kind: "Set to 'final_repair' on failure; absent on pass."
+      current_milestone_id: "Fresh final-repair id on failure (e.g. FINAL-REPAIR-1)."
+      current_milestone: "Self-contained final-repair milestone object on failure."
+      final_validator_artifact_url: "Public URL of full cross-milestone validation report."
+      final_validation_failures: "Structured failures; empty on pass."
+      milestone_state: "Updated status map (may add the final-repair id)."
+
   pr_creator:
     agent: pr-creator
     prompt: |
@@ -810,281 +557,266 @@ nodes:
       TASK:
       {{normalized_task}}
 
-      📄 FINAL VALIDATION REPORT ARTIFACT (mcp__allen__allen_get_artifact and link in PR body):
-      {{final_implementation_validation_artifact_url}}
+      📄 PRD ARTIFACT:
+      {{default resolved_prd_artifact_url prd_artifact_url}}
 
-      MILESTONE STATE:
-      {{milestone_state}}
+      📄 TDD ARTIFACT:
+      {{default resolved_tdd_artifact_url tdd_artifact_url}}
 
-      PRD URL:
-      {{prd_artifact_url}}
-
-      TDD URL:
-      {{tdd_artifact_url}}
-
-      Stage, commit, push, and create or reuse a PR. Do not change code.
-
-      End with JSON keys: pr_url, commit_hash, branch_name, pr_status, pr_error.
-    outputs:
-      pr_url: Created or reused PR URL.
-      commit_hash: Commit SHA pushed for PR.
-      branch_name: Branch used for PR.
-      pr_status: created | reused_existing | failed.
-      pr_error: Error message if PR creation failed.
-  final_summary:
-    agent: documentation-writer
-    prompt: >
-      Produce the final implementation summary.
-
-
-      TASK:
-
-      {{normalized_task}}
-
-
-      PR URL:
-
-      {{pr_url}}
-
-
-      COMMIT HASH:
-
-      {{commit_hash}}
-
-
-      BRANCH:
-
-      {{branch_name}}
-
-
-      WORKTREE PATH:
-
-      {{worktree_path}}
-
-
-      PRD ARTIFACT:
-
-      {{resolved_prd_artifact_url}}
-
-
-      TDD ARTIFACT:
-
-      {{resolved_tdd_artifact_url}}
-
-
-      MILESTONE PLAN ARTIFACT:
-
+      📄 MILESTONE PLAN ARTIFACT:
       {{milestone_plan_artifact_url}}
 
-
-      FINAL VALIDATION ARTIFACT:
-
-      {{final_implementation_validation_artifact_url}}
-
+      📄 FINAL VALIDATION REPORT ARTIFACT (link in PR body):
+      {{final_validator_artifact_url}}
 
       MILESTONE STATE:
-
       {{milestone_state}}
 
+      Run the full stage → commit → push → create-PR sequence. You have
+      terminal access; execute shell commands directly. Do NOT modify
+      source files — only commit what's already in the diff.
 
-      Produce concise markdown with clickable PR/artifact links, completed milestones, tests written/run, final
-      validator verdict, and risks. Save with mcp__allen__allen_save_artifact using filename "implementation/13-final-summary.md",
-      content_type="markdown", overwrite=true. Put the publicUrl in final_summary_artifact_url.
+      1. STAGE AND COMMIT (inside the worktree):
+         `cd {{worktree_path}} && git add -A`
+         Check if there's anything to commit:
+           `git diff --cached --quiet || COMMIT_NEEDED=1`
+         If a commit is needed, use a conventional-commit message:
+           `feat: <short title derived from normalized_task>`
+         If nothing to commit, still proceed to push in case the branch
+         has prior commits that weren't pushed yet.
 
+      2. PUSH:
+         `git push -u origin {{branch_name}}` (set upstream if first push).
+         On non-fast-forward errors, investigate before force-pushing —
+         do NOT use --force unless explicitly safe.
 
-      End with JSON keys: final_summary_artifact_url, workflow_result.
+      3. CREATE OR REUSE PR:
+         Check for an existing open PR for this branch first:
+           `gh pr view {{branch_name}} --json url,state`
+         If one exists in `OPEN` state, REUSE it and update the body —
+         set `pr_status: "reused_existing"`.
+         If none exists, create one with `gh pr create`. PR body must
+         link the resolved PRD/TDD artifacts and the milestone /
+         final-validator reports.
 
-      The full summary markdown lives in the saved artifact — the caller
-      uses the URL to read it (via mcp__allen__allen_get_artifact or any HTTP fetch). Do NOT duplicate the body in JSON.
+      4. ERROR HANDLING:
+         - gh CLI not authenticated → emit `pr_status: "failed"` and
+           describe the auth issue in `pr_error`. Do not retry blindly.
+         - Network/transient errors → retry the failing command once.
+         - Empty branch (nothing to push) → set `pr_status: "failed"`
+           with `pr_error: "no commits to push"`.
+
+      End with a fenced JSON block containing EXACTLY:
+      ```json
+      {
+        "pr_url": "https://github.com/owner/repo/pull/123",
+        "commit_hash": "<git SHA pushed>",
+        "branch_name": "{{branch_name}}",
+        "pr_status": "created | reused_existing | failed",
+        "pr_error": ""
+      }
+      ```
+      On failure, set `pr_url` to `null` and put the error in `pr_error`.
     outputs:
-      final_summary_artifact_url: Public artifact URL for final summary — workflow's primary deliverable.
-      workflow_result: Concise final workflow result string (e.g. 'success', 'partial — manual review needed').
+      pr_url: "Created or reused PR URL."
+      commit_hash: "Commit SHA pushed for PR."
+      branch_name: "Branch used for PR."
+      pr_status: "created | reused_existing | failed."
+      pr_error: "Error message if PR creation failed."
 
-  # Escalation gate — fires when ANY retry edge in the workflow exhausts.
-  # Three exhaustion sources route here:
-  #   - milestone_repair_planner exhausted (per-milestone repair budget = 3)
-  #   - mark_milestone_complete exhausted (cross-milestone budget = 5)
-  #   - final_implementation_validator exhausted (final-validation repair = 2)
-  # The human picks retry_with_feedback / force_continue / abandon. On
-  # retry_with_feedback, the engine clears __retry_exhausted_from and resets
-  # retry counters targeting the destination node, so the original budget is
-  # restored (e.g. 3 fresh repair attempts).
+  final_summary:
+    agent: documentation-writer
+    prompt: |
+      Produce the final implementation summary.
+
+      TASK:
+      {{normalized_task}}
+
+      PR URL:        {{pr_url}}
+      COMMIT HASH:   {{commit_hash}}
+      BRANCH:        {{branch_name}}
+      WORKTREE:      {{worktree_path}}
+
+      📄 ARTIFACTS:
+        PRD:                {{default resolved_prd_artifact_url prd_artifact_url}}
+        TDD:                {{default resolved_tdd_artifact_url tdd_artifact_url}}
+        MILESTONE PLAN:     {{milestone_plan_artifact_url}}
+        FINAL VALIDATION:   {{final_validator_artifact_url}}
+
+      MILESTONE STATE:
+      {{milestone_state}}
+
+      Produce concise markdown with clickable PR/artifact links, completed
+      milestones, tests written/run, final validator verdict, and risks.
+
+      Save:
+        mcp__allen__allen_save_artifact("implementation/13-final-summary.md", <markdown>, content_type="markdown", overwrite=true)
+      Put publicUrl in `final_summary_artifact_url`.
+
+      End with a fenced JSON block containing EXACTLY:
+      ```json
+      {
+        "final_summary_artifact_url": "<publicUrl from allen_save_artifact>",
+        "workflow_result": "success | partial — manual review needed"
+      }
+      ```
+    outputs:
+      final_summary_artifact_url: "Public artifact URL for final summary — workflow's primary deliverable."
+      workflow_result: "Concise final workflow result string (e.g. 'success', 'partial — manual review needed')."
+
+  # Escalation gate — every retry exhaustion AND every direct "blocked"
+  # status routes here. The human picks retry_with_feedback /
+  # force_continue / abandon. Retry counters are reset by the engine
+  # when an override edge fires.
   milestone_escalation_review:
     type: human
     fields:
       - name: escalation_decision
-        label: "Retry budget exhausted. What now?"
+        label: "What now?"
         type: select
         options: [retry_with_feedback, force_continue, abandon]
         required: true
       - name: escalation_feedback
         label: "Feedback or reason (required for retry)"
         type: textarea
-        required: true
-    outputs:
-      escalation_decision: "retry_with_feedback | force_continue | abandon"
-      escalation_feedback: "Feedback that becomes retry_context on retry."
+        required: false
     prompt: |
-      🔴 A milestone retry budget exhausted.
+      🔴 The milestone workflow paused.
 
-      WHICH LOOP EXHAUSTED:
-      {{__retry_exhausted_from}}
+      EXHAUSTED FROM:  {{default __retry_exhausted_from "(direct block — no retry budget hit)"}}
 
-      CURRENT MILESTONE: {{current_milestone}}
-      CURRENT MILESTONE ID: {{current_milestone_id}}
-      MILESTONE STATE: {{milestone_state}}
+      CURRENT MILESTONE:    {{default current_milestone "(none selected)"}}
+      CURRENT MILESTONE ID: {{default current_milestone_id "(none)"}}
+      MILESTONE KIND:       {{default current_milestone_kind "—"}}
+      MILESTONE STATE:      {{milestone_state}}
 
-      Validation failures (if any): {{milestone_validation_failures}}
-      Review repair items (if any): {{milestone_review_repair_items}}
-      Final validation blockers (if any): {{final_validation_blockers}}
+      IMPLEMENTER STATUS:   {{default implementer_status "—"}}
+      BLOCKERS:             {{default blockers "(none reported)"}}
+
+      VALIDATOR FAILURES:   {{default milestone_validation_failures "(none)"}}
+      VALIDATOR FEEDBACK:   {{default validator_feedback "(none)"}}
+
+      FINAL VALIDATION FAILURES: {{default final_validation_failures "(none)"}}
 
       📄 Artifacts so far:
-        PRD:               {{resolved_prd_artifact_url}}
-        TDD:               {{resolved_tdd_artifact_url}}
-        Milestone plan:    {{milestone_plan_artifact_url}}
-        Current task plan: {{milestone_task_plan_artifact_url}}
-        Final validation:  {{default final_implementation_validation_artifact_url "(not run yet)"}}
+        PRD:                  {{default resolved_prd_artifact_url "(not produced)"}}
+        TDD:                  {{default resolved_tdd_artifact_url "(not produced)"}}
+        Milestone plan:       {{default milestone_plan_artifact_url "(not produced)"}}
+        Implementation:       {{default implementation_artifact_url "(not run yet)"}}
+        Milestone validator:  {{default validator_artifact_url "(not run yet)"}}
+        Final validator:      {{default final_validator_artifact_url "(not run yet)"}}
 
       Options:
-        retry_with_feedback — loop back to the failed node with your feedback.
-                              Retry counter RESETS — you get the original
-                              budget again (3 repairs / 5 milestones / 2
-                              final-validations).
-        force_continue      — skip past the failed stage:
-                              • repair_planner exhausted → move on to mark_complete
-                                anyway (accept current milestone as-is).
-                              • mark_complete exhausted (>5 milestones) → jump
-                                straight to final_implementation_validator.
-                              • final_validator exhausted → jump to pr_creator
-                                with current state.
+        retry_with_feedback — loop back to the failing node with your
+                              feedback. Retry counters reset to original
+                              budgets.
+        force_continue      — skip past the failed stage and continue
+                              with current state.
         abandon             — end the run; artifacts preserved.
 
 edges:
-  - from: START
-    to: load_implementation_context
-  - from: load_implementation_context
-    to: create_workspace
-  - from: create_workspace
-    to: milestone_planner
-  - from: milestone_planner
-    to: select_next_milestone
-  - from: select_next_milestone
-    to: milestone_task_planner
-    condition: all_milestones_complete != true
-  - from: select_next_milestone
-    to: final_implementation_validator
-    condition: all_milestones_complete == true
-  - from: milestone_task_planner
-    to: milestone_implementer
-  # milestone_implementer now orchestrates impl + test-writer spawn +
-  # code-reviewer spawn internally. Self-judge gates the downstream path.
-  - from: milestone_implementer
-    to: milestone_validator
-    condition: milestone_self_judge == 'pass'
-  - from: milestone_implementer
-    to: milestone_repair_planner
-    condition: milestone_self_judge != 'pass'
+  - { from: START,                       to: load_implementation_context }
+  - { from: load_implementation_context, to: create_workspace }
+  - { from: create_workspace,            to: milestone_planner }
+  - { from: milestone_planner,           to: select_next_milestone }
+
+  # ── select_next_milestone outgoing ────────────────────────────────────
+  - { from: select_next_milestone, to: milestone_implementer,
+      condition: "milestone_selection_status == 'pending'" }
+  - { from: select_next_milestone, to: final_implementation_validator,
+      condition: "milestone_selection_status == 'all_complete'" }
+  - { from: select_next_milestone, to: milestone_escalation_review,
+      condition: "milestone_selection_status == 'blocked'" }
+
+  # ── milestone_implementer outgoing ────────────────────────────────────
+  #
+  # Routing flag `current_milestone_kind`:
+  #   'normal'       → milestone_validator (per-milestone validation).
+  #   'final_repair' → final_implementation_validator (re-check global).
+  - { from: milestone_implementer, to: milestone_validator,
+      condition: "implementer_status == 'ready_for_validation' AND current_milestone_kind != 'final_repair'" }
+  - { from: milestone_implementer, to: final_implementation_validator,
+      condition: "implementer_status == 'ready_for_validation' AND current_milestone_kind == 'final_repair'" }
+  - { from: milestone_implementer, to: milestone_escalation_review,
+      condition: "implementer_status == 'blocked'" }
+
+  # ── milestone_validator outgoing ──────────────────────────────────────
+  #
+  # Pass: validator itself marked current milestone complete in
+  # milestone_state. Loop to select_next_milestone.
+  - { from: milestone_validator, to: select_next_milestone,
+      condition: "milestone_validation_passed == true" }
   - from: milestone_validator
-    to: mark_milestone_complete
-    condition: milestone_validation_passed == true
-  - from: milestone_validator
-    to: milestone_repair_planner
-    condition: milestone_validation_passed != true
-  - from: milestone_repair_planner
     to: milestone_implementer
-    max_retries: 3
-    retry_context: |
-      Repair tasks:
-      {{current_milestone_tasks}}
-
-      Repair summary:
-      {{repair_task_summary}}
-
-      Prior internal code-review repair items (from implementer's spawn):
-      {{milestone_review_repair_items}}
-  # Fallback for repair_planner→implementer exhaustion. MUST come AFTER the
-  # retry edge so __retry_exhausted_from is set in the same iteration.
-  - from: milestone_repair_planner
-    to: milestone_escalation_review
-    condition: "__retry_exhausted_from == 'milestone_repair_planner'"
-
-  # HARD CAP of 5 milestones — matches milestone_planner sizing rule above.
-  - from: mark_milestone_complete
-    to: select_next_milestone
-    max_retries: 5
-    retry_context: |
-      Completed milestone:
-      {{completed_milestone_summary}}
-
-      Select the next unfinished milestone.
-  # Fallback for mark_complete→select_next exhaustion (>5 milestones).
-  - from: mark_milestone_complete
-    to: milestone_escalation_review
-    condition: "__retry_exhausted_from == 'mark_milestone_complete'"
-
-  - from: final_implementation_validator
-    to: pr_creator
-    condition: implementation_valid == true
-  - from: final_implementation_validator
-    to: milestone_repair_planner
-    condition: implementation_valid != true
+    condition: "milestone_validation_passed != true"
     max_retries: 2
     retry_context: |
-      Final validation failed. Create and execute focused repair milestone:
-      {{final_repair_milestone}}
+      Milestone validator failed for {{current_milestone_id}}.
+      Validator report: {{validator_artifact_url}}
+      Failures: {{milestone_validation_failures}}
+      Feedback: {{validator_feedback}}
+  - { from: milestone_validator, to: milestone_escalation_review,
+      condition: "milestone_validation_passed != true AND __retry_exhausted_from == 'milestone_validator'" }
 
-      Blockers:
-      {{final_validation_blockers}}
-  # Fallback for final_validator→repair_planner exhaustion.
+  # ── final_implementation_validator outgoing ───────────────────────────
+  - { from: final_implementation_validator, to: pr_creator,
+      condition: "implementation_valid == true" }
   - from: final_implementation_validator
-    to: milestone_escalation_review
-    condition: "__retry_exhausted_from == 'final_implementation_validator'"
+    to: milestone_implementer
+    condition: "implementation_valid != true"
+    max_retries: 2
+    retry_context: |
+      Final implementation validation failed.
+      Treat this as a final repair milestone.
+      Final validator report: {{final_validator_artifact_url}}
+      Failures: {{final_validation_failures}}
+      Repair milestone: {{current_milestone}}
+  - { from: final_implementation_validator, to: milestone_escalation_review,
+      condition: "implementation_valid != true AND __retry_exhausted_from == 'final_implementation_validator'" }
 
-  - from: pr_creator
-    to: final_summary
-  - from: final_summary
-    to: END
+  # ── pr_creator + final_summary ────────────────────────────────────────
+  - { from: pr_creator,    to: final_summary }
+  - { from: final_summary, to: END }
 
-  # ── Escalation outgoing edges ─────────────────────────────────────────
+  # ── milestone_escalation_review outgoing ──────────────────────────────
+  #
+  # abandon → END
   - { from: milestone_escalation_review, to: END,
       condition: "escalation_decision == 'abandon'" }
 
-  # retry_with_feedback — condition-only retry edges (no max_retries). The
-  # engine clears __retry_exhausted_from and resets retry counters
-  # targeting the destination node, so the original budget restores fully.
+  # retry_with_feedback — condition-only re-route edges (no max_retries).
+  # The engine resets retry counters targeting the destination.
   - from: milestone_escalation_review
     to: milestone_implementer
-    condition: "escalation_decision == 'retry_with_feedback' AND __retry_exhausted_from == 'milestone_repair_planner'"
+    condition: "escalation_decision == 'retry_with_feedback' AND (__retry_exhausted_from == 'milestone_validator' OR implementer_status == 'blocked')"
     retry_context: |
-      Human intervened after per-milestone repair budget exhausted.
+      Human intervened on milestone validation failure or implementer blocker.
       Feedback: {{escalation_feedback}}
 
-      Re-attempt this milestone from the implementer. The 3-attempt repair
-      budget is reset.
+      Re-attempt the current milestone from the implementer. Budget reset.
   - from: milestone_escalation_review
-    to: select_next_milestone
-    condition: "escalation_decision == 'retry_with_feedback' AND __retry_exhausted_from == 'mark_milestone_complete'"
-    retry_context: |
-      Human intervened after milestone-count budget (5) exhausted.
-      Feedback: {{escalation_feedback}}
-
-      Continue processing more milestones — the 5-milestone budget is reset.
-  - from: milestone_escalation_review
-    to: milestone_repair_planner
+    to: milestone_implementer
     condition: "escalation_decision == 'retry_with_feedback' AND __retry_exhausted_from == 'final_implementation_validator'"
     retry_context: |
-      Human intervened after final-validation repair budget (2) exhausted.
+      Human intervened on final-validation exhaustion.
       Feedback: {{escalation_feedback}}
 
-      Re-attempt the final repair milestone. Budget is reset.
+      Re-attempt the final repair milestone from the implementer. Budget reset.
+  - from: milestone_escalation_review
+    to: select_next_milestone
+    condition: "escalation_decision == 'retry_with_feedback' AND milestone_selection_status == 'blocked'"
+    retry_context: |
+      Human intervened on a blocked milestone selection.
+      Feedback: {{escalation_feedback}}
 
-  # force_continue — skip the failed stage and continue with what we have.
-  - from: milestone_escalation_review
-    to: mark_milestone_complete
-    condition: "escalation_decision == 'force_continue' AND __retry_exhausted_from == 'milestone_repair_planner'"
-  - from: milestone_escalation_review
-    to: final_implementation_validator
-    condition: "escalation_decision == 'force_continue' AND __retry_exhausted_from == 'mark_milestone_complete'"
-  - from: milestone_escalation_review
-    to: pr_creator
-    condition: "escalation_decision == 'force_continue' AND __retry_exhausted_from == 'final_implementation_validator'"
+      Re-evaluate milestone_state and pick the next available milestone.
+
+  # force_continue — skip the failed stage.
+  - { from: milestone_escalation_review, to: select_next_milestone,
+      condition: "escalation_decision == 'force_continue' AND __retry_exhausted_from == 'milestone_validator'" }
+  - { from: milestone_escalation_review, to: pr_creator,
+      condition: "escalation_decision == 'force_continue' AND __retry_exhausted_from == 'final_implementation_validator'" }
+  - { from: milestone_escalation_review, to: final_implementation_validator,
+      condition: "escalation_decision == 'force_continue' AND milestone_selection_status == 'blocked'" }
+  - { from: milestone_escalation_review, to: select_next_milestone,
+      condition: "escalation_decision == 'force_continue' AND implementer_status == 'blocked'" }

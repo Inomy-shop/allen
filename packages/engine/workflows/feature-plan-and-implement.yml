@@ -1,34 +1,32 @@
 name: feature-plan-and-implement
 description: >
-  End-to-end feature workflow with artifact-only handoff:
-    1. Requirements analyst reads the raw ask, asks clarifying questions
-       via human gate if the request is ambiguous, then produces the PRD.
-    2. Doc-auditor audits the PRD.
-    3. Technical-designer produces the TDD from the PRD artifact.
-    4. Doc-auditor audits the TDD against the PRD artifact.
-    5. Optional human plan-approval gate (skipped when trusted_mode=true).
-    6. Code node creates an isolated git worktree.
-    7. Engineering-lead dispatches specialists AND self-validates the diff
+  End-to-end feature workflow that assumes a PRD is supplied up front:
+    1. The caller provides `user_request` containing a complete PRD with
+       clear requirements and acceptance criteria (typically authored by
+       a human PM or pulled from a Linear ticket). The workflow does NOT
+       generate or audit the PRD.
+    2. Technical-designer produces the TDD from user_request directly.
+    3. Doc-auditor audits the TDD against user_request.
+    4. Optional human plan-approval gate (skipped when trusted_mode=true).
+    5. Code node creates an isolated git worktree.
+    6. Engineering-lead dispatches specialists AND self-validates the diff
        in one node — no separate self-check.
-    8. QA writes/runs tests, implementation-validator checks the diff
-       against the PRD, docs are updated, security-aware code review runs,
-       PR opens, and a final summary is posted to chat.
+    7. QA writes/runs tests, implementation-validator checks the diff
+       against the PRD (user_request), docs are updated, security-aware
+       code review runs, PR opens, and a final summary is posted to chat.
 
-  Artifact-read convention: every artifact URL is
-  http://.../api/artifacts/<id>/content. To read an artifact, use
-  mcp__allen__allen_get_artifact(artifact_id=<id>) — extract <id> from the
-  URL segment between /artifacts/ and /content, or use the upstream-
-  artifacts index the engine auto-injects into every agent's context.
-  Agents save with mcp__allen__allen_save_artifact.
+  Artifact-read convention: artifact URLs are
+  http://.../api/artifacts/<id>/content. Read with
+  mcp__allen__allen_get_artifact(artifact_id=<id>). Agents save with
+  mcp__allen__allen_save_artifact.
 
-  Human touches per run (steady state): 2-3 total —
-    1. Clarification answers (only when produce_prd asks)
-    2. Plan approval (skipped when trusted_mode=true)
-    3. PR merge on GitHub (external)
+  Human touches per run (steady state): 1-2 total —
+    1. Plan approval (skipped when trusted_mode=true)
+    2. PR merge on GitHub (external)
 
   Escalations may add extra touches when agents can't self-correct.
 
-version: 2
+version: 3
 
 context:
   requires: [repo]
@@ -40,9 +38,9 @@ input:
     type: string
     required: true
     widget: textarea
-    label: Feature request
-    description: Describe the feature in plain English — what the user wants, why, and any constraints.
-    placeholder: "e.g. Users should be able to bookmark their favorite workflows so they appear pinned at the top of the workflow list. Per-user, no cap."
+    label: Product requirements (PRD)
+    description: A complete PRD with clear requirements and acceptance criteria. May come from a Linear ticket or be authored inline. The workflow treats this as the source of truth for every implementation decision — it is NOT clarified, audited, or rewritten. Requirements should include REQ-/AC-style ids when possible so downstream traceability works.
+    placeholder: "e.g.\n## Requirements\nREQ-001: Users can bookmark workflows.\nREQ-002: Bookmarks appear pinned at the top of the workflow list.\n\n## Acceptance criteria\nAC-001 (REQ-001): Clicking the bookmark icon toggles state.\nAC-002 (REQ-002): The list re-sorts so bookmarked items appear first.\n..."
   repo_path:
     type: string
     required: true
@@ -76,135 +74,22 @@ input:
 
 nodes:
   # ══════════════════════════════════════════════════════════════════════
-  # PHASE 1 — PLANNING (artifact-only handoff)
+  # PHASE 1 — TECHNICAL DESIGN (PRD is the input, not produced here)
   # ══════════════════════════════════════════════════════════════════════
-
-  produce_prd:
-    agent: requirements-analyst
-    resume_on_retry: true
-    prompt: |
-      You are the Product Manager. Read the raw user request and either:
-        (a) ask 1-3 clarifying questions if the ask is ambiguous, OR
-        (b) produce the full PRD as a markdown artifact.
-
-      USER REQUEST: {{user_request}}
-      REPO PATH:    {{repo_path}}
-
-      Scan the repo briefly to ground your understanding before deciding —
-      e.g. "this API already exists in routes/teams.ts, did you mean to
-      extend it or add a new one?".
-
-      You have up to 3 clarification rounds. Round 3 is your last chance
-      to ask — after that, commit to the best interpretation and produce
-      the PRD.
-
-      ─────────────────────────────────────────────────────────────────
-      PATH A — REQUEST IS UNCLEAR
-      ─────────────────────────────────────────────────────────────────
-      Emit 1-3 concrete, answerable questions. Do NOT save an artifact.
-
-      ```json
-      {
-        "ready_to_produce_prd": false,
-        "clarifying_questions": [
-          "Per-user or per-workspace bookmarks?",
-          "Pinned to top, or separate section?"
-        ],
-        "prd_artifact_url": ""
-      }
-      ```
-
-      ─────────────────────────────────────────────────────────────────
-      PATH B — REQUEST IS CLEAR (or round 3 forces commit)
-      ─────────────────────────────────────────────────────────────────
-      Produce the full PRD. It must include: user stories, acceptance
-      criteria (Given/When/Then), edge cases, out-of-scope items, affected
-      areas, risks, assumptions, non-functional requirements, open
-      questions.
-
-      TRACEABILITY CONTRACT:
-        - Every requirement: stable id REQ-001, REQ-002, ...
-        - Every acceptance criterion: stable id AC-001 referencing a REQ.
-        - Every edge case: EC-001. Every NFR: NFR-001.
-
-      Save the FULL PRD as a markdown artifact:
-        mcp__allen__allen_save_artifact("prd/requirements.md", <markdown>, content_type="markdown", overwrite=true)
-      Copy the returned `publicUrl` into the JSON below as `prd_artifact_url`.
-
-      Keep PRD body INSIDE the artifact. JSON carries only the URL + bool.
-
-      ```json
-      {
-        "ready_to_produce_prd": true,
-        "clarifying_questions": [],
-        "prd_artifact_url": "<publicUrl from allen_save_artifact>"
-      }
-      ```
-
-      {{#if retry_context}}
-      RETRY FEEDBACK (from clarification answers OR PRD-audit revise):
-      {{retry_context}}
-      {{/if}}
-    outputs:
-      ready_to_produce_prd: "Boolean — true when PRD artifact saved; false when clarifying_questions are returned."
-      clarifying_questions: "Array of clarifying questions. Empty when ready_to_produce_prd=true."
-      prd_artifact_url: "Public URL of the PRD markdown artifact. Empty string when ready_to_produce_prd=false."
-
-  clarify_human:
-    type: human
-    fields:
-      - name: answers
-        label: "Answers to clarifying questions"
-        type: textarea
-        required: true
-    prompt: |
-      The product manager needs clarification before producing the PRD.
-
-      Original request: {{user_request}}
-
-      Questions to answer:
-      {{clarifying_questions}}
-
-      Please answer each question in order. The PM will incorporate your
-      answers and either ask follow-ups or produce the PRD.
-
-  audit_prd:
-    agent: doc-auditor
-    resume_on_retry: true
-    prompt: |
-      Audit the PRD against the user's original request for intent fidelity.
-
-      ORIGINAL USER REQUEST: {{user_request}}
-
-      📄 PRD ARTIFACT (fetch via mcp__allen__allen_get_artifact):
-      {{prd_artifact_url}}
-
-      Judge: does this PRD answer what the user asked for? Are stories,
-      acceptance criteria, and edge cases covered? Flag intent drift only —
-      technical correctness is the validator's job later.
-
-      End with a fenced JSON block:
-      ```json
-      {
-        "prd_audit_verdict": "approve | revise | escalate",
-        "prd_audit_rationale": "one paragraph"
-      }
-      ```
-    outputs:
-      prd_audit_verdict: "approve | revise | escalate"
-      prd_audit_rationale: "One-paragraph rationale; used in retry_context + escalation display."
 
   produce_tdd:
     agent: technical-designer
     resume_on_retry: true
     prompt: |
-      Produce the Technical Design Document (TDD) from the approved PRD.
+      Produce the Technical Design Document (TDD) for the PRD supplied
+      in `user_request`. The PRD is the binding source of truth — every
+      design decision must trace to a REQ / AC / EC / NFR id from it.
 
-      📄 PRD ARTIFACT (fetch via mcp__allen__allen_get_artifact — primary input):
-      {{prd_artifact_url}}
+      📋 PRD (user_request — the complete product requirements with
+      acceptance criteria; treat as the spec):
+      {{user_request}}
 
-      ORIGINAL USER REQUEST: {{user_request}}
-      REPO PATH:             {{repo_path}}
+      REPO PATH: {{repo_path}}
 
       EXISTING CODEBASE AWARENESS (MANDATORY):
         1. Read package.json / go.mod / Cargo.toml / requirements.txt to
@@ -222,16 +107,21 @@ nodes:
       taxonomy, observability plan, UI changes.
 
       TRACEABILITY CONTRACT:
-        - Every data model, API contract, UI change, validation rule, and
-          test strategy item lists the PRD ids it satisfies (REQ/AC/EC/NFR).
-        - Add a coverage matrix mapping every AC id to concrete
-          implementation touchpoints and intended tests.
+        - Every data model, API contract, UI change, validation rule,
+          and test strategy item lists the PRD ids it satisfies
+          (REQ/AC/EC/NFR).
+        - Add a coverage matrix mapping every AC id from user_request to
+          concrete implementation touchpoints and intended tests.
         - Mark any AC that needs no code change as not_applicable + reason.
+        - If user_request lacks stable ids, derive them in the TDD
+          (REQ-001, AC-001, …) and reference both the derived id AND a
+          short quote from user_request so the link is auditable.
 
       Save the FULL TDD as a markdown artifact:
         mcp__allen__allen_save_artifact("tdd/technical-design.md", <markdown>, content_type="markdown", overwrite=true)
       Copy the returned `publicUrl` into JSON as `tdd_artifact_url`.
 
+      End with a fenced JSON block containing EXACTLY:
       ```json
       {
         "tdd_artifact_url": "<publicUrl from allen_save_artifact>"
@@ -249,19 +139,18 @@ nodes:
     agent: doc-auditor
     resume_on_retry: true
     prompt: |
-      Audit the TDD against the approved PRD.
+      Audit the TDD against the supplied PRD (user_request).
 
-      ORIGINAL USER REQUEST: {{user_request}}
-
-      📄 PRD ARTIFACT (fetch via mcp__allen__allen_get_artifact):
-      {{prd_artifact_url}}
+      📋 PRD (user_request — the binding spec):
+      {{user_request}}
 
       📄 TDD ARTIFACT (fetch via mcp__allen__allen_get_artifact):
       {{tdd_artifact_url}}
 
-      Judge: does every API contract and data model trace to a PRD id?
-      Does every endpoint satisfy at least one acceptance criterion? Are
-      the models and APIs internally consistent?
+      Judge: does every API contract and data model trace to a PRD
+      requirement or acceptance criterion? Does every endpoint satisfy
+      at least one AC? Are the models and APIs internally consistent?
+      Are there obvious gaps where a PRD AC has no TDD coverage?
 
       End with a fenced JSON block:
       ```json
@@ -282,29 +171,24 @@ nodes:
         type: select
         options: [approve, request_changes, reject]
         required: true
-      - name: scope
-        label: "Scope (only for request_changes)"
-        type: select
-        options: [requirements, technical_design, all]
-        required: false
       - name: feedback
         label: "Feedback (required for request_changes)"
         type: textarea
         required: false
     prompt: |
-      ✅ PRD and TDD are produced and audited. Review and approve to start
-      implementation.
+      ✅ TDD is produced and audited. The PRD was supplied as input.
+      Review and approve to start implementation.
 
-      USER REQUEST: {{user_request}}
+      📋 PRD (user_request):
+      {{user_request}}
 
-      📋 Requirements:     {{prd_artifact_url}}
       🔧 Technical Design: {{tdd_artifact_url}}
 
-      Both passed agent audit.
+      The TDD passed agent audit against the PRD.
 
       Decision:
         approve         → advance to implementation
-        request_changes → loop back to the producer (pick scope)
+        request_changes → loop back to produce_tdd with your feedback
         reject          → abandon the workflow
 
   # ══════════════════════════════════════════════════════════════════════
@@ -342,20 +226,18 @@ nodes:
       file-level plan, dispatch specialists, and self-validate the diff.
       You DO NOT write code yourself.
 
-      📄 PRD ARTIFACT (fetch via mcp__allen__allen_get_artifact):
-      {{prd_artifact_url}}
+      📋 PRD (user_request — the binding spec; every AC must be addressed):
+      {{user_request}}
 
       📄 TDD ARTIFACT (fetch via mcp__allen__allen_get_artifact):
       {{tdd_artifact_url}}
-
-      USER REQUEST: {{user_request}}
 
       EXISTING WORKSPACE (do NOT create a new one):
         worktree_path: {{worktree_path}}
         branch_name:   {{branch_name}}
 
       Step-by-step:
-        1. Fetch the PRD and TDD artifacts.
+        1. Read the PRD above and fetch the TDD artifact.
         2. Spawn codebase-navigator (READ-ONLY) with repo_path={{worktree_path}}
            to identify existing patterns, dependency order, validation commands.
            The navigator MUST NOT edit files, commit, push, or run formatters
@@ -368,9 +250,9 @@ nodes:
         5. Wait on each batch, retry each specialist once on failure.
         6. SELF-VALIDATE before returning:
            a. `git diff --name-only` to confirm planned files were touched.
-           b. For each PRD acceptance criterion, verify at least one plan
-              item has implementation evidence in the diff (or is marked
-              not_applicable with reason).
+           b. For each PRD acceptance criterion from user_request, verify
+              at least one plan item has implementation evidence in the
+              diff (or is marked not_applicable with reason).
            c. Confirm codebase-navigator did not write files.
            d. Enumerate the build/lint/typecheck commands QA must run.
 
@@ -426,8 +308,8 @@ nodes:
       back on failure, repeat until green. Return only when verdict is
       pass, fail (delegate back to engineering-lead), or escalate.
 
-      📄 PRD ARTIFACT (fetch via mcp__allen__allen_get_artifact):
-      {{prd_artifact_url}}
+      📋 PRD (user_request — every AC needs test coverage):
+      {{user_request}}
 
       📄 TDD ARTIFACT (fetch via mcp__allen__allen_get_artifact):
       {{tdd_artifact_url}}
@@ -439,7 +321,8 @@ nodes:
       SKIP REGRESSION:  {{skip_regression}}
 
       Follow your five-rule contract:
-        1. Fetch the artifacts, spawn test-writer with the PRD's ACs.
+        1. Read the PRD + fetch TDD/plan artifacts, spawn test-writer
+           with the PRD's ACs.
         2. Run build + lint + tests inside {{worktree_path}}.
         3. Verify coverage against the PRD's acceptance criteria.
         4. Loop until green (max 3 write-run-verify cycles).
@@ -475,23 +358,26 @@ nodes:
     resume_on_retry: true
     retries: 1
     prompt: |
-      Validate the final implementation against the approved PRD.
+      Validate the final implementation against the PRD (user_request).
 
-      REMEMBER: PRD is the source of truth. TDD deviations are
-      informational, not blocking, as long as the PRD is still satisfied.
+      REMEMBER: the PRD supplied as user_request is the source of truth.
+      TDD deviations are informational, not blocking, as long as every
+      PRD requirement and acceptance criterion is still satisfied.
 
-      📄 PRD ARTIFACT:                  {{prd_artifact_url}}
+      📋 PRD (user_request):
+      {{user_request}}
+
       📄 TDD ARTIFACT:                  {{tdd_artifact_url}}
       📄 IMPLEMENTATION PLAN ARTIFACT:  {{default implementation_plan_artifact_url "(implement node escalated before saving plan — validate the worktree diff against PRD acceptance criteria directly)"}}
       📄 QA REPORT ARTIFACT:            {{default qa_artifact_url "(qa node escalated before saving report — no QA evidence available; rely on diff + PRD only)"}}
-      (Fetch each via mcp__allen__allen_get_artifact.)
+      (Fetch each artifact via mcp__allen__allen_get_artifact.)
 
       WORKTREE PATH: {{worktree_path}}
 
       Run your blocking-checks + informational-checks list against the
-      current diff. Check every PRD AC id, edge case id, and NFR id —
-      return ALL blocking violations and informational deviations in one
-      response, grouped by id.
+      current diff. Check every PRD AC id, edge case id, and NFR id from
+      user_request — return ALL blocking violations and informational
+      deviations in one response, grouped by id.
 
       Save the full validator report:
         mcp__allen__allen_save_artifact("validator/report.md", <markdown>, content_type="markdown", overwrite=true)
@@ -523,9 +409,9 @@ nodes:
       Update the in-repo technical documentation to reflect the changes
       in the current diff.
 
-      📄 PRD ARTIFACT: {{prd_artifact_url}}
+      📋 PRD (user_request): {{user_request}}
       📄 TDD ARTIFACT: {{tdd_artifact_url}}
-      (Fetch each via mcp__allen__allen_get_artifact.)
+      (Fetch the TDD via mcp__allen__allen_get_artifact.)
 
       WORKTREE PATH: {{worktree_path}}
 
@@ -553,12 +439,14 @@ nodes:
       Review the full diff in the worktree, INCLUDING doc changes from
       the upstream update_docs node.
 
-      📄 PRD ARTIFACT:                  {{prd_artifact_url}}
+      📋 PRD (user_request — what the code is supposed to deliver):
+      {{user_request}}
+
       📄 TDD ARTIFACT:                  {{tdd_artifact_url}}
       📄 IMPLEMENTATION PLAN ARTIFACT:  {{implementation_plan_artifact_url}}
       📄 QA REPORT ARTIFACT:            {{qa_artifact_url}}
       📄 VALIDATOR REPORT ARTIFACT:     {{validator_artifact_url}}
-      (Fetch each via mcp__allen__allen_get_artifact.)
+      (Fetch each artifact via mcp__allen__allen_get_artifact.)
 
       WORKTREE PATH: {{worktree_path}}
       BRANCH:        {{branch_name}}
@@ -596,10 +484,11 @@ nodes:
       WORKFLOW TYPE: feature
       WORKTREE PATH: {{worktree_path}}
       BRANCH NAME:   {{branch_name}}
-      USER REQUEST:  {{user_request}}
+
+      📋 PRD (user_request — use as the basis for the PR title + summary):
+      {{user_request}}
 
       📄 ARTIFACTS (mcp__allen__allen_get_artifact any you need to populate the PR body):
-        PRD:                 {{prd_artifact_url}}
         TDD:                 {{tdd_artifact_url}}
         IMPLEMENTATION PLAN: {{implementation_plan_artifact_url}}
         QA REPORT:           {{qa_artifact_url}}
@@ -626,13 +515,12 @@ nodes:
       Produce the final implementation summary for this feature workflow
       run. Post it back to the chat session AND upload as a public .md.
 
-      USER REQUEST: {{user_request}}
-      PR URL:       {{pr_url}}
-      BRANCH:       {{branch_name}}
-      WORKTREE:     {{worktree_path}}
+      📋 PRD (user_request): {{user_request}}
+      PR URL:                {{pr_url}}
+      BRANCH:                {{branch_name}}
+      WORKTREE:              {{worktree_path}}
 
       📄 ARTIFACTS (mcp__allen__allen_get_artifact when you need detail):
-        PRD:                 {{prd_artifact_url}}
         TDD:                 {{tdd_artifact_url}}
         IMPLEMENTATION PLAN: {{implementation_plan_artifact_url}}
         QA REPORT:           {{qa_artifact_url}}
@@ -673,14 +561,13 @@ nodes:
       🔴 The workflow paused because an agent escalated or a retry budget
       ran out. It's handing the decision to you.
 
-      ORIGINAL REQUEST:
+      📋 PRD (user_request):
       {{user_request}}
 
       ── Status (only relevant rows are filled) ──
 
       EXHAUSTED FROM:  {{default __retry_exhausted_from "(direct escalate — no retry budget hit)"}}
 
-      PRD AUDIT:        {{default prd_audit_verdict "—"}} — {{default prd_audit_rationale "(not run yet)"}}
       TDD AUDIT:        {{default tdd_audit_verdict "—"}} — {{default tdd_audit_rationale "(not run yet)"}}
 
       IMPLEMENT:        {{default implement_verdict "—"}} — {{default implement_failure_details "(not run yet)"}}
@@ -689,7 +576,6 @@ nodes:
       REVIEW:           {{default review_verdict "(not reviewed yet)"}}
 
       📄 Artifacts so far:
-        PRD:                 {{default prd_artifact_url "(not produced yet)"}}
         TDD:                 {{default tdd_artifact_url "(not produced yet)"}}
         IMPLEMENTATION PLAN: {{default implementation_plan_artifact_url "(not produced yet)"}}
         QA REPORT:           {{default qa_artifact_url "(not run yet)"}}
@@ -705,31 +591,9 @@ nodes:
 
 edges:
   # ──────────────────────────────────────────────────────────────────────
-  # Planning phase
+  # Planning phase (TDD only — PRD is supplied as user_request)
   # ──────────────────────────────────────────────────────────────────────
-  - { from: START, to: produce_prd }
-  - { from: produce_prd, to: audit_prd,     condition: "ready_to_produce_prd == true" }
-  - { from: produce_prd, to: clarify_human, condition: "ready_to_produce_prd != true" }
-
-  # The PM's session is RESUMED so it remembers the questions it asked.
-  # max_retries=3 matches the prompt's 3-round budget.
-  - from: clarify_human
-    to: produce_prd
-    max_retries: 3
-    retry_context: |
-      The user answered your clarifying questions:
-
-      {{answers}}
-
-      Decide:
-        - If the request is now clear enough → emit ready_to_produce_prd=true
-          with a saved PRD artifact.
-        - If you still need clarification → emit new clarifying_questions
-          (you have used {{__retry_attempt}} of 3 rounds).
-
-  - { from: audit_prd, to: produce_tdd,        condition: "prd_audit_verdict == 'approve'" }
-  - { from: audit_prd, to: produce_prd,        condition: "prd_audit_verdict == 'revise'", max_retries: 2, retry_context: "PRD audit feedback:\n{{prd_audit_rationale}}" }
-  - { from: audit_prd, to: escalation_review,  condition: "prd_audit_verdict == 'escalate'" }
+  - { from: START, to: produce_tdd }
 
   - { from: produce_tdd, to: audit_tdd }
 
@@ -740,9 +604,7 @@ edges:
 
   - { from: plan_approval_gate, to: create_workspace, condition: "decision == 'approve'" }
   - { from: plan_approval_gate, to: END,              condition: "decision == 'reject'" }
-  - { from: plan_approval_gate, to: produce_prd, condition: "decision == 'request_changes' AND scope == 'requirements'",     max_retries: 2, retry_context: "Human feedback on PRD:\n{{feedback}}" }
-  - { from: plan_approval_gate, to: produce_tdd, condition: "decision == 'request_changes' AND scope == 'technical_design'", max_retries: 2, retry_context: "Human feedback on TDD:\n{{feedback}}" }
-  - { from: plan_approval_gate, to: produce_prd, condition: "decision == 'request_changes' AND scope == 'all'",              max_retries: 2, retry_context: "Human feedback (full redesign):\n{{feedback}}" }
+  - { from: plan_approval_gate, to: produce_tdd,      condition: "decision == 'request_changes'", max_retries: 2, retry_context: "Human feedback on TDD:\n{{feedback}}" }
 
   # ──────────────────────────────────────────────────────────────────────
   # Implementation phase
@@ -774,8 +636,6 @@ edges:
   # These condition-only edges fire ONLY after exhaustion so they don't
   # fan out in parallel with an active retry.
   # ──────────────────────────────────────────────────────────────────────
-  - { from: clarify_human,            to: escalation_review, condition: "ready_to_produce_prd != true AND __retry_exhausted_from == 'clarify_human'" }
-  - { from: audit_prd,                to: escalation_review, condition: "prd_audit_verdict == 'revise' AND __retry_exhausted_from == 'audit_prd'" }
   - { from: audit_tdd,                to: escalation_review, condition: "tdd_audit_verdict == 'revise' AND __retry_exhausted_from == 'audit_tdd'" }
   - { from: plan_approval_gate,       to: escalation_review, condition: "decision == 'request_changes' AND __retry_exhausted_from == 'plan_approval_gate'" }
   - { from: implement,                to: escalation_review, condition: "implement_verdict == 'fail' AND __retry_exhausted_from == 'implement'" }
@@ -792,27 +652,17 @@ edges:
   - { from: escalation_review, to: END, condition: "decision == 'abandon'" }
 
   # retry_with_feedback — route back to the failing stage with feedback.
-  - { from: escalation_review, to: produce_prd, condition: "decision == 'retry_with_feedback' AND __retry_exhausted_from == 'clarify_human'",        retry_context: "Human intervened on clarification exhaustion. Commit to the best interpretation and produce a PRD. Feedback:\n{{feedback}}" }
-  - { from: escalation_review, to: produce_prd, condition: "decision == 'retry_with_feedback' AND (prd_audit_verdict == 'escalate' OR prd_audit_verdict == 'revise')", retry_context: "Human intervened on PRD audit failure. Feedback:\n{{feedback}}" }
   - { from: escalation_review, to: produce_tdd, condition: "decision == 'retry_with_feedback' AND (tdd_audit_verdict == 'escalate' OR tdd_audit_verdict == 'revise')", retry_context: "Human intervened on TDD audit failure. Feedback:\n{{feedback}}" }
-
-  # Plan-approval exhaustion retry — route back to the producer for the
-  # scope the human last picked. Guarded by exhaustion source so these
-  # don't fan out with audit-driven retries.
-  - { from: escalation_review, to: produce_prd, condition: "decision == 'retry_with_feedback' AND __retry_exhausted_from == 'plan_approval_gate' AND scope == 'requirements'",     retry_context: "Human intervened on plan-approval exhaustion. Feedback:\n{{feedback}}" }
-  - { from: escalation_review, to: produce_tdd, condition: "decision == 'retry_with_feedback' AND __retry_exhausted_from == 'plan_approval_gate' AND scope == 'technical_design'", retry_context: "Human intervened on plan-approval exhaustion. Feedback:\n{{feedback}}" }
-  - { from: escalation_review, to: produce_prd, condition: "decision == 'retry_with_feedback' AND __retry_exhausted_from == 'plan_approval_gate' AND scope == 'all'",              retry_context: "Human intervened on plan-approval exhaustion (all scope). Feedback:\n{{feedback}}" }
+  - { from: escalation_review, to: produce_tdd, condition: "decision == 'retry_with_feedback' AND __retry_exhausted_from == 'plan_approval_gate'", retry_context: "Human intervened on plan-approval exhaustion. Feedback:\n{{feedback}}" }
 
   # Implementation-side retries. The condition-parser maps undefined
-  # identifiers to false, so `prd_satisfied != true` AND
-  # `prd_satisfied == false` BOTH fan out whenever prd_satisfied has
-  # never been set. Guard validator branch with the exhaustion flag.
+  # identifiers to false, so guard the validator branch with the
+  # exhaustion flag instead of relying on prd_satisfied != true.
   - { from: escalation_review, to: implement, condition: "decision == 'retry_with_feedback' AND (implement_verdict == 'escalate' OR implement_verdict == 'fail' OR qa_verdict == 'escalate' OR qa_verdict == 'fail' OR __retry_exhausted_from == 'implementation_validator' OR review_verdict == 'REQUEST_CHANGES')", retry_context: "Human intervened on implementation/qa/validation/review failure. Feedback:\n{{feedback}}" }
 
   # override_and_continue — advance past the failing stage. Paths that
   # reach implementation for the FIRST time go through create_workspace.
   # Paths that have already implemented skip to the next downstream node.
-  - { from: escalation_review, to: produce_tdd,              condition: "decision == 'override_and_continue' AND (prd_audit_verdict == 'escalate' OR prd_audit_verdict == 'revise')" }
   - { from: escalation_review, to: create_workspace,         condition: "decision == 'override_and_continue' AND (tdd_audit_verdict == 'escalate' OR tdd_audit_verdict == 'revise') AND trusted_mode == true" }
   - { from: escalation_review, to: plan_approval_gate,       condition: "decision == 'override_and_continue' AND (tdd_audit_verdict == 'escalate' OR tdd_audit_verdict == 'revise') AND trusted_mode != true" }
   - { from: escalation_review, to: qa,                       condition: "decision == 'override_and_continue' AND (implement_verdict == 'escalate' OR implement_verdict == 'fail')" }
@@ -820,4 +670,3 @@ edges:
   - { from: escalation_review, to: update_docs,              condition: "decision == 'override_and_continue' AND __retry_exhausted_from == 'implementation_validator'" }
   - { from: escalation_review, to: open_pr,                  condition: "decision == 'override_and_continue' AND review_verdict == 'REQUEST_CHANGES'" }
   - { from: escalation_review, to: create_workspace,         condition: "decision == 'override_and_continue' AND __retry_exhausted_from == 'plan_approval_gate'" }
-  - { from: escalation_review, to: produce_prd,              condition: "decision == 'override_and_continue' AND __retry_exhausted_from == 'clarify_human'" }
