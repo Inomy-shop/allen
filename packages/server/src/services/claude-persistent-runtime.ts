@@ -138,7 +138,7 @@ export class ClaudePersistentRuntime implements PersistentChatRuntime {
       args.push('--mcp-config', writeClaudeMcpConfigFile(this.id, mcp.servers), '--strict-mcp-config');
     }
 
-    this.proc = spawn('claude', args, {
+    this.proc = spawn(resolveClaudeBin(), args, {
       cwd,
       env: { ...process.env, ...(input.chatSessionId ? { ALLEN_CHAT_SESSION_ID: input.chatSessionId } : {}) },
       stdio: ['pipe', 'pipe', 'pipe'],
@@ -146,6 +146,7 @@ export class ClaudePersistentRuntime implements PersistentChatRuntime {
     this.proc.stdout.on('data', (chunk: Buffer) => this.handleStdout(chunk));
     this.proc.stderr.on('data', (chunk: Buffer) => { this.stderrBuffer += chunk.toString(); });
     this.proc.on('close', (code) => {
+      const stderrTail = this.stderrBuffer.slice(-2000);
       logRuntimeEvent({
         db: input.db,
         sessionId: input.chatSessionId,
@@ -153,10 +154,11 @@ export class ClaudePersistentRuntime implements PersistentChatRuntime {
         runtimeId: this.id,
         eventType: 'lifecycle',
         event: 'process_closed',
-        data: { code, stderr: this.stderrBuffer.slice(-2000) },
+        data: { code, stderr: stderrTail },
       });
       this.closed = true;
-      this.currentTurn?.reject(new Error(`Claude CLI exited with code ${code}`));
+      const detail = stderrTail.trim() ? `: ${stderrTail.trim().slice(-500)}` : '';
+      this.currentTurn?.reject(new Error(`Claude CLI exited with code ${code}${detail}`));
       this.currentTurn = undefined;
     });
     this.proc.on('error', (err) => {
@@ -416,8 +418,26 @@ function claudeSupportsSystemPrompt(): boolean {
 let claudeHelp: string | undefined;
 function claudeHelpText(): string {
   claudeHelp ??= (() => {
-    const result = spawnSync('claude', ['--help'], { encoding: 'utf8' });
+    const result = spawnSync(resolveClaudeBin(), ['--help'], { encoding: 'utf8' });
     return `${result.stdout ?? ''}\n${result.stderr ?? ''}`;
   })();
   return claudeHelp;
+}
+
+let claudeBinCache: string | undefined;
+function resolveClaudeBin(): string {
+  if (claudeBinCache) return claudeBinCache;
+  const override = process.env.CLAUDE_BIN?.trim();
+  if (override) {
+    claudeBinCache = override;
+    return claudeBinCache;
+  }
+  const r = spawnSync('which', ['-a', 'claude'], { encoding: 'utf8' });
+  const candidate = (r.stdout ?? '')
+    .split('\n')
+    .map((s) => s.trim())
+    .filter((s) => s.length > 0)
+    .find((p) => !p.includes('/node_modules/.bin/'));
+  claudeBinCache = candidate ?? 'claude';
+  return claudeBinCache;
 }
