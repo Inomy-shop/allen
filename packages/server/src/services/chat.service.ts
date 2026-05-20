@@ -9,7 +9,7 @@ import type { Db } from 'mongodb';
 import { ObjectId } from 'mongodb';
 import type { Response } from 'express';
 import { PROVIDERS, runChatLLM, type ChatLLMMessage, type ChatProvider } from './chat-llm.js';
-import { getDefaultChatProvider, getProvidersInDefaultOrder } from './chat-providers.js';
+import { getDefaultChatProvider, getProvidersInDefaultOrder, getTitleGenProviderModel } from './chat-providers.js';
 import { resolveAgentSettings, type AgentLike, type AgentOverrides, type ResolvedSettings } from './agent-settings.js';
 import { AlertService } from './alert.service.js';
 import { registerActiveSession, unregisterActiveSession, waitForBackgroundTasks } from './chat-tools.js';
@@ -1295,11 +1295,12 @@ export class ChatService {
    * Returns the sanitized final title, or null if both attempts failed.
    */
   private async runVerifiedTitleLLM(prompt: string, userMessage: string): Promise<string | null> {
+    const { provider: titleProvider, model: titleModel } = getTitleGenProviderModel();
     const callOnce = async (p: string): Promise<VerifiedTitle | null> => {
       try {
         const result = await runChatLLM(this.db, {
-          provider: 'codex',
-          model: 'gpt-5.5',
+          provider: titleProvider,
+          model: titleModel,
           systemPrompt: '',
           messages: [{ role: 'user', content: p }],
           skipTools: true,
@@ -1331,7 +1332,10 @@ export class ChatService {
 
   /**
    * Generate a concise, meaningful title for a conversation using the LLM.
-   * Uses codex gpt-5.5 with no tools. Falls back to string truncation.
+   * Provider+model come from getTitleGenProviderModel() — the chat default
+   * provider's defaultModel (so claude-only installs run titles through
+   * claude-cli/sonnet, codex installs through codex/gpt-5.5).
+   * Falls back to deterministic / truncation titles when the LLM fails.
    * assistantResponse is optional — omit it when titling from a user message only
    * (e.g. the first turn was aborted before the LLM responded).
    */

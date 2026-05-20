@@ -107,6 +107,22 @@ export function getProvidersInDefaultOrder(): ProviderConfig[] {
   });
 }
 
+/**
+ * Provider + model to use for chat-session title generation.
+ * Reuses the same provider as chat (ALLEN_DEFAULT_CHAT_PROVIDER) with that
+ * provider's default model — fast/cheap is preferred over capable for a
+ * 10-word title.
+ *
+ * On claude-only installs this means title gen runs through claude-cli
+ * instead of failing to spawn codex; on codex installs it matches the
+ * previous hard-coded `codex` / `gpt-5.5` exactly.
+ */
+export function getTitleGenProviderModel(): { provider: ChatProvider; model: string } {
+  const provider = getDefaultChatProvider();
+  const cfg = PROVIDERS.find((p) => p.provider === provider);
+  return { provider, model: cfg?.defaultModel ?? 'gpt-5.5' };
+}
+
 // ── Logger ──
 
 const LOG = '\x1b[36m[chat]\x1b[0m';
@@ -139,6 +155,17 @@ export async function syncMcpToCodex(db: Db): Promise<void> {
   const { execFile } = await import('node:child_process');
   const { promisify } = await import('node:util');
   const execFileAsync = promisify(execFile);
+
+  // Skip entirely if codex isn't on PATH (claude-only install). Otherwise
+  // every boot logs "Failed to register Allen MCP with Codex: spawn codex
+  // ENOENT" for the Allen MCP, each external server, etc.
+  try {
+    await execFileAsync('codex', ['--version'], { timeout: 2000 });
+  } catch {
+    log('codex CLI not available — skipping Codex MCP sync (claude-only install)');
+    return;
+  }
+
   const { McpService } = await import('./mcp.service.js');
   const service = new McpService(db);
   const servers = (await service.list()).filter(s => s.enabled && s.type === 'stdio');

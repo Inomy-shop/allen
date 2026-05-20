@@ -310,6 +310,28 @@ replace_placeholder() {
 replace_placeholder JWT_ACCESS_SECRET
 replace_placeholder JWT_REFRESH_SECRET
 
+# Set (or leave) an .env key idempotently. If the key is already present and
+# non-empty, leave it alone (user customization wins). If a commented
+# placeholder exists, uncomment it with the value; otherwise append.
+set_env_key() {
+  local key="$1"
+  local val="$2"
+  if grep -qE "^${key}=." .env; then
+    ok "${key} already set in .env (leaving as-is)"
+    return 0
+  fi
+  if grep -qE "^# *${key}=" .env; then
+    awk -v k="$key" -v v="$val" '
+      BEGIN { pat = "^# *" k "=" }
+      $0 ~ pat { print k "=" v; next }
+      { print }
+    ' .env > .env.tmp && mv .env.tmp .env
+  else
+    printf "%s=%s\n" "$key" "$val" >> .env
+  fi
+  ok "Set ${key}=${val}"
+}
+
 # ---------------------------------------------------------------------------
 # CLAUDE_BIN auto-detection
 #
@@ -345,6 +367,105 @@ else
     warn "Install the standalone Claude Code CLI from https://docs.claude.com/en/docs/claude-code/quickstart"
     warn "then re-run this script (or set CLAUDE_BIN=<absolute-path> in .env)."
   fi
+fi
+
+# ---------------------------------------------------------------------------
+# Default LLM provider
+#
+# Pick the provider Allen will use by default for chat, newly seeded built-in
+# agents, agents created via the API, and the agent each workflow node spawns.
+# Per-agent overrides in the Agents page (and per-node overrides in the
+# workflow editor) still win at runtime — these are creation-time defaults.
+#
+# Decision:
+#   - both CLIs available  → interactive prompt (claude/opus vs codex/gpt-5.5)
+#   - only claude          → claude-cli + opus
+#   - only codex           → codex + gpt-5.5
+#   - neither              → skip (warn; user wires it later)
+# ---------------------------------------------------------------------------
+step "Choosing default LLM provider"
+
+CLAUDE_AVAILABLE=0
+CODEX_AVAILABLE=0
+if have claude && claude_has_agent_flag claude; then
+  CLAUDE_AVAILABLE=1
+fi
+if have codex; then
+  CODEX_AVAILABLE=1
+fi
+
+CHOICE_PROVIDER=""
+CHOICE_MODEL=""
+CHOICE_LABEL=""
+
+# CHOICE_MODE distinguishes the three outcomes:
+#   "flatten" → write all three ALLEN_DEFAULT_* keys to .env
+#   "preserve" → write none of them, so the seed's per-agent provider+model
+#                is honored verbatim by resolveAgentProviderModel()
+#   ""        → no CLI usable; skip silently with a warn
+CHOICE_MODE=""
+
+if [ "$CLAUDE_AVAILABLE" -eq 1 ] && [ "$CODEX_AVAILABLE" -eq 1 ]; then
+  if [ -t 0 ]; then
+    printf "\n  Both Claude Code and Codex CLIs are available.\n"
+    printf "  Pick the default for chat, new agents, and workflow nodes:\n"
+    printf "    ${C_BOLD}1)${C_RESET} Claude Code     (everything on claude-cli / opus)\n"
+    printf "    ${C_BOLD}2)${C_RESET} Codex           (everything on codex / gpt-5.5)\n"
+    printf "    ${C_BOLD}3)${C_RESET} Both (preserve) (keep each seeded agent's own provider+model —\n"
+    printf "                       some on claude, some on codex, as defined in the seed)\n"
+    printf "  Choice [1/2/3, default 1]: "
+    read -r picker_choice
+    case "$picker_choice" in
+      2|codex)
+        CHOICE_MODE="flatten"
+        CHOICE_PROVIDER="codex"
+        CHOICE_MODEL="gpt-5.5"
+        CHOICE_LABEL="Codex (gpt-5.5) — flattened"
+        ;;
+      3|both|preserve)
+        CHOICE_MODE="preserve"
+        CHOICE_LABEL="Both (preserve seed: per-agent provider+model)"
+        ;;
+      *)
+        CHOICE_MODE="flatten"
+        CHOICE_PROVIDER="claude-cli"
+        CHOICE_MODEL="opus"
+        CHOICE_LABEL="Claude Code (opus) — flattened"
+        ;;
+    esac
+  else
+    warn "Non-interactive shell — defaulting to claude-cli/opus."
+    warn "Edit ALLEN_DEFAULT_CHAT_PROVIDER / ALLEN_DEFAULT_AGENT_PROVIDER / ALLEN_DEFAULT_AGENT_MODEL in .env to override."
+    CHOICE_MODE="flatten"
+    CHOICE_PROVIDER="claude-cli"
+    CHOICE_MODEL="opus"
+    CHOICE_LABEL="Claude Code (opus) — flattened"
+  fi
+elif [ "$CLAUDE_AVAILABLE" -eq 1 ]; then
+  ok "Only Claude Code CLI is available — defaulting to claude-cli / opus."
+  CHOICE_MODE="flatten"
+  CHOICE_PROVIDER="claude-cli"
+  CHOICE_MODEL="opus"
+  CHOICE_LABEL="Claude Code (opus)"
+elif [ "$CODEX_AVAILABLE" -eq 1 ]; then
+  ok "Only Codex CLI is available — defaulting to codex / gpt-5.5."
+  CHOICE_MODE="flatten"
+  CHOICE_PROVIDER="codex"
+  CHOICE_MODEL="gpt-5.5"
+  CHOICE_LABEL="Codex (gpt-5.5)"
+else
+  warn "Neither Claude Code nor Codex CLI is usable — skipping default LLM provider config."
+  warn "Once a CLI is installed, set these in .env:"
+  warn "  ALLEN_DEFAULT_CHAT_PROVIDER, ALLEN_DEFAULT_AGENT_PROVIDER, ALLEN_DEFAULT_AGENT_MODEL"
+fi
+
+if [ "$CHOICE_MODE" = "flatten" ]; then
+  set_env_key ALLEN_DEFAULT_CHAT_PROVIDER  "$CHOICE_PROVIDER"
+  set_env_key ALLEN_DEFAULT_AGENT_PROVIDER "$CHOICE_PROVIDER"
+  set_env_key ALLEN_DEFAULT_AGENT_MODEL    "$CHOICE_MODEL"
+elif [ "$CHOICE_MODE" = "preserve" ]; then
+  ok "Preserve mode — leaving ALLEN_DEFAULT_AGENT_* unset so seed values are honored verbatim."
+  ok "Chat will use Allen's built-in default (codex). Override per-session in the chat picker."
 fi
 
 # ---------------------------------------------------------------------------
@@ -396,4 +517,37 @@ else
     - Open ${C_BOLD}http://localhost:5173${C_RESET} and complete onboarding.
 
 EOF
+fi
+
+if [ -n "${CHOICE_LABEL:-}" ]; then
+  if [ "$CHOICE_MODE" = "preserve" ]; then
+    cat <<EOF
+  ${C_BOLD}Default LLM provider:${C_RESET} ${CHOICE_LABEL}
+    - Each seeded built-in agent keeps the provider+model defined in its seed
+      (e.g. architects on opus, lightweight dispatchers on haiku, repo-scanner
+      on codex/gpt-5.5).
+    - Override per-agent in the Agents page (provider + model).
+    - Override per-node in the workflow editor (Agent overrides → provider/model).
+    - Chat: switch per-session in the chat picker. To pin a default, set
+      ${C_BOLD}ALLEN_DEFAULT_CHAT_PROVIDER${C_RESET} in .env.
+    - Existing agent records keep their stored values. To re-seed built-ins
+      under the current rules, set ${C_BOLD}SEED_OVERRIDE=true${C_RESET} and restart.
+
+EOF
+  else
+    cat <<EOF
+  ${C_BOLD}Default LLM provider:${C_RESET} ${CHOICE_LABEL}
+    - Chat, newly seeded built-in agents, and new workflow nodes use this by default.
+    - Same-provider role-specific models in the seed are preserved (e.g. an agent
+      pinned to opus stays on opus); cross-provider seeds fall back to the env model.
+    - Override per-agent in the Agents page (provider + model).
+    - Override per-node in the workflow editor (Agent overrides → provider/model).
+    - Chat: switch per-session in the chat picker, or change the default by editing
+      ${C_BOLD}ALLEN_DEFAULT_CHAT_PROVIDER${C_RESET} in .env.
+    - Existing agent records keep their stored provider/model; only NEW agents pick
+      up the env defaults. To re-seed built-ins, set ${C_BOLD}SEED_OVERRIDE=true${C_RESET}
+      and restart.
+
+EOF
+  fi
 fi
