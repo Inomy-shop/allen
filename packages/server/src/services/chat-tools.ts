@@ -1346,6 +1346,12 @@ async function runSpawnInBackground(
                 // resume — waiting for Promise resolution loses threadId if
                 // the spawn is killed by a watchdog.
                 currentResumeSession = evt.thread_id;
+                // Eagerly persist to executions.sessions so a SIGTERM/crash
+                // after this point still leaves a resumable session id.
+                db.collection('executions').updateOne(
+                  { id: executionId },
+                  { $set: { [`sessions.${agentName}`]: evt.thread_id } },
+                ).catch((err) => logger.warn('[codex] session.eager_persist_failed', { executionId, agentName, error: (err as Error).message }));
                 logger.info('[codex] thread.started', { executionId, agentName, pid: proc.pid ?? '?', thread: String(evt.thread_id).slice(0, 12) });
               }
               if (evt.type === 'item.completed' && evt.item?.type === 'agent_message') {
@@ -1607,7 +1613,18 @@ async function runSpawnInBackground(
         const msg = raced.result.value;
 
         if ('session_id' in msg && msg.session_id) {
-          sessionId = msg.session_id as string;
+          const incoming = msg.session_id as string;
+          // Eagerly persist on first observation so a SIGTERM/crash before
+          // the terminal updateOne (line ~1687) still leaves a resumable
+          // session id on executions.sessions[agentName]. Fire-and-forget;
+          // failures here must not stall the stream.
+          if (sessionId !== incoming) {
+            db.collection('executions').updateOne(
+              { id: executionId },
+              { $set: { [`sessions.${agentName}`]: incoming } },
+            ).catch((err) => logger.warn('[spawn] session.eager_persist_failed', { executionId, agentName, error: (err as Error).message }));
+          }
+          sessionId = incoming;
           currentResumeSession = sessionId;
         }
 
