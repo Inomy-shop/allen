@@ -22,6 +22,7 @@
   ],
   "scripts": {
     "setup": "bash scripts/setup.sh",
+    "setup:context": "bash scripts/setup-context-engine.sh",
     "health": "npm --workspace @allen/server run health --",
     "start": "turbo run dev",
     "dev": "turbo run dev",
