@@ -38,6 +38,7 @@ export const ALLEN_MCP_TOOL_NAMES: readonly string[] = [
   'get_repo_context_body',
   'get_repo_skill_body',
   'get_node_context_usage',
+  'save_repo_knowledge_graph',
   'find_repo_for_pr_url',
   'find_pr_by_url',
   'mark_pr_synced',

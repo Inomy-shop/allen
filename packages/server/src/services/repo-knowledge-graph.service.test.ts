@@ -6,6 +6,8 @@ import {
   RepoKnowledgeGraphService,
   RepoKnowledgeGraphValidationError,
 } from './repo-knowledge-graph.service.js';
+import { buildIndexerUserPrompt, buildSpawnedAgentRoleInventory, workflowRoleGuidance } from './knowledge-graph/repo-knowledge-graph-indexer.js';
+import type { KnowledgeCandidateInventory, WorkflowRoleInventoryEntry } from './knowledge-graph/repo-knowledge-graph.types.js';
 import { execFileSync } from 'node:child_process';
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -21,9 +23,11 @@ describe('RepoKnowledgeGraphService context packets', () => {
   let repoId: ObjectId;
   let repoPath: string;
   let previousContextProvider: string | undefined;
+  let previousCogneeMandatoryGraph: string | undefined;
 
   beforeAll(async () => {
     previousContextProvider = process.env.ALLEN_CONTEXT_PROVIDER;
+    previousCogneeMandatoryGraph = process.env.ALLEN_COGNEE_MANDATORY_GRAPH;
     process.env.ALLEN_CONTEXT_PROVIDER = 'graph';
     repoPath = mkdtempSync(join(tmpdir(), 'allen-knowledge-fixture-'));
     mkdirSync(join(repoPath, '.claude/skills/payments'), { recursive: true });
@@ -64,6 +68,14 @@ describe('RepoKnowledgeGraphService context packets', () => {
       createdAt: new Date(),
       updatedAt: new Date(),
     });
+    await db.collection('agents').insertMany([
+      { name: 'backend-developer', displayName: 'Backend Developer' },
+      { name: 'frontend-developer', displayName: 'Frontend Developer' },
+      { name: 'devops-engineer', displayName: 'DevOps Engineer' },
+      { name: 'security-specialist', displayName: 'Security Specialist' },
+      { name: 'test-writer', displayName: 'Test Writer' },
+      { name: 'documentation-writer', displayName: 'Documentation Writer' },
+    ]);
     await db.collection('repo_knowledge_indexes').insertOne({
       indexId: 'index-1',
       repoId: String(repoId),
@@ -202,6 +214,8 @@ describe('RepoKnowledgeGraphService context packets', () => {
   afterAll(async () => {
     if (previousContextProvider === undefined) delete process.env.ALLEN_CONTEXT_PROVIDER;
     else process.env.ALLEN_CONTEXT_PROVIDER = previousContextProvider;
+    if (previousCogneeMandatoryGraph === undefined) delete process.env.ALLEN_COGNEE_MANDATORY_GRAPH;
+    else process.env.ALLEN_COGNEE_MANDATORY_GRAPH = previousCogneeMandatoryGraph;
     await client.close();
     await mongo.stop();
     rmSync(repoPath, { recursive: true, force: true });
@@ -363,6 +377,92 @@ describe('RepoKnowledgeGraphService context packets', () => {
     expect(stored?.contextInjection?.injectedRefs?.length).toBeGreaterThan(0);
   });
 
+  it('skips semantic repo context for support/output nodes with no explicit mandatory mapping', async () => {
+    const service = new RepoKnowledgeGraphService(db);
+    const packet = await service.buildNodeContextPacket({
+      executionId: 'exec-open-pr-support',
+      workflowName: 'bug-investigate-and-fix',
+      nodeName: 'open_pr',
+      nodeRole: 'pr-creator',
+      attempt: 1,
+      state: { repo_path: repoPath, changedFiles: ['src/payments/service.ts'] },
+      prompt: 'Create the pull request from upstream artifacts',
+      provider: 'claude',
+    });
+
+    expect(packet).toBeNull();
+    await expect(db.collection('node_context_packets').findOne({ executionId: 'exec-open-pr-support' })).resolves.toBeNull();
+  });
+
+  it('injects only explicit mandatory role mappings for support/output nodes', async () => {
+    const service = new RepoKnowledgeGraphService(db);
+    writeFileSync(join(repoPath, 'docs/pr-policy.md'), 'PR titles must include the ticket key.\n');
+    execFileSync('git', ['add', 'docs/pr-policy.md'], { cwd: repoPath });
+    await db.collection('knowledge_nodes').insertOne({
+      id: `${repoId}:pr-policy`,
+      stableKey: 'pr-policy',
+      repoId: String(repoId),
+      indexId: 'index-1',
+      kind: 'context_file',
+      title: 'PR Policy',
+      path: 'docs/pr-policy.md',
+      summary: 'Always-load PR creation policy.',
+      tags: ['pr', 'policy'],
+      mandatoryForNodeRoles: ['pr-creator'],
+      source: { type: 'repo_file', uri: 'repo://docs/pr-policy.md' },
+      freshness: { lastSeenAt: new Date(), contentHash: '8', stale: false },
+      access: { visibility: 'repo', injectPolicy: 'on_demand' },
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    });
+
+    const packet = await service.buildNodeContextPacket({
+      executionId: 'exec-open-pr-mandatory-only',
+      workflowName: 'bug-investigate-and-fix',
+      nodeName: 'open_pr',
+      nodeRole: 'pr-creator',
+      attempt: 1,
+      state: { repo_path: repoPath, changedFiles: ['src/payments/service.ts'] },
+      prompt: 'Create the pull request from upstream artifacts',
+      provider: 'claude',
+    });
+
+    expect(packet).not.toBeNull();
+    expect(packet?.systemPromptBlock).toContain('PR titles must include the ticket key');
+    expect(packet?.systemPromptBlock).not.toContain('Always read repo instructions before changes.');
+    expect(packet?.traceSummary).toEqual(expect.objectContaining({
+      contextRetrievalMode: 'mandatory_only',
+      retrievalProviders: expect.arrayContaining(['mandatory_graph']),
+    }));
+    expect(packet?.traceSummary.retrievalProviders).not.toContain('graph_keyword_metadata');
+    const stored = await db.collection('node_context_packets').findOne({ packetId: packet?.packetId });
+    expect(stored?.selectedRefs).toEqual([
+      expect.objectContaining({ refId: `${repoId}:pr-policy`, providerId: 'mandatory_graph' }),
+    ]);
+  });
+
+  it('keeps investigation and planning roles on full retrieval', async () => {
+    const service = new RepoKnowledgeGraphService(db);
+    const packet = await service.buildNodeContextPacket({
+      executionId: 'exec-investigation-full-context',
+      workflowName: 'bug-investigate-and-fix',
+      nodeName: 'investigate',
+      nodeRole: 'bug-investigator',
+      attempt: 1,
+      state: { repo_path: repoPath },
+      prompt: 'Investigate a payment refund mismatch',
+      provider: 'claude',
+    });
+
+    expect(packet).not.toBeNull();
+    expect(packet?.traceSummary).toEqual(expect.objectContaining({
+      contextRetrievalMode: 'full',
+      retrievalProviders: expect.arrayContaining(['mandatory_graph', 'graph_keyword_metadata']),
+    }));
+    expect(workflowRoleGuidance('solution-architect').category).toBe('repo-operating');
+    expect(workflowRoleGuidance('technical-designer').category).toBe('repo-operating');
+  });
+
   it('returns no context packet when a repo graph is missing', async () => {
     const service = new RepoKnowledgeGraphService(db);
     await db.collection('repos').insertOne({
@@ -381,6 +481,189 @@ describe('RepoKnowledgeGraphService context packets', () => {
       state: { repo_path: join(repoPath, 'missing-index') },
       prompt: 'Investigate a bug',
     })).resolves.toBeNull();
+  });
+
+  it('builds a Cognee context packet without requiring a graph index', async () => {
+    const previousProvider = process.env.ALLEN_CONTEXT_PROVIDER;
+    const previousSidecar = process.env.ALLEN_COGNEE_SIDECAR_SCRIPT;
+    const previousGraphExpansion = process.env.ALLEN_COGNEE_GRAPH_EXPANSION;
+    const scriptDir = mkdtempSync(join(tmpdir(), 'allen-cognee-packet-'));
+    try {
+      process.env.ALLEN_CONTEXT_PROVIDER = 'cognee';
+      process.env.ALLEN_COGNEE_GRAPH_EXPANSION = 'off';
+      const cogneeRepoId = new ObjectId();
+      const cogneeRepoPath = join(repoPath, 'cognee-only-repo');
+      mkdirSync(cogneeRepoPath, { recursive: true });
+      await db.collection('repos').insertOne({
+        _id: cogneeRepoId,
+        name: 'cognee-only-repo',
+        path: cogneeRepoPath,
+        status: 'active',
+      });
+
+      const scriptPath = join(scriptDir, 'fake-cognee-search.py');
+      writeFileSync(scriptPath, `#!/usr/bin/env python3
+import json
+import sys
+json.load(sys.stdin)
+print(json.dumps({
+  "diagnostics": [{"code": "fake_cognee_search", "severity": "info"}],
+  "results": [{
+    "id": "payment-service-chunk",
+    "title": "Payment Service",
+    "kind": "source_file",
+    "path": "src/payments/service.ts",
+    "content": "export function refund() { return 'idempotent'; }",
+    "score": 0.98,
+    "externalMetadata": {
+      "repoId": "${String(cogneeRepoId)}",
+      "path": "src/payments/service.ts",
+      "title": "Payment Service",
+      "kind": "source_file"
+    }
+  }]
+}))
+`);
+      process.env.ALLEN_COGNEE_SIDECAR_SCRIPT = scriptPath;
+
+      const service = new RepoKnowledgeGraphService(db);
+      const packet = await service.buildNodeContextPacket({
+        executionId: 'exec-cognee-no-graph',
+        workflowName: 'bug-investigate-and-fix',
+        nodeName: 'investigate',
+        nodeRole: 'bug-investigator',
+        attempt: 1,
+        state: {
+          worktree_path: join(repoPath, 'unmapped-worktree'),
+          repo_path: cogneeRepoPath,
+          changedFiles: ['src/payments/service.ts'],
+        },
+        prompt: 'Investigate refund idempotency in payment service',
+        provider: 'claude',
+      });
+
+      expect(packet).not.toBeNull();
+      expect(packet?.systemPromptBlock).toContain('<allen_mandatory_repo_context');
+      expect(packet?.systemPromptBlock).toContain("return 'idempotent'");
+      expect(packet?.traceSummary).toEqual(expect.objectContaining({
+        contextProvider: 'cognee',
+        indexId: `cognee:${String(cogneeRepoId)}`,
+        indexFreshness: 'provider_runtime',
+        systemPromptContextInjected: true,
+      }));
+      expect(packet?.traceSummary.retrievalProviders).toEqual(expect.arrayContaining(['cognee_memory']));
+      expect(packet?.traceSummary.providerDiagnostics).toEqual(expect.arrayContaining([
+        expect.objectContaining({ code: 'cognee_mandatory_graph_missing', severity: 'warn' }),
+        expect.objectContaining({ code: 'cognee_graph_expansion_disabled' }),
+        expect.objectContaining({ code: 'fake_cognee_search' }),
+      ]));
+
+      const stored = await db.collection('node_context_packets').findOne({ packetId: packet?.packetId });
+      expect(stored?.selectedRefs).toEqual(expect.arrayContaining([
+        expect.objectContaining({ refId: 'cognee:payment-service-chunk', path: 'src/payments/service.ts' }),
+      ]));
+      expect(stored?.contextInjection?.injectedRefs).toEqual(expect.arrayContaining([
+        expect.objectContaining({ refId: 'cognee:payment-service-chunk' }),
+      ]));
+
+      const usage = await service.recordContextUsage({
+        executionId: 'exec-cognee-no-graph',
+        workflowName: 'bug-investigate-and-fix',
+        nodeName: 'investigate',
+        nodeRole: 'bug-investigator',
+        attempt: 1,
+        packetId: packet?.packetId,
+        outputs: {
+          repo_context_usage: {
+            context_loaded: [],
+            context_applied: [],
+            context_skipped: [],
+          },
+        },
+      });
+      expect(usage?.loadedCount).toBeGreaterThan(0);
+    } finally {
+      if (previousProvider === undefined) delete process.env.ALLEN_CONTEXT_PROVIDER;
+      else process.env.ALLEN_CONTEXT_PROVIDER = previousProvider;
+      if (previousSidecar === undefined) delete process.env.ALLEN_COGNEE_SIDECAR_SCRIPT;
+      else process.env.ALLEN_COGNEE_SIDECAR_SCRIPT = previousSidecar;
+      if (previousGraphExpansion === undefined) delete process.env.ALLEN_COGNEE_GRAPH_EXPANSION;
+      else process.env.ALLEN_COGNEE_GRAPH_EXPANSION = previousGraphExpansion;
+      rmSync(scriptDir, { recursive: true, force: true });
+    }
+  });
+
+  it('loads mandatory Allen graph context before Cognee semantic refs in Cognee mode', async () => {
+    const previousProvider = process.env.ALLEN_CONTEXT_PROVIDER;
+    const previousSidecar = process.env.ALLEN_COGNEE_SIDECAR_SCRIPT;
+    const previousGraphExpansion = process.env.ALLEN_COGNEE_GRAPH_EXPANSION;
+    const scriptDir = mkdtempSync(join(tmpdir(), 'allen-cognee-graph-packet-'));
+    try {
+      process.env.ALLEN_CONTEXT_PROVIDER = 'cognee';
+      delete process.env.ALLEN_COGNEE_MANDATORY_GRAPH;
+      process.env.ALLEN_COGNEE_GRAPH_EXPANSION = 'off';
+      const scriptPath = join(scriptDir, 'fake-cognee-search.py');
+      writeFileSync(scriptPath, `#!/usr/bin/env python3
+import json
+import sys
+json.load(sys.stdin)
+print(json.dumps({
+  "diagnostics": [{"code": "fake_cognee_search", "severity": "info"}],
+  "results": [{
+    "id": "payment-service-chunk",
+    "title": "Payment Service",
+    "kind": "source_file",
+    "path": "src/payments/service.ts",
+    "content": "export function refund() { return 'idempotent'; }",
+    "score": 0.98,
+    "externalMetadata": {
+      "repoId": "${String(repoId)}",
+      "path": "src/payments/service.ts",
+      "title": "Payment Service",
+      "kind": "source_file"
+    }
+  }]
+}))
+`);
+      process.env.ALLEN_COGNEE_SIDECAR_SCRIPT = scriptPath;
+
+      const service = new RepoKnowledgeGraphService(db);
+      const packet = await service.buildNodeContextPacket({
+        executionId: 'exec-cognee-with-graph',
+        workflowName: 'bug-investigate-and-fix',
+        nodeName: 'implement',
+        nodeRole: 'backend-developer',
+        attempt: 1,
+        state: {
+          repo_path: repoPath,
+          changedFiles: ['src/payments/service.ts'],
+        },
+        prompt: 'Implement refund idempotency in payment service',
+        provider: 'claude',
+      });
+
+      expect(packet).not.toBeNull();
+      expect(packet?.systemPromptBlock).toContain('Prefer small, precise mandatory repo rules');
+      expect(packet?.traceSummary.retrievalProviders).toEqual(expect.arrayContaining(['mandatory_graph', 'cognee_memory']));
+      expect(packet?.traceSummary.providerDiagnostics).toEqual(expect.arrayContaining([
+        expect.objectContaining({ code: 'cognee_mandatory_graph_loaded', indexId: 'index-1' }),
+        expect.objectContaining({ code: 'cognee_graph_expansion_disabled' }),
+      ]));
+
+      const stored = await db.collection('node_context_packets').findOne({ packetId: packet?.packetId });
+      expect(stored?.selectedRefs).toEqual(expect.arrayContaining([
+        expect.objectContaining({ providerId: 'mandatory_graph', refId: `${repoId}:guidelines-payments` }),
+        expect.objectContaining({ providerId: 'cognee_memory', refId: 'cognee:payment-service-chunk' }),
+      ]));
+    } finally {
+      if (previousProvider === undefined) delete process.env.ALLEN_CONTEXT_PROVIDER;
+      else process.env.ALLEN_CONTEXT_PROVIDER = previousProvider;
+      if (previousSidecar === undefined) delete process.env.ALLEN_COGNEE_SIDECAR_SCRIPT;
+      else process.env.ALLEN_COGNEE_SIDECAR_SCRIPT = previousSidecar;
+      if (previousGraphExpansion === undefined) delete process.env.ALLEN_COGNEE_GRAPH_EXPANSION;
+      else process.env.ALLEN_COGNEE_GRAPH_EXPANSION = previousGraphExpansion;
+      rmSync(scriptDir, { recursive: true, force: true });
+    }
   });
 
   it('records usage from raw agent JSON even when workflow outputs omit usage fields', async () => {
@@ -951,11 +1234,52 @@ describe('RepoKnowledgeGraphService context packets', () => {
     expect(latest?.indexId).toBe(second.indexId);
   });
 
+  it('keeps latest indexes separate by graph mode', async () => {
+    const service = new RepoKnowledgeGraphService(db);
+    const full = await service.saveGeneratedGraph({
+      repoId: String(repoId),
+      source: 'api',
+      graphMode: 'full_graph',
+      graph: {
+        repoSummary: 'full graph',
+        nodes: [{ id: 'module-full', kind: 'module', title: 'Full Module', summary: 'full graph node' }],
+        edges: [],
+      },
+    });
+    const mandatory = await service.saveGeneratedGraph({
+      repoId: String(repoId),
+      source: 'api',
+      graphMode: 'mandatory_context_map',
+      graph: {
+        repoSummary: 'mandatory map',
+        nodes: [{ id: 'root-agents', kind: 'instruction_file', title: 'Root AGENTS', path: 'AGENTS.md', summary: 'global repo instruction' }],
+        edges: [],
+      },
+    });
+
+    expect((await service.getLatestIndex(String(repoId), 'full_graph'))?.indexId).toBe(full.indexId);
+    expect((await service.getLatestIndex(String(repoId), 'mandatory_context_map'))?.indexId).toBe(mandatory.indexId);
+  });
+
+  it('requires graph mode for manual agent-tool graph saves', async () => {
+    const service = new RepoKnowledgeGraphService(db);
+    await expect(service.saveGeneratedGraph({
+      repoId: String(repoId),
+      source: 'agent_tool',
+      graph: {
+        repoSummary: 'missing mode',
+        nodes: [],
+        edges: [],
+      },
+    })).rejects.toThrow(/graph_mode is required/);
+  });
+
   it('rejects generated graphs with wrong repo path casing before saving', async () => {
     const service = new RepoKnowledgeGraphService(db);
     await expect(service.saveGeneratedGraph({
       repoId: String(repoId),
       source: 'agent_tool',
+      graphMode: 'full_graph',
       graph: {
         repoSummary: 'bad casing',
         nodes: [{ id: 'root-agents-uppercase', kind: 'instruction_file', title: 'Root AGENTS', path: 'agents.md', summary: 'wrong path casing' }],
@@ -1002,7 +1326,108 @@ describe('RepoKnowledgeGraphService context packets', () => {
     expect(latest?.graphValidation?.candidateCoverage).toBeTruthy();
   });
 
-  it('warns when active workflow roles are missing mandatory context mappings', async () => {
+  it('instructs the indexer to reserve mandatory mappings for always-load guidelines only', () => {
+    const inventory: KnowledgeCandidateInventory = {
+      trackedPaths: ['AGENTS.md', 'docs/architecture.md', 'docs/coding-guidelines.md', 'package.json'],
+      instructionFiles: ['AGENTS.md'],
+      skillFiles: [],
+      productionKnowledgeFiles: [],
+      moduleRuleFiles: ['docs/coding-guidelines.md'],
+      docsAndRunbooks: ['docs/architecture.md'],
+      sourceModuleDirs: ['src'],
+      packageScripts: [{ path: 'package.json', scripts: { test: 'vitest run' } }],
+    };
+    const workflowRoleInventory: WorkflowRoleInventoryEntry[] = [
+      {
+        role: 'engineering-lead',
+        category: 'repo-operating',
+        workflows: [{ workflowName: 'bug-investigate-and-fix', nodeName: 'implement' }],
+        recommendedMandatoryContext: ['implementation workflow guidelines'],
+        notes: 'Map mandatory context only for always-load engineering workflow guidelines.',
+      },
+    ];
+    const spawnedAgentRoleInventory: WorkflowRoleInventoryEntry[] = [
+      {
+        role: 'devops-engineer',
+        category: 'repo-operating',
+        workflows: [],
+        recommendedMandatoryContext: ['always-load coding guidelines', 'implementation process rules'],
+        notes: 'Implementation-capable role; map only always-load guideline files as mandatory.',
+      },
+      {
+        role: 'security-specialist',
+        category: 'workflow-support',
+        workflows: [],
+        recommendedMandatoryContext: ['always-load process guidelines when available'],
+        notes: 'Support role; map mandatory repo context only when a candidate file is an always-load guideline for the role.',
+      },
+      {
+        role: 'test-writer',
+        category: 'workflow-support',
+        workflows: [],
+        recommendedMandatoryContext: ['always-load process guidelines when available'],
+        notes: 'Support role; map mandatory repo context only when a candidate file is an always-load guideline for the role.',
+      },
+      {
+        role: 'documentation-writer',
+        category: 'workflow-support',
+        workflows: [],
+        recommendedMandatoryContext: ['always-load process guidelines when available'],
+        notes: 'Support role; map mandatory repo context only when a candidate file is an always-load guideline for the role.',
+      },
+    ];
+
+    const prompt = buildIndexerUserPrompt('fixture-repo', repoPath, inventory, workflowRoleInventory, spawnedAgentRoleInventory);
+
+    expect(prompt).toContain('MODE: full_graph');
+    expect(prompt).toContain('mandatory_context_map');
+    expect(prompt).toContain('mandatoryForNodeRoles means "always-load workflow node role guideline."');
+    expect(prompt).toContain('Allen spawned specialist role inventory');
+    expect(prompt).toContain('mandatoryForSpawnedAgentRoles');
+    expect(prompt).toContain('mandatoryForSpawnerRoles');
+    expect(prompt).toContain('It is valid for a role to have no mandatory mapping');
+    expect(prompt).toContain('Do not mark architecture docs, module maps');
+    expect(prompt).toContain('Command profile files such as package.json');
+    expect(prompt).toContain('Cognee uses this graph only to identify Allen mandatory always-load context');
+    expect(prompt).toContain('Workflow-support/output roles such as PR creation');
+    expect(prompt).toContain('"role": "devops-engineer"');
+    expect(prompt).toContain('"role": "security-specialist"');
+    expect(prompt).toContain('"role": "test-writer"');
+    expect(prompt).toContain('"role": "documentation-writer"');
+    expect(prompt).toContain('"mandatoryForNodeRoles": []');
+    expect(prompt).toContain('"mandatoryForSpawnedAgentRoles": []');
+    expect(prompt).toContain('"mandatoryForSpawnerRoles": []');
+    expect(prompt).not.toContain('"mandatoryForNodeRoles": ["backend-developer", "qa-lead"]');
+    expect(prompt).not.toContain('map at least one mandatory context file');
+    expect(prompt).not.toContain('every repo-operating role has at least one node');
+    expect(workflowRoleGuidance('pr-creator')).toEqual(expect.objectContaining({
+      category: 'workflow-support',
+      recommendedMandatoryContext: [],
+    }));
+    expect(workflowRoleGuidance('security-specialist').category).toBe('repo-operating');
+    expect(workflowRoleGuidance('test-writer').category).toBe('repo-operating');
+
+    const mandatoryPrompt = buildIndexerUserPrompt('fixture-repo', repoPath, inventory, workflowRoleInventory, spawnedAgentRoleInventory, 'mandatory_context_map');
+    expect(mandatoryPrompt).toContain('MODE: mandatory_context_map');
+    expect(mandatoryPrompt).toContain('Build only always-load guideline/policy/process/safety context');
+    expect(mandatoryPrompt).toContain('omit task-specific files from the output graph');
+  });
+
+  it('builds spawned-agent role inventory from seeded agents instead of a hard-coded subset', async () => {
+    const inventory = await buildSpawnedAgentRoleInventory(db);
+    const roles = inventory.map((entry) => entry.role);
+
+    expect(roles).toEqual(expect.arrayContaining([
+      'backend-developer',
+      'frontend-developer',
+      'devops-engineer',
+      'security-specialist',
+      'test-writer',
+      'documentation-writer',
+    ]));
+  });
+
+  it('accepts graphs without role mandatory mappings because only always-load guidelines should be mandatory', async () => {
     const service = new RepoKnowledgeGraphService(db);
     const saved = await service.saveGeneratedGraph({
       repoId: String(repoId),
@@ -1023,7 +1448,6 @@ describe('RepoKnowledgeGraphService context packets', () => {
             title: 'Payments Production',
             path: 'docs/payments-production.md',
             summary: 'refund reconciliation production rule',
-            mandatoryForNodeRoles: ['backend-developer'],
           },
         ],
         edges: [],
@@ -1032,15 +1456,12 @@ describe('RepoKnowledgeGraphService context packets', () => {
 
     const latest = await service.getLatestIndex(String(repoId));
     expect(latest?.indexId).toBe(saved.indexId);
-    expect(latest?.graphValidation?.workflowRoleCoverage?.missingMandatoryMappingRoles).toEqual(expect.arrayContaining([
-      'bug-investigator',
-      'qa-lead',
-      'code-reviewer',
-    ]));
-    expect(latest?.graphValidation?.issues).toEqual(expect.arrayContaining([
-      expect.objectContaining({ code: 'workflow_role_missing_mandatory_mapping', nodeId: 'bug-investigator' }),
-      expect.objectContaining({ code: 'missing_mandatory_role_edges' }),
-    ]));
+    expect(latest?.graphValidation?.workflowRoleCoverage?.missingMandatoryMappingRoles).toEqual([]);
+    const issueCodes = (latest?.graphValidation?.issues as Array<{ code: string }>).map((issue) => issue.code);
+    expect(issueCodes).not.toContain('missing_mandatory_role_mapping');
+    expect(issueCodes).not.toContain('workflow_role_missing_mandatory_mapping');
+    expect(issueCodes).not.toContain('missing_mandatory_role_edges');
+    expect(issueCodes).not.toContain('workflow_role_missing_mandatory_edge');
   });
 
   it('passes workflow role coverage when generated graph maps every active repo-operating role', async () => {
@@ -1048,6 +1469,7 @@ describe('RepoKnowledgeGraphService context packets', () => {
     const saved = await service.saveGeneratedGraph({
       repoId: String(repoId),
       source: 'agent_tool',
+      graphMode: 'full_graph',
       graph: {
         repoSummary: 'role coverage complete',
         nodes: [
@@ -1082,12 +1504,48 @@ describe('RepoKnowledgeGraphService context packets', () => {
     expect((latest?.graphValidation?.issues as Array<{ code: string }>).map((issue) => issue.code)).not.toContain('workflow_role_missing_mandatory_edge');
   });
 
+  it('warns when broad task-specific graph nodes are marked mandatory', async () => {
+    const service = new RepoKnowledgeGraphService(db);
+    const saved = await service.saveGeneratedGraph({
+      repoId: String(repoId),
+      source: 'api',
+      graph: {
+        repoSummary: 'broad mandatory warning',
+        nodes: [
+          {
+            id: 'payments-production',
+            kind: 'production_note',
+            title: 'Payments Production',
+            path: 'docs/payments-production.md',
+            summary: 'refund reconciliation production notes',
+            mandatoryForNodeRoles: ['backend-developer'],
+          },
+          { id: 'role-backend-developer', kind: 'imported_agent', title: 'Allen workflow role: backend-developer', summary: 'Allen workflow node role.' },
+        ],
+        edges: [
+          { from: 'payments-production', to: 'role-backend-developer', relation: 'MANDATORY_FOR_ROLE', confidence: 0.8, reason: 'Broad production note incorrectly marked mandatory.' },
+        ],
+      },
+    });
+
+    const latest = await service.getLatestIndex(String(repoId));
+    expect(latest?.indexId).toBe(saved.indexId);
+    expect(latest?.graphValidation?.issues).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        code: 'broad_context_marked_mandatory',
+        nodeId: 'payments-production',
+        path: 'docs/payments-production.md',
+      }),
+    ]));
+  });
+
   it('rejects agent-generated graphs that map mandatory context to repo-native non-workflow roles', async () => {
     const service = new RepoKnowledgeGraphService(db);
     try {
       await service.saveGeneratedGraph({
         repoId: String(repoId),
         source: 'agent_tool',
+        graphMode: 'full_graph',
         graph: {
           repoSummary: 'bad role',
           nodes: [
@@ -1121,6 +1579,80 @@ describe('RepoKnowledgeGraphService context packets', () => {
     }
   });
 
+  it('accepts mandatory spawned-agent and spawner role mappings when roles are allowed', async () => {
+    const service = new RepoKnowledgeGraphService(db);
+    const saved = await service.saveGeneratedGraph({
+      repoId: String(repoId),
+      source: 'agent_tool',
+      graphMode: 'mandatory_context_map',
+      graph: {
+        repoSummary: 'spawn role coverage',
+        nodes: [
+          {
+            id: 'payments-guidelines',
+            kind: 'context_file',
+            title: 'Payments Coding Guidelines',
+            path: 'docs/payments-guidelines.md',
+            summary: 'Always-load implementation guidelines.',
+            tags: ['guidelines', 'coding'],
+            mandatoryForSpawnedAgentRoles: ['frontend-developer', 'security-specialist'],
+            mandatoryForSpawnerRoles: ['backend-developer'],
+          },
+          { id: 'role-frontend-developer', kind: 'imported_agent', title: 'Allen spawned agent role: frontend-developer', summary: 'Spawned frontend implementation role.' },
+          { id: 'role-security-specialist', kind: 'imported_agent', title: 'Allen spawned agent role: security-specialist', summary: 'Spawned security implementation role.' },
+          { id: 'role-backend-developer', kind: 'imported_agent', title: 'Allen spawner role: backend-developer', summary: 'Workflow role that can spawn implementation agents.' },
+        ],
+        edges: [
+          { from: 'payments-guidelines', to: 'role-frontend-developer', relation: 'MANDATORY_FOR_ROLE', confidence: 1, reason: 'Guideline is mandatory for spawned frontend implementation.' },
+          { from: 'payments-guidelines', to: 'role-security-specialist', relation: 'MANDATORY_FOR_ROLE', confidence: 1, reason: 'Guideline is mandatory for spawned security implementation.' },
+          { from: 'payments-guidelines', to: 'role-backend-developer', relation: 'MANDATORY_FOR_ROLE', confidence: 1, reason: 'Guideline is mandatory for backend-developer delegation.' },
+        ],
+      },
+    });
+
+    const latest = await service.getLatestIndex(String(repoId), 'mandatory_context_map');
+    expect(latest?.indexId).toBe(saved.indexId);
+    expect(latest?.graphValidation?.workflowRoleCoverage).toEqual(expect.objectContaining({
+      mappedSpawnedAgentRoles: ['frontend-developer', 'security-specialist'],
+      mappedSpawnerRoles: ['backend-developer'],
+      unknownMandatorySpawnedRoles: [],
+      unknownMandatorySpawnerRoles: [],
+    }));
+  });
+
+  it('rejects unknown spawned-agent mandatory roles', async () => {
+    const service = new RepoKnowledgeGraphService(db);
+    await expect(service.saveGeneratedGraph({
+      repoId: String(repoId),
+      source: 'agent_tool',
+      graphMode: 'mandatory_context_map',
+      graph: {
+        repoSummary: 'bad spawned role',
+        nodes: [
+          {
+            id: 'payments-guidelines',
+            kind: 'context_file',
+            title: 'Payments Coding Guidelines',
+            path: 'docs/payments-guidelines.md',
+            summary: 'Always-load implementation guidelines.',
+            tags: ['guidelines', 'coding'],
+            mandatoryForSpawnedAgentRoles: ['mobile-developer'],
+          },
+        ],
+        edges: [],
+      },
+    })).rejects.toMatchObject({
+      payload: expect.objectContaining({
+        issues: expect.arrayContaining([
+          expect.objectContaining({
+            code: 'unknown_mandatory_spawned_agent_role',
+            role: 'mobile-developer',
+          }),
+        ]),
+      }),
+    });
+  });
+
   it('returns structured validation JSON from the repo graph save route', async () => {
     const app = express();
     app.use(express.json({ limit: '1mb' }));
@@ -1129,6 +1661,7 @@ describe('RepoKnowledgeGraphService context packets', () => {
     const res = await request(app)
       .post(`/api/repos/knowledge-graph?path=${encodeURIComponent(repoPath)}`)
       .send({
+        graph_mode: 'full_graph',
         graph: {
           repoSummary: 'bad casing via route',
           nodes: [
@@ -1161,6 +1694,7 @@ describe('RepoKnowledgeGraphService context packets', () => {
     await expect(service.saveGeneratedGraph({
       repoId: String(repoId),
       source: 'agent_tool',
+      graphMode: 'full_graph',
       graph: {
         repoSummary: 'bad edge',
         nodes: [
@@ -1196,13 +1730,14 @@ describe('RepoKnowledgeGraphService context packets', () => {
     });
   });
 
-  it('rejects agent-generated graphs that do not cover active workflow node roles', async () => {
+  it('rejects agent-generated mandatory mappings without role edges', async () => {
     const service = new RepoKnowledgeGraphService(db);
     await expect(service.saveGeneratedGraph({
       repoId: String(repoId),
       source: 'agent_tool',
+      graphMode: 'full_graph',
       graph: {
-        repoSummary: 'missing workflow roles',
+        repoSummary: 'missing mandatory role edge',
         nodes: [
           {
             id: 'prod-payments',
@@ -1218,8 +1753,8 @@ describe('RepoKnowledgeGraphService context packets', () => {
     })).rejects.toMatchObject({
       payload: expect.objectContaining({
         issues: expect.arrayContaining([
-          expect.objectContaining({ code: 'workflow_role_missing_mandatory_mapping' }),
           expect.objectContaining({ code: 'missing_mandatory_role_edges' }),
+          expect.objectContaining({ code: 'workflow_role_missing_mandatory_edge', role: 'backend-developer' }),
         ]),
       }),
     });

@@ -654,6 +654,9 @@ export interface EngineServices {
       workflowName: string;
       nodeName: string;
       nodeRole?: string;
+      executionKind?: 'workflow_node' | 'spawned_agent' | 'chat_agent';
+      targetRole?: string;
+      callerRole?: string;
       attempt: number;
       state: Record<string, unknown>;
       prompt?: string;
@@ -673,6 +676,9 @@ export interface EngineServices {
       workflowName: string;
       nodeName: string;
       nodeRole?: string;
+      executionKind?: 'workflow_node' | 'spawned_agent' | 'chat_agent';
+      targetRole?: string;
+      callerRole?: string;
       attempt: number;
       packetId?: string;
       outputs: Record<string, unknown>;

@@ -188,7 +188,7 @@ const TOOLS = [
   { name: 'search_repo_knowledge', description: 'Search the repo knowledge graph for missing or follow-up context refs by query. Use when an investigation discovers a module, file, term, or concept not covered by repo_context_selection; load useful file-backed results with get_repo_context_body/get_repo_skill_body before relying on them.', params: { repo_path: 'string (required) — absolute path of a registered repo or workspace worktree', query: 'string (required) — module, file, ticket, error, or concept to search for', node_role: 'string — optional workflow node role', current_files: 'string[] — optional repo-relative files currently being inspected', limit: 'number — optional max refs' } },
   { name: 'get_repo_skill_body', description: 'Load the full body of a repo skill file referenced by the knowledge graph. Use when a repo_knowledge_packet summary makes a skill look useful; summaries are only a relevance filter and must not be the only source for useful skills.', params: { repo_path: 'string (required) — absolute path of a registered repo or workspace worktree', ref_id: 'string — knowledge graph refId for the skill', skill_path: 'string — repo-relative SKILL.md path alternative to ref_id' } },
   { name: 'get_repo_context_body', description: 'Load the full body of a repo instruction, context, doc, runbook, or production knowledge file referenced by the knowledge graph. Use when a repo_knowledge_packet summary makes a file-backed ref look useful; summaries are only a relevance filter and must not be the only source for useful context.', params: { repo_path: 'string (required) — absolute path of a registered repo or workspace worktree', ref_id: 'string — knowledge graph refId for the context file', context_path: 'string — repo-relative file path alternative to ref_id' } },
-  { name: 'save_repo_knowledge_graph', description: 'Save a generated repo knowledge graph as a new latest version in Allen DB. Use after repo-knowledge-graph-indexer produces graph JSON directly in chat/agent execution.', params: { repo_path: 'string (required) — absolute path of a registered repo or workspace worktree', graph: 'object — parsed graph JSON with repoSummary, nodes, edges', graph_json: 'string — graph JSON string alternative to graph' } },
+  { name: 'save_repo_knowledge_graph', description: 'Save a generated repo knowledge graph as a new latest version in Allen DB. Use after repo-knowledge-graph-indexer produces graph JSON directly in chat/agent execution.', params: { repo_path: 'string (required) — absolute path of a registered repo or workspace worktree', graph_mode: 'string (required) — full_graph or mandatory_context_map', graph: 'object — parsed graph JSON with repoSummary, nodes, edges', graph_json: 'string — graph JSON string alternative to graph' } },
   { name: 'find_repo_for_pr_url', description: 'Given a GitHub PR URL, find the registered Allen repo whose remote matches (owner/repo). Returns null if the repo is not registered.', params: { pr_url: 'string (required) — https://github.com/<owner>/<repo>/pull/<n>' } },
 
   // ── Pull Requests ──
@@ -511,11 +511,14 @@ async function executeTool(name: string, args: Record<string, unknown>): Promise
     case 'save_repo_knowledge_graph': {
       const path = String(args.repo_path ?? '');
       if (!path) return { error: 'repo_path is required' };
+      const graphMode = String(args.graph_mode ?? '');
+      if (graphMode !== 'full_graph' && graphMode !== 'mandatory_context_map') return { error: 'graph_mode is required and must be full_graph or mandatory_context_map' };
       const graph = args.graph as Record<string, unknown> | undefined;
       const graphJson = typeof args.graph_json === 'string' ? args.graph_json : undefined;
       if (!graph && !graphJson) return { error: 'graph or graph_json is required' };
       return callAPI(`/api/repos/knowledge-graph?path=${encodeURIComponent(path)}`, 'POST', {
         graph,
+        graph_mode: graphMode,
         graph_json: graphJson,
         source_execution_id: SPAWN_ROOT_EXECUTION_ID || SPAWN_PARENT_EXECUTION_ID,
       });

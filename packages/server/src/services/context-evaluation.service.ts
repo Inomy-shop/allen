@@ -19,6 +19,13 @@ type ScoreSet = {
   groundedness: number;
   correctness: number;
   bloat: number;
+  candidateRecall: number;
+  selectionPrecision: number;
+  injectionPrecision: number;
+  injectableFulfillment: number;
+  manifestCompliance: number;
+  graphExpansionYield: number;
+  graphExpansionNoise: number;
   overall: number;
 };
 
@@ -334,6 +341,13 @@ export class ContextEvaluationService {
         groundedness: avg('groundedness'),
         correctness: avg('correctness'),
         bloat: avg('bloat'),
+        candidateRecall: avg('candidateRecall'),
+        selectionPrecision: avg('selectionPrecision'),
+        injectionPrecision: avg('injectionPrecision'),
+        injectableFulfillment: avg('injectableFulfillment'),
+        manifestCompliance: avg('manifestCompliance'),
+        graphExpansionYield: avg('graphExpansionYield'),
+        graphExpansionNoise: avg('graphExpansionNoise'),
         overall: avg('overall'),
       },
       topDiagnostics: diagnostics.slice(0, 50),
@@ -347,8 +361,10 @@ export class ContextEvaluationService {
     feedbackEvidence: Array<Record<string, unknown>>,
   ): { scores: ScoreSet; diagnostics: Array<Record<string, unknown>>; refScores: Array<Record<string, unknown>> } {
     const selectedRefs = normalizeUsageArray(packet.selectedRefs);
-    const availableRefs = normalizeUsageArray(packet.availableRefs);
+    const injectableRefs = normalizeUsageArray(packet.injectableRefs);
+    const candidateRefs = normalizeUsageArray(packet.candidateRefs);
     const rejectedRefs = normalizeUsageArray(packet.rejectedRefs);
+    const availableRefs = normalizeUsageArray(packet.availableRefs);
     const injection = isRecord(packet.contextInjection) ? packet.contextInjection : {};
     const injectedRefs = normalizeUsageArray(injection.injectedRefs);
     const providerNativeRefs = normalizeUsageArray(injection.skippedProviderNativeRefs);
@@ -363,6 +379,7 @@ export class ContextEvaluationService {
     const loadedIds = idSet(loaded);
     const appliedIds = idSet(claimedUsed);
     const injectedIds = idSet(injectedRefs);
+    const injectableIds = idSet(injectableRefs);
     const providerNativeIds = idSet(providerNativeRefs);
     const claimedIds = new Set([...idSet(reportedLoaded), ...idSet(reportedApplied), ...appliedIds]);
     const expectedRefs = selectedRefs.filter((ref) => ref.mandatory === true || String(ref.reason ?? '').toLowerCase().includes('mandatory'));
@@ -377,8 +394,25 @@ export class ContextEvaluationService {
       const id = refId(ref);
       return id && !appliedIds.has(id);
     });
+    const unresolvedInjectableRefs = injectableRefs.filter((ref) => {
+      const id = refId(ref);
+      return id && !injectedIds.has(id) && !providerNativeIds.has(id);
+    });
     const totalInjectedChars = Number(injection.totalChars ?? injectedRefs.reduce((sum, ref) => sum + Number(ref.contentChars ?? 0), 0));
     const unusedInjectedChars = unusedInjectedRefs.reduce((sum, ref) => sum + Number(ref.contentChars ?? 0), 0);
+    const selectedRefById = new Map(selectedRefs.map((ref) => [refId(ref), ref]).filter((entry): entry is [string, Record<string, unknown>] => Boolean(entry[0])));
+    const manifestOnlyClaimIds = [...claimedIds].filter((id) => {
+      const ref = selectedRefById.get(id);
+      const metadata = isRecord(ref?.providerMetadata) ? ref.providerMetadata : {};
+      const decision = metadata.injectionDecision ?? metadata.injectionPolicy;
+      return decision === 'manifest_only' && !loadedIds.has(id) && !injectedIds.has(id) && !providerNativeIds.has(id);
+    });
+    const graphSelectedRefs = selectedRefs.filter((ref) => isRecord(ref.providerMetadata) && ref.providerMetadata.graphExpansion === true);
+    const graphAppliedIds = graphSelectedRefs
+      .map(refId)
+      .filter((id): id is string => Boolean(id))
+      .filter((id) => appliedIds.has(id));
+    const graphRejectedRefs = rejectedRefs.filter((ref) => isRecord(ref.providerMetadata) && ref.providerMetadata.graphExpansion === true);
     const scores: ScoreSet = {
       precision: ratio(usedSelected, selectedRefs.length),
       completeness: ratio(satisfiedExpected, expectedRefs.length),
@@ -386,9 +420,16 @@ export class ContextEvaluationService {
       groundedness: ratio(claimedWithEvidence, claimedIds.size),
       correctness: ratio(Math.max(0, claimedIds.size - invalidClaimIds.length - unverifiedClaimIds.length), claimedIds.size),
       bloat: ratio(unusedInjectedRefs.length, injectedRefs.length),
+      candidateRecall: ratio(selectedRefs.length + rejectedRefs.length, candidateRefs.length || selectedRefs.length + rejectedRefs.length),
+      selectionPrecision: ratio(usefulSelected, selectedRefs.length),
+      injectionPrecision: ratio(injectedRefs.length - unusedInjectedRefs.length, injectedRefs.length),
+      injectableFulfillment: ratio(injectableRefs.length - unresolvedInjectableRefs.length, injectableRefs.length),
+      manifestCompliance: ratio(Math.max(0, claimedIds.size - manifestOnlyClaimIds.length), claimedIds.size),
+      graphExpansionYield: ratio(graphAppliedIds.length, graphSelectedRefs.length),
+      graphExpansionNoise: ratio(graphRejectedRefs.length, graphSelectedRefs.length + graphRejectedRefs.length),
       overall: 0,
     };
-    scores.overall = round((scores.precision + scores.completeness + scores.usefulness + scores.groundedness + scores.correctness + (1 - scores.bloat)) / 6);
+    scores.overall = round((scores.precision + scores.completeness + scores.usefulness + scores.groundedness + scores.correctness + (1 - scores.bloat) + scores.manifestCompliance) / 7);
 
     const diagnostics: Array<Record<string, unknown>> = [];
     if (scores.precision < 0.5 && selectedRefs.length > 0) diagnostics.push(diagnostic('low_context_precision', 'warn', `Only ${usedSelected}/${selectedRefs.length} selected refs had load/apply evidence.`));
@@ -396,7 +437,11 @@ export class ContextEvaluationService {
     if (invalidClaimIds.length > 0) diagnostics.push(diagnostic('context_claimed_but_not_selected', 'warn', `Usage claims referenced refs outside selected/available context: ${invalidClaimIds.join(', ')}`, { refIds: invalidClaimIds }));
     if (unverifiedClaimIds.length > 0) diagnostics.push(diagnostic('unverified_context_claim', 'warn', `Usage claims lacked injection or body-load evidence: ${unverifiedClaimIds.join(', ')}`, { refIds: unverifiedClaimIds }));
     if (unusedInjectedRefs.length > 0) diagnostics.push(diagnostic('injected_context_unused', 'info', `${unusedInjectedRefs.length}/${injectedRefs.length} injected refs had no applied-context evidence.`, { refIds: unusedInjectedRefs.map(refId).filter(Boolean) }));
+    if (unresolvedInjectableRefs.length > 0) diagnostics.push(diagnostic('injectable_context_not_injected', 'warn', `${unresolvedInjectableRefs.length}/${injectableRefs.length} injectable refs were not injected or provider-native.`, { refIds: unresolvedInjectableRefs.map(refId).filter(Boolean) }));
     if (scores.bloat > 0.5 && injectedRefs.length > 1) diagnostics.push(diagnostic('context_budget_bloat', 'warn', 'Most injected refs were not applied by the agent.'));
+    if (manifestOnlyClaimIds.length > 0) diagnostics.push(diagnostic('manifest_ref_used_without_load', 'warn', `Manifest-only refs were claimed without body-load or injection evidence: ${manifestOnlyClaimIds.join(', ')}`, { refIds: manifestOnlyClaimIds }));
+    if (candidateRefs.length > 0 && selectedRefs.length === 0) diagnostics.push(diagnostic('over_filtered_context', 'warn', 'Context retrieval returned candidates but none were selected.', { candidateCount: candidateRefs.length }));
+    if (graphRejectedRefs.length > 0 && graphSelectedRefs.length === 0) diagnostics.push(diagnostic('graph_expansion_noise', 'info', 'Cognee graph expansion produced only rejected or shadow candidates.', { rejectedCount: graphRejectedRefs.length }));
     for (const ref of skippedRefs) {
       const reason = firstString(ref.skipReason);
       if (reason === 'budget' || reason === 'oversize') {
@@ -415,6 +460,7 @@ export class ContextEvaluationService {
         selected: true,
         injected: Boolean(id && injectedIds.has(id)),
         providerNative: Boolean(id && providerNativeIds.has(id)),
+        injectable: Boolean(id && injectableIds.has(id)),
         loaded: Boolean(id && loadedIds.has(id)),
         applied: Boolean(id && appliedIds.has(id)),
         score: Boolean(id && appliedIds.has(id)) ? 1 : Boolean(id && loadedIds.has(id)) ? 0.7 : Boolean(id && injectedIds.has(id)) ? 0.4 : 0,

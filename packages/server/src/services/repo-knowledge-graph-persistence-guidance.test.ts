@@ -32,6 +32,8 @@ describe('repo knowledge graph persistence guidance', () => {
     });
 
     expect(system).toContain(REPO_KNOWLEDGE_GRAPH_PERSISTENCE_GUIDANCE_SENTINEL);
+    expect(system).toContain('mode full_graph or mandatory_context_map');
+    expect(system).toContain('graph_mode');
     expect(system).toContain('MUST call the Allen MCP tool save_repo_knowledge_graph');
     expect(system).toContain('mcp__allen__save_repo_knowledge_graph');
     expect(system).toContain('allen_save_artifact');

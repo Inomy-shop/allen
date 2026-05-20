@@ -104,8 +104,9 @@ export async function ensureIndexes(db: Db): Promise<void> {
 
   // Repo Knowledge Graphs — structured repo/module/skill/production-knowledge graph.
   await db.collection('repo_knowledge_indexes').createIndex({ repoId: 1, latest: 1, indexedAt: -1 });
+  await db.collection('repo_knowledge_indexes').createIndex({ repoId: 1, graphMode: 1, latest: 1, indexedAt: -1 });
   await db.collection('repo_knowledge_indexes').createIndex(
-    { repoId: 1, headSha: 1, indexVersion: 1 },
+    { repoId: 1, graphMode: 1, headSha: 1, indexVersion: 1 },
     { partialFilterExpression: { headSha: { $exists: true } } },
   );
   // Drop the early PoC unique index if present. Knowledge nodes must be
@@ -138,6 +139,11 @@ export async function ensureIndexes(db: Db): Promise<void> {
   await db.collection('context_workflow_evaluation_jobs').createIndex({ rootExecutionId: 1, queuedAt: 1 });
   await db.collection('repo_cognee_datasets').createIndex({ repoId: 1 }, { unique: true });
   await db.collection('repo_cognee_datasets').createIndex({ status: 1, updatedAt: -1 });
+  await db.collection('repo_context_metadata').createIndex(
+    { repoId: 1, path: 1, fileHash: 1, schemaVersion: 1 },
+    { unique: true },
+  );
+  await db.collection('repo_context_metadata').createIndex({ repoId: 1, active: 1, path: 1 });
 
   // Cron Jobs — generic scheduler for agents/workflows/system actions
   await db.collection('cron_jobs').createIndex({ name: 1 }, { unique: true });

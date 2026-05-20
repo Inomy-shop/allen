@@ -1,120 +1,181 @@
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { Db } from 'mongodb';
-import type { KnowledgeCandidateInventory, WorkflowRoleInventoryEntry } from './repo-knowledge-graph.types.js';
+import type { KnowledgeCandidateInventory, KnowledgeGraphMode, WorkflowRoleInventoryEntry } from './repo-knowledge-graph.types.js';
 import { gitLsFiles, isDocsRunbookCandidatePath, isInstructionCandidatePath, isModuleRuleCandidatePath, isProductionKnowledgeCandidatePath, isSkillCandidatePath, sourceModuleDir } from './repo-knowledge-graph-paths.js';
+import { REPO_KNOWLEDGE_GRAPH_MODE_CONTRACT, REPO_KNOWLEDGE_GRAPH_SCHEMA_CONTRACT, REPO_KNOWLEDGE_GRAPH_SHARED_RULES } from './repo-knowledge-graph-indexer-prompts.js';
 
 const WORKFLOW_ROLE_GUIDANCE: Record<string, { category: string; recommendedMandatoryContext: string[]; notes: string }> = {
   'codebase-navigator': {
     category: 'repo-operating',
-    recommendedMandatoryContext: ['module map', 'repo instructions', 'source layout', 'search/navigation rules'],
-    notes: 'Must answer codebase navigation questions from repo-specific structure and instructions.',
+    recommendedMandatoryContext: ['repo instructions', 'search/navigation guidelines'],
+    notes: 'Map mandatory context only for always-load repo navigation guidelines; module maps and source layout are task-specific retrieval context.',
   },
   'bug-investigator': {
     category: 'repo-operating',
-    recommendedMandatoryContext: ['production rules', 'failure modes', 'runbooks', 'module map', 'log/debugging commands', 'validation commands'],
-    notes: 'Must understand how the repo fails in production and how to reproduce or localize the issue.',
+    recommendedMandatoryContext: ['investigation guidelines', 'debugging process rules', 'evidence collection guidelines'],
+    notes: 'Map mandatory context only for always-load investigation guidelines; failure modes, runbooks, module maps, and logs are task-specific retrieval context.',
   },
   'allen-incident-router': {
     category: 'repo-operating',
-    recommendedMandatoryContext: ['monitoring runbooks', 'failure modes', 'ownership map', 'incident routing rules'],
-    notes: 'Must route Allen incidents using repo-specific ownership, telemetry, and failure-mode knowledge.',
+    recommendedMandatoryContext: ['incident routing rules', 'escalation guidelines'],
+    notes: 'Map mandatory context only for always-load routing guidelines; monitoring runbooks, failure modes, and ownership details are task-specific retrieval context.',
   },
   'allen-monitoring-agent': {
     category: 'repo-operating',
-    recommendedMandatoryContext: ['monitoring docs', 'runbooks', 'diagnostic queries', 'production constraints'],
-    notes: 'Must collect evidence from repo-specific monitoring and diagnostic guidance.',
+    recommendedMandatoryContext: ['monitoring evidence guidelines', 'diagnostic process rules'],
+    notes: 'Map mandatory context only for always-load monitoring guidelines; monitoring docs, runbooks, queries, and production constraints are task-specific retrieval context.',
   },
   'engineering-lead': {
     category: 'repo-operating',
-    recommendedMandatoryContext: ['architecture docs', 'module ownership', 'implementation planning rules', 'specialist routing rules', 'validation commands'],
-    notes: 'Must route work to the right implementation roles with repo-specific constraints.',
+    recommendedMandatoryContext: ['implementation workflow guidelines', 'delegation/routing rules', 'planning process rules'],
+    notes: 'Map mandatory context only for always-load engineering workflow guidelines; architecture, module ownership, and validation commands are task-specific retrieval context.',
   },
   'qa-lead': {
     category: 'repo-operating',
-    recommendedMandatoryContext: ['test strategy', 'validation commands', 'module test conventions', 'production risk checks'],
-    notes: 'Must verify implementation using repo-specific test and validation rules.',
+    recommendedMandatoryContext: ['testing guidelines', 'validation policy', 'quality gate rules'],
+    notes: 'Map mandatory context only for always-load QA guidelines; concrete commands and module-specific test conventions are task-specific retrieval context.',
   },
   'implementation-validator': {
     category: 'repo-operating',
-    recommendedMandatoryContext: ['validation commands', 'acceptance criteria conventions', 'module test conventions', 'production constraints'],
-    notes: 'Must validate implementation against repo-specific quality gates.',
+    recommendedMandatoryContext: ['validation policy', 'acceptance criteria guidelines', 'quality gate rules'],
+    notes: 'Map mandatory context only for always-load validation guidelines; concrete commands, module tests, and production constraints are task-specific retrieval context.',
   },
   'code-reviewer': {
     category: 'repo-operating',
-    recommendedMandatoryContext: ['coding guidelines', 'security rules', 'module rules', 'test expectations', 'production constraints'],
-    notes: 'Must review changes against repo-specific engineering rules.',
+    recommendedMandatoryContext: ['coding guidelines', 'security review rules', 'testing review guidelines'],
+    notes: 'Map mandatory context only for always-load review guidelines; module rules and production constraints should be selected by touched files or task retrieval.',
   },
   'documentation-writer': {
     category: 'repo-operating',
-    recommendedMandatoryContext: ['documentation conventions', 'docs map', 'runbooks', 'module documentation'],
-    notes: 'Must update docs consistently with repo-specific documentation structure.',
+    recommendedMandatoryContext: ['documentation guidelines', 'style/contribution rules'],
+    notes: 'Map mandatory context only for always-load documentation guidelines; docs maps, runbooks, and module docs are task-specific retrieval context.',
   },
   'pr-creator': {
-    category: 'repo-operating',
-    recommendedMandatoryContext: ['PR conventions', 'branch/base rules', 'commit conventions', 'validation summary requirements'],
-    notes: 'Must prepare repo-specific PR metadata and validation notes.',
+    category: 'workflow-support',
+    recommendedMandatoryContext: [],
+    notes: 'PR creation is an output/support role. Do not map repo mandatory context by default; map only an explicit always-load PR policy written for this role.',
   },
   'pr-review-bot': {
     category: 'repo-operating',
-    recommendedMandatoryContext: ['review rules', 'security rules', 'test expectations', 'module ownership', 'PR conventions'],
-    notes: 'Must review PRs against repo-specific quality, security, and ownership constraints.',
+    recommendedMandatoryContext: ['review guidelines', 'security review rules', 'PR conventions'],
+    notes: 'Map mandatory context only for always-load PR review guidelines; module ownership and test details are task-specific retrieval context.',
   },
   'pr-workspace-resolver': {
-    category: 'repo-operating',
-    recommendedMandatoryContext: ['repo registration rules', 'workspace rules', 'branch/base rules', 'PR conventions'],
-    notes: 'Must map PRs to the correct repo/workspace using repo-specific branching and workspace conventions.',
+    category: 'workflow-support',
+    recommendedMandatoryContext: [],
+    notes: 'Workspace resolution is a support role. Do not map repo mandatory context by default; map only an explicit always-load workspace/branch policy written for this role.',
   },
   'prd-creator': {
     category: 'repo-operating',
-    recommendedMandatoryContext: ['product docs', 'domain docs', 'requirements conventions', 'module map'],
-    notes: 'Must draft PRDs using existing repo/domain terminology and requirement structure.',
+    recommendedMandatoryContext: ['requirements writing guidelines', 'PRD conventions'],
+    notes: 'Map mandatory context only for always-load requirements guidelines; product docs, domain docs, and module maps are task-specific retrieval context.',
   },
   'product-manager': {
     category: 'repo-operating',
-    recommendedMandatoryContext: ['product docs', 'domain docs', 'roadmap/process docs', 'requirements conventions'],
-    notes: 'Must make product decisions grounded in repo-specific domain and process documentation.',
+    recommendedMandatoryContext: ['product process guidelines', 'requirements conventions'],
+    notes: 'Map mandatory context only for always-load product process guidelines; product/domain/roadmap docs are task-specific retrieval context.',
   },
   'requirements-analyst': {
     category: 'repo-operating',
-    recommendedMandatoryContext: ['product docs', 'domain docs', 'module map', 'existing requirements conventions'],
-    notes: 'Must ground requirements in existing repo/domain documentation when available.',
+    recommendedMandatoryContext: ['requirements analysis guidelines', 'requirements conventions'],
+    notes: 'Map mandatory context only for always-load requirements guidelines; product docs, domain docs, and module maps are task-specific retrieval context.',
   },
   'solution-architect': {
     category: 'repo-operating',
-    recommendedMandatoryContext: ['architecture docs', 'data flow docs', 'API contracts', 'module boundaries', 'production constraints'],
-    notes: 'Must design within repo architecture and production constraints.',
+    recommendedMandatoryContext: ['architecture decision guidelines', 'design process rules'],
+    notes: 'Map mandatory context only for always-load architecture guidelines; architecture docs, data flows, API contracts, and constraints are task-specific retrieval context.',
   },
   'technical-designer': {
     category: 'repo-operating',
-    recommendedMandatoryContext: ['architecture docs', 'module rules', 'API contracts', 'data contracts', 'validation commands'],
-    notes: 'Must produce repo-specific implementation design.',
+    recommendedMandatoryContext: ['technical design guidelines', 'implementation design process rules'],
+    notes: 'Map mandatory context only for always-load technical design guidelines; module rules, API/data contracts, and validation commands are task-specific retrieval context.',
   },
   'backend-developer': {
     category: 'repo-operating',
-    recommendedMandatoryContext: ['backend coding rules', 'backend skills', 'production rules', 'API/data contracts', 'backend validation commands'],
-    notes: 'Must implement backend changes using module-specific repo guidance.',
+    recommendedMandatoryContext: ['backend coding guidelines', 'backend safety rules'],
+    notes: 'Map mandatory context only for always-load backend coding guidelines, preferably scoped with mandatoryForGlobs; skills, production rules, contracts, and commands are task-specific retrieval context.',
   },
   'frontend-developer': {
     category: 'repo-operating',
-    recommendedMandatoryContext: ['frontend coding rules', 'frontend skills', 'UI conventions', 'frontend validation commands'],
-    notes: 'Must implement frontend changes using module-specific repo guidance.',
+    recommendedMandatoryContext: ['frontend coding guidelines', 'UI safety rules'],
+    notes: 'Map mandatory context only for always-load frontend coding guidelines, preferably scoped with mandatoryForGlobs; skills, UI docs, and commands are task-specific retrieval context.',
+  },
+  'security-specialist': {
+    category: 'repo-operating',
+    recommendedMandatoryContext: ['security review rules', 'secure implementation guidelines'],
+    notes: 'Security specialists may investigate, review, or implement security-sensitive changes; map only always-load security guidelines as mandatory.',
+  },
+  'test-writer': {
+    category: 'repo-operating',
+    recommendedMandatoryContext: ['testing guidelines', 'validation policy'],
+    notes: 'Test-writing roles need repo testing rules; map only always-load testing guidelines as mandatory. Concrete commands and module tests are task-specific retrieval context.',
   },
   'doc-auditor': {
     category: 'workflow-support',
-    recommendedMandatoryContext: ['documentation conventions', 'docs map'],
-    notes: 'Map mandatory context only when the repo has explicit documentation audit rules.',
+    recommendedMandatoryContext: ['documentation audit guidelines'],
+    notes: 'Map mandatory context only when the repo has explicit always-load documentation audit guidelines.',
+  },
+  'summary-writer': {
+    category: 'workflow-support',
+    recommendedMandatoryContext: [],
+    notes: 'Summary roles aggregate upstream artifacts and should not receive repo mandatory context by default.',
+  },
+  'workflow-summary': {
+    category: 'workflow-support',
+    recommendedMandatoryContext: [],
+    notes: 'Workflow summary roles aggregate upstream artifacts and should not receive repo mandatory context by default.',
   },
 };
-export function buildIndexerPrompt(
+
+export async function buildSpawnedAgentRoleInventory(db: Db): Promise<WorkflowRoleInventoryEntry[]> {
+  const docs = await db.collection('agents')
+    .find({}, { projection: { name: 1 } })
+    .sort({ name: 1 })
+    .toArray()
+    .catch(() => []);
+
+  return docs
+    .map((doc) => typeof doc.name === 'string' ? doc.name.trim() : '')
+    .filter((role) => role.length > 0)
+    .map((role) => {
+      const guidance = workflowRoleGuidance(role);
+      return {
+        role,
+        category: guidance.category,
+        workflows: [],
+        recommendedMandatoryContext: guidance.recommendedMandatoryContext,
+        notes: guidance.notes,
+      };
+    })
+    .sort((a, b) => a.role.localeCompare(b.role));
+}
+
+export function buildIndexerUserPrompt(
   repoName: string,
   repoPath: string,
   inventory: KnowledgeCandidateInventory,
   workflowRoleInventory: WorkflowRoleInventoryEntry[],
+  spawnedAgentRoleInventory: WorkflowRoleInventoryEntry[] = [],
+  graphMode: KnowledgeGraphMode = 'full_graph',
 ): string {
   const inventoryJson = JSON.stringify(compactInventoryForPrompt(inventory), null, 2);
   const workflowRoleInventoryJson = JSON.stringify(compactWorkflowRoleInventoryForPrompt(workflowRoleInventory), null, 2);
+  const spawnedAgentRoleInventoryJson = JSON.stringify(compactWorkflowRoleInventoryForPrompt(spawnedAgentRoleInventory), null, 2);
+  const modeRules = graphMode === 'mandatory_context_map'
+    ? `Mode-specific rules for mandatory_context_map:
+- Build only always-load guideline/policy/process/safety context and role mappings.
+- Do not include broad module, source file, production note, runbook, command, command_profile, package script, CI, Docker, or deployment nodes unless the file itself is an always-load guideline or policy.
+- Every non-repo path-backed node should either be baseline global guidance or have at least one mandatory role mapping plus a matching MANDATORY_FOR_ROLE edge.`
+    : `Mode-specific rules for full_graph:
+- Build the complete Allen repo knowledge graph.
+- Include broad repo structure, docs/runbooks, production knowledge, command profiles, modules, and source module directories as on-demand graph nodes.
+- Mandatory mappings are still narrow: only true always-load guideline/policy/process/safety files should use mandatory role fields.`;
   return `Build a structured repo knowledge graph for "${repoName}" at ${repoPath}.
+
+MODE: ${graphMode}
+
+${REPO_KNOWLEDGE_GRAPH_MODE_CONTRACT}
 
 Allen has already scanned the git-tracked file inventory. Use these exact repo-relative paths. Do not invent paths and do not change path casing:
 \`\`\`json
@@ -126,54 +187,32 @@ Allen active workflow node role inventory. These exact role names are the node a
 ${workflowRoleInventoryJson}
 \`\`\`
 
+Allen spawned specialist role inventory. These exact role names are child agents that can consume mandatory context in separate spawned sessions:
+\`\`\`json
+${spawnedAgentRoleInventoryJson}
+\`\`\`
+
 Return ONLY a JSON object with this exact shape:
-{
-  "repoSummary": "short summary",
-  "nodes": [
-    {
-      "id": "stable-local-id",
-      "kind": "module | source_file | context_file | doc | runbook | skill | skill_reference | production_note | instruction_file | command | command_profile | imported_agent | historical_learning",
-      "title": "human title",
-      "path": "repo-relative path when applicable",
-      "summary": "what future workflow agents need to know",
-      "tags": ["short", "tags"],
-      "moduleId": "module id if applicable",
-      "appliesToGlobs": ["path/**"],
-      "mandatoryForGlobs": ["path/**"],
-      "mandatoryForNodeRoles": ["backend-developer"]
-    }
-  ],
-  "edges": [
-    {
-      "from": "node id",
-      "to": "node id",
-      "relation": "CONTAINS | APPLIES_TO | REQUIRES | REFERENCES | IMPLEMENTS | VALIDATED_BY | RECOMMENDED_FOR_ROLE | MANDATORY_FOR_ROLE | SUPERSEDES | DERIVED_FROM",
-      "confidence": 0.0,
-      "reason": "brief reason"
-    }
-  ]
-}
+${REPO_KNOWLEDGE_GRAPH_SCHEMA_CONTRACT}
 
 Mandatory role edge representation:
-- For every role in mandatoryForNodeRoles, create an imported_agent role node with id "role-<exact-role-name>", for example "role-bug-investigator".
+- For every role in mandatoryForNodeRoles, mandatoryForSpawnedAgentRoles, or mandatoryForSpawnerRoles, create an imported_agent role node with id "role-<exact-role-name>", for example "role-bug-investigator".
 - Add a MANDATORY_FOR_ROLE edge from each mandatory context node to the matching "role-<exact-role-name>" node.
-- The target role node title should be "Allen workflow role: <exact-role-name>" and should not have a path.
+- The target role node title should identify the role audience, for example "Allen workflow role: <exact-role-name>", "Allen spawned agent role: <exact-role-name>", or "Allen spawner role: <exact-role-name>", and should not have a path.
 
 Index only git-tracked files from the inventory. Never read .env files or secrets.
 
-Generation rules:
-- First cover global instruction files, repo skills, production knowledge, module rule files, docs/runbooks, source modules, package scripts, CI, and deployment docs from the inventory.
+Shared indexer rules from the DB agent system prompt:
+${REPO_KNOWLEDGE_GRAPH_SHARED_RULES}
+
+${modeRules}
+
+Runtime generation rules:
+- In full_graph mode, cover global instruction files, repo skills, production knowledge, module rule files, docs/runbooks, source modules, package scripts, CI, and deployment docs from the inventory.
+- In mandatory_context_map mode, inspect those inventory categories only to find always-load guidelines/policies/process rules; omit task-specific files from the output graph.
 - Use exact paths from the inventory only. If a useful file is absent from the inventory, omit it instead of guessing.
 - Keep summaries short selector summaries. They help future agents decide what to load; they must not replace the file body.
-- CRITICAL: mandatoryForNodeRoles must contain ONLY exact Allen workflow role names from the role inventory. Do not put repo-native agent names there unless the exact same name appears in the active Allen workflow role inventory.
-- Repo-native files under .claude/agents, .codex, or .agents are knowledge sources and may become imported_agent nodes, but they are not Allen workflow role names unless the same name appears in the role inventory.
-- For each repo-operating workflow role in the role inventory, map at least one mandatory context file. If no role-specific file exists, use the most relevant global repo instruction, architecture, production, or validation file rather than leaving the role unmapped.
-- Typical mandatory mappings: bug-investigator needs failure modes, production rules, module map, logs/runbooks, and validation commands; engineering-lead needs architecture, module ownership, implementation planning, and specialist routing rules; qa-lead and implementation-validator need test strategy and validation commands; code-reviewer needs coding/security/testing guidelines and relevant module rules; documentation-writer needs docs conventions and docs/runbook map; pr-creator needs PR, branch, and contribution rules; solution-architect and technical-designer need architecture, data flow, API contracts, and module boundaries; backend/frontend developer roles need their module coding rules, skills, production rules, and validation commands.
-- Command profile files such as package.json, CI workflow YAML, Dockerfiles, docker-compose files, build scripts, and deploy configs are useful graph nodes, but they are not globally mandatory context. Mark command profiles mandatory only for roles/tasks that truly need command execution, validation, package scripts, CI, Docker, deployment, runtime packaging, or dependency behavior, such as qa-lead, implementation-validator, pr-creator, or release/deploy-focused roles.
-- Do not mark command profiles mandatory for broad investigation, engineering-lead, design, documentation, or review roles unless the specific file is directly required by that role's normal work in this repo. Prefer rule/guideline, production knowledge, runbook, architecture, and module context files as mandatory context for those roles.
-- Mark only truly global repo instructions as baseline by leaving them as global instruction nodes. Role-specific and module-specific rules should use mandatoryForNodeRoles, appliesToGlobs, mandatoryForGlobs, and MANDATORY_FOR_ROLE/RECOMMENDED_FOR_ROLE edges.
-- Add MANDATORY_FOR_ROLE edges for context that a role must load before work. The node should also include that role in mandatoryForNodeRoles.
-- Before returning JSON, internally verify that every repo-operating role has at least one node containing that exact role in mandatoryForNodeRoles and at least one MANDATORY_FOR_ROLE edge to role-<exact-role-name>.
+- Mark only truly global repo instructions as baseline by leaving them as global instruction nodes. Role-specific and module-specific guidelines should use mandatoryForNodeRoles, mandatoryForSpawnedAgentRoles, mandatoryForSpawnerRoles, appliesToGlobs, mandatoryForGlobs, and MANDATORY_FOR_ROLE/RECOMMENDED_FOR_ROLE edges.
 - Use confidence 1.0 only for relationships directly stated by files or package scripts. Use confidence below 0.7 for inferred relationships.
 - Avoid duplicate nodes pointing at the same file unless the concepts are clearly separate and the summaries explain the difference.`;
 }
@@ -280,14 +319,14 @@ export function workflowRoleGuidance(role: string): { category: string; recommen
   if (normalized.includes('developer') || normalized.includes('engineer')) {
     return {
       category: 'repo-operating',
-      recommendedMandatoryContext: ['module coding rules', 'repo instructions', 'skills for touched module', 'production constraints', 'validation commands'],
-      notes: 'Implementation-capable role; map relevant repo rules, module skills, production knowledge, and tests.',
+      recommendedMandatoryContext: ['always-load coding guidelines', 'implementation process rules'],
+      notes: 'Implementation-capable role; map only always-load guideline files as mandatory. Module skills, production knowledge, contracts, and tests are task-specific retrieval context.',
     };
   }
   return {
     category: 'workflow-support',
-    recommendedMandatoryContext: ['repo instructions when directly relevant', 'docs or process rules when available'],
-    notes: 'Support role; map mandatory repo context only when a candidate file clearly applies to the role.',
+    recommendedMandatoryContext: ['always-load process guidelines when available'],
+    notes: 'Support role; map mandatory repo context only when a candidate file is an always-load guideline for the role.',
   };
 }
 

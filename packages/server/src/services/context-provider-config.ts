@@ -1,4 +1,6 @@
 export type AllenContextProvider = 'allen' | 'cognee' | 'cognee_memory';
+export type CogneeMandatoryGraphMode = 'auto' | 'required' | 'off';
+export type ContextIndexGraphMode = 'full_graph' | 'mandatory_context_map';
 
 const DISABLED_CONTEXT_PROVIDER_VALUES = new Set(['', 'none', 'off', 'disabled']);
 const KNOWN_CONTEXT_PROVIDERS = new Set<AllenContextProvider>(['allen', 'cognee', 'cognee_memory']);
@@ -26,8 +28,28 @@ export function isCogneeContextEnabled(): boolean {
   return provider === 'cognee' || provider === 'cognee_memory';
 }
 
+export function cogneeMandatoryGraphMode(): CogneeMandatoryGraphMode {
+  const raw = (process.env.ALLEN_COGNEE_MANDATORY_GRAPH ?? 'auto').trim().toLowerCase();
+  if (raw === 'auto' || raw === 'required' || raw === 'off') return raw;
+  if (raw === 'true' || raw === 'enabled' || raw === 'on' || raw === '1') return 'auto';
+  if (raw === 'false' || raw === 'disabled' || raw === 'none' || raw === '0') return 'off';
+  return 'auto';
+}
+
+export function isCogneeMandatoryGraphEnabled(): boolean {
+  return isCogneeContextEnabled() && cogneeMandatoryGraphMode() !== 'off';
+}
+
 export function isGraphContextEnabled(): boolean {
   return configuredContextProvider() === 'allen';
+}
+
+export function contextIndexGraphModeForProvider(
+  provider: AllenContextProvider | null = configuredContextProvider(),
+): ContextIndexGraphMode | null {
+  if (provider === 'allen') return 'full_graph';
+  if (provider === 'cognee' || provider === 'cognee_memory') return 'mandatory_context_map';
+  return null;
 }
 
 export function contextProviderRuntimeConfig(): {

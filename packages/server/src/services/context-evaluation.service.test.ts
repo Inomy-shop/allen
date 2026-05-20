@@ -140,6 +140,136 @@ describe('ContextEvaluationService', () => {
     }));
   });
 
+  it('flags manifest-only claims without load evidence and reports retrieval lifecycle metrics', async () => {
+    await db.collection('node_context_packets').insertOne({
+      packetId: 'packet-manifest-only',
+      executionId: 'exec-manifest-only',
+      workflowName: 'bug-investigate-and-fix',
+      nodeName: 'implement',
+      nodeRole: 'backend-developer',
+      attempt: 1,
+      repoId: 'repo-1',
+      repoName: 'fixture-repo',
+      indexId: 'index-1',
+      candidateRefs: [
+        { refId: 'manifest-ref', providerId: 'cognee_memory' },
+        { refId: 'graph-shadow-ref', providerId: 'cognee_memory', providerMetadata: { graphExpansion: true } },
+      ],
+      selectedRefs: [{
+        refId: 'manifest-ref',
+        kind: 'doc',
+        providerId: 'cognee_memory',
+        providerMetadata: { injectionPolicy: 'manifest_only' },
+      }],
+      rejectedRefs: [{
+        refId: 'graph-shadow-ref',
+        kind: 'doc',
+        providerId: 'cognee_memory',
+        providerMetadata: { graphExpansion: true, injectionPolicy: 'manifest_only' },
+      }],
+      contextInjection: { injectedRefs: [], totalChars: 0 },
+      createdAt: new Date(),
+    });
+    await db.collection('context_usage_traces').insertOne({
+      traceId: 'usage-manifest-only',
+      executionId: 'exec-manifest-only',
+      workflowName: 'bug-investigate-and-fix',
+      nodeName: 'implement',
+      nodeRole: 'backend-developer',
+      attempt: 1,
+      packetId: 'packet-manifest-only',
+      loaded: [],
+      claimedUsed: [{ refId: 'manifest-ref', summary: 'Used manifest-only summary' }],
+      reportedLoaded: [],
+      reportedApplied: [],
+      skipped: [],
+      validationPerformed: [],
+      createdAt: new Date(),
+    });
+
+    const service = new ContextEvaluationService(db);
+    const result = await service.evaluateUsageTrace({
+      executionId: 'exec-manifest-only',
+      nodeName: 'implement',
+      attempt: 1,
+      packetId: 'packet-manifest-only',
+      usageTraceId: 'usage-manifest-only',
+    });
+
+    expect(result?.scores).toEqual(expect.objectContaining({
+      candidateRecall: 1,
+      manifestCompliance: 0,
+      graphExpansionNoise: 1,
+    }));
+    expect(result?.diagnostics).toEqual(expect.arrayContaining([
+      expect.objectContaining({ code: 'manifest_ref_used_without_load', refIds: ['manifest-ref'] }),
+      expect.objectContaining({ code: 'graph_expansion_noise', rejectedCount: 1 }),
+    ]));
+  });
+
+  it('flags injectable refs that were selected for injection but never packed', async () => {
+    await db.collection('node_context_packets').insertOne({
+      packetId: 'packet-injectable-missing',
+      executionId: 'exec-injectable-missing',
+      workflowName: 'bug-investigate-and-fix',
+      nodeName: 'implement',
+      nodeRole: 'backend-developer',
+      attempt: 1,
+      repoId: 'repo-1',
+      repoName: 'fixture-repo',
+      indexId: 'index-1',
+      selectedRefs: [{
+        refId: 'snippet-ref',
+        kind: 'doc',
+        providerId: 'cognee_memory',
+        providerMetadata: { injectionDecision: 'snippet' },
+      }],
+      injectableRefs: [{
+        refId: 'snippet-ref',
+        kind: 'doc',
+        providerId: 'cognee_memory',
+        providerMetadata: { injectionDecision: 'snippet' },
+      }],
+      contextInjection: { injectedRefs: [], skippedRefs: [], totalChars: 0 },
+      createdAt: new Date(),
+    });
+    await db.collection('context_usage_traces').insertOne({
+      traceId: 'usage-injectable-missing',
+      executionId: 'exec-injectable-missing',
+      workflowName: 'bug-investigate-and-fix',
+      nodeName: 'implement',
+      nodeRole: 'backend-developer',
+      attempt: 1,
+      packetId: 'packet-injectable-missing',
+      loaded: [],
+      claimedUsed: [],
+      reportedLoaded: [],
+      reportedApplied: [],
+      skipped: [],
+      validationPerformed: [],
+      createdAt: new Date(),
+    });
+
+    const service = new ContextEvaluationService(db);
+    const result = await service.evaluateUsageTrace({
+      executionId: 'exec-injectable-missing',
+      nodeName: 'implement',
+      attempt: 1,
+      packetId: 'packet-injectable-missing',
+      usageTraceId: 'usage-injectable-missing',
+    });
+
+    expect(result?.scores).toEqual(expect.objectContaining({
+      injectableFulfillment: 0,
+    }));
+    expect(result?.diagnostics).toEqual(expect.arrayContaining([
+      expect.objectContaining({ code: 'injectable_context_not_injected', refIds: ['snippet-ref'] }),
+    ]));
+    expect(result?.refScores).toEqual(expect.arrayContaining([
+      expect.objectContaining({ refId: 'snippet-ref', injectable: true, injected: false }),
+    ]));
+  });
+
   it('attaches evaluation to the exact execution trace when node and attempt are duplicated', async () => {
     await insertEvaluationFixture(db, {
       executionId: 'exec-duplicate-trace',

@@ -510,9 +510,11 @@ async def run_search(payload: Dict[str, Any]) -> Dict[str, Any]:
     query = str(payload.get("query") or "")
     max_results = int((payload.get("limits") or {}).get("maxResults") or 12) if isinstance(payload.get("limits"), dict) else 12
     started = time.time()
+    search_mode = str(payload.get("searchMode") or "CHUNKS").upper()
+    query_type = getattr(SearchType, search_mode, SearchType.CHUNKS)
     search_kwargs = {
         "query_text": query,
-        "query_type": SearchType.CHUNKS,
+        "query_type": query_type,
         "datasets": [dataset_name],
         "top_k": max_results,
     }
@@ -521,7 +523,7 @@ async def run_search(payload: Dict[str, Any]) -> Dict[str, Any]:
     except TypeError:
         search_kwargs.pop("top_k", None)
         raw_results = await cognee.search(**search_kwargs)
-    normalized = await normalize_results(raw_results, dataset_name, max_results)
+    normalized = await normalize_results(raw_results, dataset_name, max_results, search_mode)
     return {
         "status": "completed",
         "datasetName": dataset_name,
@@ -532,7 +534,7 @@ async def run_search(payload: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
-async def normalize_results(raw_results: Any, dataset_name: str, max_results: int) -> Dict[str, Any]:
+async def normalize_results(raw_results: Any, dataset_name: str, max_results: int, search_mode: str = "CHUNKS") -> Dict[str, Any]:
     rows = flatten_search_rows(raw_results)
     out: List[Dict[str, Any]] = []
     diagnostics: List[Dict[str, Any]] = []
@@ -563,7 +565,7 @@ async def normalize_results(raw_results: Any, dataset_name: str, max_results: in
                     "severity": "warn",
                     "chunkId": str(chunk_id),
                     "datasetName": dataset_name,
-                    "searchMode": "CHUNKS",
+                    "searchMode": search_mode,
                     "message": "Cognee returned a chunk id, but Allen could not resolve source document metadata for it.",
                 })
             path = first_portable_path(
@@ -612,14 +614,14 @@ async def normalize_results(raw_results: Any, dataset_name: str, max_results: in
             "sourceMetadata": source_metadata,
             "externalMetadata": source_metadata,
             "entityIds": metadata.get("entityIds") or metadata.get("entity_ids"),
-            "searchMode": "CHUNKS",
+            "searchMode": search_mode,
         })
     if chunk_count > 0:
         diagnostics.append({
             "code": "cognee_chunk_source_metadata_resolution",
             "severity": "info" if unresolved_metadata_count == 0 else "warn",
             "datasetName": dataset_name,
-            "searchMode": "CHUNKS",
+            "searchMode": search_mode,
             "chunkCount": chunk_count,
             "resolvedChunkMetadataCount": resolved_metadata_count,
             "unresolvedChunkMetadataCount": unresolved_metadata_count,

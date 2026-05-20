@@ -7,7 +7,7 @@ import { resolveRepositoriesDir } from '@allen/engine';
 import { scanRepo } from './repo-scanner.js';
 import { RepoContextScannerService } from './repo-context-scanner.service.js';
 import { RepoKnowledgeGraphService } from './repo-knowledge-graph.service.js';
-import { isGraphContextEnabled } from './context-provider-config.js';
+import { isContextEngineEnabled, isGraphContextEnabled } from './context-provider-config.js';
 
 const exec = promisify(execFile);
 
@@ -161,8 +161,10 @@ export class RepoService {
       this.contextScanner.scheduleScan(String(result.insertedId)).catch((err) => {
         console.error(`[repos] failed to schedule deep scan for ${result.insertedId}:`, err);
       });
-      this.knowledgeGraph.scheduleIndex(String(result.insertedId)).catch((err) => {
-        console.error(`[repos] failed to schedule knowledge graph index for ${result.insertedId}:`, err);
+    }
+    if (isContextEngineEnabled()) {
+      this.knowledgeGraph.scheduleProviderContextIndex(String(result.insertedId)).catch((err) => {
+        console.error(`[repos] failed to schedule provider context index for ${result.insertedId}:`, err);
       });
     }
 
@@ -451,6 +453,11 @@ export class RepoService {
       // Fire deep context scan in the background.
       this.contextScanner.scheduleScan(String(result.insertedId)).catch((err) => {
         console.error(`[repos] failed to schedule deep scan for ${result.insertedId}:`, err);
+      });
+    }
+    if (isContextEngineEnabled()) {
+      this.knowledgeGraph.scheduleProviderContextIndex(String(result.insertedId)).catch((err) => {
+        console.error(`[repos] failed to schedule provider context index for ${result.insertedId}:`, err);
       });
     }
 

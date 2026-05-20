@@ -55,7 +55,10 @@ export class WorkflowContextInjectionAdapter {
   }): Promise<WorkflowContextInjection> {
     const basePath = input.worktreePath && existsSync(input.worktreePath) ? input.worktreePath : input.repoPath;
     const limits = contextInjectionLimits();
-    const consideredRefs = input.packet.selectedRefs.filter(isContextInjectionEligible);
+    const packetInjectableRefs = input.packet.injectableRefs?.length
+      ? input.packet.injectableRefs
+      : input.packet.selectedRefs.filter((ref) => isInjectablePolicy(ref));
+    const consideredRefs = packetInjectableRefs.filter(isContextInjectionEligible);
     const injectedRefs: ContextInjectionRef[] = [];
     const skippedRefs: ContextInjectionRef[] = [];
     const providerNativeRefs: ContextInjectionRef[] = [];
@@ -252,10 +255,12 @@ ${items.map((ref) => renderContextRef(ref)).join('\n')}
   <repo_context_selection>
     <selection_instructions>
       These entries are relevance hints unless Allen injected their full body in the system context.
-      File refs should be loaded before relying on them unless already present in Allen-injected full_body_context.
+      File refs with injection_policy="manifest_only" must be loaded before relying on them unless already present in Allen-injected full_body_context.
+      File refs with injection_policy="never_full_auto" must not be treated as loaded from this packet.
       Provider-text refs can be used directly when they are present in Allen-injected full_body_context.
     </selection_instructions>
 ${refs('selected_context', 'provider_composer', packet.selectedRefs)}
+${refs('injectable_context', 'injection_policy', packet.injectableRefs ?? [])}
 ${refs('mandatory_context', 'mandatory_graph', mandatoryRefs)}
 ${refs('recommended_context', 'graph_keyword_metadata', optionalRefs)}
 ${refs('available_skills', 'skill_manifest', skills)}
@@ -319,7 +324,8 @@ export function summarizeInjection(injection: WorkflowContextInjection): Record<
 }
 
 function renderManifestRef(ref: ContextInjectionRef, status: string): string {
-  return `    <context_ref id="${escapeAttr(ref.refId)}" kind="${escapeAttr(ref.kind)}" provider="${escapeAttr(ref.providerId)}" source="${escapeAttr(ref.source)}" status="${escapeAttr(status)}"${ref.path ? ` path="${escapeAttr(ref.path)}"` : ''}${ref.itemType ? ` item_type="${escapeAttr(ref.itemType)}"` : ''}${ref.grounding ? ` grounding="${escapeAttr(ref.grounding)}"` : ''}${ref.contentSha256 ? ` content_sha256="${escapeAttr(ref.contentSha256)}"` : ''}${ref.charCount != null ? ` char_count="${escapeAttr(ref.charCount)}"` : ''}${ref.packingTransformation ? ` packing_transformation="${escapeAttr(ref.packingTransformation)}"` : ''}${ref.riskClass ? ` risk_class="${escapeAttr(ref.riskClass)}"` : ''}>
+  const injectionPolicy = injectionDecisionFor(ref);
+  return `    <context_ref id="${escapeAttr(ref.refId)}" kind="${escapeAttr(ref.kind)}" provider="${escapeAttr(ref.providerId)}" source="${escapeAttr(ref.source)}" status="${escapeAttr(status)}" injection_policy="${escapeAttr(injectionPolicy)}"${ref.path ? ` path="${escapeAttr(ref.path)}"` : ''}${ref.itemType ? ` item_type="${escapeAttr(ref.itemType)}"` : ''}${ref.grounding ? ` grounding="${escapeAttr(ref.grounding)}"` : ''}${ref.contentSha256 ? ` content_sha256="${escapeAttr(ref.contentSha256)}"` : ''}${ref.charCount != null ? ` char_count="${escapeAttr(ref.charCount)}"` : ''}${ref.packingTransformation ? ` packing_transformation="${escapeAttr(ref.packingTransformation)}"` : ''}${ref.riskClass ? ` risk_class="${escapeAttr(ref.riskClass)}"` : ''}>
       <title>${escapeText(ref.title)}</title>
       <reason>${escapeText(ref.reason)}</reason>
     </context_ref>`;
@@ -328,7 +334,7 @@ function renderManifestRef(ref: ContextInjectionRef, status: string): string {
 function renderInjectedContextRef(ref: ContextInjectionRef): string {
   const content = String(ref.content ?? '');
   const fence = markdownFenceFor(content);
-  return `    <context_file id="${escapeAttr(ref.refId)}" kind="${escapeAttr(ref.kind)}" provider="${escapeAttr(ref.providerId)}"${ref.path ? ` path="${escapeAttr(ref.path)}"` : ''}${ref.itemType ? ` item_type="${escapeAttr(ref.itemType)}"` : ''}${ref.grounding ? ` grounding="${escapeAttr(ref.grounding)}"` : ''} content_sha256="${escapeAttr(ref.contentSha256 ?? '')}" original_content_sha256="${escapeAttr(ref.originalContentSha256 ?? '')}" char_count="${escapeAttr(ref.charCount ?? 0)}" original_char_count="${escapeAttr(ref.originalCharCount ?? ref.charCount ?? 0)}" packing_transformation="${escapeAttr(ref.packingTransformation ?? 'full_body')}" compressor_provider="${escapeAttr(ref.compressorProviderId ?? '')}" risk_class="${escapeAttr(ref.riskClass ?? '')}">
+  return `    <context_file id="${escapeAttr(ref.refId)}" kind="${escapeAttr(ref.kind)}" provider="${escapeAttr(ref.providerId)}"${ref.path ? ` path="${escapeAttr(ref.path)}"` : ''}${ref.itemType ? ` item_type="${escapeAttr(ref.itemType)}"` : ''}${ref.grounding ? ` grounding="${escapeAttr(ref.grounding)}"` : ''} injection_policy="${escapeAttr(injectionDecisionFor(ref))}" content_sha256="${escapeAttr(ref.contentSha256 ?? '')}" original_content_sha256="${escapeAttr(ref.originalContentSha256 ?? '')}" char_count="${escapeAttr(ref.charCount ?? 0)}" original_char_count="${escapeAttr(ref.originalCharCount ?? ref.charCount ?? 0)}" packing_transformation="${escapeAttr(ref.packingTransformation ?? 'full_body')}" compressor_provider="${escapeAttr(ref.compressorProviderId ?? '')}" risk_class="${escapeAttr(ref.riskClass ?? '')}">
       <title>${escapeText(ref.title)}</title>
       <reason>${escapeText(ref.reason)}</reason>
 ${fence}
@@ -337,9 +343,26 @@ ${fence}
     </context_file>`;
 }
 
+function isInjectablePolicy(ref: KnowledgeCandidateRef): boolean {
+  const decision = ref.providerMetadata?.injectionDecision ?? ref.providerMetadata?.injectionPolicy;
+  if (!decision) return true;
+  return ref.mandatory
+    || ref.targetLayer === 'system_prompt'
+    || decision === 'mandatory_full'
+    || decision === 'snippet'
+    || decision === 'injectable';
+}
+
+function injectionDecisionFor(ref: KnowledgeCandidateRef): string {
+  const decision = ref.providerMetadata?.injectionDecision ?? ref.providerMetadata?.injectionPolicy;
+  if (decision === 'injectable') return 'snippet';
+  if (typeof decision === 'string' && decision) return decision;
+  return ref.mandatory || ref.targetLayer === 'system_prompt' ? 'mandatory_full' : 'manifest_only';
+}
+
 function renderContextRef(ref: KnowledgeCandidateRef): string {
   const rerank = ref.rerank && typeof ref.rerank === 'object' ? ref.rerank as Record<string, unknown> : {};
-  return `    <context_ref id="${escapeAttr(ref.refId)}" kind="${escapeAttr(ref.kind)}" provider="${escapeAttr(ref.providerId)}" source="${escapeAttr(ref.source)}"${ref.path ? ` path="${escapeAttr(ref.path)}"` : ''}${ref.itemType ? ` item_type="${escapeAttr(ref.itemType)}"` : ''}${ref.grounding ? ` grounding="${escapeAttr(ref.grounding)}"` : ''} loadable="${escapeAttr(String(ref.loadable))}" mandatory="${escapeAttr(String(ref.mandatory))}"${ref.contentSha256 ? ` content_sha256="${escapeAttr(ref.contentSha256)}"` : ''}${ref.score !== undefined ? ` score="${escapeAttr(String(ref.score))}"` : ''}${rerank.score !== undefined ? ` rerank_score="${escapeAttr(String(rerank.score))}"` : ''}${rerank.finalRank !== undefined ? ` final_rank="${escapeAttr(String(rerank.finalRank))}"` : ''}>
+  return `    <context_ref id="${escapeAttr(ref.refId)}" kind="${escapeAttr(ref.kind)}" provider="${escapeAttr(ref.providerId)}" source="${escapeAttr(ref.source)}" injection_policy="${escapeAttr(injectionDecisionFor(ref))}"${ref.path ? ` path="${escapeAttr(ref.path)}"` : ''}${ref.itemType ? ` item_type="${escapeAttr(ref.itemType)}"` : ''}${ref.grounding ? ` grounding="${escapeAttr(ref.grounding)}"` : ''} loadable="${escapeAttr(String(ref.loadable))}" mandatory="${escapeAttr(String(ref.mandatory))}"${ref.contentSha256 ? ` content_sha256="${escapeAttr(ref.contentSha256)}"` : ''}${ref.score !== undefined ? ` score="${escapeAttr(String(ref.score))}"` : ''}${rerank.score !== undefined ? ` rerank_score="${escapeAttr(String(rerank.score))}"` : ''}${rerank.finalRank !== undefined ? ` final_rank="${escapeAttr(String(rerank.finalRank))}"` : ''}>
       <title>${escapeText(ref.title)}</title>
       <summary>${escapeText(ref.summary)}</summary>
       <reason>${escapeText(ref.reason)}</reason>

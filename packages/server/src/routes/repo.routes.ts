@@ -3,7 +3,7 @@ import { dirname } from 'node:path';
 import { RepoService } from '../services/repo.service.js';
 import { RepoKnowledgeGraphService, isRepoKnowledgeGraphValidationError } from '../services/repo-knowledge-graph.service.js';
 import { CogneeMemoryService } from '../services/cognee-memory.service.js';
-import { isCogneeContextEnabled, isGraphContextEnabled } from '../services/context-provider-config.js';
+import { isCogneeContextEnabled, isContextEngineEnabled, isGraphContextEnabled } from '../services/context-provider-config.js';
 import { param } from '../types.js';
 import { ObjectId, type Db } from 'mongodb';
 import { execFile } from 'node:child_process';
@@ -188,13 +188,14 @@ export function repoRoutes(db: Db): Router {
   // POST /api/repos/knowledge-graph?path=... — path-based save for MCP agents.
   router.post('/knowledge-graph', async (req: Request, res: Response) => {
     try {
-      if (!isGraphContextEnabled()) return res.status(409).json(contextProviderDisabledPayload('Allen context provider is disabled.'));
+      if (!isContextEngineEnabled()) return res.status(409).json(contextProviderDisabledPayload());
       const path = String(req.query.path ?? req.body?.repo_path ?? '');
       if (!path) return res.status(400).json({ error: 'path query param or repo_path body field is required' });
       const result = await knowledgeGraph.saveGeneratedGraph({
         repoPath: path,
         graph: req.body?.graph,
         graphJson: req.body?.graph_json ?? req.body?.graphJson,
+        graphMode: req.body?.graph_mode ?? req.body?.graphMode,
         sourceExecutionId: req.body?.source_execution_id ?? req.body?.sourceExecutionId,
         source: 'agent_tool',
       });

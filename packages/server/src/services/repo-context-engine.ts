@@ -1,6 +1,6 @@
 import { createConfiguredContextReranker, type ContextReranker } from './repo-context-reranker.js';
 import { CogneeMemoryProvider } from './repo-context-cognee-provider.js';
-import { configuredContextProvider } from './context-provider-config.js';
+import { cogneeMandatoryGraphMode, configuredContextProvider } from './context-provider-config.js';
 import type { Db } from 'mongodb';
 
 export type RepoContextProvider = 'claude' | 'codex' | 'unknown';
@@ -31,6 +31,8 @@ export interface KnowledgeNodeLike {
   moduleId?: string;
   mandatoryForGlobs?: string[];
   mandatoryForNodeRoles?: string[];
+  mandatoryForSpawnedAgentRoles?: string[];
+  mandatoryForSpawnerRoles?: string[];
   access: {
     injectPolicy: 'baseline' | 'on_demand' | 'never_auto';
   };
@@ -45,6 +47,9 @@ export interface KnowledgeRetrievalInput {
   workflowName: string;
   nodeName: string;
   nodeRole?: string;
+  executionKind?: 'workflow_node' | 'spawned_agent' | 'chat_agent';
+  targetRole?: string;
+  callerRole?: string;
   attempt: number;
   state: Record<string, unknown>;
   prompt?: string;
@@ -97,6 +102,7 @@ export interface KnowledgeRetrievalResult {
   providerId: string;
   candidates: KnowledgeCandidateRef[];
   selectedRefs: KnowledgeCandidateRef[];
+  injectableRefs?: KnowledgeCandidateRef[];
   rejectedRefs: KnowledgeCandidateRef[];
   diagnostics: Array<Record<string, unknown>>;
   trace: KnowledgeRetrievalTrace[];
@@ -113,6 +119,9 @@ export interface RepoContextPacket {
   workflowName: string;
   nodeName: string;
   nodeRole?: string;
+  executionKind?: 'workflow_node' | 'spawned_agent' | 'chat_agent';
+  targetRole?: string;
+  callerRole?: string;
   attempt: number;
   repoId: string;
   repoName?: string;
@@ -125,8 +134,10 @@ export interface RepoContextPacket {
   indexFreshness: string;
   taskPrompt?: string;
   selectedRefs: KnowledgeCandidateRef[];
+  injectableRefs?: KnowledgeCandidateRef[];
   rejectedRefs: KnowledgeCandidateRef[];
   availableRefs: KnowledgeCandidateRef[];
+  candidateRefs?: KnowledgeCandidateRef[];
   providerTraces: KnowledgeRetrievalTrace[];
   providerDiagnostics: Array<Record<string, unknown>>;
   rerankerTraces: Array<Record<string, unknown>>;
@@ -140,19 +151,27 @@ export interface RepoContextPacket {
 export class MandatoryGraphProvider implements KnowledgeRetrievalProvider {
   readonly providerId = 'mandatory_graph';
 
+  constructor(private readonly options: { includeBaseline?: boolean; includeGlobs?: boolean } = {}) {}
+
   async retrieve(input: KnowledgeRetrievalInput): Promise<KnowledgeRetrievalResult> {
-    const baseline = input.nodes.filter((node) => node.kind === 'repo' || node.access.injectPolicy === 'baseline');
-    const roleMandatory = input.nodes.filter((node) => node.mandatoryForNodeRoles?.includes(input.nodeRole ?? ''));
-    const globMandatory = input.nodes.filter((node) => nodeMatchesMandatoryGlobs(node, input.currentFiles));
+    const includeBaseline = this.options.includeBaseline ?? true;
+    const includeGlobs = this.options.includeGlobs ?? true;
+    const baseline = includeBaseline
+      ? input.nodes.filter((node) => node.kind === 'repo' || node.access.injectPolicy === 'baseline')
+      : [];
+    const roleMandatory = input.nodes.filter((node) => mandatoryContextMatch(node, input).matched);
+    const globMandatory = includeGlobs
+      ? input.nodes.filter((node) => nodeMatchesMandatoryGlobs(node, input.currentFiles))
+      : [];
     const selectedRefs = uniqueByRefId([...baseline, ...roleMandatory, ...globMandatory])
-      .sort((a, b) => mandatoryContextCandidatePriority(b, input.nodeRole) - mandatoryContextCandidatePriority(a, input.nodeRole))
+      .sort((a, b) => mandatoryContextCandidatePriority(b, input) - mandatoryContextCandidatePriority(a, input))
       .map((node) => toCandidateRef({
         node,
         providerId: this.providerId,
         source: 'mandatory_graph',
         mandatory: true,
-        score: mandatoryContextCandidatePriority(node, input.nodeRole),
-        reason: mandatoryContextReason(node, input.nodeRole, input.currentFiles),
+        score: mandatoryContextCandidatePriority(node, input),
+        reason: mandatoryContextReason(node, input, input.currentFiles),
       }));
 
     return resultFromSelected(this.providerId, selectedRefs);
@@ -201,6 +220,8 @@ export class RepoContextEngine {
       try {
         results.push(await provider.retrieve(input));
       } catch (err) {
+        const mandatoryGraphRequired = provider.providerId === 'mandatory_graph'
+          && (contextProviderFallback() === 'graph' || cogneeMandatoryGraphMode() === 'required');
         results.push({
           providerId: provider.providerId,
           candidates: [],
@@ -208,7 +229,7 @@ export class RepoContextEngine {
           rejectedRefs: [],
           diagnostics: [{
             code: 'retrieval_provider_failed',
-            severity: provider.providerId === 'mandatory_graph' && contextProviderFallback() === 'graph' ? 'error' : 'warn',
+            severity: mandatoryGraphRequired ? 'error' : 'warn',
             providerId: provider.providerId,
             message: (err as Error).message,
           }],
@@ -227,6 +248,9 @@ export class RepoContextEngine {
       workflowName: input.workflowName,
       nodeName: input.nodeName,
       nodeRole: input.nodeRole,
+      executionKind: input.executionKind,
+      targetRole: input.targetRole,
+      callerRole: input.callerRole,
       attempt: input.attempt,
       state: input.state,
       prompt: input.prompt,
@@ -244,6 +268,9 @@ export class RepoContextEngine {
       workflowName: input.workflowName,
       nodeName: input.nodeName,
       nodeRole: input.nodeRole,
+      executionKind: input.executionKind,
+      targetRole: input.targetRole,
+      callerRole: input.callerRole,
       attempt: input.attempt,
       repoId: input.repoId,
       repoName: input.repoName,
@@ -256,8 +283,10 @@ export class RepoContextEngine {
       indexFreshness: input.indexFreshness,
       taskPrompt: input.prompt,
       selectedRefs: composed.selectedRefs,
+      injectableRefs: composed.injectableRefs,
       rejectedRefs: composed.rejectedRefs,
       availableRefs: composed.availableRefs,
+      candidateRefs: composed.candidateRefs,
       providerTraces: results.flatMap((result) => result.trace),
       providerDiagnostics: [...results.flatMap((result) => result.diagnostics), ...reranked.diagnostics],
       rerankerTraces: reranked.traces,
@@ -296,8 +325,11 @@ export function createConfiguredKnowledgeProviders(options: { db?: Db } = {}): K
   const provider = configuredContextProvider();
   if (!provider) return [];
   if (provider === 'cognee' || provider === 'cognee_memory') {
-    const providers: KnowledgeRetrievalProvider[] = [new CogneeMemoryProvider(options.db)];
-    if (contextProviderFallback() === 'graph') providers.push(new MandatoryGraphProvider(), new GraphKeywordMetadataProvider());
+    const providers: KnowledgeRetrievalProvider[] = [];
+    const graphFallbackEnabled = contextProviderFallback() === 'graph';
+    if (cogneeMandatoryGraphMode() !== 'off' || graphFallbackEnabled) providers.push(new MandatoryGraphProvider());
+    providers.push(new CogneeMemoryProvider(options.db));
+    if (graphFallbackEnabled) providers.push(new GraphKeywordMetadataProvider());
     return providers;
   }
   if (provider === 'allen') return [new MandatoryGraphProvider(), new GraphKeywordMetadataProvider()];
@@ -310,14 +342,15 @@ function contextProviderFallback(): string {
 
 function composeProviderResults(results: KnowledgeRetrievalResult[], rankedRefs: KnowledgeCandidateRef[]): {
   selectedRefs: KnowledgeCandidateRef[];
+  injectableRefs: KnowledgeCandidateRef[];
   rejectedRefs: KnowledgeCandidateRef[];
   availableRefs: KnowledgeCandidateRef[];
+  candidateRefs: KnowledgeCandidateRef[];
 } {
   const selected: KnowledgeCandidateRef[] = [];
   const rejected: KnowledgeCandidateRef[] = [];
   const seenRefIds = new Set<string>();
   const seenContentHashes = new Set<string>();
-  const seenPaths = new Set<string>();
   const orderedRefs = [...rankedRefs].sort((a, b) => {
     if (a.mandatory !== b.mandatory) return a.mandatory ? -1 : 1;
     return Number((a.rerank as Record<string, unknown> | undefined)?.finalRank ?? 0)
@@ -325,26 +358,34 @@ function composeProviderResults(results: KnowledgeRetrievalResult[], rankedRefs:
   });
 
   for (const ref of orderedRefs) {
-    const pathKey = ref.path ? ref.path.toLowerCase() : undefined;
-    if (seenRefIds.has(ref.refId) || (pathKey && seenPaths.has(pathKey))) {
+    if (seenRefIds.has(ref.refId)) {
       rejected.push({ ...ref, reason: `Duplicate context ref skipped after reranking: ${ref.reason}` });
       continue;
     }
-    if (!pathKey && ref.contentSha256 && seenContentHashes.has(ref.contentSha256)) {
+    if (ref.contentSha256 && seenContentHashes.has(ref.contentSha256)) {
       rejected.push({ ...ref, reason: `Duplicate provider text skipped after reranking: ${ref.reason}` });
       continue;
     }
     seenRefIds.add(ref.refId);
-    if (pathKey) seenPaths.add(pathKey);
     if (ref.contentSha256) seenContentHashes.add(ref.contentSha256);
     selected.push(ref);
   }
 
   rejected.push(...results.flatMap((result) => result.rejectedRefs));
+  const explicitInjectableIds = new Set(results.flatMap((result) => result.injectableRefs ?? []).map((ref) => ref.refId));
+  const injectableRefs = selected.filter((ref) => {
+    if (ref.mandatory || ref.targetLayer === 'system_prompt') return true;
+    if (explicitInjectableIds.has(ref.refId)) return true;
+    return ref.providerMetadata?.injectionDecision === 'mandatory_full'
+      || ref.providerMetadata?.injectionDecision === 'snippet'
+      || ref.providerMetadata?.injectionPolicy === 'injectable';
+  });
   return {
     selectedRefs: selected,
+    injectableRefs,
     rejectedRefs: rejected,
     availableRefs: selected.filter((ref) => !ref.mandatory),
+    candidateRefs: results.flatMap((result) => result.candidates),
   };
 }
 
@@ -411,9 +452,12 @@ function contextRefPriority(ref: KnowledgeCandidateRef): number {
   return priority;
 }
 
-function mandatoryContextCandidatePriority(node: KnowledgeNodeLike, role?: string): number {
+function mandatoryContextCandidatePriority(node: KnowledgeNodeLike, input: Pick<KnowledgeRetrievalInput, 'nodeRole' | 'targetRole' | 'executionKind'>): number {
   let priority = 0;
-  if (role && node.mandatoryForNodeRoles?.includes(role)) priority += 1_000;
+  const match = mandatoryContextMatch(node, input);
+  if (match.field === 'mandatoryForNodeRoles') priority += 1_000;
+  if (match.field === 'mandatoryForSpawnedAgentRoles') priority += 1_000;
+  if (match.field === 'mandatoryForSpawnerRoles') priority += 900;
   if (node.mandatoryForGlobs?.length) priority += 50;
   if (node.access.injectPolicy === 'baseline') priority += 500;
   if (node.access.injectPolicy === 'never_auto') priority -= 1_000;
@@ -427,11 +471,32 @@ function mandatoryContextCandidatePriority(node: KnowledgeNodeLike, role?: strin
   }));
 }
 
-function mandatoryContextReason(node: KnowledgeNodeLike, role?: string, currentFiles?: string[]): string {
+function mandatoryContextReason(node: KnowledgeNodeLike, input: Pick<KnowledgeRetrievalInput, 'nodeRole' | 'targetRole' | 'executionKind'>, currentFiles?: string[]): string {
   if (node.access.injectPolicy === 'baseline') return 'Baseline mandatory repo context selected by Allen before agent startup.';
-  if (role && node.mandatoryForNodeRoles?.includes(role)) return `Mandatory for node role ${role}.`;
+  const match = mandatoryContextMatch(node, input);
+  if (match.field === 'mandatoryForNodeRoles') return `Mandatory for workflow node role ${match.role}.`;
+  if (match.field === 'mandatoryForSpawnedAgentRoles') return `Mandatory for spawned agent role ${match.role}.`;
+  if (match.field === 'mandatoryForSpawnerRoles') return `Mandatory for spawner role ${match.role}.`;
   if (node.mandatoryForGlobs?.length && currentFiles?.length) return `Mandatory for matched repo files: ${currentFiles.slice(0, 5).join(', ')}.`;
   return 'Mandatory repo context selected by Allen before agent startup.';
+}
+
+function mandatoryContextMatch(
+  node: KnowledgeNodeLike,
+  input: Pick<KnowledgeRetrievalInput, 'nodeRole' | 'targetRole' | 'executionKind'>,
+): { matched: boolean; field?: 'mandatoryForNodeRoles' | 'mandatoryForSpawnedAgentRoles' | 'mandatoryForSpawnerRoles'; role?: string } {
+  const nodeRole = input.nodeRole ?? input.targetRole;
+  const targetRole = input.targetRole ?? input.nodeRole;
+  if (nodeRole && node.mandatoryForNodeRoles?.includes(nodeRole)) {
+    return { matched: true, field: 'mandatoryForNodeRoles', role: nodeRole };
+  }
+  if (input.executionKind === 'spawned_agent' && targetRole && node.mandatoryForSpawnedAgentRoles?.includes(targetRole)) {
+    return { matched: true, field: 'mandatoryForSpawnedAgentRoles', role: targetRole };
+  }
+  if (input.executionKind !== 'spawned_agent' && targetRole && node.mandatoryForSpawnerRoles?.includes(targetRole)) {
+    return { matched: true, field: 'mandatoryForSpawnerRoles', role: targetRole };
+  }
+  return { matched: false };
 }
 
 function nodeMatchesMandatoryGlobs(node: KnowledgeNodeLike, currentFiles: string[]): boolean {
@@ -466,6 +531,8 @@ function scoreNode(node: KnowledgeNodeLike, taskText: string, role?: string): nu
     if (haystack.includes(token)) score += 1;
   }
   if (role && node.mandatoryForNodeRoles?.includes(role)) score += 5;
+  if (role && node.mandatoryForSpawnedAgentRoles?.includes(role)) score += 5;
+  if (role && node.mandatoryForSpawnerRoles?.includes(role)) score += 4;
   if (node.kind === 'production_note') score += 2;
   if (node.kind === 'skill') score += 1;
   return score;
@@ -474,6 +541,8 @@ function scoreNode(node: KnowledgeNodeLike, taskText: string, role?: string): nu
 function searchWhy(node: KnowledgeNodeLike, score: number, role?: string): string {
   if (node.access.injectPolicy === 'baseline') return `Baseline repo knowledge matched the query with score ${score}.`;
   if (role && node.mandatoryForNodeRoles?.includes(role)) return `Mandatory for role ${role} and matched the query with score ${score}.`;
+  if (role && node.mandatoryForSpawnedAgentRoles?.includes(role)) return `Mandatory for spawned role ${role} and matched the query with score ${score}.`;
+  if (role && node.mandatoryForSpawnerRoles?.includes(role)) return `Mandatory for spawner role ${role} and matched the query with score ${score}.`;
   if (node.kind === 'production_note' || node.kind === 'runbook') return `Production/runbook context matched the query with score ${score}.`;
   if (node.kind === 'skill' || node.kind === 'skill_reference') return `Skill context matched the query with score ${score}.`;
   return `Knowledge graph ref matched the query with score ${score}.`;

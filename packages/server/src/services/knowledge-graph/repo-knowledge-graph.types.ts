@@ -2,6 +2,8 @@ import type { ObjectId } from 'mongodb';
 
 export const KNOWLEDGE_GRAPH_INDEX_VERSION = 1;
 
+export type KnowledgeGraphMode = 'full_graph' | 'mandatory_context_map';
+
 export type KnowledgeNodeKind =
   | 'repo'
   | 'module'
@@ -41,6 +43,8 @@ export interface RawGraphNode {
   appliesToGlobs?: string[];
   mandatoryForGlobs?: string[];
   mandatoryForNodeRoles?: string[];
+  mandatoryForSpawnedAgentRoles?: string[];
+  mandatoryForSpawnerRoles?: string[];
 }
 
 export interface RawGraphEdge {
@@ -133,6 +137,8 @@ export interface KnowledgeNodeRecord {
   appliesToGlobs?: string[];
   mandatoryForGlobs?: string[];
   mandatoryForNodeRoles?: string[];
+  mandatoryForSpawnedAgentRoles?: string[];
+  mandatoryForSpawnerRoles?: string[];
   source: {
     type: 'repo_file' | 'allen_db' | 'imported_agent' | 'generated_summary';
     uri: string;

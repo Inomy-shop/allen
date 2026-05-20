@@ -45,7 +45,8 @@ export function validateRawGraphForPersistence(
   rawEdges: RawGraphEdge[],
   inventory: KnowledgeCandidateInventory,
   workflowRoleInventory: WorkflowRoleInventoryEntry[] = [],
-  options: { strictWorkflowRoleCoverage?: boolean } = {},
+  spawnedAgentRoleInventory: WorkflowRoleInventoryEntry[] = [],
+  options: { strictWorkflowRoleCoverage?: boolean; mandatoryContextMapMode?: boolean } = {},
 ): {
   issues: GraphValidationIssue[];
   candidateCoverage: Record<string, unknown>;
@@ -157,12 +158,52 @@ export function validateRawGraphForPersistence(
     });
   }
 
+  for (const raw of rawNodes) {
+    const mandatoryRoles = mandatoryRolesForNode(raw);
+    if (mandatoryRoles.length === 0) continue;
+    const kind = normalizeKind(raw.kind);
+    if (!isUsuallyTaskSpecificKind(kind)) continue;
+    const path = raw.path ? safeRepoRelativePath(String(raw.path)) : undefined;
+    if (looksLikeAlwaysLoadGuideline(raw, path)) continue;
+    const localId = localIdByRaw.get(raw) ?? String(raw.id ?? stableNodeKey(raw));
+    issues.push({
+      code: 'broad_context_marked_mandatory',
+      severity: options.mandatoryContextMapMode ? 'error' : 'warn',
+      nodeId: localId,
+      path,
+      role: mandatoryRoles.join(','),
+      actual: {
+        kind,
+        mandatoryForNodeRoles: arrayOfStrings(raw.mandatoryForNodeRoles),
+        mandatoryForSpawnedAgentRoles: arrayOfStrings(raw.mandatoryForSpawnedAgentRoles),
+        mandatoryForSpawnerRoles: arrayOfStrings(raw.mandatoryForSpawnerRoles),
+      },
+      expected: 'Use mandatory role fields only for always-load guideline, policy, process, safety, or role operating instruction files.',
+      message: `${kind} node "${localId}" is marked mandatory for ${mandatoryRoles.join(', ')}, but broad repo context is usually task-specific. Keep it on demand unless the file is explicitly an always-load guideline or policy.`,
+    });
+  }
+
   const mandatoryRolesFromNodes = new Set<string>();
+  const mandatoryWorkflowRolesFromNodes = new Set<string>();
+  const mandatorySpawnedRolesFromNodes = new Set<string>();
+  const mandatorySpawnerRolesFromNodes = new Set<string>();
   for (const node of rawNodes) {
-    for (const role of arrayOfStrings(node.mandatoryForNodeRoles)) mandatoryRolesFromNodes.add(role);
+    for (const role of arrayOfStrings(node.mandatoryForNodeRoles)) {
+      mandatoryRolesFromNodes.add(role);
+      mandatoryWorkflowRolesFromNodes.add(role);
+    }
+    for (const role of arrayOfStrings(node.mandatoryForSpawnedAgentRoles)) {
+      mandatoryRolesFromNodes.add(role);
+      mandatorySpawnedRolesFromNodes.add(role);
+    }
+    for (const role of arrayOfStrings(node.mandatoryForSpawnerRoles)) {
+      mandatoryRolesFromNodes.add(role);
+      mandatorySpawnerRolesFromNodes.add(role);
+    }
   }
   const workflowRoleNames = new Set(workflowRoleInventory.map((entry) => entry.role));
-  const unknownMandatoryRoles = Array.from(mandatoryRolesFromNodes)
+  const spawnedRoleNames = new Set(spawnedAgentRoleInventory.map((entry) => entry.role));
+  const unknownMandatoryRoles = Array.from(mandatoryWorkflowRolesFromNodes)
     .filter((role) => workflowRoleNames.size > 0 && !workflowRoleNames.has(role))
     .sort();
   for (const role of unknownMandatoryRoles) {
@@ -176,31 +217,50 @@ export function validateRawGraphForPersistence(
       message: `mandatoryForNodeRoles contains "${role}", but that is not an active Allen workflow node role. Use exact workflow role names only.`,
     });
   }
-  const mandatoryRoleNodeCount = rawNodes.filter((n) => arrayOfStrings(n.mandatoryForNodeRoles).length > 0).length;
-  const mandatoryRoleEdgeCount = rawEdges.filter((e) => normalizeRelation(e.relation) === 'MANDATORY_FOR_ROLE').length;
-  if (rawNodes.length > 3 && mandatoryRoleNodeCount === 0 && mandatoryRoleEdgeCount === 0) {
+  const unknownMandatorySpawnerRoles = Array.from(mandatorySpawnerRolesFromNodes)
+    .filter((role) => workflowRoleNames.size > 0 && !workflowRoleNames.has(role))
+    .sort();
+  for (const role of unknownMandatorySpawnerRoles) {
     issues.push({
-      code: 'missing_mandatory_role_mapping',
-      severity: options.strictWorkflowRoleCoverage && workflowRoleNames.size > 0 ? 'error' : 'warn',
-      message: 'No mandatory role mappings were generated. Node agents may not know which repo context is required for each role.',
+      code: 'unknown_mandatory_spawner_role',
+      severity: options.strictWorkflowRoleCoverage ? 'error' : 'warn',
+      nodeId: role,
+      role,
+      expected: Array.from(workflowRoleNames).sort(),
+      actual: role,
+      message: `mandatoryForSpawnerRoles contains "${role}", but that is not an active Allen workflow node role. Use exact workflow role names only.`,
     });
   }
+  const unknownMandatorySpawnedRoles = Array.from(mandatorySpawnedRolesFromNodes)
+    .filter((role) => !spawnedRoleNames.has(role))
+    .sort();
+  for (const role of unknownMandatorySpawnedRoles) {
+    issues.push({
+      code: 'unknown_mandatory_spawned_agent_role',
+      severity: 'error',
+      nodeId: role,
+      role,
+      expected: Array.from(spawnedRoleNames).sort(),
+      actual: role,
+      message: `mandatoryForSpawnedAgentRoles contains "${role}", but that is not an allowed spawned specialist role. Use exact spawned specialist role names only.`,
+    });
+  }
+  const mandatoryRoleNodeCount = rawNodes.filter((n) => mandatoryRolesForNode(n).length > 0).length;
+  const mandatoryRoleEdgeCount = rawEdges.filter((e) => normalizeRelation(e.relation) === 'MANDATORY_FOR_ROLE').length;
   if (mandatoryRoleNodeCount > 0 && mandatoryRoleEdgeCount === 0) {
     issues.push({
       code: 'missing_mandatory_role_edges',
       severity: options.strictWorkflowRoleCoverage && workflowRoleNames.size > 0 ? 'error' : 'warn',
-      message: 'Graph uses mandatoryForNodeRoles but does not include MANDATORY_FOR_ROLE edges. Add role edges so graph traversal and diagnostics can explain required context.',
+      message: 'Graph uses mandatory role fields but does not include MANDATORY_FOR_ROLE edges. Add role edges so graph traversal and diagnostics can explain required context.',
     });
   }
 
   const repoOperatingRoles = workflowRoleInventory.filter((entry) => isRepoOperatingWorkflowRole(entry.role));
-  const missingMandatoryMappingRoles = repoOperatingRoles
-    .map((entry) => entry.role)
-    .filter((role) => !mandatoryRolesFromNodes.has(role));
+  const missingMandatoryMappingRoles: string[] = [];
   const rawNodeIds = new Set(rawNodes.map((node) => String(node.id ?? stableNodeKey(node))));
-  const roleNodeIds = new Map(repoOperatingRoles.map((entry) => [entry.role, `role-${entry.role}`]));
-  const missingMandatoryRoleEdgeRoles = repoOperatingRoles
-    .map((entry) => entry.role)
+  const roleNodeIds = new Map(Array.from(mandatoryRolesFromNodes).map((role) => [role, `role-${role}`]));
+  const missingMandatoryRoleEdgeRoles = Array.from(mandatoryRolesFromNodes)
+    .filter((role) => workflowRoleNames.size === 0 || workflowRoleNames.has(role))
     .filter((role) => {
       const roleNodeId = roleNodeIds.get(role);
       if (!roleNodeId || !rawNodeIds.has(roleNodeId)) return true;
@@ -209,17 +269,6 @@ export function validateRawGraphForPersistence(
         && (String(edge.to ?? '') === roleNodeId || String(edge.from ?? '') === roleNodeId)
       );
     });
-  for (const role of missingMandatoryMappingRoles) {
-    issues.push({
-      code: 'workflow_role_missing_mandatory_mapping',
-      severity: options.strictWorkflowRoleCoverage ? 'error' : 'warn',
-      nodeId: role,
-      role,
-      expected: `At least one graph node with mandatoryForNodeRoles containing "${role}".`,
-      actual: 'No mandatory context node mapped to this workflow role.',
-      message: `Active Allen workflow role "${role}" has no mandatory context mapping in this graph.`,
-    });
-  }
   for (const role of missingMandatoryRoleEdgeRoles) {
     issues.push({
       code: 'workflow_role_missing_mandatory_edge',
@@ -251,13 +300,50 @@ export function validateRawGraphForPersistence(
       roleCount: workflowRoleInventory.length,
       repoOperatingRoleCount: repoOperatingRoles.length,
       mappedRoles: Array.from(mandatoryRolesFromNodes).sort(),
+      mappedWorkflowRoles: Array.from(mandatoryWorkflowRolesFromNodes).sort(),
+      mappedSpawnedAgentRoles: Array.from(mandatorySpawnedRolesFromNodes).sort(),
+      mappedSpawnerRoles: Array.from(mandatorySpawnerRolesFromNodes).sort(),
       unknownMandatoryRoles,
+      unknownMandatorySpawnedRoles,
+      unknownMandatorySpawnerRoles,
       missingMandatoryMappingRoles,
       missingMandatoryRoleEdgeRoles,
       mandatoryRoleNodeCount,
       mandatoryRoleEdgeCount,
     },
   };
+}
+
+function mandatoryRolesForNode(raw: RawGraphNode): string[] {
+  return [
+    ...arrayOfStrings(raw.mandatoryForNodeRoles),
+    ...arrayOfStrings(raw.mandatoryForSpawnedAgentRoles),
+    ...arrayOfStrings(raw.mandatoryForSpawnerRoles),
+  ];
+}
+
+function isUsuallyTaskSpecificKind(kind: KnowledgeNodeKind): boolean {
+  return kind === 'module'
+    || kind === 'source_file'
+    || kind === 'doc'
+    || kind === 'runbook'
+    || kind === 'production_note'
+    || kind === 'command'
+    || kind === 'command_profile';
+}
+
+function looksLikeAlwaysLoadGuideline(node: RawGraphNode, path?: string): boolean {
+  const tags = arrayOfStrings(node.tags).join(' ');
+  const text = `${node.title ?? ''} ${path ?? ''} ${tags}`.toLowerCase();
+  return /\b(always[-_\s]?load|guideline|guidelines|policy|policies|rule|rules|standard|standards|convention|conventions|process|procedure|procedures|instruction|instructions|safety|review|testing|validation|coding|style)\b/.test(text);
+}
+
+function safeRepoRelativePath(path: string): string | undefined {
+  try {
+    return sanitizeRepoRelativePath(path);
+  } catch {
+    return undefined;
+  }
 }
 
 function addCoverageWarning(
@@ -293,8 +379,11 @@ export function buildGraphValidationRepairHints(issues: GraphValidationIssue[]):
   if (codes.has('unknown_mandatory_workflow_role')) {
     hints.push('Use only exact Allen workflow role names from the active workflow role inventory in mandatoryForNodeRoles.');
   }
-  if (codes.has('missing_mandatory_role_mapping') || codes.has('workflow_role_missing_mandatory_mapping')) {
-    hints.push('Map every repo-operating workflow role to at least one mandatory context node, using the most relevant global instruction, architecture, production, module, or validation file when no role-specific file exists.');
+  if (codes.has('unknown_mandatory_spawner_role')) {
+    hints.push('Use only exact Allen workflow role names from the active workflow role inventory in mandatoryForSpawnerRoles.');
+  }
+  if (codes.has('unknown_mandatory_spawned_agent_role')) {
+    hints.push('Use only exact spawned specialist role names from the spawned specialist role inventory in mandatoryForSpawnedAgentRoles.');
   }
   if (codes.has('missing_mandatory_role_edges') || codes.has('workflow_role_missing_mandatory_edge')) {
     hints.push('For every mandatory role, create an imported_agent node with id role-<exact-role-name> and add at least one MANDATORY_FOR_ROLE edge connected to it.');
@@ -335,7 +424,7 @@ export function determineInjectPolicy(
   path?: string,
 ): KnowledgeNodeRecord['access']['injectPolicy'] {
   if (kind === 'repo') return 'baseline';
-  if (arrayOfStrings(raw.mandatoryForNodeRoles).length > 0) return 'on_demand';
+  if (mandatoryRolesForNode(raw).length > 0) return 'on_demand';
   const tags = arrayOfStrings(raw.tags).map((tag) => tag.toLowerCase());
   if (tags.includes('never-auto') || tags.includes('never_auto')) return 'never_auto';
   if ((kind === 'instruction_file' || kind === 'context_file') && path && isGlobalInstructionPath(path)) {

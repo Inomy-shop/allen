@@ -157,6 +157,9 @@ export function agentRoutes(db: Db): Router {
       if (!prompt || !prompt.trim()) {
         return res.status(400).json({ error: 'prompt is required' });
       }
+      if (agentName === 'repo-knowledge-graph-indexer' && !/\b(?:mode|graph_mode)\s*[:=]\s*(full_graph|mandatory_context_map)\b/i.test(prompt)) {
+        return res.status(400).json({ error: 'repo-knowledge-graph-indexer runs must specify mode: full_graph or mode: mandatory_context_map' });
+      }
       const result = await executeChatTool(
         'spawn_agent',
         { agent_name: agentName, prompt, repo_path: repoPath, session_id: sessionId },

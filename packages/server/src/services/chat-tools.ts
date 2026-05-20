@@ -1264,6 +1264,9 @@ async function runSpawnInBackground(
         workflowName: spawnTree?.parentCaller ? `${spawnTree.parentCaller}:spawn_agent/${agentName}` : `chat:spawn_agent/${agentName}`,
         nodeName: agentName,
         nodeRole: agentName,
+        executionKind: 'spawned_agent',
+        targetRole: agentName,
+        callerRole: spawnTree?.parentCaller ?? undefined,
         attempt: baseAttempt,
         state: { repo_path: repoPath, worktree_path: repoPath },
         prompt,
@@ -1618,6 +1621,10 @@ async function runSpawnInBackground(
         extraEnv: spawnContextEnv,
         externalServerNames: externalMcpServers,
       });
+      const requiresAllenGraphPersistenceTool = agentName === 'repo-knowledge-graph-indexer';
+      if (requiresAllenGraphPersistenceTool && !mcpServers.allen) {
+        throw new Error('repo-knowledge-graph-indexer requires the built-in Allen MCP server for save_repo_knowledge_graph');
+      }
 
       const sdkOptions: Record<string, unknown> = {
         model, permissionMode: 'bypassPermissions',
@@ -1650,7 +1657,7 @@ async function runSpawnInBackground(
 
       // Execution mode. Claude-provider spawns default to CLI mode. Explicit
       // ALLEN_AGENT_EXECUTION_MODE=cli|sdk overrides. See cli-runner.ts.
-      const useCliMode = resolveExecutionMode(sdkOptions.cwd as string | undefined) === 'cli';
+      const useCliMode = !requiresAllenGraphPersistenceTool && resolveExecutionMode(sdkOptions.cwd as string | undefined) === 'cli';
       let msgStream: AsyncIterable<any>;
       if (useCliMode) {
         const { queryViaCli } = await import('@allen/engine');
@@ -1890,6 +1897,9 @@ async function runSpawnInBackground(
           workflowName: spawnTree?.parentCaller ? `${spawnTree.parentCaller}:spawn_agent/${agentName}` : `chat:spawn_agent/${agentName}`,
           nodeName: agentName,
           nodeRole: agentName,
+          executionKind: 'spawned_agent',
+          targetRole: agentName,
+          callerRole: spawnTree?.parentCaller ?? undefined,
           attempt: baseAttempt + attempt,
           packetId: repoKnowledgePacketSummary.packetId,
           outputs: traceOutput,
@@ -3594,7 +3604,8 @@ async function runAgentTurn(
       else sdkOptions.appendSystemPrompt = systemPrompt;
       registerExecutionProcess(convId, process.pid, () => abortController.abort());
 
-      const useCliMode = resolveExecutionMode(sdkOptions.cwd as string | undefined) === 'cli';
+      const requiresAllenGraphPersistenceTool = targetName === 'repo-knowledge-graph-indexer';
+      const useCliMode = !requiresAllenGraphPersistenceTool && resolveExecutionMode(sdkOptions.cwd as string | undefined) === 'cli';
       let messageStream: AsyncIterable<any>;
       if (useCliMode) {
         const { queryViaCli } = await import('@allen/engine');

@@ -3,9 +3,10 @@ import { existsSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { Collection, Db } from 'mongodb';
-import { withArtifactsGuidance, withNonInteractiveGuidance, normalizeModelAlias } from '@allen/engine';
+import { withArtifactsGuidance, withNonInteractiveGuidance, normalizeModelAlias, loadAllMcpServers } from '@allen/engine';
 import type { SystemAction } from '../cron.types.js';
 import {
+  MandatoryGraphProvider,
   RepoContextEngine,
   type RepoContextProvider,
 } from '../repo-context-engine.js';
@@ -16,6 +17,7 @@ import {
 import {
   KNOWLEDGE_GRAPH_INDEX_VERSION,
   type KnowledgeEdgeRecord,
+  type KnowledgeGraphMode,
   type KnowledgeNodeKind,
   type KnowledgeNodeRecord,
   type ParsedUsage,
@@ -23,7 +25,7 @@ import {
   type RawKnowledgeGraph,
   type UsageToolCall,
 } from './repo-knowledge-graph.types.js';
-import { buildIndexerPrompt, buildKnowledgeCandidateInventory, buildWorkflowRoleInventory } from './repo-knowledge-graph-indexer.js';
+import { buildIndexerUserPrompt, buildKnowledgeCandidateInventory, buildSpawnedAgentRoleInventory, buildWorkflowRoleInventory, workflowRoleGuidance } from './repo-knowledge-graph-indexer.js';
 import {
   collectCurrentFiles,
   gitHeadSha,
@@ -55,10 +57,18 @@ import {
   normalizeUsageArray,
   verifyContextUsageClaims,
 } from './repo-knowledge-graph-usage.js';
-import { arrayOfStrings, firstString, hashJson, normalizeKind, normalizeRelation, sha256, stableNodeKey } from './repo-knowledge-graph-utils.js';
+import { arrayOfStrings, firstString, hashJson, isRecord, normalizeKind, normalizeRelation, sha256, stableNodeKey } from './repo-knowledge-graph-utils.js';
 import { ContextEvaluationService } from '../context-evaluation.service.js';
 import { ContextWorkflowEvaluationService } from '../context-workflow-evaluation.service.js';
-import { contextProviderDisabledError, isGraphContextEnabled } from '../context-provider-config.js';
+import {
+  cogneeMandatoryGraphMode,
+  configuredContextProvider,
+  contextIndexGraphModeForProvider,
+  contextProviderDisabledError,
+  isContextEngineEnabled,
+  isCogneeContextEnabled,
+  isGraphContextEnabled,
+} from '../context-provider-config.js';
 
 export { KNOWLEDGE_GRAPH_INDEX_VERSION } from './repo-knowledge-graph.types.js';
 export type { KnowledgeEdgeRecord, KnowledgeNodeRecord } from './repo-knowledge-graph.types.js';
@@ -67,6 +77,11 @@ export { RepoKnowledgeGraphValidationError, isRepoKnowledgeGraphValidationError 
 
 const INDEX_TIMEOUT_MS = 60 * 60 * 1000;
 const SEARCH_REPO_KNOWLEDGE_LIMIT = 12;
+
+function normalizeGraphMode(value: unknown): KnowledgeGraphMode | null {
+  if (value === 'full_graph' || value === 'mandatory_context_map') return value;
+  return null;
+}
 
 export class RepoKnowledgeGraphService {
   private repos: Collection;
@@ -87,6 +102,19 @@ export class RepoKnowledgeGraphService {
 
   async scheduleIndex(repoId: string): Promise<{ scheduled: boolean; reason?: string; executionId?: string }> {
     if (!isGraphContextEnabled()) return { scheduled: false, reason: 'Allen context provider is disabled' };
+    return this.scheduleIndexForMode(repoId, 'full_graph');
+  }
+
+  async scheduleProviderContextIndex(repoId: string): Promise<{ scheduled: boolean; reason?: string; executionId?: string; graphMode?: KnowledgeGraphMode }> {
+    const graphMode = normalizeGraphMode(contextIndexGraphModeForProvider());
+    if (!graphMode) return { scheduled: false, reason: 'Context provider is disabled' };
+    const result = await this.scheduleIndexForMode(repoId, graphMode);
+    return { ...result, graphMode };
+  }
+
+  private async scheduleIndexForMode(repoId: string, graphMode: KnowledgeGraphMode): Promise<{ scheduled: boolean; reason?: string; executionId?: string }> {
+    if (graphMode === 'full_graph' && !isGraphContextEnabled()) return { scheduled: false, reason: 'Allen context provider is disabled' };
+    if (graphMode === 'mandatory_context_map' && !isCogneeContextEnabled()) return { scheduled: false, reason: 'Cognee context provider is disabled' };
     const { ObjectId } = await import('mongodb');
     const repo = await this.repos.findOne({ _id: new ObjectId(repoId) });
     if (!repo) return { scheduled: false, reason: 'Repo not found' };
@@ -98,18 +126,21 @@ export class RepoKnowledgeGraphService {
     if (claim.matchedCount === 0) return { scheduled: false, reason: 'Index already in progress' };
 
     const executionId = randomUUID();
-    this.runIndex(repoId, repo.path as string, repo.name as string, executionId).catch((err) => {
+    this.runIndex(repoId, repo.path as string, repo.name as string, executionId, graphMode).catch((err) => {
       console.error(`[repo-knowledge-graph] index failed for ${repoId}:`, err);
     });
     return { scheduled: true, executionId };
   }
 
-  async getLatestIndex(repoId: string): Promise<Record<string, unknown> | null> {
-    return this.indexes.findOne({ repoId, latest: true }, { sort: { indexedAt: -1 } });
+  async getLatestIndex(repoId: string, graphMode: KnowledgeGraphMode = 'full_graph'): Promise<Record<string, unknown> | null> {
+    const graphModeFilter = graphMode === 'full_graph'
+      ? { $or: [{ graphMode: 'full_graph' }, { graphMode: { $exists: false } }] }
+      : { graphMode };
+    return this.indexes.findOne({ repoId, latest: true, ...graphModeFilter }, { sort: { indexedAt: -1 } });
   }
 
-  async getLatestGraph(repoId: string): Promise<Record<string, unknown> | null> {
-    const index = await this.getLatestIndex(repoId);
+  async getLatestGraph(repoId: string, graphMode: KnowledgeGraphMode = 'full_graph'): Promise<Record<string, unknown> | null> {
+    const index = await this.getLatestIndex(repoId, graphMode);
     if (!index) return null;
     const indexId = String(index.indexId);
     const [nodes, edges] = await Promise.all([
@@ -124,10 +155,16 @@ export class RepoKnowledgeGraphService {
     repoPath?: string;
     graph?: RawKnowledgeGraph;
     graphJson?: string;
+    graphMode?: KnowledgeGraphMode | string;
     sourceExecutionId?: string;
     source?: 'api' | 'agent_tool';
   }): Promise<{ repoId: string; indexId: string; nodeCount: number; edgeCount: number; latest: true }> {
-    if (!isGraphContextEnabled()) throw contextProviderDisabledError('Allen context provider is disabled.');
+    if (!isContextEngineEnabled()) throw contextProviderDisabledError();
+    const graphMode = normalizeGraphMode(input.graphMode);
+    if (!graphMode && (input.source ?? 'api') === 'agent_tool') {
+      throw new Error('graph_mode is required. Use "full_graph" or "mandatory_context_map".');
+    }
+    const resolvedGraphMode = graphMode ?? 'full_graph';
     const repo = input.repoId
       ? await this.repoById(input.repoId)
       : await resolveRepoFromPath(this.db, input.repoPath);
@@ -147,6 +184,7 @@ export class RepoKnowledgeGraphService {
       repoPath,
       headSha,
       graph,
+      graphMode: resolvedGraphMode,
       executionId: input.sourceExecutionId,
       costUsd: 0,
       source: input.source ?? 'api',
@@ -158,6 +196,9 @@ export class RepoKnowledgeGraphService {
     workflowName: string;
     nodeName: string;
     nodeRole?: string;
+    executionKind?: 'workflow_node' | 'spawned_agent' | 'chat_agent';
+    targetRole?: string;
+    callerRole?: string;
     attempt: number;
     state: Record<string, unknown>;
     prompt?: string;
@@ -166,22 +207,52 @@ export class RepoKnowledgeGraphService {
     rootExecutionId?: string;
     provider?: RepoContextProvider;
   }): Promise<{ packetId: string; promptBlock: string; systemPromptBlock: string; traceSummary: any } | null> {
-    if (!isGraphContextEnabled()) return null;
-    const pathHint = firstString(input.state.worktree_path, input.state.repo_path, input.state.repository_path);
-    const repo = await resolveRepoFromPath(this.db, pathHint);
+    const configuredProvider = configuredContextProvider();
+    if (!configuredProvider) return null;
+    const repo = await this.resolveRepoForContextPacket(input.state);
     if (!repo) return null;
     const repoId = String(repo._id);
-    const index = await this.getLatestIndex(repoId);
-    if (!index) return null;
+    const cogneeGraphMode = cogneeMandatoryGraphMode();
+    const cogneeGraphEnabled = (configuredProvider === 'cognee' || configuredProvider === 'cognee_memory') && cogneeGraphMode !== 'off';
+    const graphFallbackEnabled = (process.env.ALLEN_CONTEXT_PROVIDER_FALLBACK ?? '').toLowerCase() === 'graph';
+    const graphUseful = configuredProvider === 'allen' || graphFallbackEnabled || cogneeGraphEnabled;
+    const primaryGraphMode: KnowledgeGraphMode = configuredProvider === 'allen' || (graphFallbackEnabled && !cogneeGraphEnabled)
+      ? 'full_graph'
+      : 'mandatory_context_map';
+    let index = graphUseful
+      ? await this.getLatestIndex(repoId, primaryGraphMode)
+      : null;
+    if (!index && cogneeGraphEnabled && cogneeGraphMode === 'auto') {
+      index = await this.getLatestIndex(repoId, 'full_graph');
+    }
+    if (configuredProvider === 'allen' && !index) return null;
+    if (cogneeGraphEnabled && cogneeGraphMode === 'required' && !index) {
+      throw new Error(`Cognee mandatory graph is required, but repo ${repoId} has no latest Allen knowledge graph index.`);
+    }
 
-    const indexId = String(index.indexId);
-    const allNodes = await this.nodes.find({ repoId, indexId }).toArray();
-    if (allNodes.length === 0) return null;
+    const indexId = index ? String(index.indexId) : `${configuredProvider}:${repoId}`;
+    const allNodes = index ? await this.nodes.find({ repoId, indexId }).toArray() : [];
+    if (configuredProvider === 'allen' && allNodes.length === 0) return null;
+    if (cogneeGraphEnabled && cogneeGraphMode === 'required' && allNodes.length === 0) {
+      throw new Error(`Cognee mandatory graph is required, but repo ${repoId} index ${indexId} has no knowledge nodes.`);
+    }
+    const graphDiagnostics = cogneeGraphEnabled
+      ? cogneeMandatoryGraphDiagnostics({
+        mode: cogneeGraphMode,
+        repoId,
+        indexId,
+        indexFound: Boolean(index),
+        nodeCount: allNodes.length,
+      })
+      : [];
 
     const currentFiles = collectCurrentFiles(input.state, input.prompt);
     const packetId = randomUUID();
     const provider = normalizeRepoContextProvider(input.provider);
-    const contextEngine = new RepoContextEngine(undefined, undefined, { db: this.db });
+    const contextRetrievalMode = contextRetrievalModeForNode(input);
+    const contextEngine = contextRetrievalMode === 'mandatory_only'
+      ? new RepoContextEngine([new MandatoryGraphProvider({ includeBaseline: false, includeGlobs: false })], undefined, { db: this.db })
+      : new RepoContextEngine(undefined, undefined, { db: this.db });
     const adapter = new WorkflowContextInjectionAdapter();
     const packet = await contextEngine.buildPacket({
       packetId,
@@ -190,10 +261,13 @@ export class RepoKnowledgeGraphService {
       repoName: String(repo.name ?? ''),
       repoPath: String(repo.path ?? ''),
       indexId,
-      indexFreshness: ((index.freshness as { status?: string } | undefined)?.status ?? 'fresh'),
+      indexFreshness: index ? ((index.freshness as { status?: string } | undefined)?.status ?? 'fresh') : 'provider_runtime',
       workflowName: input.workflowName,
       nodeName: input.nodeName,
       nodeRole: input.nodeRole,
+      executionKind: input.executionKind,
+      targetRole: input.targetRole,
+      callerRole: input.callerRole,
       attempt: input.attempt,
       state: input.state,
       prompt: input.prompt,
@@ -205,6 +279,18 @@ export class RepoKnowledgeGraphService {
       parentExecutionId: input.parentExecutionId,
       rootExecutionId: input.rootExecutionId,
     });
+    packet.providerDiagnostics.push({
+      code: 'repo_context_retrieval_mode',
+      severity: 'info',
+      mode: contextRetrievalMode,
+      message: contextRetrievalMode === 'mandatory_only'
+        ? 'Support/output node skipped semantic context retrieval; only explicit mandatory role mappings are eligible.'
+        : 'Repo-operating node used full configured context retrieval.',
+    });
+    if (contextRetrievalMode === 'mandatory_only' && packet.selectedRefs.length === 0) {
+      return null;
+    }
+    if (graphDiagnostics.length) packet.providerDiagnostics.push(...graphDiagnostics);
     const injection = await adapter.buildInjection({
       packet,
       provider,
@@ -234,7 +320,9 @@ export class RepoKnowledgeGraphService {
       rerankerProviders: packet.rerankerProviders,
       rerankerDiagnostics: packet.rerankerDiagnostics,
       selectedContextCount: packet.selectedRefs.length,
+      injectableContextCount: packet.injectableRefs?.length ?? 0,
       injectedContextCount: injection.injectedRefs.length,
+      skippedContextCount: injection.skippedRefs.length,
       providerTextContextCount: packet.selectedRefs.filter((ref) => ref.itemType === 'provider_text' || ref.itemType === 'provider_generated').length,
       repoBackedContextCount: packet.selectedRefs.filter((ref) => ref.grounding === 'repo_backed').length,
       mandatoryCount: packet.selectedRefs.filter((ref) => ref.mandatory).length,
@@ -251,7 +339,12 @@ export class RepoKnowledgeGraphService {
       mandatoryContextSkippedBudgetCount: injection.skippedRefs.filter((ref) => ref.skipReason === 'budget').length,
       mandatoryContextTargetLayer: injection.targetLayer,
       systemPromptContextInjected: systemPromptBlock.length > 0,
-      contextProvider: packet.retrievalProviders[0],
+      contextProvider: configuredProvider,
+      contextRetrievalMode,
+      retrievalContextProvider: packet.retrievalProviders[0],
+      executionKind: packet.executionKind,
+      targetRole: packet.targetRole,
+      callerRole: packet.callerRole,
     };
 
     return {
@@ -262,12 +355,36 @@ export class RepoKnowledgeGraphService {
     };
   }
 
+  private async resolveRepoForContextPacket(state: Record<string, unknown>): Promise<Record<string, unknown> | null> {
+    const repoId = firstString(
+      state.repoId,
+      state.repo_id,
+      state.repositoryId,
+      state.repository_id,
+      isRecord(state.repo) ? state.repo.repoId : undefined,
+      isRecord(state.repository) ? state.repository.repoId : undefined,
+    );
+    if (repoId) {
+      const repo = await this.repoById(repoId).catch(() => null);
+      if (repo) return repo;
+    }
+
+    for (const pathHint of contextPacketPathHints(state)) {
+      const repo = await resolveRepoFromPath(this.db, pathHint);
+      if (repo) return repo;
+    }
+    return null;
+  }
+
   async recordContextUsage(input: {
     executionId: string;
     executionTraceId?: string;
     workflowName: string;
     nodeName: string;
     nodeRole?: string;
+    executionKind?: 'workflow_node' | 'spawned_agent' | 'chat_agent';
+    targetRole?: string;
+    callerRole?: string;
     attempt: number;
     packetId?: string;
     outputs: Record<string, unknown>;
@@ -287,7 +404,7 @@ export class RepoKnowledgeGraphService {
     repoContextUsage: Record<string, unknown>;
     contextEvaluation?: Record<string, unknown>;
   } | null> {
-    if (!isGraphContextEnabled()) return null;
+    if (!isContextEngineEnabled()) return null;
     if (!input.packetId) return null;
     const parsed = extractUsage(input.outputs, input.rawResponse, input.toolCalls);
     const packet = await this.packets.findOne({ packetId: input.packetId }).catch(() => null);
@@ -301,6 +418,9 @@ export class RepoKnowledgeGraphService {
       workflowName: input.workflowName,
       nodeName: input.nodeName,
       nodeRole: input.nodeRole,
+      executionKind: input.executionKind,
+      targetRole: input.targetRole,
+      callerRole: input.callerRole,
       attempt: input.attempt,
       packetId: input.packetId,
       parentPacketId: input.parentPacketId,
@@ -722,8 +842,7 @@ export class RepoKnowledgeGraphService {
     };
   }
 
-  private async runIndex(repoId: string, repoPath: string, repoName: string, executionId: string): Promise<void> {
-    if (!isGraphContextEnabled()) return;
+  private async runIndex(repoId: string, repoPath: string, repoName: string, executionId: string, graphMode: KnowledgeGraphMode): Promise<void> {
     const { ObjectId } = await import('mongodb');
     const startedAt = new Date();
     let headSha: string | undefined;
@@ -745,8 +864,8 @@ export class RepoKnowledgeGraphService {
         workflowVersion: 0,
         status: 'running',
         source: 'chat',
-        input: { prompt: `repo-knowledge-graph-index: ${repoName}`, agent_name: 'repo-knowledge-graph-indexer', repo_path: repoPath },
-        meta: { cwd: repoPath, provider: 'claude', model, spawnedBy: 'repo-knowledge-graph-indexer' },
+        input: { prompt: `repo-knowledge-graph-index: ${repoName}; mode: ${graphMode}`, agent_name: 'repo-knowledge-graph-indexer', repo_path: repoPath, graph_mode: graphMode },
+        meta: { cwd: repoPath, provider: 'claude', model, spawnedBy: 'repo-knowledge-graph-indexer', graphMode },
         state: {},
         sessions: {},
         retryCounts: {},
@@ -763,13 +882,33 @@ export class RepoKnowledgeGraphService {
       try {
         const inventory = await buildKnowledgeCandidateInventory(repoPath);
         const workflowRoleInventory = await buildWorkflowRoleInventory(this.db);
-        const prompt = buildIndexerPrompt(repoName, repoPath, inventory, workflowRoleInventory);
+        const spawnedAgentRoleInventory = await buildSpawnedAgentRoleInventory(this.db);
+        const prompt = buildIndexerUserPrompt(repoName, repoPath, inventory, workflowRoleInventory, spawnedAgentRoleInventory, graphMode);
+        const spawnContextEnv = {
+          ALLEN_PARENT_EXECUTION_ID: executionId,
+          ALLEN_PARENT_CALLER: 'repo-knowledge-graph-indexer',
+          ALLEN_ROOT_EXECUTION_ID: executionId,
+          ALLEN_ARTIFACT_ROOT_TYPE: 'agent',
+          ALLEN_ARTIFACT_ROOT_ID: executionId,
+          ALLEN_ARTIFACT_AGENT_NAME: 'repo-knowledge-graph-indexer',
+          ALLEN_ARTIFACT_AGENT_EXECUTION_ID: executionId,
+          ALLEN_ARTIFACT_PARENT_ID: executionId,
+        };
+        const mcpServers = await loadAllMcpServers(this.db, {
+          extraEnv: spawnContextEnv,
+          externalServerNames: [],
+        });
+        if (!mcpServers.allen) {
+          throw new Error('repo-knowledge-graph-indexer requires the built-in Allen MCP server for save_repo_knowledge_graph');
+        }
         for await (const msg of query({
           prompt,
           options: {
             model,
             permissionMode: 'bypassPermissions',
             cwd: repoPath,
+            env: { ...process.env, ...spawnContextEnv },
+            mcpServers,
             customSystemPrompt: withNonInteractiveGuidance(withArtifactsGuidance(agent.system as string)),
             abortController,
           } as any,
@@ -789,7 +928,7 @@ export class RepoKnowledgeGraphService {
       }
 
       const graph = parseGraphJson(rawResponse);
-      await this.persistGraph({ repoId, repoName, repoPath, headSha, graph, executionId, costUsd, source: 'agent_tool' });
+      await this.persistGraph({ repoId, repoName, repoPath, headSha, graph, graphMode, executionId, costUsd, source: 'agent_tool' });
 
       await this.db.collection('executions').updateOne(
         { id: executionId },
@@ -798,7 +937,7 @@ export class RepoKnowledgeGraphService {
             status: 'completed',
             completedAt: new Date(),
             durationMs: Date.now() - startedAt.getTime(),
-            state: { indexed: true },
+            state: { indexed: true, graphMode },
             cost: { actual: costUsd, estimated: costUsd },
           },
         },
@@ -823,8 +962,8 @@ export class RepoKnowledgeGraphService {
         {
           $set: {
             knowledgeGraphIndex: error
-              ? { status: 'failed', completedAt: new Date(), error, headSha, executionId }
-              : { status: 'completed', completedAt: new Date(), indexedAt: new Date(), error: null, headSha, executionId },
+              ? { status: 'failed', completedAt: new Date(), error, headSha, executionId, graphMode }
+              : { status: 'completed', completedAt: new Date(), indexedAt: new Date(), error: null, headSha, executionId, graphMode },
           },
         },
       );
@@ -837,6 +976,7 @@ export class RepoKnowledgeGraphService {
     repoPath: string;
     headSha?: string;
     graph: RawKnowledgeGraph;
+    graphMode: KnowledgeGraphMode;
     executionId?: string;
     costUsd: number;
     source: 'api' | 'agent_tool';
@@ -855,8 +995,10 @@ export class RepoKnowledgeGraphService {
     ];
     const inventory = await buildKnowledgeCandidateInventory(input.repoPath);
     const workflowRoleInventory = await buildWorkflowRoleInventory(this.db);
-    const validation = validateRawGraphForPersistence(rawNodes, input.graph.edges ?? [], inventory, workflowRoleInventory, {
+    const spawnedAgentRoleInventory = await buildSpawnedAgentRoleInventory(this.db);
+    const validation = validateRawGraphForPersistence(rawNodes, input.graph.edges ?? [], inventory, workflowRoleInventory, spawnedAgentRoleInventory, {
       strictWorkflowRoleCoverage: input.source === 'agent_tool',
+      mandatoryContextMapMode: input.graphMode === 'mandatory_context_map',
     });
     const validationErrors = validation.issues.filter((issue) => issue.severity === 'error');
     if (validationErrors.length > 0) {
@@ -887,6 +1029,8 @@ export class RepoKnowledgeGraphService {
         appliesToGlobs: arrayOfStrings(raw.appliesToGlobs),
         mandatoryForGlobs: arrayOfStrings(raw.mandatoryForGlobs),
         mandatoryForNodeRoles: arrayOfStrings(raw.mandatoryForNodeRoles),
+        mandatoryForSpawnedAgentRoles: arrayOfStrings(raw.mandatoryForSpawnedAgentRoles),
+        mandatoryForSpawnerRoles: arrayOfStrings(raw.mandatoryForSpawnerRoles),
         source: {
           type: path ? 'repo_file' : 'generated_summary',
           uri: path ? `repo://${path}` : `generated://${stableKey}`,
@@ -930,7 +1074,10 @@ export class RepoKnowledgeGraphService {
     }
     if (edges.length > 0) await this.edges.insertMany(edges);
 
-    await this.indexes.updateMany({ repoId: input.repoId, latest: true }, { $set: { latest: false } });
+    const latestFilter = input.graphMode === 'full_graph'
+      ? { repoId: input.repoId, latest: true, $or: [{ graphMode: 'full_graph' }, { graphMode: { $exists: false } }] }
+      : { repoId: input.repoId, latest: true, graphMode: input.graphMode };
+    await this.indexes.updateMany(latestFilter, { $set: { latest: false } });
     const rootRefs = rawNodes
       .map((raw) => idMap.get(String(raw.id ?? stableNodeKey(raw))))
       .filter((id, idx): id is string => {
@@ -945,6 +1092,7 @@ export class RepoKnowledgeGraphService {
       indexId,
       repoId: input.repoId,
       repoName: input.repoName,
+      graphMode: input.graphMode,
       sourceRepoPath: input.repoPath,
       headSha: input.headSha,
       indexVersion: KNOWLEDGE_GRAPH_INDEX_VERSION,
@@ -973,6 +1121,103 @@ export class RepoKnowledgeGraphService {
     return this.repos.findOne({ _id: new ObjectId(repoId) });
   }
 
+}
+
+function cogneeMandatoryGraphDiagnostics(input: {
+  mode: string;
+  repoId: string;
+  indexId: string;
+  indexFound: boolean;
+  nodeCount: number;
+}): Array<Record<string, unknown>> {
+  if (input.indexFound && input.nodeCount > 0) {
+    return [{
+      code: 'cognee_mandatory_graph_loaded',
+      severity: 'info',
+      mode: input.mode,
+      repoId: input.repoId,
+      indexId: input.indexId,
+      nodeCount: input.nodeCount,
+      message: 'Cognee provider loaded Allen mandatory context before semantic retrieval.',
+      detail: 'This is Allen repo knowledge graph mandatory context, not Cognee graph expansion.',
+    }];
+  }
+  return [{
+    code: 'cognee_mandatory_graph_missing',
+    severity: input.mode === 'required' ? 'error' : 'warn',
+    mode: input.mode,
+    repoId: input.repoId,
+    indexId: input.indexId,
+    reason: input.indexFound ? 'no_nodes' : 'no_latest_index',
+    message: 'Cognee provider did not find Allen mandatory context; semantic Cognee retrieval will continue in auto mode.',
+    detail: 'This checks Allen repo knowledge graph mandatory mappings only. Cognee graph expansion is controlled separately.',
+  }];
+}
+
+function contextPacketPathHints(state: Record<string, unknown>): string[] {
+  return uniqueStrings([
+    firstString(state.repo_path),
+    firstString(state.repoPath),
+    firstString(state.repository_path),
+    firstString(state.repositoryPath),
+    firstString(state.source_path),
+    firstString(state.sourcePath),
+    isRecord(state.repo) ? firstString(state.repo.repoPath, state.repo.path, state.repo.sourcePath) : undefined,
+    isRecord(state.repository) ? firstString(state.repository.repoPath, state.repository.path, state.repository.sourcePath) : undefined,
+    firstString(state.worktree_path),
+    firstString(state.worktreePath),
+  ]);
+}
+
+type ContextRetrievalMode = 'full' | 'mandatory_only';
+
+function contextRetrievalModeForNode(input: {
+  workflowName: string;
+  nodeName: string;
+  nodeRole?: string;
+  targetRole?: string;
+  prompt?: string;
+}): ContextRetrievalMode {
+  const nodeName = normalizeNodeName(input.nodeName);
+  const role = normalizeRoleName(firstString(input.targetRole, input.nodeRole));
+  if (isSupportOutputNodeName(nodeName) || isSummaryModePrompt(input.prompt)) {
+    return 'mandatory_only';
+  }
+  if (role && workflowRoleGuidance(role).category === 'workflow-support') {
+    return 'mandatory_only';
+  }
+  return 'full';
+}
+
+function isSupportOutputNodeName(nodeName: string): boolean {
+  return [
+    'open_pr',
+    'create_pr',
+    'create_pull_request',
+    'open_pull_request',
+    'final_summary',
+    'summary',
+    'run_summary',
+    'workflow_summary',
+    'pr_workspace_resolver',
+    'workspace_resolver',
+  ].includes(nodeName);
+}
+
+function isSummaryModePrompt(prompt?: string): boolean {
+  return Boolean(prompt && /(^|\n)\s*MODE:\s*summary\b/i.test(prompt));
+}
+
+function normalizeNodeName(value?: string): string {
+  return String(value ?? '').trim().toLowerCase().replace(/-/g, '_');
+}
+
+function normalizeRoleName(value?: string): string {
+  return String(value ?? '').trim().toLowerCase();
+}
+
+function uniqueStrings(values: Array<string | undefined>): string[] {
+  return Array.from(new Set(values.filter((value): value is string => Boolean(value))));
 }
 
 function buildSynthesizedRepoContextUsage(
@@ -1028,9 +1273,10 @@ function summarizeContextEvaluationForTrace(evaluation: Record<string, unknown>)
 export function createRepoKnowledgeGraphIndexIfChangedAction(db: Db): SystemAction {
   return {
     name: 'repo-knowledge-graph-index-if-changed',
-    description: 'Rebuild repo knowledge graph indexes for active repos whose base-branch HEAD has changed.',
+    description: 'Rebuild provider-specific repo context indexes for active repos whose base-branch HEAD has changed.',
     async run() {
-      if (!isGraphContextEnabled()) return 'Skipped: Allen context provider is disabled.';
+      const graphMode = normalizeGraphMode(contextIndexGraphModeForProvider());
+      if (!graphMode) return 'Skipped: context provider is disabled.';
       const service = new RepoKnowledgeGraphService(db);
       const repos = await db.collection('repos').find({ status: 'active' }).toArray();
       const queued: string[] = [];
@@ -1041,13 +1287,13 @@ export function createRepoKnowledgeGraphIndexIfChangedAction(db: Db): SystemActi
         const repoPath = repo.path as string;
         try {
           const headSha = await gitHeadSha(repoPath);
-          const latest = await service.getLatestIndex(repoId);
+          const latest = await service.getLatestIndex(repoId, graphMode);
           if (latest?.headSha && headSha && latest.headSha === headSha) {
-            skipped.push(`${repo.name}: HEAD unchanged (${headSha.slice(0, 8)})`);
+            skipped.push(`${repo.name}: ${graphMode} HEAD unchanged (${headSha.slice(0, 8)})`);
             continue;
           }
-          const result = await service.scheduleIndex(repoId);
-          if (result.scheduled) queued.push(`${repo.name}: queued`);
+          const result = await service.scheduleProviderContextIndex(repoId);
+          if (result.scheduled) queued.push(`${repo.name}: queued ${graphMode}`);
           else skipped.push(`${repo.name}: ${result.reason ?? 'not scheduled'}`);
         } catch (err) {
           errors.push(`${repo.name}: ${(err as Error).message}`);

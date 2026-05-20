@@ -16,6 +16,19 @@ import { isRecord } from '../knowledge-graph/repo-knowledge-graph-utils.js';
 import { normalizeUsageArray } from '../knowledge-graph/repo-knowledge-graph-usage.js';
 import { resolveAllenPython } from '../python-runtime.js';
 import { contextProviderDisabledError, isCogneeContextEnabled } from '../context-provider-config.js';
+import {
+  buildCogneeQuery,
+  buildGraphExpansionQuery,
+  buildRetrievalIntentEnvelope,
+  DEFAULT_COGNEE_CANDIDATE_LIMIT,
+  positiveIntegerEnv,
+  renderedQueryHash,
+  retrievalEnvelopeHash,
+  selectCogneeRefs,
+  type RetrievalIntentEnvelope,
+  uniqueCogneeRefs,
+} from './cognee-retrieval-policy.js';
+import { enrichCogneeCandidates } from './cognee-metadata-enrichment.js';
 
 const COGNEE_INGEST_FORMAT = 'markdown_file_docmeta_v1';
 
@@ -36,10 +49,13 @@ export class CogneeMemoryProvider implements KnowledgeRetrievalProvider {
       };
     }
     const status = await this.loadStatus(input.repoId);
+    const envelope = buildRetrievalIntentEnvelope(input);
+    const query = buildCogneeQuery(input);
     const output = await runCogneeSidecar('search', {
       datasetName: firstString(status?.datasetName) ?? cogneeDatasetName(input.repoId, input.repoName),
       dataDir: cogneeDataDir(),
-      query: buildCogneeQuery(input),
+      query,
+      retrievalEnvelope: envelope,
       repo: {
         repoId: input.repoId,
         repoName: input.repoName,
@@ -55,16 +71,48 @@ export class CogneeMemoryProvider implements KnowledgeRetrievalProvider {
         currentFiles: input.currentFiles,
       },
       limits: {
-        maxResults: Number(process.env.ALLEN_COGNEE_MAX_RESULTS ?? 12),
+        maxResults: positiveIntegerEnv('ALLEN_COGNEE_CANDIDATE_LIMIT', positiveIntegerEnv('ALLEN_COGNEE_MAX_RESULTS', DEFAULT_COGNEE_CANDIDATE_LIMIT)),
       },
     });
-    const selectedRefs = normalizeCogneeRefs(output.results, this.providerId);
+    const rawCandidates = normalizeCogneeRefs(output.results, this.providerId);
+    const enriched = await enrichCogneeCandidates({ db: this.db, repoId: input.repoId, candidates: rawCandidates });
+    const primary = selectCogneeRefs(enriched.candidates, input, envelope, 'primary');
+    const graphExpansion = await this.retrieveGraphExpansion(input, envelope, status?.datasetName, primary.selectedRefs);
+    const candidates = [...primary.candidates, ...graphExpansion.candidates];
+    const selectedRefs = graphExpansion.active
+      ? uniqueCogneeRefs([...primary.selectedRefs, ...graphExpansion.selectedRefs])
+      : primary.selectedRefs;
+    const injectableRefs = selectedRefs.filter((ref) => ref.providerMetadata?.injectionDecision === 'mandatory_full' || ref.providerMetadata?.injectionDecision === 'snippet' || ref.providerMetadata?.injectionPolicy === 'injectable');
+    const rejectedRefs = [...primary.rejectedRefs, ...graphExpansion.rejectedRefs];
     return {
       providerId: this.providerId,
-      candidates: selectedRefs,
+      candidates,
       selectedRefs,
-      rejectedRefs: [],
-      diagnostics: normalizeUsageArray(output.diagnostics),
+      injectableRefs,
+      rejectedRefs,
+      diagnostics: [
+        {
+          code: 'cognee_retrieval_envelope_built',
+          severity: 'info',
+          retrievalEnvelopeHash: retrievalEnvelopeHash(envelope),
+          renderedQueryHash: renderedQueryHash(query),
+          role: envelope.role,
+          roleFamily: envelope.roleFamily,
+          rawRole: envelope.rawRole,
+          requiredCategories: envelope.requiredCategories,
+          preferredCategories: envelope.preferredCategories,
+          exclusionCategories: envelope.exclusionCategories,
+          querySignalSources: envelope.querySignalSources,
+          querySignalSections: envelope.querySignalSections,
+          querySignalLength: envelope.querySignalLength,
+          renderedQueryLength: query.length,
+          message: 'Allen built a deterministic Cognee retrieval envelope before semantic search.',
+        },
+        ...normalizeUsageArray(output.diagnostics),
+        ...enriched.diagnostics,
+        ...primary.diagnostics,
+        ...graphExpansion.diagnostics,
+      ],
       trace: selectedRefs.map((ref) => ({
         providerId: this.providerId,
         refId: ref.refId,
@@ -79,6 +127,121 @@ export class CogneeMemoryProvider implements KnowledgeRetrievalProvider {
         providerMetadata: ref.providerMetadata,
       })),
     };
+  }
+
+  private async retrieveGraphExpansion(
+    input: KnowledgeRetrievalInput,
+    envelope: RetrievalIntentEnvelope,
+    datasetName: string | undefined,
+    seedRefs: KnowledgeCandidateRef[],
+  ): Promise<{
+    active: boolean;
+    candidates: KnowledgeCandidateRef[];
+    selectedRefs: KnowledgeCandidateRef[];
+    rejectedRefs: KnowledgeCandidateRef[];
+    diagnostics: Array<Record<string, unknown>>;
+  }> {
+    const mode = (process.env.ALLEN_COGNEE_GRAPH_EXPANSION ?? 'off').toLowerCase();
+    if (!['active', 'shadow'].includes(mode)) {
+      return {
+        active: false,
+        candidates: [],
+        selectedRefs: [],
+        rejectedRefs: [],
+        diagnostics: [{
+          code: 'cognee_graph_expansion_disabled',
+          severity: 'info',
+          mode,
+          message: 'Cognee graph expansion is disabled; Allen will use only primary Cognee semantic retrieval plus any Allen mandatory context.',
+        }],
+      };
+    }
+    const seeds = seedRefs
+      .filter((ref) => ref.path || ref.providerMetadata?.cogneeChunkId)
+      .slice(0, positiveIntegerEnv('ALLEN_COGNEE_GRAPH_EXPANSION_SEEDS', 3));
+    if (!seeds.length) {
+      return {
+        active: false,
+        candidates: [],
+        selectedRefs: [],
+        rejectedRefs: [],
+        diagnostics: [{ code: 'cognee_graph_expansion_no_seeds', severity: 'info', message: 'Cognee graph expansion had no selected seed refs.' }],
+      };
+    }
+    const timeoutMs = positiveIntegerEnv('ALLEN_COGNEE_GRAPH_EXPANSION_TIMEOUT_MS', DEFAULT_COGNEE_GRAPH_EXPANSION_TIMEOUT_MS);
+    try {
+      const output = await runCogneeSidecar('search', {
+        datasetName: datasetName ?? cogneeDatasetName(input.repoId, input.repoName),
+        dataDir: cogneeDataDir(),
+        query: buildGraphExpansionQuery(input, seeds),
+        searchMode: 'GRAPH_COMPLETION_CONTEXT_EXTENSION',
+        retrievalEnvelope: envelope,
+        repo: {
+          repoId: input.repoId,
+          repoName: input.repoName,
+          repoPath: input.repoPath,
+          branch: input.state.branch ?? input.state.defaultBranch,
+          headSha: input.state.headSha ?? input.state.head_sha,
+        },
+        limits: {
+          maxResults: positiveIntegerEnv('ALLEN_COGNEE_GRAPH_EXPANSION_MAX_RESULTS', 10),
+        },
+      }, undefined, {
+        timeoutMs,
+      });
+      const rawRefs = normalizeCogneeRefs(output.results, this.providerId).map((ref) => ({
+        ...ref,
+        source: 'cognee_graph_expansion',
+        providerMetadata: {
+          ...ref.providerMetadata,
+          graphExpansion: true,
+          graphExpansionMode: mode,
+          seedRefIds: seeds.map((seed) => seed.refId),
+        },
+      }));
+      const enriched = await enrichCogneeCandidates({ db: this.db, repoId: input.repoId, candidates: rawRefs });
+      const selected = selectCogneeRefs(enriched.candidates, input, envelope, 'graph_expansion');
+      return {
+        active: mode === 'active',
+        candidates: enriched.candidates,
+        selectedRefs: mode === 'active' ? selected.selectedRefs : [],
+        rejectedRefs: mode === 'active' ? selected.rejectedRefs : enriched.candidates.map((ref) => ({
+          ...ref,
+          reason: `Shadow graph expansion candidate not selected for injection: ${ref.reason}`,
+          providerMetadata: { ...ref.providerMetadata, injectionDecision: 'manifest_only', injectionPolicy: 'manifest_only' },
+        })),
+        diagnostics: [
+          ...normalizeUsageArray(output.diagnostics),
+          ...enriched.diagnostics,
+          ...selected.diagnostics,
+          {
+            code: mode === 'active' ? 'cognee_graph_expansion_active' : 'cognee_graph_expansion_shadow',
+            severity: 'info',
+            seedCount: seeds.length,
+            candidateCount: enriched.candidates.length,
+            selectedCount: mode === 'active' ? selected.selectedRefs.length : 0,
+            timeoutMs,
+            searchMode: 'GRAPH_COMPLETION_CONTEXT_EXTENSION',
+            llmBacked: true,
+            message: mode === 'active'
+              ? 'Cognee graph expansion candidates were allowed into selected context.'
+              : 'Cognee graph expansion ran in shadow mode and did not affect selected context.',
+          },
+        ],
+      };
+    } catch (err) {
+      return {
+        active: false,
+        candidates: [],
+        selectedRefs: [],
+        rejectedRefs: [],
+        diagnostics: [{
+          code: 'cognee_graph_expansion_failed',
+          severity: 'warn',
+          message: (err as Error).message,
+        }],
+      };
+    }
   }
 
   private async loadStatus(repoId: string): Promise<{ datasetName?: string } | null> {
@@ -154,11 +317,13 @@ export type CogneeSidecarProgress = {
 
 export type CogneeSidecarOptions = {
   signal?: AbortSignal;
+  timeoutMs?: number;
 };
 
 const COGNEE_PROGRESS_PREFIX = '__ALLEN_COGNEE_PROGRESS__';
 const DEFAULT_COGNEE_INGEST_TIMEOUT_MS = 4 * 60 * 60_000;
 const DEFAULT_COGNEE_SEARCH_TIMEOUT_MS = 120_000;
+const DEFAULT_COGNEE_GRAPH_EXPANSION_TIMEOUT_MS = 300_000;
 const MAX_COGNEE_STDERR_CHARS = 256_000;
 const MAX_COGNEE_STDOUT_CHARS = 10_000_000;
 const MAX_COGNEE_STDERR_LINE_CHARS = 64_000;
@@ -173,7 +338,7 @@ export async function runCogneeSidecar(
   const python = resolveAllenPython();
   const script = resolveCogneeScript();
   const defaultTimeoutMs = action === 'ingest' ? DEFAULT_COGNEE_INGEST_TIMEOUT_MS : DEFAULT_COGNEE_SEARCH_TIMEOUT_MS;
-  const timeoutMs = Number(process.env.ALLEN_COGNEE_TIMEOUT_MS ?? defaultTimeoutMs);
+  const timeoutMs = Number(options.timeoutMs ?? process.env.ALLEN_COGNEE_TIMEOUT_MS ?? defaultTimeoutMs);
   const effectiveTimeoutMs = Number.isFinite(timeoutMs) && timeoutMs > 0 ? timeoutMs : defaultTimeoutMs;
   const body = {
     action,
@@ -490,16 +655,6 @@ function normalizeKind(value: unknown): KnowledgeNodeKind {
     'production_note', 'instruction_file', 'command', 'command_profile', 'imported_agent', 'historical_learning',
   ]);
   return (supported.has(kind) ? kind : 'historical_learning') as KnowledgeNodeKind;
-}
-
-function buildCogneeQuery(input: KnowledgeRetrievalInput): string {
-  return [
-    `Workflow: ${input.workflowName}`,
-    `Node: ${input.nodeName}`,
-    input.nodeRole ? `Role: ${input.nodeRole}` : '',
-    input.prompt ? `Task: ${input.prompt}` : '',
-    input.currentFiles.length ? `Current files: ${input.currentFiles.join(', ')}` : '',
-  ].filter(Boolean).join('\n');
 }
 
 function resolveCogneeScript(): string {

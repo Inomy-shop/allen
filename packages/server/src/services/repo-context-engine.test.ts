@@ -7,14 +7,22 @@ import {
   GraphKeywordMetadataProvider,
   MandatoryGraphProvider,
   RepoContextEngine,
+  createConfiguredKnowledgeProviders,
   type KnowledgeCandidateRef,
   type KnowledgeNodeLike,
+  type KnowledgeRetrievalInput,
+  type KnowledgeRetrievalProvider,
+  type KnowledgeRetrievalResult,
 } from './repo-context-engine.js';
 import { summarizeInjection, WorkflowContextInjectionAdapter } from './workflow-context-injection-adapter.js';
 import { createConfiguredContextReranker, type ContextRerankInput, type ContextRerankResult, type ContextReranker } from './repo-context-reranker.js';
 import { CogneeMemoryProvider, runCogneeSidecar } from './repo-context-cognee-provider.js';
+import { buildCogneeQuery, buildRetrievalIntentEnvelope, renderedQueryHash, retrievalEnvelopeHash, selectCogneeRefs } from './cognee/cognee-retrieval-policy.js';
+import { generateDeterministicMetadata } from './cognee/cognee-metadata-enrichment.js';
 
 const originalContextProvider = process.env.ALLEN_CONTEXT_PROVIDER;
+const originalCogneeMandatoryGraph = process.env.ALLEN_COGNEE_MANDATORY_GRAPH;
+const originalContextProviderFallback = process.env.ALLEN_CONTEXT_PROVIDER_FALLBACK;
 
 beforeEach(() => {
   process.env.ALLEN_CONTEXT_PROVIDER = 'cognee';
@@ -23,6 +31,10 @@ beforeEach(() => {
 afterEach(() => {
   if (originalContextProvider === undefined) delete process.env.ALLEN_CONTEXT_PROVIDER;
   else process.env.ALLEN_CONTEXT_PROVIDER = originalContextProvider;
+  if (originalCogneeMandatoryGraph === undefined) delete process.env.ALLEN_COGNEE_MANDATORY_GRAPH;
+  else process.env.ALLEN_COGNEE_MANDATORY_GRAPH = originalCogneeMandatoryGraph;
+  if (originalContextProviderFallback === undefined) delete process.env.ALLEN_CONTEXT_PROVIDER_FALLBACK;
+  else process.env.ALLEN_CONTEXT_PROVIDER_FALLBACK = originalContextProviderFallback;
 });
 
 describe('RepoContextEngine', () => {
@@ -31,10 +43,12 @@ describe('RepoContextEngine', () => {
     node('repo:agents', 'instruction_file', 'Root AGENTS', 'AGENTS.md', 'root coding rules', ['rules'], 'baseline'),
     node('repo:prod', 'production_note', 'Payments Production Rules', 'docs/payments.md', 'payment refund idempotency', ['payments'], 'on_demand', ['backend-developer']),
     node('repo:dup-prod', 'production_note', 'Duplicate Payments Rules', 'docs/payments.md', 'duplicate payment ref', ['payments'], 'on_demand', ['backend-developer']),
+    node('repo:frontend-guidelines', 'context_file', 'Frontend Coding Guidelines', 'docs/frontend-guidelines.md', 'UI implementation rules', ['frontend', 'guidelines'], 'on_demand', [], ['frontend-developer'], ['engineering-lead']),
+    node('repo:backend-guidelines', 'context_file', 'Backend Coding Guidelines', 'docs/backend-guidelines.md', 'API implementation rules', ['backend', 'guidelines'], 'on_demand', [], ['backend-developer'], ['engineering-lead']),
     node('repo:skill', 'skill', 'Payments Skill', '.claude/skills/payments/SKILL.md', 'payment reconciliation skill', ['payments'], 'on_demand'),
   ];
 
-  it('composes mandatory refs before optional refs and dedupes repeated paths', async () => {
+  it('composes mandatory refs before optional refs and allows repeated paths for distinct refs', async () => {
     const packet = await graphEngine().buildPacket({
       packetId: 'packet-1',
       executionId: 'exec-1',
@@ -57,12 +71,116 @@ describe('RepoContextEngine', () => {
     expect(packet.retrievalProviders).toEqual(['mandatory_graph', 'graph_keyword_metadata', 'deterministic_policy_reranker']);
     expect(packet.selectedRefs[0]).toEqual(expect.objectContaining({ providerId: 'mandatory_graph', mandatory: true }));
     expect(packet.selectedRefs.map((ref) => ref.refId)).toContain('repo:prod');
-    expect(packet.selectedRefs.map((ref) => ref.refId)).not.toContain('repo:dup-prod');
-    expect(packet.rejectedRefs).toEqual(expect.arrayContaining([
-      expect.objectContaining({ refId: 'repo:dup-prod' }),
-    ]));
+    expect(packet.selectedRefs.map((ref) => ref.refId)).toContain('repo:dup-prod');
     expect(packet.providerTraces).toEqual(expect.arrayContaining([
       expect.objectContaining({ providerId: 'mandatory_graph', decision: 'selected' }),
+    ]));
+  });
+
+  it('selects spawner mandatory context for workflow parent roles', async () => {
+    const packet = await graphEngine().buildPacket({
+      packetId: 'packet-spawner',
+      executionId: 'exec-spawner',
+      repoId: 'repo',
+      repoName: 'fixture',
+      repoPath: '/tmp/fixture',
+      indexId: 'index-1',
+      indexFreshness: 'fresh',
+      workflowName: 'feature-plan-and-implement',
+      nodeName: 'lead',
+      nodeRole: 'engineering-lead',
+      executionKind: 'workflow_node',
+      targetRole: 'engineering-lead',
+      attempt: 1,
+      state: {},
+      prompt: 'Implement a UI and API feature',
+      provider: 'claude',
+      currentFiles: [],
+      nodes,
+    });
+
+    expect(packet.selectedRefs).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        refId: 'repo:frontend-guidelines',
+        mandatory: true,
+        reason: expect.stringContaining('Mandatory for spawner role engineering-lead'),
+      }),
+      expect.objectContaining({
+        refId: 'repo:backend-guidelines',
+        mandatory: true,
+        reason: expect.stringContaining('Mandatory for spawner role engineering-lead'),
+      }),
+    ]));
+  });
+
+  it('selects spawned-agent mandatory context for child sessions', async () => {
+    const packet = await graphEngine().buildPacket({
+      packetId: 'packet-spawned',
+      executionId: 'exec-spawned',
+      repoId: 'repo',
+      repoName: 'fixture',
+      repoPath: '/tmp/fixture',
+      indexId: 'index-1',
+      indexFreshness: 'fresh',
+      workflowName: 'engineering-lead:spawn_agent/frontend-developer',
+      nodeName: 'frontend-developer',
+      nodeRole: 'frontend-developer',
+      executionKind: 'spawned_agent',
+      targetRole: 'frontend-developer',
+      callerRole: 'engineering-lead',
+      attempt: 1,
+      state: {},
+      prompt: 'Implement the UI',
+      provider: 'claude',
+      currentFiles: [],
+      nodes,
+    });
+
+    expect(packet.selectedRefs).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        refId: 'repo:frontend-guidelines',
+        mandatory: true,
+        reason: expect.stringContaining('Mandatory for spawned agent role frontend-developer'),
+      }),
+    ]));
+    const mandatoryRefIds = packet.selectedRefs.filter((ref) => ref.mandatory).map((ref) => ref.refId);
+    expect(mandatoryRefIds).not.toContain('repo:backend-guidelines');
+  });
+
+  it('dedupes exact refs and identical content while preserving distinct same-path chunks', async () => {
+    const refs: KnowledgeCandidateRef[] = [
+      providerRef('chunk-1', 'docs/vendor.md', 'hash-1', 'first vendor chunk', 100),
+      providerRef('chunk-2', 'docs/vendor.md', 'hash-2', 'second vendor chunk', 90),
+      providerRef('chunk-duplicate-content', 'docs/vendor-copy.md', 'hash-2', 'second vendor chunk', 80),
+      providerRef('chunk-1', 'docs/vendor.md', 'hash-1', 'duplicate ref id', 70),
+    ];
+    const packet = await new RepoContextEngine(
+      [new StaticContextProvider(refs)],
+      new TestSemanticReranker(),
+    ).buildPacket({
+      packetId: 'packet-chunks',
+      executionId: 'exec-chunks',
+      repoId: 'repo',
+      repoName: 'fixture',
+      repoPath: '/tmp/fixture',
+      indexId: 'index-1',
+      indexFreshness: 'fresh',
+      workflowName: 'workflow',
+      nodeName: 'implement',
+      nodeRole: 'backend-developer',
+      attempt: 1,
+      state: {},
+      prompt: 'Fix vendor category mappings',
+      provider: 'claude',
+      currentFiles: [],
+      nodes: [],
+    });
+
+    expect(packet.selectedRefs.map((ref) => ref.refId)).toEqual(['chunk-1', 'chunk-2']);
+    expect(packet.injectableRefs.map((ref) => ref.refId)).toEqual(['chunk-1', 'chunk-2']);
+    expect(packet.rejectedRefs).toEqual(expect.arrayContaining([
+      expect.objectContaining({ refId: 'chunk-duplicate-content', reason: expect.stringContaining('Duplicate provider text') }),
+      expect.objectContaining({ refId: 'chunk-1', reason: expect.stringContaining('Duplicate context ref') }),
     ]));
   });
 
@@ -82,12 +200,31 @@ describe('RepoContextEngine', () => {
       currentFiles: [],
       nodes,
       query: 'payment reconciliation',
-      limit: 3,
+      limit: 5,
     });
 
     expect(refs).toEqual(expect.arrayContaining([
       expect.objectContaining({ refId: 'repo:skill', source: 'search_repo_knowledge', loadable: true }),
     ]));
+  });
+
+  it('configures Cognee with Allen mandatory context before semantic retrieval by default', () => {
+    process.env.ALLEN_CONTEXT_PROVIDER = 'cognee';
+    delete process.env.ALLEN_COGNEE_MANDATORY_GRAPH;
+    delete process.env.ALLEN_CONTEXT_PROVIDER_FALLBACK;
+
+    expect(createConfiguredKnowledgeProviders().map((provider) => provider.providerId)).toEqual([
+      'mandatory_graph',
+      'cognee_memory',
+    ]);
+  });
+
+  it('allows Cognee Allen mandatory context to be disabled separately from Cognee retrieval', () => {
+    process.env.ALLEN_CONTEXT_PROVIDER = 'cognee';
+    process.env.ALLEN_COGNEE_MANDATORY_GRAPH = 'off';
+    delete process.env.ALLEN_CONTEXT_PROVIDER_FALLBACK;
+
+    expect(createConfiguredKnowledgeProviders().map((provider) => provider.providerId)).toEqual(['cognee_memory']);
   });
 
   it('keeps mandatory refs protected while allowing optional semantic reranking', async () => {
@@ -340,6 +477,7 @@ describe('CogneeMemoryProvider', () => {
   let previousLlmProvider: string | undefined;
   let previousHome: string | undefined;
   let previousFakeEnvOut: string | undefined;
+  let previousGraphExpansion: string | undefined;
 
   afterEach(() => {
     if (scriptDir) rmSync(scriptDir, { recursive: true, force: true });
@@ -355,10 +493,328 @@ describe('CogneeMemoryProvider', () => {
     else process.env.HOME = previousHome;
     if (previousFakeEnvOut === undefined) delete process.env.ALLEN_FAKE_COGNEE_ENV_OUT;
     else process.env.ALLEN_FAKE_COGNEE_ENV_OUT = previousFakeEnvOut;
+    if (previousGraphExpansion === undefined) delete process.env.ALLEN_COGNEE_GRAPH_EXPANSION;
+    else process.env.ALLEN_COGNEE_GRAPH_EXPANSION = previousGraphExpansion;
     previousPythonPath = undefined;
     previousLlmProvider = undefined;
     previousHome = undefined;
     previousFakeEnvOut = undefined;
+    previousGraphExpansion = undefined;
+  });
+
+  it('builds stable role envelopes and query hashes for spawned developer agents', () => {
+    const input = {
+      repoId: 'repo-id',
+      repoName: 'fixture',
+      repoPath: '/tmp/fixture',
+      indexId: 'index-1',
+      indexFreshness: 'fresh',
+      workflowName: 'implement:spawn_agent/backend-developer',
+      nodeName: 'backend-developer',
+      nodeRole: 'backend-developer',
+      attempt: 1,
+      state: { changedFiles: ['src/payments/service.ts'], expectedOutput: 'patch' },
+      prompt: 'Fix refund idempotency in the payment service',
+      provider: 'claude' as const,
+      currentFiles: ['src/payments/service.ts'],
+      nodes: [],
+    };
+    const envelope = buildRetrievalIntentEnvelope(input);
+    const query = buildCogneeQuery(input);
+
+    expect(envelope).toEqual(expect.objectContaining({
+      role: 'backend-developer',
+      roleFamily: 'backend',
+      roleFocus: expect.arrayContaining(['backend implementation']),
+      rawRole: 'backend-developer',
+      changedFiles: ['src/payments/service.ts'],
+      moduleHints: ['src'],
+      externalContextEligible: false,
+    }));
+    expect(query).toContain('Role: backend-developer');
+    expect(query).toContain('Role family: backend');
+    expect(query).toContain('Role search intent: backend implementation');
+    expect(retrievalEnvelopeHash(envelope)).toMatch(/^[a-f0-9]{64}$/);
+    expect(renderedQueryHash(query)).toMatch(/^[a-f0-9]{64}$/);
+    expect(retrievalEnvelopeHash(envelope)).toBe(retrievalEnvelopeHash(buildRetrievalIntentEnvelope(input)));
+  });
+
+  it('builds Cognee query text from deterministic state and task sections before raw prompt fallback', () => {
+    const prompt = `${'workflow boilerplate '.repeat(90)}
+BUG REPORT: Fresh-start workflow-only bug fix for Linear issue ENG-1711: vendor onboarding wizard does not refresh mapped categories
+
+User instructions and constraints:
+- Earlier workflow executions 2db796de-fd14-45c9-96d1-782e42acca74 and aef421a8-9767-4628-911f-6520d15564ec were cancelled.
+
+Bug summary:
+Vendor onboarding V2 wizard does not refresh mapped/detected categories after rerunning vendor-category-mapper inside the onboarding wizard UI.
+
+Expected behavior:
+Step 2 should invalidate or reparse stale detectedCategories when the source agent result/execution changes.
+
+Known repro/evidence clues from ticket/context:
+Suspected UI files include ui/src/modules/vendor-onboarding-v2/components/steps/Step2CategorySelection.tsx and ui/src/modules/vendor-onboarding-v2/components/steps/MultiCategoryStep2Selection.tsx.
+The suspected parser gate is needsParse = detectedCategories.length === 0 || !detectedCategories.some(c => c._parserVersion).
+
+Required investigation path:
+Walk the rerun trigger, persisted session agentExecutions, category parsing, detectedCategories, and selectedMappings rendering.`;
+    const input = {
+      repoId: 'repo-id',
+      repoName: 'fixture',
+      repoPath: '/tmp/fixture',
+      indexId: 'index-1',
+      indexFreshness: 'fresh',
+      workflowName: 'bug-fix-by-severity',
+      nodeName: 'implement',
+      nodeRole: 'engineering-lead',
+      attempt: 1,
+      state: {
+        files_changed: [
+          'ui/src/modules/vendor-onboarding-v2/types.ts',
+          'ui/src/modules/vendor-onboarding-v2/components/steps/Step2CategorySelection.tsx',
+        ],
+        repo_context_usage: {
+          module_identified: 'ui/src/modules/vendor-onboarding-v2 (Step 2 single + multi category)',
+        },
+        severity: 'medium',
+        investigation_artifact_url: 'http://localhost:4023/api/artifacts/abc/content',
+      },
+      prompt,
+      provider: 'claude' as const,
+      currentFiles: ['ui/src/modules/vendor-onboarding-v2/components/steps/Step2CategorySelection.tsx'],
+      nodes: [],
+    };
+
+    const envelope = buildRetrievalIntentEnvelope(input);
+    const query = buildCogneeQuery(input);
+
+    expect(envelope.querySignalSources).toEqual(expect.arrayContaining([
+      'state.changed_files',
+      'state.repo_context_usage.module_identified',
+      'prompt.sections',
+      'prompt.repo_paths',
+    ]));
+    expect(envelope.querySignalSections).toEqual(expect.arrayContaining([
+      'BUG SUMMARY',
+      'Expected behavior',
+      'Known repro/evidence clues from ticket/context',
+      'Required investigation path',
+    ]));
+    expect(query).toContain('Vendor onboarding V2 wizard does not refresh mapped/detected categories');
+    expect(query).toContain('detectedCategories');
+    expect(query).toContain('_parserVersion');
+    expect(query).toContain('Step2CategorySelection');
+    expect(query).toContain('MultiCategoryStep2Selection');
+    expect(query).toContain('ui/src/modules/vendor-onboarding-v2');
+    expect(query).not.toContain('2db796de-fd14-45c9-96d1-782e42acca74');
+    expect(query).not.toContain('User instructions and constraints');
+    expect(retrievalEnvelopeHash(envelope)).toBe(retrievalEnvelopeHash(buildRetrievalIntentEnvelope(input)));
+    expect(renderedQueryHash(query)).toMatch(/^[a-f0-9]{64}$/);
+  });
+
+  it('extracts bounded markdown task sections from spawned frontend implementation prompts', () => {
+    const prompt = `You are fixing a diagnosed bug in the vendor onboarding V2 wizard UI. Read the full investigation report via MCP tool \`mcp__allen__allen_get_artifact\`.
+
+WORKTREE: /Users/example/.allen/workspaces/worktree
+BRANCH: allen/fresh-start-workflow-only-bug-fix
+
+---
+
+## BUG SUMMARY
+
+**Ticket:** ENG-1711 — Vendor onboarding wizard does not refresh mapped categories after category mapper rerun.
+
+After the \`vendor-category-mapper\` agent runs for the first time, Step 2 of the wizard parses the result and stamps every \`DetectedCategory\` with \`_parserVersion: 2\`. If the user reruns the category mapper, \`Step2CategorySelection\` and \`MultiCategoryStep2Selection\` never re-parse the new result because \`needsParse\` is permanently false.
+
+## ROOT CAUSE (verbatim from investigation)
+
+The buggy gate in \`Step2CategorySelection.tsx\` is:
+
+\`\`\`typescript
+const needsParse = detectedCategories.length === 0 || !detectedCategories.some(c => c._parserVersion);
+\`\`\`
+
+The code does not compare the current agent execution id against the source execution that produced \`detectedCategories\`.
+
+## FILES TO TOUCH
+
+- \`ui/src/modules/vendor-onboarding-v2/types.ts\`
+- \`ui/src/modules/vendor-onboarding-v2/store/wizardStore.ts\`
+- \`ui/src/modules/vendor-onboarding-v2/components/steps/Step2CategorySelection.tsx\`
+- \`ui/src/modules/vendor-onboarding-v2/components/steps/MultiCategoryStep2Selection.tsx\`
+
+## IMPLEMENTATION PLAN (implement ALL items in order)
+
+### Item 1 — \`types.ts\`: Add \`detectedCategoriesSourceExecutionId\`
+### Item 2 — \`wizardStore.ts\`: Add store field + setter + sync/hydrate
+### Item 3 — \`Step2CategorySelection.tsx\`: Fix \`needsParse\` gate
+### Item 4 — \`MultiCategoryStep2Selection.tsx\`: Same gate fix + stale reset
+
+## ACCEPTANCE CRITERIA (all must be satisfied)
+
+- Rerunning the mapper reparses categories when source execution changes.
+- Existing detected categories remain stable when the source execution is unchanged.
+
+## CODING STANDARDS (mandatory)
+
+Follow the frontend coding guidelines and test the state transition.`;
+    const input = {
+      repoId: 'repo-id',
+      repoName: 'fixture',
+      repoPath: '/tmp/fixture',
+      indexId: 'index-1',
+      indexFreshness: 'fresh',
+      workflowName: 'implement:spawn_agent/frontend-developer',
+      nodeName: 'frontend-developer',
+      nodeRole: 'frontend-developer',
+      executionKind: 'spawned_agent' as const,
+      targetRole: 'frontend-developer',
+      callerRole: 'engineering-lead',
+      attempt: 1,
+      state: {},
+      prompt,
+      provider: 'claude' as const,
+      currentFiles: [],
+      nodes: [],
+    };
+
+    const envelope = buildRetrievalIntentEnvelope(input);
+    const query = buildCogneeQuery(input);
+
+    expect(envelope.querySignalSources).toEqual(expect.arrayContaining(['prompt.sections', 'prompt.repo_paths']));
+    expect(envelope.querySignalSections).toEqual(expect.arrayContaining([
+      'BUG SUMMARY',
+      'ROOT CAUSE',
+      'FILES TO TOUCH',
+      'IMPLEMENTATION PLAN',
+      'ACCEPTANCE CRITERIA',
+      'CODING STANDARDS',
+    ]));
+    expect(envelope.querySignalSources).not.toContain('raw_prompt_fallback');
+    expect(query.length).toBeLessThanOrEqual(5000);
+    expect(query).toContain('vendor-onboarding-v2');
+    expect(query).toContain('Step2CategorySelection.tsx');
+    expect(query).toContain('MultiCategoryStep2Selection.tsx');
+    expect(query).toContain('detectedCategories');
+    expect(query).toContain('_parserVersion');
+    expect(query).toContain('needsParse');
+  });
+
+  it('keeps investigator role intent even when the task mentions backend systems', () => {
+    const envelope = buildRetrievalIntentEnvelope({
+      repoId: 'repo-id',
+      repoName: 'fixture',
+      repoPath: '/tmp/fixture',
+      indexId: 'index-1',
+      indexFreshness: 'fresh',
+      workflowName: 'bug-investigate-and-fix',
+      nodeName: 'bug-investigator',
+      nodeRole: 'bug-investigator',
+      attempt: 1,
+      state: {},
+      prompt: 'Investigate an API/database refund failure',
+      provider: 'claude' as const,
+      currentFiles: [],
+      nodes: [],
+    });
+
+    expect(envelope).toEqual(expect.objectContaining({
+      role: 'bug-investigator',
+      roleFamily: 'investigation',
+      roleFocus: expect.arrayContaining(['bug evidence']),
+    }));
+  });
+
+  it('generates deterministic metadata and never auto-injects agent persona docs', () => {
+    const metadata = generateDeterministicMetadata({
+      repoId: 'repo-id',
+      path: '.claude/agents/payments-agent.md',
+      fileHash: 'hash-1',
+      title: 'Payments Agent',
+      kind: 'doc',
+      content: '# Payments Agent\n\nPersona instructions.',
+    });
+
+    expect(metadata).toEqual(expect.objectContaining({
+      categories: expect.arrayContaining(['guideline', 'agent_persona']),
+      sourceAuthority: 'low',
+      injectionDecision: 'never_full_auto',
+      active: true,
+    }));
+  });
+
+  it('selects all non-hard-rejected Cognee refs without selected or injectable rank caps', () => {
+    const input = {
+      repoId: 'repo-id',
+      repoName: 'fixture',
+      repoPath: '/tmp/fixture',
+      indexId: 'index-1',
+      indexFreshness: 'fresh',
+      workflowName: 'workflow',
+      nodeName: 'implement',
+      nodeRole: 'backend-developer',
+      attempt: 1,
+      state: {},
+      prompt: 'Fix vendor category mappings',
+      provider: 'claude' as const,
+      currentFiles: [],
+      nodes: [],
+    };
+    const envelope = buildRetrievalIntentEnvelope(input);
+    const candidates = Array.from({ length: 14 }, (_, index) => providerRef(
+      `chunk-${index}`,
+      `docs/vendor-${index}.md`,
+      `hash-${index}`,
+      `vendor chunk ${index}`,
+      100 - index,
+    ));
+
+    const result = selectCogneeRefs(candidates, input, envelope, 'primary');
+
+    expect(result.selectedRefs).toHaveLength(14);
+    expect(result.rejectedRefs).toHaveLength(0);
+    expect(result.selectedRefs.every((ref) => ref.providerMetadata?.injectionDecision === 'snippet')).toBe(true);
+    expect(result.selectedRefs.every((ref) => ref.providerMetadata?.injectionPolicy === 'injectable')).toBe(true);
+    expect(result.diagnostics).toEqual(expect.arrayContaining([
+      expect.objectContaining({ code: 'cognee_retrieval_policy_applied', selectedCount: 14, injectableCount: 14 }),
+    ]));
+  });
+
+  it('hard-rejects agent system docs for frontend implementation tasks unless explicitly relevant', () => {
+    const input = {
+      repoId: 'repo-id',
+      repoName: 'fixture',
+      repoPath: '/tmp/fixture',
+      indexId: 'index-1',
+      indexFreshness: 'fresh',
+      workflowName: 'implement:spawn_agent/frontend-developer',
+      nodeName: 'frontend-developer',
+      nodeRole: 'frontend-developer',
+      attempt: 1,
+      state: {},
+      prompt: 'Fix vendor onboarding V2 category rerun parsing in Step2CategorySelection.tsx',
+      provider: 'claude' as const,
+      currentFiles: [],
+      nodes: [],
+    };
+    const envelope = buildRetrievalIntentEnvelope(input);
+    const result = selectCogneeRefs([
+      providerRef('agent-architecture', 'docs/AGENT_ARCHITECTURE.md', 'hash-agent', 'Agent Architecture & Self-Healing System', 95),
+      providerRef('vendor-prd', 'docs/prds/PRD-vendor-onboarding-v2-wizard.md', 'hash-vendor', 'Vendor onboarding wizard category mapping behavior', 90),
+    ], input, envelope, 'primary');
+
+    expect(result.selectedRefs.map((ref) => ref.refId)).toContain('vendor-prd');
+    expect(result.selectedRefs.map((ref) => ref.refId)).not.toContain('agent-architecture');
+    expect(result.rejectedRefs).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        refId: 'agent-architecture',
+        providerMetadata: expect.objectContaining({
+          injectionDecision: 'never_full_auto',
+          retrievalCategory: 'agent_system_doc',
+        }),
+        reason: expect.stringContaining('Rejected agent system doc'),
+      }),
+    ]));
   });
 
   it('configures Cognee env from Allen payload before importing Cognee', async () => {
@@ -650,8 +1106,84 @@ print(json.dumps({
       expect.objectContaining({ refId: 'file-ref', itemType: 'repo_chunk', grounding: 'repo_backed', path: 'docs/rules.md' }),
       expect.objectContaining({ refId: 'text-ref', itemType: 'provider_text', grounding: 'provider_text', contentSha256: expect.any(String) }),
     ]));
+    expect(result.injectableRefs).toEqual([
+      expect.objectContaining({
+        refId: 'file-ref',
+        providerMetadata: expect.objectContaining({ injectionPolicy: 'injectable' }),
+      }),
+    ]);
     expect(result.diagnostics).toEqual(expect.arrayContaining([
       expect.objectContaining({ code: 'fake_cognee' }),
+      expect.objectContaining({ code: 'cognee_retrieval_policy_applied', selectedCount: 2, injectableCount: 1 }),
+      expect.objectContaining({ code: 'cognee_graph_expansion_disabled' }),
+    ]));
+  });
+
+  it('rejects noisy Cognee persona matches before selection and traces policy hashes', async () => {
+    previousScript = process.env.ALLEN_COGNEE_SIDECAR_SCRIPT;
+    scriptDir = mkdtempSync(join(tmpdir(), 'allen-cognee-noisy-persona-'));
+    scriptPath = join(scriptDir, 'fake-cognee-noise.py');
+    writeFileSync(scriptPath, `#!/usr/bin/env python3
+import json
+import sys
+json.load(sys.stdin)
+print(json.dumps({
+  "diagnostics": [],
+  "results": [
+    {"refId": "persona-ref", "title": "Payments Persona", "kind": "doc", "path": ".claude/agents/payments-agent.md", "content": "# Payments Persona\\n\\nGeneral agent behavior.", "score": 0.99},
+    {"refId": "source-ref", "title": "Payment Service", "kind": "source_file", "path": "src/payments/service.ts", "content": "export function refund() {}", "score": 0.7}
+  ]
+}))
+`);
+    process.env.ALLEN_COGNEE_SIDECAR_SCRIPT = scriptPath;
+
+    const result = await new CogneeMemoryProvider().retrieve({
+      repoId: 'repo-id',
+      repoName: 'fixture',
+      repoPath: '/tmp/fixture',
+      indexId: 'index-1',
+      indexFreshness: 'fresh',
+      workflowName: 'workflow',
+      nodeName: 'implement',
+      nodeRole: 'backend-developer',
+      attempt: 1,
+      state: {},
+      prompt: 'Fix payment refund behavior',
+      provider: 'claude',
+      currentFiles: ['src/payments/service.ts'],
+      nodes: [],
+    });
+
+    expect(result.selectedRefs.map((ref) => ref.refId)).toEqual(['source-ref']);
+    expect(result.injectableRefs).toEqual([
+      expect.objectContaining({
+        refId: 'source-ref',
+        providerMetadata: expect.objectContaining({ injectionDecision: 'snippet' }),
+      }),
+    ]);
+    expect(result.rejectedRefs).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        refId: 'persona-ref',
+        providerMetadata: expect.objectContaining({
+          injectionDecision: 'never_full_auto',
+          retrievalReasons: expect.arrayContaining([expect.stringContaining('Rejected noisy category')]),
+        }),
+      }),
+    ]));
+    expect(result.diagnostics).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        code: 'cognee_retrieval_envelope_built',
+        retrievalEnvelopeHash: expect.stringMatching(/^[a-f0-9]{64}$/),
+        renderedQueryHash: expect.stringMatching(/^[a-f0-9]{64}$/),
+      }),
+      expect.objectContaining({
+        code: 'cognee_metadata_enrichment_complete',
+        generatedMetadataCount: 2,
+      }),
+      expect.objectContaining({
+        code: 'cognee_retrieval_policy_applied',
+        injectionDecisionCounts: { snippet: 1 },
+      }),
     ]));
   });
 
@@ -737,6 +1269,81 @@ print(json.dumps({
     expect(result.diagnostics).not.toEqual(expect.arrayContaining([
       expect.objectContaining({ code: 'cognee_manifest_missing' }),
     ]));
+  });
+
+  it('runs Cognee graph expansion in shadow mode without selecting expanded refs', async () => {
+    previousScript = process.env.ALLEN_COGNEE_SIDECAR_SCRIPT;
+    previousGraphExpansion = process.env.ALLEN_COGNEE_GRAPH_EXPANSION;
+    scriptDir = mkdtempSync(join(tmpdir(), 'allen-cognee-graph-shadow-'));
+    scriptPath = join(scriptDir, 'fake-cognee-graph.py');
+    const callsPath = join(scriptDir, 'calls.jsonl');
+    writeFileSync(scriptPath, `#!/usr/bin/env python3
+import json
+import os
+import sys
+
+payload = json.load(sys.stdin)
+with open(${JSON.stringify(callsPath)}, "a") as fh:
+    fh.write(json.dumps({"searchMode": payload.get("searchMode"), "query": payload.get("query")}) + "\\n")
+
+if payload.get("searchMode") == "GRAPH_COMPLETION_CONTEXT_EXTENSION":
+    results = [{
+        "refId": "graph-related",
+        "title": "Related Graph Doc",
+        "kind": "doc",
+        "path": "docs/related.md",
+        "content": "Related graph context.",
+        "score": 0.95,
+    }]
+else:
+    results = [{
+        "refId": "primary-seed",
+        "title": "Primary Seed",
+        "kind": "doc",
+        "path": "docs/seed.md",
+        "content": "Primary seed context.",
+        "score": 0.9,
+    }]
+print(json.dumps({"diagnostics": [], "results": results}))
+`);
+    process.env.ALLEN_COGNEE_SIDECAR_SCRIPT = scriptPath;
+    process.env.ALLEN_COGNEE_GRAPH_EXPANSION = 'shadow';
+
+    const result = await new CogneeMemoryProvider().retrieve({
+      repoId: 'repo-id',
+      repoName: 'fixture',
+      repoPath: '/tmp/fixture',
+      indexId: 'index-1',
+      indexFreshness: 'fresh',
+      workflowName: 'workflow',
+      nodeName: 'implement',
+      nodeRole: 'backend-developer',
+      attempt: 1,
+      state: {},
+      prompt: 'Fix seed behavior',
+      provider: 'claude',
+      currentFiles: [],
+      nodes: [],
+    });
+
+    expect(result.selectedRefs.map((ref) => ref.refId)).toEqual(['primary-seed']);
+    expect(result.rejectedRefs).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        refId: 'graph-related',
+        providerMetadata: expect.objectContaining({ graphExpansion: true, injectionPolicy: 'manifest_only' }),
+      }),
+    ]));
+    expect(result.diagnostics).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        code: 'cognee_graph_expansion_shadow',
+        candidateCount: 1,
+        selectedCount: 0,
+        timeoutMs: 300_000,
+        searchMode: 'GRAPH_COMPLETION_CONTEXT_EXTENSION',
+        llmBacked: true,
+      }),
+    ]));
+    expect(readFileSync(callsPath, 'utf8')).toContain('GRAPH_COMPLETION_CONTEXT_EXTENSION');
   });
 
   it('keeps Cognee metadata in injection summaries while stripping repo-backed content', () => {
@@ -1189,11 +1796,30 @@ class CrossEncoder:
     expect(readFileSync(pairsOut, 'utf8')).toContain('DISTINCTIVE CONTENT USED BY RERANKER');
   });
 
-  it('preserves Cognee retrieval order for Cognee-only candidates even when semantic reranking is configured', async () => {
+  it('reranks Cognee-only candidates when semantic reranking is configured', async () => {
     previousReranker = process.env.ALLEN_CONTEXT_RERANKER;
     previousScript = process.env.ALLEN_CONTEXT_RERANKER_SCRIPT;
+    tempDir = mkdtempSync(join(tmpdir(), 'allen-reranker-cognee-only-'));
+    const script = join(tempDir, 'fake-reranker.py');
+    writeFileSync(script, `#!/usr/bin/env python3
+import json
+import sys
+
+payload = json.loads(sys.stdin.read() or "{}")
+print(json.dumps({
+  "scores": [
+    {
+      "refId": candidate["refId"],
+      "score": 0.95 if candidate["refId"] == "cognee:second" else 0.1,
+      "reason": "cognee-only semantic test score",
+    }
+    for candidate in payload.get("candidates", [])
+  ],
+  "diagnostics": []
+}))
+`);
     process.env.ALLEN_CONTEXT_RERANKER = 'bge';
-    delete process.env.ALLEN_CONTEXT_RERANKER_SCRIPT;
+    process.env.ALLEN_CONTEXT_RERANKER_SCRIPT = script;
 
     const reranked = await createConfiguredContextReranker().rerank({
       repoId: 'repo',
@@ -1244,20 +1870,18 @@ class CrossEncoder:
       ],
     });
 
-    expect(reranked.providerId).toBe('provider_order_preserver');
-    expect(reranked.rankedRefs.map((ref) => ref.refId)).toEqual(['cognee:first', 'cognee:second']);
-    expect(reranked.rankedRefs.map((ref) => ref.rerank)).toEqual([
-      expect.objectContaining({ providerId: 'provider_order_preserver', originalRank: 0, finalRank: 0 }),
-      expect.objectContaining({ providerId: 'provider_order_preserver', originalRank: 1, finalRank: 1 }),
-    ]);
-    expect(reranked.diagnostics).toEqual([
+    expect(reranked.providerId).toBe('bge');
+    expect(reranked.rankedRefs.map((ref) => ref.refId)).toEqual(['cognee:second', 'cognee:first']);
+    expect(reranked.diagnostics).toEqual(expect.arrayContaining([
       expect.objectContaining({
-        code: 'semantic_reranker_skipped_single_provider',
-        providerId: 'cognee_memory',
+        code: 'semantic_reranker_completed',
+        providerId: 'bge',
         candidateCount: 2,
-        preservedProviderRank: true,
       }),
-    ]);
+    ]));
+    expect(reranked.diagnostics).not.toEqual(expect.arrayContaining([
+      expect.objectContaining({ code: 'semantic_reranker_skipped_single_provider' }),
+    ]));
   });
 
   it('delegates mixed-provider candidates to the configured semantic reranker', async () => {
@@ -1451,6 +2075,24 @@ class TestSemanticReranker implements ContextReranker {
   }
 }
 
+class StaticContextProvider implements KnowledgeRetrievalProvider {
+  readonly providerId = 'static_provider';
+
+  constructor(private refs: KnowledgeCandidateRef[]) {}
+
+  async retrieve(_input: KnowledgeRetrievalInput): Promise<KnowledgeRetrievalResult> {
+    return {
+      providerId: this.providerId,
+      candidates: this.refs,
+      selectedRefs: this.refs,
+      injectableRefs: this.refs.filter((ref) => ref.providerMetadata?.injectionDecision === 'snippet'),
+      rejectedRefs: [],
+      diagnostics: [],
+      trace: [],
+    };
+  }
+}
+
 function graphEngine(reranker?: ContextReranker): RepoContextEngine {
   return new RepoContextEngine(
     [new MandatoryGraphProvider(), new GraphKeywordMetadataProvider()],
@@ -1464,6 +2106,31 @@ function semanticScore(ref: KnowledgeCandidateRef): number {
   return Number(ref.score ?? 0);
 }
 
+function providerRef(refId: string, path: string, contentSha256: string, summary: string, score: number): KnowledgeCandidateRef {
+  return {
+    refId,
+    kind: 'doc',
+    title: refId,
+    path,
+    summary,
+    tags: [],
+    providerId: 'static_provider',
+    source: 'static_provider',
+    reason: summary,
+    score,
+    loadable: true,
+    mandatory: false,
+    itemType: 'repo_chunk',
+    grounding: 'repo_backed',
+    content: summary,
+    contentSha256,
+    providerMetadata: {
+      injectionDecision: 'snippet',
+      injectionPolicy: 'injectable',
+    },
+  };
+}
+
 function node(
   id: string,
   kind: KnowledgeNodeLike['kind'],
@@ -1473,6 +2140,8 @@ function node(
   tags: string[],
   injectPolicy: KnowledgeNodeLike['access']['injectPolicy'],
   mandatoryForNodeRoles?: string[],
+  mandatoryForSpawnedAgentRoles?: string[],
+  mandatoryForSpawnerRoles?: string[],
 ): KnowledgeNodeLike {
   return {
     id,
@@ -1482,6 +2151,8 @@ function node(
     summary,
     tags,
     mandatoryForNodeRoles,
+    mandatoryForSpawnedAgentRoles,
+    mandatoryForSpawnerRoles,
     access: { injectPolicy },
   };
 }

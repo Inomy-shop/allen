@@ -4,6 +4,7 @@ Start here when setting up, operating, or contributing to Allen.
 
 - [First workflow](first-workflow.md) - run Allen from a fresh local setup and produce a plan from a real repo.
 - [Context engine setup](context-engine-setup.md) - configure Allen or Cognee context providers, Python sidecars, local models, and Cognee databases.
+- [Context engine](context-engine.md) - runtime context retrieval, mandatory injection, Cognee selection policy, and usage tracking.
 - [Architecture](architecture.md) - how the engine, server, UI, workspaces, agents, and integrations fit together.
 - [Security and sandboxing](security.md) - repo execution, secrets, public capability URLs, workspaces, MCP, and operator responsibilities.
 - [Troubleshooting](troubleshooting.md) - common setup, auth, MongoDB, Claude Code, workspace, integration, and test failures.

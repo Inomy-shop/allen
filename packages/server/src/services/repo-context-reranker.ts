@@ -38,23 +38,6 @@ export class ProviderAwareContextReranker implements ContextReranker {
       };
     }
 
-    if (input.candidates.every((candidate) => candidate.providerId === 'cognee_memory')) {
-      const rankedRefs = preserveProviderOrder(input.candidates, 'provider_order_preserver', 'Single-provider Cognee results preserve Cognee retrieval order.');
-      return {
-        providerId: 'provider_order_preserver',
-        rankedRefs,
-        diagnostics: [{
-          code: 'semantic_reranker_skipped_single_provider',
-          severity: 'info',
-          providerId: 'cognee_memory',
-          candidateCount: input.candidates.length,
-          preservedProviderRank: true,
-          message: 'Semantic reranking skipped for Cognee-only results; Cognee retrieval order was preserved.',
-        }],
-        traces: rankedRefs.map((ref, idx) => traceRef(ref, idx)),
-      };
-    }
-
     return this.delegate.rerank(input);
   }
 }
