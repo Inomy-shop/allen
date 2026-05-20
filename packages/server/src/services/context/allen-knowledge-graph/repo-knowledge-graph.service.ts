@@ -4,16 +4,16 @@ import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { Collection, Db } from 'mongodb';
 import { withArtifactsGuidance, withNonInteractiveGuidance, normalizeModelAlias, loadAllMcpServers } from '@allen/engine';
-import type { SystemAction } from '../cron.types.js';
+import type { SystemAction } from '../../cron.types.js';
 import {
   MandatoryGraphProvider,
   RepoContextEngine,
   type RepoContextProvider,
-} from '../repo-context-engine.js';
+} from '../core/repo-context-engine.js';
 import {
   WorkflowContextInjectionAdapter,
   summarizeInjection,
-} from '../workflow-context-injection-adapter.js';
+} from '../core/workflow-context-injection-adapter.js';
 import {
   KNOWLEDGE_GRAPH_INDEX_VERSION,
   type KnowledgeEdgeRecord,
@@ -26,7 +26,7 @@ import {
   type UsageToolCall,
 } from './repo-knowledge-graph.types.js';
 import { buildIndexerUserPrompt, buildKnowledgeCandidateInventory, buildSpawnedAgentRoleInventory, buildWorkflowRoleInventory, workflowRoleGuidance } from './repo-knowledge-graph-indexer.js';
-import { resolveContextLlmConfig } from '../context-llm-config.js';
+import { resolveContextLlmConfig } from '../config/context-llm-config.js';
 import {
   collectCurrentFiles,
   gitHeadSha,
@@ -59,8 +59,8 @@ import {
   verifyContextUsageClaims,
 } from './repo-knowledge-graph-usage.js';
 import { arrayOfStrings, firstString, hashJson, isRecord, normalizeKind, normalizeRelation, sha256, stableNodeKey } from './repo-knowledge-graph-utils.js';
-import { ContextEvaluationService } from '../context-evaluation.service.js';
-import { ContextWorkflowEvaluationService } from '../context-workflow-evaluation.service.js';
+import { ContextEvaluationService } from '../evaluation/context-evaluation.service.js';
+import { ContextWorkflowEvaluationService } from '../evaluation/context-workflow-evaluation.service.js';
 import {
   cogneeMandatoryGraphMode,
   configuredContextProvider,
@@ -69,7 +69,7 @@ import {
   isContextEngineEnabled,
   isCogneeContextEnabled,
   isGraphContextEnabled,
-} from '../context-provider-config.js';
+} from '../config/context-provider-config.js';
 
 export { KNOWLEDGE_GRAPH_INDEX_VERSION } from './repo-knowledge-graph.types.js';
 export type { KnowledgeEdgeRecord, KnowledgeNodeRecord } from './repo-knowledge-graph.types.js';

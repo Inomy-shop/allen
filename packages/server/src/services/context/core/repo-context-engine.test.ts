@@ -16,9 +16,9 @@ import {
 } from './repo-context-engine.js';
 import { summarizeInjection, WorkflowContextInjectionAdapter } from './workflow-context-injection-adapter.js';
 import { createConfiguredContextReranker, type ContextRerankInput, type ContextRerankResult, type ContextReranker } from './repo-context-reranker.js';
-import { CogneeMemoryProvider, runCogneeSidecar } from './repo-context-cognee-provider.js';
-import { buildCogneeQuery, buildRetrievalIntentEnvelope, renderedQueryHash, retrievalEnvelopeHash, selectCogneeRefs } from './cognee/cognee-retrieval-policy.js';
-import { generateDeterministicMetadata } from './cognee/cognee-metadata-enrichment.js';
+import { CogneeMemoryProvider, runCogneeSidecar } from '../cognee/repo-context-cognee-provider.js';
+import { buildCogneeQuery, buildRetrievalIntentEnvelope, renderedQueryHash, retrievalEnvelopeHash, selectCogneeRefs } from '../cognee/cognee-retrieval-policy.js';
+import { generateDeterministicMetadata } from '../cognee/cognee-metadata-enrichment.js';
 
 const originalContextProvider = process.env.ALLEN_CONTEXT_PROVIDER;
 const originalCogneeMandatoryGraph = process.env.ALLEN_COGNEE_MANDATORY_GRAPH;

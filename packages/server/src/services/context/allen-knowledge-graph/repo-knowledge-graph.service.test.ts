@@ -6,15 +6,15 @@ import {
   RepoKnowledgeGraphService,
   RepoKnowledgeGraphValidationError,
 } from './repo-knowledge-graph.service.js';
-import { buildIndexerUserPrompt, buildSpawnedAgentRoleInventory, workflowRoleGuidance } from './knowledge-graph/repo-knowledge-graph-indexer.js';
-import type { KnowledgeCandidateInventory, WorkflowRoleInventoryEntry } from './knowledge-graph/repo-knowledge-graph.types.js';
+import { buildIndexerUserPrompt, buildSpawnedAgentRoleInventory, workflowRoleGuidance } from './repo-knowledge-graph-indexer.js';
+import type { KnowledgeCandidateInventory, WorkflowRoleInventoryEntry } from './repo-knowledge-graph.types.js';
 import { execFileSync } from 'node:child_process';
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import express from 'express';
 import request from 'supertest';
-import { repoRoutes } from '../routes/repo.routes.js';
+import { repoRoutes } from '../../../routes/repo.routes.js';
 
 describe('RepoKnowledgeGraphService context packets', () => {
   let mongo: MongoMemoryServer;

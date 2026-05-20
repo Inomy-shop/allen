@@ -1,6 +1,6 @@
 import { createConfiguredContextReranker, type ContextReranker } from './repo-context-reranker.js';
-import { CogneeMemoryProvider } from './repo-context-cognee-provider.js';
-import { cogneeMandatoryGraphMode, configuredContextProvider } from './context-provider-config.js';
+import { CogneeMemoryProvider } from '../cognee/repo-context-cognee-provider.js';
+import { cogneeMandatoryGraphMode, configuredContextProvider } from '../config/context-provider-config.js';
 import type { Db } from 'mongodb';
 
 export type RepoContextProvider = 'claude' | 'codex' | 'unknown';

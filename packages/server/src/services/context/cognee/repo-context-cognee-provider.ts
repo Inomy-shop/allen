@@ -11,12 +11,12 @@ import type {
   KnowledgeRetrievalInput,
   KnowledgeRetrievalProvider,
   KnowledgeRetrievalResult,
-} from '../repo-context-engine.js';
-import { isRecord } from '../knowledge-graph/repo-knowledge-graph-utils.js';
-import { normalizeUsageArray } from '../knowledge-graph/repo-knowledge-graph-usage.js';
-import { resolveAllenPython } from '../python-runtime.js';
-import { contextProviderDisabledError, isCogneeContextEnabled } from '../context-provider-config.js';
-import { resolveContextLlmConfig } from '../context-llm-config.js';
+} from '../core/repo-context-engine.js';
+import { isRecord } from '../allen-knowledge-graph/repo-knowledge-graph-utils.js';
+import { normalizeUsageArray } from '../allen-knowledge-graph/repo-knowledge-graph-usage.js';
+import { resolveAllenPython } from '../../python-runtime.js';
+import { contextProviderDisabledError, isCogneeContextEnabled } from '../config/context-provider-config.js';
+import { resolveContextLlmConfig } from '../config/context-llm-config.js';
 import {
   buildCogneeQuery,
   buildGraphExpansionQuery,

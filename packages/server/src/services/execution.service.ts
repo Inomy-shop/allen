@@ -24,11 +24,11 @@ import { ArtifactService } from './artifact.service.js';
 import { MonitoringService } from './self-healing-monitor.service.js';
 import { assertSelfHealingLinearConfig, isSelfHealingWorkflowName } from './self-healing-env.js';
 import { AgentActivityService, type PersistedActivityRow } from './agent-activity.service.js';
-import { RepoKnowledgeGraphService } from './repo-knowledge-graph.service.js';
-import { ContextEvaluationService } from './context-evaluation.service.js';
-import { ContextWorkflowEvaluationService } from './context-workflow-evaluation.service.js';
-import { hydrateTraceContextEvaluations } from './context-evaluation-trace-hydrator.js';
-import { isContextEngineEnabled } from './context-provider-config.js';
+import { RepoKnowledgeGraphService } from './context/allen-knowledge-graph/repo-knowledge-graph.service.js';
+import { ContextEvaluationService } from './context/evaluation/context-evaluation.service.js';
+import { ContextWorkflowEvaluationService } from './context/evaluation/context-workflow-evaluation.service.js';
+import { hydrateTraceContextEvaluations } from './context/evaluation/context-evaluation-trace-hydrator.js';
+import { isContextEngineEnabled } from './context/config/context-provider-config.js';
 
 /**
  * Build the in-process service hook bundle the engine passes to built-ins.

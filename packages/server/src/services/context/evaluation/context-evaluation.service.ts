@@ -4,11 +4,11 @@ import { existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import type { Collection, Db } from 'mongodb';
-import { normalizeUsageArray } from './repo-knowledge-graph-usage.js';
-import { firstString, isRecord } from './repo-knowledge-graph-utils.js';
-import { resolveAllenPython } from './python-runtime.js';
-import { isContextEngineEnabled } from './context-provider-config.js';
-import { resolveContextLlmConfig } from './context-llm-config.js';
+import { normalizeUsageArray } from '../allen-knowledge-graph/repo-knowledge-graph-usage.js';
+import { firstString, isRecord } from '../allen-knowledge-graph/repo-knowledge-graph-utils.js';
+import { resolveAllenPython } from '../../python-runtime.js';
+import { isContextEngineEnabled } from '../config/context-provider-config.js';
+import { resolveContextLlmConfig } from '../config/context-llm-config.js';
 
 export type ContextEvaluationStatus = 'passed' | 'warning' | 'failed';
 export type SemanticEvaluationStatus = 'disabled' | 'queued' | 'running' | 'completed' | 'failed';

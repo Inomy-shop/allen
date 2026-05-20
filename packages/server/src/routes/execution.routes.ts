@@ -1,8 +1,8 @@
 import { Router, type Request, type Response } from 'express';
 import { ExecutionService } from '../services/execution.service.js';
 import { InterventionService } from '../services/intervention.service.js';
-import { RepoKnowledgeGraphService } from '../services/repo-knowledge-graph.service.js';
-import { isContextEngineEnabled } from '../services/context-provider-config.js';
+import { RepoKnowledgeGraphService } from '../services/context/allen-knowledge-graph/repo-knowledge-graph.service.js';
+import { isContextEngineEnabled } from '../services/context/config/context-provider-config.js';
 import { param } from '../types.js';
 import type { Db } from 'mongodb';
 import { UserService } from '../services/user.service.js';

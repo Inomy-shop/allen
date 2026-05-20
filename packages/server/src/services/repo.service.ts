@@ -5,9 +5,9 @@ import { promisify } from 'node:util';
 import type { Collection, Db } from 'mongodb';
 import { resolveRepositoriesDir } from '@allen/engine';
 import { scanRepo } from './repo-scanner.js';
-import { RepoContextScannerService } from './repo-context-scanner.service.js';
-import { RepoKnowledgeGraphService } from './repo-knowledge-graph.service.js';
-import { isContextEngineEnabled, isGraphContextEnabled } from './context-provider-config.js';
+import { RepoContextScannerService } from './context/scanner/repo-context-scanner.service.js';
+import { RepoKnowledgeGraphService } from './context/allen-knowledge-graph/repo-knowledge-graph.service.js';
+import { isContextEngineEnabled, isGraphContextEnabled } from './context/config/context-provider-config.js';
 
 const exec = promisify(execFile);
 

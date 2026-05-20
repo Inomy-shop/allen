@@ -4,13 +4,13 @@ import { existsSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { Collection, Db } from 'mongodb';
-import { logger } from '../logger.js';
-import { firstString, isRecord } from './repo-knowledge-graph-utils.js';
-import { normalizeUsageArray } from './repo-knowledge-graph-usage.js';
+import { logger } from '../../../logger.js';
+import { firstString, isRecord } from '../allen-knowledge-graph/repo-knowledge-graph-utils.js';
+import { normalizeUsageArray } from '../allen-knowledge-graph/repo-knowledge-graph-usage.js';
 import { WORKFLOW_EVIDENCE_PACKING_VERSION, buildWorkflowSemanticEvaluationPromptArtifacts } from './context-workflow-evaluation-prompt.js';
-import { resolveAllenPython } from './python-runtime.js';
-import { isContextEngineEnabled } from './context-provider-config.js';
-import { resolveContextLlmConfig } from './context-llm-config.js';
+import { resolveAllenPython } from '../../python-runtime.js';
+import { isContextEngineEnabled } from '../config/context-provider-config.js';
+import { resolveContextLlmConfig } from '../config/context-llm-config.js';
 
 type WorkflowSemanticStatus = 'queued' | 'running' | 'completed' | 'failed';
 

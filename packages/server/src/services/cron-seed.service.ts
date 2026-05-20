@@ -11,7 +11,7 @@
 import type { Db } from 'mongodb';
 import { computeNextRun } from './cron.service.js';
 import type { CronJob } from './cron.types.js';
-import { isContextEngineEnabled } from './context-provider-config.js';
+import { isContextEngineEnabled } from './context/config/context-provider-config.js';
 import { getSelfHealingLinearConfig } from './self-healing-env.js';
 import { isSeedOverrideEnabled } from './seed-policy.js';
 

@@ -1,9 +1,9 @@
 import { Router, type Request, type Response } from 'express';
 import { dirname } from 'node:path';
 import { RepoService } from '../services/repo.service.js';
-import { RepoKnowledgeGraphService, isRepoKnowledgeGraphValidationError } from '../services/repo-knowledge-graph.service.js';
-import { CogneeMemoryService } from '../services/cognee-memory.service.js';
-import { isCogneeContextEnabled, isContextEngineEnabled, isGraphContextEnabled } from '../services/context-provider-config.js';
+import { RepoKnowledgeGraphService, isRepoKnowledgeGraphValidationError } from '../services/context/allen-knowledge-graph/repo-knowledge-graph.service.js';
+import { CogneeMemoryService } from '../services/context/cognee/cognee-memory.service.js';
+import { isCogneeContextEnabled, isContextEngineEnabled, isGraphContextEnabled } from '../services/context/config/context-provider-config.js';
 import { param } from '../types.js';
 import { ObjectId, type Db } from 'mongodb';
 import { execFile } from 'node:child_process';

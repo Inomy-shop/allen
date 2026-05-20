@@ -465,7 +465,7 @@ export class RepoContextScannerService {
 
 // ── System action handler for the cron service ──
 
-import type { SystemAction } from './cron.types.js';
+import type { SystemAction } from '../../cron.types.js';
 
 /**
  * Factory for the "repo-scan-if-changed" system action. Iterates all active

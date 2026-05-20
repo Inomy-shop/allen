@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import type { Db } from 'mongodb';
-import type { KnowledgeCandidateRef } from '../repo-context-engine.js';
-import { isRecord } from '../knowledge-graph/repo-knowledge-graph-utils.js';
+import type { KnowledgeCandidateRef } from '../core/repo-context-engine.js';
+import { isRecord } from '../allen-knowledge-graph/repo-knowledge-graph-utils.js';
 
 export const COGNEE_METADATA_SCHEMA_VERSION = 1;
 

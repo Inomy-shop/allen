@@ -2,8 +2,8 @@ import { createHmac, timingSafeEqual } from 'node:crypto';
 import { Router, type Request, type Response } from 'express';
 import type { Db } from 'mongodb';
 import { runChatLLM } from '../services/chat-llm.js';
-import { resolveContextLlmConfig } from '../services/context-llm-config.js';
-import { isCogneeContextEnabled, isContextEngineEnabled } from '../services/context-provider-config.js';
+import { resolveContextLlmConfig } from '../services/context/config/context-llm-config.js';
+import { isCogneeContextEnabled, isContextEngineEnabled } from '../services/context/config/context-provider-config.js';
 
 const MAX_CLOCK_SKEW_MS = 5 * 60_000;
 

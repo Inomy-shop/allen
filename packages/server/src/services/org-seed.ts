@@ -21,7 +21,7 @@
  */
 
 import type { Db } from 'mongodb';
-import { buildRepoKnowledgeGraphIndexerSystemPrompt } from './knowledge-graph/repo-knowledge-graph-indexer-prompts.js';
+import { buildRepoKnowledgeGraphIndexerSystemPrompt } from './context/allen-knowledge-graph/repo-knowledge-graph-indexer-prompts.js';
 import { isSeedOverrideEnabled } from './seed-policy.js';
 import { resolveAgentProviderModel } from './llm-defaults.js';
 

@@ -5,8 +5,8 @@ import {
   isRepoContextLoaderToolCall,
   shouldRetryForRepoContextLoadingCompliance,
   withRepoContextUsageOutput,
-} from './repo-context-usage.js';
-import type { ToolCallRecord } from './tool-call.js';
+} from '../src/repo-context-usage.js';
+import type { ToolCallRecord } from '../src/tool-call.js';
 
 function toolCall(tool: string): ToolCallRecord {
   return {

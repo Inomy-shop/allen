@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
-import type { KnowledgeCandidateRef, KnowledgeRetrievalInput } from '../repo-context-engine.js';
-import { isRecord } from '../knowledge-graph/repo-knowledge-graph-utils.js';
+import type { KnowledgeCandidateRef, KnowledgeRetrievalInput } from '../core/repo-context-engine.js';
+import { isRecord } from '../allen-knowledge-graph/repo-knowledge-graph-utils.js';
 import type { CogneeInjectionDecision } from './cognee-metadata-enrichment.js';
 
 export const DEFAULT_COGNEE_CANDIDATE_LIMIT = 30;

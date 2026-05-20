@@ -4,7 +4,7 @@ import { promisify } from 'node:util';
 import { ObjectId, type Db } from 'mongodb';
 import { UserService } from '../services/user.service.js';
 import { runSystemHealth } from '../services/system-health.service.js';
-import { contextProviderRuntimeConfig } from '../services/context-provider-config.js';
+import { contextProviderRuntimeConfig } from '../services/context/config/context-provider-config.js';
 import { requireAuth, type AuthedRequest } from '../middleware/requireAuth.js';
 
 const exec = promisify(execFile);

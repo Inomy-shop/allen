@@ -12,9 +12,9 @@ import {
   recoverCogneeGraphWalFiles,
   runCogneeSidecar,
   type CogneeSidecarProgress,
-} from '../repo-context-cognee-provider.js';
-import { normalizeUsageArray } from '../knowledge-graph/repo-knowledge-graph-usage.js';
-import { contextProviderDisabledError, isCogneeContextEnabled } from '../context-provider-config.js';
+} from './repo-context-cognee-provider.js';
+import { normalizeUsageArray } from '../allen-knowledge-graph/repo-knowledge-graph-usage.js';
+import { contextProviderDisabledError, isCogneeContextEnabled } from '../config/context-provider-config.js';
 
 const exec = promisify(execFile);
 const DEFAULT_COGNEE_STALE_MS = 10 * 60_000;

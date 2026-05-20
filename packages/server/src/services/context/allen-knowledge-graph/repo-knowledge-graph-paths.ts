@@ -1,7 +1,7 @@
 import { spawn } from 'node:child_process';
 import { dirname, isAbsolute, normalize, relative } from 'node:path';
 import type { Db } from 'mongodb';
-import type { RepoContextProvider } from '../repo-context-engine.js';
+import type { RepoContextProvider } from '../core/repo-context-engine.js';
 import { firstString } from './repo-knowledge-graph-utils.js';
 
 export async function resolveRepoFromPath(db: Db, pathHint: string | undefined): Promise<Record<string, unknown> | null> {

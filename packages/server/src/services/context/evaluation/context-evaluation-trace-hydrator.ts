@@ -1,6 +1,6 @@
 import type { Db } from 'mongodb';
-import { firstString, isRecord } from './repo-knowledge-graph-utils.js';
-import { normalizeUsageArray } from './repo-knowledge-graph-usage.js';
+import { firstString, isRecord } from '../allen-knowledge-graph/repo-knowledge-graph-utils.js';
+import { normalizeUsageArray } from '../allen-knowledge-graph/repo-knowledge-graph-usage.js';
 
 type EvaluationRow = Record<string, unknown>;
 type TraceRow = Record<string, unknown>;

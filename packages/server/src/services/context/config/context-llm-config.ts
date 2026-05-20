@@ -1,4 +1,4 @@
-import { PROVIDERS, type ChatProvider } from './chat-providers.js';
+import { PROVIDERS, type ChatProvider } from '../../chat-providers.js';
 
 export type ContextLlmPurpose = 'cognee' | 'semantic_judge' | 'knowledge_graph_indexer';
 

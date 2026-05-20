@@ -3,8 +3,8 @@ import { existsSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { KnowledgeCandidateRef, KnowledgeNodeKind, KnowledgeRetrievalInput } from './repo-context-engine.js';
-import { isRecord } from './repo-knowledge-graph-utils.js';
-import { resolveAllenPython } from './python-runtime.js';
+import { isRecord } from '../allen-knowledge-graph/repo-knowledge-graph-utils.js';
+import { resolveAllenPython } from '../../python-runtime.js';
 
 export interface ContextRerankInput extends Omit<KnowledgeRetrievalInput, 'nodes'> {
   candidates: KnowledgeCandidateRef[];

@@ -28,8 +28,8 @@ import {
   type InterventionStatus,
 } from '../services/intervention.service.js';
 import { ExecutionService } from '../services/execution.service.js';
-import { ContextEvaluationService } from '../services/context-evaluation.service.js';
-import { isContextEngineEnabled } from '../services/context-provider-config.js';
+import { ContextEvaluationService } from '../services/context/evaluation/context-evaluation.service.js';
+import { isContextEngineEnabled } from '../services/context/config/context-provider-config.js';
 import { param } from '../types.js';
 
 export function interventionRoutes(db: Db): Router {
