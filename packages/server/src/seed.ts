@@ -301,8 +301,41 @@ Discover available Linear or external issue tools at runtime. Query current tick
 - Ticket creation/update uses the available issue-management tool.
 - Ticket asks for implementation: inspect ticket, identify repo, then use bug-fix-routing, feature-routing, review-routing, or team-delegation-routing.
 
+## Ticket content requirements (MANDATORY for create AND update)
+Whenever a Linear issue is **created OR updated**, the description MUST capture all investigation done and any artifacts produced **in this session or already known from the conversation context**. Never create or update a ticket with only a title and a one-line summary when richer data is available.
+
+**Core rule: if the data exists, put it in the ticket.** Walk through the session before writing the description and pull in every relevant fact you already have — investigation findings, file paths, error messages, log excerpts, evidence bundle ids, PR/commit links, screenshots, repro steps, acceptance criteria. Do not summarize away detail that the reader will need; paste it in.
+
+**Every section listed below MUST be present in the description. If — and only if — a section truly has no data, write the explicit placeholder for that section instead of omitting it.** Silent omission is forbidden because a missing section is indistinguishable from "we forgot to check." Using a placeholder when data actually exists is also forbidden — that is worse than omission, because it actively misleads the reader.
+
+When updating an existing ticket: preserve any sections the ticket already has, merge new findings into the right section (don't duplicate), and replace any prior placeholder with the real data now that it's known.
+
+Required sections (use these exact headings):
+
+1. \`## Investigation\` — Every relevant finding gathered in this session: what was checked and why, file paths with \`path:line\` references, function/symbol names, error messages, log excerpts, hypotheses considered and which were ruled out.
+   - Placeholder when empty: \`> No investigation has been done yet — ticket filed for triage.\`
+
+2. \`## Root Cause\` — Current understanding of the root cause.
+   - Placeholder when empty: \`> Root cause not yet identified — needs further investigation.\`
+
+3. \`## Artifacts\` — Files created/edited, evidence bundles, screenshots, logs, diffs, query results, design docs, PR links, commit SHAs, dashboard URLs, repro scripts, allen monitoring evidence bundle ids, execution/trace ids.
+   - Files: include relative/absolute paths AND paste the relevant excerpt in a fenced code block. If a file is too large or binary, link to it (PR diff URL, gist, S3 link) or note its exact location.
+   - Images/screenshots: upload via Linear's attachment mechanism if available; otherwise link the source URL.
+   - Commands and their output: include the command and a trimmed but representative output block.
+   - PRs/commits/external dashboards: include full URLs, not bare identifiers.
+   - Allen evidence bundle ids / execution ids / trace ids: list them so a reader can pull them up.
+   - Placeholder when empty: \`> No artifacts produced for this ticket.\`
+
+4. \`## Reproduction\` — Exact steps to reproduce or the conditions under which the issue surfaced.
+   - Placeholder when empty: \`> No reproduction steps available yet.\`
+
+5. \`## Acceptance Criteria / Next Actions\` — What "done" looks like and any follow-up tasks already identified.
+   - Placeholder when empty: \`> Acceptance criteria not yet defined.\`
+
+Before creating or updating the issue, confirm the assembled title + description with the user. After the create/update, report the issue identifier/URL and confirm every required section (including any placeholders used) was attached, plus list which sections were filled with real data vs. left as placeholders.
+
 ## Output
-Return issue identifiers, titles, state, owner, dates, links, and any assumptions about filtering.`,
+Return issue identifiers, titles, state, owner, dates, links, and any assumptions about filtering. For newly-created issues, also confirm that the Investigation and Artifacts sections were included.`,
   },
   {
     name: 'issue-investigation',
