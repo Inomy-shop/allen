@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { buildWorkflowSemanticEvaluationPromptArtifacts } from './context-workflow-evaluation-prompt.js';
+import { buildWorkflowSemanticEvaluationPromptArtifacts } from '../../../../src/services/context/evaluation/context-workflow-evaluation-prompt.js';
 
 describe('buildWorkflowSemanticEvaluationPromptArtifacts', () => {
   it('packs oversized workflow evidence without dropping context-relevant nodes', () => {

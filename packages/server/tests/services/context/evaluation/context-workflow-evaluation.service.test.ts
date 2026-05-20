@@ -4,9 +4,9 @@ import { MongoMemoryServer } from 'mongodb-memory-server';
 import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { ContextWorkflowEvaluationService } from './context-workflow-evaluation.service.js';
+import { ContextWorkflowEvaluationService } from '../../../../src/services/context/evaluation/context-workflow-evaluation.service.js';
 
-vi.unmock('./chat-llm.js');
+vi.unmock('../../../../src/services/chat-llm.js');
 
 describe('ContextWorkflowEvaluationService', () => {
   let mongo: MongoMemoryServer;

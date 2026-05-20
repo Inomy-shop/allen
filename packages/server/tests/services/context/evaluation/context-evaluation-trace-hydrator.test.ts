@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { MongoClient, type Db } from 'mongodb';
 import { MongoMemoryServer } from 'mongodb-memory-server';
-import { hydrateTraceContextEvaluations } from './context-evaluation-trace-hydrator.js';
+import { hydrateTraceContextEvaluations } from '../../../../src/services/context/evaluation/context-evaluation-trace-hydrator.js';
 
 describe('hydrateTraceContextEvaluations', () => {
   let mongo: MongoMemoryServer;

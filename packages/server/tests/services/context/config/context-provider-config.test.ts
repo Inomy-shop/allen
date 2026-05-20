@@ -6,7 +6,7 @@ import {
   cogneeMandatoryGraphMode,
   isCogneeContextEnabled,
   isContextEngineEnabled,
-} from './context-provider-config.js';
+} from '../../../../src/services/context/config/context-provider-config.js';
 
 const originalAllenContextProvider = process.env.ALLEN_CONTEXT_PROVIDER;
 const originalCogneeMandatoryGraph = process.env.ALLEN_COGNEE_MANDATORY_GRAPH;

@@ -10,15 +10,15 @@ const mocks = vi.hoisted(() => ({
   runCogneeSidecar: vi.fn(),
 }));
 
-vi.mock('./repo-context-cognee-provider.js', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('./repo-context-cognee-provider.js')>();
+vi.mock('../../../../src/services/context/cognee/repo-context-cognee-provider.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../../../src/services/context/cognee/repo-context-cognee-provider.js')>();
   return {
     ...actual,
     runCogneeSidecar: mocks.runCogneeSidecar,
   };
 });
 
-import { CogneeMemoryService } from './cognee-memory.service.js';
+import { CogneeMemoryService } from '../../../../src/services/context/cognee/cognee-memory.service.js';
 
 describe('CogneeMemoryService', () => {
   let mongod: MongoMemoryServer;

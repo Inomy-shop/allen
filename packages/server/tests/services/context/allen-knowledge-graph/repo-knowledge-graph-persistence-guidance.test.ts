@@ -3,7 +3,7 @@ import {
   REPO_KNOWLEDGE_GRAPH_PERSISTENCE_GUIDANCE_SENTINEL,
   shouldInjectRepoKnowledgeGraphPersistenceGuidance,
   withRepoKnowledgeGraphPersistenceGuidance,
-} from './repo-knowledge-graph-persistence-guidance.js';
+} from '../../../../src/services/context/allen-knowledge-graph/repo-knowledge-graph-persistence-guidance.js';
 
 describe('repo knowledge graph persistence guidance', () => {
   it('targets repo knowledge graph indexer persistence prompts', () => {

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { resolveContextLlmConfig } from './context-llm-config.js';
+import { resolveContextLlmConfig } from '../../../../src/services/context/config/context-llm-config.js';
 
 describe('resolveContextLlmConfig', () => {
   const originalEnv = {

@@ -13,12 +13,12 @@ import {
   type KnowledgeRetrievalInput,
   type KnowledgeRetrievalProvider,
   type KnowledgeRetrievalResult,
-} from './repo-context-engine.js';
-import { summarizeInjection, WorkflowContextInjectionAdapter } from './workflow-context-injection-adapter.js';
-import { createConfiguredContextReranker, type ContextRerankInput, type ContextRerankResult, type ContextReranker } from './repo-context-reranker.js';
-import { CogneeMemoryProvider, runCogneeSidecar } from '../cognee/repo-context-cognee-provider.js';
-import { buildCogneeQuery, buildRetrievalIntentEnvelope, renderedQueryHash, retrievalEnvelopeHash, selectCogneeRefs } from '../cognee/cognee-retrieval-policy.js';
-import { generateDeterministicMetadata } from '../cognee/cognee-metadata-enrichment.js';
+} from '../../../../src/services/context/core/repo-context-engine.js';
+import { summarizeInjection, WorkflowContextInjectionAdapter } from '../../../../src/services/context/core/workflow-context-injection-adapter.js';
+import { createConfiguredContextReranker, type ContextRerankInput, type ContextRerankResult, type ContextReranker } from '../../../../src/services/context/core/repo-context-reranker.js';
+import { CogneeMemoryProvider, runCogneeSidecar } from '../../../../src/services/context/cognee/repo-context-cognee-provider.js';
+import { buildCogneeQuery, buildRetrievalIntentEnvelope, renderedQueryHash, retrievalEnvelopeHash, selectCogneeRefs } from '../../../../src/services/context/cognee/cognee-retrieval-policy.js';
+import { generateDeterministicMetadata } from '../../../../src/services/context/cognee/cognee-metadata-enrichment.js';
 
 const originalContextProvider = process.env.ALLEN_CONTEXT_PROVIDER;
 const originalCogneeMandatoryGraph = process.env.ALLEN_COGNEE_MANDATORY_GRAPH;
