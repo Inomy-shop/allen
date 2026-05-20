@@ -1,10 +1,12 @@
-import { spawn } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { KnowledgeCandidateRef, KnowledgeNodeKind, KnowledgeRetrievalInput } from './repo-context-engine.js';
+import { runSharedRerankerWorker } from './context-reranker-worker.js';
 import { isRecord } from '../allen-knowledge-graph/repo-knowledge-graph-utils.js';
 import { resolveAllenPython } from '../../python-runtime.js';
+
+export { shutdownContextRerankerWorkers } from './context-reranker-worker.js';
 
 export interface ContextRerankInput extends Omit<KnowledgeRetrievalInput, 'nodes'> {
   candidates: KnowledgeCandidateRef[];
@@ -258,6 +260,7 @@ function normalizeDiagnostics(value: unknown): Array<Record<string, unknown>> {
 async function runRerankerSidecar(providerId: string, input: ContextRerankInput): Promise<Record<string, unknown>> {
   const script = resolveRerankerScript();
   const python = resolveAllenPython();
+  const modelName = process.env.ALLEN_CONTEXT_RERANKER_MODEL;
   const payload = {
     providerId,
     task: `${input.workflowName} ${input.nodeName} ${input.nodeRole ?? ''} ${input.prompt ?? ''}`,
@@ -277,34 +280,22 @@ async function runRerankerSidecar(providerId: string, input: ContextRerankInput)
       providerMetadata: candidate.providerMetadata,
     })),
   };
-  return new Promise((resolve, reject) => {
-    const child = spawn(python, [script], { stdio: ['pipe', 'pipe', 'pipe'] });
-    let stdout = '';
-    let stderr = '';
-    const timer = setTimeout(() => {
-      child.kill('SIGTERM');
-      reject(new Error('Context reranker timed out'));
-    }, Number(process.env.ALLEN_CONTEXT_RERANKER_TIMEOUT_MS ?? 120_000));
-    child.stdout.on('data', (chunk: Buffer) => (stdout += chunk.toString()));
-    child.stderr.on('data', (chunk: Buffer) => (stderr += chunk.toString()));
-    child.on('error', (err) => {
-      clearTimeout(timer);
-      reject(err);
-    });
-    child.on('close', (code) => {
-      clearTimeout(timer);
-      if (code !== 0) {
-        reject(new Error(stderr.trim() || `Context reranker exited with code ${code}`));
-        return;
-      }
-      try {
-        resolve(JSON.parse(stdout || '{}') as Record<string, unknown>);
-      } catch (err) {
-        reject(new Error(`Context reranker returned invalid JSON: ${(err as Error).message}`));
-      }
-    });
-    child.stdin.end(JSON.stringify(payload));
-  });
+  const result = await runSharedRerankerWorker({
+    providerId,
+    python,
+    script,
+    modelName,
+    timeoutMs: Number(process.env.ALLEN_CONTEXT_RERANKER_TIMEOUT_MS ?? 120_000),
+    idleTimeoutMs: Number(process.env.ALLEN_CONTEXT_RERANKER_IDLE_TIMEOUT_MS ?? 1_800_000),
+    queueLimit: Number(process.env.ALLEN_CONTEXT_RERANKER_QUEUE_LIMIT ?? 100),
+  }, payload);
+  return {
+    ...result.output,
+    diagnostics: [
+      ...normalizeDiagnostics(result.output.diagnostics),
+      ...result.diagnostics,
+    ],
+  };
 }
 
 function contextPolicyAdjustment(ref: KnowledgeCandidateRef, input?: ContextRerankInput): { adjustment: number; reason?: string } {

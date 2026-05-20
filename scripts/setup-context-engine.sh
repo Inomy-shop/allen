@@ -207,6 +207,8 @@ set_env_default "ALLEN_CONTEXT_LLM_MODEL" "gpt-5.5"
 if [ "$WITH_RERANKER" -eq 1 ]; then
   set_env_default "ALLEN_CONTEXT_RERANKER" "bge"
   set_env_default "ALLEN_CONTEXT_RERANKER_MODEL" "$RERANKER_MODEL_DEFAULT"
+  set_env_default "ALLEN_CONTEXT_RERANKER_IDLE_TIMEOUT_MS" "1800000"
+  set_env_default "ALLEN_CONTEXT_RERANKER_QUEUE_LIMIT" "100"
 fi
 
 if [ "$EXTERNAL_DB" -eq 1 ]; then

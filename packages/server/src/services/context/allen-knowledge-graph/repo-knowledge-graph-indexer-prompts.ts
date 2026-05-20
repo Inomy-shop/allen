@@ -1,4 +1,4 @@
-export const REPO_KNOWLEDGE_GRAPH_INDEXING_PRIORITIES = `INDEXING PRIORITIES:
+const REPO_KNOWLEDGE_GRAPH_INDEXING_PRIORITIES = `INDEXING PRIORITIES:
 1. Root and nested instruction files: AGENTS.md, CLAUDE.md, .cursorrules, .cursor/rules/*.mdc, .allen.md.
 2. Skill files: .claude/skills/*/SKILL.md, .allen/skills/*/SKILL.md, referenced skill docs.
 3. Production knowledge: docs or runbooks describing deployments, incidents, data contracts, vendor behavior, operational constraints, migrations, or validation rules.
@@ -44,7 +44,7 @@ export const REPO_KNOWLEDGE_GRAPH_MODE_CONTRACT = `MODES:
 - full_graph: build the complete Allen repo knowledge graph. Include instruction files, skills, production knowledge, modules, docs/runbooks, commands, and relationships. Mandatory mappings are allowed only for true always-load guidelines.
 - mandatory_context_map: build only the always-load guideline/policy/process/safety context needed before Cognee semantic retrieval. Include repo/global guideline nodes, role nodes, and MANDATORY_FOR_ROLE edges. Do not build broad module/source/doc/runbook/command graph nodes unless the file itself is explicitly an always-load guideline or policy.`;
 
-export const REPO_KNOWLEDGE_GRAPH_OUTPUT_CONTRACT = `OUTPUT:
+const REPO_KNOWLEDGE_GRAPH_OUTPUT_CONTRACT = `OUTPUT:
 Return ONLY valid JSON. No markdown, no commentary.`;
 
 export const REPO_KNOWLEDGE_GRAPH_SCHEMA_CONTRACT = `Schema:
@@ -77,7 +77,7 @@ export const REPO_KNOWLEDGE_GRAPH_SCHEMA_CONTRACT = `Schema:
   ]
 }`;
 
-export const REPO_KNOWLEDGE_GRAPH_PERSISTENCE_CONTRACT = `If you are asked to index, save, persist, refresh, recreate, rebuild, or
+const REPO_KNOWLEDGE_GRAPH_PERSISTENCE_CONTRACT = `If you are asked to index, save, persist, refresh, recreate, rebuild, or
 replace a repo knowledge graph, the task MUST specify mode full_graph or
 mandatory_context_map. If mode is missing, stop and report that mode is
 required. When mode is specified, you MUST call save_repo_knowledge_graph

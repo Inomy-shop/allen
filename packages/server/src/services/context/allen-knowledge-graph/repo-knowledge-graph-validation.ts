@@ -364,7 +364,7 @@ function addCoverageWarning(
   }
 }
 
-export function buildGraphValidationRepairHints(issues: GraphValidationIssue[]): string[] {
+function buildGraphValidationRepairHints(issues: GraphValidationIssue[]): string[] {
   const codes = new Set(issues.map((issue) => issue.code));
   const hints: string[] = [];
   if (codes.has('node_path_missing') || codes.has('path_casing_mismatch') || codes.has('invalid_node_path')) {

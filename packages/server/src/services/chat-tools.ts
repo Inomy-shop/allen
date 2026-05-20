@@ -1243,7 +1243,6 @@ async function runSpawnInBackground(
     }
   }
 
-  let repoKnowledgeBlock = '';
   let repoKnowledgePacketSummary: {
     packetId: string;
     repoId: string;
@@ -1276,7 +1275,6 @@ async function runSpawnInBackground(
         provider: provider === 'codex' ? 'codex' : 'claude',
       });
       if (packet) {
-        repoKnowledgeBlock = '';
         repoKnowledgeSystemPromptBlock = packet.systemPromptBlock ?? '';
         repoKnowledgePacketSummary = packet.traceSummary;
         liveLog({ type: 'started', content: `Resolved repo knowledge packet ${packet.packetId}` });
@@ -1945,7 +1943,6 @@ async function runSpawnInBackground(
       runtimeContext: {
         repoContextLoadingGuidancePresent,
         repoContextLoadingGuidanceInjected,
-        repoKnowledgePacketInUserPrompt: Boolean(repoKnowledgeBlock),
         mandatoryRepoContextInjected: Boolean(repoKnowledgeSystemPromptBlock),
         mandatoryRepoContextInjectedCount: repoKnowledgePacketSummary?.mandatoryContextInjectedCount,
         mandatoryRepoContextSkippedProviderNativeCount: repoKnowledgePacketSummary?.mandatoryContextSkippedProviderNativeCount,
@@ -1995,7 +1992,6 @@ async function runSpawnInBackground(
       runtimeContext: {
         repoContextLoadingGuidancePresent,
         repoContextLoadingGuidanceInjected,
-        repoKnowledgePacketInUserPrompt: Boolean(repoKnowledgeBlock),
         mandatoryRepoContextInjected: Boolean(repoKnowledgeSystemPromptBlock),
         mandatoryRepoContextInjectedCount: repoKnowledgePacketSummary?.mandatoryContextInjectedCount,
         mandatoryRepoContextSkippedProviderNativeCount: repoKnowledgePacketSummary?.mandatoryContextSkippedProviderNativeCount,

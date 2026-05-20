@@ -470,11 +470,6 @@ export class RepoService {
     return this.contextScanner.scheduleScan(id);
   }
 
-  async indexKnowledgeGraph(id: string): Promise<{ scheduled: boolean; reason?: string; executionId?: string }> {
-    if (!isGraphContextEnabled()) return { scheduled: false, reason: 'Allen context provider is disabled' };
-    return this.knowledgeGraph.scheduleIndex(id);
-  }
-
   /** Fetch the stored detailed context document for a repo. */
   async getContext(id: string): Promise<Record<string, unknown> | null> {
     if (!isGraphContextEnabled()) return null;

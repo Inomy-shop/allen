@@ -99,10 +99,6 @@ function workflowFindingForTrace(findingsByIdentity: Map<string, any>, trace: an
   return undefined;
 }
 
-function interventionDecisionLabel(value: string): string {
-  return value.replace(/[_-]+/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
-}
-
 function ExecutionApprovalModal({
   executionId,
   intervention,

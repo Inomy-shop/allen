@@ -15,7 +15,7 @@ import { executeCodexNode } from './codex-executor.js';
 import { buildToolCallRecord, type ToolCallRecord } from './tool-call.js';
 import { normalizeModelAlias } from './model-alias.js';
 import { hasRepoContextLoadingGuidance, withArtifactsGuidance, withMandatoryRepoContext, withNonInteractiveGuidance, withRepoContextLoadingGuidance } from './agent-file-writer.js';
-import { buildRepoContextLoadingCompliancePrompt, shouldRetryForRepoContextLoadingCompliance, withRepoContextUsageOutput } from './repo-context-usage.js';
+import { withRepoContextUsageOutput } from './repo-context-usage.js';
 import type { MaterializedAgentFileMetadata } from './cli-runner.js';
 import { statSync, mkdirSync } from 'node:fs';
 
@@ -1205,49 +1205,6 @@ Use auto-gate only if the original prompt's workflow context explicitly allowed 
       message: `[extraction] All strategies failed — downstream conditions will evaluate missing values as false`,
     });
   }
-
-  if (shouldRetryForRepoContextLoadingCompliance(outputs, rawResponse, allToolCalls, deps.repoKnowledgeContext, sessionId)) {
-    emitLog(deps, nodeName, {
-      level: 'warn',
-      category: 'system',
-      message: `[repo-context] No repo context body-loader calls found after reported context use; resuming agent once for context-loading compliance`,
-    });
-    const contextRetryPrompt = buildRepoContextLoadingCompliancePrompt(requiredOutputs, outputs);
-    try {
-      const retry = await callAgent({
-        promptText: contextRetryPrompt,
-        resumeSession: sessionId,
-        emitText: true,
-      });
-
-      if (retry.sessionId) sessionId = retry.sessionId;
-      if (retry.cost != null) actualCost = (actualCost ?? 0) + retry.cost;
-      turns += retry.turns;
-      allToolCalls.push(...retry.toolCalls);
-
-      if (retry.text) {
-        rawResponse += '\n\n--- Repo context loading compliance retry ---\n' + retry.text;
-        const retryOutputs = await extractOutputs(retry.text, nodeDef, extractLog, /*skipLLMFallback*/ true);
-        outputs = { ...outputs, ...retryOutputs };
-        emitLog(deps, nodeName, {
-          level: 'info',
-          category: 'system',
-          message: `[repo-context] Compliance retry completed — extracted [${Object.keys(retryOutputs).join(', ') || 'none'}]`,
-        });
-      }
-    } catch (err) {
-      const msg = (err as Error).message;
-      if (deps.abortSignal?.aborted || /exited with code 143|SIGTERM/i.test(msg)) {
-        throw new Error('Execution cancelled');
-      }
-      emitLog(deps, nodeName, {
-        level: 'warn',
-        category: 'system',
-        message: `[repo-context] Compliance retry failed: ${msg}`,
-      });
-    }
-  }
-  // ───────────────────────────────────────────────────────────────────────
 
   // ── Phase 2: build the trace enrichments bundle ────────────────────────
   // All optional; engine stitches them into NodeTrace at save time.

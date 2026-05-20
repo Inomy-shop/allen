@@ -73,6 +73,15 @@ ALLEN_CONTEXT_RERANKER=bge
 ALLEN_CONTEXT_RERANKER_MODEL=BAAI/bge-reranker-base
 ```
 
+Allen starts the semantic reranker lazily on the first rerank request and reuses one persistent Python worker per server process. Concurrent workflows queue through that worker instead of loading multiple copies of the model. The worker exits after 30 minutes without rerank traffic by default:
+
+```bash
+ALLEN_CONTEXT_RERANKER_IDLE_TIMEOUT_MS=1800000
+ALLEN_CONTEXT_RERANKER_QUEUE_LIMIT=100
+```
+
+Set `ALLEN_CONTEXT_RERANKER_IDLE_TIMEOUT_MS=0` to keep the worker alive until the Allen server exits.
+
 Install and warm the default reranker model manually only if you skipped the one-command setup:
 
 ```bash

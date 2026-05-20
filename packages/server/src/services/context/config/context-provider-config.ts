@@ -36,10 +36,6 @@ export function cogneeMandatoryGraphMode(): CogneeMandatoryGraphMode {
   return 'auto';
 }
 
-export function isCogneeMandatoryGraphEnabled(): boolean {
-  return isCogneeContextEnabled() && cogneeMandatoryGraphMode() !== 'off';
-}
-
 export function isGraphContextEnabled(): boolean {
   return configuredContextProvider() === 'allen';
 }

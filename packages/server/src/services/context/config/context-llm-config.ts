@@ -37,7 +37,7 @@ export function resolveContextLlmConfig(options: ResolveContextLlmOptions): Cont
   };
 }
 
-export function resolveContextLlmProvider(purpose: ContextLlmPurpose, override?: unknown): ChatProvider {
+function resolveContextLlmProvider(purpose: ContextLlmPurpose, override?: unknown): ChatProvider {
   const raw = firstString(override)
     ?? process.env.ALLEN_CONTEXT_LLM_PROVIDER
     ?? legacyProviderEnv(purpose)

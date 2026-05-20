@@ -20,10 +20,6 @@ type EvidenceBudget = {
   maxDiagnostics: number;
 };
 
-export function buildWorkflowSemanticEvaluationPrompt(input: WorkflowSemanticEvaluationPromptInput): string {
-  return buildWorkflowSemanticEvaluationPromptArtifacts(input).prompt;
-}
-
 export function buildWorkflowSemanticEvaluationPromptArtifacts(input: WorkflowSemanticEvaluationPromptInput): {
   prompt: string;
   evidencePayload: Record<string, unknown>;

@@ -15,7 +15,7 @@ import {
   type KnowledgeRetrievalResult,
 } from '../../../../src/services/context/core/repo-context-engine.js';
 import { summarizeInjection, WorkflowContextInjectionAdapter } from '../../../../src/services/context/core/workflow-context-injection-adapter.js';
-import { createConfiguredContextReranker, type ContextRerankInput, type ContextRerankResult, type ContextReranker } from '../../../../src/services/context/core/repo-context-reranker.js';
+import { createConfiguredContextReranker, shutdownContextRerankerWorkers, type ContextRerankInput, type ContextRerankResult, type ContextReranker } from '../../../../src/services/context/core/repo-context-reranker.js';
 import { CogneeMemoryProvider, runCogneeSidecar } from '../../../../src/services/context/cognee/repo-context-cognee-provider.js';
 import { buildCogneeQuery, buildRetrievalIntentEnvelope, renderedQueryHash, retrievalEnvelopeHash, selectCogneeRefs } from '../../../../src/services/context/cognee/cognee-retrieval-policy.js';
 import { generateDeterministicMetadata } from '../../../../src/services/context/cognee/cognee-metadata-enrichment.js';
@@ -1735,8 +1735,12 @@ describe('Context reranker sidecars and policy', () => {
   let previousReranker: string | undefined;
   let previousModel: string | undefined;
   let previousPairsOut: string | undefined;
+  let previousIdleTimeout: string | undefined;
+  let previousQueueLimit: string | undefined;
+  let previousStartsFile: string | undefined;
 
   afterEach(() => {
+    shutdownContextRerankerWorkers();
     if (tempDir) rmSync(tempDir, { recursive: true, force: true });
     tempDir = undefined;
     if (previousScript === undefined) delete process.env.ALLEN_CONTEXT_RERANKER_SCRIPT;
@@ -1749,6 +1753,12 @@ describe('Context reranker sidecars and policy', () => {
     else process.env.ALLEN_CONTEXT_RERANKER_MODEL = previousModel;
     if (previousPairsOut === undefined) delete process.env.ALLEN_RERANKER_PAIRS_OUT;
     else process.env.ALLEN_RERANKER_PAIRS_OUT = previousPairsOut;
+    if (previousIdleTimeout === undefined) delete process.env.ALLEN_CONTEXT_RERANKER_IDLE_TIMEOUT_MS;
+    else process.env.ALLEN_CONTEXT_RERANKER_IDLE_TIMEOUT_MS = previousIdleTimeout;
+    if (previousQueueLimit === undefined) delete process.env.ALLEN_CONTEXT_RERANKER_QUEUE_LIMIT;
+    else process.env.ALLEN_CONTEXT_RERANKER_QUEUE_LIMIT = previousQueueLimit;
+    if (previousStartsFile === undefined) delete process.env.ALLEN_RERANKER_STARTS_FILE;
+    else process.env.ALLEN_RERANKER_STARTS_FILE = previousStartsFile;
   });
 
   it('includes candidate content in Python reranker scoring text', () => {
@@ -1805,18 +1815,24 @@ class CrossEncoder:
 import json
 import sys
 
-payload = json.loads(sys.stdin.read() or "{}")
-print(json.dumps({
-  "scores": [
-    {
-      "refId": candidate["refId"],
-      "score": 0.95 if candidate["refId"] == "cognee:second" else 0.1,
-      "reason": "cognee-only semantic test score",
-    }
-    for candidate in payload.get("candidates", [])
-  ],
-  "diagnostics": []
-}))
+for line in sys.stdin:
+    envelope = json.loads(line)
+    payload = envelope.get("payload") or {}
+    print(json.dumps({
+      "requestId": envelope.get("requestId"),
+      "ok": True,
+      "result": {
+        "scores": [
+          {
+            "refId": candidate["refId"],
+            "score": 0.95 if candidate["refId"] == "cognee:second" else 0.1,
+            "reason": "cognee-only semantic test score",
+          }
+          for candidate in payload.get("candidates", [])
+        ],
+        "diagnostics": []
+      }
+    }), flush=True)
 `);
     process.env.ALLEN_CONTEXT_RERANKER = 'bge';
     process.env.ALLEN_CONTEXT_RERANKER_SCRIPT = script;
@@ -1893,15 +1909,21 @@ print(json.dumps({
 import json
 import sys
 
-payload = json.loads(sys.stdin.read() or "{}")
-scores = []
-for candidate in payload.get("candidates", []):
-    scores.append({
-        "refId": candidate["refId"],
-        "score": 0.9 if candidate["refId"] == "graph:ui-rules" else 0.1,
-        "reason": "mixed provider semantic test score",
-    })
-print(json.dumps({"scores": scores, "diagnostics": []}))
+for line in sys.stdin:
+    envelope = json.loads(line)
+    payload = envelope.get("payload") or {}
+    scores = []
+    for candidate in payload.get("candidates", []):
+        scores.append({
+            "refId": candidate["refId"],
+            "score": 0.9 if candidate["refId"] == "graph:ui-rules" else 0.1,
+            "reason": "mixed provider semantic test score",
+        })
+    print(json.dumps({
+        "requestId": envelope.get("requestId"),
+        "ok": True,
+        "result": {"scores": scores, "diagnostics": []}
+    }), flush=True)
 `);
     process.env.ALLEN_CONTEXT_RERANKER = 'bge';
     process.env.ALLEN_CONTEXT_RERANKER_SCRIPT = script;
@@ -1975,11 +1997,17 @@ print(json.dumps({"scores": scores, "diagnostics": []}))
 import json
 import sys
 
-payload = json.loads(sys.stdin.read() or "{}")
-print(json.dumps({
-  "scores": [{"refId": candidate["refId"], "score": 0.5, "reason": "equal test score"} for candidate in payload.get("candidates", [])],
-  "diagnostics": []
-}))
+for line in sys.stdin:
+    envelope = json.loads(line)
+    payload = envelope.get("payload") or {}
+    print(json.dumps({
+      "requestId": envelope.get("requestId"),
+      "ok": True,
+      "result": {
+        "scores": [{"refId": candidate["refId"], "score": 0.5, "reason": "equal test score"} for candidate in payload.get("candidates", [])],
+        "diagnostics": []
+      }
+    }), flush=True)
 `);
     process.env.ALLEN_CONTEXT_RERANKER = 'bge';
     process.env.ALLEN_CONTEXT_RERANKER_SCRIPT = script;
@@ -2046,7 +2074,205 @@ print(json.dumps({
       expect.objectContaining({ code: 'context_policy_adjusted_ranking', prdCodeSnippetDownrankedCount: 1 }),
     ]));
   });
+
+  it('shares one persistent reranker worker across concurrent requests', async () => {
+    previousScript = process.env.ALLEN_CONTEXT_RERANKER_SCRIPT;
+    previousReranker = process.env.ALLEN_CONTEXT_RERANKER;
+    previousIdleTimeout = process.env.ALLEN_CONTEXT_RERANKER_IDLE_TIMEOUT_MS;
+    previousStartsFile = process.env.ALLEN_RERANKER_STARTS_FILE;
+    tempDir = mkdtempSync(join(tmpdir(), 'allen-reranker-shared-worker-'));
+    const script = join(tempDir, 'fake-reranker.py');
+    const startsFile = join(tempDir, 'starts.txt');
+    writeFileSync(script, `#!/usr/bin/env python3
+import json
+import os
+import sys
+import time
+
+with open(os.environ["ALLEN_RERANKER_STARTS_FILE"], "a") as fh:
+    fh.write("start\\n")
+
+for line in sys.stdin:
+    envelope = json.loads(line)
+    payload = envelope.get("payload") or {}
+    time.sleep(0.05)
+    print(json.dumps({
+        "requestId": envelope.get("requestId"),
+        "ok": True,
+        "result": {
+            "scores": [
+                {"refId": candidate["refId"], "score": 0.7, "reason": "shared worker score"}
+                for candidate in payload.get("candidates", [])
+            ],
+            "diagnostics": []
+        }
+    }), flush=True)
+`);
+    process.env.ALLEN_CONTEXT_RERANKER = 'bge';
+    process.env.ALLEN_CONTEXT_RERANKER_SCRIPT = script;
+    process.env.ALLEN_CONTEXT_RERANKER_IDLE_TIMEOUT_MS = '0';
+    process.env.ALLEN_RERANKER_STARTS_FILE = startsFile;
+
+    const reranker = createConfiguredContextReranker();
+    const [first, second] = await Promise.all([
+      reranker.rerank(rerankerInput('first')),
+      reranker.rerank(rerankerInput('second')),
+    ]);
+
+    expect(first.providerId).toBe('bge');
+    expect(second.providerId).toBe('bge');
+    expect(readFileSync(startsFile, 'utf8').trim().split('\n')).toHaveLength(1);
+    expect(first.diagnostics).toEqual(expect.arrayContaining([
+      expect.objectContaining({ code: 'semantic_reranker_worker_request_completed', workerMode: 'persistent' }),
+    ]));
+  });
+
+  it('stops idle reranker worker and starts it again on the next request', async () => {
+    previousScript = process.env.ALLEN_CONTEXT_RERANKER_SCRIPT;
+    previousReranker = process.env.ALLEN_CONTEXT_RERANKER;
+    previousIdleTimeout = process.env.ALLEN_CONTEXT_RERANKER_IDLE_TIMEOUT_MS;
+    previousStartsFile = process.env.ALLEN_RERANKER_STARTS_FILE;
+    tempDir = mkdtempSync(join(tmpdir(), 'allen-reranker-idle-worker-'));
+    const script = join(tempDir, 'fake-reranker.py');
+    const startsFile = join(tempDir, 'starts.txt');
+    writeFileSync(script, `#!/usr/bin/env python3
+import json
+import os
+import sys
+
+with open(os.environ["ALLEN_RERANKER_STARTS_FILE"], "a") as fh:
+    fh.write("start\\n")
+
+for line in sys.stdin:
+    envelope = json.loads(line)
+    payload = envelope.get("payload") or {}
+    print(json.dumps({
+        "requestId": envelope.get("requestId"),
+        "ok": True,
+        "result": {
+            "scores": [
+                {"refId": candidate["refId"], "score": 0.7, "reason": "idle worker score"}
+                for candidate in payload.get("candidates", [])
+            ],
+            "diagnostics": []
+        }
+    }), flush=True)
+`);
+    process.env.ALLEN_CONTEXT_RERANKER = 'bge';
+    process.env.ALLEN_CONTEXT_RERANKER_SCRIPT = script;
+    process.env.ALLEN_CONTEXT_RERANKER_IDLE_TIMEOUT_MS = '50';
+    process.env.ALLEN_RERANKER_STARTS_FILE = startsFile;
+
+    const reranker = createConfiguredContextReranker();
+    await reranker.rerank(rerankerInput('first'));
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    await reranker.rerank(rerankerInput('second'));
+
+    expect(readFileSync(startsFile, 'utf8').trim().split('\n')).toHaveLength(2);
+  });
+
+  it('falls back deterministically when the persistent reranker queue is full', async () => {
+    previousScript = process.env.ALLEN_CONTEXT_RERANKER_SCRIPT;
+    previousReranker = process.env.ALLEN_CONTEXT_RERANKER;
+    previousQueueLimit = process.env.ALLEN_CONTEXT_RERANKER_QUEUE_LIMIT;
+    previousIdleTimeout = process.env.ALLEN_CONTEXT_RERANKER_IDLE_TIMEOUT_MS;
+    tempDir = mkdtempSync(join(tmpdir(), 'allen-reranker-queue-full-'));
+    const script = join(tempDir, 'fake-reranker.py');
+    writeFileSync(script, `#!/usr/bin/env python3
+import json
+import sys
+import time
+
+for line in sys.stdin:
+    envelope = json.loads(line)
+    payload = envelope.get("payload") or {}
+    time.sleep(0.2)
+    print(json.dumps({
+        "requestId": envelope.get("requestId"),
+        "ok": True,
+        "result": {
+            "scores": [
+                {"refId": candidate["refId"], "score": 0.7, "reason": "slow worker score"}
+                for candidate in payload.get("candidates", [])
+            ],
+            "diagnostics": []
+        }
+    }), flush=True)
+`);
+    process.env.ALLEN_CONTEXT_RERANKER = 'bge';
+    process.env.ALLEN_CONTEXT_RERANKER_SCRIPT = script;
+    process.env.ALLEN_CONTEXT_RERANKER_QUEUE_LIMIT = '1';
+    process.env.ALLEN_CONTEXT_RERANKER_IDLE_TIMEOUT_MS = '0';
+
+    const reranker = createConfiguredContextReranker();
+    const [first, second] = await Promise.all([
+      reranker.rerank(rerankerInput('first')),
+      reranker.rerank(rerankerInput('second')),
+    ]);
+
+    expect(first.providerId).toBe('bge');
+    expect(second.providerId).toBe('deterministic_policy_reranker');
+    expect(second.diagnostics).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        code: 'semantic_reranker_failed',
+        message: expect.stringContaining('queue is full'),
+      }),
+    ]));
+  });
 });
+
+function rerankerInput(prompt: string): ContextRerankInput {
+  return {
+    repoId: 'repo',
+    repoName: 'fixture',
+    repoPath: '/tmp/fixture',
+    indexId: 'index-1',
+    indexFreshness: 'fresh',
+    workflowName: 'bug-investigate-and-fix',
+    nodeName: 'investigate',
+    nodeRole: 'bug-investigator',
+    attempt: 1,
+    state: {},
+    prompt,
+    provider: 'claude',
+    currentFiles: [],
+    nodes: [],
+    candidates: [
+      {
+        refId: `ref-${prompt}`,
+        title: `Ref ${prompt}`,
+        kind: 'doc',
+        path: `docs/${prompt}.md`,
+        summary: 'Relevant doc.',
+        tags: ['doc'],
+        providerId: 'cognee_memory',
+        source: 'cognee_recall',
+        reason: 'Matched query.',
+        loadable: true,
+        mandatory: false,
+        itemType: 'repo_chunk',
+        grounding: 'repo_backed',
+        content: 'Relevant content.',
+      },
+      {
+        refId: `other-${prompt}`,
+        title: `Other ${prompt}`,
+        kind: 'doc',
+        path: `docs/other-${prompt}.md`,
+        summary: 'Other doc.',
+        tags: ['doc'],
+        providerId: 'cognee_memory',
+        source: 'cognee_recall',
+        reason: 'Matched query.',
+        loadable: true,
+        mandatory: false,
+        itemType: 'repo_chunk',
+        grounding: 'repo_backed',
+        content: 'Other content.',
+      },
+    ],
+  };
+}
 
 class TestSemanticReranker implements ContextReranker {
   readonly providerId = 'test_semantic_reranker';

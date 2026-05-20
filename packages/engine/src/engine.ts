@@ -1094,7 +1094,6 @@ ${lines.join('\n')}
           upstreamArtifacts,
         )
       : '';
-    let repoKnowledgeContextBlock = '';
     let nodeContext = workflowNodeContext;
     let repoKnowledgePacket: Awaited<ReturnType<NonNullable<EngineServices['repoKnowledge']>['buildNodeContextPacket']>> | null = null;
     if (nodeType === 'agent' && this.config.services?.repoKnowledge?.buildNodeContextPacket) {
@@ -1115,7 +1114,6 @@ ${lines.join('\n')}
           provider: packetProvider,
         });
         if (repoKnowledgePacket) {
-          repoKnowledgeContextBlock = '';
           nodeContext = workflowNodeContext;
           this.log(exec.id, {
             category: 'system',
@@ -1154,7 +1152,7 @@ ${lines.join('\n')}
           550,
         );
         if (learnings.length > 0) {
-          nodeContext = `${repoKnowledgeContextBlock}${workflowNodeContext}${this.learningManager.buildLearningsPrompt(learnings)}`;
+          nodeContext = `${workflowNodeContext}${this.learningManager.buildLearningsPrompt(learnings)}`;
           injectedLearningIds = learnings.map(l => l._id).filter(Boolean);
           learningsInjectedTrace = learnings.map((l) => ({
             id: l._id ? String(l._id) : undefined,
