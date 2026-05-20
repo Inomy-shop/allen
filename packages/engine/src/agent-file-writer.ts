@@ -172,7 +172,7 @@ function slugify(s: string): string {
 }
 
 /** Render the markdown file body (frontmatter + prompt body). */
-export function renderAgentFile(agent: AgentSpec): { subagentName: string; body: string } {
+export function renderAgentFile(agent: AgentSpec): { subagentName: string; body: string; allowedTools?: string[] } {
   const subagentName = `allen-${slugify(agent.name)}`;
   const description = agent.description ?? `Allen agent: ${agent.name}`;
 
@@ -199,7 +199,7 @@ export function renderAgentFile(agent: AgentSpec): { subagentName: string; body:
   // Only inject when an explicit allowlist exists — empty means "all tools",
   // which already includes the Allen MCP. Skip duplicates so we don't bloat
   // the frontmatter on agents that already opted in.
-  // if (expandedTools.length > 0) {
+  if (expandedTools.length > 0) {
     const seen = new Set(expandedTools);
     // Always-on Allen MCP tools. Workflow / direct agent runs rely on Allen
     // MCP for artifacts, execution lookup, spawning, workflow dispatch, etc.
@@ -233,7 +233,7 @@ export function renderAgentFile(agent: AgentSpec): { subagentName: string; body:
         seen.add(t);
       }
     }
-  // }
+  }
   const frontmatter = [
     '---',
     `name: ${subagentName}`,
@@ -244,7 +244,11 @@ export function renderAgentFile(agent: AgentSpec): { subagentName: string; body:
   ].join('\n');
 
   const body = `${frontmatter}\n\n${safeSystem}\n`;
-  return { subagentName, body };
+  return {
+    subagentName,
+    body,
+    allowedTools: expandedTools.length > 0 ? expandedTools : undefined,
+  };
 }
 
 /**
