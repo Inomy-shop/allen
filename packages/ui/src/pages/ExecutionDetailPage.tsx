@@ -940,7 +940,9 @@ function AgentExecutionView({ execution, agentName, traces, id, liveToolCalls, r
 
   const handleResume = async () => {
     const trimmed = resumePrompt.trim();
-    if (!trimmed || !sessionId) return;
+    // Don't gate on sessionId — the backend handles the missing-session
+    // case by starting a fresh session re-run (see canResume comment above).
+    if (!trimmed) return;
     setResumeBusy(true);
     try {
       // Append a new attempt to this same execution — preserves the
