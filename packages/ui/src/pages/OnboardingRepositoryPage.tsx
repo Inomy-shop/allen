@@ -5,6 +5,7 @@ import {
   AlertTriangle,
   ArrowRight,
   CheckCircle2,
+  ExternalLink,
   FolderGit2,
   GitBranch,
   Github,
@@ -16,6 +17,7 @@ import {
 import { repos, system } from '../services/api';
 import { BRAND_NAME } from '../lib/brand';
 import { useOnboardingGate } from '../hooks/useOnboardingGate';
+import { DEFAULT_ONBOARDING_REPO, isDefaultOnboardingRepoUrl } from '../lib/onboarding-defaults';
 
 type Mode = 'local' | 'clone';
 type CheckStatus = 'pass' | 'warn' | 'fail';
@@ -33,7 +35,10 @@ interface ValidationResult {
   name?: string;
   path?: string;
   clonePath?: string;
+  cloneUrl?: string;
   sshUrl?: string;
+  httpsUrl?: string;
+  requiresSsh?: boolean;
   branch?: string;
   detected?: {
     language: string[];
@@ -86,7 +91,8 @@ function ValidationPanel({ result }: { result: ValidationResult | null }) {
         <div className="mt-3 grid gap-2 text-xs text-theme-muted">
           {result.path && <p className="font-mono">{result.path}</p>}
           {result.clonePath && <p className="font-mono">{result.clonePath}</p>}
-          {result.sshUrl && <p className="font-mono">{result.sshUrl}</p>}
+          {result.cloneUrl && <p className="font-mono">{result.cloneUrl}</p>}
+          {!result.cloneUrl && result.sshUrl && <p className="font-mono">{result.sshUrl}</p>}
           {result.branch && <p>Branch: <span className="font-mono">{result.branch}</span></p>}
           {result.detected && (
             <p>
@@ -123,7 +129,7 @@ function SshPanel({ result, loading, onVerify }: { result: SshResult | null; loa
         <div className="min-w-0">
           <div className="flex items-center gap-2">
             <ShieldCheck className="h-4 w-4 text-accent-blue" />
-            <p className="text-sm font-semibold text-theme-primary">GitHub SSH</p>
+            <p className="text-sm font-semibold text-theme-primary">GitHub SSH for private repos</p>
             {result && (
               <span className={result.ok ? 'badge badge-ok' : 'badge badge-err'}>
                 {result.ok ? 'ready' : 'failed'}
@@ -131,7 +137,7 @@ function SshPanel({ result, loading, onVerify }: { result: SshResult | null; loa
             )}
           </div>
           <p className="mt-2 text-xs leading-5 text-theme-secondary">
-            Allen clones GitHub repositories over SSH. Verify this before cloning.
+            Repos clone over HTTPS when this machine has access. If HTTPS access is unavailable, private repos need SSH.
           </p>
         </div>
         <button type="button" onClick={onVerify} disabled={loading} className="btn-ghost inline-flex items-center gap-2">
@@ -162,10 +168,10 @@ function SshPanel({ result, loading, onVerify }: { result: SshResult | null; loa
 export default function OnboardingRepositoryPage() {
   const navigate = useNavigate();
   const checkingOnboarding = useOnboardingGate('repository');
-  const [mode, setMode] = useState<Mode>('local');
+  const [mode, setMode] = useState<Mode>('clone');
   const [localPath, setLocalPath] = useState('');
-  const [cloneUrl, setCloneUrl] = useState('');
-  const [branch, setBranch] = useState('main');
+  const [cloneUrl, setCloneUrl] = useState(DEFAULT_ONBOARDING_REPO.url);
+  const [branch, setBranch] = useState(DEFAULT_ONBOARDING_REPO.branch);
   const [name, setName] = useState('');
   const [validation, setValidation] = useState<ValidationResult | null>(null);
   const [sshResult, setSshResult] = useState<SshResult | null>(null);
@@ -181,9 +187,10 @@ export default function OnboardingRepositoryPage() {
 
   const canConnect = useMemo(() => {
     if (!validation?.ok || saving) return false;
-    if (mode === 'clone' && !sshResult?.ok) return false;
+    if (mode === 'clone' && validation.requiresSsh !== false && !sshResult?.ok) return false;
     return true;
   }, [mode, saving, sshResult, validation]);
+  const showDefaultRepoInfo = mode === 'clone' && isDefaultOnboardingRepoUrl(cloneUrl);
 
   async function validate() {
     setChecking(true);
@@ -191,7 +198,11 @@ export default function OnboardingRepositoryPage() {
     try {
       const result = mode === 'local'
         ? await repos.validateLocal(localPath)
-        : await repos.validateClone({ url: cloneUrl, branch, name: name.trim() || undefined });
+        : await repos.validateClone({
+          url: cloneUrl.trim() || DEFAULT_ONBOARDING_REPO.url,
+          branch: branch.trim() || DEFAULT_ONBOARDING_REPO.branch,
+          name: name.trim() || undefined,
+        });
       setValidation(result);
     } catch (err) {
       setValidation(null);
@@ -227,8 +238,8 @@ export default function OnboardingRepositoryPage() {
         await repos.create({ path: localPath.trim() });
       } else {
         await repos.clone({
-          url: cloneUrl.trim(),
-          branch: branch.trim() || 'main',
+          url: cloneUrl.trim() || DEFAULT_ONBOARDING_REPO.url,
+          branch: branch.trim() || DEFAULT_ONBOARDING_REPO.branch,
           name: name.trim() || undefined,
         });
       }
@@ -297,7 +308,7 @@ export default function OnboardingRepositoryPage() {
                 >
                   <span className="inline-flex items-center gap-2">
                     <Github className="h-4 w-4" />
-                    GitHub SSH
+                    GitHub URL
                   </span>
                 </button>
               </div>
@@ -316,7 +327,9 @@ export default function OnboardingRepositoryPage() {
                 </div>
               ) : (
                 <div className="space-y-4">
-                  <SshPanel result={sshResult} loading={sshLoading} onVerify={verifySsh} />
+                  {(!validation || validation.requiresSsh !== false) && (
+                    <SshPanel result={sshResult} loading={sshLoading} onVerify={verifySsh} />
+                  )}
                   <div className="space-y-2">
                     <label className="block overline text-theme-muted">GitHub repository URL</label>
                     <input
@@ -326,6 +339,28 @@ export default function OnboardingRepositoryPage() {
                       className="input w-full font-mono"
                     />
                   </div>
+                  {showDefaultRepoInfo && (
+                    <div className="rounded-md border border-accent-blue/30 bg-accent-blue/10 p-4">
+                      <div className="flex items-start gap-3">
+                        <Github className="mt-0.5 h-5 w-5 shrink-0 text-accent-blue" />
+                        <div className="min-w-0">
+                          <h2 className="text-sm font-semibold text-theme-primary">Default test repository</h2>
+                          <p className="mt-1 text-xs leading-5 text-theme-secondary">
+                            Use this repo if you want to test Allen without connecting your own code. It is a small static website with one readiness widget and fast tests, so the first workflow can safely make a small change.
+                          </p>
+                          <a
+                            href={DEFAULT_ONBOARDING_REPO.url}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="mt-3 inline-flex items-center gap-1.5 text-xs font-semibold text-accent-blue hover:underline"
+                          >
+                            View test repo
+                            <ExternalLink className="h-3.5 w-3.5" />
+                          </a>
+                        </div>
+                      </div>
+                    </div>
+                  )}
                   <div className="grid gap-3 sm:grid-cols-2">
                     <div className="space-y-2">
                       <label className="block overline text-theme-muted">Branch</label>
