@@ -137,13 +137,14 @@ Built-in workflows in `packages/engine/workflows/`:
 
 | Workflow | Purpose |
 |---|---|
-| `feature-plan-and-implement.yml` | Clarify requirements, write PRD/HLD/TDD, implement, validate, open a PR. |
+| `feature-plan-and-implement.yml` | Take a user-supplied requirement spec (PRD-style), produce the TDD, audit it, implement, validate, and open a PR. No PRD authoring inside the workflow. |
 | `bug-fix-by-severity.yml` | Triage a bug by severity and dispatch the appropriate fix path. |
-| `prd-tdd-design-by-severity.yml` | Generate product + technical design documents scaled to severity. |
+| `tdd-design-by-severity.yml` | Generate a technical design document (TDD) from a user-supplied requirement, scaled to severity. |
 | `milestone-implementation-from-prd-tdd.yml` | Implement milestones from existing PRD/TDD docs. |
 | `resolve-pr-reviews.yml` | Resolve CodeRabbit/PR review comments, run tests, push fixes, summarize. |
 | `self-healing-incident-triage.yml` | Classify and route a production/runtime incident. |
 | `allen-self-healing-monitor-hourly.yml` | Hourly scan of Allen's own runtime; files and dispatches incidents. |
+| `multi-repo-change-orchestration.yml` | Parent orchestrator for cross-repo change delivery — clarify, plan per-repo work, approve, then run child workflows in dependency-aware parallel phases. |
 
 See [`docs/first-workflow.md`](docs/first-workflow.md) for a step-by-step walkthrough.
 
