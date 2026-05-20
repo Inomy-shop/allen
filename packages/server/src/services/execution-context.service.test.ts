@@ -311,7 +311,7 @@ describe('ExecutionService.getContext', () => {
       executions: [
         {
           id: 'linear-1',
-          workflowName: 'bug-investigate-and-fix',
+          workflowName: 'bug-fix-by-severity',
           status: 'completed',
           input: { linear_issue_id: 'issue-1', linear_identifier: 'ENG-1453', linear_url: 'https://linear.app/acme/issue/ENG-1453/fix-login' },
           state: {},
@@ -330,7 +330,7 @@ describe('ExecutionService.getContext', () => {
         { _id: workspaceId, name: 'eng-1453', status: 'active', repoName: 'allen', branch: 'linear/eng-1453', baseBranch: 'main', worktreePath: '/tmp/allen/eng-1453' },
       ],
       ticket_assignments: [
-        { executionId: 'linear-1', linearIssueId: 'issue-1', status: 'completed', targetKind: 'workflow', targetName: 'bug-investigate-and-fix' },
+        { executionId: 'linear-1', linearIssueId: 'issue-1', status: 'completed', targetKind: 'workflow', targetName: 'bug-fix-by-severity' },
       ],
       pull_requests: [
         { originatingExecutionId: 'linear-1', number: 598, title: 'Fix login', url: 'https://github.com/acme/allen/pull/598', status: 'open', branch: 'linear/eng-1453', baseBranch: 'main', updatedAt: new Date('2026-05-01T00:09:00Z') },

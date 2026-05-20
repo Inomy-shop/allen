@@ -491,7 +491,7 @@ const updateIncident: ChatTool = {
 
 const resolveRepoPath: ChatTool = {
   name: 'allen_monitoring_resolve_repo_path',
-  description: 'Resolve the Allen repo path to pass into bug-investigate-and-fix for self-healing incidents.',
+  description: 'Resolve the Allen repo path to pass into bug-fix-by-severity for self-healing incidents.',
   inputSchema: { type: 'object', properties: {} },
   async execute(_args, db) {
     if (process.env.ALLEN_SELF_HEALING_REPO_PATH) {

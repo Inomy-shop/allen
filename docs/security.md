@@ -148,7 +148,7 @@ Allen can create PRs, post Slack messages, read Linear tickets, and run tools de
 ## Security Checklist Before Public Use
 
 - Create the first admin through the UI onboarding screen, then use a strong password.
-- Generate strong JWT secrets (`npm run setup` does this on first run).
+- Generate strong JWT secrets (`./scripts/setup.sh` does this on first run).
 - Keep `.env` out of git.
 - Run secret scanning before publishing the repository.
 - Use a dedicated workspace directory.

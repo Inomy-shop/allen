@@ -63,7 +63,7 @@ nodes:
       {{evidence}}
 
       Decide whether this is actionable, whether it is Allen-owned, and whether
-      bug-investigate-and-fix or triage should handle it. Completed, failed, cancelled/canceled,
+      bug-fix-by-severity or triage should handle it. Completed, failed, cancelled/canceled,
       interrupted, and stale records are all valid evidence.
 
       End with JSON: actionability, allen_owned, root_cause_area, severity,

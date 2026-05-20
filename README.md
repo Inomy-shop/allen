@@ -58,7 +58,7 @@ Allen runs a multi-team organization of AI agents against your codebases. You ta
 
 ### Requirements
 
-You only need **Node.js 22+** to begin. `npm run setup` checks for and (where possible) installs the rest:
+`./scripts/setup.sh` checks for and (where possible) installs everything below — including Node 22 itself via nvm if it is missing:
 
 - Node.js 22+ and npm 10+
 - Git
@@ -78,12 +78,12 @@ cd allen
 ### 2. Run setup
 
 ```bash
-npm run setup
+./scripts/setup.sh
 ```
 
 The setup script, in order:
 
-1. Verifies Node.js 22+, npm 10+, and git.
+1. Verifies npm 10+ and git, and installs Node 22 via nvm if Node is missing or older than 22.
 2. Checks/installs MongoDB 7 (macOS via Homebrew) and ensures it is reachable on `localhost:27017`.
 3. Installs the standalone Claude Code CLI via the official installer if missing or if the one on `PATH` lacks `--agent` support.
 4. Installs the Codex CLI via npm if missing.
@@ -91,7 +91,7 @@ The setup script, in order:
 6. Creates `.env` from `.env.example`, generates `JWT_ACCESS_SECRET` / `JWT_REFRESH_SECRET`, and auto-pins `CLAUDE_BIN` to the verified standalone CLI.
 7. Runs `npm run health` and prints PASS/FAIL per dependency.
 
-Re-running is safe — it skips work already done and preserves your `.env`. If a step fails the script exits with a red error line; see [docs/troubleshooting.md → `npm run setup` Fails](docs/troubleshooting.md#npm-run-setup-fails) for the fix matrix.
+Re-running is safe — it skips work already done and preserves your `.env`. If a step fails the script exits with a red error line; see [docs/troubleshooting.md → Setup Script Fails](docs/troubleshooting.md#setup-script-fails) for the fix matrix.
 
 ### 3. Authenticate the CLIs (one-time)
 
@@ -102,9 +102,12 @@ codex     # optional: log in with your OpenAI account (skip if using claude-cli 
 
 Both CLIs persist auth on disk after first login.
 
-### 4. Start Allen
+### 4. Build and start Allen
+
+The packages compile to `dist/` and the engine is consumed as a built dependency, so build before starting:
 
 ```bash
+npm run build
 npm start
 ```
 
@@ -125,18 +128,16 @@ npm run health
 Use a disposable or non-critical repository for the first run — agents inspect files, and implementation workflows can write code, create branches, and open PRs.
 
 1. Register a repository (local path, or clone from a GitHub SSH URL) on the Agents → Repos screen.
-2. Open **Workflows** and choose `understand-and-plan`.
-3. Select the repo and enter a bounded task (e.g. "Add a CSV export button to the executions list").
-4. Watch the execution: timeline, node logs, tool calls, artifacts, and the final plan.
-5. Once you trust the output, try an implementation workflow (`feature-plan-and-implement`, `bug-investigate-and-fix`).
+2. Open **Workflows** and choose `bug-fix-by-severity`.
+3. Select the repo and enter a bug report (e.g. "Clicking Delete on an empty workflow crashes the UI with 'Cannot read property id of undefined'").
+4. Watch the execution: timeline, node logs, tool calls, artifacts, and the opened PR.
+5. Once you trust the output, try `feature-plan-and-implement` for a new-feature run.
 
 Built-in workflows in `packages/engine/workflows/`:
 
 | Workflow | Purpose |
 |---|---|
-| `understand-and-plan.yml` | Explore a repo and produce a grounded implementation plan. |
 | `feature-plan-and-implement.yml` | Clarify requirements, write PRD/HLD/TDD, implement, validate, open a PR. |
-| `bug-investigate-and-fix.yml` | Reproduce, diagnose, fix, test, review, and summarize a bug. |
 | `bug-fix-by-severity.yml` | Triage a bug by severity and dispatch the appropriate fix path. |
 | `prd-tdd-design-by-severity.yml` | Generate product + technical design documents scaled to severity. |
 | `milestone-implementation-from-prd-tdd.yml` | Implement milestones from existing PRD/TDD docs. |
@@ -164,7 +165,7 @@ See [`docs/first-workflow.md`](docs/first-workflow.md) for a step-by-step walkth
 
 **Cron / scheduled work.** Six built-in jobs (repo scan/pull, PR sync, MCP bundle cleanup, CodeRabbit sweep, hourly self-healing monitor) plus user-created scheduled agent/workflow runs via the Schedules page.
 
-**Self-healing monitoring.** An hourly agent-led scan inspects Allen's own runtime records, fingerprints and deduplicates incidents, files Linear tickets, and can auto-dispatch `bug-investigate-and-fix`. See [`docs/SELF_HEALING_MONITORING.md`](docs/SELF_HEALING_MONITORING.md).
+**Self-healing monitoring.** An hourly agent-led scan inspects Allen's own runtime records, fingerprints and deduplicates incidents, files Linear tickets, and can auto-dispatch `bug-fix-by-severity`. See [`docs/SELF_HEALING_MONITORING.md`](docs/SELF_HEALING_MONITORING.md).
 
 **Learnings & memory.** Agents record learnings (facts, patterns, mistakes) scoped to global / workflow / context / agent. Relevant learnings are retrieved by embedding similarity and injected into future prompts.
 

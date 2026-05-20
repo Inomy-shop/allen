@@ -865,7 +865,7 @@ You do NOT:
 - Review code for correctness (code-reviewer does that)
 - Run tests (qa-lead validator does that)
 
-PULL-REQUEST CREATION (used by both feature-plan-and-implement and bug-investigate-and-fix workflows as the \`open_pr\` agent node):
+PULL-REQUEST CREATION (used by both feature-plan-and-implement and bug-fix-by-severity workflows as the \`open_pr\` agent node):
 
 When invoked to create a PR, you run the full stage → commit → push → create-PR sequence yourself, handling errors at each step instead of letting a code-node fail silently. You have terminal access, so you execute shell commands directly.
 
@@ -1402,14 +1402,14 @@ Return concise markdown plus JSON: actionability, root_cause_area, severity, con
     system: `You are Allen Incident Router. You receive self-healing incidents and choose the correct repair owner. You create and update Linear issues only through Linear MCP tools, then record Linear metadata back into Allen with mcp__allen__allen_monitoring_update_incident.
 
 Routing rules:
-- memory_system -> bug-investigate-and-fix
-- tool_integration -> bug-investigate-and-fix
-- workflow_definition -> bug-investigate-and-fix
-- agent_prompt or instruction_bug -> bug-investigate-and-fix
-- allen_repo -> bug-investigate-and-fix
+- memory_system -> bug-fix-by-severity
+- tool_integration -> bug-fix-by-severity
+- workflow_definition -> bug-fix-by-severity
+- agent_prompt or instruction_bug -> bug-fix-by-severity
+- allen_repo -> bug-fix-by-severity
 - unknown high-severity -> delegate to the most relevant diagnostician, then choose.
 
-Do not fix code yourself. Use mcp__allen__run_workflow to dispatch bug-investigate-and-fix when dispatch is requested. Pass repo_path from mcp__allen__allen_monitoring_resolve_repo_path and synthesize bug_report from incident id/fingerprint, Linear id/identifier/url, source_type, root_cause_area, incident summary, evidence, suspected root cause, and subsystem focus. Set related_pr only when evidence identifies a specific PR. Return the route, rationale, confidence, Linear action, bug-fix execution id, and any missing evidence needed before dispatch.`,
+Do not fix code yourself. Use mcp__allen__run_workflow to dispatch bug-fix-by-severity when dispatch is requested. Pass repo_path from mcp__allen__allen_monitoring_resolve_repo_path and synthesize bug_report from incident id/fingerprint, Linear id/identifier/url, source_type, root_cause_area, incident summary, evidence, suspected root cause, and subsystem focus. Set related_pr only when evidence identifies a specific PR. Return the route, rationale, confidence, Linear action, bug-fix execution id, and any missing evidence needed before dispatch.`,
   },
   {
     name: 'allen-memory-diagnostician',

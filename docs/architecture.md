@@ -64,7 +64,7 @@ Important files:
 - `src/paths.ts` - resolves `ALLEN_HOME` and `WORKSPACE_BASE_DIR`.
 - `src/model-alias.ts` - resolves `ALLEN_MODEL_HAIKU/SONNET/OPUS` overrides.
 - `src/validator.ts` and `src/types.ts` - workflow YAML schema and types.
-- `workflows/*.yml` - nine runnable workflows: `understand-and-plan`, `feature-plan-and-implement`, `bug-investigate-and-fix`, `bug-fix-by-severity`, `prd-tdd-design-by-severity`, `milestone-implementation-from-prd-tdd`, `resolve-pr-reviews`, `self-healing-incident-triage`, `allen-self-healing-monitor-hourly`.
+- `workflows/*.yml` - seven runnable workflows: `feature-plan-and-implement`, `bug-fix-by-severity`, `prd-tdd-design-by-severity`, `milestone-implementation-from-prd-tdd`, `resolve-pr-reviews`, `self-healing-incident-triage`, `allen-self-healing-monitor-hourly`.
 
 ### `packages/server`
 

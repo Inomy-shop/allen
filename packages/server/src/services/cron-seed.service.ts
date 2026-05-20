@@ -96,7 +96,7 @@ const SEED_JOBS: Omit<CronJob, '_id' | 'nextRunAt' | 'lastRunAt' | 'lastRunStatu
     name: 'allen-self-healing-monitor-hourly',
     displayName: 'Allen Self-Healing Monitor',
     description:
-      'Every hour, starts the agent-led self-healing workflow. Allen monitoring agents collect evidence through Allen MCP tools, create/update Linear issues through Linear MCP, and dispatch bug-investigate-and-fix for Allen-owned incidents.',
+      'Every hour, starts the agent-led self-healing workflow. Allen monitoring agents collect evidence through Allen MCP tools, create/update Linear issues through Linear MCP, and dispatch bug-fix-by-severity for Allen-owned incidents.',
     enabled: true,
     schedule: '17 * * * *',
     timezone: 'UTC',

@@ -301,8 +301,41 @@ Discover available Linear or external issue tools at runtime. Query current tick
 - Ticket creation/update uses the available issue-management tool.
 - Ticket asks for implementation: inspect ticket, identify repo, then use bug-fix-routing, feature-routing, review-routing, or team-delegation-routing.
 
+## Ticket content requirements (MANDATORY for create AND update)
+Whenever a Linear issue is **created OR updated**, the description MUST capture all investigation done and any artifacts produced **in this session or already known from the conversation context**. Never create or update a ticket with only a title and a one-line summary when richer data is available.
+
+**Core rule: if the data exists, put it in the ticket.** Walk through the session before writing the description and pull in every relevant fact you already have — investigation findings, file paths, error messages, log excerpts, evidence bundle ids, PR/commit links, screenshots, repro steps, acceptance criteria. Do not summarize away detail that the reader will need; paste it in.
+
+**Every section listed below MUST be present in the description. If — and only if — a section truly has no data, write the explicit placeholder for that section instead of omitting it.** Silent omission is forbidden because a missing section is indistinguishable from "we forgot to check." Using a placeholder when data actually exists is also forbidden — that is worse than omission, because it actively misleads the reader.
+
+When updating an existing ticket: preserve any sections the ticket already has, merge new findings into the right section (don't duplicate), and replace any prior placeholder with the real data now that it's known.
+
+Required sections (use these exact headings):
+
+1. \`## Investigation\` — Every relevant finding gathered in this session: what was checked and why, file paths with \`path:line\` references, function/symbol names, error messages, log excerpts, hypotheses considered and which were ruled out.
+   - Placeholder when empty: \`> No investigation has been done yet — ticket filed for triage.\`
+
+2. \`## Root Cause\` — Current understanding of the root cause.
+   - Placeholder when empty: \`> Root cause not yet identified — needs further investigation.\`
+
+3. \`## Artifacts\` — Files created/edited, evidence bundles, screenshots, logs, diffs, query results, design docs, PR links, commit SHAs, dashboard URLs, repro scripts, allen monitoring evidence bundle ids, execution/trace ids.
+   - Files: include relative/absolute paths AND paste the relevant excerpt in a fenced code block. If a file is too large or binary, link to it (PR diff URL, gist, S3 link) or note its exact location.
+   - Images/screenshots: upload via Linear's attachment mechanism if available; otherwise link the source URL.
+   - Commands and their output: include the command and a trimmed but representative output block.
+   - PRs/commits/external dashboards: include full URLs, not bare identifiers.
+   - Allen evidence bundle ids / execution ids / trace ids: list them so a reader can pull them up.
+   - Placeholder when empty: \`> No artifacts produced for this ticket.\`
+
+4. \`## Reproduction\` — Exact steps to reproduce or the conditions under which the issue surfaced.
+   - Placeholder when empty: \`> No reproduction steps available yet.\`
+
+5. \`## Acceptance Criteria / Next Actions\` — What "done" looks like and any follow-up tasks already identified.
+   - Placeholder when empty: \`> Acceptance criteria not yet defined.\`
+
+Before creating or updating the issue, confirm the assembled title + description with the user. After the create/update, report the issue identifier/URL and confirm every required section (including any placeholders used) was attached, plus list which sections were filled with real data vs. left as placeholders.
+
 ## Output
-Return issue identifiers, titles, state, owner, dates, links, and any assumptions about filtering.`,
+Return issue identifiers, titles, state, owner, dates, links, and any assumptions about filtering. For newly-created issues, also confirm that the Investigation and Artifacts sections were included.`,
   },
   {
     name: 'issue-investigation',
@@ -314,7 +347,7 @@ Return issue identifiers, titles, state, owner, dates, links, and any assumption
     priority: 84,
     allowedRoutes: ['direct_answer', 'data_query', 'spawn_agent', 'delegate_to_agent', 'run_workflow'],
     relatedAgents: ['bug-investigator', 'codebase-navigator', 'engineering-lead'],
-    relatedWorkflows: ['bug-investigate-and-fix'],
+    relatedWorkflows: ['bug-fix-by-severity'],
     body: `# Issue Investigation
 
 ## When to use
@@ -339,12 +372,12 @@ Return evidence checked, findings, confidence, unknowns, and recommended route i
     name: 'bug-fix-routing',
     displayName: 'Bug Fix Routing',
     category: 'implementation',
-    description: 'Route bug fixes to a direct specialist for small fixes, bug-fix-by-severity for severity-gated full pipelines, or bug-investigate-and-fix for the legacy always-full pipeline.',
+    description: 'Route bug fixes to a direct specialist for small fixes or bug-fix-by-severity for severity-gated full pipelines.',
     triggers: ['fix bug', 'bug', 'broken', 'regression', 'production issue', 'crash', 'error'],
     excludes: ['add feature', 'new workflow'],
     priority: 82,
     allowedRoutes: ['spawn_agent', 'delegate_to_agent', 'run_workflow'],
-    relatedWorkflows: ['bug-fix-by-severity', 'bug-investigate-and-fix'],
+    relatedWorkflows: ['bug-fix-by-severity'],
     relatedAgents: ['backend-developer', 'frontend-developer', 'bug-investigator', 'engineering-lead'],
     body: `# Bug Fix Routing
 
@@ -359,8 +392,7 @@ Confirm repo, reproduction clues, failing behavior, affected surface, and availa
 
 ## Routing
 - Small, obvious, low-risk bug with narrow files: create/reuse workspace, spawn the right specialist such as backend-developer or frontend-developer, then continue to PR.
-- Bug needing investigation but where severity is unknown up front (default lane): run bug-fix-by-severity. The investigator classifies severity as small | medium | large and the workflow auto-skips heavier gates for smaller bugs (small skips qa + implementation_validator; medium skips implementation_validator; large runs the full pipeline).
-- Bug where you explicitly want the full pipeline regardless of size (high-risk surface, security-sensitive, or for parity with historical runs): run bug-investigate-and-fix.
+- Bug needing investigation: run bug-fix-by-severity. The investigator classifies severity as small | medium | large and the workflow auto-skips heavier gates for smaller bugs (small skips qa + implementation_validator; medium skips implementation_validator; large runs the full pipeline).
 - Cross-team operational bug: delegate to engineering-lead or devops-engineer.
 
 ## Output
@@ -375,7 +407,7 @@ State selected route, why direct specialist or workflow is appropriate, required
     excludes: ['fix bug', 'resolve pr comments'],
     priority: 80,
     allowedRoutes: ['spawn_agent', 'delegate_to_agent', 'run_workflow', 'direct_answer'],
-    relatedWorkflows: ['feature-plan-and-implement', 'understand-and-plan'],
+    relatedWorkflows: ['feature-plan-and-implement'],
     relatedAgents: ['product-manager', 'engineering-lead', 'backend-developer', 'frontend-developer'],
     body: `# Feature Routing
 
@@ -391,7 +423,7 @@ Identify repo, affected product area, expected behavior, existing implementation
 ## Routing
 - Tiny low-risk tweak: direct specialist in workspace, then PR.
 - Normal or large feature, cross-cutting change, uncertain design, multiple surfaces, or work needing PRD/HLA/TDD/QA/review/PR: run feature-plan-and-implement.
-- Planning-only request: run understand-and-plan or answer directly if no repo grounding is needed.
+- Planning-only request: answer directly if no repo grounding is needed.
 - Product-heavy ambiguity: delegate to product-manager or engineering lead.
 
 ## Output
