@@ -152,6 +152,33 @@ describe('ContextWorkflowEvaluationService', () => {
     }));
   });
 
+  it('marks workflow evaluation summaries stale when evidence packing is outdated', async () => {
+    await insertWorkflowFixture(db, 'completed');
+    await db.collection('context_workflow_evaluation_jobs').insertOne({
+      jobId: 'job-old-packing',
+      executionId: 'exec-workflow',
+      rootExecutionId: 'exec-workflow',
+      provider: 'deepeval',
+      mode: 'workflow_summary',
+      status: 'completed',
+      attempts: 1,
+      maxAttempts: 3,
+      queuedAt: new Date(),
+      completedAt: new Date(),
+      evidenceStats: { packingVersion: 1 },
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    });
+    const service = new ContextWorkflowEvaluationService(db);
+
+    const summary = await service.getSummaryForExecution('exec-workflow');
+
+    expect(summary).toEqual(expect.objectContaining({
+      stale: true,
+      staleReason: expect.stringContaining('older evidence packing format'),
+    }));
+  });
+
   it('does not queue workflow jobs when per-node mode is explicitly enabled', async () => {
     process.env.ALLEN_CONTEXT_SEMANTIC_MODE = 'per_node';
     await insertWorkflowFixture(db, 'completed');

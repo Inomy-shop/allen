@@ -1,6 +1,6 @@
 # Context Engine
 
-This document explains Allen runtime context behavior. For setup, provider configuration, Python sidecars, models, and Cognee databases, see [Context engine setup](context-engine-setup.md).
+This document explains Allen runtime context behavior. For setup, provider configuration, Python sidecars, models, and Cognee databases, see [Context engine setup](context-engine-setup.md). For guidance on what context means and how to design it, see [Context engine best practices](context-engine-best-practices.md).
 
 ## Provider Gate
 
@@ -61,3 +61,11 @@ Cognee recall results are candidates. Allen decides whether they become selected
 ## Usage Tracking
 
 Agents must report repo context usage with structured fields such as preselected refs, loaded refs, applied refs, skipped refs, and validation performed. Allen also synthesizes usage from system-injected mandatory context and MCP body-load calls when an agent omits a complete report.
+
+## Evaluation Semantics
+
+Context evaluation distinguishes injected guidance from source discovery. Injected context is expected to provide mandatory rules, domain/spec context, API contracts, product requirements, and repo practices. Investigation and implementation agents are expected to read concrete source files, tests, logs, diffs, and workflow artifacts directly with tools. Missing source-code bodies should not be treated as a context-injection failure when tool evidence shows the agent inspected the source; missing mandatory guidelines or relevant specs should still be penalized.
+
+## Context LLM Calls
+
+Context-engine LLM calls use `ALLEN_CONTEXT_LLM_PROVIDER` and `ALLEN_CONTEXT_LLM_MODEL` by default. This applies to Cognee LLM callbacks, workflow-level semantic context evaluation, node-level semantic context evaluation, and context-indexing jobs where the runtime supports the configured provider. Cognee-specific `ALLEN_COGNEE_LLM_PROVIDER` and `ALLEN_COGNEE_LLM_MODEL` are legacy fallbacks.

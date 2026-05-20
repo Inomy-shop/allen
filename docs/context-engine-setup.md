@@ -12,6 +12,31 @@ Use one of these values:
 
 `graph` is accepted as a legacy alias for `allen`, but new environments should use `allen`.
 
+## One-Command Cognee Setup
+
+For local development, run the context setup script. Cognee is the default provider:
+
+```bash
+npm run setup:context
+```
+
+The script creates `~/.allen/python/context-eval`, installs Cognee with the local embedding stack, installs the BGE reranker stack, warms `BAAI/bge-small-en-v1.5` and `BAAI/bge-reranker-base`, and adds missing context-engine defaults to `.env` without overwriting existing values. It writes resolved absolute paths for generated local directories.
+
+Optional modes:
+
+```bash
+# Install Postgres/pgvector and Neo4j extras, then print required DB env vars.
+npm run setup:context -- --external-db
+
+# Skip semantic reranker setup and use deterministic ranking only.
+npm run setup:context -- --without-reranker
+
+# Use a specific Python executable.
+npm run setup:context -- --python /path/to/python3
+```
+
+The script does not run Cognee ingestion, create the `vector` extension, or start external databases. For shared Postgres/pgvector and Neo4j setups, complete the database steps below before rebuilding context.
+
 ## Python Interpreter
 
 Allen runs Python sidecars through `ALLEN_PYTHON`. Use a dedicated virtual environment so Cognee, model caches, and reranker packages do not depend on the system Python.
@@ -41,21 +66,21 @@ Use this when you want Allen's built-in repository context provider without Cogn
 ALLEN_CONTEXT_PROVIDER=allen
 ```
 
-No Cognee database is required. Python is only needed if you enable a semantic reranker:
+No Cognee database is required. The default setup enables the semantic reranker:
 
 ```bash
 ALLEN_CONTEXT_RERANKER=bge
 ALLEN_CONTEXT_RERANKER_MODEL=BAAI/bge-reranker-base
 ```
 
-Install and warm the default reranker model:
+Install and warm the default reranker model manually only if you skipped the one-command setup:
 
 ```bash
 "$HOME/.allen/python/context-eval/bin/python" -m pip install sentence-transformers
 "$HOME/.allen/python/context-eval/bin/python" -c "from sentence_transformers import CrossEncoder; m=CrossEncoder('BAAI/bge-reranker-base'); print(m.predict([('query','document')]))"
 ```
 
-Leave `ALLEN_CONTEXT_RERANKER` unset to use deterministic ranking only.
+Leave `ALLEN_CONTEXT_RERANKER` unset, or run setup with `--without-reranker`, to use deterministic ranking only.
 
 ## Cognee Provider
 
@@ -67,20 +92,26 @@ ALLEN_PYTHON=$HOME/.allen/python/context-eval/bin/python
 ALLEN_COGNEE_DATA_DIR=$HOME/.allen/cognee
 ALLEN_COGNEE_EMBEDDING_PROVIDER=local
 ALLEN_COGNEE_EMBEDDING_MODEL=BAAI/bge-small-en-v1.5
-ALLEN_COGNEE_LLM_PROVIDER=codex
-ALLEN_COGNEE_LLM_MODEL=gpt-5.5
+ALLEN_CONTEXT_RERANKER=bge
+ALLEN_CONTEXT_RERANKER_MODEL=BAAI/bge-reranker-base
+ALLEN_CONTEXT_LLM_PROVIDER=codex
+ALLEN_CONTEXT_LLM_MODEL=gpt-5.5
 ```
 
-Install Cognee and the local embedding stack:
+`ALLEN_CONTEXT_LLM_PROVIDER` and `ALLEN_CONTEXT_LLM_MODEL` are shared by context-engine LLM calls, including Cognee LLM callbacks, semantic context evaluation, and context-indexing jobs where the runtime supports that provider. Older `ALLEN_COGNEE_LLM_PROVIDER` and `ALLEN_COGNEE_LLM_MODEL` values still work as Cognee-only fallbacks.
+
+Install Cognee, the local embedding stack, and the reranker stack:
 
 ```bash
 "$HOME/.allen/python/context-eval/bin/python" -m pip install "cognee[fastembed]" fastembed
+"$HOME/.allen/python/context-eval/bin/python" -m pip install sentence-transformers
 ```
 
-Warm the default embedding model:
+Warm the default embedding and reranker models:
 
 ```bash
 "$HOME/.allen/python/context-eval/bin/python" -c "from fastembed import TextEmbedding; list(TextEmbedding(model_name='BAAI/bge-small-en-v1.5').embed(['warmup'])); print('ok')"
+"$HOME/.allen/python/context-eval/bin/python" -c "from sentence_transformers import CrossEncoder; m=CrossEncoder('BAAI/bge-reranker-base'); print(m.predict([('query','document')]))"
 ```
 
 With local defaults, Cognee stores relational metadata, vector data, and graph data under `ALLEN_COGNEE_DATA_DIR`. This is suitable for local development and single-user testing.

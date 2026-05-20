@@ -7,9 +7,10 @@ import type { Collection, Db } from 'mongodb';
 import { logger } from '../logger.js';
 import { firstString, isRecord } from './repo-knowledge-graph-utils.js';
 import { normalizeUsageArray } from './repo-knowledge-graph-usage.js';
-import { buildWorkflowSemanticEvaluationPromptArtifacts } from './context-workflow-evaluation-prompt.js';
+import { WORKFLOW_EVIDENCE_PACKING_VERSION, buildWorkflowSemanticEvaluationPromptArtifacts } from './context-workflow-evaluation-prompt.js';
 import { resolveAllenPython } from './python-runtime.js';
 import { isContextEngineEnabled } from './context-provider-config.js';
+import { resolveContextLlmConfig } from './context-llm-config.js';
 
 type WorkflowSemanticStatus = 'queued' | 'running' | 'completed' | 'failed';
 
@@ -292,13 +293,20 @@ export class ContextWorkflowEvaluationService {
     const latestWorkflowChangeAt = await this.latestWorkflowChangeAt(executionId).catch(() => null);
     const evaluatedAt = dateValue(job.completedAt);
     const isTerminalEval = job.status === 'completed' && evaluatedAt != null;
-    const stale = Boolean(isTerminalEval && latestWorkflowChangeAt && evaluatedAt.getTime() < latestWorkflowChangeAt.getTime());
+    const packingVersion = numericValue(isRecord(job.evidenceStats) ? job.evidenceStats.packingVersion : undefined);
+    const staleForWorkflowChange = Boolean(isTerminalEval && latestWorkflowChangeAt && evaluatedAt.getTime() < latestWorkflowChangeAt.getTime());
+    const staleForPackingVersion = Boolean(isTerminalEval && (packingVersion ?? 0) < WORKFLOW_EVIDENCE_PACKING_VERSION);
+    const stale = staleForWorkflowChange || staleForPackingVersion;
     return {
       ...summary,
       stale,
       latestWorkflowChangeAt,
       evaluatedAt,
-      staleReason: stale ? 'Workflow changed after the last workflow-level context evaluation.' : undefined,
+      staleReason: staleForPackingVersion
+        ? 'Workflow-level context evaluation used an older evidence packing format.'
+        : staleForWorkflowChange
+          ? 'Workflow changed after the last workflow-level context evaluation.'
+          : undefined,
     };
   }
 
@@ -373,11 +381,13 @@ type WorkflowJudgeRun = {
 async function runDeepEvalWorkflowJudge(prompt: string): Promise<WorkflowJudgeRun> {
   const script = resolveWorkflowDeepEvalScript();
   const python = resolveAllenPython();
+  const llm = resolveContextLlmConfig({ purpose: 'semantic_judge' });
   const payload = {
     prompt,
     judgeUrl: workflowJudgeUrl(),
     judgeSecret: workflowJudgeSecret(),
-    model: process.env.ALLEN_CONTEXT_SEMANTIC_JUDGE_MODEL ?? 'gpt-5.5',
+    provider: llm.provider,
+    model: llm.model,
     timeoutMs: Number(process.env.ALLEN_DEEPEVAL_WORKFLOW_JUDGE_TIMEOUT_MS ?? 300_000),
   };
   return new Promise((resolve, reject) => {
@@ -387,7 +397,7 @@ async function runDeepEvalWorkflowJudge(prompt: string): Promise<WorkflowJudgeRu
     const timer = setTimeout(() => {
       child.kill('SIGTERM');
       reject(new Error('DeepEval workflow evaluator timed out'));
-    }, Number(process.env.ALLEN_DEEPEVAL_WORKFLOW_TIMEOUT_MS ?? 600_000));
+    }, workflowSidecarTimeoutMs());
     child.stdout.on('data', (chunk: Buffer) => (stdout += chunk.toString()));
     child.stderr.on('data', (chunk: Buffer) => (stderr += chunk.toString()));
     child.on('error', (err) => {
@@ -673,8 +683,8 @@ function workflowJudgeUrl(): string {
 }
 
 function workflowJudgeSecret(): string {
-  const secret = process.env.ALLEN_CONTEXT_EVAL_JUDGE_SECRET ?? process.env.JWT_ACCESS_SECRET;
-  if (!secret) throw new Error('ALLEN_CONTEXT_EVAL_JUDGE_SECRET or JWT_ACCESS_SECRET is required for workflow DeepEval judge calls');
+  const secret = process.env.ALLEN_CONTEXT_LLM_SECRET ?? process.env.ALLEN_CONTEXT_EVAL_JUDGE_SECRET ?? process.env.JWT_ACCESS_SECRET;
+  if (!secret) throw new Error('ALLEN_CONTEXT_LLM_SECRET, ALLEN_CONTEXT_EVAL_JUDGE_SECRET, or JWT_ACCESS_SECRET is required for workflow DeepEval judge calls');
   return secret;
 }
 
@@ -687,6 +697,14 @@ function isWorkflowDeepEvalEnabled(): boolean {
 function workflowSemanticMaxAttempts(): number {
   const value = Number(process.env.ALLEN_CONTEXT_SEMANTIC_MAX_ATTEMPTS ?? DEFAULT_MAX_ATTEMPTS);
   return Number.isFinite(value) && value > 0 ? Math.floor(value) : DEFAULT_MAX_ATTEMPTS;
+}
+
+function workflowSidecarTimeoutMs(): number {
+  const explicit = Number(process.env.ALLEN_DEEPEVAL_WORKFLOW_TIMEOUT_MS);
+  if (Number.isFinite(explicit) && explicit > 0) return explicit;
+  const judge = Number(process.env.ALLEN_DEEPEVAL_WORKFLOW_JUDGE_TIMEOUT_MS ?? 300_000);
+  const safeJudge = Number.isFinite(judge) && judge > 0 ? judge : 300_000;
+  return safeJudge + 60_000;
 }
 
 function workflowEvalPromptPreviewChars(): number {
