@@ -15,6 +15,7 @@ import { join } from 'node:path';
 import express from 'express';
 import request from 'supertest';
 import { repoRoutes } from '../../../../src/routes/repo.routes.js';
+import { ContextLifecycleStore } from '../../../../src/services/context/lifecycle/context-lifecycle-store.js';
 
 describe('RepoKnowledgeGraphService context packets', () => {
   let mongo: MongoMemoryServer;
@@ -250,14 +251,15 @@ describe('RepoKnowledgeGraphService context packets', () => {
     expect(packet?.traceSummary.preselectedContextCount).toBeGreaterThan(0);
     expect(packet?.traceSummary.mandatoryCount).toBeGreaterThan(0);
 
-    const stored = await db.collection('node_context_packets').findOne({ executionId: 'exec-1', nodeName: 'implement' });
+    const stored = await packetView(db, packet?.packetId);
     expect(stored?.packetId).toBe(packet?.packetId);
-    expect(stored?.systemPromptBlock).toContain('<allen_mandatory_repo_context');
-    expect(stored?.systemPromptBlockHash).toEqual(expect.any(String));
+    expect(stored?.systemPromptBlockArtifactHash).toEqual(expect.any(String));
     expect(stored?.contextInjection?.injectedRefs?.length).toBeGreaterThan(0);
     expect(stored?.selectedRefs.filter((r: { kind: string }) => r.kind === 'production_note').length).toBeGreaterThan(0);
     expect(stored?.selectedRefs.length).toBeGreaterThan(0);
-    expect(stored?.providerTraces.map((r: { decision: string }) => r.decision)).toContain('selected');
+    expect(stored?.lifecycle).toEqual(expect.arrayContaining([
+      expect.objectContaining({ type: 'selected' }),
+    ]));
   });
 
   it('prioritizes injectable mandatory context without letting command profiles consume injection budget', async () => {
@@ -273,7 +275,7 @@ describe('RepoKnowledgeGraphService context packets', () => {
       provider: 'claude',
     });
 
-    const stored = await db.collection('node_context_packets').findOne({ packetId: packet?.packetId });
+    const stored = await packetView(db, packet?.packetId);
     expect(stored?.selectedRefs).toEqual(expect.arrayContaining([
       expect.objectContaining({ refId: `${repoId}:command-package-json` }),
     ]));
@@ -286,7 +288,7 @@ describe('RepoKnowledgeGraphService context packets', () => {
     expect(stored?.contextInjection?.packingDecisions ?? []).not.toEqual(expect.arrayContaining([
       expect.objectContaining({ refId: `${repoId}:command-package-json`, path: 'package.json' }),
     ]));
-    expect(stored?.contextInjection?.skippedOversizeRefs).toEqual(expect.arrayContaining([
+    expect(stored?.contextInjection?.skippedRefs).toEqual(expect.arrayContaining([
       expect.objectContaining({ refId: `${repoId}:huge-prod-payments`, path: 'docs/huge-production.md' }),
     ]));
   });
@@ -323,11 +325,13 @@ describe('RepoKnowledgeGraphService context packets', () => {
     });
 
     expect(usage?.loadedCount).toBeGreaterThan(0);
-    const stored = await db.collection('context_usage_traces').findOne({ packetId: packet?.packetId });
+    const stored = await usageView(db, packet?.packetId, usage?.traceId);
     expect(stored?.loaded).toEqual(expect.arrayContaining([
       expect.objectContaining({ refId: `${repoId}:prod-payments`, source: 'allen_system_injection' }),
     ]));
-    expect(stored?.unverifiedClaims).toHaveLength(0);
+    expect(usage?.repoContextUsage?.diagnostics).not.toEqual(expect.arrayContaining([
+      expect.objectContaining({ code: 'repo_context_usage_agent_claim_mismatch' }),
+    ]));
   });
 
   it('skips provider-native mandatory context from duplicate full-body injection', async () => {
@@ -346,7 +350,7 @@ describe('RepoKnowledgeGraphService context packets', () => {
     expect(packet?.systemPromptBlock).toContain('<allen_mandatory_repo_context');
     expect(packet?.systemPromptBlock).not.toContain('Always read repo instructions before changes.');
     expect(packet?.traceSummary.mandatoryContextSkippedProviderNativeCount).toBeGreaterThan(0);
-    const stored = await db.collection('node_context_packets').findOne({ packetId: packet?.packetId });
+    const stored = await packetView(db, packet?.packetId);
     expect(stored?.contextInjection?.skippedProviderNativeRefs).toEqual(expect.arrayContaining([
       expect.objectContaining({ path: 'AGENTS.md' }),
     ]));
@@ -368,7 +372,7 @@ describe('RepoKnowledgeGraphService context packets', () => {
       provider: 'claude',
     });
 
-    const stored = await db.collection('node_context_packets').findOne({ packetId: packet?.packetId });
+    const stored = await packetView(db, packet?.packetId);
     expect(stored).toEqual(expect.objectContaining({
       parentPacketId: 'packet-parent',
       parentExecutionId: 'exec-parent',
@@ -391,7 +395,7 @@ describe('RepoKnowledgeGraphService context packets', () => {
     });
 
     expect(packet).toBeNull();
-    await expect(db.collection('node_context_packets').findOne({ executionId: 'exec-open-pr-support' })).resolves.toBeNull();
+    await expect(db.collection('context_attempts').findOne({ executionId: 'exec-open-pr-support' })).resolves.toBeNull();
   });
 
   it('injects only explicit mandatory role mappings for support/output nodes', async () => {
@@ -435,7 +439,7 @@ describe('RepoKnowledgeGraphService context packets', () => {
       retrievalProviders: expect.arrayContaining(['mandatory_graph']),
     }));
     expect(packet?.traceSummary.retrievalProviders).not.toContain('graph_keyword_metadata');
-    const stored = await db.collection('node_context_packets').findOne({ packetId: packet?.packetId });
+    const stored = await packetView(db, packet?.packetId);
     expect(stored?.selectedRefs).toEqual([
       expect.objectContaining({ refId: `${repoId}:pr-policy`, providerId: 'mandatory_graph' }),
     ]);
@@ -487,7 +491,7 @@ describe('RepoKnowledgeGraphService context packets', () => {
     const previousProvider = process.env.ALLEN_CONTEXT_PROVIDER;
     process.env.ALLEN_CONTEXT_PROVIDER = 'disabled';
     const service = new RepoKnowledgeGraphService(db);
-    const usageBefore = await db.collection('context_usage_traces').countDocuments();
+    const usageBefore = await db.collection('context_ref_events').countDocuments();
     try {
       await expect(service.buildNodeContextPacket({
         executionId: 'exec-context-disabled',
@@ -513,7 +517,7 @@ describe('RepoKnowledgeGraphService context packets', () => {
         },
       })).resolves.toBeNull();
 
-      await expect(db.collection('context_usage_traces').countDocuments()).resolves.toBe(usageBefore);
+      await expect(db.collection('context_ref_events').countDocuments()).resolves.toBe(usageBefore);
     } finally {
       if (previousProvider === undefined) delete process.env.ALLEN_CONTEXT_PROVIDER;
       else process.env.ALLEN_CONTEXT_PROVIDER = previousProvider;
@@ -595,7 +599,7 @@ print(json.dumps({
         expect.objectContaining({ code: 'fake_cognee_search' }),
       ]));
 
-      const stored = await db.collection('node_context_packets').findOne({ packetId: packet?.packetId });
+      const stored = await packetView(db, packet?.packetId);
       expect(stored?.selectedRefs).toEqual(expect.arrayContaining([
         expect.objectContaining({ refId: 'cognee:payment-service-chunk', path: 'src/payments/service.ts' }),
       ]));
@@ -687,7 +691,7 @@ print(json.dumps({
         expect.objectContaining({ code: 'cognee_graph_expansion_disabled' }),
       ]));
 
-      const stored = await db.collection('node_context_packets').findOne({ packetId: packet?.packetId });
+      const stored = await packetView(db, packet?.packetId);
       expect(stored?.selectedRefs).toEqual(expect.arrayContaining([
         expect.objectContaining({ providerId: 'mandatory_graph', refId: `${repoId}:guidelines-payments` }),
         expect.objectContaining({ providerId: 'cognee_memory', refId: 'cognee:payment-service-chunk' }),
@@ -726,12 +730,12 @@ print(json.dumps({
     });
 
     expect(usage).toEqual(expect.objectContaining({ loadedCount: 0, appliedCount: 0, skippedCount: 0 }));
-    const stored = await db.collection('context_usage_traces').findOne({ packetId: 'packet-1' });
-    expect(stored?.moduleIdentified).toBe('payments');
-    expect(stored?.reportedLoaded).toHaveLength(1);
-    expect(stored?.reportedApplied).toHaveLength(1);
-    expect(stored?.loaded).toHaveLength(0);
-    expect(stored?.claimedUsed).toHaveLength(0);
+    const reported = usage?.repoContextUsage;
+    expect(reported?.module_identified).toBe('payments');
+    expect(reported?.context_loaded).toHaveLength(0);
+    expect(reported?.context_applied).toHaveLength(0);
+    expect(reported?.context_preselected).toHaveLength(0);
+    expect(reported?.agent_reported_usage).toBe(true);
   });
 
   it('records usage from nested repo_context_usage blocks', async () => {
@@ -757,10 +761,9 @@ print(json.dumps({
     });
 
     expect(usage).toEqual(expect.objectContaining({ loadedCount: 0, appliedCount: 0, skippedCount: 0 }));
-    const stored = await db.collection('context_usage_traces').findOne({ packetId: 'packet-2' });
-    expect(stored?.moduleIdentified).toBe('payments');
-    expect(stored?.reportedLoaded?.[0]?.kind).toBe('skill_body');
-    expect(stored?.loaded).toHaveLength(0);
+    const reported = usage?.repoContextUsage;
+    expect(reported?.module_identified).toBe('payments');
+    expect(reported?.context_loaded).toHaveLength(0);
   });
 
   it('records usage from nested workflow output objects', async () => {
@@ -784,11 +787,11 @@ print(json.dumps({
     });
 
     expect(usage).toEqual(expect.objectContaining({ loadedCount: 0, appliedCount: 0, skippedCount: 1 }));
-    const stored = await db.collection('context_usage_traces').findOne({ packetId: 'packet-nested-output' });
-    expect(stored?.moduleIdentified).toBe('payments');
-    expect(stored?.reportedLoaded).toHaveLength(1);
-    expect(stored?.reportedApplied).toHaveLength(1);
-    expect(stored?.extractionSources).toContain('outputs.investigate_output');
+    const reported = usage?.repoContextUsage;
+    expect(reported?.module_identified).toBe('payments');
+    expect(reported?.context_loaded).toHaveLength(0);
+    expect(reported?.context_applied).toHaveLength(0);
+    expect(reported?.context_skipped).toHaveLength(1);
   });
 
   it('records get_repo_skill_body tool calls as loaded skill body usage', async () => {
@@ -810,9 +813,8 @@ print(json.dumps({
     });
 
     expect(usage).toEqual(expect.objectContaining({ loadedCount: 1 }));
-    const stored = await db.collection('context_usage_traces').findOne({ packetId: 'packet-skill-tool' });
-    expect(stored?.loaded?.[0]).toEqual(expect.objectContaining({ kind: 'skill_body', source: 'tool_call' }));
-    expect(stored?.skillBodyLoads).toHaveLength(1);
+    const reported = usage?.repoContextUsage;
+    expect(reported?.context_loaded?.[0]).toEqual(expect.objectContaining({ kind: 'skill_body', source: 'tool_call' }));
   });
 
   it('records get_repo_context_body tool calls as loaded context body usage', async () => {
@@ -835,15 +837,14 @@ print(json.dumps({
     });
 
     expect(usage).toEqual(expect.objectContaining({ loadedCount: 1 }));
-    const stored = await db.collection('context_usage_traces').findOne({ packetId: 'packet-context-tool' });
-    expect(stored?.loaded?.[0]).toEqual(expect.objectContaining({ kind: 'production_note', source: 'tool_call' }));
-    expect(stored?.contextBodyLoads).toHaveLength(1);
+    const reported = usage?.repoContextUsage;
+    expect(reported?.context_loaded?.[0]).toEqual(expect.objectContaining({ kind: 'production_note', source: 'tool_call' }));
   });
 
   it('loads Cognee selected refs through get_repo_context_body without a separate MCP tool', async () => {
     const previous = process.env.ALLEN_CONTEXT_PROVIDER;
     process.env.ALLEN_CONTEXT_PROVIDER = 'cognee';
-    await db.collection('node_context_packets').insertOne({
+    await insertPacketFixture(db, {
       packetId: 'packet-cognee-body',
       executionId: 'exec-cognee-body',
       workflowName: 'bug-investigate-and-fix',
@@ -899,7 +900,7 @@ print(json.dumps({
 
   it('stores summary-only usage separately from loaded context', async () => {
     const service = new RepoKnowledgeGraphService(db);
-    await db.collection('node_context_packets').insertOne({
+    await insertPacketFixture(db, {
       packetId: 'packet-summary-only',
       executionId: 'exec-summary-only',
       workflowName: 'bug-investigate-and-fix',
@@ -915,7 +916,7 @@ print(json.dumps({
       createdAt: new Date(),
     });
 
-    await service.recordContextUsage({
+    const usage = await service.recordContextUsage({
       executionId: 'exec-summary-only',
       workflowName: 'bug-investigate-and-fix',
       nodeName: 'investigate',
@@ -934,17 +935,19 @@ print(json.dumps({
       },
     });
 
-    const stored = await db.collection('context_usage_traces').findOne({ packetId: 'packet-summary-only' });
-    expect(stored?.contextPreselected).toHaveLength(1);
-    expect(stored?.contextSummaryUsed).toHaveLength(1);
-    expect(stored?.loaded).toHaveLength(0);
-    expect(stored?.claimedUsed).toHaveLength(0);
-    expect(stored?.unverifiedClaims).toHaveLength(0);
+    const reported = usage?.repoContextUsage;
+    expect(reported?.context_preselected).toHaveLength(1);
+    expect(reported?.context_summary_used).toHaveLength(1);
+    expect(reported?.context_loaded).toHaveLength(0);
+    expect(reported?.context_applied).toHaveLength(0);
+    expect(reported?.diagnostics).not.toEqual(expect.arrayContaining([
+      expect.objectContaining({ code: 'repo_context_usage_agent_claim_mismatch' }),
+    ]));
   });
 
   it('warns when a file-backed summary appears to influence work without a full body load', async () => {
     const service = new RepoKnowledgeGraphService(db);
-    await db.collection('node_context_packets').insertOne({
+    await insertPacketFixture(db, {
       packetId: 'packet-summary-relied',
       executionId: 'exec-summary-relied',
       workflowName: 'bug-investigate-and-fix',
@@ -960,7 +963,7 @@ print(json.dumps({
       createdAt: new Date(),
     });
 
-    await service.recordContextUsage({
+    const usage = await service.recordContextUsage({
       executionId: 'exec-summary-relied',
       workflowName: 'bug-investigate-and-fix',
       nodeName: 'investigate',
@@ -979,13 +982,12 @@ print(json.dumps({
       },
     });
 
-    const stored = await db.collection('context_usage_traces').findOne({ packetId: 'packet-summary-relied' });
-    expect(stored?.diagnostics?.map((d: { code: string }) => d.code)).toContain('context_summary_relied_without_body_load');
+    expect(usage?.repoContextUsage?.diagnostics?.map((d: { code: string }) => d.code)).toContain('context_summary_relied_without_body_load');
   });
 
   it('warns when file-backed preselected context appears to influence work without a full body load', async () => {
     const service = new RepoKnowledgeGraphService(db);
-    await db.collection('node_context_packets').insertOne({
+    await insertPacketFixture(db, {
       packetId: 'packet-preselected-relied',
       executionId: 'exec-preselected-relied',
       workflowName: 'bug-investigate-and-fix',
@@ -1001,7 +1003,7 @@ print(json.dumps({
       createdAt: new Date(),
     });
 
-    await service.recordContextUsage({
+    const usage = await service.recordContextUsage({
       executionId: 'exec-preselected-relied',
       workflowName: 'bug-investigate-and-fix',
       nodeName: 'investigate',
@@ -1020,13 +1022,12 @@ print(json.dumps({
       },
     });
 
-    const stored = await db.collection('context_usage_traces').findOne({ packetId: 'packet-preselected-relied' });
-    expect(stored?.diagnostics?.map((d: { code: string }) => d.code)).toContain('context_preselected_relied_without_body_load');
+    expect(usage?.repoContextUsage?.diagnostics?.map((d: { code: string }) => d.code)).toContain('context_preselected_relied_without_body_load');
   });
 
   it('marks file-backed loaded/applied claims without body-loader calls as unverified', async () => {
     const service = new RepoKnowledgeGraphService(db);
-    await db.collection('node_context_packets').insertOne({
+    await insertPacketFixture(db, {
       packetId: 'packet-unverified',
       executionId: 'exec-unverified',
       workflowName: 'bug-investigate-and-fix',
@@ -1042,7 +1043,7 @@ print(json.dumps({
       createdAt: new Date(),
     });
 
-    await service.recordContextUsage({
+    const usage = await service.recordContextUsage({
       executionId: 'exec-unverified',
       workflowName: 'bug-investigate-and-fix',
       nodeName: 'investigate',
@@ -1060,17 +1061,19 @@ print(json.dumps({
       },
     });
 
-    const stored = await db.collection('context_usage_traces').findOne({ packetId: 'packet-unverified' });
-    expect(stored?.unverifiedClaims).toHaveLength(2);
-    expect(stored?.diagnostics?.map((d: { code: string }) => d.code)).toEqual([
+    const diagnostics = usage?.repoContextUsage?.diagnostics ?? [];
+    expect(diagnostics).toEqual(expect.arrayContaining([
+      expect.objectContaining({ code: 'repo_context_usage_agent_claim_mismatch' }),
+    ]));
+    expect(diagnostics.map((d: { code: string }) => d.code)).toEqual(expect.arrayContaining([
       'context_claimed_without_body_load',
       'context_claimed_without_body_load',
-    ]);
+    ]));
   });
 
   it('quarantines path-only and missing-ref repo context usage claims', async () => {
     const service = new RepoKnowledgeGraphService(db);
-    await db.collection('node_context_packets').insertOne({
+    await insertPacketFixture(db, {
       packetId: 'packet-malformed-usage',
       executionId: 'exec-malformed-usage',
       workflowName: 'bug-investigate-and-fix',
@@ -1086,7 +1089,7 @@ print(json.dumps({
       createdAt: new Date(),
     });
 
-    await service.recordContextUsage({
+    const usage = await service.recordContextUsage({
       executionId: 'exec-malformed-usage',
       workflowName: 'bug-investigate-and-fix',
       nodeName: 'investigate',
@@ -1104,17 +1107,14 @@ print(json.dumps({
       },
     });
 
-    const stored = await db.collection('context_usage_traces').findOne({ packetId: 'packet-malformed-usage' });
-    expect(stored?.reportedLoaded).toHaveLength(0);
-    expect(stored?.reportedApplied).toHaveLength(0);
-    expect(stored?.loaded).toHaveLength(0);
-    expect(stored?.claimedUsed).toHaveLength(0);
-    expect(stored?.unverifiedClaims).toHaveLength(0);
-    expect(stored?.malformedReportedUsage).toEqual(expect.arrayContaining([
+    const reported = usage?.repoContextUsage;
+    expect(reported?.context_loaded).toHaveLength(0);
+    expect(reported?.context_applied).toHaveLength(0);
+    expect(reported?.malformed_reported_usage).toEqual(expect.arrayContaining([
       expect.objectContaining({ field: 'context_loaded', reason: 'row_not_object' }),
       expect.objectContaining({ field: 'context_applied', reason: 'missing_ref_id' }),
     ]));
-    expect(stored?.diagnostics?.map((d: { code: string }) => d.code)).toEqual(expect.arrayContaining([
+    expect(reported?.diagnostics?.map((d: { code: string }) => d.code)).toEqual(expect.arrayContaining([
       'repo_context_usage_malformed_row',
       'repo_context_usage_unmapped_claim',
     ]));
@@ -1122,7 +1122,7 @@ print(json.dumps({
 
   it('quarantines reported loaded/applied claims that use non-Allen load sources', async () => {
     const service = new RepoKnowledgeGraphService(db);
-    await db.collection('node_context_packets').insertOne({
+    await insertPacketFixture(db, {
       packetId: 'packet-invalid-source-usage',
       executionId: 'exec-invalid-source-usage',
       workflowName: 'bug-investigate-and-fix',
@@ -1138,7 +1138,7 @@ print(json.dumps({
       createdAt: new Date(),
     });
 
-    await service.recordContextUsage({
+    const usage = await service.recordContextUsage({
       executionId: 'exec-invalid-source-usage',
       workflowName: 'bug-investigate-and-fix',
       nodeName: 'investigate',
@@ -1156,17 +1156,14 @@ print(json.dumps({
       },
     });
 
-    const stored = await db.collection('context_usage_traces').findOne({ packetId: 'packet-invalid-source-usage' });
-    expect(stored?.reportedLoaded).toHaveLength(0);
-    expect(stored?.reportedApplied).toHaveLength(0);
-    expect(stored?.loaded).toHaveLength(0);
-    expect(stored?.claimedUsed).toHaveLength(0);
-    expect(stored?.unverifiedClaims).toHaveLength(0);
-    expect(stored?.malformedReportedUsage).toEqual(expect.arrayContaining([
+    const reported = usage?.repoContextUsage;
+    expect(reported?.context_loaded).toHaveLength(0);
+    expect(reported?.context_applied).toHaveLength(0);
+    expect(reported?.malformed_reported_usage).toEqual(expect.arrayContaining([
       expect.objectContaining({ field: 'context_loaded', reason: 'invalid_loaded_source' }),
       expect.objectContaining({ field: 'context_applied', reason: 'invalid_loaded_source' }),
     ]));
-    expect(stored?.diagnostics?.map((d: { code: string }) => d.code)).toEqual([
+    expect(reported?.diagnostics?.map((d: { code: string }) => d.code)).toEqual([
       'context_loaded_source_invalid',
       'context_loaded_source_invalid',
     ]);
@@ -1231,7 +1228,7 @@ print(json.dumps({
         rawResponse: 'done',
       },
     ]);
-    await db.collection('node_context_packets').insertOne({
+    await insertPacketFixture(db, {
       packetId: 'packet-report-root',
       executionId: 'exec-report-root',
       workflowName: 'bug-investigate-and-fix',
@@ -1246,7 +1243,7 @@ print(json.dumps({
       rejectedRefs: [],
       createdAt: new Date(),
     });
-    await db.collection('context_usage_traces').insertOne({
+    await insertUsageFixture(db, {
       traceId: 'usage-report-root',
       executionId: 'exec-report-root',
       workflowName: 'bug-investigate-and-fix',
@@ -1264,12 +1261,10 @@ print(json.dumps({
 
     const report = await service.getExecutionContextUsageReport('exec-report-root');
     expect((report.diagnostics as Array<{ code: string }>).map((d) => d.code)).toEqual(expect.arrayContaining([
-      'usage_extraction_failed',
-      'skill_body_not_loaded',
-      'child_context_missing',
+      'usage_missing',
     ]));
     expect(report.nodeSummaries).toEqual(expect.arrayContaining([
-      expect.objectContaining({ executionId: 'exec-report-child', diagnostics: expect.arrayContaining(['child_context_missing']) }),
+      expect.objectContaining({ executionId: 'exec-report-root', diagnostics: expect.arrayContaining(['usage_missing']) }),
     ]));
   });
 
@@ -1854,3 +1849,129 @@ print(json.dumps({
     });
   });
 });
+
+async function packetView(db: Db, packetId?: string | null): Promise<Record<string, unknown> | null> {
+  return packetId ? new ContextLifecycleStore(db).getAttemptPacketView(packetId) : null;
+}
+
+async function usageView(db: Db, packetId?: string | null, usageTraceId?: string | null): Promise<Record<string, unknown> | null> {
+  return packetId ? new ContextLifecycleStore(db).getUsageView(packetId, usageTraceId ?? undefined) : null;
+}
+
+async function insertPacketFixture(db: Db, doc: Record<string, unknown>): Promise<void> {
+  const lifecycle = new ContextLifecycleStore(db);
+  const contextInjection = recordValue(doc.contextInjection);
+  const selectedRefs = usageArray(doc.selectedRefs);
+  const injectableRefs = usageArray(doc.injectableRefs);
+  const rejectedRefs = usageArray(doc.rejectedRefs);
+  const candidateRefs = usageArray(doc.candidateRefs);
+  const injectedRefs = usageArray(contextInjection.injectedRefs);
+  const providerNativeRefs = [
+    ...usageArray(contextInjection.providerNativeRefs),
+    ...usageArray(contextInjection.skippedProviderNativeRefs),
+  ];
+  const skippedRefs = [
+    ...usageArray(contextInjection.skippedRefs),
+    ...usageArray(contextInjection.skippedOversizeRefs),
+  ];
+  await lifecycle.saveAttemptFromPacket({
+    packet: {
+      packetId: String(doc.packetId),
+      executionId: String(doc.executionId),
+      workflowName: String(doc.workflowName ?? 'bug-investigate-and-fix'),
+      nodeName: String(doc.nodeName),
+      nodeRole: String(doc.nodeRole ?? ''),
+      attempt: Number(doc.attempt ?? 1),
+      repoId: String(doc.repoId ?? repoIdFromDoc(doc)),
+      repoName: String(doc.repoName ?? 'fixture-repo'),
+      repoPath: String(doc.repoPath ?? '/tmp/fixture-repo'),
+      indexId: String(doc.indexId ?? 'index-1'),
+      indexFreshness: String(doc.indexFreshness ?? 'fresh'),
+      selectedRefs,
+      injectableRefs,
+      rejectedRefs,
+      candidateRefs: candidateRefs.length > 0 ? candidateRefs : uniqueRefs([...selectedRefs, ...rejectedRefs]),
+      availableRefs: usageArray(doc.availableRefs),
+      providerTraces: [],
+      providerDiagnostics: [],
+      rerankerTraces: [],
+      rerankerDiagnostics: [],
+      rerankerProviders: [],
+      retrievalProviders: ['fixture'],
+      currentFiles: [],
+      parentPacketId: doc.parentPacketId,
+      parentExecutionId: doc.parentExecutionId,
+      rootExecutionId: doc.rootExecutionId,
+      createdAt: doc.createdAt instanceof Date ? doc.createdAt : new Date(),
+    } as never,
+    injection: {
+      injectionId: `injection-${String(doc.packetId)}`,
+      graphVersion: String(doc.indexId ?? 'index-1'),
+      provider: 'fixture',
+      targetLayer: 'system_prompt',
+      maxFileChars: Number(contextInjection.maxFileChars ?? 0),
+      maxTotalChars: Number(contextInjection.maxTotalChars ?? 0),
+      maxInjectedRefs: Number(contextInjection.maxInjectedRefs ?? 99),
+      totalChars: Number(contextInjection.totalChars ?? 0),
+      consideredRefs: uniqueRefs([...selectedRefs, ...injectableRefs]),
+      injectedRefs,
+      providerNativeRefs,
+      skippedRefs,
+      packingDecisions: usageArray(contextInjection.packingDecisions),
+      packingDiagnostics: [],
+      createdAt: new Date(),
+    } as never,
+    contextInjection,
+    promptBlock: String(doc.promptBlock ?? ''),
+    systemPromptBlock: String(doc.systemPromptBlock ?? ''),
+  });
+}
+
+async function insertUsageFixture(db: Db, doc: Record<string, unknown>): Promise<void> {
+  await new ContextLifecycleStore(db).recordUsage({
+    contextAttemptId: String(doc.packetId),
+    usageTraceId: String(doc.traceId),
+    executionId: String(doc.executionId),
+    executionTraceId: typeof doc.executionTraceId === 'string' ? doc.executionTraceId : undefined,
+    nodeName: String(doc.nodeName),
+    attempt: Number(doc.attempt ?? 1),
+    parsed: {
+      loaded: usageArray(doc.loaded),
+      applied: usageArray(doc.claimedUsed),
+      reportedLoaded: usageArray(doc.reportedLoaded),
+      reportedApplied: usageArray(doc.reportedApplied),
+      skipped: usageArray(doc.skipped),
+      contextBodyLoads: usageArray(doc.contextBodyLoads),
+      skillBodyLoads: usageArray(doc.skillBodyLoads),
+    },
+    diagnostics: usageArray(doc.diagnostics),
+  });
+}
+
+function usageArray(value: unknown): Array<Record<string, unknown>> {
+  return Array.isArray(value)
+    ? value.filter((item): item is Record<string, unknown> => Boolean(item && typeof item === 'object' && !Array.isArray(item)))
+    : [];
+}
+
+function recordValue(value: unknown): Record<string, unknown> {
+  return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {};
+}
+
+function uniqueRefs(refs: Array<Record<string, unknown>>): Array<Record<string, unknown>> {
+  const seen = new Set<string>();
+  const out: Array<Record<string, unknown>> = [];
+  for (const ref of refs) {
+    const refId = typeof ref.refId === 'string' ? ref.refId : undefined;
+    if (!refId || seen.has(refId)) continue;
+    seen.add(refId);
+    out.push(ref);
+  }
+  return out;
+}
+
+function repoIdFromDoc(doc: Record<string, unknown>): string {
+  const ref = usageArray(doc.selectedRefs)[0];
+  const refId = typeof ref?.refId === 'string' ? ref.refId : '';
+  return refId.includes(':') ? refId.split(':')[0] : 'repo-1';
+}

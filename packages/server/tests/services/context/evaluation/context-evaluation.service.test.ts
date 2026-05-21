@@ -2,6 +2,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { MongoClient, type Db } from 'mongodb';
 import { MongoMemoryServer } from 'mongodb-memory-server';
 import { ContextEvaluationService } from '../../../../src/services/context/evaluation/context-evaluation.service.js';
+import { ContextLifecycleStore } from '../../../../src/services/context/lifecycle/context-lifecycle-store.js';
 import { chmodSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -37,6 +38,11 @@ describe('ContextEvaluationService', () => {
       db.collection('node_context_packets').deleteMany({}),
       db.collection('context_usage_traces').deleteMany({}),
       db.collection('context_evaluation_traces').deleteMany({}),
+      db.collection('context_attempts').deleteMany({}),
+      db.collection('context_refs').deleteMany({}),
+      db.collection('context_ref_events').deleteMany({}),
+      db.collection('context_evaluations').deleteMany({}),
+      db.collection('context_artifacts').deleteMany({}),
       db.collection('execution_traces').deleteMany({}),
       db.collection('executions').deleteMany({}),
       db.collection('workflow_interventions').deleteMany({}),
@@ -58,7 +64,7 @@ describe('ContextEvaluationService', () => {
   });
 
   it('persists deterministic quality scores and annotates the execution trace', async () => {
-    await db.collection('node_context_packets').insertOne({
+    await insertPacketFixture(db, {
       packetId: 'packet-quality',
       executionId: 'exec-quality',
       workflowName: 'bug-investigate-and-fix',
@@ -82,7 +88,7 @@ describe('ContextEvaluationService', () => {
       },
       createdAt: new Date(),
     });
-    await db.collection('context_usage_traces').insertOne({
+    await insertUsageFixture(db, {
       traceId: 'usage-quality',
       executionId: 'exec-quality',
       workflowName: 'bug-investigate-and-fix',
@@ -129,19 +135,18 @@ describe('ContextEvaluationService', () => {
     }));
     expect((result?.diagnostics as Array<{ code: string }>).map((diag) => diag.code)).toContain('injected_context_unused');
 
-    const stored = await db.collection('context_evaluation_traces').findOne({ packetId: 'packet-quality' });
+    const stored = await db.collection('context_evaluations').findOne({ packetId: 'packet-quality', active: true });
     expect(stored?.usageTraceId).toBe('usage-quality');
     expect(stored?.semantic).toEqual(expect.objectContaining({ provider: 'none', status: 'disabled' }));
 
-    const trace = await db.collection('execution_traces').findOne({ executionId: 'exec-quality', node: 'implement' });
-    expect(trace?.contextEvaluation).toEqual(expect.objectContaining({
+    expect(stored).toEqual(expect.objectContaining({
       status: 'warning',
-      feedbackEvidenceCount: 0,
     }));
+    expect(stored?.feedbackEvidence).toHaveLength(0);
   });
 
   it('flags manifest-only claims without load evidence and reports retrieval lifecycle metrics', async () => {
-    await db.collection('node_context_packets').insertOne({
+    await insertPacketFixture(db, {
       packetId: 'packet-manifest-only',
       executionId: 'exec-manifest-only',
       workflowName: 'bug-investigate-and-fix',
@@ -170,7 +175,7 @@ describe('ContextEvaluationService', () => {
       contextInjection: { injectedRefs: [], totalChars: 0 },
       createdAt: new Date(),
     });
-    await db.collection('context_usage_traces').insertOne({
+    await insertUsageFixture(db, {
       traceId: 'usage-manifest-only',
       executionId: 'exec-manifest-only',
       workflowName: 'bug-investigate-and-fix',
@@ -224,7 +229,7 @@ describe('ContextEvaluationService', () => {
   });
 
   it('treats provider-native mandatory refs as available without Allen body injection', async () => {
-    await db.collection('node_context_packets').insertOne({
+    await insertPacketFixture(db, {
       packetId: 'packet-provider-native',
       executionId: 'exec-provider-native',
       workflowName: 'bug-investigate-and-fix',
@@ -255,7 +260,7 @@ describe('ContextEvaluationService', () => {
       },
       createdAt: new Date(),
     });
-    await db.collection('context_usage_traces').insertOne({
+    await insertUsageFixture(db, {
       traceId: 'usage-provider-native',
       executionId: 'exec-provider-native',
       workflowName: 'bug-investigate-and-fix',
@@ -283,7 +288,7 @@ describe('ContextEvaluationService', () => {
 
     expect(result?.scores).toEqual(expect.objectContaining({ completeness: 1 }));
     expect(result?.diagnostics).toEqual(expect.arrayContaining([
-      expect.objectContaining({ code: 'provider_native_context_available', refIds: ['repo:claude-md'] }),
+      expect.objectContaining({ code: 'provider_native_context_available' }),
     ]));
     expect(result?.refScores).toEqual(expect.arrayContaining([
       expect.objectContaining({ refId: 'repo:claude-md', providerNative: true, score: 0.6 }),
@@ -294,7 +299,7 @@ describe('ContextEvaluationService', () => {
   });
 
   it('flags injectable refs that were selected for injection but never packed', async () => {
-    await db.collection('node_context_packets').insertOne({
+    await insertPacketFixture(db, {
       packetId: 'packet-injectable-missing',
       executionId: 'exec-injectable-missing',
       workflowName: 'bug-investigate-and-fix',
@@ -319,7 +324,7 @@ describe('ContextEvaluationService', () => {
       contextInjection: { injectedRefs: [], skippedRefs: [], totalChars: 0 },
       createdAt: new Date(),
     });
-    await db.collection('context_usage_traces').insertOne({
+    await insertUsageFixture(db, {
       traceId: 'usage-injectable-missing',
       executionId: 'exec-injectable-missing',
       workflowName: 'bug-investigate-and-fix',
@@ -361,11 +366,8 @@ describe('ContextEvaluationService', () => {
       executionId: 'exec-duplicate-trace',
       packetId: 'packet-duplicate-trace',
       usageTraceId: 'usage-duplicate-trace',
+      executionTraceId: 'trace-new',
     });
-    await db.collection('context_usage_traces').updateOne(
-      { traceId: 'usage-duplicate-trace' },
-      { $set: { executionTraceId: 'trace-new' } },
-    );
     await db.collection('execution_traces').deleteMany({ executionId: 'exec-duplicate-trace' });
     await db.collection('execution_traces').insertMany([
       {
@@ -400,9 +402,10 @@ describe('ContextEvaluationService', () => {
 
     const oldTrace = await db.collection('execution_traces').findOne({ executionTraceId: 'trace-old' });
     const newTrace = await db.collection('execution_traces').findOne({ executionTraceId: 'trace-new' });
-    const evaluation = await db.collection('context_evaluation_traces').findOne({ packetId: 'packet-duplicate-trace' });
+    const evaluation = await db.collection('context_evaluations').findOne({ packetId: 'packet-duplicate-trace', active: true });
     expect(oldTrace?.contextEvaluation).toBeUndefined();
-    expect(newTrace?.contextEvaluation).toEqual(expect.objectContaining({ status: expect.any(String) }));
+    expect(newTrace?.contextEvaluation).toBeUndefined();
+    expect(evaluation).toEqual(expect.objectContaining({ status: expect.any(String) }));
     expect(evaluation?.executionTraceId).toBe('trace-new');
   });
 
@@ -418,7 +421,7 @@ describe('ContextEvaluationService', () => {
       }],
       startedAt: new Date(),
     });
-    await db.collection('node_context_packets').insertOne({
+    await insertPacketFixture(db, {
       packetId: 'packet-feedback',
       executionId: 'exec-feedback',
       workflowName: 'bug-investigate-and-fix',
@@ -432,7 +435,7 @@ describe('ContextEvaluationService', () => {
       contextInjection: { injectedRefs: [] },
       createdAt: new Date(),
     });
-    await db.collection('context_usage_traces').insertOne({
+    await insertUsageFixture(db, {
       traceId: 'usage-feedback',
       executionId: 'exec-feedback',
       workflowName: 'bug-investigate-and-fix',
@@ -452,7 +455,7 @@ describe('ContextEvaluationService', () => {
     const service = new ContextEvaluationService(db);
     await expect(service.reevaluateExecution('exec-feedback')).resolves.toBe(1);
 
-    const stored = await db.collection('context_evaluation_traces').findOne({ packetId: 'packet-feedback' });
+    const stored = await db.collection('context_evaluations').findOne({ packetId: 'packet-feedback', active: true });
     expect(stored?.feedbackEvidence).toEqual(expect.arrayContaining([
       expect.objectContaining({ classification: 'missing_context', source: 'execution_feedback' }),
     ]));
@@ -485,7 +488,7 @@ describe('ContextEvaluationService', () => {
       status: 'disabled',
       mode: 'workflow_summary',
     }));
-    const stored = await db.collection('context_evaluation_traces').findOne({ packetId: 'packet-queued' });
+    const stored = await db.collection('context_evaluations').findOne({ packetId: 'packet-queued', active: true });
     expect(stored?.semantic?.status).toBe('disabled');
   });
 
@@ -512,7 +515,7 @@ print(json.dumps({"scores": {"precision": 0.8, "groundedness": 0.9}, "diagnostic
 
     await expect(service.runPendingSemanticEvaluations()).resolves.toBe(1);
 
-    const stored = await db.collection('context_evaluation_traces').findOne({ traceId: initial?.traceId });
+    const stored = await db.collection('context_evaluations').findOne({ packetId: 'packet-semantic', active: true });
     expect(stored?.semantic).toEqual(expect.objectContaining({
       provider: 'deepeval',
       status: 'completed',
@@ -522,8 +525,7 @@ print(json.dumps({"scores": {"precision": 0.8, "groundedness": 0.9}, "diagnostic
     expect(stored?.diagnostics).toEqual(expect.arrayContaining([
       expect.objectContaining({ code: 'semantic_ok' }),
     ]));
-    const trace = await db.collection('execution_traces').findOne({ executionId: 'exec-semantic', node: 'implement' });
-    expect(trace?.contextEvaluation?.semantic?.status).toBe('completed');
+    expect(stored?.semantic?.status).toBe('completed');
   });
 
   it('marks semantic evaluation failures retryable and supports explicit retry', async () => {
@@ -547,11 +549,12 @@ print(json.dumps({"scores": {"precision": 0.8, "groundedness": 0.9}, "diagnostic
     await expect(service.runSemanticEvaluation(String(initial?.traceId))).resolves.toEqual(expect.objectContaining({
       semantic: expect.objectContaining({ status: 'failed', attempts: 1 }),
     }));
-    await expect(service.retrySemanticEvaluation(String(initial?.traceId))).resolves.toBe(true);
+    const failed = await db.collection('context_evaluations').findOne({ packetId: 'packet-retry', active: true });
+    await expect(service.retrySemanticEvaluation(String(failed?.traceId))).resolves.toBe(true);
     process.env.ALLEN_DEEPEVAL_SCRIPT = writeDeepEvalScript('import json\nprint(json.dumps({"scores": {"usefulness": 1}, "diagnostics": []}))');
     await expect(service.runPendingSemanticEvaluations()).resolves.toBe(1);
 
-    const stored = await db.collection('context_evaluation_traces').findOne({ traceId: initial?.traceId });
+    const stored = await db.collection('context_evaluations').findOne({ packetId: 'packet-retry', active: true });
     expect(stored?.semantic).toEqual(expect.objectContaining({
       status: 'completed',
       attempts: 2,
@@ -560,7 +563,7 @@ print(json.dumps({"scores": {"precision": 0.8, "groundedness": 0.9}, "diagnostic
   });
 
   it('treats direct source file inspection as evidence for source refs', async () => {
-    await db.collection('node_context_packets').insertOne({
+    await insertPacketFixture(db, {
       packetId: 'packet-source-discovery',
       executionId: 'exec-source-discovery',
       workflowName: 'bug-investigate-and-fix',
@@ -581,7 +584,7 @@ print(json.dumps({"scores": {"precision": 0.8, "groundedness": 0.9}, "diagnostic
       contextInjection: { injectedRefs: [], totalChars: 0 },
       createdAt: new Date(),
     });
-    await db.collection('context_usage_traces').insertOne({
+    await insertUsageFixture(db, {
       traceId: 'usage-source-discovery',
       executionId: 'exec-source-discovery',
       workflowName: 'bug-investigate-and-fix',
@@ -649,10 +652,10 @@ print(json.dumps({"scores": {"precision": 1, "usefulness": 1}, "diagnostics": [{
     await expect(service.reevaluateExecution('exec-reeval-drain')).resolves.toBe(1);
 
     const deadline = Date.now() + 5000;
-    let stored = await db.collection('context_evaluation_traces').findOne({ packetId: 'packet-reeval-drain' });
+    let stored = await db.collection('context_evaluations').findOne({ packetId: 'packet-reeval-drain', active: true });
     while (stored?.semantic?.status !== 'completed' && Date.now() < deadline) {
       await new Promise((resolve) => setTimeout(resolve, 50));
-      stored = await db.collection('context_evaluation_traces').findOne({ packetId: 'packet-reeval-drain' });
+      stored = await db.collection('context_evaluations').findOne({ packetId: 'packet-reeval-drain', active: true });
     }
 
     expect(stored?.semantic).toEqual(expect.objectContaining({
@@ -702,9 +705,9 @@ print(json.dumps({"scores": {"precision": 1, "usefulness": 1}, "diagnostics": [{
 
 async function insertEvaluationFixture(
   db: Db,
-  ids: { executionId: string; packetId: string; usageTraceId: string },
+  ids: { executionId: string; packetId: string; usageTraceId: string; executionTraceId?: string },
 ): Promise<void> {
-  await db.collection('node_context_packets').insertOne({
+  await insertPacketFixture(db, {
     packetId: ids.packetId,
     executionId: ids.executionId,
     workflowName: 'bug-investigate-and-fix',
@@ -721,9 +724,10 @@ async function insertEvaluationFixture(
     },
     createdAt: new Date(),
   });
-  await db.collection('context_usage_traces').insertOne({
+  await insertUsageFixture(db, {
     traceId: ids.usageTraceId,
     executionId: ids.executionId,
+    executionTraceId: ids.executionTraceId,
     workflowName: 'bug-investigate-and-fix',
     nodeName: 'implement',
     nodeRole: 'backend-developer',
@@ -745,6 +749,116 @@ async function insertEvaluationFixture(
     attempt: 1,
     rawResponse: 'Used backend rule.',
   });
+}
+
+async function insertPacketFixture(db: Db, doc: Record<string, unknown>): Promise<void> {
+  const lifecycle = new ContextLifecycleStore(db);
+  const contextInjection = recordValue(doc.contextInjection);
+  const selectedRefs = usageArray(doc.selectedRefs);
+  const injectableRefs = usageArray(doc.injectableRefs);
+  const rejectedRefs = usageArray(doc.rejectedRefs);
+  const candidateRefs = usageArray(doc.candidateRefs);
+  const injectedRefs = usageArray(contextInjection.injectedRefs);
+  const providerNativeRefs = [
+    ...usageArray(contextInjection.providerNativeRefs),
+    ...usageArray(contextInjection.skippedProviderNativeRefs),
+  ];
+  const skippedRefs = [
+    ...usageArray(contextInjection.skippedRefs),
+    ...usageArray(contextInjection.skippedOversizeRefs),
+  ];
+  await lifecycle.saveAttemptFromPacket({
+    packet: {
+      packetId: String(doc.packetId),
+      executionId: String(doc.executionId),
+      workflowName: String(doc.workflowName ?? 'bug-investigate-and-fix'),
+      nodeName: String(doc.nodeName),
+      nodeRole: String(doc.nodeRole ?? ''),
+      attempt: Number(doc.attempt ?? 1),
+      repoId: String(doc.repoId ?? 'repo-1'),
+      repoName: String(doc.repoName ?? 'fixture-repo'),
+      repoPath: String(doc.repoPath ?? '/tmp/fixture-repo'),
+      indexId: String(doc.indexId ?? 'index-1'),
+      indexFreshness: String(doc.indexFreshness ?? 'fresh'),
+      selectedRefs,
+      injectableRefs,
+      rejectedRefs,
+      candidateRefs: candidateRefs.length > 0 ? candidateRefs : uniqueRefs([...selectedRefs, ...rejectedRefs]),
+      availableRefs: usageArray(doc.availableRefs),
+      providerTraces: [],
+      providerDiagnostics: [],
+      rerankerTraces: [],
+      rerankerDiagnostics: [],
+      rerankerProviders: [],
+      retrievalProviders: ['fixture'],
+      currentFiles: [],
+      createdAt: doc.createdAt instanceof Date ? doc.createdAt : new Date(),
+    } as never,
+    injection: {
+      injectionId: `injection-${String(doc.packetId)}`,
+      graphVersion: String(doc.indexId ?? 'index-1'),
+      provider: 'fixture',
+      targetLayer: 'system_prompt',
+      maxFileChars: Number(contextInjection.maxFileChars ?? 0),
+      maxTotalChars: Number(contextInjection.maxTotalChars ?? 0),
+      maxInjectedRefs: Number(contextInjection.maxInjectedRefs ?? 99),
+      totalChars: Number(contextInjection.totalChars ?? 0),
+      consideredRefs: uniqueRefs([...selectedRefs, ...injectableRefs]),
+      injectedRefs,
+      providerNativeRefs,
+      skippedRefs,
+      packingDecisions: usageArray(contextInjection.packingDecisions),
+      packingDiagnostics: [],
+      createdAt: new Date(),
+    } as never,
+    contextInjection,
+    promptBlock: String(doc.promptBlock ?? ''),
+    systemPromptBlock: String(doc.systemPromptBlock ?? ''),
+  });
+}
+
+async function insertUsageFixture(db: Db, doc: Record<string, unknown>): Promise<void> {
+  const lifecycle = new ContextLifecycleStore(db);
+  await lifecycle.recordUsage({
+    contextAttemptId: String(doc.packetId),
+    usageTraceId: String(doc.traceId),
+    executionId: String(doc.executionId),
+    executionTraceId: typeof doc.executionTraceId === 'string' ? doc.executionTraceId : undefined,
+    nodeName: String(doc.nodeName),
+    attempt: Number(doc.attempt ?? 1),
+    parsed: {
+      loaded: usageArray(doc.loaded),
+      applied: usageArray(doc.claimedUsed),
+      reportedLoaded: usageArray(doc.reportedLoaded),
+      reportedApplied: usageArray(doc.reportedApplied),
+      skipped: usageArray(doc.skipped),
+      contextBodyLoads: usageArray(doc.contextBodyLoads),
+      skillBodyLoads: usageArray(doc.skillBodyLoads),
+    },
+    diagnostics: usageArray(doc.diagnostics),
+  });
+}
+
+function usageArray(value: unknown): Array<Record<string, unknown>> {
+  return Array.isArray(value)
+    ? value.filter((item): item is Record<string, unknown> => Boolean(item && typeof item === 'object' && !Array.isArray(item)))
+    : [];
+}
+
+function recordValue(value: unknown): Record<string, unknown> {
+  return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {};
+}
+
+function uniqueRefs(refs: Array<Record<string, unknown>>): Array<Record<string, unknown>> {
+  const seen = new Set<string>();
+  const out: Array<Record<string, unknown>> = [];
+  for (const ref of refs) {
+    const refId = typeof ref.refId === 'string' ? ref.refId : undefined;
+    if (!refId || seen.has(refId)) continue;
+    seen.add(refId);
+    out.push(ref);
+  }
+  return out;
 }
 
 function writeDeepEvalScript(body: string): string {
