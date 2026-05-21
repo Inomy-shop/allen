@@ -156,6 +156,7 @@ function compactUsageTrace(row: Record<string, unknown>): Record<string, unknown
   out.reportedLoaded = normalizeUsageArray(row.reportedLoaded).map((ref) => compactRef(ref));
   out.reportedApplied = normalizeUsageArray(row.reportedApplied).map((ref) => compactRef(ref));
   out.skipped = normalizeUsageArray(row.skipped).map((ref) => compactRef(ref));
+  out.sourceDiscoveryEvidence = normalizeUsageArray(row.sourceDiscoveryEvidence).slice(0, 40);
   out.validationPerformed = normalizeUsageArray(row.validationPerformed).slice(0, 8).map(compactDiagnostic);
   out.usageSummary = truncateText(firstString(row.usageSummary), 500);
   out.diagnostics = normalizeUsageArray(row.diagnostics).map(compactDiagnostic);
@@ -185,9 +186,8 @@ function compactContextInjection(value: unknown): Record<string, unknown> {
 function compactExecutionTrace(row: Record<string, unknown>): Record<string, unknown> {
   const outputText = firstString(row.rawResponse, isRecord(row.output) ? JSON.stringify(row.output) : undefined);
   return {
-    ...(pick(row, ['executionId', 'node', 'agent', 'attempt', 'status', 'error', 'contextUsage']) ?? {}),
+    ...(pick(row, ['executionId', 'node', 'agent', 'attempt', 'status', 'error', 'contextAttemptId', 'contextUsageTraceId', 'contextEvaluationId']) ?? {}),
     outputExcerpt: truncateText(outputText, 1_200),
-    sourceDiscoveryEvidence: collectSourceDiscoveryEvidence(row).slice(0, 40),
   };
 }
 
@@ -402,6 +402,10 @@ function collectNodeEvidence(
     assignCappedRefs(node, 'reportedAppliedRefs', reportedAppliedRefs, budget.maxRefs);
     node.validationPerformed = normalizeUsageArray(usage.validationPerformed).slice(0, 5);
     node.usageSummary = truncateText(firstString(usage.usageSummary), 500);
+    node.sourceDiscoveryEvidence = [
+      ...normalizeUsageArray(node.sourceDiscoveryEvidence),
+      ...normalizeUsageArray(usage.sourceDiscoveryEvidence),
+    ].slice(0, budget.maxRefs);
     appendDiagnostics(node, normalizeUsageArray(usage.diagnostics), budget.maxDiagnostics);
     rebuildNodeContextLifecycle(node, budget.maxLifecycleRows);
   }
@@ -426,12 +430,10 @@ function collectNodeEvidence(
     const node = ensure(trace.executionId, trace.node, trace.attempt);
     node.agent ??= trace.agent;
     node.status ??= trace.status;
-    node.contextUsage ??= trace.contextUsage;
+    node.contextAttemptId ??= trace.contextAttemptId;
+    node.contextUsageTraceId ??= trace.contextUsageTraceId;
     node.error ??= truncateText(firstString(trace.error), 500);
-    node.sourceDiscoveryEvidence = [
-      ...normalizeUsageArray(trace.sourceDiscoveryEvidence),
-      ...collectSourceDiscoveryEvidence(trace),
-    ].slice(0, budget.maxRefs);
+    node.sourceDiscoveryEvidence = normalizeUsageArray(node.sourceDiscoveryEvidence).slice(0, budget.maxRefs);
     if (node._contextLifecyclePinned !== true) rebuildNodeContextLifecycle(node, budget.maxLifecycleRows);
     const outputText = firstString(trace.outputExcerpt, trace.rawResponse, isRecord(trace.output) ? JSON.stringify(trace.output) : undefined);
     node.outputExcerpt = budget.excerptChars > 0 ? truncateText(outputText, budget.excerptChars) : undefined;
@@ -650,56 +652,6 @@ function slimSourceMetadata(value: unknown): Record<string, unknown> | undefined
 function slimRerank(value: unknown): Record<string, unknown> | undefined {
   if (!isRecord(value)) return undefined;
   return pick(value, ['providerId', 'score', 'originalRank', 'finalRank', 'reason', 'mandatoryProtected']) ?? undefined;
-}
-
-function collectSourceDiscoveryEvidence(trace: Record<string, unknown>): Array<Record<string, unknown>> {
-  return normalizeUsageArray(trace.toolCalls)
-    .flatMap((call): Array<Record<string, unknown>> => {
-      const tool = firstString(call.tool, call.name);
-      if (!tool || !isSourceDiscoveryTool(tool, call)) return [];
-      const args = isRecord(call.args) ? call.args : {};
-      const command = firstString(args.command, args.cmd, call.command, call.content);
-      return [{
-        tool,
-        paths: extractToolPaths(args, call).slice(0, 12),
-        commandPreview: truncateText(command, 240),
-        toolUseId: firstString(call.toolUseId, call.toolCallId, call.id),
-      }];
-    });
-}
-
-function isSourceDiscoveryTool(tool: string, call: Record<string, unknown>): boolean {
-  const lower = tool.toLowerCase();
-  if (/(^|__)(read|grep|glob|ls|find)$/.test(lower)) return true;
-  if (/(^|__)(bash|shell|exec_command)$/.test(lower)) {
-    const args = isRecord(call.args) ? call.args : {};
-    const command = firstString(args.command, args.cmd, call.command, call.content) ?? '';
-    return /\b(rg|grep|find|ls|sed|cat|head|tail|git\s+(show|diff|grep))\b/.test(command);
-  }
-  return false;
-}
-
-function extractToolPaths(args: Record<string, unknown>, call: Record<string, unknown>): string[] {
-  const values = [
-    args.path,
-    args.file_path,
-    args.filePath,
-    args.absolute_path,
-    args.relative_path,
-    args.relativePath,
-    args.glob,
-    args.pattern,
-    call.path,
-  ];
-  const paths = values.flatMap((value) => typeof value === 'string' ? [value] : Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string') : []);
-  const command = firstString(args.command, args.cmd, call.command, call.content);
-  if (command) paths.push(...extractPathLikeTokens(command));
-  return Array.from(new Set(paths.map((path) => path.trim()).filter(Boolean)));
-}
-
-function extractPathLikeTokens(command: string): string[] {
-  const matches = command.match(/[A-Za-z0-9_./@-]+\.(?:ts|tsx|js|jsx|py|java|go|rs|rb|php|css|scss|html|json|ya?ml|md|sql|sh|bash|zsh|toml|ini)|(?:^|\s)(?:src|packages|apps|tests|test|docs|e2e|\.claude|\.github)\/[A-Za-z0-9_./@-]+/g) ?? [];
-  return matches.map((match) => match.trim());
 }
 
 function buildContextLifecycle(input: {

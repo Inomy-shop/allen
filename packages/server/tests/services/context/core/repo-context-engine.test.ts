@@ -19,13 +19,20 @@ import { createConfiguredContextReranker, shutdownContextRerankerWorkers, type C
 import { CogneeMemoryProvider, runCogneeSidecar } from '../../../../src/services/context/cognee/repo-context-cognee-provider.js';
 import { buildCogneeQuery, buildRetrievalIntentEnvelope, renderedQueryHash, retrievalEnvelopeHash, selectCogneeRefs } from '../../../../src/services/context/cognee/cognee-retrieval-policy.js';
 import { generateDeterministicMetadata } from '../../../../src/services/context/cognee/cognee-metadata-enrichment.js';
+import { buildContextQueryIntent, renderContextQuery } from '../../../../src/services/context/core/context-query-intent.js';
 
 const originalContextProvider = process.env.ALLEN_CONTEXT_PROVIDER;
 const originalCogneeMandatoryGraph = process.env.ALLEN_COGNEE_MANDATORY_GRAPH;
 const originalContextProviderFallback = process.env.ALLEN_CONTEXT_PROVIDER_FALLBACK;
+const originalCogneeMinSelectionScore = process.env.ALLEN_COGNEE_MIN_SELECTION_SCORE;
+const originalContextMinRerankScore = process.env.ALLEN_CONTEXT_MIN_RERANK_SCORE;
+const originalCogneeMinInjectionScore = process.env.ALLEN_COGNEE_MIN_INJECTION_SCORE;
 
 beforeEach(() => {
   process.env.ALLEN_CONTEXT_PROVIDER = 'cognee';
+  delete process.env.ALLEN_COGNEE_MIN_SELECTION_SCORE;
+  delete process.env.ALLEN_CONTEXT_MIN_RERANK_SCORE;
+  delete process.env.ALLEN_COGNEE_MIN_INJECTION_SCORE;
 });
 
 afterEach(() => {
@@ -35,6 +42,12 @@ afterEach(() => {
   else process.env.ALLEN_COGNEE_MANDATORY_GRAPH = originalCogneeMandatoryGraph;
   if (originalContextProviderFallback === undefined) delete process.env.ALLEN_CONTEXT_PROVIDER_FALLBACK;
   else process.env.ALLEN_CONTEXT_PROVIDER_FALLBACK = originalContextProviderFallback;
+  if (originalCogneeMinSelectionScore === undefined) delete process.env.ALLEN_COGNEE_MIN_SELECTION_SCORE;
+  else process.env.ALLEN_COGNEE_MIN_SELECTION_SCORE = originalCogneeMinSelectionScore;
+  if (originalContextMinRerankScore === undefined) delete process.env.ALLEN_CONTEXT_MIN_RERANK_SCORE;
+  else process.env.ALLEN_CONTEXT_MIN_RERANK_SCORE = originalContextMinRerankScore;
+  if (originalCogneeMinInjectionScore === undefined) delete process.env.ALLEN_COGNEE_MIN_INJECTION_SCORE;
+  else process.env.ALLEN_COGNEE_MIN_INJECTION_SCORE = originalCogneeMinInjectionScore;
 });
 
 describe('RepoContextEngine', () => {
@@ -258,6 +271,124 @@ describe('RepoContextEngine', () => {
       expect.objectContaining({ refId: 'repo:skill', providerId: 'test_semantic_reranker' }),
     ]));
   });
+
+  it('builds one Allen query intent and passes the same rendered query to providers and reranker', async () => {
+    const provider = new CapturingContextProvider([providerRef('cognee-query-ref', 'docs/query.md', 'hash-query', 'query ref', 0.95)]);
+    const reranker = new CapturingReranker();
+    const input = {
+      packetId: 'packet-query',
+      executionId: 'exec-query',
+      repoId: 'repo',
+      repoName: 'fixture',
+      repoPath: '/tmp/fixture',
+      indexId: 'index-1',
+      indexFreshness: 'fresh',
+      workflowName: 'bug-investigate-and-fix',
+      nodeName: 'investigate',
+      nodeRole: 'bug-investigator',
+      attempt: 1,
+      state: { bug_summary: 'Inspector shows queued context eval results.' },
+      prompt: 'BUG REPORT: Context eval result is hidden after completion.',
+      provider: 'claude' as const,
+      currentFiles: ['packages/server/src/services/context/lifecycle/context-lifecycle-store.ts'],
+      nodes: [],
+    };
+
+    const packet = await new RepoContextEngine([provider], reranker).buildPacket(input);
+    const expectedQuery = renderContextQuery(buildContextQueryIntent(input));
+
+    expect(provider.seenInput?.renderedContextQuery).toBe(expectedQuery);
+    expect(reranker.seenInput?.renderedContextQuery).toBe(expectedQuery);
+    expect(packet.renderedContextQuery).toBe(expectedQuery);
+    expect(packet.contextQueryIntent).toEqual(expect.objectContaining({
+      role: 'bug-investigator',
+      roleFamily: 'investigation',
+      querySignalSources: expect.arrayContaining(['state.bug_summary', 'prompt.sections']),
+    }));
+    expect(packet.contextQueryIntentHash).toMatch(/^[a-f0-9]{64}$/);
+    expect(packet.renderedContextQueryHash).toMatch(/^[a-f0-9]{64}$/);
+  });
+
+  it('filters optional Cognee refs using reranker relevance while protecting mandatory refs', async () => {
+    const cogneeRefs: KnowledgeCandidateRef[] = [
+      {
+        ...providerRef('cognee-strong', 'docs/strong.md', 'hash-cognee-strong', 'strong cognee match', 95),
+        providerId: 'cognee_memory',
+        providerMetadata: {
+          retrievalScore: 0.95,
+          injectionDecision: 'snippet',
+          injectionPolicy: 'injectable',
+        },
+      },
+      {
+        ...providerRef('cognee-low-rerank', 'docs/weak.md', 'hash-cognee-weak', 'weak reranker match', 95),
+        providerId: 'cognee_memory',
+        providerMetadata: {
+          retrievalScore: 0.7,
+          injectionDecision: 'snippet',
+          injectionPolicy: 'injectable',
+        },
+      },
+      {
+        ...providerRef('cognee-mid-rerank', 'docs/mid.md', 'hash-cognee-mid', 'mid reranker but strong retrieval match', 95),
+        providerId: 'cognee_memory',
+        providerMetadata: {
+          retrievalScore: 0.95,
+          injectionDecision: 'snippet',
+          injectionPolicy: 'injectable',
+        },
+      },
+      {
+        ...providerRef('mandatory-ref', 'AGENTS.md', 'hash-mandatory', 'mandatory rules', 1),
+        providerId: 'mandatory_graph',
+        mandatory: true,
+        targetLayer: 'system_prompt',
+      },
+    ];
+    const packet = await new RepoContextEngine(
+      [new StaticContextProvider(cogneeRefs)],
+      new FixedScoreReranker({
+        'mandatory-ref': 0.01,
+        'cognee-strong': 0.9,
+        'cognee-mid-rerank': 0.4,
+        'cognee-low-rerank': 0.05,
+      }),
+    ).buildPacket({
+      packetId: 'packet-threshold',
+      executionId: 'exec-threshold',
+      repoId: 'repo',
+      repoName: 'fixture',
+      repoPath: '/tmp/fixture',
+      indexId: 'index-1',
+      indexFreshness: 'fresh',
+      workflowName: 'workflow',
+      nodeName: 'implement',
+      nodeRole: 'backend-developer',
+      attempt: 1,
+      state: {},
+      prompt: 'Fix vendor category mappings',
+      provider: 'claude',
+      currentFiles: [],
+      nodes: [],
+    });
+
+    expect(packet.selectedRefs.map((ref) => ref.refId)).toEqual(['mandatory-ref', 'cognee-strong', 'cognee-mid-rerank']);
+    expect(packet.injectableRefs.map((ref) => ref.refId)).toEqual(['mandatory-ref', 'cognee-strong', 'cognee-mid-rerank']);
+    expect(packet.selectedRefs.find((ref) => ref.refId === 'cognee-mid-rerank')?.rerank).toEqual(expect.objectContaining({
+      rerankScore: 0.4,
+      finalRelevanceScore: expect.any(Number),
+    }));
+    expect(packet.rejectedRefs).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        refId: 'cognee-low-rerank',
+        rerank: expect.objectContaining({ rerankScore: 0.05 }),
+        providerMetadata: expect.objectContaining({ rejectionReason: 'below_rerank_threshold' }),
+      }),
+    ]));
+    expect(packet.providerDiagnostics).toEqual(expect.arrayContaining([
+      expect.objectContaining({ code: 'context_relevance_thresholds_applied', thresholdRejectedCount: expect.any(Number) }),
+    ]));
+  });
 });
 
 describe('WorkflowContextInjectionAdapter', () => {
@@ -401,7 +532,109 @@ describe('WorkflowContextInjectionAdapter', () => {
         riskClass: 'narrative',
       }),
     ]));
+    expect(injection.packingDiagnostics).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        code: 'context_compression_query_used',
+        querySource: 'rendered_context_query',
+        renderedContextQueryHash: packet.renderedContextQueryHash,
+        renderedContextQueryLength: packet.renderedContextQueryLength,
+        refId: 'repo:runbook',
+      }),
+    ]));
     expect(adapter.renderSystemPromptBlock(injection)).toContain('Always verify refund idempotency');
+  });
+
+  it('uses the rendered context query instead of legacy prompt text for section extraction', async () => {
+    const previousMaxFile = process.env.ALLEN_CONTEXT_MAX_FILE_CHARS;
+    const previousMaxTotal = process.env.ALLEN_CONTEXT_MAX_TOTAL_CHARS;
+    repoPath = mkdtempSync(join(tmpdir(), 'allen-context-query-compression-'));
+    mkdirSync(join(repoPath, 'docs'), { recursive: true });
+    writeFileSync(join(repoPath, 'docs/query-sensitive.md'), [
+      '# Legacy Prompt Section',
+      'legacy-payment-token '.repeat(400),
+      '',
+      '# Rendered Query Section',
+      'needlequartz rendered query evidence that should be selected for compression.',
+      '',
+      '# Filler',
+      'filler '.repeat(20_000),
+    ].join('\n'));
+    execFileSync('git', ['init'], { cwd: repoPath });
+    execFileSync('git', ['add', '.'], { cwd: repoPath });
+    process.env.ALLEN_CONTEXT_MAX_FILE_CHARS = '1200';
+    process.env.ALLEN_CONTEXT_MAX_TOTAL_CHARS = '4000';
+    try {
+      const adapter = new WorkflowContextInjectionAdapter();
+      const ref = {
+        refId: 'repo:query-sensitive',
+        kind: 'doc' as const,
+        title: 'Query Sensitive Doc',
+        path: 'docs/query-sensitive.md',
+        summary: 'legacy-payment-token summary',
+        tags: [],
+        providerId: 'mandatory_graph',
+        source: 'mandatory_graph',
+        reason: 'Mandatory narrative context.',
+        score: 1,
+        loadable: true,
+        mandatory: true,
+      };
+      const packet = {
+        packetId: 'packet-query-compression',
+        executionId: 'exec-query-compression',
+        repoId: 'repo',
+        repoName: 'fixture',
+        repoPath,
+        indexId: 'index-1',
+        indexFreshness: 'fresh',
+        workflowName: 'workflow',
+        nodeName: 'implement',
+        nodeRole: 'backend-developer',
+        attempt: 1,
+        state: {},
+        taskPrompt: 'legacy-payment-token prompt',
+        provider: 'claude',
+        currentFiles: [],
+        selectedRefs: [ref],
+        injectableRefs: [ref],
+        rejectedRefs: [],
+        availableRefs: [],
+        candidateRefs: [ref],
+        providerTraces: [],
+        providerDiagnostics: [],
+        rerankerTraces: [],
+        rerankerDiagnostics: [],
+        rerankerProviders: [],
+        retrievalProviders: ['mandatory_graph'],
+        renderedContextQuery: 'Workflow: workflow\nTask signal: needlequartz',
+        renderedContextQueryHash: 'rendered-query-hash',
+        renderedContextQueryLength: 43,
+        createdAt: new Date(),
+      };
+
+      const injection = await adapter.buildInjection({ packet, provider: 'claude', repoPath });
+
+      expect(injection.injectedRefs[0]).toEqual(expect.objectContaining({
+        refId: 'repo:query-sensitive',
+        packingTransformation: 'section_extracted',
+      }));
+      expect(injection.injectedRefs[0].content).toContain('needlequartz rendered query evidence');
+      expect(injection.injectedRefs[0].content).not.toContain('legacy-payment-token');
+      expect(injection.packingDiagnostics).toEqual(expect.arrayContaining([
+        expect.objectContaining({
+          code: 'context_compression_query_used',
+          querySource: 'rendered_context_query',
+          renderedContextQueryHash: 'rendered-query-hash',
+          renderedContextQueryLength: 43,
+          refId: 'repo:query-sensitive',
+        }),
+      ]));
+    } finally {
+      if (previousMaxFile === undefined) delete process.env.ALLEN_CONTEXT_MAX_FILE_CHARS;
+      else process.env.ALLEN_CONTEXT_MAX_FILE_CHARS = previousMaxFile;
+      if (previousMaxTotal === undefined) delete process.env.ALLEN_CONTEXT_MAX_TOTAL_CHARS;
+      else process.env.ALLEN_CONTEXT_MAX_TOTAL_CHARS = previousMaxTotal;
+    }
   });
 
   it('uses env-configured injection budgets', async () => {
@@ -777,6 +1010,45 @@ Follow the frontend coding guidelines and test the state transition.`;
     expect(result.selectedRefs.every((ref) => ref.providerMetadata?.injectionPolicy === 'injectable')).toBe(true);
     expect(result.diagnostics).toEqual(expect.arrayContaining([
       expect.objectContaining({ code: 'cognee_retrieval_policy_applied', selectedCount: 14, injectableCount: 14 }),
+    ]));
+  });
+
+  it('rejects optional Cognee refs below the retrieval selection threshold', () => {
+    const input = {
+      repoId: 'repo-id',
+      repoName: 'fixture',
+      repoPath: '/tmp/fixture',
+      indexId: 'index-1',
+      indexFreshness: 'fresh',
+      workflowName: 'workflow',
+      nodeName: 'implement',
+      nodeRole: 'backend-developer',
+      attempt: 1,
+      state: {},
+      prompt: 'Fix vendor category mappings',
+      provider: 'claude' as const,
+      currentFiles: [],
+      nodes: [],
+    };
+    const envelope = buildRetrievalIntentEnvelope(input);
+    const result = selectCogneeRefs([
+      providerRef('strong-source', 'src/vendor.ts', 'hash-strong', 'vendor source code', 92),
+      providerRef('weak-doc', 'docs/old-note.md', 'hash-weak', 'low confidence unrelated note', 5),
+    ], input, envelope, 'primary');
+
+    expect(result.selectedRefs.map((ref) => ref.refId)).toContain('strong-source');
+    expect(result.selectedRefs.map((ref) => ref.refId)).not.toContain('weak-doc');
+    expect(result.rejectedRefs).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        refId: 'weak-doc',
+        providerMetadata: expect.objectContaining({
+          rejectionReason: 'below_cognee_selection_threshold',
+          thresholdRejected: true,
+        }),
+      }),
+    ]));
+    expect(result.diagnostics).toEqual(expect.arrayContaining([
+      expect.objectContaining({ code: 'cognee_retrieval_policy_applied', thresholdRejectedCount: 1 }),
     ]));
   });
 
@@ -2301,6 +2573,68 @@ class TestSemanticReranker implements ContextReranker {
   }
 }
 
+class FixedScoreReranker implements ContextReranker {
+  readonly providerId = 'fixed_score_reranker';
+
+  constructor(private scores: Record<string, number>) {}
+
+  async rerank(input: ContextRerankInput): Promise<ContextRerankResult> {
+    const rankedRefs = input.candidates
+      .map((ref, originalRank) => {
+        const score = this.scores[ref.refId] ?? 0;
+        const retrievalScore = Number(ref.providerMetadata?.retrievalScore ?? ref.providerMetadata?.retrievalPolicyScore ?? ref.score ?? 0);
+        const finalRelevanceScore = ref.mandatory ? 1 : Math.max(0, Math.min(1, (score * 0.55) + (retrievalScore * 0.45)));
+        return {
+          ...ref,
+          rerank: {
+            providerId: this.providerId,
+            score,
+            rerankScore: score,
+            semanticScore: score,
+            retrievalScore,
+            finalRelevanceScore,
+            originalRank,
+            finalRank: originalRank,
+            reason: 'fixed test score',
+            mandatoryProtected: ref.mandatory,
+          },
+        };
+      })
+      .sort((a, b) => Number((b.rerank as { finalRelevanceScore: number }).finalRelevanceScore) - Number((a.rerank as { finalRelevanceScore: number }).finalRelevanceScore))
+      .map((ref, finalRank) => ({ ...ref, rerank: { ...(ref.rerank as Record<string, unknown>), finalRank } }));
+    return {
+      providerId: this.providerId,
+      rankedRefs,
+      diagnostics: [],
+      traces: rankedRefs.map((ref, idx) => ({ refId: ref.refId, providerId: this.providerId, finalRank: idx })),
+    };
+  }
+}
+
+class CapturingReranker implements ContextReranker {
+  readonly providerId = 'capturing_reranker';
+  seenInput?: ContextRerankInput;
+
+  async rerank(input: ContextRerankInput): Promise<ContextRerankResult> {
+    this.seenInput = input;
+    const rankedRefs = input.candidates.map((ref, finalRank) => ({
+      ...ref,
+      rerank: {
+        providerId: this.providerId,
+        rerankScore: 0.9,
+        finalRelevanceScore: ref.mandatory ? 1 : 0.9,
+        finalRank,
+      },
+    }));
+    return {
+      providerId: this.providerId,
+      rankedRefs,
+      diagnostics: [],
+      traces: rankedRefs.map((ref, finalRank) => ({ refId: ref.refId, providerId: this.providerId, finalRank })),
+    };
+  }
+}
+
 class StaticContextProvider implements KnowledgeRetrievalProvider {
   readonly providerId = 'static_provider';
 
@@ -2312,6 +2646,26 @@ class StaticContextProvider implements KnowledgeRetrievalProvider {
       candidates: this.refs,
       selectedRefs: this.refs,
       injectableRefs: this.refs.filter((ref) => ref.providerMetadata?.injectionDecision === 'snippet'),
+      rejectedRefs: [],
+      diagnostics: [],
+      trace: [],
+    };
+  }
+}
+
+class CapturingContextProvider implements KnowledgeRetrievalProvider {
+  readonly providerId = 'capturing_provider';
+  seenInput?: KnowledgeRetrievalInput;
+
+  constructor(private refs: KnowledgeCandidateRef[]) {}
+
+  async retrieve(input: KnowledgeRetrievalInput): Promise<KnowledgeRetrievalResult> {
+    this.seenInput = input;
+    return {
+      providerId: this.providerId,
+      candidates: this.refs,
+      selectedRefs: this.refs,
+      injectableRefs: this.refs,
       rejectedRefs: [],
       diagnostics: [],
       trace: [],

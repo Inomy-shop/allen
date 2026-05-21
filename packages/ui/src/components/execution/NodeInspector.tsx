@@ -3,13 +3,19 @@ import {
   ChevronDown, ChevronRight, AlertCircle, CheckCircle, XCircle, Info,
   Settings, GitBranch, Zap, BookOpen, Wrench, Eye,
 } from 'lucide-react';
+import { authHeaders } from '../../services/api';
 
 type ContextRefProviderMetadata = {
+  datasetName?: unknown;
+  sourceId?: unknown;
   chunkId?: unknown;
   cogneeChunkId?: unknown;
+  cogneeDataId?: unknown;
   chunkIndex?: unknown;
   documentRole?: unknown;
   containsCodeBlocks?: unknown;
+  searchMode?: unknown;
+  confidence?: unknown;
   sourceMetadata?: {
     path?: unknown;
     fileHash?: unknown;
@@ -30,6 +36,63 @@ type ContextInjectionRefSummary = {
   contentSha256?: string;
   skipReason?: string;
   providerMetadata?: ContextRefProviderMetadata;
+};
+
+type ContextLifecycleEventSummary = {
+  type?: string;
+  createdAt?: string | Date;
+};
+
+type ContextRerankSummary = {
+  providerId?: unknown;
+  score?: unknown;
+  semanticScore?: unknown;
+  rerankScore?: unknown;
+  finalRank?: unknown;
+  originalRank?: unknown;
+  reason?: unknown;
+};
+
+type ContextLifecycleRefSummary = ContextInjectionRefSummary & {
+  isMandatory?: boolean;
+  isCognee?: boolean;
+  cogneeScore?: number;
+  rerankerScore?: number;
+  rerank?: ContextRerankSummary;
+  rank?: number;
+  lifecycleStatus?: string;
+  injectionMode?: string;
+  isInjected?: boolean;
+  isFiltered?: boolean;
+  filterReason?: string;
+  filterStage?: string;
+  contentAvailable?: boolean;
+  contentUrl?: string;
+  sourceDiscovered?: boolean;
+  timeline?: ContextLifecycleEventSummary[];
+};
+
+type ContextQuerySummary = {
+  queryIntentHash?: string;
+  renderedQueryHash?: string;
+  renderedQueryLength?: number;
+  role?: string;
+  roleFamily?: string;
+  roleFocus?: string[];
+  querySignalSources?: string[];
+  querySignalSections?: string[];
+  querySignalLength?: number;
+  requiredCategories?: string[];
+  preferredCategories?: string[];
+  exclusionCategories?: string[];
+  currentFiles?: string[];
+  changedFiles?: string[];
+  pathHints?: string[];
+  moduleHints?: string[];
+  queryIntentAvailable?: boolean;
+  renderedQueryAvailable?: boolean;
+  queryIntentUrl?: string;
+  renderedQueryUrl?: string;
 };
 
 interface Trace {
@@ -71,6 +134,24 @@ interface Trace {
       skippedRefs?: ContextInjectionRefSummary[];
       skippedProviderNativeRefs?: ContextInjectionRefSummary[];
     };
+  };
+  contextLifecycleAttempt?: {
+    packetId?: string;
+    contextAttemptId?: string;
+    repoName?: string;
+    indexId?: string;
+    indexFreshness?: string;
+    retrievalProviders?: string[];
+    refs?: ContextLifecycleRefSummary[];
+    contextInjection?: {
+      targetLayer?: string;
+      totalChars?: number;
+      injectedRefs?: ContextInjectionRefSummary[];
+      providerNativeRefs?: ContextInjectionRefSummary[];
+      skippedProviderNativeRefs?: ContextInjectionRefSummary[];
+      skippedRefs?: ContextInjectionRefSummary[];
+    };
+    contextQuery?: ContextQuerySummary;
   };
   contextEvaluation?: {
     traceId?: string; status?: string;
@@ -118,6 +199,59 @@ export default function NodeInspector({ trace, workflowEdges, contextEngineEnabl
   const downstream = workflowEdges ? getDownstreamNodes(workflowEdges, trace.node) : [];
 
   const toolsUsed = new Set((trace.toolCalls ?? []).map((tc) => tc.tool));
+  const contextAttempt = trace.contextLifecycleAttempt;
+  const orderedLifecycleRefs = orderContextRefs(contextAttempt);
+  const [openContentRef, setOpenContentRef] = useState<string | null>(null);
+  const [contentByRef, setContentByRef] = useState<Record<string, { loading?: boolean; error?: string; content?: string }>>({});
+  const [openQueryContent, setOpenQueryContent] = useState<string | null>(null);
+  const [queryContentByUrl, setQueryContentByUrl] = useState<Record<string, { loading?: boolean; error?: string; content?: string }>>({});
+
+  const toggleRefContent = async (ref: ContextLifecycleRefSummary) => {
+    const key = contextRefKey(ref);
+    if (openContentRef === key) {
+      setOpenContentRef(null);
+      return;
+    }
+    setOpenContentRef(key);
+    if (!ref.contentUrl || contentByRef[key]?.content || contentByRef[key]?.loading) return;
+    setContentByRef(prev => ({ ...prev, [key]: { loading: true } }));
+    try {
+      const response = await fetch(ref.contentUrl, { headers: authHeaders() });
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      const payload = await response.json();
+      const content = typeof payload.content === 'string' ? payload.content : '';
+      setContentByRef(prev => ({
+        ...prev,
+        [key]: { content: content || 'No stored chunk content.' },
+      }));
+    } catch (err) {
+      setContentByRef(prev => ({ ...prev, [key]: { error: (err as Error).message } }));
+    }
+  };
+
+  const toggleQueryContent = async (kind: 'query' | 'intent', url?: string) => {
+    if (!url) return;
+    const key = `${kind}:${url}`;
+    if (openQueryContent === key) {
+      setOpenQueryContent(null);
+      return;
+    }
+    setOpenQueryContent(key);
+    if (queryContentByUrl[key]?.content || queryContentByUrl[key]?.loading) return;
+    setQueryContentByUrl(prev => ({ ...prev, [key]: { loading: true } }));
+    try {
+      const response = await fetch(url, { headers: authHeaders() });
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      const payload = await response.json();
+      const content = formatQueryArtifactContent(payload.content);
+      setQueryContentByUrl(prev => ({
+        ...prev,
+        [key]: { content: content || 'No stored query content.' },
+      }));
+    } catch (err) {
+      setQueryContentByUrl(prev => ({ ...prev, [key]: { error: (err as Error).message } }));
+    }
+  };
 
   return (
     <div className="space-y-3">
@@ -157,8 +291,122 @@ export default function NodeInspector({ trace, workflowEdges, contextEngineEnabl
       </Section>
 
       {contextEngineEnabled && (
-      <Section icon={BookOpen} title="Repo context injection" defaultOpen={Boolean(trace.repoKnowledgeInjected?.mandatoryContextInjected)}>
-        {trace.repoKnowledgeInjected ? (
+      <Section icon={BookOpen} title="Repo context injection" defaultOpen={Boolean(contextAttempt || trace.repoKnowledgeInjected?.mandatoryContextInjected)}>
+        {contextAttempt ? (
+          <div className="space-y-2">
+            <KeyValueGrid
+              rows={[
+                ['attempt', contextAttempt.contextAttemptId ?? contextAttempt.packetId],
+                ['repo', contextAttempt.repoName],
+                ['index', contextAttempt.indexId],
+                ['freshness', contextAttempt.indexFreshness],
+                ['retrieval providers', (contextAttempt.retrievalProviders ?? []).join(', ') || undefined],
+                ['selected refs', countRefs(contextAttempt.refs, ref => ref.lifecycleStatus === 'selected' || Boolean(ref.isInjected) || ref.lifecycleStatus === 'loaded' || ref.lifecycleStatus === 'applied')],
+                ['mandatory refs', countRefs(contextAttempt.refs, ref => Boolean(ref.isMandatory))],
+                ['Cognee refs', countRefs(contextAttempt.refs, ref => Boolean(ref.isCognee))],
+                ['injected refs', countRefs(contextAttempt.refs, ref => Boolean(ref.isInjected))],
+                ['filtered refs', countRefs(contextAttempt.refs, ref => Boolean(ref.isFiltered))],
+                ['target layer', contextAttempt.contextInjection?.targetLayer],
+              ]}
+            />
+            {contextAttempt.contextQuery ? (
+              <div className="space-y-1.5">
+                <div className="overline">Retrieval query</div>
+                <KeyValueGrid
+                  rows={[
+                    ['role', contextAttempt.contextQuery.role],
+                    ['role family', contextAttempt.contextQuery.roleFamily],
+                    ['query hash', contextAttempt.contextQuery.renderedQueryHash],
+                    ['intent hash', contextAttempt.contextQuery.queryIntentHash],
+                    ['query length', contextAttempt.contextQuery.renderedQueryLength],
+                    ['signals', formatList(contextAttempt.contextQuery.querySignalSources)],
+                    ['sections', formatList(contextAttempt.contextQuery.querySignalSections)],
+                    ['required', formatList(contextAttempt.contextQuery.requiredCategories)],
+                    ['preferred', formatList(contextAttempt.contextQuery.preferredCategories)],
+                    ['excluded', formatList(contextAttempt.contextQuery.exclusionCategories)],
+                    ['current files', formatList(contextAttempt.contextQuery.currentFiles)],
+                    ['path hints', formatList(contextAttempt.contextQuery.pathHints)],
+                  ]}
+                />
+                <div className="flex flex-wrap gap-1">
+                  {contextAttempt.contextQuery.renderedQueryAvailable && contextAttempt.contextQuery.renderedQueryUrl ? (
+                    <button
+                      type="button"
+                      onClick={() => void toggleQueryContent('query', contextAttempt.contextQuery?.renderedQueryUrl)}
+                      className="px-1.5 py-0.5 rounded border border-app text-[11px] font-mono text-theme-secondary hover:text-theme-primary hover:bg-app-muted"
+                    >
+                      {openQueryContent === `query:${contextAttempt.contextQuery.renderedQueryUrl}` ? 'Hide query' : 'View query'}
+                    </button>
+                  ) : null}
+                  {contextAttempt.contextQuery.queryIntentAvailable && contextAttempt.contextQuery.queryIntentUrl ? (
+                    <button
+                      type="button"
+                      onClick={() => void toggleQueryContent('intent', contextAttempt.contextQuery?.queryIntentUrl)}
+                      className="px-1.5 py-0.5 rounded border border-app text-[11px] font-mono text-theme-secondary hover:text-theme-primary hover:bg-app-muted"
+                    >
+                      {openQueryContent === `intent:${contextAttempt.contextQuery.queryIntentUrl}` ? 'Hide intent' : 'View intent JSON'}
+                    </button>
+                  ) : null}
+                </div>
+                {openQueryContent ? (
+                  <div className="rounded border border-app bg-app-card p-2 max-h-72 overflow-auto whitespace-pre-wrap text-[11px] font-mono text-theme-secondary">
+                    {queryContentByUrl[openQueryContent]?.loading
+                      ? 'Loading query...'
+                      : queryContentByUrl[openQueryContent]?.error
+                        ? `Failed to load query: ${queryContentByUrl[openQueryContent]?.error}`
+                        : queryContentByUrl[openQueryContent]?.content || 'No content.'}
+                  </div>
+                ) : null}
+              </div>
+            ) : null}
+            {orderedLifecycleRefs.length ? (
+              <div className="space-y-1">
+                <div className="overline">Lifecycle refs</div>
+                {orderedLifecycleRefs.slice(0, 16).map((r, i) => {
+                  const key = contextRefKey(r, i);
+                  const contentState = contentByRef[key];
+                  const chunkId = contextChunkId(r);
+                  return (
+                  <div key={key} className={`text-[11px] font-mono border rounded-md p-1.5 ${r.isInjected ? 'border-accent-green/40 bg-accent-green/5' : r.isFiltered ? 'border-amber-500/40 bg-amber-500/5' : 'border-app text-theme-secondary'}`}>
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="min-w-0">
+                        <div className="text-theme-primary break-all">{r.path ?? r.title ?? r.refId}</div>
+                        <div className="mt-0.5 text-theme-subtle break-all">ref {r.refId ?? 'unknown'}</div>
+                        {chunkId ? <div className="mt-0.5 text-theme-subtle break-all">chunk {chunkId}</div> : null}
+                      </div>
+                      <div className="shrink-0 flex items-center gap-1">
+                        {r.contentAvailable && r.contentUrl ? (
+                          <button
+                            type="button"
+                            onClick={() => void toggleRefContent(r)}
+                            className="px-1.5 py-0.5 rounded border border-app text-theme-secondary hover:text-theme-primary hover:bg-app-muted"
+                          >
+                            {openContentRef === key ? 'Hide chunk' : 'View chunk'}
+                          </button>
+                        ) : null}
+                        <span className="text-theme-subtle">{r.lifecycleStatus ?? 'unknown'}</span>
+                      </div>
+                    </div>
+                    <div className="mt-1 text-theme-subtle">
+                      {[r.rank != null ? `rank ${r.rank}` : undefined, r.isMandatory ? 'mandatory' : undefined, r.isCognee ? 'Cognee' : undefined, r.injectionMode, r.kind, r.itemType, r.providerId ?? r.source].filter(Boolean).join(' · ')}
+                    </div>
+                    {(contextScoreLine(r) || r.filterReason || contextRefAuditLine(r)) && (
+                      <div className="mt-1 text-theme-subtle">
+                        {[contextScoreLine(r), contextRefAuditLine(r), r.filterReason ? `${r.filterStage ?? 'filtered'}: ${r.filterReason}` : undefined].filter(Boolean).join(' · ')}
+                      </div>
+                    )}
+                    {openContentRef === key && (
+                      <div className="mt-2 rounded border border-app bg-app-card p-2 max-h-72 overflow-auto whitespace-pre-wrap text-theme-secondary">
+                        {contentState?.loading ? 'Loading content...' : contentState?.error ? `Failed to load content: ${contentState.error}` : contentState?.content || 'No content.'}
+                      </div>
+                    )}
+                  </div>
+                  );
+                })}
+              </div>
+            ) : null}
+          </div>
+        ) : trace.repoKnowledgeInjected ? (
           <div className="space-y-2">
             <KeyValueGrid
               rows={[
@@ -480,13 +728,132 @@ function contextRefAuditLine(ref: ContextInjectionRefSummary): string | undefine
   if (!metadata) return undefined;
   const source = metadata.sourceMetadata;
   const parts = [
+    metadata.datasetName ? `dataset ${String(metadata.datasetName)}` : undefined,
+    metadata.sourceId ? `source ${String(metadata.sourceId)}` : undefined,
     metadata.cogneeChunkId || metadata.chunkId ? `chunk ${String(metadata.cogneeChunkId ?? metadata.chunkId)}` : undefined,
+    metadata.cogneeDataId ? `data ${String(metadata.cogneeDataId)}` : undefined,
     metadata.chunkIndex !== undefined ? `index ${String(metadata.chunkIndex)}` : undefined,
     metadata.documentRole ? `role ${String(metadata.documentRole)}` : undefined,
+    metadata.searchMode ? `mode ${String(metadata.searchMode)}` : undefined,
+    metadata.confidence !== undefined && metadata.confidence !== null ? `confidence ${formatContextScore(metadata.confidence)}` : undefined,
     source?.path ? `source ${String(source.path)}` : undefined,
     source?.fileHash ? `hash ${String(source.fileHash).slice(0, 12)}` : undefined,
   ].filter(Boolean);
   return parts.length ? parts.join(' · ') : undefined;
+}
+
+function contextScoreLine(ref: ContextLifecycleRefSummary): string | undefined {
+  const parts = [
+    ref.isCognee && ref.cogneeScore != null ? `Cognee raw ${formatContextScore(ref.cogneeScore)}` : undefined,
+    rerankerScoreLabel(ref),
+  ].filter(Boolean);
+  return parts.length ? parts.join(' · ') : undefined;
+}
+
+function rerankerScoreLabel(ref: ContextLifecycleRefSummary): string | undefined {
+  const score = firstFiniteNumber(ref.rerankerScore, ref.rerank?.rerankScore, ref.rerank?.semanticScore, ref.rerank?.score);
+  if (score != null) {
+    const provider = firstText(ref.rerank?.providerId);
+    return `reranker${provider ? ` ${provider}` : ''} ${formatContextScore(score)}`;
+  }
+  return ref.isCognee ? 'reranker not run' : undefined;
+}
+
+function contextChunkId(ref: ContextInjectionRefSummary): string | undefined {
+  return firstText(
+    ref.providerMetadata?.cogneeChunkId,
+    ref.providerMetadata?.chunkId,
+    ref.refId?.startsWith('cognee:') ? ref.refId.slice('cognee:'.length) : undefined,
+  );
+}
+
+function contextRefKey(ref: ContextLifecycleRefSummary, fallback?: number): string {
+  return String(ref.refId ?? ref.contentUrl ?? fallback ?? 'ref');
+}
+
+function formatList(values: unknown): string | undefined {
+  if (!Array.isArray(values) || values.length === 0) return undefined;
+  return values.map(String).join(', ');
+}
+
+function formatQueryArtifactContent(value: unknown): string {
+  if (typeof value !== 'string') return '';
+  try {
+    return JSON.stringify(JSON.parse(value), null, 2);
+  } catch {
+    return value;
+  }
+}
+
+function countRefs(refs: ContextLifecycleRefSummary[] | undefined, predicate: (ref: ContextLifecycleRefSummary) => boolean): number {
+  return (refs ?? []).filter(predicate).length;
+}
+
+function orderContextRefs(attempt: Trace['contextLifecycleAttempt'] | undefined): ContextLifecycleRefSummary[] {
+  const injectedOrder = refOrderMap(attempt?.contextInjection?.injectedRefs);
+  return (attempt?.refs ?? [])
+    .map((ref, index) => ({ ref, index }))
+    .sort((a, b) => {
+      const groupDelta = contextRefDisplayGroup(a.ref) - contextRefDisplayGroup(b.ref);
+      if (groupDelta !== 0) return groupDelta;
+      if (contextRefDisplayGroup(a.ref) === 0) {
+        const injectedOrderDelta = refOrder(injectedOrder, a.ref) - refOrder(injectedOrder, b.ref);
+        if (injectedOrderDelta !== 0) return injectedOrderDelta;
+      }
+      const timeDelta = contextRefGroupTime(a.ref) - contextRefGroupTime(b.ref);
+      if (timeDelta !== 0) return timeDelta;
+      const rankDelta = contextRefRank(a.ref) - contextRefRank(b.ref);
+      if (rankDelta !== 0) return rankDelta;
+      return a.index - b.index;
+    })
+    .map((entry) => entry.ref);
+}
+
+function contextRefDisplayGroup(ref: ContextLifecycleRefSummary): number {
+  const status = String(ref.lifecycleStatus ?? '').toLowerCase();
+  const mode = String(ref.injectionMode ?? '').toLowerCase();
+  if (ref.isInjected || ['injected', 'loaded', 'applied', 'provider_native'].includes(status) || ['full', 'provider_native'].includes(mode)) return 0;
+  if (ref.isFiltered || ['filtered', 'rejected', 'skipped'].includes(status) || mode === 'skipped') return 1;
+  if (status === 'selected' || mode === 'manifest') return 2;
+  return 3;
+}
+
+function contextRefGroupTime(ref: ContextLifecycleRefSummary): number {
+  const group = contextRefDisplayGroup(ref);
+  const eventTypes = group === 0
+    ? ['injected_full', 'provider_native', 'loaded', 'applied', 'reported_loaded', 'reported_applied']
+    : group === 1
+      ? ['filtered', 'rejected', 'skipped']
+      : group === 2
+        ? ['selected', 'injected_manifest']
+        : ['candidate'];
+  return firstEventTime(ref.timeline, eventTypes);
+}
+
+function firstEventTime(timeline: ContextLifecycleEventSummary[] | undefined, types: string[]): number {
+  for (const type of types) {
+    const event = timeline?.find((entry) => entry.type === type);
+    const createdAt = event?.createdAt ? new Date(event.createdAt).getTime() : Number.NaN;
+    if (Number.isFinite(createdAt)) return createdAt;
+  }
+  return Number.POSITIVE_INFINITY;
+}
+
+function contextRefRank(ref: ContextLifecycleRefSummary): number {
+  const rank = firstFiniteNumber(ref.rank, ref.rerank?.finalRank, ref.rerank?.originalRank);
+  return rank ?? Number.POSITIVE_INFINITY;
+}
+
+function refOrderMap(refs: ContextInjectionRefSummary[] | undefined): Map<string, number> {
+  const map = new Map<string, number>();
+  for (const [index, ref] of (refs ?? []).entries()) {
+    if (ref.refId && !map.has(ref.refId)) map.set(ref.refId, index);
+  }
+  return map;
+}
+
+function refOrder(order: Map<string, number>, ref: ContextLifecycleRefSummary): number {
+  return ref.refId && order.has(ref.refId) ? order.get(ref.refId)! : Number.POSITIVE_INFINITY;
 }
 
 function KeyValueGrid({ rows }: { rows: Array<[string, unknown, string?]> }) {
@@ -578,6 +945,31 @@ function getDownstreamNodes(edges: NonNullable<Props['workflowEdges']>, node: st
 
 function formatScore(value?: number): string | undefined {
   return typeof value === 'number' ? `${Math.round(value * 100)}%` : undefined;
+}
+
+function firstText(...values: unknown[]): string | undefined {
+  for (const value of values) {
+    if (typeof value === 'string' && value.trim()) return value;
+    if (typeof value === 'number' && Number.isFinite(value)) return String(value);
+  }
+  return undefined;
+}
+
+function firstFiniteNumber(...values: unknown[]): number | undefined {
+  for (const value of values) {
+    const numeric = Number(value);
+    if (Number.isFinite(numeric)) return numeric;
+  }
+  return undefined;
+}
+
+function formatContextScore(value: unknown): string {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) return String(value);
+  if (Math.abs(numeric) >= 100) return numeric.toFixed(0);
+  if (Math.abs(numeric) >= 10) return numeric.toFixed(2).replace(/\.?0+$/, '');
+  if (Math.abs(numeric) >= 1) return numeric.toFixed(3).replace(/\.?0+$/, '');
+  return numeric.toFixed(4).replace(/\.?0+$/, '');
 }
 
 function previewValue(v: unknown): string {

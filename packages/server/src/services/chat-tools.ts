@@ -1885,7 +1885,7 @@ async function runSpawnInBackground(
     const traceOutput: Record<string, unknown> = { response, session_id: sessionId };
     const executionTraceId = randomUUID();
     let contextUsageTrace: { traceId?: string; preselectedCount?: number; loadedCount: number; appliedCount: number; skippedCount: number } | null = null;
-    let contextEvaluationTrace: Record<string, unknown> | undefined;
+    let contextEvaluationId: string | undefined;
     if (repoKnowledgePacketSummary) {
       try {
         const repoKnowledge = new RepoKnowledgeGraphService(db);
@@ -1916,7 +1916,11 @@ async function runSpawnInBackground(
           appliedCount: recordedUsage.appliedCount,
           skippedCount: recordedUsage.skippedCount,
         } : null;
-        contextEvaluationTrace = recordedUsage?.contextEvaluation;
+        contextEvaluationId = typeof recordedUsage?.contextEvaluation?.evaluationId === 'string'
+          ? recordedUsage.contextEvaluation.evaluationId
+          : typeof recordedUsage?.contextEvaluation?.traceId === 'string'
+            ? recordedUsage.contextEvaluation.traceId
+            : undefined;
         if (recordedUsage?.repoContextUsage && !hasMeaningfulRepoContextUsage(traceOutput.repo_context_usage)) {
           traceOutput.repo_context_usage = recordedUsage.repoContextUsage;
         }
@@ -1937,9 +1941,9 @@ async function runSpawnInBackground(
       output: traceOutput,
       toolCalls,
       activity: activity.map(a => ({ ...a, type: a.type as any, content: a.tool ?? '' })),
-      repoKnowledgeInjected: repoKnowledgePacketSummary ?? undefined,
-      contextUsage: contextUsageTrace ?? undefined,
-      contextEvaluation: contextEvaluationTrace,
+      contextAttemptId: repoKnowledgePacketSummary?.packetId,
+      contextUsageTraceId: contextUsageTrace?.traceId,
+      contextEvaluationId,
       runtimeContext: {
         repoContextLoadingGuidancePresent,
         repoContextLoadingGuidanceInjected,
@@ -1988,7 +1992,7 @@ async function runSpawnInBackground(
       inputState: { prompt: initialRenderedPrompt }, renderedPrompt: initialRenderedPrompt, rawResponse: '',
       output: { error: errorMsg, session_id: failedSessionId },
       activity: activity.map(a => ({ ...a, type: a.type as any, content: a.tool ?? '' })),
-      repoKnowledgeInjected: repoKnowledgePacketSummary ?? undefined,
+      contextAttemptId: repoKnowledgePacketSummary?.packetId,
       runtimeContext: {
         repoContextLoadingGuidancePresent,
         repoContextLoadingGuidanceInjected,
@@ -2220,7 +2224,7 @@ const queryDatabase: ChatTool = {
     required: ['collection'],
   },
   async execute(args, db) {
-    const allowedCollections = ['workflows', 'executions', 'agents', 'repos', 'learnings', 'chat_sessions', 'execution_logs', 'node_traces', 'repo_knowledge_indexes', 'knowledge_nodes', 'knowledge_edges', 'node_context_packets', 'context_usage_traces'];
+    const allowedCollections = ['workflows', 'executions', 'agents', 'repos', 'learnings', 'chat_sessions', 'execution_logs', 'node_traces', 'repo_knowledge_indexes', 'knowledge_nodes', 'knowledge_edges', 'context_attempts', 'context_refs', 'context_ref_events', 'context_evaluations', 'context_artifacts'];
     const collection = args.collection as string;
     if (!allowedCollections.includes(collection)) {
       return { error: `Collection "${collection}" not allowed. Allowed: ${allowedCollections.join(', ')}` };

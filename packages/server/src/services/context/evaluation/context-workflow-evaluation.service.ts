@@ -11,16 +11,21 @@ import { WORKFLOW_EVIDENCE_PACKING_VERSION, buildWorkflowSemanticEvaluationPromp
 import { resolveAllenPython } from '../../python-runtime.js';
 import { isContextEngineEnabled } from '../config/context-provider-config.js';
 import { resolveContextLlmConfig } from '../config/context-llm-config.js';
+import { ContextLifecycleStore } from '../lifecycle/context-lifecycle-store.js';
 
 type WorkflowSemanticStatus = 'queued' | 'running' | 'completed' | 'failed';
 
 type WorkflowSemanticJob = {
   jobId: string;
+  evaluationId?: string;
+  traceId?: string;
   executionId: string;
   rootExecutionId: string;
   workflowName?: string;
   provider: 'deepeval';
   mode: 'workflow_summary';
+  scope?: 'workflow';
+  active?: boolean;
   status: WorkflowSemanticStatus;
   attempts: number;
   maxAttempts: number;
@@ -41,6 +46,7 @@ type WorkflowSemanticJob = {
   judgeModel?: string;
   judgeDurationMs?: number;
   judgeCostUsd?: number;
+  artifactHashes?: Record<string, unknown>;
   error?: string;
   diagnostics?: Array<Record<string, unknown>>;
   createdAt: Date;
@@ -48,7 +54,12 @@ type WorkflowSemanticJob = {
 };
 
 const DEFAULT_MAX_ATTEMPTS = 3;
-const WORKFLOW_TERMINAL_STATUSES = new Set(['completed', 'failed']);
+const WORKFLOW_AUTO_EVALUATION_STATUSES = new Set(['completed', 'failed']);
+
+type WorkflowEvaluationEnqueueOptions = {
+  force?: boolean;
+  allowAnyExecutionStatus?: boolean;
+};
 
 export class ContextWorkflowEvaluationService {
   private jobs: Collection<WorkflowSemanticJob>;
@@ -58,33 +69,46 @@ export class ContextWorkflowEvaluationService {
   private nodeEvaluations: Collection;
   private traces: Collection;
   private interventions: Collection;
+  private lifecycle: ContextLifecycleStore;
 
   constructor(private db: Db) {
-    this.jobs = db.collection<WorkflowSemanticJob>('context_workflow_evaluation_jobs');
+    this.jobs = db.collection<WorkflowSemanticJob>('context_evaluations');
     this.executions = db.collection('executions');
-    this.packets = db.collection('node_context_packets');
-    this.usage = db.collection('context_usage_traces');
-    this.nodeEvaluations = db.collection('context_evaluation_traces');
+    this.packets = db.collection('context_attempts');
+    this.usage = db.collection('context_ref_events');
+    this.nodeEvaluations = db.collection('context_evaluations');
     this.traces = db.collection('execution_traces');
     this.interventions = db.collection('workflow_interventions');
+    this.lifecycle = new ContextLifecycleStore(db);
   }
 
-  async enqueueForExecution(executionId: string, reason = 'workflow_terminal', options: { force?: boolean } = {}): Promise<WorkflowSemanticJob | null> {
+  async enqueueForExecution(executionId: string, reason = 'workflow_terminal', options: WorkflowEvaluationEnqueueOptions = {}): Promise<WorkflowSemanticJob | null> {
     if (!isWorkflowDeepEvalEnabled()) return null;
     const exec = await this.executions.findOne({ id: executionId });
-    if (!exec || !WORKFLOW_TERMINAL_STATUSES.has(String(exec.status))) return null;
+    if (!exec) return null;
+    if (!options.allowAnyExecutionStatus && !WORKFLOW_AUTO_EVALUATION_STATUSES.has(String(exec.status))) return null;
     const rootExecutionId = firstString(exec.rootExecutionId, exec.parentExecutionId, exec.id) ?? executionId;
-    const existing = await this.jobs.findOne({ executionId, provider: 'deepeval', mode: 'workflow_summary' });
+    const existing = await this.jobs.findOne({ executionId, provider: 'deepeval', mode: 'workflow_summary', scope: 'workflow', active: true });
     const now = new Date();
     if (!options.force && (existing?.status === 'running' || existing?.status === 'queued')) return existing;
     const resetExisting = options.force && existing != null;
+    if (resetExisting) {
+      await this.jobs.updateMany(
+        { executionId, provider: 'deepeval', mode: 'workflow_summary', scope: 'workflow', active: true },
+        { $set: { active: false, validTo: now, supersededAt: now } },
+      );
+    }
     const job: WorkflowSemanticJob = {
       jobId: resetExisting ? randomUUID() : firstString(existing?.jobId) ?? randomUUID(),
+      evaluationId: randomUUID(),
+      traceId: randomUUID(),
       executionId,
       rootExecutionId,
       workflowName: firstString(exec.workflowName),
       provider: 'deepeval',
       mode: 'workflow_summary',
+      scope: 'workflow',
+      active: true,
       status: 'queued',
       attempts: resetExisting ? 0 : Number(existing?.attempts ?? 0),
       maxAttempts: workflowSemanticMaxAttempts(),
@@ -101,7 +125,7 @@ export class ContextWorkflowEvaluationService {
       updatedAt: now,
     };
     await this.jobs.updateOne(
-      { executionId, provider: 'deepeval', mode: 'workflow_summary' },
+      { executionId, provider: 'deepeval', mode: 'workflow_summary', scope: 'workflow', active: true },
       {
         $set: job,
         $unset: {
@@ -121,10 +145,6 @@ export class ContextWorkflowEvaluationService {
       },
       { upsert: true },
     );
-    await this.executions.updateOne(
-      { id: executionId },
-      { $set: { contextWorkflowEvaluation: await this.summarizeWorkflowJobWithFreshness(job) } },
-    ).catch(() => undefined);
     return job;
   }
 
@@ -133,6 +153,8 @@ export class ContextWorkflowEvaluationService {
     const now = new Date();
     const rows = await this.jobs.find({
       provider: 'deepeval',
+      scope: 'workflow',
+      active: true,
       mode: 'workflow_summary',
       $or: [
         { status: 'queued' },
@@ -164,7 +186,7 @@ export class ContextWorkflowEvaluationService {
 
   async runWorkflowEvaluation(jobId: string): Promise<WorkflowSemanticJob | null> {
     if (!isWorkflowDeepEvalEnabled()) return null;
-    const job = await this.jobs.findOne({ jobId });
+    const job = await this.jobs.findOne({ jobId, scope: 'workflow', active: true });
     if (!job) return null;
     const attempts = Number(job.attempts ?? 0);
     const maxAttempts = workflowSemanticMaxAttempts();
@@ -200,6 +222,7 @@ export class ContextWorkflowEvaluationService {
         promptArtifacts.packedEvidencePayload,
       );
       const completed: Partial<WorkflowSemanticJob> = {
+        ...job,
         status: 'completed',
         attempts: nextAttempt,
         maxAttempts,
@@ -209,12 +232,22 @@ export class ContextWorkflowEvaluationService {
         diagnostics: normalizeDiagnostics(result.diagnostics),
         updatedAt: new Date(),
       };
-      await this.jobs.updateOne({ jobId }, { $set: completed, $unset: { error: '', nextRetryAt: '' } });
-      const refreshed = await this.jobs.findOne({ jobId });
+      const refreshed = await this.lifecycle.replaceWorkflowEvaluation({
+        executionId: job.executionId,
+        rootExecutionId: job.rootExecutionId,
+        job: { ...completed, error: undefined, nextRetryAt: undefined } as Record<string, unknown>,
+        artifacts: {
+          evidencePayload: promptArtifacts.evidencePayload,
+          packedEvidencePayload: promptArtifacts.packedEvidencePayload,
+          prompt: promptArtifacts.prompt,
+          rawJudgeResponse: firstString(judgeRun.audit.rawJudgeResponse),
+        },
+      }) as WorkflowSemanticJob;
       if (refreshed) await this.updateExecutionSummary(refreshed.executionId, refreshed);
       return refreshed;
     } catch (err) {
       const failed: Partial<WorkflowSemanticJob> = {
+        ...job,
         status: 'failed',
         attempts: nextAttempt,
         maxAttempts,
@@ -228,15 +261,18 @@ export class ContextWorkflowEvaluationService {
         }],
         updatedAt: new Date(),
       };
-      await this.jobs.updateOne({ jobId }, { $set: failed });
-      const refreshed = await this.jobs.findOne({ jobId });
+      const refreshed = await this.lifecycle.replaceWorkflowEvaluation({
+        executionId: job.executionId,
+        rootExecutionId: job.rootExecutionId,
+        job: failed as Record<string, unknown>,
+      }) as WorkflowSemanticJob;
       if (refreshed) await this.updateExecutionSummary(refreshed.executionId, refreshed);
       return refreshed;
     }
   }
 
   async getForExecution(executionId: string): Promise<WorkflowSemanticJob | null> {
-    return this.jobs.findOne({ executionId, provider: 'deepeval', mode: 'workflow_summary' });
+    return this.jobs.findOne({ executionId, provider: 'deepeval', mode: 'workflow_summary', scope: 'workflow', active: true });
   }
 
   async getSummaryForExecution(executionId: string): Promise<Record<string, unknown> | null> {
@@ -256,18 +292,27 @@ export class ContextWorkflowEvaluationService {
       executionId,
       ...descendants.map((row) => String(row.id)).filter(Boolean),
     ]));
-    const [execution, nodeContextPackets, usageTraces, nodeEvaluations, executionTraces] = await Promise.all([
+    const [execution, attemptRows, nodeEvaluations, executionTraces] = await Promise.all([
       this.executions.findOne({ id: executionId }),
       this.packets.find({ executionId: { $in: executionIds } }).sort({ createdAt: 1 }).toArray(),
-      this.usage.find({
-        $or: [
-          { executionId: { $in: executionIds } },
-          { parentExecutionId: executionId },
-          { rootExecutionId: executionId },
-        ],
-      }).sort({ createdAt: 1 }).toArray(),
-      this.nodeEvaluations.find({ executionId: { $in: executionIds } }).sort({ createdAt: 1 }).toArray(),
+      this.nodeEvaluations.find({ executionId: { $in: executionIds }, scope: 'node', active: true }).sort({ createdAt: 1 }).toArray(),
       this.traces.find({ executionId: { $in: executionIds }, type: 'agent' }).sort({ startedAt: 1 }).toArray(),
+    ]);
+    await Promise.all(executionTraces.map((trace) => {
+      const contextAttemptId = firstString(trace.contextAttemptId);
+      if (!contextAttemptId) return Promise.resolve();
+      return this.lifecycle.recordSourceDiscoveryFromTrace({
+        contextAttemptId,
+        usageTraceId: firstString(trace.contextUsageTraceId),
+        executionTraceId: firstString(trace.executionTraceId),
+        trace,
+      });
+    }));
+    const [nodeContextPackets, usageTraces] = await Promise.all([
+      Promise.all(attemptRows.map((row) => this.lifecycle.getAttemptPacketView(String(row.contextAttemptId))))
+        .then((rows) => rows.filter((row): row is Record<string, unknown> => row != null)),
+      Promise.all(attemptRows.map((row) => this.lifecycle.getUsageView(String(row.contextAttemptId))))
+        .then((rows) => rows.filter((row): row is Record<string, unknown> => row != null)),
     ]);
     return {
       execution,
@@ -280,10 +325,8 @@ export class ContextWorkflowEvaluationService {
   }
 
   private async updateExecutionSummary(executionId: string, job: Partial<WorkflowSemanticJob>): Promise<void> {
-    await this.executions.updateOne(
-      { id: executionId },
-      { $set: { contextWorkflowEvaluation: await this.summarizeWorkflowJobWithFreshness(job) } },
-    ).catch(() => undefined);
+    void executionId;
+    void job;
   }
 
   private async summarizeWorkflowJobWithFreshness(job: Partial<WorkflowSemanticJob>): Promise<Record<string, unknown>> {
@@ -439,11 +482,8 @@ function buildWorkflowAuditFields(
     promptPreview: promptArtifacts.prompt.slice(0, workflowEvalPromptPreviewChars()),
     promptChars: promptArtifacts.prompt.length,
     promptSha256: createHash('sha256').update(promptArtifacts.prompt).digest('hex'),
-    evidencePayload: promptArtifacts.evidencePayload,
-    packedEvidencePayload: promptArtifacts.packedEvidencePayload,
     evidenceTruncated: promptArtifacts.evidenceTruncated,
     evidenceStats: promptArtifacts.evidenceStats,
-    rawJudgeResponse: firstString(judgeAudit.rawJudgeResponse),
     judgeProvider: firstString(judgeAudit.judgeProvider),
     judgeModel: firstString(judgeAudit.judgeModel),
     judgeDurationMs: numericValue(judgeAudit.judgeDurationMs),
@@ -653,11 +693,9 @@ function workflowAuditSummary(job: Partial<WorkflowSemanticJob>): Record<string,
     promptPreview: job.promptPreview,
     promptChars: job.promptChars,
     promptSha256: job.promptSha256,
-    evidencePayload: job.evidencePayload,
-    packedEvidencePayload: job.packedEvidencePayload,
+    artifactHashes: job.artifactHashes,
     evidenceTruncated: job.evidenceTruncated,
     evidenceStats: job.evidenceStats,
-    rawJudgeResponse: job.rawJudgeResponse,
     judgeProvider: job.judgeProvider,
     judgeModel: job.judgeModel,
     judgeDurationMs: job.judgeDurationMs,

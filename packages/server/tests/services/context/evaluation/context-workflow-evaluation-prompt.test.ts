@@ -106,7 +106,17 @@ describe('buildWorkflowSemanticEvaluationPromptArtifacts', () => {
         selectedRefs: [{ refId: 'guide', path: '.claude/rules/coding-guidelines-frontend.md', mandatory: true }],
         contextInjection: { injectedRefs: [{ refId: 'guide', path: '.claude/rules/coding-guidelines-frontend.md', content: largeInjected }] },
       }],
-      usageTraces: [],
+      usageTraces: [{
+        executionId: 'exec-raw-trace',
+        nodeName: 'implement',
+        nodeRole: 'engineering-lead',
+        attempt: 1,
+        packetId: 'packet-raw-trace',
+        sourceDiscoveryEvidence: [
+          { tool: 'Read', paths: ['packages/ui/src/vendor.tsx'], toolUseId: 'read-1' },
+          { tool: 'Bash', paths: ['packages/ui/src/vendor.tsx'], commandPreview: 'rg "vendor" packages/ui/src/vendor.tsx', toolUseId: 'bash-1' },
+        ],
+      }],
       nodeEvaluations: [],
       executionTraces: [{
         executionId: 'exec-raw-trace',
@@ -116,10 +126,6 @@ describe('buildWorkflowSemanticEvaluationPromptArtifacts', () => {
         status: 'completed',
         repoKnowledgeInjected: largeInjected,
         rawResponse: 'Implemented the fix.',
-        toolCalls: [
-          { tool: 'Read', args: { path: 'packages/ui/src/vendor.tsx', content: largeInjected }, result: largeInjected },
-          { tool: 'Bash', args: { command: 'rg "vendor" packages/ui/src/vendor.tsx' }, result: largeInjected },
-        ],
       }],
     });
 
@@ -136,7 +142,17 @@ describe('buildWorkflowSemanticEvaluationPromptArtifacts', () => {
       execution: { id: 'exec-source-discovery', workflowName: 'bug-investigate-and-fix', status: 'completed' },
       descendants: [],
       nodeContextPackets: [],
-      usageTraces: [],
+      usageTraces: [{
+        executionId: 'exec-source-discovery',
+        nodeName: 'investigate',
+        nodeRole: 'allen-bug-investigator',
+        attempt: 1,
+        packetId: 'packet-source-discovery',
+        sourceDiscoveryEvidence: [
+          { tool: 'Read', paths: ['packages/server/src/services/vendor.service.ts'], toolUseId: 'read-1' },
+          { tool: 'Bash', paths: ['packages/server/src/services/vendor.service.ts'], commandPreview: 'rg "vendor" packages/server/src/services/vendor.service.ts', toolUseId: 'bash-1' },
+        ],
+      }],
       nodeEvaluations: [],
       executionTraces: [{
         executionId: 'exec-source-discovery',
@@ -145,10 +161,6 @@ describe('buildWorkflowSemanticEvaluationPromptArtifacts', () => {
         attempt: 1,
         status: 'completed',
         rawResponse: 'Read the source file and found the root cause.',
-        toolCalls: [
-          { tool: 'Read', args: { path: 'packages/server/src/services/vendor.service.ts' }, toolUseId: 'read-1' },
-          { tool: 'Bash', args: { command: 'rg "vendor" packages/server/src/services/vendor.service.ts' }, toolUseId: 'bash-1' },
-        ],
       }],
     });
 
@@ -309,6 +321,7 @@ describe('buildWorkflowSemanticEvaluationPromptArtifacts', () => {
         packetId: 'packet-old-eval',
         loaded: [{ refId: 'cognee:vendor-doc', providerId: 'cognee_memory' }],
         claimedUsed: [{ refId: 'cognee:vendor-doc', providerId: 'cognee_memory' }],
+        sourceDiscoveryEvidence: [{ tool: 'Read', paths: ['docs/vendor-onboarding.md'] }],
       }],
       nodeEvaluations: [{
         executionId: 'exec-old-eval',
@@ -324,7 +337,6 @@ describe('buildWorkflowSemanticEvaluationPromptArtifacts', () => {
         agent: 'allen-bug-investigator',
         attempt: 1,
         status: 'completed',
-        toolCalls: [{ tool: 'Read', args: { path: 'docs/vendor-onboarding.md' } }],
       }],
     });
 

@@ -1,7 +1,17 @@
 import { createConfiguredContextReranker, type ContextReranker } from './repo-context-reranker.js';
 import { CogneeMemoryProvider } from '../cognee/repo-context-cognee-provider.js';
+import { boundedScoreEnv, DEFAULT_COGNEE_MIN_INJECTION_SCORE, DEFAULT_COGNEE_MIN_SELECTION_SCORE } from '../cognee/cognee-retrieval-policy.js';
 import { cogneeMandatoryGraphMode, configuredContextProvider } from '../config/context-provider-config.js';
+import {
+  buildContextQueryIntent,
+  contextQueryIntentHash,
+  renderedContextQueryHash,
+  renderContextQuery,
+  type ContextQueryIntent,
+} from './context-query-intent.js';
 import type { Db } from 'mongodb';
+
+const DEFAULT_CONTEXT_MIN_RERANK_SCORE = 0.45;
 
 export type RepoContextProvider = 'claude' | 'codex' | 'unknown';
 
@@ -59,6 +69,11 @@ export interface KnowledgeRetrievalInput {
   parentPacketId?: string;
   parentExecutionId?: string | null;
   rootExecutionId?: string;
+  contextQueryIntent?: ContextQueryIntent;
+  renderedContextQuery?: string;
+  contextQueryIntentHash?: string;
+  renderedContextQueryHash?: string;
+  renderedContextQueryLength?: number;
 }
 
 export interface KnowledgeCandidateRef {
@@ -145,6 +160,11 @@ export interface RepoContextPacket {
   rerankerProviders: string[];
   retrievalProviders: string[];
   currentFiles: string[];
+  contextQueryIntent?: ContextQueryIntent;
+  renderedContextQuery?: string;
+  contextQueryIntentHash?: string;
+  renderedContextQueryHash?: string;
+  renderedContextQueryLength?: number;
   createdAt: Date;
 }
 
@@ -215,10 +235,20 @@ export class RepoContextEngine {
   }
 
   async buildPacket(input: KnowledgeRetrievalInput & { packetId: string; executionId: string; worktreePath?: unknown }): Promise<RepoContextPacket> {
+    const contextQueryIntent = input.contextQueryIntent ?? buildContextQueryIntent(input);
+    const renderedContextQuery = input.renderedContextQuery ?? renderContextQuery(contextQueryIntent);
+    const queryInput = {
+      ...input,
+      contextQueryIntent,
+      renderedContextQuery,
+      contextQueryIntentHash: input.contextQueryIntentHash ?? contextQueryIntentHash(contextQueryIntent),
+      renderedContextQueryHash: input.renderedContextQueryHash ?? renderedContextQueryHash(renderedContextQuery),
+      renderedContextQueryLength: input.renderedContextQueryLength ?? renderedContextQuery.length,
+    };
     const results: KnowledgeRetrievalResult[] = [];
     for (const provider of this.providers) {
       try {
-        results.push(await provider.retrieve(input));
+        results.push(await provider.retrieve(queryInput));
       } catch (err) {
         const mandatoryGraphRequired = provider.providerId === 'mandatory_graph'
           && (contextProviderFallback() === 'graph' || cogneeMandatoryGraphMode() === 'required');
@@ -240,25 +270,30 @@ export class RepoContextEngine {
 
     const allCandidates = results.flatMap((result) => result.selectedRefs);
     const reranked = await this.reranker.rerank({
-      repoId: input.repoId,
-      repoName: input.repoName,
-      repoPath: input.repoPath,
-      indexId: input.indexId,
-      indexFreshness: input.indexFreshness,
-      workflowName: input.workflowName,
-      nodeName: input.nodeName,
-      nodeRole: input.nodeRole,
-      executionKind: input.executionKind,
-      targetRole: input.targetRole,
-      callerRole: input.callerRole,
-      attempt: input.attempt,
-      state: input.state,
-      prompt: input.prompt,
-      provider: input.provider,
-      currentFiles: input.currentFiles,
-      parentPacketId: input.parentPacketId,
-      parentExecutionId: input.parentExecutionId,
-      rootExecutionId: input.rootExecutionId,
+      repoId: queryInput.repoId,
+      repoName: queryInput.repoName,
+      repoPath: queryInput.repoPath,
+      indexId: queryInput.indexId,
+      indexFreshness: queryInput.indexFreshness,
+      workflowName: queryInput.workflowName,
+      nodeName: queryInput.nodeName,
+      nodeRole: queryInput.nodeRole,
+      executionKind: queryInput.executionKind,
+      targetRole: queryInput.targetRole,
+      callerRole: queryInput.callerRole,
+      attempt: queryInput.attempt,
+      state: queryInput.state,
+      prompt: queryInput.prompt,
+      provider: queryInput.provider,
+      currentFiles: queryInput.currentFiles,
+      parentPacketId: queryInput.parentPacketId,
+      parentExecutionId: queryInput.parentExecutionId,
+      rootExecutionId: queryInput.rootExecutionId,
+      contextQueryIntent: queryInput.contextQueryIntent,
+      renderedContextQuery: queryInput.renderedContextQuery,
+      contextQueryIntentHash: queryInput.contextQueryIntentHash,
+      renderedContextQueryHash: queryInput.renderedContextQueryHash,
+      renderedContextQueryLength: queryInput.renderedContextQueryLength,
       candidates: allCandidates,
     });
     const composed = composeProviderResults(results, reranked.rankedRefs);
@@ -288,12 +323,17 @@ export class RepoContextEngine {
       availableRefs: composed.availableRefs,
       candidateRefs: composed.candidateRefs,
       providerTraces: results.flatMap((result) => result.trace),
-      providerDiagnostics: [...results.flatMap((result) => result.diagnostics), ...reranked.diagnostics],
+      providerDiagnostics: [...results.flatMap((result) => result.diagnostics), ...reranked.diagnostics, ...composed.diagnostics],
       rerankerTraces: reranked.traces,
       rerankerDiagnostics: reranked.diagnostics,
       rerankerProviders: [reranked.providerId],
       retrievalProviders: [...results.map((result) => result.providerId), reranked.providerId],
       currentFiles: input.currentFiles,
+      contextQueryIntent: queryInput.contextQueryIntent,
+      renderedContextQuery: queryInput.renderedContextQuery,
+      contextQueryIntentHash: queryInput.contextQueryIntentHash,
+      renderedContextQueryHash: queryInput.renderedContextQueryHash,
+      renderedContextQueryLength: queryInput.renderedContextQueryLength,
       createdAt: new Date(),
     };
   }
@@ -346,9 +386,11 @@ function composeProviderResults(results: KnowledgeRetrievalResult[], rankedRefs:
   rejectedRefs: KnowledgeCandidateRef[];
   availableRefs: KnowledgeCandidateRef[];
   candidateRefs: KnowledgeCandidateRef[];
+  diagnostics: Array<Record<string, unknown>>;
 } {
   const selected: KnowledgeCandidateRef[] = [];
   const rejected: KnowledgeCandidateRef[] = [];
+  const thresholds = contextRelevanceThresholds();
   const seenRefIds = new Set<string>();
   const seenContentHashes = new Set<string>();
   const orderedRefs = [...rankedRefs].sort((a, b) => {
@@ -358,6 +400,11 @@ function composeProviderResults(results: KnowledgeRetrievalResult[], rankedRefs:
   });
 
   for (const ref of orderedRefs) {
+    const thresholdRejection = contextRefThresholdRejection(ref, thresholds);
+    if (thresholdRejection) {
+      rejected.push(withThresholdRejection(ref, thresholdRejection));
+      continue;
+    }
     if (seenRefIds.has(ref.refId)) {
       rejected.push({ ...ref, reason: `Duplicate context ref skipped after reranking: ${ref.reason}` });
       continue;
@@ -375,18 +422,123 @@ function composeProviderResults(results: KnowledgeRetrievalResult[], rankedRefs:
   const explicitInjectableIds = new Set(results.flatMap((result) => result.injectableRefs ?? []).map((ref) => ref.refId));
   const injectableRefs = selected.filter((ref) => {
     if (ref.mandatory || ref.targetLayer === 'system_prompt') return true;
+    if (!passesInjectionThreshold(ref, thresholds)) return false;
     if (explicitInjectableIds.has(ref.refId)) return true;
     return ref.providerMetadata?.injectionDecision === 'mandatory_full'
       || ref.providerMetadata?.injectionDecision === 'snippet'
       || ref.providerMetadata?.injectionPolicy === 'injectable';
   });
+  rejected.push(...selected
+    .filter((ref) => isOptionalCogneeRef(ref) && isInjectableDecision(ref) && !passesInjectionThreshold(ref, thresholds))
+    .map((ref) => withThresholdRejection(ref, { code: 'below_injection_threshold', threshold: thresholds.minInjectionScore })));
   return {
     selectedRefs: selected,
     injectableRefs,
     rejectedRefs: rejected,
     availableRefs: selected.filter((ref) => !ref.mandatory),
     candidateRefs: results.flatMap((result) => result.candidates),
+    diagnostics: [{
+      code: 'context_relevance_thresholds_applied',
+      severity: 'info',
+      minCogneeSelectionScore: thresholds.minCogneeSelectionScore,
+      minRerankScore: thresholds.minRerankScore,
+      minInjectionScore: thresholds.minInjectionScore,
+      thresholdRejectedCount: rejected.filter((ref) => typeof ref.providerMetadata?.rejectionReason === 'string' && String(ref.providerMetadata.rejectionReason).startsWith('below_')).length,
+      selectedCount: selected.length,
+      injectableCount: injectableRefs.length,
+      message: 'Optional Cognee context was filtered using retrieval and reranker relevance thresholds.',
+    }],
   };
+}
+
+function contextRelevanceThresholds(): { minCogneeSelectionScore: number; minRerankScore: number; minInjectionScore: number } {
+  return {
+    minCogneeSelectionScore: boundedScoreEnv('ALLEN_COGNEE_MIN_SELECTION_SCORE', DEFAULT_COGNEE_MIN_SELECTION_SCORE),
+    minRerankScore: boundedScoreEnv('ALLEN_CONTEXT_MIN_RERANK_SCORE', DEFAULT_CONTEXT_MIN_RERANK_SCORE),
+    minInjectionScore: boundedScoreEnv('ALLEN_COGNEE_MIN_INJECTION_SCORE', DEFAULT_COGNEE_MIN_INJECTION_SCORE),
+  };
+}
+
+function contextRefThresholdRejection(
+  ref: KnowledgeCandidateRef,
+  thresholds: { minCogneeSelectionScore: number; minRerankScore: number },
+): { code: string; threshold: number } | null {
+  if (!isOptionalCogneeRef(ref)) return null;
+  if (retrievalScoreFor(ref) < thresholds.minCogneeSelectionScore) {
+    return { code: 'below_cognee_selection_threshold', threshold: thresholds.minCogneeSelectionScore };
+  }
+  if (finalRelevanceScoreFor(ref) < thresholds.minRerankScore) {
+    return { code: 'below_rerank_threshold', threshold: thresholds.minRerankScore };
+  }
+  return null;
+}
+
+function passesInjectionThreshold(
+  ref: KnowledgeCandidateRef,
+  thresholds: { minInjectionScore: number; minRerankScore: number },
+): boolean {
+  if (!isOptionalCogneeRef(ref)) return true;
+  return retrievalScoreFor(ref) >= thresholds.minInjectionScore
+    && finalRelevanceScoreFor(ref) >= thresholds.minRerankScore;
+}
+
+function withThresholdRejection(ref: KnowledgeCandidateRef, rejection: { code: string; threshold: number }): KnowledgeCandidateRef {
+  return {
+    ...ref,
+    reason: `${ref.reason} Rejected by context relevance threshold: ${rejection.code} (${thresholdScoreFor(ref, rejection.code)} < ${rejection.threshold}).`,
+    providerMetadata: {
+      ...ref.providerMetadata,
+      thresholdRejected: true,
+      rejectionReason: rejection.code,
+      rejectionThreshold: rejection.threshold,
+    },
+  };
+}
+
+function thresholdScoreFor(ref: KnowledgeCandidateRef, code: string): number {
+  if (code === 'below_rerank_threshold') return finalRelevanceScoreFor(ref);
+  return retrievalScoreFor(ref);
+}
+
+function isOptionalCogneeRef(ref: KnowledgeCandidateRef): boolean {
+  return !ref.mandatory && (ref.providerId === 'cognee_memory' || ref.providerMetadata?.retrievalStage === 'primary' || ref.providerMetadata?.retrievalStage === 'graph_expansion');
+}
+
+function isInjectableDecision(ref: KnowledgeCandidateRef): boolean {
+  const decision = ref.providerMetadata?.injectionDecision ?? ref.providerMetadata?.injectionPolicy;
+  return decision === 'mandatory_full' || decision === 'snippet' || decision === 'injectable';
+}
+
+function retrievalScoreFor(ref: KnowledgeCandidateRef): number {
+  const metadataScore = Number(ref.providerMetadata?.retrievalScore ?? ref.providerMetadata?.retrievalPolicyScore);
+  return Number.isFinite(metadataScore) ? clampUnitScore(metadataScore) : normalizeRawScore(ref.score);
+}
+
+function rerankScoreFor(ref: KnowledgeCandidateRef): number {
+  const rerank = ref.rerank as Record<string, unknown> | undefined;
+  const rerankScore = Number(rerank?.rerankScore);
+  if (Number.isFinite(rerankScore)) return clampUnitScore(rerankScore);
+  const semanticScore = Number(rerank?.semanticScore ?? rerank?.score);
+  return Number.isFinite(semanticScore) ? normalizeRawScore(semanticScore) : retrievalScoreFor(ref);
+}
+
+function finalRelevanceScoreFor(ref: KnowledgeCandidateRef): number {
+  const rerank = ref.rerank as Record<string, unknown> | undefined;
+  const finalRelevanceScore = Number(rerank?.finalRelevanceScore);
+  return Number.isFinite(finalRelevanceScore) ? clampUnitScore(finalRelevanceScore) : rerankScoreFor(ref);
+}
+
+function normalizeRawScore(value: unknown): number {
+  const score = Number(value);
+  if (!Number.isFinite(score)) return 0;
+  if (score < 0) return 0;
+  if (score > 1) return Math.min(1, score / 100);
+  return score;
+}
+
+function clampUnitScore(value: number): number {
+  if (!Number.isFinite(value)) return 0;
+  return Math.max(0, Math.min(1, value));
 }
 
 function resultFromSelected(providerId: string, selectedRefs: KnowledgeCandidateRef[]): KnowledgeRetrievalResult {

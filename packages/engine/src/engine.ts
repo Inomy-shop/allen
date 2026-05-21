@@ -1288,7 +1288,7 @@ ${lines.join('\n')}
       }
 
       let contextUsageTrace: NonNullable<NodeTrace['contextUsage']> | null = null;
-      let contextEvaluationTrace: Record<string, unknown> | undefined;
+      let contextEvaluationId: string | undefined;
       if (nodeType === 'agent' && this.config.services?.repoKnowledge?.recordContextUsage) {
         try {
           const recordedUsage = await this.config.services.repoKnowledge.recordContextUsage({
@@ -1312,7 +1312,11 @@ ${lines.join('\n')}
             appliedCount: recordedUsage.appliedCount,
             skippedCount: recordedUsage.skippedCount,
           } : null;
-          contextEvaluationTrace = recordedUsage?.contextEvaluation;
+          contextEvaluationId = typeof recordedUsage?.contextEvaluation?.evaluationId === 'string'
+            ? recordedUsage.contextEvaluation.evaluationId
+            : typeof recordedUsage?.contextEvaluation?.traceId === 'string'
+              ? recordedUsage.contextEvaluation.traceId
+              : undefined;
           if (recordedUsage?.repoContextUsage && !hasMeaningfulRepoContextUsage(result.outputs.repo_context_usage)) {
             result.outputs.repo_context_usage = recordedUsage.repoContextUsage;
           }
@@ -1395,9 +1399,9 @@ ${lines.join('\n')}
         // Enrichments — any still-undefined fields are dropped by Mongo on $set.
         templateBindings: promptRender?.bindings,
         learningsInjected: learningsInjectedTrace.length > 0 ? learningsInjectedTrace : undefined,
-        repoKnowledgeInjected: repoKnowledgePacket?.traceSummary,
-        contextUsage: contextUsageTrace ?? undefined,
-        contextEvaluation: contextEvaluationTrace,
+        contextAttemptId: repoKnowledgePacket?.packetId,
+        contextUsageTraceId: contextUsageTrace?.traceId,
+        contextEvaluationId,
         feedbackInjected: applicableFeedbackEntries.length > 0
           ? applicableFeedbackEntries.map((entry) => ({ id: entry.id, createdAt: entry.createdAt }))
           : undefined,
@@ -1712,7 +1716,7 @@ ${lines.join('\n')}
         completedAt: new Date(),
         templateBindings: promptRender?.bindings,
         learningsInjected: learningsInjectedTrace.length > 0 ? learningsInjectedTrace : undefined,
-        repoKnowledgeInjected: repoKnowledgePacket?.traceSummary,
+        contextAttemptId: repoKnowledgePacket?.packetId,
         // Stash the error message on the trace so the UI can show what
         // happened without needing a separate log lookup.
         error: message,

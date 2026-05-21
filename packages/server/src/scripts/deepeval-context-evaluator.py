@@ -146,12 +146,14 @@ def main():
             payload.get("model") or "gpt-5.5",
             payload.get("timeoutMs") or 300000,
         )
-        text = judge.generate(build_judge_prompt(payload))
+        prompt = build_judge_prompt(payload)
+        text = judge.generate(prompt)
         result = parse_json_object(text)
         result.setdefault("provider", "deepeval")
         result.setdefault("runner", "allen_node_context_judge")
         result.setdefault("modelProvider", f"allen_{judge.provider}")
         result.setdefault("model", f"allen-{judge.provider}/{judge.model}")
+        result.setdefault("judgePrompt", prompt)
         result.setdefault("rawJudgeResponse", text)
         result.setdefault("judgeProvider", judge.last_response.get("provider"))
         result.setdefault("judgeModel", judge.last_response.get("model"))

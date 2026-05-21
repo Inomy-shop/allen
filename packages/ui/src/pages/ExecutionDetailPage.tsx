@@ -894,7 +894,7 @@ function RunContextPanel({
                   <button
                     type="button"
                     onClick={onRerunContextEvaluation}
-                    disabled={contextEvaluationBusy || execution.status === 'running'}
+                    disabled={contextEvaluationBusy}
                     className="btn-ghost text-[10px] px-2 py-1 shrink-0"
                     title="Rerun workflow context evaluation"
                   >

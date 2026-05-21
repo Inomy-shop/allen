@@ -93,6 +93,8 @@ class SidecarContextReranker implements ContextReranker {
             candidateCount: input.candidates.length,
             scoredCandidateCount: scores.size,
             contentCandidateCount: input.candidates.filter((candidate) => typeof candidate.content === 'string' && candidate.content.trim()).length,
+            renderedContextQueryHash: input.renderedContextQueryHash,
+            renderedContextQueryLength: input.renderedContextQueryLength ?? input.renderedContextQuery?.length,
             contentUsed: true,
           },
           ...contextPolicyDiagnostics(rankedRefs),
@@ -129,6 +131,8 @@ function preserveProviderOrder(candidates: KnowledgeCandidateRef[], providerId: 
   return candidates.map((ref, index) => annotateRank(ref, {
     providerId,
     reason,
+    rerankScore: retrievalRelevanceScore(ref),
+    finalRelevanceScore: ref.mandatory ? 1 : retrievalRelevanceScore(ref),
     originalRank: index,
     finalRank: index,
     mandatoryProtected: ref.mandatory,
@@ -145,14 +149,22 @@ function mergeSemanticScores(
     .map((ref, originalRank) => {
       const semantic = scores.get(ref.refId);
       const deterministicScore = deterministicPriority(ref, input);
-      const baseScore = ref.mandatory ? deterministicScore : Number(semantic?.score ?? 0);
+      const retrievalScore = retrievalRelevanceScore(ref);
+      const rawRerankerScore = Number(semantic?.score ?? retrievalScore);
+      const rerankScore = normalizeRelevanceScore(rawRerankerScore, retrievalScore);
       const policy = contextPolicyAdjustment(ref, input);
-      const rerankerScore = ref.mandatory ? deterministicScore : baseScore + policy.adjustment;
+      const finalRelevanceScore = ref.mandatory
+        ? 1
+        : clampScore((rerankScore * 0.55) + (retrievalScore * 0.45) + policy.adjustment);
+      const sortScore = ref.mandatory ? deterministicScore : finalRelevanceScore;
       return {
         ref,
         originalRank,
-        score: rerankerScore,
-        baseScore,
+        score: sortScore,
+        retrievalScore,
+        rawRerankerScore,
+        rerankScore,
+        finalRelevanceScore,
         reason: semantic?.reason,
         policy,
       };
@@ -165,7 +177,11 @@ function mergeSemanticScores(
   return ranked.map((entry, finalRank) => annotateRank(entry.ref, {
     providerId,
     score: entry.score,
-    semanticScore: entry.baseScore,
+    rawRerankerScore: entry.rawRerankerScore,
+    rerankScore: entry.rerankScore,
+    semanticScore: entry.rerankScore,
+    retrievalScore: entry.retrievalScore,
+    finalRelevanceScore: entry.finalRelevanceScore,
     reason: entry.ref.mandatory
       ? 'Mandatory context is protected from semantic demotion.'
       : entry.reason ?? 'Semantic reranker score.',
@@ -181,14 +197,19 @@ function rankDeterministically(candidates: KnowledgeCandidateRef[], providerId: 
   return candidates
     .map((ref, originalRank) => {
       const baseScore = deterministicPriority(ref, input);
+      const retrievalScore = retrievalRelevanceScore(ref);
       const policy = contextPolicyAdjustment(ref, input);
-      return { ref, originalRank, score: baseScore + policy.adjustment, baseScore, policy };
+      const finalRelevanceScore = ref.mandatory ? 1 : retrievalScore;
+      return { ref, originalRank, score: baseScore + policy.adjustment, baseScore, retrievalScore, finalRelevanceScore, policy };
     })
     .sort((a, b) => b.score - a.score)
     .map((entry, finalRank) => annotateRank(entry.ref, {
       providerId,
       score: entry.score,
       deterministicScore: entry.baseScore,
+      retrievalScore: entry.retrievalScore,
+      rerankScore: entry.retrievalScore,
+      finalRelevanceScore: entry.finalRelevanceScore,
       reason: 'Deterministic Allen policy score based on mandatory status, provider, kind, and graph score.',
       originalRank: entry.originalRank,
       finalRank,
@@ -210,10 +231,29 @@ function traceRef(ref: KnowledgeCandidateRef, finalRank: number): Record<string,
     kind: ref.kind,
     mandatory: ref.mandatory,
     score: isRecord(ref.rerank) ? ref.rerank.score : ref.score,
+    finalRelevanceScore: isRecord(ref.rerank) ? ref.rerank.finalRelevanceScore : ref.score,
     originalRank: isRecord(ref.rerank) ? ref.rerank.originalRank : undefined,
     finalRank,
     reason: isRecord(ref.rerank) ? ref.rerank.reason : ref.reason,
   };
+}
+
+function retrievalRelevanceScore(ref: KnowledgeCandidateRef): number {
+  const metadataScore = Number(ref.providerMetadata?.retrievalScore ?? ref.providerMetadata?.retrievalPolicyScore);
+  return Number.isFinite(metadataScore) ? clampScore(metadataScore) : normalizeRelevanceScore(ref.score, 0);
+}
+
+function normalizeRelevanceScore(value: unknown, fallback: number): number {
+  const score = Number(value);
+  if (!Number.isFinite(score)) return fallback;
+  if (score < 0) return 0;
+  if (score > 1) return Math.min(1, score / 100);
+  return score;
+}
+
+function clampScore(value: number): number {
+  if (!Number.isFinite(value)) return 0;
+  return Math.max(0, Math.min(1, Number(value.toFixed(4))));
 }
 
 function deterministicPriority(ref: KnowledgeCandidateRef, input?: ContextRerankInput): number {
@@ -261,9 +301,15 @@ async function runRerankerSidecar(providerId: string, input: ContextRerankInput)
   const script = resolveRerankerScript();
   const python = resolveAllenPython();
   const modelName = process.env.ALLEN_CONTEXT_RERANKER_MODEL;
+  const task = input.renderedContextQuery ?? legacyTaskText(input);
   const payload = {
     providerId,
-    task: `${input.workflowName} ${input.nodeName} ${input.nodeRole ?? ''} ${input.prompt ?? ''}`,
+    task,
+    contextQuery: input.renderedContextQuery,
+    contextQueryIntent: input.contextQueryIntent,
+    contextQueryIntentHash: input.contextQueryIntentHash,
+    renderedContextQueryHash: input.renderedContextQueryHash,
+    renderedContextQueryLength: input.renderedContextQueryLength ?? task.length,
     currentFiles: input.currentFiles,
     candidates: input.candidates.map((candidate) => ({
       refId: candidate.refId,
@@ -355,7 +401,11 @@ function isProductOrRequirementsTask(input: ContextRerankInput): boolean {
 }
 
 function taskProfileText(input: ContextRerankInput): string {
-  return `${input.workflowName} ${input.nodeName} ${input.nodeRole ?? ''} ${input.prompt ?? ''}`.toLowerCase();
+  return (input.renderedContextQuery ?? legacyTaskText(input)).toLowerCase();
+}
+
+function legacyTaskText(input: ContextRerankInput): string {
+  return `${input.workflowName} ${input.nodeName} ${input.nodeRole ?? ''} ${input.prompt ?? ''}`;
 }
 
 function resolveRerankerScript(): string {

@@ -69,6 +69,7 @@ export class WorkflowContextInjectionAdapter {
     let totalChars = 0;
 
     for (const ref of consideredRefs) {
+      const queryContext = compressionQueryContext(input.packet, ref);
       if (typeof ref.content === 'string' && ref.content.trim()) {
         const content = redactPotentialSecrets(ref.content);
         const originalContentSha256 = sha256(content);
@@ -80,11 +81,11 @@ export class WorkflowContextInjectionAdapter {
         const packed = await compressor.compress({
           ref,
           content,
-          taskText: `${input.packet.workflowName} ${input.packet.nodeName} ${input.packet.nodeRole ?? ''} ${input.packet.taskPrompt ?? ''} ${ref.summary ?? ''}`,
+          taskText: queryContext.taskText,
           maxChars: Math.min(limits.maxFileChars, remainingChars),
           allowCompression: true,
         });
-        packingDiagnostics.push(...packed.diagnostics);
+        packingDiagnostics.push(...withCompressionQueryDiagnostics(packed, queryContext, ref));
         const withPackingMeta = withCompressionMeta(ref, packed, originalContentSha256);
         if (!packed.content) {
           skippedRefs.push({ ...withPackingMeta, skipReason: packed.transformation === 'skipped' ? 'oversize' : 'provider_error', packingDecision: 'skipped' });
@@ -155,11 +156,11 @@ export class WorkflowContextInjectionAdapter {
       const packed = await compressor.compress({
         ref,
         content,
-        taskText: `${input.packet.workflowName} ${input.packet.nodeName} ${input.packet.nodeRole ?? ''} ${input.packet.taskPrompt ?? ''} ${ref.summary ?? ''}`,
+        taskText: queryContext.taskText,
         maxChars,
         allowCompression: false,
       });
-      packingDiagnostics.push(...packed.diagnostics);
+      packingDiagnostics.push(...withCompressionQueryDiagnostics(packed, queryContext, ref));
       const withPackingMeta = withCompressionMeta(ref, packed, originalContentSha256);
       if (!packed.content) {
         skippedRefs.push({ ...withPackingMeta, skipReason: packed.transformation === 'skipped' ? 'oversize' : 'provider_error', packingDecision: 'skipped' });
@@ -280,6 +281,57 @@ function contextInjectionLimits(): { maxFileChars: number; maxTotalChars: number
     maxTotalChars: positiveIntegerEnv('ALLEN_CONTEXT_MAX_TOTAL_CHARS', DEFAULT_MANDATORY_CONTEXT_MAX_TOTAL_CHARS),
     maxInjectedRefs: positiveIntegerEnv('ALLEN_CONTEXT_MAX_INJECTED_REFS', DEFAULT_MANDATORY_CONTEXT_MAX_INJECTED_REFS),
   };
+}
+
+function compressionQueryContext(packet: RepoContextPacket, ref: KnowledgeCandidateRef): {
+  taskText: string;
+  querySource: 'rendered_context_query' | 'legacy_task_text';
+  renderedContextQueryHash?: string;
+  renderedContextQueryLength?: number;
+} {
+  if (typeof packet.renderedContextQuery === 'string' && packet.renderedContextQuery.trim()) {
+    return {
+      taskText: packet.renderedContextQuery,
+      querySource: 'rendered_context_query',
+      renderedContextQueryHash: packet.renderedContextQueryHash ?? sha256(packet.renderedContextQuery),
+      renderedContextQueryLength: packet.renderedContextQueryLength ?? packet.renderedContextQuery.length,
+    };
+  }
+  return {
+    taskText: `${packet.workflowName} ${packet.nodeName} ${packet.nodeRole ?? ''} ${packet.taskPrompt ?? ''} ${ref.summary ?? ''}`,
+    querySource: 'legacy_task_text',
+  };
+}
+
+function withCompressionQueryDiagnostics(
+  packed: ContextCompressionResult,
+  queryContext: ReturnType<typeof compressionQueryContext>,
+  ref: KnowledgeCandidateRef,
+): Array<Record<string, unknown>> {
+  if (packed.transformation !== 'section_extracted') return packed.diagnostics;
+  const queryDiagnostics = {
+    code: 'context_compression_query_used',
+    severity: 'info',
+    refId: ref.refId,
+    path: ref.path,
+    packingTransformation: packed.transformation,
+    querySource: queryContext.querySource,
+    renderedContextQueryHash: queryContext.renderedContextQueryHash,
+    renderedContextQueryLength: queryContext.renderedContextQueryLength,
+    originalChars: packed.originalChars,
+    finalChars: packed.finalChars,
+    sectionCount: packed.sectionCount,
+    message: 'Context compression recorded the query source used for section extraction.',
+  };
+  return [
+    ...packed.diagnostics.map((diagnostic) => ({
+      ...diagnostic,
+      querySource: queryContext.querySource,
+      renderedContextQueryHash: queryContext.renderedContextQueryHash,
+      renderedContextQueryLength: queryContext.renderedContextQueryLength,
+    })),
+    queryDiagnostics,
+  ];
 }
 
 function positiveIntegerEnv(name: string, fallback: number): number {

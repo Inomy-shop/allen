@@ -54,6 +54,7 @@ import { interventionRoutes } from './routes/intervention.routes.js';
 import { linearRoutes } from './routes/linear.routes.js';
 import { monitoringRoutes } from './routes/monitoring.routes.js';
 import { internalContextEvaluationRoutes } from './routes/context-evaluation.routes.js';
+import { contextRoutes } from './routes/context.routes.js';
 import { authRoutes } from './routes/auth.routes.js';
 import { systemRoutes } from './routes/system.routes.js';
 import { userRoutes } from './routes/users.routes.js';
@@ -251,6 +252,7 @@ async function main(): Promise<void> {
   app.use('/api/workflows', workflowRoutes(db));
   app.use('/api/skills', skillRoutes(db));
   app.use('/api/executions', executionRoutes(db));
+  app.use('/api/context', contextRoutes(db));
   app.use('/api/agents', agentRoutes(db));
   app.use('/api/teams', teamRoutes(db));
   app.use('/api/dashboard', dashboardRoutes(db));

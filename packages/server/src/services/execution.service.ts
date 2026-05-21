@@ -1079,7 +1079,7 @@ export class ExecutionService {
         failedNode: exec.failedNode ?? null,
         errorMessage: exec.errorMessage ?? null,
         isAgentExecution,
-        contextWorkflowEvaluation: contextWorkflowEvaluation ?? row.contextWorkflowEvaluation ?? null,
+        contextWorkflowEvaluation: contextWorkflowEvaluation ?? null,
       },
       progress: {
         completed: completedCount,
@@ -1182,13 +1182,8 @@ export class ExecutionService {
     if (!isContextEngineEnabled()) return null;
     const exec = await this.stateManager.getExecution(executionId).catch(() => null);
     if (!exec) throw new Error('Execution not found');
-    if (exec.status !== 'completed' && exec.status !== 'failed') {
-      const err = new Error(`Can only rerun workflow context evaluation for terminal executions (was: ${exec.status})`);
-      (err as unknown as { statusCode: number }).statusCode = 409;
-      throw err;
-    }
     const service = new ContextWorkflowEvaluationService(this.db);
-    const job = await service.enqueueForExecution(executionId, 'manual_rerun', { force: true });
+    const job = await service.enqueueForExecution(executionId, 'manual_rerun', { force: true, allowAnyExecutionStatus: true });
     if (!job) return null;
     service.runPendingWorkflowEvaluations(1).catch((err) => {
       logger.warn('manual workflow context semantic evaluation failed', { executionId, error: (err as Error).message });

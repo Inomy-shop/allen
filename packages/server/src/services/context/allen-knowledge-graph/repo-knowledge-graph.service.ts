@@ -61,6 +61,7 @@ import {
 import { arrayOfStrings, firstString, hashJson, isRecord, normalizeKind, normalizeRelation, sha256, stableNodeKey } from './repo-knowledge-graph-utils.js';
 import { ContextEvaluationService } from '../evaluation/context-evaluation.service.js';
 import { ContextWorkflowEvaluationService } from '../evaluation/context-workflow-evaluation.service.js';
+import { ContextLifecycleStore } from '../lifecycle/context-lifecycle-store.js';
 import {
   cogneeMandatoryGraphMode,
   configuredContextProvider,
@@ -109,16 +110,14 @@ export class RepoKnowledgeGraphService {
   private indexes: Collection;
   private nodes: Collection<KnowledgeNodeRecord>;
   private edges: Collection<KnowledgeEdgeRecord>;
-  private packets: Collection;
-  private usage: Collection;
+  private lifecycle: ContextLifecycleStore;
 
   constructor(private db: Db) {
     this.repos = db.collection('repos');
     this.indexes = db.collection('repo_knowledge_indexes');
     this.nodes = db.collection<KnowledgeNodeRecord>('knowledge_nodes');
     this.edges = db.collection<KnowledgeEdgeRecord>('knowledge_edges');
-    this.packets = db.collection('node_context_packets');
-    this.usage = db.collection('context_usage_traces');
+    this.lifecycle = new ContextLifecycleStore(db);
   }
 
   async scheduleIndex(repoId: string): Promise<{ scheduled: boolean; reason?: string; executionId?: string }> {
@@ -321,13 +320,14 @@ export class RepoKnowledgeGraphService {
     const systemPromptBlock = adapter.renderSystemPromptBlock(injection);
     const promptBlock = adapter.renderContextPacket(packet);
     const contextInjection = summarizeInjection(injection);
-    await this.packets.insertOne({
-      ...packet,
-      diagnostics: packet.providerDiagnostics,
+    await this.lifecycle.saveAttemptFromPacket({
+      packet,
+      injection,
       contextInjection,
-      systemPromptBlockHash: systemPromptBlock ? sha256(systemPromptBlock) : undefined,
-      systemPromptBlockChars: systemPromptBlock.length,
+      promptBlock,
       systemPromptBlock,
+      contextProvider: configuredProvider,
+      contextRetrievalMode,
     });
 
     const traceSummary = {
@@ -428,45 +428,28 @@ export class RepoKnowledgeGraphService {
     if (!isContextEngineEnabled()) return null;
     if (!input.packetId) return null;
     const parsed = extractUsage(input.outputs, input.rawResponse, input.toolCalls);
-    const packet = await this.packets.findOne({ packetId: input.packetId }).catch(() => null);
+    const packet = await this.lifecycle.getAttemptPacketView(input.packetId).catch(() => null);
     addSystemInjectedContextUsage(parsed, packet as Record<string, unknown> | null);
     const verification = verifyContextUsageClaims(parsed, packet as Record<string, unknown> | null);
     const traceId = randomUUID();
-    await this.usage.insertOne({
-      traceId,
+    await this.lifecycle.recordUsage({
+      contextAttemptId: input.packetId,
+      usageTraceId: traceId,
       executionId: input.executionId,
       executionTraceId: input.executionTraceId,
-      workflowName: input.workflowName,
       nodeName: input.nodeName,
-      nodeRole: input.nodeRole,
-      executionKind: input.executionKind,
-      targetRole: input.targetRole,
-      callerRole: input.callerRole,
       attempt: input.attempt,
-      packetId: input.packetId,
-      parentPacketId: input.parentPacketId,
-      parentExecutionId: input.parentExecutionId,
-      rootExecutionId: input.rootExecutionId,
-      parentNodeName: input.parentNodeName,
-      agentName: input.agentName,
-      moduleIdentified: parsed.moduleIdentified,
-      contextPreselected: mergeUsageArrays(collectPreselectedContextFromPacket(packet as Record<string, unknown> | null), parsed.preselected),
-      contextSummaryUsed: parsed.summaryUsed,
-      loaded: parsed.loaded,
-      claimedUsed: parsed.applied,
-      reportedLoaded: parsed.reportedLoaded,
-      reportedApplied: parsed.reportedApplied,
-      skipped: parsed.skipped,
-      validationPerformed: parsed.validationPerformed,
-      usageSummary: parsed.usageSummary,
-      extractionSources: parsed.extractionSources,
-      skillBodyLoads: parsed.skillBodyLoads,
-      contextBodyLoads: parsed.contextBodyLoads,
-      unverifiedClaims: verification.unverifiedClaims,
-      malformedReportedUsage: parsed.malformedReportedUsage,
+      parsed: {
+        ...parsed,
+        loaded: parsed.loaded,
+        applied: parsed.applied,
+        reportedLoaded: parsed.reportedLoaded,
+        reportedApplied: parsed.reportedApplied,
+        skipped: parsed.skipped,
+        contextBodyLoads: parsed.contextBodyLoads,
+        skillBodyLoads: parsed.skillBodyLoads,
+      },
       diagnostics: [...parsed.diagnostics, ...verification.diagnostics],
-      sawUsageKeys: parsed.sawUsageKeys,
-      createdAt: new Date(),
     });
     const evaluationService = new ContextEvaluationService(this.db);
     const evaluation = await evaluationService.evaluateUsageTrace({
@@ -492,205 +475,7 @@ export class RepoKnowledgeGraphService {
   }
 
   async getExecutionContextUsageReport(executionId: string): Promise<Record<string, unknown>> {
-    const descendants = await this.db.collection('executions')
-      .find(
-        {
-          $or: [
-            { parentExecutionId: executionId },
-            { rootExecutionId: executionId },
-          ],
-        },
-        { projection: { id: 1, workflowName: 1, input: 1, meta: 1, parentExecutionId: 1, parentCaller: 1, rootExecutionId: 1, completedNodes: 1, currentNodes: 1 } },
-      )
-      .toArray();
-    const executionIds = Array.from(new Set([
-      executionId,
-      ...descendants.map((row) => String(row.id)).filter(Boolean),
-    ]));
-
-    const evaluationService = new ContextEvaluationService(this.db);
-    const workflowEvaluationService = new ContextWorkflowEvaluationService(this.db);
-    const [packets, usage, traces, executions, evaluations, workflowSemanticEvaluation] = await Promise.all([
-      this.packets.find({ executionId: { $in: executionIds } }).sort({ createdAt: 1 }).toArray(),
-      this.usage.find({
-        $or: [
-          { executionId: { $in: executionIds } },
-          { parentExecutionId: executionId },
-          { rootExecutionId: executionId },
-        ],
-      }).sort({ createdAt: 1 }).toArray(),
-      this.db.collection('execution_traces').find(
-        { executionId: { $in: executionIds }, type: 'agent' },
-        { projection: { executionId: 1, node: 1, agent: 1, attempt: 1, rawResponse: 1, repoKnowledgeInjected: 1, contextUsage: 1, toolCalls: 1 } },
-      ).toArray(),
-      this.db.collection('executions').find(
-        { id: { $in: executionIds } },
-        { projection: { id: 1, workflowName: 1, input: 1, meta: 1, parentExecutionId: 1, parentCaller: 1, rootExecutionId: 1, completedNodes: 1, currentNodes: 1, feedbackEntries: 1 } },
-      ).toArray(),
-      evaluationService.getEvaluationsForExecutions(executionIds),
-      workflowEvaluationService.getForExecution(executionId),
-    ]);
-
-    const packetKey = (executionIdValue: string, nodeName: string, attempt?: number) => `${executionIdValue}:${nodeName}:${attempt ?? 1}`;
-    const packetByKey = new Map<string, any>();
-    for (const packet of packets) packetByKey.set(packetKey(String(packet.executionId), String(packet.nodeName), Number(packet.attempt ?? 1)), packet);
-    const usageByKey = new Map<string, any>();
-    for (const row of usage) usageByKey.set(packetKey(String(row.executionId), String(row.nodeName), Number(row.attempt ?? 1)), row);
-    const evaluationByKey = new Map<string, any>();
-    for (const row of evaluations) evaluationByKey.set(packetKey(String(row.executionId), String(row.nodeName), Number(row.attempt ?? 1)), row);
-    const execById = new Map(executions.map((row) => [String(row.id), row]));
-
-    const diagnostics: Array<Record<string, unknown>> = [];
-    const contextPreselected: Array<Record<string, unknown>> = [];
-    const skillBodyLoads: Array<Record<string, unknown>> = [];
-    const contextBodyLoads: Array<Record<string, unknown>> = [];
-    const nodeSummaries = traces.map((trace) => {
-      const exec = execById.get(String(trace.executionId));
-      const nodeName = String(trace.node ?? trace.agent ?? '');
-      const attempt = Number(trace.attempt ?? 1);
-      const packet = packetByKey.get(packetKey(String(trace.executionId), nodeName, attempt));
-      const usageRow = usageByKey.get(packetKey(String(trace.executionId), nodeName, attempt));
-      const evaluationRow = evaluationByKey.get(packetKey(String(trace.executionId), nodeName, attempt));
-      const codes: string[] = [];
-      const hasRepoPath = hasMeaningfulRepoPath(
-        firstString(
-          (exec?.input as Record<string, unknown> | undefined)?.repo_path,
-          (exec?.meta as Record<string, unknown> | undefined)?.cwd,
-        ),
-      );
-
-      if (!packet && hasRepoPath) {
-        const code = exec?.parentExecutionId ? 'child_context_missing' : 'context_packet_missing';
-        codes.push(code);
-        diagnostics.push(contextDiagnostic(code, 'warn', trace, packet, `${nodeName} did not have a repo knowledge packet.`));
-      }
-
-      if (packet && !usageRow) {
-        codes.push('usage_missing');
-        diagnostics.push(contextDiagnostic('usage_missing', 'warn', trace, packet, `${nodeName} had a context packet but no usage trace.`));
-      }
-
-      const loadedCount = Array.isArray(usageRow?.loaded) ? usageRow.loaded.length : 0;
-      const preselectedCount = Array.isArray(usageRow?.contextPreselected)
-        ? usageRow.contextPreselected.length
-        : Array.isArray(packet?.selectedRefs)
-          ? packet.selectedRefs.length
-          : 0;
-      const appliedCount = Array.isArray(usageRow?.claimedUsed) ? usageRow.claimedUsed.length : 0;
-      const skippedCount = Array.isArray(usageRow?.skipped) ? usageRow.skipped.length : 0;
-      const validationCount = Array.isArray(usageRow?.validationPerformed) ? usageRow.validationPerformed.length : 0;
-      for (const diagnostic of normalizeUsageArray(usageRow?.diagnostics)) {
-        const code = firstString(diagnostic.code);
-        if (!code) continue;
-        codes.push(code);
-        diagnostics.push({
-          ...diagnostic,
-          executionId: String(trace.executionId ?? ''),
-          nodeName,
-          agentName: trace.agent,
-          packetId: packet?.packetId,
-        });
-      }
-      if (usageRow && loadedCount === 0 && appliedCount === 0 && skippedCount === 0 && validationCount === 0 && !usageRow.moduleIdentified) {
-        const code = usageRow.sawUsageKeys ? 'usage_extraction_failed' : 'usage_empty';
-        codes.push(code);
-        diagnostics.push(contextDiagnostic(code, 'warn', trace, packet, `${nodeName} produced an empty context usage trace.`));
-      }
-
-      const preselectedRows = normalizeUsageArray(usageRow?.contextPreselected ?? packet?.selectedRefs);
-      const reportedSkillLoads = collectSkillBodyLoadsFromUsage(usageRow, String(trace.executionId), nodeName, String(trace.agent ?? nodeName));
-      skillBodyLoads.push(...reportedSkillLoads);
-      const selectedRefs = normalizeUsageArray(packet?.selectedRefs);
-      const skillRefs = selectedRefs.filter((ref) => ref.kind === 'skill' || ref.kind === 'skill_reference');
-      if (packet && skillRefs.length > 0 && reportedSkillLoads.length === 0) {
-        const code = 'skill_body_not_loaded';
-        codes.push(code);
-        diagnostics.push(contextDiagnostic(code, 'info', trace, packet, `${nodeName} had skill refs available but no skill body load was recorded.`));
-      }
-
-      const reportedContextLoads = collectContextBodyLoadsFromUsage(usageRow, String(trace.executionId), nodeName, String(trace.agent ?? nodeName));
-      contextBodyLoads.push(...reportedContextLoads);
-      for (const item of preselectedRows) {
-        contextPreselected.push({
-          executionId: String(trace.executionId),
-          nodeName,
-          agentName: trace.agent,
-          refId: item.refId,
-          path: item.path,
-          kind: item.kind,
-          source: 'runtime_preselected',
-        });
-      }
-      const contextLoadRefIds = new Set(reportedContextLoads.map((row) => String(row.refId ?? '')).filter(Boolean));
-      const contextRefKindsById = knowledgeRefKindMap(packet);
-      const productionRefs = selectedRefs.filter((ref) => ref.kind === 'production_note' || ref.kind === 'runbook');
-      if (packet && productionRefs.length > 0 && reportedContextLoads.length === 0) {
-        const code = 'production_context_body_not_loaded';
-        codes.push(code);
-        diagnostics.push(contextDiagnostic(code, 'info', trace, packet, `${nodeName} had production knowledge refs available but no context body load was recorded.`));
-      }
-      for (const item of [...normalizeUsageArray(usageRow?.loaded), ...normalizeUsageArray(usageRow?.claimedUsed)]) {
-        const refId = firstString(item.refId, item.ref_id);
-        if (!refId) continue;
-        const kind = contextRefKindsById.get(refId);
-        if (kind && isFileBackedContextKind(kind) && !contextLoadRefIds.has(refId)) {
-          const code = 'context_claimed_without_body_load';
-          codes.push(code);
-          diagnostics.push(contextDiagnostic(code, 'warn', trace, packet, `${nodeName} claimed ${refId} as loaded/applied but no get_repo_context_body call was recorded.`));
-        }
-      }
-
-      return {
-        executionId: String(trace.executionId),
-        nodeName,
-        nodeRole: packet?.nodeRole ?? trace.agent,
-        agentName: trace.agent,
-        parentExecutionId: exec?.parentExecutionId ?? packet?.parentExecutionId ?? null,
-        parentNodeName: exec?.parentCaller ?? packet?.parentNodeName ?? null,
-        packetId: packet?.packetId,
-        parentPacketId: packet?.parentPacketId ?? null,
-        usageTraceId: usageRow?.traceId,
-        contextInjection: packet?.contextInjection,
-        contextEvaluation: evaluationRow ? {
-          traceId: evaluationRow.traceId,
-          status: evaluationRow.status,
-          scores: evaluationRow.scores,
-          semantic: evaluationRow.semantic,
-          diagnostics: normalizeUsageArray(evaluationRow.diagnostics).map((diag) => diag.code).filter(Boolean),
-          feedbackEvidenceCount: normalizeUsageArray(evaluationRow.feedbackEvidence).length,
-        } : undefined,
-        preselectedCount,
-        loadedCount,
-        appliedCount,
-        skippedCount,
-        validationCount,
-        diagnostics: codes,
-      };
-    });
-
-    return {
-      executionId,
-      executionIds,
-      packets,
-      usage,
-      evaluations,
-      evaluationSummary: evaluationService.rollup(evaluations as Array<Record<string, unknown>>),
-      workflowSemanticEvaluation,
-      nodeSummaries,
-      diagnostics,
-      contextPreselected,
-      skillBodyLoads,
-      contextBodyLoads,
-      contextInjections: packets
-        .filter((packet) => packet.contextInjection)
-        .map((packet) => ({
-          packetId: packet.packetId,
-          executionId: packet.executionId,
-          nodeName: packet.nodeName,
-          nodeRole: packet.nodeRole,
-          ...(packet.contextInjection as Record<string, unknown>),
-        })),
-    };
+    return this.lifecycle.getExecutionContextUsageReport(executionId);
   }
 
   async getSkillBody(input: {
@@ -856,18 +641,13 @@ export class RepoKnowledgeGraphService {
     providerMetadata?: Record<string, unknown>;
     bodySource?: string;
   } | null> {
-    const packet = await this.packets.findOne(
+    const ref = await this.db.collection('context_refs').findOne(
       {
         repoId: input.repoId,
-        $or: [
-          { 'selectedRefs.refId': input.refId },
-          { 'injectableRefs.refId': input.refId },
-          { 'contextInjection.injectedRefs.refId': input.refId },
-        ],
+        refId: input.refId,
       },
       { sort: { createdAt: -1 } },
     );
-    const ref = findPacketRef(packet, input.refId);
     if (!ref) return null;
     const providerId = firstString(ref.providerId);
     if (providerId !== 'cognee_memory' && !isCogneeRefId(input.refId)) return null;
@@ -875,12 +655,15 @@ export class RepoKnowledgeGraphService {
     const metadata = isRecord(ref.providerMetadata) ? ref.providerMetadata : {};
     const sourceMetadata = isRecord(metadata.sourceMetadata) ? metadata.sourceMetadata : {};
     const path = sanitizeRepoRelativePath(firstString(ref.path, sourceMetadata.path) ?? '');
-    const content = firstString(ref.content);
+    const contentArtifact = firstString(ref.contentArtifactHash)
+      ? await this.db.collection('context_artifacts').findOne({ hash: firstString(ref.contentArtifactHash) })
+      : null;
+    const content = firstString(ref.content, contentArtifact?.content);
     if (content) {
       return {
         repoId: input.repoId,
         repoName: input.repoName,
-        indexId: firstString(packet?.indexId) ?? 'cognee',
+        indexId: firstString(ref.indexId) ?? 'cognee',
         refId: input.refId,
         kind: normalizeKind(firstString(ref.kind) ?? 'historical_learning') as KnowledgeNodeKind,
         title: firstString(ref.title),
@@ -906,7 +689,7 @@ export class RepoKnowledgeGraphService {
     return {
       repoId: input.repoId,
       repoName: input.repoName,
-      indexId: firstString(packet?.indexId) ?? 'cognee',
+      indexId: firstString(ref.indexId) ?? 'cognee',
       refId: input.refId,
       kind: normalizeKind(firstString(ref.kind) ?? 'doc') as KnowledgeNodeKind,
       title: firstString(ref.title),

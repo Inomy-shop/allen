@@ -403,6 +403,11 @@ export interface NodeTrace {
   }>;
 
   /** Repo knowledge packet injected into this node attempt, if available. */
+  contextAttemptId?: string;
+  contextUsageTraceId?: string;
+  contextEvaluationId?: string;
+
+  /** Legacy summary retained for old callers; new code should use contextAttemptId. */
   repoKnowledgeInjected?: {
     packetId: string;
     repoId: string;

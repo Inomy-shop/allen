@@ -91,6 +91,16 @@ Install and warm the default reranker model manually only if you skipped the one
 
 Leave `ALLEN_CONTEXT_RERANKER` unset, or run setup with `--without-reranker`, to use deterministic ranking only.
 
+Optional Cognee refs are filtered by relevance before they are selected or injected. Tune these only if diagnostics show useful context is being filtered too aggressively, or noisy context is still leaking through:
+
+```bash
+ALLEN_COGNEE_MIN_SELECTION_SCORE=0.45
+ALLEN_CONTEXT_MIN_RERANK_SCORE=0.45
+ALLEN_COGNEE_MIN_INJECTION_SCORE=0.60
+```
+
+Mandatory Allen graph context bypasses these optional Cognee relevance thresholds.
+
 ## Cognee Provider
 
 Use Cognee when repo Markdown should be ingested into Cognee memory and recalled through semantic or graph-backed search:

@@ -118,25 +118,29 @@ export async function ensureIndexes(db: Db): Promise<void> {
   await db.collection('knowledge_edges').createIndex({ repoId: 1, indexId: 1 });
   await db.collection('knowledge_edges').createIndex({ repoId: 1, fromNodeId: 1 });
   await db.collection('knowledge_edges').createIndex({ repoId: 1, toNodeId: 1 });
-  await db.collection('node_context_packets').createIndex({ executionId: 1, nodeName: 1, attempt: 1 });
-  await db.collection('node_context_packets').createIndex({ packetId: 1 }, { unique: true });
-  await db.collection('context_usage_traces').createIndex({ executionId: 1, nodeName: 1, attempt: 1 });
-  await db.collection('context_usage_traces').createIndex({ executionTraceId: 1 }, { sparse: true });
-  await db.collection('context_usage_traces').createIndex({ rootExecutionId: 1, createdAt: 1 });
-  await db.collection('context_usage_traces').createIndex({ parentExecutionId: 1, createdAt: 1 });
-  await db.collection('context_usage_traces').createIndex({ packetId: 1 });
-  await db.collection('context_evaluation_traces').createIndex({ executionId: 1, nodeName: 1, attempt: 1 });
-  await db.collection('context_evaluation_traces').createIndex({ executionTraceId: 1 }, { sparse: true });
-  await db.collection('context_evaluation_traces').createIndex({ packetId: 1, usageTraceId: 1 }, { unique: true });
-  await db.collection('context_evaluation_traces').createIndex({ repoId: 1, indexId: 1, createdAt: -1 });
-  await db.collection('context_evaluation_traces').createIndex({ status: 1, createdAt: -1 });
-  await db.collection('context_evaluation_traces').createIndex({ 'semantic.status': 1, 'semantic.nextRetryAt': 1, createdAt: 1 });
-  await db.collection('context_workflow_evaluation_jobs').createIndex(
-    { executionId: 1, provider: 1, mode: 1 },
-    { unique: true },
-  );
-  await db.collection('context_workflow_evaluation_jobs').createIndex({ status: 1, nextRetryAt: 1, queuedAt: 1 });
-  await db.collection('context_workflow_evaluation_jobs').createIndex({ rootExecutionId: 1, queuedAt: 1 });
+  await db.collection('context_attempts').createIndex({ executionId: 1, nodeName: 1, attempt: 1 });
+  await db.collection('context_attempts').createIndex({ contextAttemptId: 1 }, { unique: true });
+  await db.collection('context_attempts').createIndex({ rootExecutionId: 1, createdAt: 1 });
+  await db.collection('context_attempts').createIndex({ parentExecutionId: 1, createdAt: 1 });
+  await db.collection('context_refs').createIndex({ contextAttemptId: 1, refId: 1 }, { unique: true });
+  await db.collection('context_refs').createIndex({ executionId: 1, nodeName: 1, attempt: 1 });
+  await db.collection('context_refs').createIndex({ providerId: 1, cogneeScore: -1 });
+  await db.collection('context_ref_events').createIndex({ contextAttemptId: 1, refId: 1, createdAt: 1 });
+  await db.collection('context_ref_events').createIndex({ executionId: 1, nodeName: 1, attempt: 1 });
+  await db.collection('context_ref_events').createIndex({ executionTraceId: 1 }, { sparse: true });
+  await db.collection('context_ref_events').createIndex({ usageTraceId: 1 }, { sparse: true });
+  await db.collection('context_ref_events').createIndex({ rootExecutionId: 1, createdAt: 1 });
+  await db.collection('context_ref_events').createIndex({ parentExecutionId: 1, createdAt: 1 });
+  await db.collection('context_ref_events').createIndex({ type: 1, createdAt: 1 });
+  await db.collection('context_artifacts').createIndex({ hash: 1 }, { unique: true });
+  await db.collection('context_artifacts').createIndex({ kind: 1, createdAt: -1 });
+  await db.collection('context_evaluations').createIndex({ executionId: 1, nodeName: 1, attempt: 1, active: 1 });
+  await db.collection('context_evaluations').createIndex({ evaluationId: 1 }, { unique: true });
+  await db.collection('context_evaluations').createIndex({ traceId: 1 }, { unique: true });
+  await db.collection('context_evaluations').createIndex({ contextAttemptId: 1, usageTraceId: 1, scope: 1, active: 1 });
+  await db.collection('context_evaluations').createIndex({ repoId: 1, indexId: 1, createdAt: -1 });
+  await db.collection('context_evaluations').createIndex({ status: 1, active: 1, createdAt: -1 });
+  await db.collection('context_evaluations').createIndex({ 'semantic.status': 1, 'semantic.nextRetryAt': 1, active: 1, createdAt: 1 });
   await db.collection('repo_cognee_datasets').createIndex({ repoId: 1 }, { unique: true });
   await db.collection('repo_cognee_datasets').createIndex({ status: 1, updatedAt: -1 });
   await db.collection('repo_context_metadata').createIndex(

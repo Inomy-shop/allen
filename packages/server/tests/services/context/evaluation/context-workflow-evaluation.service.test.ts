@@ -5,6 +5,7 @@ import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { ContextWorkflowEvaluationService } from '../../../../src/services/context/evaluation/context-workflow-evaluation.service.js';
+import { ContextLifecycleStore } from '../../../../src/services/context/lifecycle/context-lifecycle-store.js';
 
 vi.unmock('../../../../src/services/chat-llm.js');
 
@@ -36,10 +37,11 @@ describe('ContextWorkflowEvaluationService', () => {
     await Promise.all([
       db.collection('executions').deleteMany({}),
       db.collection('execution_traces').deleteMany({}),
-      db.collection('node_context_packets').deleteMany({}),
-      db.collection('context_usage_traces').deleteMany({}),
-      db.collection('context_evaluation_traces').deleteMany({}),
-      db.collection('context_workflow_evaluation_jobs').deleteMany({}),
+      db.collection('context_attempts').deleteMany({}),
+      db.collection('context_refs').deleteMany({}),
+      db.collection('context_ref_events').deleteMany({}),
+      db.collection('context_evaluations').deleteMany({}),
+      db.collection('context_artifacts').deleteMany({}),
     ]);
   });
 
@@ -70,9 +72,11 @@ describe('ContextWorkflowEvaluationService', () => {
       provider: 'deepeval',
       mode: 'workflow_summary',
       status: 'queued',
+      evaluationId: expect.any(String),
+      traceId: expect.any(String),
     }));
     expect(second?.jobId).toBe(job?.jobId);
-    expect(await db.collection('context_workflow_evaluation_jobs').countDocuments({ executionId: 'exec-workflow' })).toBe(1);
+    expect(await db.collection('context_evaluations').countDocuments({ executionId: 'exec-workflow', scope: 'workflow', active: true })).toBe(1);
   });
 
   it('runs the workflow-level evaluator through the DeepEval sidecar path', async () => {
@@ -90,7 +94,7 @@ describe('ContextWorkflowEvaluationService', () => {
 
     await expect(service.runPendingWorkflowEvaluations()).resolves.toBe(1);
 
-    const stored = await db.collection('context_workflow_evaluation_jobs').findOne({ executionId: 'exec-workflow' });
+    const stored = await db.collection('context_evaluations').findOne({ executionId: 'exec-workflow', scope: 'workflow', active: true });
     expect(stored).toEqual(expect.objectContaining({
       status: 'completed',
       result: expect.objectContaining({
@@ -112,19 +116,18 @@ describe('ContextWorkflowEvaluationService', () => {
       promptChars: expect.any(Number),
       promptSha256: expect.any(String),
       promptPreview: expect.stringContaining('Packed workflow evidence JSON:'),
-      evidencePayload: expect.objectContaining({
-        nodeContextPackets: expect.any(Array),
-      }),
-      packedEvidencePayload: expect.objectContaining({
-        nodes: expect.any(Array),
-      }),
       evidenceStats: expect.objectContaining({
         originalChars: expect.any(Number),
         packedChars: expect.any(Number),
       }),
+      artifactHashes: expect.objectContaining({
+        deepevalEvidence: expect.any(String),
+        deepevalPackedEvidence: expect.any(String),
+        deepevalPrompt: expect.any(String),
+      }),
     }));
-    const exec = await db.collection('executions').findOne({ id: 'exec-workflow' });
-    expect(exec?.contextWorkflowEvaluation).toEqual(expect.objectContaining({
+    const summary = await service.getSummaryForExecution('exec-workflow');
+    expect(summary).toEqual(expect.objectContaining({
       status: 'completed',
       result: expect.objectContaining({ summary: 'Workflow context was useful with minor bloat.' }),
     }));
@@ -154,17 +157,19 @@ describe('ContextWorkflowEvaluationService', () => {
 
   it('marks workflow evaluation summaries stale when evidence packing is outdated', async () => {
     await insertWorkflowFixture(db, 'completed');
-    await db.collection('context_workflow_evaluation_jobs').insertOne({
+    await db.collection('context_evaluations').insertOne({
       jobId: 'job-old-packing',
       executionId: 'exec-workflow',
       rootExecutionId: 'exec-workflow',
       provider: 'deepeval',
       mode: 'workflow_summary',
+      scope: 'workflow',
+      active: true,
       status: 'completed',
       attempts: 1,
       maxAttempts: 3,
       queuedAt: new Date(),
-      completedAt: new Date(),
+      completedAt: new Date(Date.now() + 60_000),
       evidenceStats: { packingVersion: 1 },
       createdAt: new Date(),
       updatedAt: new Date(),
@@ -186,9 +191,35 @@ describe('ContextWorkflowEvaluationService', () => {
 
     await expect(service.enqueueForExecution('exec-workflow')).resolves.toBeNull();
   });
+
+  it('allows manual workflow evaluation reruns for non-terminal execution states', async () => {
+    await insertWorkflowFixture(db, 'cancelled');
+    const service = new ContextWorkflowEvaluationService(db);
+
+    await expect(service.enqueueForExecution('exec-workflow')).resolves.toBeNull();
+
+    const job = await service.enqueueForExecution('exec-workflow', 'manual_rerun', {
+      force: true,
+      allowAnyExecutionStatus: true,
+    });
+
+    expect(job).toEqual(expect.objectContaining({
+      executionId: 'exec-workflow',
+      status: 'queued',
+      provider: 'deepeval',
+      mode: 'workflow_summary',
+      diagnostics: expect.arrayContaining([
+        expect.objectContaining({
+          code: 'workflow_semantic_queued',
+          message: expect.stringContaining('manual_rerun'),
+        }),
+      ]),
+    }));
+  });
 });
 
 async function insertWorkflowFixture(db: Db, status: string): Promise<void> {
+  const lifecycle = new ContextLifecycleStore(db);
   await db.collection('executions').insertOne({
     id: 'exec-workflow',
     workflowName: 'bug-investigate-and-fix',
@@ -199,43 +230,86 @@ async function insertWorkflowFixture(db: Db, status: string): Promise<void> {
     startedAt: new Date(),
     completedAt: new Date(),
   });
-  await db.collection('node_context_packets').insertOne({
-    packetId: 'packet-implement',
-    executionId: 'exec-workflow',
-    workflowName: 'bug-investigate-and-fix',
-    nodeName: 'implement',
-    nodeRole: 'backend-developer',
-    attempt: 1,
-    selectedRefs: [{ refId: 'ref-guidelines', path: 'docs/guidelines.md', mandatory: true }],
+  const ref = { refId: 'ref-guidelines', kind: 'context_file' as const, path: 'docs/guidelines.md', title: 'Guidelines', mandatory: true, providerId: 'mandatory_graph' };
+  await lifecycle.saveAttemptFromPacket({
+    packet: {
+      packetId: 'packet-implement',
+      executionId: 'exec-workflow',
+      workflowName: 'bug-investigate-and-fix',
+      nodeName: 'implement',
+      nodeRole: 'backend-developer',
+      attempt: 1,
+      repoId: 'repo-1',
+      repoName: 'repo',
+      repoPath: '/repo',
+      indexId: 'index-1',
+      indexFreshness: 'fresh',
+      selectedRefs: [ref],
+      injectableRefs: [ref],
+      rejectedRefs: [],
+      availableRefs: [],
+      candidateRefs: [ref],
+      providerTraces: [],
+      providerDiagnostics: [],
+      rerankerTraces: [],
+      rerankerDiagnostics: [],
+      rerankerProviders: [],
+      retrievalProviders: ['mandatory_graph'],
+      currentFiles: [],
+      createdAt: new Date(),
+    },
+    injection: {
+      injectionId: 'injection-implement',
+      graphVersion: 'index-1',
+      provider: 'unknown',
+      targetLayer: 'system_prompt',
+      maxFileChars: 0,
+      maxTotalChars: 0,
+      maxInjectedRefs: 1,
+      totalChars: 100,
+      consideredRefs: [ref],
+      injectedRefs: [{ ...ref, content: 'Use repo guidelines.', contentSha256: 'hash-guidelines', charCount: 20, packingDecision: 'injected' as const }],
+      skippedRefs: [],
+      providerNativeRefs: [],
+      packingDecisions: [],
+      packingDiagnostics: [],
+      createdAt: new Date(),
+    },
     contextInjection: { injectedRefs: [{ refId: 'ref-guidelines', contentChars: 100 }] },
-    createdAt: new Date(),
+    promptBlock: '',
+    systemPromptBlock: '',
   });
-  await db.collection('context_usage_traces').insertOne({
-    traceId: 'usage-implement',
+  await lifecycle.recordUsage({
+    contextAttemptId: 'packet-implement',
+    usageTraceId: 'usage-implement',
     executionId: 'exec-workflow',
     nodeName: 'implement',
     attempt: 1,
-    packetId: 'packet-implement',
-    loaded: [{ refId: 'ref-guidelines' }],
-    claimedUsed: [{ refId: 'ref-guidelines' }],
-    createdAt: new Date(),
+    parsed: {
+      loaded: [{ refId: 'ref-guidelines' }],
+      applied: [{ refId: 'ref-guidelines' }],
+    },
   });
-  await db.collection('context_evaluation_traces').insertOne({
-    traceId: 'eval-implement',
-    executionId: 'exec-workflow',
-    nodeName: 'implement',
-    attempt: 1,
-    packetId: 'packet-implement',
-    status: 'passed',
-    scores: { precision: 1, completeness: 1, usefulness: 1, groundedness: 1, correctness: 1, bloat: 0, overall: 1 },
-    diagnostics: [],
-    createdAt: new Date(),
+  await lifecycle.saveEvaluationVersion({
+    evaluation: {
+      traceId: 'eval-implement',
+      contextAttemptId: 'packet-implement',
+      usageTraceId: 'usage-implement',
+      executionId: 'exec-workflow',
+      nodeName: 'implement',
+      attempt: 1,
+      status: 'passed',
+      scores: { precision: 1, completeness: 1, usefulness: 1, groundedness: 1, correctness: 1, bloat: 0, overall: 1 },
+      diagnostics: [],
+    },
   });
   await db.collection('execution_traces').insertOne({
     executionId: 'exec-workflow',
     node: 'implement',
     type: 'agent',
     attempt: 1,
+    contextAttemptId: 'packet-implement',
+    contextUsageTraceId: 'usage-implement',
     rawResponse: 'Implemented the fix using repo guidelines.',
     startedAt: new Date(),
   });

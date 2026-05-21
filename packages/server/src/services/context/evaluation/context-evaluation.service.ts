@@ -9,6 +9,7 @@ import { firstString, isRecord } from '../allen-knowledge-graph/repo-knowledge-g
 import { resolveAllenPython } from '../../python-runtime.js';
 import { isContextEngineEnabled } from '../config/context-provider-config.js';
 import { resolveContextLlmConfig } from '../config/context-llm-config.js';
+import { ContextLifecycleStore } from '../lifecycle/context-lifecycle-store.js';
 
 export type ContextEvaluationStatus = 'passed' | 'warning' | 'failed';
 export type SemanticEvaluationStatus = 'disabled' | 'queued' | 'running' | 'completed' | 'failed';
@@ -59,6 +60,16 @@ type EvaluationInput = {
   usageTraceId?: string;
 };
 
+type SemanticEvaluationRun = {
+  semantic: SemanticEvaluation;
+  artifacts: {
+    deepevalEvidence: Record<string, unknown>;
+    deepevalPrompt?: string;
+    rawJudgeResponse?: string;
+    outputExcerpt?: string;
+  };
+};
+
 const DEFAULT_SEMANTIC_MAX_ATTEMPTS = 3;
 
 export class ContextEvaluationService {
@@ -68,27 +79,35 @@ export class ContextEvaluationService {
   private traces: Collection;
   private executions: Collection;
   private interventions: Collection;
+  private lifecycle: ContextLifecycleStore;
 
   constructor(private db: Db) {
-    this.packets = db.collection('node_context_packets');
-    this.usage = db.collection('context_usage_traces');
-    this.evaluations = db.collection('context_evaluation_traces');
+    this.packets = db.collection('context_attempts');
+    this.usage = db.collection('context_ref_events');
+    this.evaluations = db.collection('context_evaluations');
     this.traces = db.collection('execution_traces');
     this.executions = db.collection('executions');
     this.interventions = db.collection('workflow_interventions');
+    this.lifecycle = new ContextLifecycleStore(db);
   }
 
   async evaluateUsageTrace(input: EvaluationInput): Promise<Record<string, unknown> | null> {
     if (!isContextEngineEnabled()) return null;
-    const [packet, usageRow, trace, existing] = await Promise.all([
-      this.packets.findOne({ packetId: input.packetId }),
+    const trace = await this.findExecutionTrace(input);
+    await this.lifecycle.recordSourceDiscoveryFromTrace({
+      contextAttemptId: input.packetId,
+      usageTraceId: input.usageTraceId,
+      executionTraceId: input.executionTraceId,
+      trace,
+    });
+    const [packet, usageRow, existing] = await Promise.all([
+      this.lifecycle.getAttemptPacketView(input.packetId),
       input.usageTraceId
-        ? this.usage.findOne({ traceId: input.usageTraceId })
-        : this.usage.findOne({ packetId: input.packetId, executionId: input.executionId, nodeName: input.nodeName, attempt: input.attempt }),
-      this.findExecutionTrace(input),
+        ? this.lifecycle.getUsageView(input.packetId, input.usageTraceId)
+        : this.lifecycle.getUsageView(input.packetId),
       input.usageTraceId
-        ? this.evaluations.findOne({ packetId: input.packetId, usageTraceId: input.usageTraceId })
-        : this.evaluations.findOne({ packetId: input.packetId }),
+        ? this.lifecycle.getActiveEvaluation({ contextAttemptId: input.packetId, usageTraceId: input.usageTraceId, scope: 'node' })
+        : this.lifecycle.getActiveEvaluation({ contextAttemptId: input.packetId, scope: 'node' }),
     ]);
     if (!packet || !usageRow) return null;
 
@@ -98,6 +117,9 @@ export class ContextEvaluationService {
     const traceId = firstString(existing?.traceId) ?? randomUUID();
     const doc = {
       traceId,
+      evaluationId: firstString(existing?.evaluationId) ?? randomUUID(),
+      contextAttemptId: input.packetId,
+      scope: 'node',
       executionId: input.executionId,
       executionTraceId: input.executionTraceId,
       nodeName: input.nodeName,
@@ -119,18 +141,7 @@ export class ContextEvaluationService {
       updatedAt: new Date(),
       createdAt: new Date(),
     };
-    await this.evaluations.updateOne(
-      { packetId: input.packetId, usageTraceId: usageRow.traceId },
-      { $set: doc },
-      { upsert: true },
-    );
-    await this.traces.updateOne(
-      input.executionTraceId
-        ? { executionTraceId: input.executionTraceId, executionId: input.executionId, type: 'agent' }
-        : { executionId: input.executionId, node: input.nodeName, attempt: input.attempt, type: 'agent' },
-      { $set: { contextEvaluation: summarizeEvaluation(doc) } },
-    ).catch(() => undefined);
-    return doc;
+    return this.lifecycle.saveEvaluationVersion({ evaluation: doc });
   }
 
   private async findExecutionTrace(input: EvaluationInput): Promise<Record<string, unknown> | null> {
@@ -155,6 +166,7 @@ export class ContextEvaluationService {
     const now = new Date();
     const maxAttempts = semanticMaxAttempts();
     const rows = await this.evaluations.find({
+      active: true,
       'semantic.provider': 'deepeval',
       $or: [
         { 'semantic.status': 'queued' },
@@ -208,19 +220,25 @@ export class ContextEvaluationService {
     if (!isContextEngineEnabled()) return null;
     if (!isDeepEvalEnabled()) return null;
     if (semanticMode() !== 'per_node') return null;
-    const evaluation = await this.evaluations.findOne({ traceId });
+    const evaluation = await this.evaluations.findOne({ traceId, active: true });
     if (!evaluation) return null;
     const attempts = Number((evaluation.semantic as Record<string, unknown> | undefined)?.attempts ?? 0);
     const maxAttempts = semanticMaxAttempts();
     if (attempts >= maxAttempts && (evaluation.semantic as Record<string, unknown> | undefined)?.status !== 'queued') return evaluation;
 
-    const [packet, usageRow, trace] = await Promise.all([
-      this.packets.findOne({ packetId: evaluation.packetId }),
-      this.usage.findOne({ traceId: evaluation.usageTraceId }),
-      this.traces.findOne(
-        { executionId: evaluation.executionId, node: evaluation.nodeName, attempt: evaluation.attempt, type: 'agent' },
-        { projection: { rawResponse: 1, output: 1, toolCalls: 1, agent: 1 } },
-      ),
+    const trace = await this.traces.findOne(
+      { executionId: evaluation.executionId, node: evaluation.nodeName, attempt: evaluation.attempt, type: 'agent' },
+      { projection: { rawResponse: 1, output: 1, toolCalls: 1, agent: 1, executionTraceId: 1 } },
+    );
+    await this.lifecycle.recordSourceDiscoveryFromTrace({
+      contextAttemptId: String(evaluation.contextAttemptId ?? evaluation.packetId),
+      usageTraceId: firstString(evaluation.usageTraceId),
+      executionTraceId: firstString(trace?.executionTraceId, evaluation.executionTraceId),
+      trace,
+    });
+    const [packet, usageRow] = await Promise.all([
+      this.lifecycle.getAttemptPacketView(String(evaluation.contextAttemptId ?? evaluation.packetId)),
+      this.lifecycle.getUsageView(String(evaluation.contextAttemptId ?? evaluation.packetId), firstString(evaluation.usageTraceId)),
     ]);
     if (!packet || !usageRow) return null;
 
@@ -239,7 +257,7 @@ export class ContextEvaluationService {
     );
 
     try {
-      const semantic = await this.evaluateSemanticNow(
+      const semanticRun = await this.evaluateSemanticNow(
         packet,
         usageRow,
         trace,
@@ -250,21 +268,17 @@ export class ContextEvaluationService {
         },
         normalizeUsageArray(evaluation.feedbackEvidence),
       );
+      const semantic = semanticRun.semantic;
       semantic.attempts = nextAttempt;
       semantic.maxAttempts = maxAttempts;
       const diagnostics = [
         ...normalizeUsageArray(evaluation.diagnostics).filter((diag) => firstString(diag.code) !== 'semantic_eval_failed'),
         ...normalizeUsageArray(semantic.diagnostics),
       ];
-      const updated = {
-        semantic,
-        diagnostics,
-        updatedAt: new Date(),
-      };
-      await this.evaluations.updateOne({ traceId }, { $set: updated });
-      const refreshed = await this.evaluations.findOne({ traceId });
-      if (refreshed) await this.updateTraceSummary(refreshed);
-      return refreshed;
+      return this.lifecycle.saveEvaluationVersion({
+        evaluation: nextEvaluationVersion(evaluation, { semantic, diagnostics }),
+        artifacts: semanticRun.artifacts,
+      });
     } catch (err) {
       const failedSemantic: SemanticEvaluation = {
         provider: 'deepeval',
@@ -280,19 +294,18 @@ export class ContextEvaluationService {
         ...normalizeUsageArray(evaluation.diagnostics).filter((diag) => firstString(diag.code) !== 'semantic_eval_failed'),
         ...normalizeUsageArray(failedSemantic.diagnostics),
       ];
-      await this.evaluations.updateOne(
-        { traceId },
-        { $set: { semantic: failedSemantic, diagnostics, updatedAt: new Date() } },
-      );
-      const refreshed = await this.evaluations.findOne({ traceId });
-      if (refreshed) await this.updateTraceSummary(refreshed);
-      return refreshed;
+      return this.lifecycle.saveEvaluationVersion({
+        evaluation: nextEvaluationVersion(evaluation, { semantic: failedSemantic, diagnostics }),
+        artifacts: {
+          outputExcerpt: firstString(trace?.rawResponse, JSON.stringify(trace?.output ?? {}))?.slice(0, 4000),
+        },
+      });
     }
   }
 
   async reevaluateExecution(executionId: string): Promise<number> {
     if (!isContextEngineEnabled()) return 0;
-    const usageRows = await this.usage.find({
+    const attempts = await this.packets.find({
       $or: [
         { executionId },
         { rootExecutionId: executionId },
@@ -300,16 +313,17 @@ export class ContextEvaluationService {
       ],
     }).toArray();
     let count = 0;
-    for (const row of usageRows) {
-      const packetId = firstString(row.packetId);
+    for (const row of attempts) {
+      const packetId = firstString(row.contextAttemptId, row.packetId);
       const nodeName = firstString(row.nodeName);
       if (!packetId || !nodeName) continue;
+      const usageEvent = await this.usage.findOne({ contextAttemptId: packetId, usageTraceId: { $exists: true } }, { sort: { createdAt: -1 } });
       const evaluated = await this.evaluateUsageTrace({
         executionId: String(row.executionId ?? executionId),
         nodeName,
         attempt: Number(row.attempt ?? 1),
         packetId,
-        usageTraceId: firstString(row.traceId),
+        usageTraceId: firstString(usageEvent?.usageTraceId),
       }).catch(() => null);
       if (evaluated) count += 1;
     }
@@ -320,10 +334,7 @@ export class ContextEvaluationService {
   }
 
   async getEvaluationsForExecutions(executionIds: string[]): Promise<Record<string, unknown>[]> {
-    return this.evaluations
-      .find({ executionId: { $in: executionIds } })
-      .sort({ createdAt: 1 })
-      .toArray();
+    return this.lifecycle.getEvaluationsForExecutions(executionIds, 'node');
   }
 
   rollup(evaluations: Array<Record<string, unknown>>): Record<string, unknown> {
@@ -386,7 +397,7 @@ export class ContextEvaluationService {
     const reportedLoaded = normalizeUsageArray(usageRow.reportedLoaded);
     const reportedApplied = normalizeUsageArray(usageRow.reportedApplied);
     const contextPreselected = normalizeUsageArray(usageRow.contextPreselected);
-    const sourceDiscovery = collectSourceDiscoveryEvidence(trace);
+    const sourceDiscovery = normalizeUsageArray(usageRow.sourceDiscoveryEvidence);
     const selectedIds = idSet(selectedRefs);
     const availableIds = new Set([...selectedIds, ...idSet(availableRefs), ...idSet(injectedRefs), ...idSet(providerNativeRefs)]);
     const loadedIds = idSet(loaded);
@@ -528,8 +539,9 @@ export class ContextEvaluationService {
     trace: Record<string, unknown> | null,
     deterministic: { scores: ScoreSet; diagnostics: Array<Record<string, unknown>>; refScores: Array<Record<string, unknown>> },
     feedbackEvidence: Array<Record<string, unknown>>,
-  ): Promise<SemanticEvaluation> {
+  ): Promise<SemanticEvaluationRun> {
     const llm = resolveContextLlmConfig({ purpose: 'semantic_judge' });
+    const sourceDiscovery = normalizeUsageArray(usageRow.sourceDiscoveryEvidence);
     const payload = {
       taskPrompt: firstString(packet.prompt, (trace?.output as Record<string, unknown> | undefined)?.prompt),
       finalOutput: firstString(trace?.rawResponse, JSON.stringify(trace?.output ?? {})),
@@ -556,9 +568,9 @@ export class ContextEvaluationService {
         appliedRefs: normalizeUsageArray(usageRow.claimedUsed),
         rejectedRefs: normalizeUsageArray(packet.rejectedRefs),
         skippedRefs: normalizeUsageArray((packet.contextInjection as Record<string, unknown> | undefined)?.skippedRefs),
-        sourceDiscovery: collectSourceDiscoveryEvidence(trace),
+        sourceDiscovery,
       }).slice(0, 40),
-      sourceDiscoveryEvidence: collectSourceDiscoveryEvidence(trace).slice(0, 20),
+      sourceDiscoveryEvidence: sourceDiscovery.slice(0, 20),
       usage: usageRow,
       deterministic,
       feedbackEvidence,
@@ -568,18 +580,27 @@ export class ContextEvaluationService {
       model: llm.model,
       timeoutMs: Number(process.env.ALLEN_DEEPEVAL_JUDGE_TIMEOUT_MS ?? 300_000),
     };
-    const result = await runDeepEval(payload);
+    const run = await runDeepEval(payload);
+    const result = run.result;
     return {
-      provider: 'deepeval',
-      status: 'completed',
-      maxAttempts: semanticMaxAttempts(),
-      completedAt: new Date(),
-      scores: isRecord(result.scores) ? result.scores as Partial<ScoreSet> : undefined,
-      diagnostics: normalizeUsageArray(result.diagnostics),
-      judgeProvider: firstString(result.judgeProvider),
-      judgeModel: firstString(result.judgeModel),
-      modelProvider: firstString(result.modelProvider),
-      model: firstString(result.model),
+      semantic: {
+        provider: 'deepeval',
+        status: 'completed',
+        maxAttempts: semanticMaxAttempts(),
+        completedAt: new Date(),
+        scores: isRecord(result.scores) ? result.scores as Partial<ScoreSet> : undefined,
+        diagnostics: normalizeUsageArray(result.diagnostics),
+        judgeProvider: firstString(result.judgeProvider),
+        judgeModel: firstString(result.judgeModel),
+        modelProvider: firstString(result.modelProvider),
+        model: firstString(result.model),
+      },
+      artifacts: {
+        deepevalEvidence: payload,
+        deepevalPrompt: firstString(result.judgePrompt) ?? JSON.stringify(payload),
+        rawJudgeResponse: firstString(result.rawJudgeResponse) ?? run.rawStdout,
+        outputExcerpt: firstString(trace?.rawResponse, JSON.stringify(trace?.output ?? {}))?.slice(0, 4000),
+      },
     };
   }
 
@@ -638,14 +659,6 @@ export class ContextEvaluationService {
     return 'passed';
   }
 
-  private async updateTraceSummary(doc: Record<string, unknown>): Promise<void> {
-    await this.traces.updateOne(
-      firstString(doc.executionTraceId)
-        ? { executionTraceId: doc.executionTraceId, executionId: doc.executionId, type: 'agent' }
-        : { executionId: doc.executionId, node: doc.nodeName, attempt: doc.attempt, type: 'agent' },
-      { $set: { contextEvaluation: summarizeEvaluation(doc) } },
-    ).catch(() => undefined);
-  }
 }
 
 function summarizeEvaluation(doc: Record<string, unknown>): Record<string, unknown> {
@@ -656,6 +669,38 @@ function summarizeEvaluation(doc: Record<string, unknown>): Record<string, unkno
     semantic: doc.semantic,
     diagnostics: normalizeUsageArray(doc.diagnostics).slice(0, 10),
     feedbackEvidenceCount: normalizeUsageArray(doc.feedbackEvidence).length,
+  };
+}
+
+function nextEvaluationVersion(
+  current: Record<string, unknown>,
+  patch: Record<string, unknown>,
+): Record<string, unknown> {
+  const {
+    _id: _discardId,
+    active: _discardActive,
+    validFrom: _discardValidFrom,
+    validTo: _discardValidTo,
+    supersededAt: _discardSupersededAt,
+    artifactHashes: _discardArtifactHashes,
+    version: _discardVersion,
+    createdAt: _discardCreatedAt,
+    updatedAt: _discardUpdatedAt,
+    ...rest
+  } = current;
+  void _discardId;
+  void _discardActive;
+  void _discardValidFrom;
+  void _discardValidTo;
+  void _discardSupersededAt;
+  void _discardArtifactHashes;
+  void _discardVersion;
+  void _discardCreatedAt;
+  void _discardUpdatedAt;
+  return {
+    ...rest,
+    ...patch,
+    updatedAt: new Date(),
   };
 }
 
@@ -724,58 +769,6 @@ function classifyFeedback(content: string): string {
   if (/stale|outdated|old instruction|no longer true/.test(value)) return 'stale_context';
   if (/context helped|used the context|guideline was useful|instruction was useful/.test(value)) return 'useful_context';
   return 'task_issue_not_context_related';
-}
-
-function collectSourceDiscoveryEvidence(trace: Record<string, unknown> | null | undefined): Array<Record<string, unknown>> {
-  const calls = normalizeUsageArray(trace?.toolCalls);
-  return calls
-    .flatMap((call): Array<Record<string, unknown>> => {
-      const tool = firstString(call.tool, call.name);
-      if (!tool || !isSourceDiscoveryTool(tool, call)) return [];
-      const args = isRecord(call.args) ? call.args : {};
-      const paths = extractToolPaths(args, call);
-      const command = firstString(args.command, args.cmd, call.command, call.content);
-      return [{
-        tool,
-        paths,
-        commandPreview: command ? command.slice(0, 300) : undefined,
-        toolUseId: firstString(call.toolUseId, call.toolCallId, call.id),
-      }];
-    });
-}
-
-function isSourceDiscoveryTool(tool: string, call: Record<string, unknown>): boolean {
-  const lower = tool.toLowerCase();
-  if (/(^|__)(read|grep|glob|ls|find)$/.test(lower)) return true;
-  if (/(^|__)(bash|shell|exec_command)$/.test(lower)) {
-    const args = isRecord(call.args) ? call.args : {};
-    const command = firstString(args.command, args.cmd, call.command, call.content) ?? '';
-    return /\b(rg|grep|find|ls|sed|cat|head|tail|git\s+(show|diff|grep))\b/.test(command);
-  }
-  return false;
-}
-
-function extractToolPaths(args: Record<string, unknown>, call: Record<string, unknown>): string[] {
-  const values = [
-    args.path,
-    args.file_path,
-    args.filePath,
-    args.absolute_path,
-    args.relative_path,
-    args.relativePath,
-    args.glob,
-    args.pattern,
-    call.path,
-  ];
-  const paths = values.flatMap((value) => typeof value === 'string' ? [value] : Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string') : []);
-  const command = firstString(args.command, args.cmd, call.command, call.content);
-  if (command) paths.push(...extractPathLikeTokens(command));
-  return Array.from(new Set(paths.map((path) => path.trim()).filter(Boolean))).slice(0, 20);
-}
-
-function extractPathLikeTokens(command: string): string[] {
-  const matches = command.match(/[A-Za-z0-9_./@-]+\.(?:ts|tsx|js|jsx|py|java|go|rs|rb|php|css|scss|html|json|ya?ml|md|sql|sh|bash|zsh|toml|ini|env|Dockerfile)|(?:^|\s)(?:src|packages|apps|tests|test|docs|e2e|\\.claude|\\.github)\/[A-Za-z0-9_./@-]+/g) ?? [];
-  return matches.map((match) => match.trim());
 }
 
 function sourceDiscoveryCanSatisfyRef(ref: Record<string, unknown>): boolean {
@@ -938,7 +931,7 @@ function diagnostic(code: string, severity: 'info' | 'warn', message: string, ex
   return { code, severity, message, ...extra };
 }
 
-async function runDeepEval(payload: Record<string, unknown>): Promise<Record<string, unknown>> {
+async function runDeepEval(payload: Record<string, unknown>): Promise<{ result: Record<string, unknown>; rawStdout: string }> {
   const script = resolveDeepEvalScript();
   const python = resolveAllenPython();
   return new Promise((resolve, reject) => {
@@ -962,7 +955,8 @@ async function runDeepEval(payload: Record<string, unknown>): Promise<Record<str
         return;
       }
       try {
-        resolve(JSON.parse(stdout || '{}') as Record<string, unknown>);
+        const parsed = JSON.parse(stdout || '{}') as Record<string, unknown>;
+        resolve({ result: parsed, rawStdout: stdout });
       } catch (err) {
         reject(new Error(`DeepEval evaluator returned invalid JSON: ${(err as Error).message}`));
       }
