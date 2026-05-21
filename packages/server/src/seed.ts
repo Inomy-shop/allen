@@ -6,6 +6,7 @@ import type { Db } from 'mongodb';
 import { loadAgents, validateWorkflow, getBuiltIns } from '@allen/engine';
 import type { WorkflowDef } from '@allen/engine';
 import { isSeedOverrideEnabled } from './services/seed-policy.js';
+import { normalizeNodeOverridesForProvider } from './services/llm-defaults.js';
 import type { SkillInput } from './services/skill.service.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -59,6 +60,29 @@ export async function seedDefaultAgents(db: Db): Promise<void> {
 /**
  * Seed the database with default workflows from the engine's workflows/ directory.
  */
+/**
+ * Walk a parsed workflow's nodes and rewrite each node's `agentOverrides`
+ * through `normalizeNodeOverridesForProvider`. Mutates the input. When all
+ * fields in an override get stripped, drop the empty object entirely so the
+ * DB row stays clean.
+ *
+ * The YAML source on disk is untouched — only the `parsed` representation
+ * that gets stored in the workflow document and used at execution time is
+ * normalized for the active provider.
+ */
+function normalizeWorkflowNodeOverrides(parsed: WorkflowDef): void {
+  const nodes = (parsed.nodes ?? {}) as Record<string, Record<string, unknown>>;
+  for (const node of Object.values(nodes)) {
+    if (node.agentOverrides === undefined || node.agentOverrides === null) continue;
+    const normalized = normalizeNodeOverridesForProvider(node.agentOverrides as Record<string, unknown>);
+    if (!normalized || Object.keys(normalized).length === 0) {
+      delete node.agentOverrides;
+    } else {
+      node.agentOverrides = normalized;
+    }
+  }
+}
+
 export async function seedDefaultWorkflows(db: Db): Promise<void> {
   const col = db.collection('workflows');
   const yamlAgents = loadAgents();
@@ -99,6 +123,11 @@ export async function seedDefaultWorkflows(db: Db): Promise<void> {
     const content = readFileSync(join(workflowDir, file), 'utf-8');
     const parsed = yaml.load(content) as WorkflowDef;
 
+    // Strip claude-only fields when the setup picked codex (and vice versa)
+    // so workflow YAMLs authored for one provider degrade gracefully on the
+    // other. Preserve mode (no env) leaves overrides untouched.
+    normalizeWorkflowNodeOverrides(parsed);
+
     const existing = await col.findOne({ name: parsed.name });
     const validation = validateWorkflow(parsed, agents, builtInNames);
 
@@ -121,8 +150,15 @@ export async function seedDefaultWorkflows(db: Db): Promise<void> {
     }
 
     // Auto-update existing workflows only when explicitly requested.
+    // Also refresh under SEED_OVERRIDE when the env-driven override
+    // normalization produced a different `parsed.nodes` shape than what's
+    // stored — that lets an operator re-run setup with a different provider
+    // and pick up the refreshed agentOverrides by setting SEED_OVERRIDE=true,
+    // without having to edit the YAML on disk.
     const yamlChanged = existing.yaml !== content;
-    if (override && yamlChanged) {
+    const normalizationChanged =
+      JSON.stringify(existing.parsed?.nodes ?? {}) !== JSON.stringify(parsed.nodes ?? {});
+    if (override && (yamlChanged || normalizationChanged)) {
       await col.updateOne(
         { _id: existing._id },
         {

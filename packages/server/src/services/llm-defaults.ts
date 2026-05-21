@@ -103,6 +103,74 @@ export function getRequiredProviders(): { claude: boolean; codex: boolean } {
 }
 
 /**
+ * Strip workflow-node `agentOverrides` fields that don't belong on the active
+ * provider. Used at workflow seed time so a YAML node like
+ *
+ *   agentOverrides: { model: sonnet, reasoningEffort: high, planMode: true }
+ *
+ * doesn't force Codex agents to try `sonnet` (which Codex rejects) on a
+ * codex-only install.
+ *
+ * Rules:
+ *   - Preserve mode (env unset, "Both") → return overrides unchanged. The
+ *     user opted into the seed's mix; YAML intent stays.
+ *   - Flatten mode (env set):
+ *       * `model` is dropped if it's a recognized model belonging to the
+ *         OTHER provider. `'default'` and unknown strings are left alone.
+ *       * `planMode: true` is dropped when env provider ≠ claude-cli.
+ *       * `reasoningEffort: 'max'` is dropped when env provider ≠ claude-cli.
+ *       * Everything else (other reasoningEffort values, mcp toggles, etc.)
+ *         passes through.
+ *
+ * Never swaps values (e.g. won't translate `sonnet` → `gpt-5.5`). When a
+ * field is dropped the merged spawn settings fall back to the agent's stored
+ * default — which `OrgSeedService` has already set to the env-chosen
+ * provider+model — so the node runs on the install's available CLI.
+ */
+export function normalizeNodeOverridesForProvider(
+  overrides: Record<string, unknown> | undefined | null,
+): Record<string, unknown> | undefined {
+  if (!overrides || typeof overrides !== 'object' || Array.isArray(overrides)) {
+    return overrides === null ? undefined : overrides as Record<string, unknown> | undefined;
+  }
+
+  const envProvider = readEnvProvider();
+  // Preserve mode: keep YAML intent exactly.
+  if (!envProvider) return overrides;
+
+  // Build the union "model X belongs to provider Y" lookup once.
+  const modelOwner: Record<string, ChatProvider> = {};
+  for (const p of PROVIDERS) {
+    for (const m of p.models) modelOwner[m] = p.provider;
+  }
+
+  const out: Record<string, unknown> = { ...overrides };
+
+  // model: drop only when it's a recognized model belonging to the OTHER
+  // provider. 'default' and unknown strings are not in modelOwner so they
+  // pass through.
+  if (typeof out.model === 'string') {
+    const owner = modelOwner[out.model];
+    if (owner && owner !== envProvider) {
+      delete out.model;
+    }
+  }
+
+  // planMode is a claude-cli-only feature.
+  if (out.planMode === true && envProvider !== 'claude-cli') {
+    delete out.planMode;
+  }
+
+  // reasoningEffort 'max' requires claude (and Opus); other levels work on
+  // both providers.
+  if (out.reasoningEffort === 'max' && envProvider !== 'claude-cli') {
+    delete out.reasoningEffort;
+  }
+
+  return out;
+}
+
+/**
  * Resolve the provider+model for a seeded agent given the env config.
  * See file-level docstring for the three modes.
  */
