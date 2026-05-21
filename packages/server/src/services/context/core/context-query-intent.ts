@@ -216,8 +216,8 @@ function promptSectionSignals(prompt: unknown): { entries: string[]; sources: st
   const text = firstString(prompt);
   if (!text) return { entries: [], sources: [], sections: [] };
   const matches: Array<{ label: string; index: number; end: number }> = [];
-  const labelPattern = /^\s*(BUG REPORT|BUG SUMMARY|Bug summary|ROOT CAUSE|Expected behavior|Known repro(?:\/evidence clues from ticket\/context)?|Required investigation path|FILES CHANGED|FILES TO TOUCH|ROUTING PRIMITIVES|IMPLEMENTATION PLAN|ACCEPTANCE CRITERIA|CODING STANDARDS|QA REPORT|INVESTIGATION REPORT)\s*:/gim;
-  const headingPattern = /^\s*#{1,2}\s+(BUG REPORT|BUG SUMMARY|ROOT CAUSE|EXPECTED BEHAVIOR|KNOWN REPRO(?:\/EVIDENCE CLUES FROM TICKET\/CONTEXT)?|REQUIRED INVESTIGATION PATH|FILES CHANGED|FILES TO TOUCH|ROUTING PRIMITIVES|IMPLEMENTATION PLAN|ACCEPTANCE CRITERIA|CODING STANDARDS|QA REPORT|INVESTIGATION REPORT)\b[^\n]*$/gim;
+  const labelPattern = /^\s*(USER PROMPT|USER REQUEST|BUG REPORT|BUG SUMMARY|Bug summary|ROOT CAUSE|Expected behavior|Known repro(?:\/evidence clues from ticket\/context)?|Required investigation path|FILES CHANGED|FILES TO TOUCH|ROUTING PRIMITIVES|IMPLEMENTATION PLAN|ACCEPTANCE CRITERIA|CODING STANDARDS|QA REPORT|INVESTIGATION REPORT)\s*:/gim;
+  const headingPattern = /^\s*#{1,2}\s+(USER PROMPT|USER REQUEST|BUG REPORT|BUG SUMMARY|ROOT CAUSE|EXPECTED BEHAVIOR|KNOWN REPRO(?:\/EVIDENCE CLUES FROM TICKET\/CONTEXT)?|REQUIRED INVESTIGATION PATH|FILES CHANGED|FILES TO TOUCH|ROUTING PRIMITIVES|IMPLEMENTATION PLAN|ACCEPTANCE CRITERIA|CODING STANDARDS|QA REPORT|INVESTIGATION REPORT)\b[^\n]*$/gim;
   let match: RegExpExecArray | null;
   while ((match = labelPattern.exec(text))) {
     matches.push({ label: normalizeSectionLabel(match[1]), index: match.index, end: labelPattern.lastIndex });
@@ -307,6 +307,8 @@ function isLowSignalSection(label: string, text: string): boolean {
 function normalizeSectionLabel(label: string): string {
   const normalized = label.replace(/\s+/g, ' ').trim();
   const upper = normalized.toUpperCase();
+  if (upper === 'USER PROMPT') return 'USER PROMPT';
+  if (upper === 'USER REQUEST') return 'USER REQUEST';
   if (upper === 'BUG SUMMARY') return 'BUG SUMMARY';
   if (upper === 'BUG REPORT') return 'BUG REPORT';
   if (upper === 'ROOT CAUSE') return 'ROOT CAUSE';

@@ -25,6 +25,7 @@ describe('context query intent', () => {
         bug_summary: 'Context eval shows queued after completion.',
       },
       prompt: [
+        'user request: Check why the UI keeps showing queued context evaluation results.',
         'BUG REPORT: Context eval completed but inspector does not show semantic results.',
         'Expected behavior: completed semantic results are visible.',
         'Required investigation path: packages/server/src/services/context/evaluation/context-evaluation-service.ts',
@@ -50,11 +51,12 @@ describe('context query intent', () => {
       preferredCategories: expect.arrayContaining(['design']),
       exclusionCategories: expect.arrayContaining(['agent_persona', 'generated_doc']),
       querySignalSources: expect.arrayContaining(['state.changed_files', 'state.bug_summary', 'prompt.sections']),
-      querySignalSections: expect.arrayContaining(['BUG REPORT', 'Expected behavior', 'Required investigation path']),
+      querySignalSections: expect.arrayContaining(['USER REQUEST', 'BUG REPORT', 'Expected behavior', 'Required investigation path']),
     }));
     expect(query).toContain('Role family: investigation');
     expect(query).toContain('Task signal: Changed files: packages/server/src/services/context/core/repo-context-engine.ts');
     expect(query).toContain('Required investigation path: packages/server/src/services/context/evaluation/context-evaluation-service.ts');
+    expect(query).toContain('USER REQUEST: Check why the UI keeps showing queued context evaluation results.');
     expect(contextQueryIntentHash(intent)).toBe(contextQueryIntentHash(buildContextQueryIntent(input)));
     expect(renderedContextQueryHash(query)).toMatch(/^[a-f0-9]{64}$/);
   });
