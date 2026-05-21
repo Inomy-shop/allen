@@ -70,6 +70,56 @@ export async function seedDefaultAgents(db: Db): Promise<void> {
  * that gets stored in the workflow document and used at execution time is
  * normalized for the active provider.
  */
+/**
+ * Locate the engine's workflows YAML directory. Same lookup
+ * `seedDefaultWorkflows` uses — kept as a single source of truth so
+ * downstream consumers (e.g. cleanup keep-lists) read the same files.
+ */
+function findWorkflowDir(): string | null {
+  const possiblePaths = [
+    join(__dirname, '..', '..', 'engine', 'workflows'),
+    join(__dirname, '..', '..', '..', 'engine', 'workflows'),
+  ];
+  for (const p of possiblePaths) {
+    if (existsSync(p)) return p;
+  }
+  return null;
+}
+
+/**
+ * Read all YAML workflow files in the engine's workflows/ directory and
+ * return each workflow's `name` field. Used by org-cleanup to build a
+ * keep-list automatically so any YAML on disk is protected from deletion
+ * without anyone having to maintain a hardcoded mirror list.
+ *
+ * Returns [] when the directory can't be found (uncommon — dev + prod
+ * layouts are both covered) or when YAMLs fail to parse. Treating failure
+ * as "empty keep list" would cause data loss, so call sites should pair
+ * this with the cleanup's `keepWorkflows` parameter knowing that a return
+ * of [] still triggers deletion. If that's a concern, gate cleanup on
+ * a non-empty result.
+ */
+export function listDefaultWorkflowNames(): string[] {
+  const dir = findWorkflowDir();
+  if (!dir) return [];
+  const files = readdirSync(dir).filter(f => f.endsWith('.yml') || f.endsWith('.yaml'));
+  const names: string[] = [];
+  for (const file of files) {
+    try {
+      const content = readFileSync(join(dir, file), 'utf-8');
+      const parsed = yaml.load(content) as { name?: unknown } | null;
+      if (parsed && typeof parsed.name === 'string' && parsed.name.length > 0) {
+        names.push(parsed.name);
+      }
+    } catch {
+      // Skip unparseable files — they'll surface as a separate error
+      // during seedDefaultWorkflows. We don't want to corrupt the
+      // keep-list on a single bad YAML.
+    }
+  }
+  return names;
+}
+
 function normalizeWorkflowNodeOverrides(parsed: WorkflowDef): void {
   const nodes = (parsed.nodes ?? {}) as Record<string, Record<string, unknown>>;
   for (const node of Object.values(nodes)) {

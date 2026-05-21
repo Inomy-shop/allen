@@ -296,19 +296,29 @@ function buildPresentationModel(intervention: WorkflowInterventionLike): Present
     ? [optionField, ...rawFields]
     : rawFields;
   const severity = severityForIntervention(intervention, fields);
-  const mode: DialogMode = severity === 'approval' ? 'approval' : 'simple';
-  const decisionField = fields.find(isDecisionField) ?? (mode === 'approval'
+  // Mode is derived from CONTENT, not severity. Any intervention that has a
+  // discrete decision (a select/radio decision field, or an `options` array
+  // on the intervention itself) renders its buttons. Severity only drives
+  // the title/icon styling. Old behavior mapped only `severity === 'approval'`
+  // to button-mode, which silently dropped the options array for
+  // `'escalation'` and `'question'`-with-options interventions —
+  // they all rendered as a single freeform textarea.
+  const hasOptions = Array.isArray(intervention.options) && intervention.options.length > 0;
+  const decisionField = fields.find(isDecisionField);
+  const hasDecision = hasOptions || !!decisionField;
+  const mode: DialogMode = hasDecision ? 'approval' : 'simple';
+  const resolvedDecisionField = decisionField ?? (mode === 'approval'
     ? defaultDecisionField(intervention)
     : undefined);
   const feedbackField = fields.find((field) => {
-    if (field === decisionField) return false;
+    if (field === resolvedDecisionField) return false;
     const name = field.name.toLowerCase();
     const type = String(field.type || '').toLowerCase();
     return name.includes('feedback') || name.includes('reason') || name.includes('comment') || type === 'textarea';
   });
 
   if (mode !== 'approval') {
-    const responseField = feedbackField ?? fields.find(field => field !== decisionField);
+    const responseField = feedbackField ?? fields.find(field => field !== resolvedDecisionField);
     return {
       mode,
       severity,
@@ -322,7 +332,7 @@ function buildPresentationModel(intervention: WorkflowInterventionLike): Present
         placeholder: responseField?.placeholder ?? 'Type your response...',
         help: responseField?.help,
       }],
-      decisionField,
+      decisionField: resolvedDecisionField,
       feedbackField,
       responseField,
     };
@@ -331,9 +341,9 @@ function buildPresentationModel(intervention: WorkflowInterventionLike): Present
   return {
     mode,
     severity,
-    title: 'Approval Required',
-    visibleFields: fields.filter(field => field !== decisionField && field !== feedbackField),
-    decisionField,
+    title: severity === 'escalation' ? 'Escalation Review' : 'Approval Required',
+    visibleFields: fields.filter(field => field !== resolvedDecisionField && field !== feedbackField),
+    decisionField: resolvedDecisionField,
     feedbackField,
   };
 }
@@ -471,6 +481,13 @@ function severityForIntervention(
   ].filter(Boolean).join(' ').toLowerCase();
   if (haystack.includes('approval') || haystack.includes('gate')) return 'approval';
   if (haystack.includes('escalation')) return 'escalation';
+  // Promote to 'approval' when any field is a decision field carrying
+  // approve/request_changes/reject/cancel options — handles human nodes
+  // whose stage names don't trip the heuristics above (e.g.
+  // review_repo_plan). Without this, buildPresentationModel collapses to
+  // simple mode and renders a single textarea instead of the decision
+  // buttons that the workflow YAML asked for.
+  if (fields.some(isDecisionField)) return 'approval';
   return 'question';
 }
 

@@ -469,9 +469,27 @@ function InterventionDetailView() {
   const isPending = item.status === 'pending';
   const isPlanApproval = item.stage === 'plan_approval_gate';
 
-  // Map intervention → ClarificationPanel props
+  // Map intervention → ClarificationPanel props.
+  // Mode is derived from CONTENT (does this intervention carry options or
+  // a decision field?), not from severity. Driving it from severity alone
+  // silently dropped the buttons on `escalation` and `question`-with-options
+  // interventions — they all rendered as a single textarea.
+  const interventionHasOptions = Array.isArray(item.options) && item.options.length > 0;
+  const interventionHasDecisionField = (item.fields ?? []).some(f => {
+    const fname = (f.name ?? '').toLowerCase();
+    const ftype = String(f.type ?? '').toLowerCase();
+    const opts = Array.isArray(f.options) ? f.options : [];
+    const optValues = opts.map(o => typeof o === 'string' ? o.toLowerCase() : '');
+    return fname.includes('decision')
+      || fname.includes('approval')
+      || fname === 'action'
+      || ((ftype === 'select' || ftype === 'radio') && optValues.some(v =>
+        v === 'approve' || v === 'request_changes' || v === 'reject' || v === 'cancel'
+        || v === 'retry_with_feedback' || v === 'override_and_continue' || v === 'abandon'
+      ));
+  });
   const panelMode: 'simple' | 'approval' =
-    item.severity === 'approval' ? 'approval' : 'simple';
+    (interventionHasOptions || interventionHasDecisionField) ? 'approval' : 'simple';
 
   const panelSeverity: ClarificationSeverity =
     item.severity === 'approval'   ? 'approval'

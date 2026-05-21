@@ -14,6 +14,14 @@ const AGENT_FALLBACK_CWD = '/tmp/allen';
 interface CodexResult {
   outputs: Record<string, unknown>;
   rawResponse: string;
+  /**
+   * The prompt actually sent to codex for this attempt — minimal feedback
+   * resume, upstream-re-ran forward prompt, or full template depending on
+   * the resolved promptShape. Surfaced so the engine can persist the truth
+   * on the trace's renderedPrompt instead of re-rendering the template
+   * (which always produces the full first-run prompt regardless of attempt).
+   */
+  prompt: string;
   sessionId?: string;
   cost: {
     actual: number | null;
@@ -218,7 +226,16 @@ ${context}
   const currentAttempt = (state.retry_count as number ?? 0) + 1;
   emitter.emit({
     event: 'node_started',
-    data: { node: nodeName, agent: nodeDef.agent, attempt: currentAttempt },
+    data: {
+      node: nodeName,
+      agent: nodeDef.agent,
+      attempt: currentAttempt,
+      // Ship the actual prompt (retry/forward/full shape) so the UI's live
+      // view shows the truth instead of falling back to a re-rendered
+      // template. Mirrors node-executor.ts:518-528.
+      renderedPrompt: prompt,
+      inputState: { ...state },
+    },
   });
 
   emitter.emit({
@@ -421,6 +438,7 @@ ${context}
         resolve({
           outputs,
           rawResponse,
+          prompt,
           sessionId: threadId,
           cost: {
             actual: null,
