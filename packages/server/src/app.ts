@@ -32,7 +32,7 @@ import { startTerminalWebSocketServer } from './services/workspace-terminal.js';
 import { createWorkspaceProxy, createWorkspaceUpgradeHandler } from './services/workspace-proxy.js';
 import { startFileWatchServer } from './services/workspace-watcher.js';
 import { WorkspaceManager } from './services/workspace.service.js';
-import { seedDefaultSkills, seedDefaultWorkflows } from './seed.js';
+import { seedDefaultSkills, seedDefaultWorkflows, listDefaultWorkflowNames } from './seed.js';
 import { setStreamDb } from './services/stream.service.js';
 import { McpService } from './services/mcp.service.js';
 import { startMcpHealthMonitor } from './services/mcp-health.service.js';
@@ -114,18 +114,15 @@ async function main(): Promise<void> {
     // Remove orphaned seed teams/agents/workflows from prior schemas only when
     // the operator has explicitly enabled seed override.
     // Meta team is always protected by cleanupOrphanedSeedEntities.
-    // Keep this list in sync with the .yml files in packages/engine/workflows/.
+    // The workflow keep-list is derived from the YAML files on disk so any
+    // workflow you add to packages/engine/workflows/ is automatically
+    // protected — no hardcoded mirror list to keep in sync.
+    const keepWorkflows = listDefaultWorkflowNames();
     await cleanupOrphanedSeedEntities(
       db,
       OrgSeedService.seedTeamNames,
       OrgSeedService.seedAgentNames,
-      [
-        'feature-plan-and-implement',
-        'resolve-pr-reviews',
-        'allen-self-healing-monitor-hourly',
-        'self-healing-incident-triage',
-        'multi-repo-change-orchestration',
-      ],
+      keepWorkflows,
     );
   }
   await seedCronJobs(db);

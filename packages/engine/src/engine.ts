@@ -1272,7 +1272,10 @@ ${lines.join('\n')}
         type: nodeDef.type ?? 'agent',
         agent: nodeDef.agent,
         inputState: { ...exec.state },
-        renderedPrompt: promptRender?.rendered,
+        // Prefer the executor's actual prompt (carries retry/forward
+        // shape on retries). Fall back to the template re-render only for
+        // non-agent paths that don't set result.prompt.
+        renderedPrompt: resultExt.prompt ?? promptRender?.rendered,
         output: result.outputs,
         rawResponse: result.rawResponse,
         activity: [],
@@ -1821,7 +1824,9 @@ ${lines.join('\n')}
         type: nodeDef?.type ?? 'agent',
         agent: nodeDef?.agent,
         inputState: stateSnapshot,
-        renderedPrompt: nodeDef?.prompt ? renderTemplate(nodeDef.prompt, stateSnapshot) : undefined,
+        // Prefer the executor's actual prompt; fall back to template render
+        // for non-agent branches that don't set result.prompt.
+        renderedPrompt: br.result.prompt ?? (nodeDef?.prompt ? renderTemplate(nodeDef.prompt, stateSnapshot) : undefined),
         output: br.outputs,
         rawResponse: br.result.rawResponse,
         activity: [],

@@ -147,6 +147,16 @@ function filterExternalMcpToolNames(
 export interface NodeResult {
   outputs: Record<string, unknown>;
   rawResponse?: string;
+  /**
+   * The actual prompt sent to the agent for this attempt. Set by both
+   * `executeAgentNode` and `executeCodexNode`. The engine persists this on
+   * the trace's `renderedPrompt` field. Without it, the engine falls back
+   * to re-rendering `nodeDef.prompt` against state — which always produces
+   * the full first-run prompt and misses retry/forward shapes, making the
+   * UI's "Prompt" tab lie about what the agent actually received on
+   * retries. See engine.ts trace-save sites.
+   */
+  prompt?: string;
   sessionId?: string;
   /**
    * Resolved session key used to track this run's SDK session in
@@ -1198,6 +1208,7 @@ Use auto-gate only if the original prompt's workflow context explicitly allowed 
   return {
     outputs,
     rawResponse,
+    prompt,
     sessionId,
     sessionKey,
     cost: {
