@@ -8,7 +8,7 @@ Do not open a public issue for a vulnerability.
 
 Report vulnerabilities through GitHub Security Advisories:
 
-https://github.com/Kalpai-poc/allen/security/advisories/new
+https://github.com/Inomy-shop/allen/security/advisories/new
 
 Useful reports include:
 

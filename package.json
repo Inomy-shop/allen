@@ -6,12 +6,12 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/Kalpai-poc/allen.git"
+    "url": "https://github.com/Inomy-shop/allen.git"
   },
   "bugs": {
-    "url": "https://github.com/Kalpai-poc/allen/issues"
+    "url": "https://github.com/Inomy-shop/allen/issues"
   },
-  "homepage": "https://github.com/Kalpai-poc/allen#readme",
+  "homepage": "https://github.com/Inomy-shop/allen#readme",
   "engines": {
     "node": ">=22",
     "npm": ">=10"

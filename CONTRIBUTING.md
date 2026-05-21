@@ -15,7 +15,7 @@ Allen coordinates coding agents, workspaces, workflow traces, artifacts, and int
 ## Development Setup
 
 ```bash
-git clone https://github.com/Kalpai-poc/allen.git
+git clone https://github.com/Inomy-shop/allen.git
 cd allen
 ./scripts/setup.sh        # installs deps; installs Node 22 via nvm if needed
 claude                    # one-time Claude Code authentication

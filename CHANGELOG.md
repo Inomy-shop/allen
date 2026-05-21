@@ -4,7 +4,9 @@ This file tracks notable Allen changes.
 
 Allen is currently pre-release, so behavior can change between commits. Versioned release notes will start when public tags are created.
 
-## Unreleased
+## [0.1.0] - 2026-05-21
+
+First public alpha release.
 
 ### Fixed
 

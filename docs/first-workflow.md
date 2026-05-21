@@ -16,7 +16,7 @@ The setup script installs MongoDB, the Claude Code CLI, the Codex CLI, dependenc
 ## 1. Clone Allen
 
 ```bash
-git clone https://github.com/Kalpai-poc/allen.git
+git clone https://github.com/Inomy-shop/allen.git
 cd allen
 ```
 

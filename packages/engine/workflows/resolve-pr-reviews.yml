@@ -25,7 +25,7 @@ input:
     widget: text
     label: PR URL
     description: Full GitHub PR URL. https://github.com/<owner>/<repo>/pull/<number>
-    placeholder: "https://github.com/Kalpai-poc/allen/pull/42"
+    placeholder: "https://github.com/Inomy-shop/allen/pull/42"
   review_bot_logins:
     type: string
     required: false

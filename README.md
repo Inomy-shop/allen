@@ -71,7 +71,7 @@ Supported platforms: macOS and Linux (and WSL2 on Windows). Native Windows is no
 ### 1. Clone
 
 ```bash
-git clone https://github.com/Kalpai-poc/allen.git
+git clone https://github.com/Inomy-shop/allen.git
 cd allen
 ```
 
@@ -243,7 +243,7 @@ Allen executes agent-driven commands against repositories. Treat it like develop
 - Use least-privilege tokens for GitHub, Linear, Slack, model providers, and MCP servers.
 - Never commit `.env`, API keys, OAuth tokens, SSH keys, or private prompts.
 - Public capability URLs (artifacts, files, execution/workspace SSE, workspace preview) rely on unguessable IDs — treat them as sensitive.
-- Report vulnerabilities privately via GitHub Security Advisories: https://github.com/Kalpai-poc/allen/security/advisories/new
+- Report vulnerabilities privately via GitHub Security Advisories: https://github.com/Inomy-shop/allen/security/advisories/new
 
 See [`SECURITY.md`](SECURITY.md) for the reporting policy and [`docs/security.md`](docs/security.md) for the operational model.
 
@@ -251,7 +251,7 @@ See [`SECURITY.md`](SECURITY.md) for the reporting policy and [`docs/security.md
 
 Read [`CONTRIBUTING.md`](CONTRIBUTING.md) before sending a PR. High-value contributions: workflow examples, agent definitions, engine/server/UI fixes, docs, and tests. For large workflow/agent/security/architecture changes, open an issue first.
 
-Report bugs and request features via GitHub Issues: https://github.com/Kalpai-poc/allen/issues
+Report bugs and request features via GitHub Issues: https://github.com/Inomy-shop/allen/issues
 
 ## License
 
