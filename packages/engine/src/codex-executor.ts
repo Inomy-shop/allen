@@ -64,27 +64,161 @@ export async function executeCodexNode(
   // Resume by default unless explicitly disabled on the node
   const isResume = !!((nodeDef.resume_on_retry !== false) && sessionId);
 
-  let prompt = nodeDef.prompt ? renderTemplate(nodeDef.prompt, state) : '';
-  if (!isResume && role?.system) {
-    // Only prepend system prompt on first run — resume already has context.
-    // Append artifact guidance idempotently so Codex agents are told to save
-    // generated deliverables via allen_save_artifact (the MCP tool is reachable
-    // via the synced Codex config). Non-interactive guidance is layered on top
-    // so codex workflow runs can't call ask_user / delegate_to_agent (no chat
-    // surface to resolve them on).
-    prompt = `${withNonInteractiveGuidance(withArtifactsGuidance(role.system))}\n\n${prompt}`;
+  // Retry plumbing — the engine writes __retry_target before re-running this
+  // node as the target of a retry edge, and consumes it after the run
+  // (engine.ts:1232-1236). When this node is the retry target AND the codex
+  // session is being resumed, the agent's thread already carries the original
+  // task; we only need to hand back the gate feedback. When we're NOT the
+  // retry target but the session is being resumed anyway (forward-path
+  // re-entry after an upstream re-run), the agent's prior outputs are stale
+  // and we need to dump the current state so it doesn't return cached
+  // answers. Mirrors executeAgentNode in node-executor.ts:360-512 so codex
+  // and claude code paths behave identically with respect to retry feedback.
+  const retryTargets = state.__retry_target as string[] | undefined;
+  const isRetryTarget = Array.isArray(retryTargets) && retryTargets.includes(nodeName);
+
+  const promptShape: 'retry' | 'forward' | 'full' =
+    isResume && isRetryTarget ? 'retry'
+    : isResume                 ? 'forward'
+                               : 'full';
+
+  // Log forward-path re-entries so operators can correlate the upstream
+  // retry with this node's re-invocation. Mirrors node-executor.ts:375-381.
+  if (promptShape === 'forward') {
+    emitter.emit({
+      event: 'execution_log',
+      data: {
+        executionId,
+        timestamp: new Date(),
+        level: 'debug',
+        category: 'system',
+        node: nodeName,
+        message: `[session] forward-path re-entry — resuming session ${sessionId!.slice(0, 8)} with upstream-re-ran prompt`,
+      },
+    });
   }
-  prompt += buildOutputInstruction(nodeDef.outputs, nodeDef.output_format);
-  if (nodeContext) {
-    prompt += nodeContext;
+
+  // Helpers for the 'forward' shape — dump current top-level state so the
+  // resumed agent doesn't operate on stale session memory.
+  const formatStateValue = (v: unknown): string => {
+    if (v === null) return 'null';
+    if (v === undefined) return 'undefined';
+    if (typeof v === 'string') return v.length > 800 ? v.slice(0, 800) + ` ... (${v.length - 800} chars truncated)` : v;
+    if (typeof v === 'number' || typeof v === 'boolean') return String(v);
+    let json: string;
+    try { json = JSON.stringify(v, null, 2); }
+    catch { json = String(v); }
+    return json.length > 800 ? json.slice(0, 800) + ` ... (${json.length - 800} chars truncated)` : json;
+  };
+  const renderCurrentState = (): string => {
+    const lines: string[] = [];
+    for (const [k, v] of Object.entries(state)) {
+      if (k.startsWith('__')) continue;
+      if (k === 'retry_context' || k === 'retry_count') continue;
+      lines.push(`${k}: ${formatStateValue(v)}`);
+    }
+    return lines.length > 0 ? lines.join('\n') : '(no top-level state fields)';
+  };
+
+  let prompt: string;
+  if (promptShape === 'retry') {
+    // Gate-feedback retry — a downstream reviewer rejected this node's
+    // previous output and fired the retry edge. The resumed codex thread
+    // carries the original task and the agent's prior turns; we only hand
+    // back the reviewer's feedback. __retry_source is the REVIEWING node
+    // (qa, code_review, validator, etc.), not the current node.
+    const attempt = (state.__retry_attempt as number) ?? 2;
+    const source = (state.__retry_source as string) ?? 'downstream step';
+    const context = (state.retry_context as string) ?? '';
+    prompt = `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+REVIEW FEEDBACK — ATTEMPT ${attempt}
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Your previous output was rejected by the ${source} step's review. Their
+feedback is below. Apply the fixes and re-emit your JSON output block.
+
+Do NOT redo analysis that is still valid — apply the feedback as a
+targeted fix. You decide what tool calls that requires: re-read the
+files you're about to change, re-run tests after editing, whatever
+your role's contract needs. Do not skip verification to save turns.
+
+━━━ FEEDBACK FROM ${source} ━━━
+${context}
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`;
+  } else if (promptShape === 'forward') {
+    // Forward-path re-entry after an upstream re-ran. Agent's role and task
+    // are unchanged but its prior outputs are stale; dump the current state.
+    prompt = `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+UPSTREAM RE-RUN — INPUTS CHANGED
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+An upstream node in this workflow re-ran since your last turn and
+produced different outputs. The workflow inputs you operated on
+previously are now stale — do not trust anything in your prior turns'
+analysis, tool outputs, or returned JSON.
+
+Your role, task, tools, and output schema are UNCHANGED. Your job is to
+re-execute your original task against the CURRENT inputs shown below and
+emit a fresh JSON output block.
+
+Compare each field against what you remember from your prior turn. Where
+they differ, your earlier work on that field is invalid. Where they
+match, your earlier analysis may still apply — but verify, don't assume.
+
+Do NOT copy your prior JSON output verbatim. Produce values that reflect
+the current inputs, even if they happen to match your prior values.
+
+━━━ CURRENT WORKFLOW STATE ━━━
+${renderCurrentState()}
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`;
+  } else {
+    // Full prompt — fresh run (first attempt) or resume disabled.
+    prompt = nodeDef.prompt ? renderTemplate(nodeDef.prompt, state) : '';
+    if (!isResume && role?.system) {
+      // Only prepend system prompt on first run — resume already has context.
+      // Artifact guidance + non-interactive guidance are layered idempotently.
+      prompt = `${withNonInteractiveGuidance(withArtifactsGuidance(role.system))}\n\n${prompt}`;
+    }
+    prompt += buildOutputInstruction(nodeDef.outputs, nodeDef.output_format);
+    if (nodeContext) {
+      prompt += nodeContext;
+    }
+    // Retry without session resume (resume_on_retry: false, or the session
+    // didn't persist) — can't rely on prior turns, so append the feedback
+    // block after the full re-rendered prompt.
+    if (isRetryTarget) {
+      const attempt = (state.__retry_attempt as number) ?? 2;
+      const source = (state.__retry_source as string) ?? 'previous step';
+      const context = (state.retry_context as string) ?? '';
+      prompt += `
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+RETRY FEEDBACK — ATTEMPT ${attempt}
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+You are being re-run because the previous attempt of ${source} produced a
+result that failed a downstream gate. Address the feedback below in this
+run. Do NOT redo work that is already correct — focus on the issues called
+out here.
+
+${context}
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`;
+    }
   }
+
+  // Operator-supplied workflow feedback entries — separate from
+  // state.retry_context (which is gate-feedback from a downstream review
+  // node). feedbackContext is built by engine.ts:1146 from feedback entries
+  // an operator added through the UI. Append AFTER the shape branching so
+  // resumed retry / forward shapes also see it — mirrors node-executor.ts:514-516.
   if (feedbackContext) {
     prompt += feedbackContext;
   }
 
+  // Real attempt counter — matches node-executor.ts:518-523. `retry_count`
+  // is incremented by the engine before each retry; emitting +1 so the UI's
+  // first-attempt display reads "1" rather than "0".
+  const currentAttempt = (state.retry_count as number ?? 0) + 1;
   emitter.emit({
     event: 'node_started',
-    data: { node: nodeName, agent: nodeDef.agent, attempt: 1 },
+    data: { node: nodeName, agent: nodeDef.agent, attempt: currentAttempt },
   });
 
   emitter.emit({
