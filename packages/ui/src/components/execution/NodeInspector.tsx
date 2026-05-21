@@ -3,8 +3,100 @@ import {
   ChevronDown, ChevronRight, AlertCircle, CheckCircle, XCircle, Info,
   Settings, GitBranch, Zap, BookOpen, Wrench, Eye,
 } from 'lucide-react';
+import { authHeaders } from '../../services/api';
+
+type ContextRefProviderMetadata = {
+  datasetName?: unknown;
+  sourceId?: unknown;
+  chunkId?: unknown;
+  cogneeChunkId?: unknown;
+  cogneeDataId?: unknown;
+  chunkIndex?: unknown;
+  documentRole?: unknown;
+  containsCodeBlocks?: unknown;
+  searchMode?: unknown;
+  confidence?: unknown;
+  sourceMetadata?: {
+    path?: unknown;
+    fileHash?: unknown;
+    branch?: unknown;
+    headSha?: unknown;
+  };
+};
+
+type ContextInjectionRefSummary = {
+  refId?: string;
+  path?: string;
+  kind?: string;
+  title?: string;
+  providerId?: string;
+  source?: string;
+  itemType?: string;
+  grounding?: string;
+  contentSha256?: string;
+  skipReason?: string;
+  providerMetadata?: ContextRefProviderMetadata;
+};
+
+type ContextLifecycleEventSummary = {
+  type?: string;
+  createdAt?: string | Date;
+};
+
+type ContextRerankSummary = {
+  providerId?: unknown;
+  score?: unknown;
+  semanticScore?: unknown;
+  rerankScore?: unknown;
+  finalRank?: unknown;
+  originalRank?: unknown;
+  reason?: unknown;
+};
+
+type ContextLifecycleRefSummary = ContextInjectionRefSummary & {
+  isMandatory?: boolean;
+  isCognee?: boolean;
+  cogneeScore?: number;
+  rerankerScore?: number;
+  rerank?: ContextRerankSummary;
+  rank?: number;
+  lifecycleStatus?: string;
+  injectionMode?: string;
+  isInjected?: boolean;
+  isFiltered?: boolean;
+  filterReason?: string;
+  filterStage?: string;
+  contentAvailable?: boolean;
+  contentUrl?: string;
+  sourceDiscovered?: boolean;
+  timeline?: ContextLifecycleEventSummary[];
+};
+
+type ContextQuerySummary = {
+  queryIntentHash?: string;
+  renderedQueryHash?: string;
+  renderedQueryLength?: number;
+  role?: string;
+  roleFamily?: string;
+  roleFocus?: string[];
+  querySignalSources?: string[];
+  querySignalSections?: string[];
+  querySignalLength?: number;
+  requiredCategories?: string[];
+  preferredCategories?: string[];
+  exclusionCategories?: string[];
+  currentFiles?: string[];
+  changedFiles?: string[];
+  pathHints?: string[];
+  moduleHints?: string[];
+  queryIntentAvailable?: boolean;
+  renderedQueryAvailable?: boolean;
+  queryIntentUrl?: string;
+  renderedQueryUrl?: string;
+};
 
 interface Trace {
+  executionTraceId?: string;
   node: string;
   attempt: number;
   status: string;
@@ -21,8 +113,64 @@ interface Trace {
   routingDecision?: { expression: string; result: unknown };
   runtimeContext?: {
     cwd?: string; executionMode?: string; systemPromptMode?: string;
+    repoContextLoadingGuidancePresent?: boolean; repoContextLoadingGuidanceInjected?: boolean;
+    mandatoryRepoContextInjected?: boolean; mandatoryRepoContextInjectedCount?: number;
+    mandatoryRepoContextSkippedProviderNativeCount?: number; mandatoryRepoContextTargetLayer?: string;
     resolvedModel?: string; reasoningEffort?: string; planMode?: boolean;
     mcpServerNames?: string[]; envKeys?: string[];
+  };
+  repoKnowledgeInjected?: {
+    packetId?: string; repoName?: string; indexId?: string; indexFreshness?: string;
+    mandatoryCount?: number; recommendedCount?: number; preselectedContextCount?: number; selectedContextCount?: number;
+    retrievalProviders?: string[];
+    mandatoryContextInjected?: boolean; mandatoryContextInjectedCount?: number;
+    mandatoryContextSkippedProviderNativeCount?: number; mandatoryContextSkippedOversizeCount?: number;
+    mandatoryContextTargetLayer?: string; systemPromptContextInjected?: boolean;
+    contextInjection?: {
+      injectionId?: string; provider?: string; targetLayer?: string;
+      injectedCount?: number; skippedProviderNativeCount?: number; skippedOversizeCount?: number;
+      skippedMissingCount?: number; skippedUntrackedCount?: number; totalChars?: number;
+      injectedRefs?: ContextInjectionRefSummary[];
+      skippedRefs?: ContextInjectionRefSummary[];
+      skippedProviderNativeRefs?: ContextInjectionRefSummary[];
+    };
+  };
+  contextLifecycleAttempt?: {
+    packetId?: string;
+    contextAttemptId?: string;
+    repoName?: string;
+    indexId?: string;
+    indexFreshness?: string;
+    retrievalProviders?: string[];
+    refs?: ContextLifecycleRefSummary[];
+    contextInjection?: {
+      targetLayer?: string;
+      totalChars?: number;
+      injectedRefs?: ContextInjectionRefSummary[];
+      providerNativeRefs?: ContextInjectionRefSummary[];
+      skippedProviderNativeRefs?: ContextInjectionRefSummary[];
+      skippedRefs?: ContextInjectionRefSummary[];
+    };
+    contextQuery?: ContextQuerySummary;
+  };
+  contextEvaluation?: {
+    traceId?: string; status?: string;
+    scores?: { precision?: number; completeness?: number; usefulness?: number; groundedness?: number; correctness?: number; bloat?: number; overall?: number };
+    semantic?: { provider?: string; status?: string; mode?: string; scores?: Record<string, number>; error?: string; completedAt?: string; reason?: string };
+    diagnostics?: Array<{ code?: string; severity?: string; message?: string; refId?: string; path?: string }>;
+    feedbackEvidenceCount?: number;
+  };
+  contextEvaluationMissingReason?: string;
+  workflowContextFinding?: {
+    executionId?: string;
+    nodeName?: string;
+    attempt?: number;
+    source?: string;
+    fallbackReason?: string;
+    identityNormalized?: boolean;
+    status?: string;
+    scores?: Record<string, number>;
+    summary?: string;
   };
   learningsInjected?: Array<{ id?: string; content: string; contextTags?: string[] }>;
   agentOverrides?: {
@@ -35,6 +183,7 @@ interface Trace {
 interface Props {
   trace: Trace;
   workflowEdges?: Array<{ from: string; to: string | string[]; condition?: string; parallel?: boolean }>;
+  contextEngineEnabled?: boolean;
 }
 
 /**
@@ -42,7 +191,7 @@ interface Props {
  * Phase-2 enrichment field as a collapsible section. All sections are
  * self-hiding when their data is absent (older traces, non-agent nodes, etc).
  */
-export default function NodeInspector({ trace, workflowEdges }: Props) {
+export default function NodeInspector({ trace, workflowEdges, contextEngineEnabled = true }: Props) {
   // State diff: keys added/modified by this node's output vs the pre-run state.
   const stateDiff = diffState(trace.inputState ?? {}, trace.output ?? {});
 
@@ -50,6 +199,59 @@ export default function NodeInspector({ trace, workflowEdges }: Props) {
   const downstream = workflowEdges ? getDownstreamNodes(workflowEdges, trace.node) : [];
 
   const toolsUsed = new Set((trace.toolCalls ?? []).map((tc) => tc.tool));
+  const contextAttempt = trace.contextLifecycleAttempt;
+  const orderedLifecycleRefs = orderContextRefs(contextAttempt);
+  const [openContentRef, setOpenContentRef] = useState<string | null>(null);
+  const [contentByRef, setContentByRef] = useState<Record<string, { loading?: boolean; error?: string; content?: string }>>({});
+  const [openQueryContent, setOpenQueryContent] = useState<string | null>(null);
+  const [queryContentByUrl, setQueryContentByUrl] = useState<Record<string, { loading?: boolean; error?: string; content?: string }>>({});
+
+  const toggleRefContent = async (ref: ContextLifecycleRefSummary) => {
+    const key = contextRefKey(ref);
+    if (openContentRef === key) {
+      setOpenContentRef(null);
+      return;
+    }
+    setOpenContentRef(key);
+    if (!ref.contentUrl || contentByRef[key]?.content || contentByRef[key]?.loading) return;
+    setContentByRef(prev => ({ ...prev, [key]: { loading: true } }));
+    try {
+      const response = await fetch(ref.contentUrl, { headers: authHeaders() });
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      const payload = await response.json();
+      const content = typeof payload.content === 'string' ? payload.content : '';
+      setContentByRef(prev => ({
+        ...prev,
+        [key]: { content: content || 'No stored chunk content.' },
+      }));
+    } catch (err) {
+      setContentByRef(prev => ({ ...prev, [key]: { error: (err as Error).message } }));
+    }
+  };
+
+  const toggleQueryContent = async (kind: 'query' | 'intent', url?: string) => {
+    if (!url) return;
+    const key = `${kind}:${url}`;
+    if (openQueryContent === key) {
+      setOpenQueryContent(null);
+      return;
+    }
+    setOpenQueryContent(key);
+    if (queryContentByUrl[key]?.content || queryContentByUrl[key]?.loading) return;
+    setQueryContentByUrl(prev => ({ ...prev, [key]: { loading: true } }));
+    try {
+      const response = await fetch(url, { headers: authHeaders() });
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      const payload = await response.json();
+      const content = formatQueryArtifactContent(payload.content);
+      setQueryContentByUrl(prev => ({
+        ...prev,
+        [key]: { content: content || 'No stored query content.' },
+      }));
+    } catch (err) {
+      setQueryContentByUrl(prev => ({ ...prev, [key]: { error: (err as Error).message } }));
+    }
+  };
 
   return (
     <div className="space-y-3">
@@ -73,6 +275,12 @@ export default function NodeInspector({ trace, workflowEdges }: Props) {
               ['cwd', trace.runtimeContext.cwd],
               ['execution mode', trace.runtimeContext.executionMode],
               ['system-prompt mode', trace.runtimeContext.systemPromptMode],
+              ['repo context guidance present', trace.runtimeContext.repoContextLoadingGuidancePresent == null ? undefined : (trace.runtimeContext.repoContextLoadingGuidancePresent ? 'yes' : 'no')],
+              ['repo context guidance injected', trace.runtimeContext.repoContextLoadingGuidanceInjected == null ? undefined : (trace.runtimeContext.repoContextLoadingGuidanceInjected ? 'yes' : 'no')],
+              ['mandatory context injected', trace.runtimeContext.mandatoryRepoContextInjected == null ? undefined : (trace.runtimeContext.mandatoryRepoContextInjected ? 'yes' : 'no')],
+              ['mandatory context count', trace.runtimeContext.mandatoryRepoContextInjectedCount],
+              ['provider-native skipped', trace.runtimeContext.mandatoryRepoContextSkippedProviderNativeCount],
+              ['mandatory context layer', trace.runtimeContext.mandatoryRepoContextTargetLayer],
               ['resolved model', trace.runtimeContext.resolvedModel],
               ['reasoning effort', trace.runtimeContext.reasoningEffort],
               ['plan mode', trace.runtimeContext.planMode ? 'on' : 'off'],
@@ -81,6 +289,236 @@ export default function NodeInspector({ trace, workflowEdges }: Props) {
           />
         ) : <Empty>No runtime context captured (pre-Phase-2 trace).</Empty>}
       </Section>
+
+      {contextEngineEnabled && (
+      <Section icon={BookOpen} title="Repo context injection" defaultOpen={Boolean(contextAttempt || trace.repoKnowledgeInjected?.mandatoryContextInjected)}>
+        {contextAttempt ? (
+          <div className="space-y-2">
+            <KeyValueGrid
+              rows={[
+                ['attempt', contextAttempt.contextAttemptId ?? contextAttempt.packetId],
+                ['repo', contextAttempt.repoName],
+                ['index', contextAttempt.indexId],
+                ['freshness', contextAttempt.indexFreshness],
+                ['retrieval providers', (contextAttempt.retrievalProviders ?? []).join(', ') || undefined],
+                ['selected refs', countRefs(contextAttempt.refs, ref => ref.lifecycleStatus === 'selected' || Boolean(ref.isInjected) || ref.lifecycleStatus === 'loaded' || ref.lifecycleStatus === 'applied')],
+                ['mandatory refs', countRefs(contextAttempt.refs, ref => Boolean(ref.isMandatory))],
+                ['Cognee refs', countRefs(contextAttempt.refs, ref => Boolean(ref.isCognee))],
+                ['injected refs', countRefs(contextAttempt.refs, ref => Boolean(ref.isInjected))],
+                ['filtered refs', countRefs(contextAttempt.refs, ref => Boolean(ref.isFiltered))],
+                ['target layer', contextAttempt.contextInjection?.targetLayer],
+              ]}
+            />
+            {contextAttempt.contextQuery ? (
+              <div className="space-y-1.5">
+                <div className="overline">Retrieval query</div>
+                <KeyValueGrid
+                  rows={[
+                    ['role', contextAttempt.contextQuery.role],
+                    ['role family', contextAttempt.contextQuery.roleFamily],
+                    ['query hash', contextAttempt.contextQuery.renderedQueryHash],
+                    ['intent hash', contextAttempt.contextQuery.queryIntentHash],
+                    ['query length', contextAttempt.contextQuery.renderedQueryLength],
+                    ['signals', formatList(contextAttempt.contextQuery.querySignalSources)],
+                    ['sections', formatList(contextAttempt.contextQuery.querySignalSections)],
+                    ['required', formatList(contextAttempt.contextQuery.requiredCategories)],
+                    ['preferred', formatList(contextAttempt.contextQuery.preferredCategories)],
+                    ['excluded', formatList(contextAttempt.contextQuery.exclusionCategories)],
+                    ['current files', formatList(contextAttempt.contextQuery.currentFiles)],
+                    ['path hints', formatList(contextAttempt.contextQuery.pathHints)],
+                  ]}
+                />
+                <div className="flex flex-wrap gap-1">
+                  {contextAttempt.contextQuery.renderedQueryAvailable && contextAttempt.contextQuery.renderedQueryUrl ? (
+                    <button
+                      type="button"
+                      onClick={() => void toggleQueryContent('query', contextAttempt.contextQuery?.renderedQueryUrl)}
+                      className="px-1.5 py-0.5 rounded border border-app text-[11px] font-mono text-theme-secondary hover:text-theme-primary hover:bg-app-muted"
+                    >
+                      {openQueryContent === `query:${contextAttempt.contextQuery.renderedQueryUrl}` ? 'Hide query' : 'View query'}
+                    </button>
+                  ) : null}
+                  {contextAttempt.contextQuery.queryIntentAvailable && contextAttempt.contextQuery.queryIntentUrl ? (
+                    <button
+                      type="button"
+                      onClick={() => void toggleQueryContent('intent', contextAttempt.contextQuery?.queryIntentUrl)}
+                      className="px-1.5 py-0.5 rounded border border-app text-[11px] font-mono text-theme-secondary hover:text-theme-primary hover:bg-app-muted"
+                    >
+                      {openQueryContent === `intent:${contextAttempt.contextQuery.queryIntentUrl}` ? 'Hide intent' : 'View intent JSON'}
+                    </button>
+                  ) : null}
+                </div>
+                {openQueryContent ? (
+                  <div className="rounded border border-app bg-app-card p-2 max-h-72 overflow-auto whitespace-pre-wrap text-[11px] font-mono text-theme-secondary">
+                    {queryContentByUrl[openQueryContent]?.loading
+                      ? 'Loading query...'
+                      : queryContentByUrl[openQueryContent]?.error
+                        ? `Failed to load query: ${queryContentByUrl[openQueryContent]?.error}`
+                        : queryContentByUrl[openQueryContent]?.content || 'No content.'}
+                  </div>
+                ) : null}
+              </div>
+            ) : null}
+            {orderedLifecycleRefs.length ? (
+              <div className="space-y-1">
+                <div className="overline">Lifecycle refs</div>
+                {orderedLifecycleRefs.slice(0, 16).map((r, i) => {
+                  const key = contextRefKey(r, i);
+                  const contentState = contentByRef[key];
+                  const chunkId = contextChunkId(r);
+                  return (
+                  <div key={key} className={`text-[11px] font-mono border rounded-md p-1.5 ${r.isInjected ? 'border-accent-green/40 bg-accent-green/5' : r.isFiltered ? 'border-amber-500/40 bg-amber-500/5' : 'border-app text-theme-secondary'}`}>
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="min-w-0">
+                        <div className="text-theme-primary break-all">{r.path ?? r.title ?? r.refId}</div>
+                        <div className="mt-0.5 text-theme-subtle break-all">ref {r.refId ?? 'unknown'}</div>
+                        {chunkId ? <div className="mt-0.5 text-theme-subtle break-all">chunk {chunkId}</div> : null}
+                      </div>
+                      <div className="shrink-0 flex items-center gap-1">
+                        {r.contentAvailable && r.contentUrl ? (
+                          <button
+                            type="button"
+                            onClick={() => void toggleRefContent(r)}
+                            className="px-1.5 py-0.5 rounded border border-app text-theme-secondary hover:text-theme-primary hover:bg-app-muted"
+                          >
+                            {openContentRef === key ? 'Hide chunk' : 'View chunk'}
+                          </button>
+                        ) : null}
+                        <span className="text-theme-subtle">{r.lifecycleStatus ?? 'unknown'}</span>
+                      </div>
+                    </div>
+                    <div className="mt-1 text-theme-subtle">
+                      {[r.rank != null ? `rank ${r.rank}` : undefined, r.isMandatory ? 'mandatory' : undefined, r.isCognee ? 'Cognee' : undefined, r.injectionMode, r.kind, r.itemType, r.providerId ?? r.source].filter(Boolean).join(' · ')}
+                    </div>
+                    {(contextScoreLine(r) || r.filterReason || contextRefAuditLine(r)) && (
+                      <div className="mt-1 text-theme-subtle">
+                        {[contextScoreLine(r), contextRefAuditLine(r), r.filterReason ? `${r.filterStage ?? 'filtered'}: ${r.filterReason}` : undefined].filter(Boolean).join(' · ')}
+                      </div>
+                    )}
+                    {openContentRef === key && (
+                      <div className="mt-2 rounded border border-app bg-app-card p-2 max-h-72 overflow-auto whitespace-pre-wrap text-theme-secondary">
+                        {contentState?.loading ? 'Loading content...' : contentState?.error ? `Failed to load content: ${contentState.error}` : contentState?.content || 'No content.'}
+                      </div>
+                    )}
+                  </div>
+                  );
+                })}
+              </div>
+            ) : null}
+          </div>
+        ) : trace.repoKnowledgeInjected ? (
+          <div className="space-y-2">
+            <KeyValueGrid
+              rows={[
+                ['packet', trace.repoKnowledgeInjected.packetId],
+                ['repo', trace.repoKnowledgeInjected.repoName],
+                ['index', trace.repoKnowledgeInjected.indexId],
+                ['freshness', trace.repoKnowledgeInjected.indexFreshness],
+                ['retrieval providers', (trace.repoKnowledgeInjected.retrievalProviders ?? []).join(', ') || undefined],
+                ['selected refs', trace.repoKnowledgeInjected.selectedContextCount],
+                ['mandatory refs', trace.repoKnowledgeInjected.mandatoryCount],
+                ['recommended refs', trace.repoKnowledgeInjected.recommendedCount],
+                ['system injected', trace.repoKnowledgeInjected.systemPromptContextInjected == null ? undefined : (trace.repoKnowledgeInjected.systemPromptContextInjected ? 'yes' : 'no')],
+                ['full bodies injected', trace.repoKnowledgeInjected.mandatoryContextInjectedCount],
+                ['provider-native skipped', trace.repoKnowledgeInjected.mandatoryContextSkippedProviderNativeCount],
+                ['oversize skipped', trace.repoKnowledgeInjected.mandatoryContextSkippedOversizeCount],
+                ['target layer', trace.repoKnowledgeInjected.mandatoryContextTargetLayer],
+              ]}
+            />
+            {trace.repoKnowledgeInjected.contextInjection?.injectedRefs?.length ? (
+              <div className="space-y-1">
+                <div className="overline">Injected full bodies</div>
+                {trace.repoKnowledgeInjected.contextInjection.injectedRefs.map((r, i) => (
+                  <div key={r.refId ?? i} className="text-[11px] font-mono text-theme-secondary border border-app rounded-md p-1.5">
+                    <span className="text-theme-primary">{r.path ?? r.title ?? r.refId}</span>
+                    <span className="text-theme-subtle"> · {r.kind} · {r.itemType ?? 'repo_file'} · {r.grounding ?? 'repo_backed'} · {r.providerId ?? r.source ?? 'context'}</span>
+                    {contextRefAuditLine(r) && <div className="mt-1 text-theme-subtle">{contextRefAuditLine(r)}</div>}
+                  </div>
+                ))}
+              </div>
+            ) : null}
+            {trace.repoKnowledgeInjected.contextInjection?.skippedProviderNativeRefs?.length ? (
+              <div className="space-y-1">
+                <div className="overline">Provider-native refs</div>
+                {trace.repoKnowledgeInjected.contextInjection.skippedProviderNativeRefs.map((r, i) => (
+                  <div key={r.refId ?? i} className="text-[11px] font-mono text-theme-secondary border border-app rounded-md p-1.5">
+                    <span className="text-theme-primary">{r.path ?? r.title ?? r.refId}</span>
+                    <span className="text-theme-subtle"> · already loaded by provider · {r.itemType ?? 'repo_file'} · {r.providerId ?? 'provider-native'}</span>
+                    {contextRefAuditLine(r) && <div className="mt-1 text-theme-subtle">{contextRefAuditLine(r)}</div>}
+                  </div>
+                ))}
+              </div>
+            ) : null}
+            {trace.repoKnowledgeInjected.contextInjection?.skippedRefs?.length ? (
+              <div className="space-y-1">
+                <div className="overline">Skipped refs</div>
+                {trace.repoKnowledgeInjected.contextInjection.skippedRefs.map((r, i) => (
+                  <div key={`${r.refId ?? i}-skipped`} className="text-[11px] font-mono text-theme-secondary border border-app rounded-md p-1.5">
+                    <span className="text-theme-primary">{r.path ?? r.title ?? r.refId}</span>
+                    <span className="text-theme-subtle"> · {r.kind} · {r.itemType ?? 'repo_file'} · {r.skipReason ?? 'skipped'} · {r.providerId ?? 'context'}</span>
+                    {contextRefAuditLine(r) && <div className="mt-1 text-theme-subtle">{contextRefAuditLine(r)}</div>}
+                  </div>
+                ))}
+              </div>
+            ) : null}
+          </div>
+        ) : <Empty>No repo knowledge packet captured.</Empty>}
+      </Section>
+      )}
+
+      {contextEngineEnabled && (
+      <Section icon={CheckCircle} title="Context quality evaluation" defaultOpen={Boolean(trace.contextEvaluation || trace.workflowContextFinding)}>
+        {trace.contextEvaluation ? (
+          <div className="space-y-2">
+            <KeyValueGrid
+              rows={[
+                ['status', trace.contextEvaluation.status],
+                ['overall', formatScore(trace.contextEvaluation.scores?.overall)],
+                ['precision', formatScore(trace.contextEvaluation.scores?.precision)],
+                ['completeness', formatScore(trace.contextEvaluation.scores?.completeness)],
+                ['usefulness', formatScore(trace.contextEvaluation.scores?.usefulness)],
+                ['groundedness', formatScore(trace.contextEvaluation.scores?.groundedness)],
+                ['correctness', formatScore(trace.contextEvaluation.scores?.correctness)],
+                ['bloat', formatScore(trace.contextEvaluation.scores?.bloat)],
+                ['semantic provider', trace.contextEvaluation.semantic?.provider],
+                ['semantic status', trace.contextEvaluation.semantic?.status],
+                ['semantic mode', trace.contextEvaluation.semantic?.mode],
+                ['semantic completed', trace.contextEvaluation.semantic?.completedAt],
+                ['semantic reason', trace.contextEvaluation.semantic?.reason],
+                ['feedback evidence', trace.contextEvaluation.feedbackEvidenceCount],
+              ]}
+            />
+            {trace.contextEvaluation.semantic?.error && (
+              <div className="text-[11px] font-mono text-accent-red border border-accent-red/30 rounded-md p-1.5">
+                {trace.contextEvaluation.semantic.error}
+              </div>
+            )}
+            {trace.contextEvaluation.diagnostics?.length ? (
+              <div className="space-y-1">
+                <div className="overline">Evaluation diagnostics</div>
+                {trace.contextEvaluation.diagnostics.map((d, i) => (
+                  <div key={`${d.code ?? i}-eval`} className="text-[11px] font-mono text-theme-secondary border border-app rounded-md p-1.5">
+                    <span className="text-theme-primary">{d.code ?? 'diagnostic'}</span>
+                    <span className="text-theme-subtle"> · {d.severity ?? 'info'} · {d.message ?? ''}</span>
+                    {(d.refId || d.path) && <div className="mt-1 text-theme-subtle">{[d.refId, d.path].filter(Boolean).join(' · ')}</div>}
+                  </div>
+                ))}
+              </div>
+            ) : null}
+            {trace.workflowContextFinding && (
+              <WorkflowContextFinding finding={trace.workflowContextFinding} />
+            )}
+          </div>
+        ) : (
+          <div className="space-y-2">
+            {trace.workflowContextFinding ? (
+              <WorkflowContextFinding finding={trace.workflowContextFinding} />
+            ) : null}
+            <Empty>{trace.contextEvaluationMissingReason ?? 'No context quality evaluation captured.'}</Empty>
+          </div>
+        )}
+      </Section>
+      )}
 
       <Section icon={Zap} title="Agent overrides">
         {trace.agentOverrides ? (
@@ -262,6 +700,162 @@ function Empty({ children }: { children: React.ReactNode }) {
   return <div className="text-[11px] text-theme-subtle font-body italic">{children}</div>;
 }
 
+function WorkflowContextFinding({ finding }: { finding: NonNullable<Trace['workflowContextFinding']> }) {
+  return (
+    <div className="rounded-md border border-accent-blue/30 bg-accent-blue/5 p-2">
+      <div className="overline mb-1">Workflow semantic finding</div>
+      <KeyValueGrid
+        rows={[
+          ['status', finding.status],
+          ['source', finding.source],
+          ['attempt', finding.attempt],
+          ['fallback reason', finding.fallbackReason],
+          ['identity normalized', finding.identityNormalized == null ? undefined : (finding.identityNormalized ? 'yes' : 'no')],
+          ['overall', formatScore(finding.scores?.overall)],
+        ]}
+      />
+      {finding.summary && (
+        <div className="mt-2 max-h-[160px] overflow-y-auto rounded border border-app bg-surface/60 p-2 text-[11px] text-theme-secondary font-body leading-relaxed whitespace-pre-wrap">
+          {finding.summary}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function contextRefAuditLine(ref: ContextInjectionRefSummary): string | undefined {
+  const metadata = ref.providerMetadata;
+  if (!metadata) return undefined;
+  const source = metadata.sourceMetadata;
+  const parts = [
+    metadata.datasetName ? `dataset ${String(metadata.datasetName)}` : undefined,
+    metadata.sourceId ? `source ${String(metadata.sourceId)}` : undefined,
+    metadata.cogneeChunkId || metadata.chunkId ? `chunk ${String(metadata.cogneeChunkId ?? metadata.chunkId)}` : undefined,
+    metadata.cogneeDataId ? `data ${String(metadata.cogneeDataId)}` : undefined,
+    metadata.chunkIndex !== undefined ? `index ${String(metadata.chunkIndex)}` : undefined,
+    metadata.documentRole ? `role ${String(metadata.documentRole)}` : undefined,
+    metadata.searchMode ? `mode ${String(metadata.searchMode)}` : undefined,
+    metadata.confidence !== undefined && metadata.confidence !== null ? `confidence ${formatContextScore(metadata.confidence)}` : undefined,
+    source?.path ? `source ${String(source.path)}` : undefined,
+    source?.fileHash ? `hash ${String(source.fileHash).slice(0, 12)}` : undefined,
+  ].filter(Boolean);
+  return parts.length ? parts.join(' · ') : undefined;
+}
+
+function contextScoreLine(ref: ContextLifecycleRefSummary): string | undefined {
+  const parts = [
+    ref.isCognee && ref.cogneeScore != null ? `Cognee raw ${formatContextScore(ref.cogneeScore)}` : undefined,
+    rerankerScoreLabel(ref),
+  ].filter(Boolean);
+  return parts.length ? parts.join(' · ') : undefined;
+}
+
+function rerankerScoreLabel(ref: ContextLifecycleRefSummary): string | undefined {
+  const score = firstFiniteNumber(ref.rerankerScore, ref.rerank?.rerankScore, ref.rerank?.semanticScore, ref.rerank?.score);
+  if (score != null) {
+    const provider = firstText(ref.rerank?.providerId);
+    return `reranker${provider ? ` ${provider}` : ''} ${formatContextScore(score)}`;
+  }
+  return ref.isCognee ? 'reranker not run' : undefined;
+}
+
+function contextChunkId(ref: ContextInjectionRefSummary): string | undefined {
+  return firstText(
+    ref.providerMetadata?.cogneeChunkId,
+    ref.providerMetadata?.chunkId,
+    ref.refId?.startsWith('cognee:') ? ref.refId.slice('cognee:'.length) : undefined,
+  );
+}
+
+function contextRefKey(ref: ContextLifecycleRefSummary, fallback?: number): string {
+  return String(ref.refId ?? ref.contentUrl ?? fallback ?? 'ref');
+}
+
+function formatList(values: unknown): string | undefined {
+  if (!Array.isArray(values) || values.length === 0) return undefined;
+  return values.map(String).join(', ');
+}
+
+function formatQueryArtifactContent(value: unknown): string {
+  if (typeof value !== 'string') return '';
+  try {
+    return JSON.stringify(JSON.parse(value), null, 2);
+  } catch {
+    return value;
+  }
+}
+
+function countRefs(refs: ContextLifecycleRefSummary[] | undefined, predicate: (ref: ContextLifecycleRefSummary) => boolean): number {
+  return (refs ?? []).filter(predicate).length;
+}
+
+function orderContextRefs(attempt: Trace['contextLifecycleAttempt'] | undefined): ContextLifecycleRefSummary[] {
+  const injectedOrder = refOrderMap(attempt?.contextInjection?.injectedRefs);
+  return (attempt?.refs ?? [])
+    .map((ref, index) => ({ ref, index }))
+    .sort((a, b) => {
+      const groupDelta = contextRefDisplayGroup(a.ref) - contextRefDisplayGroup(b.ref);
+      if (groupDelta !== 0) return groupDelta;
+      if (contextRefDisplayGroup(a.ref) === 0) {
+        const injectedOrderDelta = refOrder(injectedOrder, a.ref) - refOrder(injectedOrder, b.ref);
+        if (injectedOrderDelta !== 0) return injectedOrderDelta;
+      }
+      const timeDelta = contextRefGroupTime(a.ref) - contextRefGroupTime(b.ref);
+      if (timeDelta !== 0) return timeDelta;
+      const rankDelta = contextRefRank(a.ref) - contextRefRank(b.ref);
+      if (rankDelta !== 0) return rankDelta;
+      return a.index - b.index;
+    })
+    .map((entry) => entry.ref);
+}
+
+function contextRefDisplayGroup(ref: ContextLifecycleRefSummary): number {
+  const status = String(ref.lifecycleStatus ?? '').toLowerCase();
+  const mode = String(ref.injectionMode ?? '').toLowerCase();
+  if (ref.isInjected || ['injected', 'loaded', 'applied', 'provider_native'].includes(status) || ['full', 'provider_native'].includes(mode)) return 0;
+  if (ref.isFiltered || ['filtered', 'rejected', 'skipped'].includes(status) || mode === 'skipped') return 1;
+  if (status === 'selected' || mode === 'manifest') return 2;
+  return 3;
+}
+
+function contextRefGroupTime(ref: ContextLifecycleRefSummary): number {
+  const group = contextRefDisplayGroup(ref);
+  const eventTypes = group === 0
+    ? ['injected_full', 'provider_native', 'loaded', 'applied', 'reported_loaded', 'reported_applied']
+    : group === 1
+      ? ['filtered', 'rejected', 'skipped']
+      : group === 2
+        ? ['selected', 'injected_manifest']
+        : ['candidate'];
+  return firstEventTime(ref.timeline, eventTypes);
+}
+
+function firstEventTime(timeline: ContextLifecycleEventSummary[] | undefined, types: string[]): number {
+  for (const type of types) {
+    const event = timeline?.find((entry) => entry.type === type);
+    const createdAt = event?.createdAt ? new Date(event.createdAt).getTime() : Number.NaN;
+    if (Number.isFinite(createdAt)) return createdAt;
+  }
+  return Number.POSITIVE_INFINITY;
+}
+
+function contextRefRank(ref: ContextLifecycleRefSummary): number {
+  const rank = firstFiniteNumber(ref.rank, ref.rerank?.finalRank, ref.rerank?.originalRank);
+  return rank ?? Number.POSITIVE_INFINITY;
+}
+
+function refOrderMap(refs: ContextInjectionRefSummary[] | undefined): Map<string, number> {
+  const map = new Map<string, number>();
+  for (const [index, ref] of (refs ?? []).entries()) {
+    if (ref.refId && !map.has(ref.refId)) map.set(ref.refId, index);
+  }
+  return map;
+}
+
+function refOrder(order: Map<string, number>, ref: ContextLifecycleRefSummary): number {
+  return ref.refId && order.has(ref.refId) ? order.get(ref.refId)! : Number.POSITIVE_INFINITY;
+}
+
 function KeyValueGrid({ rows }: { rows: Array<[string, unknown, string?]> }) {
   return (
     <div className="space-y-1">
@@ -347,6 +941,35 @@ function getDownstreamNodes(edges: NonNullable<Props['workflowEdges']>, node: st
     }
   }
   return Array.from(down);
+}
+
+function formatScore(value?: number): string | undefined {
+  return typeof value === 'number' ? `${Math.round(value * 100)}%` : undefined;
+}
+
+function firstText(...values: unknown[]): string | undefined {
+  for (const value of values) {
+    if (typeof value === 'string' && value.trim()) return value;
+    if (typeof value === 'number' && Number.isFinite(value)) return String(value);
+  }
+  return undefined;
+}
+
+function firstFiniteNumber(...values: unknown[]): number | undefined {
+  for (const value of values) {
+    const numeric = Number(value);
+    if (Number.isFinite(numeric)) return numeric;
+  }
+  return undefined;
+}
+
+function formatContextScore(value: unknown): string {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) return String(value);
+  if (Math.abs(numeric) >= 100) return numeric.toFixed(0);
+  if (Math.abs(numeric) >= 10) return numeric.toFixed(2).replace(/\.?0+$/, '');
+  if (Math.abs(numeric) >= 1) return numeric.toFixed(3).replace(/\.?0+$/, '');
+  return numeric.toFixed(4).replace(/\.?0+$/, '');
 }
 
 function previewValue(v: unknown): string {

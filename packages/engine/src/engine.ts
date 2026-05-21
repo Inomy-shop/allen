@@ -54,6 +54,23 @@ export interface RunOptions {
   workflowId?: string;
 }
 
+function hasMeaningfulRepoContextUsage(value: unknown): boolean {
+  if (!value || typeof value !== 'object') return false;
+  const record = value as Record<string, unknown>;
+  return [
+    'module_identified',
+    'context_preselected',
+    'context_summary_used',
+    'context_loaded',
+    'context_applied',
+    'context_skipped',
+    'validation_performed',
+  ].some((key) => {
+    const current = record[key];
+    return Array.isArray(current) ? current.length > 0 : current != null && current !== '';
+  });
+}
+
 export class AllenEngine {
   private stateManager: StateManager;
   private learningManager: LearningManager;
@@ -1033,6 +1050,7 @@ ${lines.join('\n')}
     exec.nodeAttempts[nodeName] = (exec.nodeAttempts[nodeName] ?? 0) + 1;
     const attempt = exec.nodeAttempts[nodeName];
     const traceStart = new Date();
+    const executionTraceId = randomUUID();
 
     const nodeType = nodeDef.type ?? 'agent';
 
@@ -1069,13 +1087,50 @@ ${lines.join('\n')}
         /* best effort — skip the index if the lookup fails */
       }
     }
-    let nodeContext = nodeType === 'agent' && workflow
+    const workflowNodeContext = nodeType === 'agent' && workflow
       ? buildNodeContext(
           nodeName,
           { nodes: workflow.nodes as Record<string, unknown>, edges: workflow.edges as unknown as Array<Record<string, unknown>> },
           upstreamArtifacts,
         )
       : '';
+    let nodeContext = workflowNodeContext;
+    let repoKnowledgePacket: Awaited<ReturnType<NonNullable<EngineServices['repoKnowledge']>['buildNodeContextPacket']>> | null = null;
+    if (nodeType === 'agent' && this.config.services?.repoKnowledge?.buildNodeContextPacket) {
+      try {
+        const renderedNodePrompt = nodeDef.prompt ? renderTemplate(nodeDef.prompt, exec.state) : undefined;
+        const agentDef = nodeDef.agent ? this.config.agents[nodeDef.agent] : undefined;
+        const packetProvider = (nodeDef.agentOverrides?.provider === 'codex' || agentDef?.provider === 'codex') ? 'codex' : 'claude';
+        repoKnowledgePacket = await this.config.services.repoKnowledge.buildNodeContextPacket({
+          executionId: exec.id,
+          workflowName: exec.workflowName,
+          nodeName,
+          nodeRole: nodeDef.agent,
+          executionKind: 'workflow_node',
+          targetRole: nodeDef.agent,
+          attempt,
+          state: exec.state,
+          prompt: renderedNodePrompt,
+          provider: packetProvider,
+        });
+        if (repoKnowledgePacket) {
+          nodeContext = workflowNodeContext;
+          this.log(exec.id, {
+            category: 'system',
+            node: nodeName,
+            message: `[repo-knowledge] Resolved context packet ${repoKnowledgePacket.packetId}`,
+            data: repoKnowledgePacket.traceSummary,
+          });
+        }
+      } catch (err) {
+        this.log(exec.id, {
+          category: 'system',
+          level: 'warn',
+          node: nodeName,
+          message: `[repo-knowledge] Failed to build node context packet: ${(err as Error).message}`,
+        });
+      }
+    }
 
     // Learning injection: query and inject relevant learnings before execution.
     // Skip entirely when ALLEN_AGENT_SKIP_LEARNINGS=true — useful when you want
@@ -1097,7 +1152,7 @@ ${lines.join('\n')}
           550,
         );
         if (learnings.length > 0) {
-          nodeContext += this.learningManager.buildLearningsPrompt(learnings);
+          nodeContext = `${workflowNodeContext}${this.learningManager.buildLearningsPrompt(learnings)}`;
           injectedLearningIds = learnings.map(l => l._id).filter(Boolean);
           learningsInjectedTrace = learnings.map((l) => ({
             id: l._id ? String(l._id) : undefined,
@@ -1172,6 +1227,17 @@ ${lines.join('\n')}
       services: this.config.services,
       abortSignal: ac.signal,
       discoverMcpToolNames: this.config.discoverMcpToolNames,
+      repoKnowledgeContext: repoKnowledgePacket?.traceSummary ? {
+        packetId: repoKnowledgePacket.traceSummary.packetId,
+        repoId: repoKnowledgePacket.traceSummary.repoId,
+        repoName: repoKnowledgePacket.traceSummary.repoName,
+        indexId: repoKnowledgePacket.traceSummary.indexId,
+        indexFreshness: repoKnowledgePacket.traceSummary.indexFreshness,
+        systemPromptBlock: repoKnowledgePacket.systemPromptBlock,
+        mandatoryContextInjectedCount: repoKnowledgePacket.traceSummary.mandatoryContextInjectedCount,
+        mandatoryContextSkippedProviderNativeCount: repoKnowledgePacket.traceSummary.mandatoryContextSkippedProviderNativeCount,
+        mandatoryContextTargetLayer: repoKnowledgePacket.traceSummary.mandatoryContextTargetLayer,
+      } : undefined,
     };
     this.log(exec.id, {
       category: 'system',
@@ -1221,7 +1287,51 @@ ${lines.join('\n')}
         await this.stateManager.updateExecution(exec.id, { status: 'running' });
       }
 
-      // Update state with outputs
+      let contextUsageTrace: NonNullable<NodeTrace['contextUsage']> | null = null;
+      let contextEvaluationId: string | undefined;
+      if (nodeType === 'agent' && this.config.services?.repoKnowledge?.recordContextUsage) {
+        try {
+          const recordedUsage = await this.config.services.repoKnowledge.recordContextUsage({
+            executionId: exec.id,
+            executionTraceId,
+            workflowName: exec.workflowName,
+            nodeName,
+            nodeRole: nodeDef.agent,
+            executionKind: 'workflow_node',
+            targetRole: nodeDef.agent,
+            attempt,
+            packetId: repoKnowledgePacket?.packetId,
+            outputs: result.outputs,
+            rawResponse: result.rawResponse,
+            toolCalls: result.toolCalls,
+          });
+          contextUsageTrace = recordedUsage ? {
+            traceId: recordedUsage.traceId,
+            preselectedCount: recordedUsage.preselectedCount,
+            loadedCount: recordedUsage.loadedCount,
+            appliedCount: recordedUsage.appliedCount,
+            skippedCount: recordedUsage.skippedCount,
+          } : null;
+          contextEvaluationId = typeof recordedUsage?.contextEvaluation?.evaluationId === 'string'
+            ? recordedUsage.contextEvaluation.evaluationId
+            : typeof recordedUsage?.contextEvaluation?.traceId === 'string'
+              ? recordedUsage.contextEvaluation.traceId
+              : undefined;
+          if (recordedUsage?.repoContextUsage && !hasMeaningfulRepoContextUsage(result.outputs.repo_context_usage)) {
+            result.outputs.repo_context_usage = recordedUsage.repoContextUsage;
+          }
+        } catch (err) {
+          this.log(exec.id, {
+            category: 'system',
+            level: 'warn',
+            node: nodeName,
+            message: `[repo-knowledge] Failed to record context usage: ${(err as Error).message}`,
+          });
+        }
+      }
+
+      // Update state with outputs after context usage synthesis so downstream
+      // nodes see repo_context_usage even when the agent omitted it.
       Object.assign(exec.state, result.outputs);
 
       // If this node ran as the target of a retry edge, consume the retry
@@ -1267,6 +1377,7 @@ ${lines.join('\n')}
       const resultExt = result as unknown as NodeResult;
       const trace: NodeTrace = {
         node: nodeName,
+        executionTraceId,
         attempt,
         status: 'completed',
         type: nodeDef.type ?? 'agent',
@@ -1288,6 +1399,9 @@ ${lines.join('\n')}
         // Enrichments — any still-undefined fields are dropped by Mongo on $set.
         templateBindings: promptRender?.bindings,
         learningsInjected: learningsInjectedTrace.length > 0 ? learningsInjectedTrace : undefined,
+        contextAttemptId: repoKnowledgePacket?.packetId,
+        contextUsageTraceId: contextUsageTrace?.traceId,
+        contextEvaluationId,
         feedbackInjected: applicableFeedbackEntries.length > 0
           ? applicableFeedbackEntries.map((entry) => ({ id: entry.id, createdAt: entry.createdAt }))
           : undefined,
@@ -1586,6 +1700,7 @@ ${lines.join('\n')}
         : undefined;
       const failureTrace: NodeTrace = {
         node: nodeName,
+        executionTraceId,
         attempt,
         status: traceStatus,
         type: nodeDef.type ?? 'agent',
@@ -1601,6 +1716,7 @@ ${lines.join('\n')}
         completedAt: new Date(),
         templateBindings: promptRender?.bindings,
         learningsInjected: learningsInjectedTrace.length > 0 ? learningsInjectedTrace : undefined,
+        contextAttemptId: repoKnowledgePacket?.packetId,
         // Stash the error message on the trace so the UI can show what
         // happened without needing a separate log lookup.
         error: message,
@@ -1817,6 +1933,7 @@ ${lines.join('\n')}
 
       // Save trace for each parallel branch
       const nodeDef = nodes[br.node];
+      const resultExt = br.result as unknown as NodeResult;
       const trace: NodeTrace = {
         node: br.node,
         attempt: 1,
@@ -1836,6 +1953,11 @@ ${lines.join('\n')}
         startedAt: br.traceStart,
         completedAt: new Date(),
         toolCalls: br.result.toolCalls,
+        runtimeContext: resultExt.runtimeContext,
+        agentOverrides: resultExt.agentOverrides,
+        toolsAvailable: resultExt.toolsAvailable,
+        tokenUsagePerTool: resultExt.tokenUsagePerTool,
+        gateDecision: resultExt.gateDecision,
       };
       await this.stateManager.saveTrace({ ...trace, executionId: exec.id });
 

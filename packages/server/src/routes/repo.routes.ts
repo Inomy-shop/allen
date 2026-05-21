@@ -1,13 +1,21 @@
 import { Router, type Request, type Response } from 'express';
+import { dirname } from 'node:path';
 import { RepoService } from '../services/repo.service.js';
+import { RepoKnowledgeGraphService, isRepoKnowledgeGraphValidationError } from '../services/context/allen-knowledge-graph/repo-knowledge-graph.service.js';
+import { CogneeMemoryService } from '../services/context/cognee/cognee-memory.service.js';
+import { isCogneeContextEnabled, isContextEngineEnabled, isGraphContextEnabled } from '../services/context/config/context-provider-config.js';
 import { param } from '../types.js';
-import type { Db } from 'mongodb';
+import { ObjectId, type Db } from 'mongodb';
 import { execFile } from 'node:child_process';
 import { existsSync, readFileSync, statSync } from 'node:fs';
 import { extname, resolve, sep } from 'node:path';
 import { promisify } from 'node:util';
 
 const exec = promisify(execFile);
+
+function contextProviderDisabledPayload(error = 'Context provider is disabled. Set ALLEN_CONTEXT_PROVIDER to enable context engine flows.'): Record<string, unknown> {
+  return { error, code: 'CONTEXT_PROVIDER_DISABLED' };
+}
 
 function safeRepoPath(repoPath: string, rawPath: string): string | null {
   const root = resolve(repoPath);
@@ -76,6 +84,8 @@ function readRepoFile(repoPath: string, rawFilePath: string): Record<string, unk
 export function repoRoutes(db: Db): Router {
   const router = Router();
   const service = new RepoService(db);
+  const knowledgeGraph = new RepoKnowledgeGraphService(db);
+  const cogneeMemory = new CogneeMemoryService(db);
 
   // GET /api/repos
   router.get('/', async (_req: Request, res: Response) => {
@@ -135,6 +145,7 @@ export function repoRoutes(db: Db): Router {
   // id="context" and the ObjectId() call throws.
   router.get('/context', async (req: Request, res: Response) => {
     try {
+      if (!isGraphContextEnabled()) return res.status(409).json(contextProviderDisabledPayload('Allen context provider is disabled.'));
       const path = String(req.query.path ?? '');
       if (!path) return res.status(400).json({ error: 'path query param is required' });
       const ctx = await service.getContextByPath(path);
@@ -142,6 +153,119 @@ export function repoRoutes(db: Db): Router {
       res.json(ctx);
     } catch (err: unknown) {
       res.status(500).json({ error: (err as Error).message });
+    }
+  });
+
+  // GET /api/repos/knowledge-graph?path=... — path-based graph lookup (used by MCP tool)
+  router.get('/knowledge-graph', async (req: Request, res: Response) => {
+    try {
+      if (!isGraphContextEnabled()) return res.status(409).json(contextProviderDisabledPayload('Allen context provider is disabled.'));
+      const path = String(req.query.path ?? '');
+      if (!path) return res.status(400).json({ error: 'path query param is required' });
+      let current = path;
+      let resolvedRepo: Record<string, unknown> | null = null;
+      for (let i = 0; i < 10; i++) {
+        const repo = await db.collection('repos').findOne({ path: current });
+        if (repo) { resolvedRepo = repo; break; }
+        const workspace = await db.collection('workspaces').findOne({ worktreePath: current }).catch(() => null);
+        if (workspace?.repoId) {
+          resolvedRepo = await db.collection('repos').findOne({ _id: new ObjectId(workspace.repoId as string) });
+          if (resolvedRepo) break;
+        }
+        const parent = dirname(current);
+        if (!parent || parent === current || parent === '/') break;
+        current = parent;
+      }
+      if (!resolvedRepo) return res.status(404).json({ error: 'No registered repo found for that path' });
+      const graph = await knowledgeGraph.getLatestGraph(String(resolvedRepo._id));
+      if (!graph) return res.status(404).json({ error: 'No knowledge graph found for that repo' });
+      res.json(graph);
+    } catch (err: unknown) {
+      res.status(500).json({ error: (err as Error).message });
+    }
+  });
+
+  // POST /api/repos/knowledge-graph?path=... — path-based save for MCP agents.
+  router.post('/knowledge-graph', async (req: Request, res: Response) => {
+    try {
+      if (!isContextEngineEnabled()) return res.status(409).json(contextProviderDisabledPayload());
+      const path = String(req.query.path ?? req.body?.repo_path ?? '');
+      if (!path) return res.status(400).json({ error: 'path query param or repo_path body field is required' });
+      const result = await knowledgeGraph.saveGeneratedGraph({
+        repoPath: path,
+        graph: req.body?.graph,
+        graphJson: req.body?.graph_json ?? req.body?.graphJson,
+        graphMode: req.body?.graph_mode ?? req.body?.graphMode,
+        sourceExecutionId: req.body?.source_execution_id ?? req.body?.sourceExecutionId,
+        source: 'agent_tool',
+      });
+      res.status(201).json(result);
+    } catch (err: unknown) {
+      if (isRepoKnowledgeGraphValidationError(err)) {
+        return res.status(400).json((err as { payload: unknown }).payload);
+      }
+      res.status(400).json({ error: (err as Error).message });
+    }
+  });
+
+  // GET /api/repos/skill-body?path=...&refId=... — load full repo skill file by graph ref.
+  router.get('/skill-body', async (req: Request, res: Response) => {
+    try {
+      if (!isGraphContextEnabled()) return res.status(409).json(contextProviderDisabledPayload('Allen context provider is disabled.'));
+      const path = String(req.query.path ?? '');
+      const refId = req.query.refId ? String(req.query.refId) : undefined;
+      const skillPath = req.query.skillPath ? String(req.query.skillPath) : undefined;
+      if (!path) return res.status(400).json({ error: 'path query param is required' });
+      if (!refId && !skillPath) return res.status(400).json({ error: 'refId or skillPath is required' });
+      const result = await knowledgeGraph.getSkillBody({ repoPath: path, refId, skillPath });
+      res.json(result);
+    } catch (err: unknown) {
+      const msg = (err as Error).message;
+      const status = msg.includes('not found') || msg.includes('No knowledge graph') ? 404 : 400;
+      res.status(status).json({ error: msg });
+    }
+  });
+
+  // GET /api/repos/context-body?path=...&refId=... — load full repo context file or selected Cognee ref.
+  router.get('/context-body', async (req: Request, res: Response) => {
+    try {
+      if (!isContextEngineEnabled()) return res.status(409).json(contextProviderDisabledPayload('Allen context provider is disabled.'));
+      const path = String(req.query.path ?? '');
+      const refId = req.query.refId ? String(req.query.refId) : undefined;
+      const contextPath = req.query.contextPath ? String(req.query.contextPath) : undefined;
+      if (!path) return res.status(400).json({ error: 'path query param is required' });
+      if (!refId && !contextPath) return res.status(400).json({ error: 'refId or contextPath is required' });
+      const result = await knowledgeGraph.getContextBody({ repoPath: path, refId, contextPath });
+      res.json(result);
+    } catch (err: unknown) {
+      const msg = (err as Error).message;
+      const status = msg.includes('not found') || msg.includes('No knowledge graph') ? 404 : 400;
+      res.status(status).json({ error: msg });
+    }
+  });
+
+  // GET /api/repos/search-knowledge?path=...&query=... — find knowledge refs for follow-up context loading.
+  router.get('/search-knowledge', async (req: Request, res: Response) => {
+    try {
+      if (!isGraphContextEnabled()) return res.status(409).json(contextProviderDisabledPayload('Allen context provider is disabled.'));
+      const path = String(req.query.path ?? '');
+      const query = String(req.query.query ?? '');
+      const nodeRole = req.query.nodeRole ? String(req.query.nodeRole) : undefined;
+      const currentFilesRaw = req.query.currentFiles;
+      const currentFiles = Array.isArray(currentFilesRaw)
+        ? currentFilesRaw.map(String)
+        : typeof currentFilesRaw === 'string' && currentFilesRaw.length > 0
+          ? currentFilesRaw.split(',').map((v) => v.trim()).filter(Boolean)
+          : undefined;
+      const limit = req.query.limit ? Number(req.query.limit) : undefined;
+      if (!path) return res.status(400).json({ error: 'path query param is required' });
+      if (!query.trim()) return res.status(400).json({ error: 'query query param is required' });
+      const result = await knowledgeGraph.searchRepoKnowledge({ repoPath: path, query, nodeRole, currentFiles, limit });
+      res.json(result);
+    } catch (err: unknown) {
+      const msg = (err as Error).message;
+      const status = msg.includes('not found') || msg.includes('No knowledge graph') ? 404 : 400;
+      res.status(status).json({ error: msg });
     }
   });
 
@@ -242,8 +366,45 @@ export function repoRoutes(db: Db): Router {
   // POST /api/repos/:id/rescan-context — deep agent-driven context rescan (async, returns 202)
   router.post('/:id/rescan-context', async (req: Request, res: Response) => {
     try {
+      if (!isGraphContextEnabled()) return res.status(409).json(contextProviderDisabledPayload('Allen context provider is disabled.'));
       const result = await service.rescanContext(param(req, 'id'));
       res.status(result.scheduled ? 202 : 409).json(result);
+    } catch (err: unknown) {
+      res.status(400).json({ error: (err as Error).message });
+    }
+  });
+
+  // GET /api/repos/:id/cognee — local Cognee dataset ingestion status.
+  router.get('/:id/cognee', async (req: Request, res: Response) => {
+    try {
+      if (!isCogneeContextEnabled()) return res.status(409).json(contextProviderDisabledPayload('Cognee context provider is disabled.'));
+      const status = await cogneeMemory.getStatus(param(req, 'id'));
+      if (!status) return res.status(404).json({ error: 'No Cognee dataset found for repo' });
+      res.json(status);
+    } catch (err: unknown) {
+      res.status(400).json({ error: (err as Error).message });
+    }
+  });
+
+  // POST /api/repos/:id/cognee/refresh — manually ingest/cognify repo memory.
+  router.post('/:id/cognee/refresh', async (req: Request, res: Response) => {
+    try {
+      if (!isCogneeContextEnabled()) return res.status(409).json(contextProviderDisabledPayload('Cognee context provider is disabled.'));
+      const pullLatest = req.query.pullLatest === 'false' || req.body?.pullLatest === false ? false : true;
+      const cleanRebuild = req.query.cleanRebuild === 'true' || req.body?.cleanRebuild === true;
+      const status = await cogneeMemory.scheduleRefreshRepo(param(req, 'id'), { pullLatest, cleanRebuild });
+      res.status(202).json(status);
+    } catch (err: unknown) {
+      res.status(400).json({ error: (err as Error).message });
+    }
+  });
+
+  // POST /api/repos/:id/cognee/stop — stop an active local Cognee context build.
+  router.post('/:id/cognee/stop', async (req: Request, res: Response) => {
+    try {
+      if (!isCogneeContextEnabled()) return res.status(409).json(contextProviderDisabledPayload('Cognee context provider is disabled.'));
+      const status = await cogneeMemory.stopRefreshRepo(param(req, 'id'));
+      res.status(202).json(status);
     } catch (err: unknown) {
       res.status(400).json({ error: (err as Error).message });
     }
@@ -252,6 +413,7 @@ export function repoRoutes(db: Db): Router {
   // GET /api/repos/:id/context — fetch the stored deep context doc
   router.get('/:id/context', async (req: Request, res: Response) => {
     try {
+      if (!isGraphContextEnabled()) return res.status(409).json(contextProviderDisabledPayload('Allen context provider is disabled.'));
       const ctx = await service.getContext(param(req, 'id'));
       if (!ctx) return res.status(404).json({ error: 'No context found for that repo' });
       res.json(ctx);

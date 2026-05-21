@@ -14,7 +14,9 @@ import { evaluateCondition } from './condition-parser.js';
 import { executeCodexNode } from './codex-executor.js';
 import { buildToolCallRecord, type ToolCallRecord } from './tool-call.js';
 import { normalizeModelAlias } from './model-alias.js';
-import { withArtifactsGuidance, withNonInteractiveGuidance } from './agent-file-writer.js';
+import { hasRepoContextLoadingGuidance, withArtifactsGuidance, withMandatoryRepoContext, withNonInteractiveGuidance, withRepoContextLoadingGuidance } from './agent-file-writer.js';
+import { withRepoContextUsageOutput } from './repo-context-usage.js';
+import type { MaterializedAgentFileMetadata } from './cli-runner.js';
 import { statSync, mkdirSync } from 'node:fs';
 
 /** Agent-safe fallback cwd. Kept in sync with chat-providers.ts's
@@ -81,6 +83,17 @@ export interface NodeExecutorDeps {
   runWorkflow: (workflow: WorkflowDef, input: Record<string, unknown>) => Promise<Record<string, unknown>>;
   executionId?: string;
   nodeContext?: string;
+  repoKnowledgeContext?: {
+    packetId: string;
+    repoId: string;
+    repoName?: string;
+    indexId?: string;
+    indexFreshness?: 'fresh' | 'stale' | 'partial' | 'missing';
+    systemPromptBlock?: string;
+    mandatoryContextInjectedCount?: number;
+    mandatoryContextSkippedProviderNativeCount?: number;
+    mandatoryContextTargetLayer?: string;
+  };
   /** Accumulated post-run feedback for this workflow execution. */
   feedbackContext?: string;
   db?: import('mongodb').Db;
@@ -186,7 +199,21 @@ export interface NodeResult {
   runtimeContext?: {
     cwd?: string;
     executionMode?: 'sdk' | 'cli';
-    systemPromptMode?: 'append' | 'custom';
+    systemPromptMode?: 'append' | 'custom' | 'prompt-prefix';
+    repoContextLoadingGuidancePresent?: boolean;
+    repoContextLoadingGuidanceInjected?: boolean;
+    mandatoryRepoContextInjected?: boolean;
+    mandatoryRepoContextInjectedCount?: number;
+    mandatoryRepoContextSkippedProviderNativeCount?: number;
+    mandatoryRepoContextTargetLayer?: string;
+    materializedAgentFile?: {
+      subagentName: string;
+      path: string;
+      sha256: string;
+      byteLength: number;
+      containsMandatoryRepoContext: boolean;
+      createdAt: Date;
+    };
     resolvedModel?: string;
     reasoningEffort?: string;
     planMode?: boolean;
@@ -231,10 +258,13 @@ export async function executeNode(
   deps: NodeExecutorDeps,
 ): Promise<NodeResult> {
   const type: NodeType = nodeDef.type ?? 'agent';
+  const effectiveNodeDef = type === 'agent' && deps.repoKnowledgeContext
+    ? withRepoContextUsageOutput(nodeDef)
+    : nodeDef;
 
   switch (type) {
     case 'agent': {
-      const role = nodeDef.agent ? deps.agents[nodeDef.agent] : undefined;
+      const role = effectiveNodeDef.agent ? deps.agents[effectiveNodeDef.agent] : undefined;
       // Effective provider: per-node override wins over agent default.
       // This lets a workflow cross-override a Claude agent to run on Codex
       // (or vice versa) without mutating the agent document.
@@ -249,7 +279,7 @@ export async function executeNode(
         const existingSession = sessions[resolveSessionKey(nodeName, nodeDef, state)];
         return executeCodexNode(
           nodeName,
-          nodeDef,
+          effectiveNodeDef,
           state,
           role,
           deps.emitter,
@@ -258,18 +288,19 @@ export async function executeNode(
           deps.nodeContext,
           deps.feedbackContext,
           deps.abortSignal,
+          deps.repoKnowledgeContext,
         );
       }
-      return executeAgentNode(nodeName, nodeDef, state, sessions, deps);
+      return executeAgentNode(nodeName, effectiveNodeDef, state, sessions, deps);
     }
     case 'code':
-      return executeCodeNode(nodeName, nodeDef, state, deps);
+      return executeCodeNode(nodeName, effectiveNodeDef, state, deps);
     case 'human':
-      return executeHumanNode(nodeName, nodeDef, state, deps);
+      return executeHumanNode(nodeName, effectiveNodeDef, state, deps);
     case 'workflow':
-      return executeWorkflowNode(nodeName, nodeDef, state, deps);
+      return executeWorkflowNode(nodeName, effectiveNodeDef, state, deps);
     case 'condition':
-      return executeConditionNode(nodeName, nodeDef, state);
+      return executeConditionNode(nodeName, effectiveNodeDef, state);
     default:
       throw new Error(`Unknown node type: ${type}`);
   }
@@ -494,11 +525,9 @@ ${renderCurrentState()}
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`;
   } else {
     // Full prompt — fresh run (first attempt) or retry with a reset session.
-    prompt = nodeDef.prompt ? renderTemplate(nodeDef.prompt, state) : '';
+    const renderedTaskPrompt = nodeDef.prompt ? renderTemplate(nodeDef.prompt, state) : '';
+    prompt = deps.nodeContext ? `${deps.nodeContext}\n\n${renderedTaskPrompt}` : renderedTaskPrompt;
     prompt += buildOutputInstruction(nodeDef.outputs, nodeDef.output_format);
-    if (deps.nodeContext) {
-      prompt += deps.nodeContext;
-    }
 
     // Retry with no session resume — we can't rely on prior context, so
     // still append the feedback block after the full re-rendered prompt.
@@ -577,6 +606,13 @@ ${context}
     ALLEN_ARTIFACT_AGENT_NAME: nodeDef.agent ?? '',
     ALLEN_ARTIFACT_AGENT_EXECUTION_ID: deps.executionId ?? '',
     ALLEN_ARTIFACT_PARENT_ID: deps.executionId ?? '',
+    ...(deps.repoKnowledgeContext ? {
+      ALLEN_REPO_KNOWLEDGE_PACKET_ID: deps.repoKnowledgeContext.packetId,
+      ALLEN_REPO_KNOWLEDGE_REPO_ID: deps.repoKnowledgeContext.repoId,
+      ALLEN_REPO_KNOWLEDGE_INDEX_ID: deps.repoKnowledgeContext.indexId ?? '',
+      ALLEN_REPO_KNOWLEDGE_REPO_NAME: deps.repoKnowledgeContext.repoName ?? '',
+      ALLEN_REPO_KNOWLEDGE_FRESHNESS: deps.repoKnowledgeContext.indexFreshness ?? '',
+    } : {}),
   };
 
   // Load MCP servers so agent nodes can access Linear, Postgres, etc.
@@ -616,21 +652,30 @@ ${context}
       }
     } catch { /* org-context unavailable — fall back to plain system prompt */ }
   }
-  // Universal artifact guidance — every workflow agent (Claude SDK, Claude
-  // CLI, Codex below) gets the instruction to save deliverables via
-  // allen_save_artifact. Idempotent: skipped if already present.
-  if (effectiveSystem !== undefined) effectiveSystem = withArtifactsGuidance(effectiveSystem);
+  // Universal artifact guidance is always visible. Repo-context guidance is
+  // only visible when a repo knowledge packet exists; otherwise workflows with
+  // the context provider disabled should not ask agents to load repo context.
+  const repoContextLoadingGuidanceAlreadyPresent = hasRepoContextLoadingGuidance(effectiveSystem);
+  effectiveSystem = withArtifactsGuidance(effectiveSystem);
+  if (deps.repoKnowledgeContext) {
+    effectiveSystem = withRepoContextLoadingGuidance(effectiveSystem);
+    effectiveSystem = withMandatoryRepoContext(effectiveSystem, deps.repoKnowledgeContext.systemPromptBlock);
+  }
+  const repoContextLoadingGuidancePresent = hasRepoContextLoadingGuidance(effectiveSystem);
+  const repoContextLoadingGuidanceInjected =
+    !repoContextLoadingGuidanceAlreadyPresent && repoContextLoadingGuidancePresent;
   // Non-interactive guidance — workflow node runs have no live user and no
   // delegation thread surface, so ask_user / delegate_to_agent must be
   // disabled. Goes last so it overrides any "use delegate_to_agent" line
   // that came in via role.system or the org-chart block above.
-  if (effectiveSystem !== undefined) effectiveSystem = withNonInteractiveGuidance(effectiveSystem);
+  effectiveSystem = withNonInteractiveGuidance(effectiveSystem);
 
   // Captured across all callAgent invocations for this node. First-seen
   // init message's `tools` array — the agent's full tool allowlist. Used
   // to populate NodeResult.toolsAvailable so the UI can diff against the
   // set of tools actually invoked.
   let capturedToolsAvailable: string[] | undefined;
+  let materializedAgentFile: MaterializedAgentFileMetadata | undefined;
 
   /**
    * Shared helper to call the Claude Code SDK with the agent's full context.
@@ -729,6 +774,8 @@ ${context}
           tools: Array.isArray((role as any)?.tools) ? (role as any).tools : undefined,
           mcpToolNames: discoveredMcpTools,
           disabledMcpTools,
+          materializedNameSuffix: deps.repoKnowledgeContext?.systemPromptBlock ? `${deps.executionId ?? 'exec'}-${nodeName}-${deps.repoKnowledgeContext.packetId}` : undefined,
+          includeRepoContextLoadingGuidance: Boolean(deps.repoKnowledgeContext),
         },
         prompt: effectivePrompt,
         cwd,
@@ -738,6 +785,22 @@ ${context}
         env: { ...process.env, ...spawnContextEnv },
         mcpServers: mcpServers && Object.keys(mcpServers).length > 0 ? (mcpServers as Record<string, unknown>) : undefined,
         abortSignal: deps.abortSignal,
+        onMaterializedAgentFile: (metadata) => {
+          materializedAgentFile = metadata;
+          emitLog(deps, nodeName, {
+            level: 'info',
+            category: 'system',
+            message: `[claude-cli] Materialized agent file ${metadata.subagentName}`,
+            data: {
+              subagentName: metadata.subagentName,
+              path: metadata.path,
+              sha256: metadata.sha256,
+              byteLength: metadata.byteLength,
+              containsMandatoryRepoContext: metadata.containsMandatoryRepoContext,
+              createdAt: metadata.createdAt,
+            },
+          });
+        },
         stderr: (chunk) => emitLog(deps, nodeName, { level: 'debug', category: 'system', message: `[claude-cli stderr] ${chunk.slice(0, 4000)}` }),
       });
     } else {
@@ -1142,7 +1205,6 @@ Use auto-gate only if the original prompt's workflow context explicitly allowed 
       message: `[extraction] All strategies failed — downstream conditions will evaluate missing values as false`,
     });
   }
-  // ───────────────────────────────────────────────────────────────────────
 
   // ── Phase 2: build the trace enrichments bundle ────────────────────────
   // All optional; engine stitches them into NodeTrace at save time.
@@ -1174,6 +1236,13 @@ Use auto-gate only if the original prompt's workflow context explicitly allowed 
     cwd,
     executionMode: executionMode2,
     systemPromptMode: systemPromptMode2,
+    repoContextLoadingGuidancePresent,
+    repoContextLoadingGuidanceInjected,
+    mandatoryRepoContextInjected: Boolean(deps.repoKnowledgeContext?.systemPromptBlock),
+    mandatoryRepoContextInjectedCount: deps.repoKnowledgeContext?.mandatoryContextInjectedCount,
+    mandatoryRepoContextSkippedProviderNativeCount: deps.repoKnowledgeContext?.mandatoryContextSkippedProviderNativeCount,
+    mandatoryRepoContextTargetLayer: deps.repoKnowledgeContext?.mandatoryContextTargetLayer,
+    materializedAgentFile,
     resolvedModel: resolvedModel2,
     reasoningEffort: resolvedEffort2,
     planMode: resolvedPlanMode2,

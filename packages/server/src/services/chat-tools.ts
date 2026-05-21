@@ -5,6 +5,7 @@
  */
 
 import { ObjectId, type Db } from 'mongodb';
+import { randomUUID } from 'node:crypto';
 import { mkdirSync } from 'node:fs';
 import { logger } from '../logger.js';
 import { ExecutionService } from './execution.service.js';
@@ -14,10 +15,14 @@ import { AgentConversationService } from './agent-conversation.service.js';
 import { AgentActivityService } from './agent-activity.service.js';
 import { metaChatTools, META_DESTRUCTIVE_TOOLS } from './chat-tools-meta.js';
 import { monitoringAgentTools } from './monitoring-agent-tools.js';
-import { buildRepoContextBlock } from './repo-context-builder.js';
+import { buildRepoContextBlock } from './context/scanner/repo-context-builder.js';
+import { RepoKnowledgeGraphService } from './context/allen-knowledge-graph/repo-knowledge-graph.service.js';
+import { ContextEvaluationService } from './context/evaluation/context-evaluation.service.js';
+import { isContextEngineEnabled } from './context/config/context-provider-config.js';
+import { withRepoKnowledgeGraphPersistenceGuidance } from './context/allen-knowledge-graph/repo-knowledge-graph-persistence-guidance.js';
 import { AGENT_FALLBACK_CWD } from './chat-providers.js';
 import { MonitoringService } from './self-healing-monitor.service.js';
-import { MCP_SERVER_NAME, normalizeModelAlias, ARTIFACTS_GUIDANCE, NON_INTERACTIVE_GUIDANCE } from '@allen/engine';
+import { MCP_SERVER_NAME, normalizeModelAlias, ARTIFACTS_GUIDANCE, NON_INTERACTIVE_GUIDANCE, hasRepoContextLoadingGuidance, withMandatoryRepoContext, withRepoContextLoadingGuidance } from '@allen/engine';
 
 /**
  * Claude-spawn-only system-prompt notice. Appended (via appendSystemPrompt
@@ -44,6 +49,13 @@ interactive Claude Code harness. Therefore:
 - If you're unsure a tool exists, just attempt the call — an
   unknown-tool error surfaces in seconds, whereas \`ToolSearch\` hangs.
 `.trim();
+
+const ALWAYS_ON_ALLEN_CONTEXT_TOOLS = [
+  `mcp__${MCP_SERVER_NAME}__search_repo_knowledge`,
+  `mcp__${MCP_SERVER_NAME}__get_repo_context_body`,
+  `mcp__${MCP_SERVER_NAME}__get_repo_skill_body`,
+  `mcp__${MCP_SERVER_NAME}__get_node_context_usage`,
+];
 
 // Codex CLI spawn lifecycle controls. Without these, a hung codex child
 // (or one blocked writing to stderr because nobody drains the pipe) holds
@@ -320,6 +332,23 @@ function trimForTool(value: unknown, max = 220): string | undefined {
   const normalized = value.replace(/\s+/g, ' ').trim();
   if (!normalized) return undefined;
   return normalized.length > max ? `${normalized.slice(0, max)}...` : normalized;
+}
+
+function hasMeaningfulRepoContextUsage(value: unknown): boolean {
+  if (!value || typeof value !== 'object') return false;
+  const record = value as Record<string, unknown>;
+  return [
+    'module_identified',
+    'context_preselected',
+    'context_summary_used',
+    'context_loaded',
+    'context_applied',
+    'context_skipped',
+    'validation_performed',
+  ].some((key) => {
+    const current = record[key];
+    return Array.isArray(current) ? current.length > 0 : current != null && current !== '';
+  });
 }
 
 function formatActivityForCaller(row: Record<string, unknown>): string | undefined {
@@ -917,6 +946,11 @@ const spawnAgent: ChatTool = {
     const providedRoot = (args.root_execution_id as string | undefined) || null;
     const providedArtifactRootType = (args.artifact_root_type as string | undefined) || undefined;
     const providedArtifactRootId = (args.artifact_root_id as string | undefined) || undefined;
+    const providedRepoKnowledgePacketId = (args.repo_knowledge_packet_id as string | undefined) || null;
+    const providedRepoKnowledgeRepoId = (args.repo_knowledge_repo_id as string | undefined) || null;
+    const providedRepoKnowledgeIndexId = (args.repo_knowledge_index_id as string | undefined) || null;
+    const providedRepoKnowledgeRepoName = (args.repo_knowledge_repo_name as string | undefined) || null;
+    const providedRepoKnowledgeFreshness = (args.repo_knowledge_freshness as string | undefined) || null;
     const callerLabel = parentCaller || 'chat';
     const workflowName = `${callerLabel}:spawn_agent/${agentName}`;
     // Root defaults to this new execution if no upstream root was passed.
@@ -956,6 +990,13 @@ const spawnAgent: ChatTool = {
         spawnedBy: activeCtxForMeta?.currentAgent ?? parentCaller ?? 'user',
         chatSessionId: chatSessionIdForMeta,
         parentMessageId: activeCtxForMeta?.parentMessageId,
+        repoKnowledgeParent: providedRepoKnowledgePacketId ? {
+          packetId: providedRepoKnowledgePacketId,
+          repoId: providedRepoKnowledgeRepoId,
+          indexId: providedRepoKnowledgeIndexId,
+          repoName: providedRepoKnowledgeRepoName,
+          freshness: providedRepoKnowledgeFreshness,
+        } : undefined,
       },
       // Spawn-tree linkage — indexed for the /children query and Phase 3 fan-out.
       parentExecutionId,
@@ -1009,6 +1050,11 @@ const spawnAgent: ChatTool = {
       spawnDepth,
       artifactRootType,
       artifactRootId,
+      repoKnowledgePacketId: providedRepoKnowledgePacketId,
+      repoKnowledgeRepoId: providedRepoKnowledgeRepoId,
+      repoKnowledgeIndexId: providedRepoKnowledgeIndexId,
+      repoKnowledgeRepoName: providedRepoKnowledgeRepoName,
+      repoKnowledgeFreshness: providedRepoKnowledgeFreshness,
     }, 1, context).catch(() => {});
 
     return {
@@ -1038,6 +1084,11 @@ interface SpawnTreeContext {
    *  of each nested spawn creating its own root. */
   artifactRootType?: string;
   artifactRootId?: string;
+  repoKnowledgePacketId?: string | null;
+  repoKnowledgeRepoId?: string | null;
+  repoKnowledgeIndexId?: string | null;
+  repoKnowledgeRepoName?: string | null;
+  repoKnowledgeFreshness?: string | null;
 }
 
 /** Run spawn_agent in background — supports both Claude and Codex with MCP + tracing */
@@ -1179,8 +1230,9 @@ async function runSpawnInBackground(
   // is the repo or a workspace clone (the common case), the agent has
   // filesystem access via Read/Grep/Glob — context injection is redundant and
   // burns tokens. Always skip for the scanner itself to avoid circularity.
+  const contextEngineEnabled = isContextEngineEnabled();
   let repoContextBlock = '';
-  if (repoPath && agentName !== 'repo-scanner' && isEphemeralCwd(repoPath)) {
+  if (contextEngineEnabled && repoPath && agentName !== 'repo-scanner' && isEphemeralCwd(repoPath)) {
     try {
       repoContextBlock = await buildRepoContextBlock(db, repoPath);
       if (repoContextBlock) {
@@ -1191,6 +1243,89 @@ async function runSpawnInBackground(
     }
   }
 
+  let repoKnowledgePacketSummary: {
+    packetId: string;
+    repoId: string;
+    repoName?: string;
+    indexId?: string;
+    indexFreshness?: 'fresh' | 'stale' | 'partial' | 'missing';
+    mandatoryContextInjectedCount?: number;
+    mandatoryContextSkippedProviderNativeCount?: number;
+    mandatoryContextTargetLayer?: string;
+    systemPromptContextInjected?: boolean;
+  } | null = null;
+  let repoKnowledgeSystemPromptBlock = '';
+  if (contextEngineEnabled && repoPath && agentName !== 'repo-knowledge-graph-indexer') {
+    try {
+      const repoKnowledge = new RepoKnowledgeGraphService(db);
+      const packet = await repoKnowledge.buildNodeContextPacket({
+        executionId,
+        workflowName: spawnTree?.parentCaller ? `${spawnTree.parentCaller}:spawn_agent/${agentName}` : `chat:spawn_agent/${agentName}`,
+        nodeName: agentName,
+        nodeRole: agentName,
+        executionKind: 'spawned_agent',
+        targetRole: agentName,
+        callerRole: spawnTree?.parentCaller ?? undefined,
+        attempt: baseAttempt,
+        state: { repo_path: repoPath, worktree_path: repoPath },
+        prompt,
+        parentPacketId: spawnTree?.repoKnowledgePacketId ?? undefined,
+        parentExecutionId: spawnTree?.parentExecutionId ?? undefined,
+        rootExecutionId: spawnTree?.rootExecutionId ?? executionId,
+        provider: provider === 'codex' ? 'codex' : 'claude',
+      });
+      if (packet) {
+        repoKnowledgeSystemPromptBlock = packet.systemPromptBlock ?? '';
+        repoKnowledgePacketSummary = packet.traceSummary;
+        liveLog({ type: 'started', content: `Resolved repo knowledge packet ${packet.packetId}` });
+      }
+    } catch (err) {
+      logger.warn('[spawn] failed to build repo knowledge packet', { executionId, agentName, error: (err as Error).message });
+    }
+  }
+
+  const repoKnowledgeEnv = (): Record<string, string> => {
+    if (!contextEngineEnabled) return {};
+    if (repoKnowledgePacketSummary) {
+      return {
+        ALLEN_REPO_KNOWLEDGE_PACKET_ID: repoKnowledgePacketSummary.packetId,
+        ALLEN_REPO_KNOWLEDGE_REPO_ID: repoKnowledgePacketSummary.repoId,
+        ALLEN_REPO_KNOWLEDGE_INDEX_ID: repoKnowledgePacketSummary.indexId ?? '',
+        ALLEN_REPO_KNOWLEDGE_REPO_NAME: repoKnowledgePacketSummary.repoName ?? '',
+        ALLEN_REPO_KNOWLEDGE_FRESHNESS: repoKnowledgePacketSummary.indexFreshness ?? '',
+      };
+    }
+    if (spawnTree?.repoKnowledgePacketId) {
+      return {
+        ALLEN_REPO_KNOWLEDGE_PACKET_ID: spawnTree.repoKnowledgePacketId,
+        ALLEN_REPO_KNOWLEDGE_REPO_ID: spawnTree.repoKnowledgeRepoId ?? '',
+        ALLEN_REPO_KNOWLEDGE_INDEX_ID: spawnTree.repoKnowledgeIndexId ?? '',
+        ALLEN_REPO_KNOWLEDGE_REPO_NAME: spawnTree.repoKnowledgeRepoName ?? '',
+        ALLEN_REPO_KNOWLEDGE_FRESHNESS: spawnTree.repoKnowledgeFreshness ?? '',
+      };
+    }
+    return {};
+  };
+
+  const initialRenderedPrompt = prompt;
+  const roleSystem = (role.system as string) ?? '';
+  const roleSystemWithGraphPersistenceGuidance = contextEngineEnabled
+    ? withRepoKnowledgeGraphPersistenceGuidance(roleSystem, {
+      agentName,
+      prompt: initialRenderedPrompt,
+      repoPath,
+    })
+    : roleSystem;
+  const repoContextLoadingGuidanceAlreadyPresent = hasRepoContextLoadingGuidance(roleSystemWithGraphPersistenceGuidance);
+  const roleSystemWithRepoContextGuidance = contextEngineEnabled
+    ? withRepoContextLoadingGuidance(roleSystemWithGraphPersistenceGuidance)
+    : roleSystemWithGraphPersistenceGuidance;
+  const roleSystemWithMandatoryRepoContext = contextEngineEnabled
+    ? withMandatoryRepoContext(roleSystemWithRepoContextGuidance, repoKnowledgeSystemPromptBlock)
+    : roleSystemWithRepoContextGuidance;
+  const repoContextLoadingGuidancePresent = hasRepoContextLoadingGuidance(roleSystemWithRepoContextGuidance);
+  const repoContextLoadingGuidanceInjected =
+    !repoContextLoadingGuidanceAlreadyPresent && repoContextLoadingGuidancePresent;
 
   const MAX_SPAWN_RETRIES = 3;
   let currentResumeSession = resumeSession;
@@ -1207,6 +1342,7 @@ async function runSpawnInBackground(
       logger.info('[spawn] Auto-retry', { executionId, agentName, attempt, session: currentResumeSession?.slice(0, 12) });
       prompt = 'Continue from where you left off. Complete your task and provide the final response.';
     }
+    const promptForThisAttempt = attempt === 0 ? initialRenderedPrompt : prompt;
 
     if (provider === 'codex') {
       // ── Codex CLI with MCP ──
@@ -1226,6 +1362,7 @@ async function runSpawnInBackground(
         ALLEN_ARTIFACT_AGENT_NAME: agentName,
         ALLEN_ARTIFACT_AGENT_EXECUTION_ID: executionId,
         ALLEN_ARTIFACT_PARENT_ID: executionId,
+        ...repoKnowledgeEnv(),
         // Session marker so callbacks from this spawn's MCP subprocess
         // carry x-allen-chat-session-id on outbound /api/chat/* calls.
         // Only set when the spawn tree is rooted in a chat; omitted for
@@ -1251,12 +1388,12 @@ async function runSpawnInBackground(
       if (currentResumeSession) {
         args.push('resume', '--json', '--dangerously-bypass-approvals-and-sandbox', '--skip-git-repo-check');
         if (mcpEnvOverrides.length > 0) args.push(...mcpEnvOverrides);
-        args.push('--', currentResumeSession, prompt);
+        args.push('--', currentResumeSession, promptForThisAttempt);
       } else {
         args.push('--json', '--dangerously-bypass-approvals-and-sandbox', '--skip-git-repo-check');
         if (model) args.push('-c', `model="${model}"`);
         if (mcpEnvOverrides.length > 0) args.push(...mcpEnvOverrides);
-        args.push(`${(role.system as string) ?? ''}${repoContextBlock}${workspaceConstraint}${ARTIFACTS_GUIDANCE}${NON_INTERACTIVE_GUIDANCE}\n\n${prompt}`);
+        args.push(`${roleSystemWithMandatoryRepoContext}${repoContextBlock}${workspaceConstraint}${ARTIFACTS_GUIDANCE}${NON_INTERACTIVE_GUIDANCE}\n\n${promptForThisAttempt}`);
       }
 
       const result = await new Promise<{ text: string; threadId?: string }>((resolveP, rejectP) => {
@@ -1464,6 +1601,7 @@ async function runSpawnInBackground(
         ALLEN_ARTIFACT_AGENT_NAME: agentName,
         ALLEN_ARTIFACT_AGENT_EXECUTION_ID: executionId,
         ALLEN_ARTIFACT_PARENT_ID: executionId,
+        ...repoKnowledgeEnv(),
         // Session marker — see codex spawn path above for rationale.
         ...(contextChatSessionId ? { ALLEN_CHAT_SESSION_ID: contextChatSessionId } : {}),
       };
@@ -1481,6 +1619,10 @@ async function runSpawnInBackground(
         extraEnv: spawnContextEnv,
         externalServerNames: externalMcpServers,
       });
+      const requiresAllenGraphPersistenceTool = agentName === 'repo-knowledge-graph-indexer';
+      if (requiresAllenGraphPersistenceTool && !mcpServers.allen) {
+        throw new Error('repo-knowledge-graph-indexer requires the built-in Allen MCP server for save_repo_knowledge_graph');
+      }
 
       const sdkOptions: Record<string, unknown> = {
         model, permissionMode: 'bypassPermissions',
@@ -1501,7 +1643,7 @@ async function runSpawnInBackground(
         // full-replacement behavior. Matches node-executor.ts wiring.
         // CLAUDE_SPAWN_NOTICE warns the model that ToolSearch isn't wired
         // here (claude-cli only — codex path above has its own prompt).
-        const systemPromptBody = `${CLAUDE_SPAWN_NOTICE}\n\n${(role.system as string) ?? ''}${repoContextBlock}${workspaceConstraint}${ARTIFACTS_GUIDANCE}${NON_INTERACTIVE_GUIDANCE}`;
+        const systemPromptBody = `${CLAUDE_SPAWN_NOTICE}\n\n${roleSystemWithMandatoryRepoContext}${repoContextBlock}${workspaceConstraint}${ARTIFACTS_GUIDANCE}${NON_INTERACTIVE_GUIDANCE}`;
         if (process.env.ALLEN_SYSTEM_PROMPT_MODE === 'custom') sdkOptions.customSystemPrompt = systemPromptBody;
         else sdkOptions.appendSystemPrompt = systemPromptBody;
       }
@@ -1513,7 +1655,7 @@ async function runSpawnInBackground(
 
       // Execution mode. Claude-provider spawns default to CLI mode. Explicit
       // ALLEN_AGENT_EXECUTION_MODE=cli|sdk overrides. See cli-runner.ts.
-      const useCliMode = resolveExecutionMode(sdkOptions.cwd as string | undefined) === 'cli';
+      const useCliMode = !requiresAllenGraphPersistenceTool && resolveExecutionMode(sdkOptions.cwd as string | undefined) === 'cli';
       let msgStream: AsyncIterable<any>;
       if (useCliMode) {
         const { queryViaCli } = await import('@allen/engine');
@@ -1532,6 +1674,7 @@ async function runSpawnInBackground(
         } catch (err) {
           logger.warn('[spawn] MCP tool discovery failed (allowlist will lack mcp__* entries)', { executionId, agentName, error: (err as Error).message });
         }
+        discoveredMcpTools = Array.from(new Set([...discoveredMcpTools, ...ALWAYS_ON_ALLEN_CONTEXT_TOOLS]));
         msgStream = queryViaCli({
           agent: {
             name: agentName,
@@ -1542,13 +1685,14 @@ async function runSpawnInBackground(
             // instruction to save via allen_save_artifact. Without
             // CLAUDE_SPAWN_NOTICE, CLI-mode agents emit `ToolSearch` out of
             // harness habit and stall their stream for ~15 min.
-            system: `${CLAUDE_SPAWN_NOTICE}\n\n${(role.system as string) ?? ''}${repoContextBlock}${workspaceConstraint}${ARTIFACTS_GUIDANCE}${NON_INTERACTIVE_GUIDANCE}`,
+            system: `${CLAUDE_SPAWN_NOTICE}\n\n${roleSystemWithMandatoryRepoContext}${repoContextBlock}${workspaceConstraint}${ARTIFACTS_GUIDANCE}${NON_INTERACTIVE_GUIDANCE}`,
             model: sdkOptions.model as string | undefined,
             tools: Array.isArray((role as any)?.tools) ? (role as any).tools : undefined,
             mcpToolNames: discoveredMcpTools,
             disabledMcpTools,
+            materializedNameSuffix: repoKnowledgeSystemPromptBlock ? `${executionId}-${agentName}-${repoKnowledgePacketSummary?.packetId ?? 'context'}` : undefined,
           },
-          prompt,
+          prompt: promptForThisAttempt,
           cwd: sdkOptions.cwd as string | undefined,
           model: sdkOptions.model as string | undefined,
           resume: sdkOptions.resume as string | undefined,
@@ -1556,6 +1700,35 @@ async function runSpawnInBackground(
           env: sdkOptions.env as NodeJS.ProcessEnv | undefined,
           mcpServers: sdkOptions.mcpServers as Record<string, unknown> | undefined,
           abortSignal: abortController.signal,
+          onMaterializedAgentFile: (metadata) => {
+            db.collection('executions').updateOne(
+              { id: executionId },
+              {
+                $set: {
+                  'meta.materializedAgentFile': {
+                    subagentName: metadata.subagentName,
+                    path: metadata.path,
+                    sha256: metadata.sha256,
+                    byteLength: metadata.byteLength,
+                    containsMandatoryRepoContext: metadata.containsMandatoryRepoContext,
+                    createdAt: metadata.createdAt,
+                  },
+                },
+              },
+            ).catch(() => { /* non-fatal */ });
+            logger.info('[spawn] materialized claude agent file', {
+              executionId,
+              agentName,
+              subagentName: metadata.subagentName,
+              sha256: metadata.sha256,
+              byteLength: metadata.byteLength,
+              containsMandatoryRepoContext: metadata.containsMandatoryRepoContext,
+            });
+            liveLog({
+              type: 'tool_start',
+              content: `[claude-cli] materialized agent file ${metadata.subagentName} sha256=${metadata.sha256}`,
+            });
+          },
           stderr: (chunk) => liveLog({ type: 'tool_start', content: `[claude-cli stderr] ${chunk.slice(0, 4000)}` }),
           // Record the claude binary's PID on the executions row so the
           // zombie reconciler can detect "running" rows whose process has
@@ -1569,7 +1742,7 @@ async function runSpawnInBackground(
           },
         });
       } else {
-        msgStream = query({ prompt, options: sdkOptions as any });
+        msgStream = query({ prompt: promptForThisAttempt, options: sdkOptions as any });
       }
 
       // Client-side idle watchdog (claude-cli path only). Claude's server-
@@ -1709,6 +1882,53 @@ async function runSpawnInBackground(
     if (onEvent) onEvent('spawn_completed', { executionId, agent: agentName, durationMs, toolCount: toolCalls.length, response: response.slice(0, 300) });
     liveLog({ type: 'completed', content: `Done in ${(durationMs/1000).toFixed(1)}s, ${toolCalls.length} tools` });
 
+    const traceOutput: Record<string, unknown> = { response, session_id: sessionId };
+    const executionTraceId = randomUUID();
+    let contextUsageTrace: { traceId?: string; preselectedCount?: number; loadedCount: number; appliedCount: number; skippedCount: number } | null = null;
+    let contextEvaluationId: string | undefined;
+    if (repoKnowledgePacketSummary) {
+      try {
+        const repoKnowledge = new RepoKnowledgeGraphService(db);
+        const recordedUsage = await repoKnowledge.recordContextUsage({
+          executionId,
+          executionTraceId,
+          workflowName: spawnTree?.parentCaller ? `${spawnTree.parentCaller}:spawn_agent/${agentName}` : `chat:spawn_agent/${agentName}`,
+          nodeName: agentName,
+          nodeRole: agentName,
+          executionKind: 'spawned_agent',
+          targetRole: agentName,
+          callerRole: spawnTree?.parentCaller ?? undefined,
+          attempt: baseAttempt + attempt,
+          packetId: repoKnowledgePacketSummary.packetId,
+          outputs: traceOutput,
+          rawResponse: response,
+          toolCalls,
+          parentPacketId: spawnTree?.repoKnowledgePacketId ?? null,
+          parentExecutionId: spawnTree?.parentExecutionId ?? null,
+          rootExecutionId: spawnTree?.rootExecutionId ?? executionId,
+          parentNodeName: spawnTree?.parentCaller ?? undefined,
+          agentName,
+        });
+        contextUsageTrace = recordedUsage ? {
+          traceId: recordedUsage.traceId,
+          preselectedCount: recordedUsage.preselectedCount,
+          loadedCount: recordedUsage.loadedCount,
+          appliedCount: recordedUsage.appliedCount,
+          skippedCount: recordedUsage.skippedCount,
+        } : null;
+        contextEvaluationId = typeof recordedUsage?.contextEvaluation?.evaluationId === 'string'
+          ? recordedUsage.contextEvaluation.evaluationId
+          : typeof recordedUsage?.contextEvaluation?.traceId === 'string'
+            ? recordedUsage.contextEvaluation.traceId
+            : undefined;
+        if (recordedUsage?.repoContextUsage && !hasMeaningfulRepoContextUsage(traceOutput.repo_context_usage)) {
+          traceOutput.repo_context_usage = recordedUsage.repoContextUsage;
+        }
+      } catch (err) {
+        logger.warn('[spawn] failed to record repo knowledge usage', { executionId, agentName, error: (err as Error).message });
+      }
+    }
+
     // Save full trace with response, tool calls, and activity.
     // `baseAttempt` is the attempt number for THIS invocation of the agent
     // (1 for a fresh execution, 2+ for a user-triggered resume). The inner
@@ -1716,11 +1936,22 @@ async function runSpawnInBackground(
     // invocation — add it so an invocation that auto-recovers doesn't
     // collide with the base attempt of the run that spawned it.
     await db.collection('execution_traces').insertOne({
-      executionId, node: agentName, attempt: baseAttempt + attempt, status: 'completed', type: 'agent', agent: agentName,
-      inputState: { prompt }, renderedPrompt: prompt, rawResponse: response,
-      output: { response, session_id: sessionId },
+      executionId, executionTraceId, node: agentName, attempt: baseAttempt + attempt, status: 'completed', type: 'agent', agent: agentName,
+      inputState: { prompt: initialRenderedPrompt }, renderedPrompt: initialRenderedPrompt, rawResponse: response,
+      output: traceOutput,
       toolCalls,
       activity: activity.map(a => ({ ...a, type: a.type as any, content: a.tool ?? '' })),
+      contextAttemptId: repoKnowledgePacketSummary?.packetId,
+      contextUsageTraceId: contextUsageTrace?.traceId,
+      contextEvaluationId,
+      runtimeContext: {
+        repoContextLoadingGuidancePresent,
+        repoContextLoadingGuidanceInjected,
+        mandatoryRepoContextInjected: Boolean(repoKnowledgeSystemPromptBlock),
+        mandatoryRepoContextInjectedCount: repoKnowledgePacketSummary?.mandatoryContextInjectedCount,
+        mandatoryRepoContextSkippedProviderNativeCount: repoKnowledgePacketSummary?.mandatoryContextSkippedProviderNativeCount,
+        mandatoryRepoContextTargetLayer: provider === 'codex' && repoKnowledgeSystemPromptBlock ? 'codex_prompt_instruction_prefix' : repoKnowledgePacketSummary?.mandatoryContextTargetLayer,
+      },
       cost: { actual: costUsd, estimated: costUsd, model, method: 'sdk_reported' as const },
       durationMs, startedAt: new Date(startMs), completedAt: new Date(),
     });
@@ -1757,10 +1988,19 @@ async function runSpawnInBackground(
       } },
     );
     await db.collection('execution_traces').insertOne({
-      executionId, node: agentName, attempt: baseAttempt + attempt, status: 'failed', type: 'agent', agent: agentName,
-      inputState: { prompt }, renderedPrompt: prompt, rawResponse: '',
+      executionId, executionTraceId: randomUUID(), node: agentName, attempt: baseAttempt + attempt, status: 'failed', type: 'agent', agent: agentName,
+      inputState: { prompt: initialRenderedPrompt }, renderedPrompt: initialRenderedPrompt, rawResponse: '',
       output: { error: errorMsg, session_id: failedSessionId },
       activity: activity.map(a => ({ ...a, type: a.type as any, content: a.tool ?? '' })),
+      contextAttemptId: repoKnowledgePacketSummary?.packetId,
+      runtimeContext: {
+        repoContextLoadingGuidancePresent,
+        repoContextLoadingGuidanceInjected,
+        mandatoryRepoContextInjected: Boolean(repoKnowledgeSystemPromptBlock),
+        mandatoryRepoContextInjectedCount: repoKnowledgePacketSummary?.mandatoryContextInjectedCount,
+        mandatoryRepoContextSkippedProviderNativeCount: repoKnowledgePacketSummary?.mandatoryContextSkippedProviderNativeCount,
+        mandatoryRepoContextTargetLayer: provider === 'codex' && repoKnowledgeSystemPromptBlock ? 'codex_prompt_instruction_prefix' : repoKnowledgePacketSummary?.mandatoryContextTargetLayer,
+      },
       cost: { actual: 0, estimated: 0, model, method: 'sdk_reported' as const },
       durationMs, startedAt: new Date(startMs), completedAt: new Date(),
     });
@@ -1917,6 +2157,11 @@ export async function resumeAgentExecution(
       spawnDepth: (exec.spawnDepth as number | undefined) ?? 0,
       artifactRootType: resumeRootType,
       artifactRootId: resumeRootId,
+      repoKnowledgePacketId: ((meta.repoKnowledgeParent as Record<string, unknown> | undefined)?.packetId as string | undefined) ?? null,
+      repoKnowledgeRepoId: ((meta.repoKnowledgeParent as Record<string, unknown> | undefined)?.repoId as string | undefined) ?? null,
+      repoKnowledgeIndexId: ((meta.repoKnowledgeParent as Record<string, unknown> | undefined)?.indexId as string | undefined) ?? null,
+      repoKnowledgeRepoName: ((meta.repoKnowledgeParent as Record<string, unknown> | undefined)?.repoName as string | undefined) ?? null,
+      repoKnowledgeFreshness: ((meta.repoKnowledgeParent as Record<string, unknown> | undefined)?.freshness as string | undefined) ?? null,
     },
     nextAttempt,
   ).catch(() => { /* errors already logged + persisted */ });
@@ -1966,11 +2211,11 @@ const getLearnings: ChatTool = {
 
 const queryDatabase: ChatTool = {
   name: 'query_database',
-  description: 'Run a read-only query against the Allen MongoDB database. Can query collections: workflows, executions, agents, repos, learnings, chat_sessions. Returns up to 20 results.',
+  description: 'Run a read-only query against the Allen MongoDB database. Can query collections: workflows, executions, agents, repos, learnings, chat_sessions, and repo knowledge graph collections. Returns up to 20 results.',
   inputSchema: {
     type: 'object',
     properties: {
-      collection: { type: 'string', description: 'MongoDB collection name (e.g., "workflows", "executions", "agents", "repos", "learnings")' },
+      collection: { type: 'string', description: 'MongoDB collection name (e.g., "workflows", "executions", "agents", "repos", "learnings", "knowledge_nodes")' },
       filter: { type: 'object', description: 'MongoDB query filter (e.g., {"status": "completed"})', additionalProperties: true },
       projection: { type: 'object', description: 'Fields to include/exclude (e.g., {"name": 1, "status": 1})', additionalProperties: true },
       sort: { type: 'object', description: 'Sort order (e.g., {"createdAt": -1})', additionalProperties: true },
@@ -1979,7 +2224,7 @@ const queryDatabase: ChatTool = {
     required: ['collection'],
   },
   async execute(args, db) {
-    const allowedCollections = ['workflows', 'executions', 'agents', 'repos', 'learnings', 'chat_sessions', 'execution_logs', 'node_traces'];
+    const allowedCollections = ['workflows', 'executions', 'agents', 'repos', 'learnings', 'chat_sessions', 'execution_logs', 'node_traces', 'repo_knowledge_indexes', 'knowledge_nodes', 'knowledge_edges', 'context_attempts', 'context_refs', 'context_ref_events', 'context_evaluations', 'context_artifacts'];
     const collection = args.collection as string;
     if (!allowedCollections.includes(collection)) {
       return { error: `Collection "${collection}" not allowed. Allowed: ${allowedCollections.join(', ')}` };
@@ -2345,6 +2590,11 @@ const submitExecutionInput: ChatTool = {
         scope: scope as 'requirements' | 'architecture' | 'technical_design' | 'all' | undefined,
         answered_by_user_id: 'chat',
       });
+      if (isContextEngineEnabled()) {
+        new ContextEvaluationService(db).reevaluateExecution(intervention.workflow_run_id).catch((err) => {
+          logger.warn('[chat-tools] context evaluation refresh after intervention failed', { executionId: intervention.workflow_run_id, error: (err as Error).message });
+        });
+      }
 
       return {
         message: `Intervention ${interventionId} resolved with "${decision}".`,
@@ -3042,13 +3292,15 @@ async function runAgentTurn(
   const prevCtx = activeCtx ? { ...activeCtx } : undefined;
   if (activeCtx) { activeCtx.currentAgent = targetName; activeCtx.delegationDepth = currentDepth; activeCtx.currentConversationId = convId; }
 
-  let systemPrompt = resumeSessionId ? undefined : buildDelegationPrompt(targetAgent, fromAgent, currentDepth, conversationService.maxDepth, cwd);
+  const contextEngineEnabled = isContextEngineEnabled();
+  const baseSystemPrompt = buildDelegationPrompt(targetAgent, fromAgent, currentDepth, conversationService.maxDepth, cwd);
+  let systemPrompt = resumeSessionId ? undefined : (contextEngineEnabled ? withRepoContextLoadingGuidance(baseSystemPrompt) : baseSystemPrompt);
 
   // Inject the deep repo context block (skip for the scanner itself).
   // buildDelegationPrompt already appended the WORKSPACE CONSTRAINT section at the
   // tail when cwd is set, so we splice the repo context in right before it to
   // preserve ordering: base → repoContext → workspaceConstraint.
-  if (systemPrompt && cwd && targetName !== 'repo-scanner' && isEphemeralCwd(cwd)) {
+  if (contextEngineEnabled && systemPrompt && cwd && targetName !== 'repo-scanner' && isEphemeralCwd(cwd)) {
     try {
       const repoContextBlock = await buildRepoContextBlock(db, cwd);
       if (repoContextBlock) {
@@ -3352,7 +3604,8 @@ async function runAgentTurn(
       else sdkOptions.appendSystemPrompt = systemPrompt;
       registerExecutionProcess(convId, process.pid, () => abortController.abort());
 
-      const useCliMode = resolveExecutionMode(sdkOptions.cwd as string | undefined) === 'cli';
+      const requiresAllenGraphPersistenceTool = targetName === 'repo-knowledge-graph-indexer';
+      const useCliMode = !requiresAllenGraphPersistenceTool && resolveExecutionMode(sdkOptions.cwd as string | undefined) === 'cli';
       let messageStream: AsyncIterable<any>;
       if (useCliMode) {
         const { queryViaCli } = await import('@allen/engine');

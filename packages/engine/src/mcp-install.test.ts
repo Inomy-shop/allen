@@ -17,10 +17,15 @@ import { tmpdir } from 'node:os';
 import { ensurePythonVenv, deletePythonVenv, venvPathFor } from './mcp-install.js';
 import { resolveAllenHome } from './paths.js';
 
-let python3Available = false;
+let python3VenvAvailable = false;
 try {
-  execSync('python3 --version', { stdio: 'pipe' });
-  python3Available = true;
+  const probeRoot = mkdtempSync(join(tmpdir(), 'allen-venv-probe-'));
+  try {
+    execSync(`python3 -m venv ${JSON.stringify(join(probeRoot, 'venv'))}`, { stdio: 'pipe' });
+    python3VenvAvailable = true;
+  } finally {
+    rmSync(probeRoot, { recursive: true, force: true });
+  }
 } catch { /* skip integration tests below */ }
 
 describe('venvPathFor', () => {
@@ -35,7 +40,7 @@ describe('venvPathFor', () => {
   });
 });
 
-describe.skipIf(!python3Available)('ensurePythonVenv (integration — needs python3)', () => {
+describe.skipIf(!python3VenvAvailable)('ensurePythonVenv (integration — needs working python3 venv)', () => {
   let tmpRoot = '';
 
   beforeEach(() => {
@@ -127,4 +132,3 @@ describe.skipIf(!python3Available)('ensurePythonVenv (integration — needs pyth
     deletePythonVenv('integ-5', venvPath);
   }, 30_000);
 });
-

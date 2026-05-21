@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
-import { inferCommand } from './mcp-loader';
+import { getAllenMcpConfig, inferCommand } from './mcp-loader';
+import { ALLEN_MCP_CLAUDE_TOOL_NAMES, ALLEN_MCP_TOOL_NAMES } from './allen-mcp-tools';
 
 describe('inferCommand', () => {
   it('returns python3 for .py files (REQ-005, AC-006)', () => {
@@ -28,5 +29,26 @@ describe('inferCommand', () => {
 
   it('returns node for .cjs files (AC-022 regression)', () => {
     expect(inferCommand('/path/to/server.cjs')).toEqual({ command: 'node', leadingArgs: [] });
+  });
+});
+
+describe('Allen MCP tool allowlist', () => {
+  it('includes repo knowledge graph persistence for graph indexer agents', () => {
+    expect(ALLEN_MCP_TOOL_NAMES).toContain('save_repo_knowledge_graph');
+    expect(ALLEN_MCP_CLAUDE_TOOL_NAMES).toContain('mcp__allen__save_repo_knowledge_graph');
+  });
+
+  it('resolves the built-in Allen MCP server from the monorepo root', () => {
+    const originalCwd = process.cwd();
+    process.chdir('../..');
+    try {
+      const config = getAllenMcpConfig();
+      const args = config?.args as string[] | undefined;
+      expect(config).toBeTruthy();
+      expect(args?.[0]).toBe('tsx');
+      expect(args?.some((arg) => arg.includes('packages/server/src/services/allen-mcp-server.ts'))).toBe(true);
+    } finally {
+      process.chdir(originalCwd);
+    }
   });
 });

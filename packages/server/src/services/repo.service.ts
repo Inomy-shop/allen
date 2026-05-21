@@ -5,7 +5,9 @@ import { promisify } from 'node:util';
 import type { Collection, Db } from 'mongodb';
 import { resolveRepositoriesDir } from '@allen/engine';
 import { scanRepo } from './repo-scanner.js';
-import { RepoContextScannerService } from './repo-context-scanner.service.js';
+import { RepoContextScannerService } from './context/scanner/repo-context-scanner.service.js';
+import { RepoKnowledgeGraphService } from './context/allen-knowledge-graph/repo-knowledge-graph.service.js';
+import { isContextEngineEnabled, isGraphContextEnabled } from './context/config/context-provider-config.js';
 
 const exec = promisify(execFile);
 
@@ -91,11 +93,13 @@ export class RepoService {
   private db: Db;
   private col: Collection;
   private contextScanner: RepoContextScannerService;
+  private knowledgeGraph: RepoKnowledgeGraphService;
 
   constructor(db: Db) {
     this.db = db;
     this.col = db.collection('repos');
     this.contextScanner = new RepoContextScannerService(db);
+    this.knowledgeGraph = new RepoKnowledgeGraphService(db);
   }
 
   async list(): Promise<Record<string, unknown>[]> {
@@ -145,16 +149,24 @@ export class RepoService {
       lastUsedAt: undefined,
       executionCount: 0,
       contextScan: { status: 'pending' as const, scannedAt: null },
+      knowledgeGraphIndex: { status: 'pending' as const, indexedAt: null },
       createdAt: new Date(),
       updatedAt: new Date(),
     };
 
     const result = await this.col.insertOne(doc);
 
-    // Fire deep context scan in the background — don't await, don't fail create
-    this.contextScanner.scheduleScan(String(result.insertedId)).catch((err) => {
-      console.error(`[repos] failed to schedule deep scan for ${result.insertedId}:`, err);
-    });
+    if (isGraphContextEnabled()) {
+      // Fire context scans in the background — don't await, don't fail create.
+      this.contextScanner.scheduleScan(String(result.insertedId)).catch((err) => {
+        console.error(`[repos] failed to schedule deep scan for ${result.insertedId}:`, err);
+      });
+    }
+    if (isContextEngineEnabled()) {
+      this.knowledgeGraph.scheduleProviderContextIndex(String(result.insertedId)).catch((err) => {
+        console.error(`[repos] failed to schedule provider context index for ${result.insertedId}:`, err);
+      });
+    }
 
     return { ...doc, _id: result.insertedId };
   }
@@ -430,33 +442,44 @@ export class RepoService {
       lastUsedAt: undefined,
       executionCount: 0,
       contextScan: { status: 'pending' as const, scannedAt: null },
+      knowledgeGraphIndex: { status: 'pending' as const, indexedAt: null },
       createdAt: new Date(),
       updatedAt: new Date(),
     };
 
     const result = await this.col.insertOne(doc);
 
-    // Fire deep context scan in the background
-    this.contextScanner.scheduleScan(String(result.insertedId)).catch((err) => {
-      console.error(`[repos] failed to schedule deep scan for ${result.insertedId}:`, err);
-    });
+    if (isGraphContextEnabled()) {
+      // Fire deep context scan in the background.
+      this.contextScanner.scheduleScan(String(result.insertedId)).catch((err) => {
+        console.error(`[repos] failed to schedule deep scan for ${result.insertedId}:`, err);
+      });
+    }
+    if (isContextEngineEnabled()) {
+      this.knowledgeGraph.scheduleProviderContextIndex(String(result.insertedId)).catch((err) => {
+        console.error(`[repos] failed to schedule provider context index for ${result.insertedId}:`, err);
+      });
+    }
 
     return { ...doc, _id: result.insertedId };
   }
 
   /** Trigger a fresh deep context scan for a repo. Async — returns immediately. */
   async rescanContext(id: string): Promise<{ scheduled: boolean; reason?: string }> {
+    if (!isGraphContextEnabled()) return { scheduled: false, reason: 'Allen context provider is disabled' };
     return this.contextScanner.scheduleScan(id);
   }
 
   /** Fetch the stored detailed context document for a repo. */
   async getContext(id: string): Promise<Record<string, unknown> | null> {
+    if (!isGraphContextEnabled()) return null;
     const ctx = await this.contextScanner.getByRepoId(id);
     return ctx as unknown as Record<string, unknown> | null;
   }
 
   /** Fetch context by repo path (used by MCP get_repo_context tool). */
   async getContextByPath(repoPath: string): Promise<Record<string, unknown> | null> {
+    if (!isGraphContextEnabled()) return null;
     const repo = await this.col.findOne({ path: repoPath });
     if (!repo) return null;
     const ctx = await this.contextScanner.getByRepoId(String(repo._id));
@@ -542,6 +565,9 @@ export class RepoService {
     await this.col.deleteOne({ _id: new ObjectId(id) });
     // Cascade-delete the deep context row so we don't leave orphans
     await this.db.collection('repo_contexts').deleteOne({ repoId: id }).catch(() => {});
+    await this.db.collection('repo_knowledge_indexes').deleteMany({ repoId: id }).catch(() => {});
+    await this.db.collection('knowledge_nodes').deleteMany({ repoId: id }).catch(() => {});
+    await this.db.collection('knowledge_edges').deleteMany({ repoId: id }).catch(() => {});
     // Remove the cloned directory from disk
     const clonePath = existing?.path as string | undefined;
     if (clonePath && existsSync(clonePath)) {
@@ -581,8 +607,9 @@ export class RepoService {
     };
     await this.col.updateOne({ _id: new ObjectId(id) }, { $set: updates });
 
-    // Kick off the deep agent scan in the background
-    const deepResult = await this.contextScanner.scheduleScan(id);
+    const deepResult = isGraphContextEnabled()
+      ? await this.contextScanner.scheduleScan(id)
+      : { scheduled: false, reason: 'Allen context provider is disabled' };
 
     return { ...existing, ...updates, deepScan: deepResult };
   }

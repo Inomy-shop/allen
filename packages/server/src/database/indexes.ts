@@ -69,6 +69,7 @@ export async function ensureIndexes(db: Db): Promise<void> {
 
   // Traces
   await db.collection('execution_traces').createIndex({ executionId: 1, node: 1, attempt: 1 });
+  await db.collection('execution_traces').createIndex({ executionTraceId: 1 }, { sparse: true });
   await db.collection('execution_traces').createIndex({ executionId: 1, startedAt: 1 });
 
   // Checkpoints
@@ -100,6 +101,53 @@ export async function ensureIndexes(db: Db): Promise<void> {
   // Repo Contexts (deep agent-generated markdown context)
   // Lookup by repoId is hot — every agent spawn into a registered repo hits this.
   await db.collection('repo_contexts').createIndex({ repoId: 1 }, { unique: true });
+
+  // Repo Knowledge Graphs — structured repo/module/skill/production-knowledge graph.
+  await db.collection('repo_knowledge_indexes').createIndex({ repoId: 1, latest: 1, indexedAt: -1 });
+  await db.collection('repo_knowledge_indexes').createIndex({ repoId: 1, graphMode: 1, latest: 1, indexedAt: -1 });
+  await db.collection('repo_knowledge_indexes').createIndex(
+    { repoId: 1, graphMode: 1, headSha: 1, indexVersion: 1 },
+    { partialFilterExpression: { headSha: { $exists: true } } },
+  );
+  // Drop the early PoC unique index if present. Knowledge nodes must be
+  // versioned by indexId so old graph versions remain queryable/revertible.
+  await db.collection('knowledge_nodes').dropIndex('repoId_1_stableKey_1').catch(() => {});
+  await db.collection('knowledge_nodes').createIndex({ repoId: 1, indexId: 1, stableKey: 1 }, { unique: true });
+  await db.collection('knowledge_nodes').createIndex({ repoId: 1, indexId: 1, kind: 1 });
+  await db.collection('knowledge_nodes').createIndex({ repoId: 1, path: 1 });
+  await db.collection('knowledge_edges').createIndex({ repoId: 1, indexId: 1 });
+  await db.collection('knowledge_edges').createIndex({ repoId: 1, fromNodeId: 1 });
+  await db.collection('knowledge_edges').createIndex({ repoId: 1, toNodeId: 1 });
+  await db.collection('context_attempts').createIndex({ executionId: 1, nodeName: 1, attempt: 1 });
+  await db.collection('context_attempts').createIndex({ contextAttemptId: 1 }, { unique: true });
+  await db.collection('context_attempts').createIndex({ rootExecutionId: 1, createdAt: 1 });
+  await db.collection('context_attempts').createIndex({ parentExecutionId: 1, createdAt: 1 });
+  await db.collection('context_refs').createIndex({ contextAttemptId: 1, refId: 1 }, { unique: true });
+  await db.collection('context_refs').createIndex({ executionId: 1, nodeName: 1, attempt: 1 });
+  await db.collection('context_refs').createIndex({ providerId: 1, cogneeScore: -1 });
+  await db.collection('context_ref_events').createIndex({ contextAttemptId: 1, refId: 1, createdAt: 1 });
+  await db.collection('context_ref_events').createIndex({ executionId: 1, nodeName: 1, attempt: 1 });
+  await db.collection('context_ref_events').createIndex({ executionTraceId: 1 }, { sparse: true });
+  await db.collection('context_ref_events').createIndex({ usageTraceId: 1 }, { sparse: true });
+  await db.collection('context_ref_events').createIndex({ rootExecutionId: 1, createdAt: 1 });
+  await db.collection('context_ref_events').createIndex({ parentExecutionId: 1, createdAt: 1 });
+  await db.collection('context_ref_events').createIndex({ type: 1, createdAt: 1 });
+  await db.collection('context_artifacts').createIndex({ hash: 1 }, { unique: true });
+  await db.collection('context_artifacts').createIndex({ kind: 1, createdAt: -1 });
+  await db.collection('context_evaluations').createIndex({ executionId: 1, nodeName: 1, attempt: 1, active: 1 });
+  await db.collection('context_evaluations').createIndex({ evaluationId: 1 }, { unique: true });
+  await db.collection('context_evaluations').createIndex({ traceId: 1 }, { unique: true });
+  await db.collection('context_evaluations').createIndex({ contextAttemptId: 1, usageTraceId: 1, scope: 1, active: 1 });
+  await db.collection('context_evaluations').createIndex({ repoId: 1, indexId: 1, createdAt: -1 });
+  await db.collection('context_evaluations').createIndex({ status: 1, active: 1, createdAt: -1 });
+  await db.collection('context_evaluations').createIndex({ 'semantic.status': 1, 'semantic.nextRetryAt': 1, active: 1, createdAt: 1 });
+  await db.collection('repo_cognee_datasets').createIndex({ repoId: 1 }, { unique: true });
+  await db.collection('repo_cognee_datasets').createIndex({ status: 1, updatedAt: -1 });
+  await db.collection('repo_context_metadata').createIndex(
+    { repoId: 1, path: 1, fileHash: 1, schemaVersion: 1 },
+    { unique: true },
+  );
+  await db.collection('repo_context_metadata').createIndex({ repoId: 1, active: 1, path: 1 });
 
   // Cron Jobs — generic scheduler for agents/workflows/system actions
   await db.collection('cron_jobs').createIndex({ name: 1 }, { unique: true });

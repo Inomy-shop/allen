@@ -346,7 +346,9 @@ export function getAllenMcpConfig(
   const candidates = [
     resolve(process.cwd(), 'src/services/allen-mcp-server.ts'),
     resolve(process.cwd(), '../server/src/services/allen-mcp-server.ts'),
+    resolve(process.cwd(), 'packages/server/src/services/allen-mcp-server.ts'),
     resolve(process.cwd(), 'dist/services/allen-mcp-server.js'),
+    resolve(process.cwd(), 'packages/server/dist/services/allen-mcp-server.js'),
   ];
   const serverPath = candidates.find(p => existsSync(p));
   if (!serverPath) return null;

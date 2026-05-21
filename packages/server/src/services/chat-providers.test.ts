@@ -295,3 +295,73 @@ describe('ALLEN_PUBLIC_URL propagation in Allen MCP env', () => {
     expect(argsStr).toContain('ALLEN_PUBLIC_URL=https://test.example.com');
   });
 });
+
+describe('Codex MCP suppression for tool-less calls', () => {
+  afterEach(() => {
+    vi.clearAllMocks();
+  });
+
+  function mockCodexProcess() {
+    return {
+      on: vi.fn((event: string, handler: Function) => {
+        if (event === 'close') setTimeout(() => handler(0), 0);
+      }),
+      stdin: { end: vi.fn() },
+      stdout: { on: vi.fn() },
+      stderr: { on: vi.fn() },
+    };
+  }
+
+  it('runCodexCLI: disables MCP servers when skipTools is true', async () => {
+    const { spawn } = await import('node:child_process');
+    const mockSpawn = vi.mocked(spawn);
+    mockSpawn.mockReturnValue(mockCodexProcess() as any);
+
+    const { runCodexCLI } = await import('./chat-providers.js');
+    const promise = runCodexCLI(
+      {} as any,
+      'system prompt',
+      [{ role: 'user' as const, content: 'hello' }],
+      'gpt-5.5',
+      { onText: vi.fn(), onToolStart: vi.fn(), onToolResult: vi.fn() },
+      undefined,
+      true,
+      undefined,
+      undefined,
+      'chat-session-abc123',
+    );
+    try { await promise; } catch { /* expected */ }
+
+    expect(mockSpawn).toHaveBeenCalled();
+    const [, args] = mockSpawn.mock.calls[0] as [string, string[]];
+    expect(args).toContain('-c');
+    expect(args).toContain('mcp_servers={}');
+    expect(args.join(' ')).not.toContain('mcp_servers.allen.env.ALLEN_CHAT_SESSION_ID');
+  });
+
+  it('runCodexCLI: keeps MCP config available when skipTools is false', async () => {
+    const { spawn } = await import('node:child_process');
+    const mockSpawn = vi.mocked(spawn);
+    mockSpawn.mockReturnValue(mockCodexProcess() as any);
+
+    const { runCodexCLI } = await import('./chat-providers.js');
+    const promise = runCodexCLI(
+      {} as any,
+      'system prompt',
+      [{ role: 'user' as const, content: 'hello' }],
+      'gpt-5.5',
+      { onText: vi.fn(), onToolStart: vi.fn(), onToolResult: vi.fn() },
+      undefined,
+      false,
+      undefined,
+      undefined,
+      'chat-session-abc123',
+    );
+    try { await promise; } catch { /* expected */ }
+
+    expect(mockSpawn).toHaveBeenCalled();
+    const [, args] = mockSpawn.mock.calls[0] as [string, string[]];
+    expect(args).not.toContain('mcp_servers={}');
+    expect(args.join(' ')).toContain('mcp_servers.allen.env.ALLEN_CHAT_SESSION_ID');
+  });
+});

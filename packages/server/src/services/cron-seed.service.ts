@@ -11,6 +11,7 @@
 import type { Db } from 'mongodb';
 import { computeNextRun } from './cron.service.js';
 import type { CronJob } from './cron.types.js';
+import { isContextEngineEnabled } from './context/config/context-provider-config.js';
 import { getSelfHealingLinearConfig } from './self-healing-env.js';
 import { isSeedOverrideEnabled } from './seed-policy.js';
 
@@ -28,6 +29,21 @@ const SEED_JOBS: Omit<CronJob, '_id' | 'nextRunAt' | 'lastRunAt' | 'lastRunStatu
     target: {
       type: 'system',
       systemAction: 'repo-scan-if-changed',
+    },
+    isBuiltIn: true,
+    createdBy: 'seed',
+  },
+  {
+    name: 'repo-knowledge-graph-index-daily',
+    displayName: 'Daily Repo Context Index',
+    description:
+      'Builds or refreshes provider-specific repo context indexes for active repos whose base-branch HEAD has changed.',
+    enabled: true,
+    schedule: '30 5 * * *',
+    timezone: 'UTC',
+    target: {
+      type: 'system',
+      systemAction: 'repo-knowledge-graph-index-if-changed',
     },
     isBuiltIn: true,
     createdBy: 'seed',
@@ -147,8 +163,12 @@ export async function seedCronJobs(db: Db): Promise<number> {
   const col = db.collection('cron_jobs');
   const override = isSeedOverrideEnabled();
   let created = 0;
+  const contextEngineEnabled = isContextEngineEnabled();
 
-  for (const seed of SEED_JOBS) {
+  for (const baseSeed of SEED_JOBS) {
+    const seed = baseSeed.name === 'repo-knowledge-graph-index-daily'
+      ? { ...baseSeed, enabled: contextEngineEnabled }
+      : baseSeed;
     const existing = await col.findOne({ name: seed.name });
 
     if (!existing) {
@@ -180,6 +200,7 @@ export async function seedCronJobs(db: Db): Promise<number> {
             description: seed.description,
             schedule: seed.schedule,
             timezone: seed.timezone,
+            enabled: seed.enabled,
             target: seed.target,
             isBuiltIn: true,
             updatedAt: new Date(),

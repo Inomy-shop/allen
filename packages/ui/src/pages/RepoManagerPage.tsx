@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
-import { repos as repoApi, workflows as wfApi } from '../services/api';
+import { repos as repoApi, workflows as wfApi, system as systemApi } from '../services/api';
 import DeleteConfirmDialog from '../components/common/DeleteConfirmDialog';
 import {
   FolderGit2, Plus, RefreshCw, Trash2, Pencil, ScanSearch, X,
@@ -33,6 +33,43 @@ interface Repo {
   createdAt: string;
   updatedAt: string;
 }
+
+type CogneeStatus = {
+  status?: 'pending' | 'running' | 'completed' | 'partial' | 'failed' | 'stopped';
+  stage?: 'pulling' | 'collecting_markdown' | 'ingesting' | 'cognifying' | 'completed' | 'failed';
+  message?: string;
+  documentCount?: number;
+  candidateCount?: number;
+  processedDocumentCount?: number;
+  ingestedDocumentCount?: number;
+  cognifiedDocumentCount?: number;
+  documentsToIngestCount?: number;
+  addedDocumentCount?: number;
+  changedDocumentCount?: number;
+  deletedDocumentCount?: number;
+  unchangedDocumentCount?: number;
+  uncognifiedRetryCount?: number;
+  storageRoot?: string;
+  systemRoot?: string;
+  databasePath?: string;
+  storageExisting?: boolean;
+  datasetExisting?: boolean;
+  workerActive?: boolean;
+  buildMode?: 'resume' | 'clean_rebuild';
+  previousDatasetName?: string;
+  uncognifiedDocuments?: Array<{ path?: string; title?: string; fileHash?: string; dataId?: string; cogneeDataId?: string; status?: string }>;
+  error?: string;
+  stopRequestedAt?: string;
+  lastStartedAt?: string;
+  lastCompletedAt?: string;
+  updatedAt?: string;
+};
+
+type ContextRuntimeConfig = {
+  enabled: boolean;
+  provider: 'allen' | 'cognee' | 'cognee_memory' | null;
+  cogneeEnabled: boolean;
+};
 
 /* ── Add Dialog ─────────────────────────────────────────────────────────── */
 
@@ -288,6 +325,110 @@ function Badge({ label, colorClass }: { label: string; colorClass?: string }) {
   );
 }
 
+function contextStatusLabel(status?: CogneeStatus): string {
+  if (!status || status.status === 'pending') return 'context pending';
+  if (status.status === 'partial') return 'context partial';
+  if (status.status === 'stopped') return 'context stopped';
+  if (status.status === 'failed') return 'context failed';
+  if (status.status === 'running') {
+    if (status.workerActive === false) return 'context interrupted';
+    if (status.stage === 'pulling') return 'running: pulling';
+    if (status.stage === 'collecting_markdown') return 'running: collecting';
+    if (status.stage === 'ingesting') return 'running: ingesting';
+    if (status.stage === 'cognifying') return 'running: cognifying';
+    return 'context running';
+  }
+  const count = status.documentCount ?? 0;
+  return `${count} md indexed`;
+}
+
+function cogneeStatusTitle(status?: CogneeStatus): string {
+  if (!status) return 'Cognee context status';
+  const progress = cogneeProgressLines(status);
+  const uncognified = (status.uncognifiedDocuments ?? [])
+    .slice(0, 5)
+    .map((doc) => doc.path ?? doc.title ?? doc.cogneeDataId)
+    .filter(Boolean)
+    .map((value) => `Uncognified: ${value}`);
+  const parts = [
+    status.message,
+    ...progress,
+    ...uncognified,
+    status.uncognifiedDocuments && status.uncognifiedDocuments.length > uncognified.length
+      ? `Uncognified: +${status.uncognifiedDocuments.length - uncognified.length} more`
+      : '',
+    status.error,
+    status.buildMode ? `Build mode: ${status.buildMode}` : '',
+    status.previousDatasetName ? `Previous dataset: ${status.previousDatasetName}` : '',
+    status.workerActive === undefined ? '' : `Live worker: ${status.workerActive ? 'yes' : 'no'}`,
+    status.storageExisting === undefined ? '' : `Existing storage: ${status.storageExisting ? 'yes' : 'no'}`,
+    status.datasetExisting === undefined ? '' : `Existing dataset: ${status.datasetExisting ? 'yes' : 'no'}`,
+    status.storageRoot ? `Storage root: ${status.storageRoot}` : '',
+    status.databasePath ? `Database path: ${status.databasePath}` : '',
+    status.lastStartedAt ? `Started: ${new Date(status.lastStartedAt).toLocaleString()}` : '',
+    status.lastCompletedAt ? `Completed: ${new Date(status.lastCompletedAt).toLocaleString()}` : '',
+    status.updatedAt ? `Updated: ${new Date(status.updatedAt).toLocaleString()}` : '',
+  ].filter(Boolean);
+  return parts.join('\n') || 'Cognee context status';
+}
+
+function cogneeProgressLines(status?: CogneeStatus): string[] {
+  if (!status) return [];
+  const total = status.documentCount ?? status.candidateCount;
+  if (!total) return [];
+  const ingested = status.ingestedDocumentCount ?? (status.stage === 'ingesting' ? status.processedDocumentCount : undefined);
+  const cognified = status.cognifiedDocumentCount ?? (status.stage === 'cognifying' ? status.processedDocumentCount : undefined);
+  const lines: string[] = [];
+  if (status.stage === 'ingesting' && status.documentsToIngestCount !== undefined) {
+    lines.push(`Adding new/changed files: ${ingested ?? 0}/${status.documentsToIngestCount}`);
+  } else if (ingested !== undefined) {
+    lines.push(`${status.stage === 'cognifying' ? 'Total ingested' : 'Ingested'}: ${ingested}/${total}`);
+  }
+  if (cognified !== undefined) lines.push(`Cognified: ${cognified}/${total}`);
+  return lines;
+}
+
+function cogneeVisibleMessage(status?: CogneeStatus): string | undefined {
+  if (!status?.message) return undefined;
+  return status.status === 'running' || status.status === 'partial' || status.status === 'failed' || status.status === 'stopped'
+    ? status.message
+    : undefined;
+}
+
+function CogneeProgress({ status }: { status?: CogneeStatus }) {
+  const lines = cogneeProgressLines(status);
+  const message = cogneeVisibleMessage(status);
+  if (!message && !lines.length) return null;
+  return (
+    <div className="pl-11 space-y-1 text-[10.5px] font-mono text-theme-muted">
+      {message && <div className="text-theme-secondary">{message}</div>}
+      {lines.length > 0 && (
+        <div className="flex flex-wrap gap-x-3 gap-y-1">
+          {lines.map((line) => (
+            <span key={line}>{line}</span>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function isCogneeRunning(status?: CogneeStatus): boolean {
+  return status?.status === 'running';
+}
+
+function isCogneeLiveBuild(status?: CogneeStatus): boolean {
+  return status?.status === 'running' && status.workerActive !== false;
+}
+
+function cogneeActionLabel(status?: CogneeStatus): string {
+  if (isCogneeLiveBuild(status)) return 'Building context';
+  if (status?.status === 'running') return 'Retry context';
+  if (status?.status === 'failed' || status?.status === 'partial' || status?.status === 'stopped') return 'Retry context';
+  if (status?.status === 'completed') return 'Refresh context';
+  return 'Build context';
+}
+
 /* ── Main Page ──────────────────────────────────────────────────────────── */
 
 export default function RepoManagerPage() {
@@ -297,6 +438,10 @@ export default function RepoManagerPage() {
   const [editRepo, setEditRepo] = useState<Repo | null>(null);
   const [scanningId, setScanningId] = useState<string | null>(null);
   const [pullingId, setPullingId] = useState<string | null>(null);
+  const [cogneeBuildingId, setCogneeBuildingId] = useState<string | null>(null);
+  const [cogneeStoppingId, setCogneeStoppingId] = useState<string | null>(null);
+  const [cogneeStatusByRepo, setCogneeStatusByRepo] = useState<Record<string, CogneeStatus>>({});
+  const [contextConfig, setContextConfig] = useState<ContextRuntimeConfig>({ enabled: false, provider: null, cogneeEnabled: false });
   const [deletingRepo, setDeletingRepo] = useState<{ id: string; name: string } | null>(null);
   const [configRepoId, setConfigRepoId] = useState<string | null>(null);
   const [wsCreateRepo, setWsCreateRepo] = useState<Repo | null>(null);
@@ -307,12 +452,46 @@ export default function RepoManagerPage() {
     setLoading(true);
     try {
       const list = await repoApi.list();
+      const runtime = await systemApi.runtimeConfig().catch(() => ({
+        contextEngine: { enabled: false, provider: null, cogneeEnabled: false } as ContextRuntimeConfig,
+      }));
+      setContextConfig(runtime.contextEngine);
       setRepoList(list);
+      if (runtime.contextEngine.cogneeEnabled) {
+        const statusEntries = await Promise.all(list.map(async (repo: Repo) => {
+          const status = await repoApi.getCogneeStatus(repo._id).catch(() => ({ status: 'pending', documentCount: 0 }));
+          return [repo._id, status] as const;
+        }));
+        setCogneeStatusByRepo(Object.fromEntries(statusEntries));
+      } else {
+        setCogneeStatusByRepo({});
+      }
     } catch { /* ignore */ }
     setLoading(false);
   }, []);
 
   useEffect(() => { refresh(); }, [refresh]);
+
+  useEffect(() => {
+    if (!contextConfig.cogneeEnabled) return;
+    const runningIds = Object.entries(cogneeStatusByRepo)
+      .filter(([, status]) => isCogneeRunning(status))
+      .map(([id]) => id);
+    if (!runningIds.length) return;
+    const timer = window.setInterval(() => {
+      void Promise.all(runningIds.map(async (id) => {
+        const status = await repoApi.getCogneeStatus(id).catch(() => null);
+        if (!status) return null;
+        return [id, status] as const;
+      })).then((entries) => {
+        setCogneeStatusByRepo(prev => ({
+          ...prev,
+          ...Object.fromEntries(entries.filter(Boolean) as Array<readonly [string, CogneeStatus]>),
+        }));
+      });
+    }, 2000);
+    return () => window.clearInterval(timer);
+  }, [cogneeStatusByRepo, contextConfig.cogneeEnabled]);
 
   const handleDelete = async () => {
     if (!deletingRepo) return;
@@ -358,6 +537,40 @@ export default function RepoManagerPage() {
       toast.error(err.message ?? 'Pull failed');
     }
     setPullingId(null);
+  };
+
+  const handleBuildCognee = async (e: React.MouseEvent, id: string, options?: { cleanRebuild?: boolean }) => {
+    e.stopPropagation();
+    if (!contextConfig.cogneeEnabled) return;
+    setCogneeBuildingId(id);
+    try {
+      const status = await repoApi.refreshCognee(id, options);
+      setCogneeStatusByRepo(prev => ({ ...prev, [id]: status }));
+      if (status.status === 'running') {
+        toast.info(status.message ?? 'Context build started.');
+      } else if (status.status === 'completed') {
+        toast.success(`Context built from ${status.documentCount ?? 0} Markdown file${status.documentCount === 1 ? '' : 's'}.`);
+      } else {
+        toast.error(status.error ?? 'Context build failed');
+      }
+    } catch (err: any) {
+      toast.error(err.message ?? 'Context build failed');
+    }
+    setCogneeBuildingId(null);
+  };
+
+  const handleStopCognee = async (e: React.MouseEvent, id: string) => {
+    e.stopPropagation();
+    if (!contextConfig.cogneeEnabled) return;
+    setCogneeStoppingId(id);
+    try {
+      const status = await repoApi.stopCognee(id);
+      setCogneeStatusByRepo(prev => ({ ...prev, [id]: status }));
+      toast.info(status.message ?? 'Context build stopped.');
+    } catch (err: any) {
+      toast.error(err.message ?? 'Context stop failed');
+    }
+    setCogneeStoppingId(null);
   };
 
   return (
@@ -416,6 +629,10 @@ export default function RepoManagerPage() {
           {repoList.map((repo) => {
             const isScanning = scanningId === repo._id;
             const isArchived = repo.status === 'archived';
+            const cogneeStatus = contextConfig.cogneeEnabled ? cogneeStatusByRepo[repo._id] : undefined;
+            const isBuildRequestPending = cogneeBuildingId === repo._id;
+            const isStopRequestPending = cogneeStoppingId === repo._id;
+            const hasLiveBuild = isCogneeLiveBuild(cogneeStatus);
             return (
               <div key={repo._id} className={`card-hover p-4 group flex flex-col gap-2 ${isArchived ? 'opacity-50' : ''}`}>
                 <div className="flex items-start gap-3">
@@ -454,6 +671,12 @@ export default function RepoManagerPage() {
                   <span className="flex items-center gap-1">
                     <GitBranch className="w-3 h-3" />{repo.detected?.defaultBranch ?? 'main'}
                   </span>
+                  {contextConfig.cogneeEnabled && (
+                    <span className="flex items-center gap-1" title={cogneeStatusTitle(cogneeStatus)}>
+                      <Sparkles className="w-3 h-3" />
+                      {contextStatusLabel(cogneeStatus)}
+                    </span>
+                  )}
                   {repo.detected?.remoteUrl && (() => {
                     const sshMatch = repo.detected.remoteUrl.match(/^git@([^:]+):(.+?)(?:\.git)?$/);
                     const httpsUrl = sshMatch ? `https://${sshMatch[1]}/${sshMatch[2]}` : repo.detected.remoteUrl.replace(/\.git$/, '');
@@ -466,12 +689,15 @@ export default function RepoManagerPage() {
                     );
                   })()}
                 </div>
+                {contextConfig.cogneeEnabled && <CogneeProgress status={cogneeStatus} />}
 
                 {/* Actions row — always visible, ghost icons */}
                 <div className="flex items-center gap-0.5 pl-11 -ml-1 mt-auto">
-                  <button onClick={(e) => { e.stopPropagation(); setContextRepo(repo); }} className="p-1.5 rounded text-theme-muted hover:text-accent hover:bg-app-muted transition-colors" title="View Context">
-                    <FileText className="w-3.5 h-3.5" />
-                  </button>
+                  {contextConfig.enabled && (
+                    <button onClick={(e) => { e.stopPropagation(); setContextRepo(repo); }} className="p-1.5 rounded text-theme-muted hover:text-accent hover:bg-app-muted transition-colors" title="View Context">
+                      <FileText className="w-3.5 h-3.5" />
+                    </button>
+                  )}
                   <button onClick={(e) => { e.stopPropagation(); setWsCreateRepo(repo); }} className="p-1.5 rounded text-theme-muted hover:text-accent-green hover:bg-app-muted transition-colors" title="New Workspace">
                     <Monitor className="w-3.5 h-3.5" />
                   </button>
@@ -481,6 +707,22 @@ export default function RepoManagerPage() {
                   <button onClick={(e) => handleScan(e, repo._id)} disabled={isScanning} className="p-1.5 rounded text-theme-muted hover:text-theme-primary hover:bg-app-muted transition-colors" title="Scan">
                     {isScanning ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <ScanSearch className="w-3.5 h-3.5" />}
                   </button>
+                  {contextConfig.cogneeEnabled && hasLiveBuild && (
+                    <button onClick={(e) => handleStopCognee(e, repo._id)} disabled={isStopRequestPending} className="p-1.5 rounded text-theme-muted hover:text-accent-red hover:bg-accent-red/10 transition-colors" title="Stop the active Cognee context build">
+                      {isStopRequestPending ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <X className="w-3.5 h-3.5" />}
+                    </button>
+                  )}
+                  {contextConfig.cogneeEnabled && (
+                    <button onClick={(e) => handleBuildCognee(e, repo._id)} disabled={isBuildRequestPending || hasLiveBuild} className="btn btn-ghost btn-sm ml-1" title="Retry resumes the existing Cognee dataset and preserves already cognified documents">
+                      {(isBuildRequestPending || hasLiveBuild) ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Sparkles className="w-3.5 h-3.5" />}
+                      {isBuildRequestPending ? 'Building context' : cogneeActionLabel(cogneeStatus)}
+                    </button>
+                  )}
+                  {contextConfig.cogneeEnabled && cogneeStatus && cogneeStatus.status !== 'pending' && !hasLiveBuild && (
+                    <button onClick={(e) => handleBuildCognee(e, repo._id, { cleanRebuild: true })} disabled={isBuildRequestPending} className="btn btn-ghost btn-sm" title="Clean rebuild creates a fresh Cognee dataset and does not continue the previous dataset">
+                      Clean rebuild context
+                    </button>
+                  )}
                   <button onClick={(e) => { e.stopPropagation(); setConfigRepoId(repo._id); }} className="p-1.5 rounded text-theme-muted hover:text-theme-primary hover:bg-app-muted transition-colors" title="Workspace Config">
                     <Settings className="w-3.5 h-3.5" />
                   </button>
@@ -509,7 +751,7 @@ export default function RepoManagerPage() {
       />
       {configRepoId && <WorkspaceConfigEditor repoId={configRepoId} onClose={() => setConfigRepoId(null)} />}
       {wsCreateRepo && <QuickWorkspaceDialog repo={wsCreateRepo} onClose={() => setWsCreateRepo(null)} onCreated={(id) => { setWsCreateRepo(null); navigate(`/workspaces/${id}`); }} />}
-      {contextRepo && <RepoContextViewer repoId={contextRepo._id} repoName={contextRepo.name} onClose={() => setContextRepo(null)} />}
+      {contextRepo && contextConfig.enabled && <RepoContextViewer repoId={contextRepo._id} repoName={contextRepo.name} onClose={() => setContextRepo(null)} />}
     </div>
   );
 }

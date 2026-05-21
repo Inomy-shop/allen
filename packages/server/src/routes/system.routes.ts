@@ -4,6 +4,7 @@ import { promisify } from 'node:util';
 import { ObjectId, type Db } from 'mongodb';
 import { UserService } from '../services/user.service.js';
 import { runSystemHealth } from '../services/system-health.service.js';
+import { contextProviderRuntimeConfig } from '../services/context/config/context-provider-config.js';
 import { requireAuth, type AuthedRequest } from '../middleware/requireAuth.js';
 
 const exec = promisify(execFile);
@@ -109,6 +110,12 @@ export function systemRoutes(db: Db): Router {
       console.error('[system/health]', err);
       return res.status(500).json({ error: 'system_health_failed' });
     }
+  });
+
+  router.get('/runtime-config', (_req: Request, res: Response) => {
+    return res.json({
+      contextEngine: contextProviderRuntimeConfig(),
+    });
   });
 
   router.get('/onboarding-progress', requireAuth, async (req: AuthedRequest, res: Response) => {

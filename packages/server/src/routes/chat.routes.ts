@@ -170,11 +170,17 @@ export function chatRoutes(db: Db): Router {
         // chat-tools can build the caller-qualified workflowName and set
         // parentExecutionId / rootExecutionId on the spawned row.
         parent_execution_id, parent_caller, root_execution_id,
+        artifact_root_type, artifact_root_id,
+        repo_knowledge_packet_id, repo_knowledge_repo_id, repo_knowledge_index_id,
+        repo_knowledge_repo_name, repo_knowledge_freshness,
       } = req.body;
       if (!agent_name || !prompt) return res.status(400).json({ error: 'agent_name and prompt are required' });
       const result = await executeChatTool('spawn_agent', {
         agent_name, prompt, repo_path, session_id,
         parent_execution_id, parent_caller, root_execution_id,
+        artifact_root_type, artifact_root_id,
+        repo_knowledge_packet_id, repo_knowledge_repo_id, repo_knowledge_index_id,
+        repo_knowledge_repo_name, repo_knowledge_freshness,
       }, db, readToolContext(req));
       res.json(result);
     } catch (err: unknown) {
