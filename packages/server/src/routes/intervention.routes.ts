@@ -487,6 +487,30 @@ async function ensurePendingInterventionForWaitingRun(
   const stageLower = nodeName.toLowerCase();
   if (stageLower.endsWith('_gate') || stageLower.includes('approval')) severity = 'approval';
   else if (stageLower.includes('escalation')) severity = 'escalation';
+  // Field-content fallback: if the node carries a select field with
+  // approve/request_changes/reject/cancel options, treat it as an
+  // approval gate regardless of the node name. Otherwise the persisted
+  // intervention's severity stays 'question', the UI's
+  // severityForIntervention falls back to 'simple' mode, and the
+  // decision buttons never render — only a generic textarea. Covers
+  // human nodes named review_repo_plan etc.
+  if (severity === 'question') {
+    const hasApprovalField = fields.some((field: any) => {
+      if (field.type !== 'select' || !Array.isArray(field.options)) return false;
+      const optionValues = field.options.map((option: unknown) => {
+        if (typeof option === 'string') return option.toLowerCase();
+        if (option && typeof option === 'object') {
+          const record = option as { value?: unknown; label?: unknown };
+          return String(record.value ?? record.label ?? '').toLowerCase();
+        }
+        return '';
+      });
+      return optionValues.some((v: string) =>
+        v === 'approve' || v === 'request_changes' || v === 'reject' || v === 'cancel',
+      );
+    });
+    if (hasApprovalField) severity = 'approval';
+  }
   const options = fields.flatMap((field: any) => {
     if (field.type !== 'select' || !Array.isArray(field.options)) return [];
     return field.options.map((option: string) => ({
