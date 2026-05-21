@@ -9,7 +9,18 @@ import type { Db } from 'mongodb';
 import type { ChatTraceEvent } from './chat-llm.js';
 import { resolve, dirname } from 'node:path';
 import { existsSync, mkdirSync } from 'node:fs';
-import { MCP_SERVER_NAME } from '@allen/engine';
+
+// `@allen/engine` is imported lazily inside the two functions that need
+// MCP_SERVER_NAME. A static import here would fail at module-load time on
+// fresh installs where `packages/engine/dist/` doesn't exist yet, which
+// breaks the health check that setup.sh runs before `npm run build`.
+let _mcpServerName: string | undefined;
+async function getMcpServerName(): Promise<string> {
+  if (_mcpServerName !== undefined) return _mcpServerName;
+  const mod = await import('@allen/engine');
+  _mcpServerName = mod.MCP_SERVER_NAME;
+  return _mcpServerName;
+}
 
 /** Fallback cwd for chat/agent spawns when no workspace/repo is in scope.
  * Intentionally NOT `process.cwd()` — we don't want agents running inside
@@ -107,6 +118,22 @@ export function getProvidersInDefaultOrder(): ProviderConfig[] {
   });
 }
 
+/**
+ * Provider + model to use for chat-session title generation.
+ * Reuses the same provider as chat (ALLEN_DEFAULT_CHAT_PROVIDER) with that
+ * provider's default model — fast/cheap is preferred over capable for a
+ * 10-word title.
+ *
+ * On claude-only installs this means title gen runs through claude-cli
+ * instead of failing to spawn codex; on codex installs it matches the
+ * previous hard-coded `codex` / `gpt-5.5` exactly.
+ */
+export function getTitleGenProviderModel(): { provider: ChatProvider; model: string } {
+  const provider = getDefaultChatProvider();
+  const cfg = PROVIDERS.find((p) => p.provider === provider);
+  return { provider, model: cfg?.defaultModel ?? 'gpt-5.5' };
+}
+
 // ── Logger ──
 
 const LOG = '\x1b[36m[chat]\x1b[0m';
@@ -139,6 +166,17 @@ export async function syncMcpToCodex(db: Db): Promise<void> {
   const { execFile } = await import('node:child_process');
   const { promisify } = await import('node:util');
   const execFileAsync = promisify(execFile);
+
+  // Skip entirely if codex isn't on PATH (claude-only install). Otherwise
+  // every boot logs "Failed to register Allen MCP with Codex: spawn codex
+  // ENOENT" for the Allen MCP, each external server, etc.
+  try {
+    await execFileAsync('codex', ['--version'], { timeout: 2000 });
+  } catch {
+    log('codex CLI not available — skipping Codex MCP sync (claude-only install)');
+    return;
+  }
+
   const { McpService } = await import('./mcp.service.js');
   const service = new McpService(db);
   const servers = (await service.list()).filter(s => s.enabled && s.type === 'stdio');
@@ -154,15 +192,16 @@ export async function syncMcpToCodex(db: Db): Promise<void> {
   // JWT_ACCESS_SECRET rotations, etc.) propagate to Codex on every sync.
   // Older registrations won't have JWT_ACCESS_SECRET and would silently
   // 401 on every tool call — this is how we heal that drift.
+  const mcpServerName = await getMcpServerName();
   try {
-    if (existingOutput.includes(MCP_SERVER_NAME)) {
-      await execFileAsync('codex', ['mcp', 'remove', MCP_SERVER_NAME], { timeout: 10000 }).catch(() => {});
+    if (existingOutput.includes(mcpServerName)) {
+      await execFileAsync('codex', ['mcp', 'remove', mcpServerName], { timeout: 10000 }).catch(() => {});
     }
     const serverPath = getAllenMcpServerPath();
     // In dev: .ts file → run with npx tsx. In prod: .js file → run with node.
     const runner = serverPath.endsWith('.ts') ? ['npx', 'tsx'] : ['node'];
     await execFileAsync('codex', [
-      'mcp', 'add', MCP_SERVER_NAME,
+      'mcp', 'add', mcpServerName,
       '--env', `ALLEN_API_URL=http://localhost:${process.env.PORT ?? '4023'}`,
       // Shared with the MCP subprocess so it can mint its own access token
       // when calling back into /api/* — see allen-mcp-server.ts.
@@ -259,16 +298,17 @@ export async function runCodexCLI(
   // on every codex exec.
   const mcpEnvOverrides: string[] = [];
   if (chatSessionId) {
+    const mcpServerName = await getMcpServerName();
     mcpEnvOverrides.push(
-      '-c', `mcp_servers.${MCP_SERVER_NAME}.env.ALLEN_ARTIFACT_ROOT_TYPE="chat"`,
-      '-c', `mcp_servers.${MCP_SERVER_NAME}.env.ALLEN_ARTIFACT_ROOT_ID="${chatSessionId}"`,
-      '-c', `mcp_servers.${MCP_SERVER_NAME}.env.ALLEN_CHAT_SESSION_ID="${chatSessionId}"`,
+      '-c', `mcp_servers.${mcpServerName}.env.ALLEN_ARTIFACT_ROOT_TYPE="chat"`,
+      '-c', `mcp_servers.${mcpServerName}.env.ALLEN_ARTIFACT_ROOT_ID="${chatSessionId}"`,
+      '-c', `mcp_servers.${mcpServerName}.env.ALLEN_CHAT_SESSION_ID="${chatSessionId}"`,
       // Carry the existing required vars too — the override is a full
       // dict replacement in some codex versions, so re-state them to be
       // safe across CLI variants.
-      '-c', `mcp_servers.${MCP_SERVER_NAME}.env.ALLEN_API_URL="http://localhost:${process.env.PORT ?? '4023'}"`,
-      '-c', `mcp_servers.${MCP_SERVER_NAME}.env.JWT_ACCESS_SECRET="${process.env.JWT_ACCESS_SECRET ?? ''}"`,
-      '-c', `mcp_servers.${MCP_SERVER_NAME}.env.ALLEN_PUBLIC_URL="${process.env.ALLEN_PUBLIC_URL ?? `http://localhost:${process.env.PORT ?? '4023'}`}"`,
+      '-c', `mcp_servers.${mcpServerName}.env.ALLEN_API_URL="http://localhost:${process.env.PORT ?? '4023'}"`,
+      '-c', `mcp_servers.${mcpServerName}.env.JWT_ACCESS_SECRET="${process.env.JWT_ACCESS_SECRET ?? ''}"`,
+      '-c', `mcp_servers.${mcpServerName}.env.ALLEN_PUBLIC_URL="${process.env.ALLEN_PUBLIC_URL ?? `http://localhost:${process.env.PORT ?? '4023'}`}"`,
     );
   }
 

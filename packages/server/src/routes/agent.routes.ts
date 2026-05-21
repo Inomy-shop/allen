@@ -8,6 +8,7 @@ import {
   type ParsedClaudeAgent,
 } from '../services/claude-agents-importer.js';
 import { executeChatTool } from '../services/chat-tools.js';
+import { getAgentDefaults } from '../services/llm-defaults.js';
 
 const ALLOWED_EFFORTS = new Set(['off', 'low', 'medium', 'high', 'max']);
 
@@ -409,6 +410,7 @@ function buildImportedAgentDoc(
   parsed: ParsedClaudeAgent,
   repo: Record<string, unknown>,
 ): Record<string, unknown> {
+  const defaults = getAgentDefaults();
   return {
     name: parsed.name,
     displayName: titleFromAgentSlug(parsed.name),
@@ -416,8 +418,8 @@ function buildImportedAgentDoc(
     teamName: 'unassigned',
     teamRole: 'member',
     type: 'technical',
-    provider: 'claude-cli',
-    model: parsed.model,
+    provider: defaults.provider,
+    model: parsed.model ?? defaults.model,
     tools: parsed.tools,
     capabilities: [],
     canDelegateTo: [],

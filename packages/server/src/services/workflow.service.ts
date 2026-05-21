@@ -35,6 +35,41 @@ export class WorkflowService {
     }).sort({ updatedAt: -1 }).toArray();
   }
 
+  /**
+   * Slim list for agent/MCP consumers — omits the heavy `parsed.nodes` and
+   * `parsed.edges` graphs that the chat-side `list_workflows` MCP tool
+   * doesn't need (callers use `get_workflow` to fetch the full graph for a
+   * chosen workflow). Returned shape mirrors the chat-tools.ts listWorkflows
+   * tool so agents get a consistent summary across in-process and MCP paths.
+   */
+  async listSummary(includeArchived = false): Promise<Record<string, unknown>[]> {
+    const filter = includeArchived ? {} : { archived: { $ne: true } };
+    const rows = await this.col.find(filter, {
+      projection: {
+        name: 1,
+        description: 1,
+        version: 1,
+        validation: 1,
+        updatedAt: 1,
+        'parsed.nodes': 1, // counted then discarded
+      },
+    }).sort({ updatedAt: -1 }).toArray();
+    return rows.map((w) => {
+      const wAny = w as Record<string, unknown>;
+      const parsed = wAny.parsed as { nodes?: Record<string, unknown> } | undefined;
+      const validation = wAny.validation as { valid?: boolean } | undefined;
+      return {
+        id: String(w._id),
+        name: w.name,
+        description: (w.description as string) ?? '',
+        version: (w.version as number) ?? 1,
+        isValid: validation?.valid ?? false,
+        nodeCount: parsed?.nodes ? Object.keys(parsed.nodes).length : 0,
+        updatedAt: w.updatedAt,
+      };
+    });
+  }
+
   async ensureDefaultWorkflows(names: string[]): Promise<Record<string, unknown>[]> {
     const wanted = new Set(names.filter(Boolean));
     if (wanted.size === 0) return [];

@@ -22,6 +22,7 @@
 
 import type { Db } from 'mongodb';
 import { isSeedOverrideEnabled } from './seed-policy.js';
+import { resolveAgentProviderModel } from './llm-defaults.js';
 
 // ── Types ──
 
@@ -2965,10 +2966,17 @@ export class OrgSeedService {
 
     // 1. Seed all agents first (leads must exist before teams reference them)
     for (const agent of AGENTS) {
+      // Provider/model resolved per-agent: when ALLEN_DEFAULT_AGENT_PROVIDER
+      // is unset (operator picked "Both" at setup), the seed's per-role mix
+      // is preserved verbatim. When set, env wins on provider; model is
+      // preserved if it's valid for the env provider, else env model wins.
+      const { provider, model } = resolveAgentProviderModel(agent.provider, agent.model);
       const existing = await agentsCol.findOne({ name: agent.name });
       if (!existing) {
         await agentsCol.insertOne({
           ...agent,
+          provider,
+          model,
           isBuiltIn: true,
           createdBy: 'seed',
           canTrigger: [],
@@ -2990,8 +2998,8 @@ export class OrgSeedService {
               personality: agent.personality,
               icon: agent.icon,
               color: agent.color,
-              provider: agent.provider,
-              model: agent.model,
+              provider,
+              model,
               tools: agent.tools,
               teamName: agent.teamName,
               teamRole: agent.teamRole,

@@ -7,10 +7,11 @@ export function workflowRoutes(db: Db): Router {
   const router = Router();
   const service = new WorkflowService(db);
 
-  // GET /api/workflows
-  router.get('/', async (_req: Request, res: Response) => {
+  // GET /api/workflows  (?summary=true returns slim shape without parsed.nodes/edges)
+  router.get('/', async (req: Request, res: Response) => {
     try {
-      const workflows = await service.list();
+      const summary = String(req.query.summary ?? '') === 'true';
+      const workflows = summary ? await service.listSummary() : await service.list();
       res.json(workflows);
     } catch (err: unknown) {
       res.status(500).json({ error: (err as Error).message });

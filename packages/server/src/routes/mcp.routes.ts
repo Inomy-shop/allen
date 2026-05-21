@@ -35,6 +35,27 @@ const bundleUpload = multer({
 
 const execFileAsync = promisify(execFile);
 
+/** Cached probe: is `codex` on PATH? Without this every MCP write spawns a
+ * process and (on claude-only installs) logs an ENOENT for each call.
+ * Lazy + cached so a freshly installed codex eventually flips true after
+ * the first successful detection.  Re-probes once after a failed detection
+ * up to a small jitter so a later install is picked up without a restart. */
+let codexProbeAt = 0;
+let codexAvailable: boolean | undefined;
+async function hasCodex(): Promise<boolean> {
+  const now = Date.now();
+  if (codexAvailable === true) return true;
+  if (codexAvailable === false && now - codexProbeAt < 60_000) return false;
+  try {
+    await execFileAsync('codex', ['--version'], { timeout: 2000 });
+    codexAvailable = true;
+  } catch {
+    codexAvailable = false;
+  }
+  codexProbeAt = now;
+  return codexAvailable;
+}
+
 /** Current user's ObjectId from the auth middleware. */
 function ownerIdOf(req: AuthedRequest): ObjectId {
   const sub = req.user?.sub;
@@ -54,6 +75,7 @@ function userScopedFilter(req: AuthedRequest, extra: Record<string, unknown> = {
  * Still translates to `codex mcp add/remove` — the external interface is
  * unchanged. Pulls env from process.env via the shared resolver. */
 async function syncUserToCodex(service: McpService, req: AuthedRequest): Promise<void> {
+  if (!(await hasCodex())) return; // claude-only install — nothing to sync to
   try {
     const ownerFilter = userScopedFilter(req);
     // Use the service list (no scope) but re-filter here so syncUserToCodex
@@ -536,9 +558,10 @@ export function mcpRoutes(db: Db): Router {
       evictMcpConnection(existing.name);
       // Synchronously remove from Codex before the fire-and-forget sync so
       // there is no window where the deleted name re-appears in a later
-      // syncUserToCodex run.  Ignore errors (e.g. Codex not installed or
-      // server was never registered).
-      try { await execFileAsync('codex', ['mcp', 'remove', existing.name], { timeout: 5000 }); } catch {}
+      // syncUserToCodex run.  Skip entirely on claude-only installs.
+      if (await hasCodex()) {
+        try { await execFileAsync('codex', ['mcp', 'remove', existing.name], { timeout: 5000 }); } catch {}
+      }
       if (existing.bundleId) bundleService.delete(existing.bundleId);
       // Wipe Allen-managed Python venv (no-op for non-Python MCPs).
       try { deletePythonVenv(id); } catch (err) {

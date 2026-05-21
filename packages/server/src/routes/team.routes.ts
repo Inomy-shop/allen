@@ -9,6 +9,7 @@ import { Router, type Request, type Response } from 'express';
 import type { Db } from 'mongodb';
 import { TeamService, type TeamInput } from '../services/team.service.js';
 import { buildTeamLeadSystemPrompt, defaultAutoLeadSlug } from '../services/team-lead-template.js';
+import { getAgentDefaults } from '../services/llm-defaults.js';
 import { param } from '../types.js';
 
 export function teamRoutes(db: Db): Router {
@@ -200,6 +201,7 @@ export function teamRoutes(db: Db): Router {
             mission: team.mission,
             memberNames: memberAgentNames,
           });
+      const defaults = getAgentDefaults();
       const leadDoc = {
         name: leadName,
         displayName: leadSpec.displayName ?? `${team.displayName} Lead`,
@@ -209,8 +211,8 @@ export function teamRoutes(db: Db): Router {
         type: 'team' as const,
         icon: 'users',
         color: '#6366f1',
-        provider: 'claude-cli',
-        model: leadSpec.model ?? 'sonnet',
+        provider: defaults.provider,
+        model: leadSpec.model ?? defaults.model,
         reasoningEffort: (leadSpec.reasoningEffort ?? 'high') as 'off' | 'low' | 'medium' | 'high' | 'max',
         planMode: false,
         tools: [],

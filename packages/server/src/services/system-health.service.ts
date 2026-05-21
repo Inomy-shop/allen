@@ -1,6 +1,7 @@
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { MongoClient, type Db } from 'mongodb';
+import { getRequiredProviders } from './llm-defaults.js';
 
 const exec = promisify(execFile);
 
@@ -299,6 +300,10 @@ async function checkAuthCommand(params: {
 }
 
 export async function runSystemHealth(db?: Db): Promise<SystemHealthSummary> {
+  // Required-ness for each LLM CLI is derived from the env config the setup
+  // script writes. A codex-only install no longer FAILs the health check on
+  // missing Claude (and vice versa); preserve mode keeps both required.
+  const llm = getRequiredProviders();
   const checks = await Promise.all([
     Promise.resolve(checkNode()),
     checkVersionCommand({
@@ -326,8 +331,11 @@ export async function runSystemHealth(db?: Db): Promise<SystemHealthSummary> {
       label: 'Claude Code CLI',
       command: 'claude',
       args: ['--version'],
-      required: true,
-      installCommand: 'npm install -g @anthropic-ai/claude-code',
+      required: llm.claude,
+      // Use the standalone installer — the npm package @anthropic-ai/claude-code
+      // is the Agent SDK shim and lacks the --agent flag Allen's engine needs.
+      // Matches scripts/setup.sh.
+      installCommand: 'curl -fsSL https://claude.ai/install.sh | bash',
       docsPath: 'docs/first-workflow.md',
       envVar: 'CLAUDE_BIN',
       skipNodeModulesBin: true,
@@ -337,7 +345,7 @@ export async function runSystemHealth(db?: Db): Promise<SystemHealthSummary> {
       label: 'Claude Code',
       command: 'claude',
       args: ['auth', 'status'],
-      required: true,
+      required: llm.claude,
       authCommand: 'claude',
       docsPath: 'docs/first-workflow.md',
       envVar: 'CLAUDE_BIN',
@@ -348,7 +356,7 @@ export async function runSystemHealth(db?: Db): Promise<SystemHealthSummary> {
       label: 'Codex CLI',
       command: 'codex',
       args: ['--version'],
-      required: false,
+      required: llm.codex,
       installCommand: 'npm install -g @openai/codex',
       docsPath: 'docs/first-workflow.md',
     }),
@@ -357,7 +365,7 @@ export async function runSystemHealth(db?: Db): Promise<SystemHealthSummary> {
       label: 'Codex',
       command: 'codex',
       args: ['login', 'status'],
-      required: false,
+      required: llm.codex,
       authCommand: 'codex',
       docsPath: 'docs/first-workflow.md',
     }),

@@ -4,7 +4,6 @@ import {
   Activity,
   AlertTriangle,
   ArrowRight,
-  Bot,
   CheckCircle2,
   ExternalLink,
   GitBranch,
@@ -12,7 +11,7 @@ import {
   Sparkles,
   Wrench,
 } from 'lucide-react';
-import { chat, executions, repos, system, workflows } from '../services/api';
+import { executions, repos, system, workflows } from '../services/api';
 import { BRAND_NAME } from '../lib/brand';
 import { useOnboardingGate } from '../hooks/useOnboardingGate';
 import {
@@ -26,7 +25,6 @@ import {
   type OnboardingTaskType,
 } from '../lib/onboarding-workflow-input';
 
-type ProviderId = 'claude-cli' | 'codex';
 type TaskType = OnboardingTaskType;
 
 interface RepoRecord {
@@ -51,12 +49,6 @@ interface WorkflowRecord {
   parsed?: {
     input?: Record<string, { type?: string; required?: boolean }>;
   };
-}
-
-interface ProviderRecord {
-  provider: ProviderId;
-  label: string;
-  defaultModel?: string;
 }
 
 interface HealthCheck {
@@ -111,19 +103,22 @@ function createDefaultOnboardingRepo(): Promise<RepoRecord> {
   return defaultOnboardingRepoPromise;
 }
 
-function providerHealth(provider: ProviderId, checks: HealthCheck[]): 'pass' | 'warn' | 'fail' {
-  const cliId = provider === 'claude-cli' ? 'claude_cli' : 'codex_cli';
-  const authId = provider === 'claude-cli' ? 'claude_auth' : 'codex_auth';
-  const relevant = checks.filter(check => check.id === cliId || check.id === authId);
-  if (relevant.some(check => check.status === 'fail')) return 'fail';
-  if (relevant.some(check => check.status === 'warn') || relevant.length < 2) return 'warn';
-  return 'pass';
-}
-
-function statusBadge(status: 'pass' | 'warn' | 'fail'): string {
-  if (status === 'pass') return 'badge badge-ok';
-  if (status === 'warn') return 'badge badge-warn';
-  return 'badge badge-err';
+/**
+ * The provider used for each agent is decided at setup time
+ * (ALLEN_DEFAULT_AGENT_PROVIDER) and persisted on each agent record, so the
+ * onboarding page no longer asks the user to choose. The launch gate just
+ * needs at least ONE provider to be fully operational — both its CLI and
+ * its auth must be present and non-failing. Either claude OR codex working
+ * is enough to continue.
+ */
+function anyProviderHealthy(checks: HealthCheck[]): boolean {
+  const isOk = (id: string): boolean => {
+    const c = checks.find(x => x.id === id);
+    return c !== undefined && c.status !== 'fail';
+  };
+  const claudeOk = isOk('claude_cli') && isOk('claude_auth');
+  const codexOk = isOk('codex_cli') && isOk('codex_auth');
+  return claudeOk || codexOk;
 }
 
 export default function OnboardingFirstWorkflowPage() {
@@ -131,10 +126,8 @@ export default function OnboardingFirstWorkflowPage() {
   const checkingOnboarding = useOnboardingGate('first_workflow');
   const [repoList, setRepoList] = useState<RepoRecord[]>([]);
   const [workflowList, setWorkflowList] = useState<WorkflowRecord[]>([]);
-  const [providerList, setProviderList] = useState<ProviderRecord[]>([]);
   const [healthChecks, setHealthChecks] = useState<HealthCheck[]>([]);
   const [selectedRepoPath, setSelectedRepoPath] = useState('');
-  const [selectedProvider, setSelectedProvider] = useState<ProviderId>('claude-cli');
   const [taskType, setTaskType] = useState<TaskType>('bug');
   const [prompt, setPrompt] = useState('');
   const [loading, setLoading] = useState(true);
@@ -147,16 +140,15 @@ export default function OnboardingFirstWorkflowPage() {
     let cancelled = false;
     setLoading(true);
     async function loadOnboardingData() {
-      const [loadedRepos, loadedWorkflows, loadedProviders, health] = await Promise.all([
+      const [loadedRepos, loadedWorkflows, health] = await Promise.all([
         repos.list(),
         workflows.ensureDefaults(Object.values(ONBOARDING_WORKFLOWS).map(workflow => workflow.name))
           .then(() => workflows.list()),
-        chat.providers(),
         system.health().catch(() => null),
       ]);
 
       if ((loadedRepos as RepoRecord[]).length > 0) {
-        return { loadedRepos, loadedWorkflows, loadedProviders, health };
+        return { loadedRepos, loadedWorkflows, health };
       }
 
       if (!cancelled) setDefaultRepoLoading(true);
@@ -164,33 +156,19 @@ export default function OnboardingFirstWorkflowPage() {
       return {
         loadedRepos: [defaultRepo],
         loadedWorkflows,
-        loadedProviders,
         health,
       };
     }
 
     loadOnboardingData()
-      .then(({ loadedRepos, loadedWorkflows, loadedProviders, health }) => {
+      .then(({ loadedRepos, loadedWorkflows, health }) => {
         if (cancelled) return;
         const typedRepos = loadedRepos as RepoRecord[];
-        const typedProviders = (loadedProviders as ProviderRecord[])
-          .filter(provider => provider.provider === 'claude-cli' || provider.provider === 'codex');
         const checks = health?.checks ?? [];
-        const claudeProvider = typedProviders.find(provider => provider.provider === 'claude-cli');
-        const preferredProvider = claudeProvider && providerHealth('claude-cli', checks) !== 'fail'
-          ? claudeProvider
-          : typedProviders.find(provider => providerHealth(provider.provider, checks) === 'pass')
-          ?? typedProviders.find(provider => providerHealth(provider.provider, checks) !== 'fail')
-          ?? typedProviders[0];
         setRepoList(typedRepos);
         setWorkflowList(loadedWorkflows as WorkflowRecord[]);
-        setProviderList(typedProviders);
         setHealthChecks(checks);
         setSelectedRepoPath(current => current || typedRepos[0]?.path || '');
-        setSelectedProvider(current => typedProviders.some(provider => provider.provider === current)
-          && providerHealth(current, checks) !== 'fail'
-          ? current
-          : preferredProvider?.provider ?? current);
       })
       .catch(err => setError((err as Error).message || 'Could not load onboarding data'))
       .finally(() => {
@@ -224,13 +202,13 @@ export default function OnboardingFirstWorkflowPage() {
   );
 
   const taskConfig = ONBOARDING_WORKFLOWS[taskType];
-  const selectedProviderHealth = providerHealth(selectedProvider, healthChecks);
+  const providersHealthy = anyProviderHealthy(healthChecks);
   const promptLooksLikeRepoPath = !!selectedRepo && prompt.trim() === selectedRepo.path;
   const canLaunch = !!selectedRepo
     && !!selectedWorkflow
     && !!prompt.trim()
     && !promptLooksLikeRepoPath
-    && selectedProviderHealth !== 'fail'
+    && providersHealthy
     && !launching;
 
   async function launch() {
@@ -244,7 +222,9 @@ export default function OnboardingFirstWorkflowPage() {
         repoPath: selectedRepo.path,
       });
 
-      const execution = await executions.start(selectedWorkflow._id, input, { agentProvider: selectedProvider });
+      // No agentProvider: let each agent use its own stored provider
+      // (set at setup time based on which CLI is installed / chosen).
+      const execution = await executions.start(selectedWorkflow._id, input);
       await system.updateOnboardingProgress({ action: 'complete' }).catch(() => {});
       navigate(`/executions/${execution.id}`, { replace: true });
     } catch (err) {
@@ -351,44 +331,21 @@ export default function OnboardingFirstWorkflowPage() {
                     })}
                   </div>
 
-                  <div className="grid gap-4 md:grid-cols-2">
-                    <div className="space-y-2">
-                      <label className="block overline text-theme-muted">Repository</label>
-                      <select value={selectedRepoPath} onChange={event => setSelectedRepoPath(event.target.value)} className="input w-full">
-                        {repoList.map(repo => (
-                          <option key={repo._id ?? repo.path} value={repo.path}>
-                            {repo.name ?? repo.path}
-                          </option>
-                        ))}
-                      </select>
-                    </div>
-                    <div className="space-y-2">
-                      <label className="block overline text-theme-muted">Runner</label>
-                      <div className="grid grid-cols-2 gap-2">
-                        {providerList.map(provider => {
-                          const health = providerHealth(provider.provider, healthChecks);
-                          const active = selectedProvider === provider.provider;
-                          return (
-                            <button
-                              key={provider.provider}
-                              type="button"
-                              onClick={() => setSelectedProvider(provider.provider)}
-                              disabled={health === 'fail'}
-                              className={`rounded-md border px-3 py-2 text-left text-xs transition-colors ${active ? 'border-accent-blue bg-accent-blue/10 text-theme-primary' : 'border-app bg-surface-100 text-theme-secondary hover:bg-surface-200'} disabled:cursor-not-allowed disabled:opacity-60`}
-                            >
-                              <span className="flex items-center justify-between gap-2">
-                                <span className="inline-flex items-center gap-2">
-                                  <Bot className="h-4 w-4" />
-                                  {provider.label}
-                                </span>
-                                <span className={statusBadge(health)}>{health}</span>
-                              </span>
-                            </button>
-                          );
-                        })}
-                      </div>
-                    </div>
+                  <div className="space-y-2">
+                    <label className="block overline text-theme-muted">Repository</label>
+                    <select value={selectedRepoPath} onChange={event => setSelectedRepoPath(event.target.value)} className="input w-full">
+                      {repoList.map(repo => (
+                        <option key={repo._id ?? repo.path} value={repo.path}>
+                          {repo.name ?? repo.path}
+                        </option>
+                      ))}
+                    </select>
                   </div>
+                  {!providersHealthy && (
+                    <div className="mt-4 rounded-md border border-accent-yellow/30 bg-accent-yellow/10 px-3 py-2 text-xs text-accent-yellow">
+                      No LLM provider is ready. Authenticate Claude Code or Codex (whichever you picked at setup) and refresh.
+                    </div>
+                  )}
 
                   <div className="mt-4 space-y-2">
                     <label className="block overline text-theme-muted">{taskConfig.inputLabel}</label>
