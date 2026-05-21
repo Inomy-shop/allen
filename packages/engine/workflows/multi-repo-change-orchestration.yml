@@ -1,0 +1,540 @@
+name: multi-repo-change-orchestration
+description: >
+  Parent orchestration workflow for cross-repo change delivery. It takes a
+  single high-level request, clarifies it when needed, analyzes the
+  registered repo landscape, and produces a per-repo execution plan that
+  picks exactly one of two child workflows for each repo:
+    - `feature-plan-and-implement` for feature / refactor / infra work
+    - `bug-fix-by-severity`        for concrete defects
+  After human approval (skipped in trusted_mode), it dispatches ALL child
+  workflows in parallel via mcp__allen__run_workflow — every repo is
+  kicked off in the same response turn, regardless of dependency
+  annotations — then waits for every child to reach a terminal state and
+  aggregates the results into one final summary. The parent stays
+  orchestration-only: child workflows own repo-local planning, workspace
+  creation, implementation, QA, and PR creation.
+version: 1
+
+context:
+  concurrency: 1
+
+input:
+  request:
+    type: string
+    required: true
+    widget: textarea
+    label: High-level request
+    description: Describe the feature, bug, or cross-repo change in plain English.
+    placeholder: "e.g. Build a workflow that takes high-level requirements, figures out changes needed in each repo, and runs the right implementation workflow per repo in parallel."
+  target_repos:
+    type: string
+    required: false
+    widget: text
+    label: Target repo paths (optional)
+    description: >
+      Optional comma-separated ABSOLUTE repo paths to constrain planning
+      (e.g. `/Users/me/.allen/repositories/my-app`). Leave blank to let the
+      planner analyze all registered repos. Repo names are also accepted —
+      the planner resolves them to paths via `mcp__allen__list_repos`.
+    placeholder: "/Users/me/.allen/repositories/my-app, /Users/me/.allen/repositories/api"
+  trusted_mode:
+    type: boolean
+    required: false
+    default: false
+    widget: checkbox
+    label: Trusted mode
+    description: Skip the human repo-plan approval gate and proceed directly to execution.
+  allow_partial_success:
+    type: boolean
+    required: false
+    default: true
+    widget: checkbox
+    label: Allow partial success
+    description: Continue non-blocking repo work when some repos fail.
+  chat_session_id:
+    type: string
+    required: false
+    widget: text
+    description: Originating chat session ID when started from chat.
+  started_by_user_id:
+    type: string
+    required: false
+    widget: text
+    description: User ID who started the run.
+
+nodes:
+  understand_request:
+    type: agent
+    agent: requirements-analyst
+    agentOverrides:
+      model: sonnet
+      reasoningEffort: high
+      planMode: true
+    prompt: |
+      You are in intake-normalization mode for a parent multi-repo orchestration workflow.
+
+      USER REQUEST:
+      {{request}}
+
+      OPTIONAL TARGET REPO PATHS:
+      {{target_repos}}
+      The above field carries absolute repo paths (or repo names — the
+      downstream planner will resolve names via `mcp__allen__list_repos`).
+      Do NOT try to resolve repo names yourself in this node; pass through
+      whatever the user supplied.
+
+      Your job is to decide whether the request is clear enough to plan across repos.
+      If the request is unclear, ask every clarifying question you
+      genuinely need — there is no cap on the number of questions.
+      Keep each question concrete and answerable in plain text. Do
+      NOT pad the list, do NOT split one question into many, and do
+      NOT skip a real question to stay under some imagined limit.
+
+      If the request is unclear, return JSON:
+      {
+        "clarifying_questions": ["..."],
+        "ready_to_plan": false,
+        "refined_request": "",
+        "request_kind": "feature"
+      }
+
+      If the request is clear enough, synthesize it into a refined brief that a repo planner can use.
+      Classify the overall request kind as one of: feature, bug_fix, mixed, refactor, infrastructure.
+      Return JSON:
+      {
+        "clarifying_questions": [],
+        "ready_to_plan": true,
+        "refined_request": "...",
+        "request_kind": "feature"
+      }
+    outputs:
+      clarifying_questions: Array of clarification questions.
+      ready_to_plan: Boolean indicating whether repo planning can begin.
+      refined_request: The clarified and normalized request.
+      request_kind: One of feature, bug_fix, mixed, refactor, infrastructure.
+
+  clarify_request:
+    type: human
+    fields:
+      - name: answers
+        label: Answers to clarification questions
+        type: textarea
+        required: true
+    outputs:
+      answers: Free-text answers to the clarification questions.
+    prompt: |
+      The workflow needs clarification before it can plan changes across repos.
+
+      Original request:
+      {{request}}
+
+      Questions:
+      {{clarifying_questions}}
+
+      Please answer each question in order.
+
+  plan_repo_changes:
+    type: agent
+    agent: engineering-lead
+    agentOverrides:
+      model: sonnet
+      reasoningEffort: high
+      planMode: true
+    prompt: |
+      You are the repo-impact planner for a parent orchestration workflow.
+
+      NORMALIZED REQUEST:
+      {{refined_request}}
+
+      ORIGINAL REQUEST:
+      {{request}}
+
+      OVERALL REQUEST KIND:
+      {{request_kind}}
+
+      OPTIONAL TARGET REPO PATHS:
+      {{target_repos}}
+
+      ── REPO RESOLUTION (binding, do this FIRST) ────────────────────────
+      The input field above carries either absolute repo paths or repo
+      names — the user is allowed to type either, and the static lists in
+      prompts go stale. To get the AUTHORITATIVE current registered repos,
+      call:
+
+          mcp__allen__list_repos()
+
+      It returns each registered repo's name and absolute path. Use that
+      response — NOT any list embedded in this prompt — as the source of
+      truth for what exists.
+
+      How to interpret `{{target_repos}}`:
+        - If it is empty / blank: consider all repos returned by list_repos
+          and pick only those that actually need to change.
+        - If it contains absolute paths (one or more, comma-separated):
+          treat them as constraints. Cross-check each path against
+          list_repos and proceed using the path verbatim, even if the
+          repo's `name` field differs from the trailing dir.
+        - If it contains repo names (not absolute paths): match each name
+          against list_repos and substitute in the corresponding absolute
+          `path`. If a name has no match in list_repos, emit it under
+          `unmapped_questions` rather than guessing.
+        - Mixed paths and names in the same input: resolve names via the
+          rule above; keep paths verbatim.
+
+      ALWAYS emit `repo_path` as an absolute path (the value returned by
+      list_repos), NEVER a name. Both `child_input.repo_path` and the
+      top-level `repo_path` in your output JSON must be paths.
+
+      Use the repo registry and repo context intelligently. Your job is to decide:
+      1. Which repos actually need changes.
+      2. Why each repo is affected.
+      3. Which child workflow each repo should use (exactly one of the two below).
+      4. The exact child-workflow payload for each repo, mapped to the child workflow's expected input field names.
+
+      ── CHILD WORKFLOW SELECTION (binding) ──────────────────────────────
+      You MUST pick `child_workflow` from this fixed set — do not invent
+      other names, do not propose alternate workflows:
+
+      • `feature-plan-and-implement`
+        Use for: feature work, refactors, infrastructure changes, new
+        capabilities, doc-driven work — anything that is NOT a defect.
+        Required `child_input` shape (use these EXACT field names):
+          {
+            "user_request": "<the per-repo requirement spec / PRD-style brief>",
+            "repo_path":    "<absolute repo path>",
+            "trusted_mode": false,
+            "chat_session_id":    "{{chat_session_id}}",
+            "started_by_user_id": "{{started_by_user_id}}"
+          }
+
+      • `bug-fix-by-severity`
+        Use for: defects — broken behavior, regressions, crashes,
+        incorrect output. Emit this ONLY when you can phrase a concrete
+        repo-local bug report (symptoms, repro, expected vs actual).
+        Required `child_input` shape (use these EXACT field names):
+          {
+            "bug_report": "<symptoms, repro steps, expected vs actual, any error/stack>",
+            "repo_path":  "<absolute repo path>",
+            "chat_session_id":    "{{chat_session_id}}",
+            "started_by_user_id": "{{started_by_user_id}}"
+          }
+
+      Do NOT use `bug-investigate-and-fix`, `tdd-design-by-severity`, or
+      any other name. The executor will reject anything outside the
+      two names above.
+
+      Keep the parent orchestration-only. Do not create workspaces, PR
+      plans, or implementation details here — this node only emits the
+      execution plan.
+
+      Required output JSON (a single flat list of repos; the executor
+      runs ALL of them in parallel — phasing/dependencies are advisory
+      only and DO NOT gate execution):
+      {
+        "global_summary": "...",
+        "execution_strategy": "all_parallel",
+        "phases": [
+          {
+            "phase": 1,
+            "repos": [
+              {
+                "repo_name": "allen",
+                "repo_path": "/home/ubuntu/.allen/repositories/allen",
+                "why_this_repo": "...",
+                "change_type": "feature",
+                "child_workflow": "feature-plan-and-implement",
+                "child_input": {
+                  "user_request": "...",
+                  "repo_path": "/home/ubuntu/.allen/repositories/allen",
+                  "trusted_mode": false,
+                  "chat_session_id": "{{chat_session_id}}",
+                  "started_by_user_id": "{{started_by_user_id}}"
+                },
+                "depends_on": [],
+                "blocking": true
+              },
+              {
+                "repo_name": "es-data-pipeline",
+                "repo_path": "/home/ubuntu/.allen/repositories/es-data-pipeline",
+                "why_this_repo": "...",
+                "change_type": "bug_fix",
+                "child_workflow": "bug-fix-by-severity",
+                "child_input": {
+                  "bug_report": "...",
+                  "repo_path": "/home/ubuntu/.allen/repositories/es-data-pipeline",
+                  "chat_session_id": "{{chat_session_id}}",
+                  "started_by_user_id": "{{started_by_user_id}}"
+                },
+                "depends_on": [],
+                "blocking": false
+              }
+            ]
+          }
+        ],
+        "risks": ["..."],
+        "unmapped_questions": ["..."],
+        "plan_markdown": "<human-readable repo plan summary>"
+      }
+
+      Rules:
+      - Prefer no more repos than necessary.
+      - `child_workflow` MUST be exactly `feature-plan-and-implement` OR
+        `bug-fix-by-severity`. Nothing else is supported.
+      - Use `bug-fix-by-severity` ONLY when you can write a concrete
+        bug report (symptoms + repro). When in doubt, prefer
+        `feature-plan-and-implement` — it can absorb refactor/infra work.
+      - `child_input` must match the selected child workflow's exact
+        input field names listed above. Do not rename, add, or omit
+        required fields.
+      - Put every repo into a single phase (phase 1). The executor
+        will dispatch all of them in parallel. `depends_on` and
+        `blocking` are kept for documentation only — they do NOT
+        gate execution.
+      - If no repos need changes, emit an empty `phases` array and
+        explain why in `global_summary`.
+    outputs:
+      global_summary: One-paragraph summary of the cross-repo change.
+      execution_strategy: Execution strategy, expected to be phased_parallel.
+      phases: Array of dependency-aware execution phases.
+      risks: Array of planning risks.
+      unmapped_questions: Array of unresolved questions.
+      plan_markdown: Human-readable repo plan summary.
+
+  review_repo_plan:
+    type: human
+    fields:
+      - name: decision
+        label: Decision
+        type: select
+        options: [approve, request_changes, reject]
+        required: true
+      - name: feedback
+        label: Feedback
+        type: textarea
+        required: false
+    outputs:
+      decision: approve, request_changes, or reject.
+      feedback: Human feedback on the repo plan.
+    prompt: |
+      Review the proposed multi-repo execution plan.
+
+      Original request:
+      {{request}}
+
+      Global summary:
+      {{global_summary}}
+
+      Plan:
+      {{plan_markdown}}
+
+      Risks:
+      {{risks}}
+
+      Unmapped questions:
+      {{unmapped_questions}}
+
+      Decision:
+      - approve: execute the plan
+      - request_changes: send feedback and regenerate the repo plan
+      - reject: stop the workflow
+
+  execute_repo_plan:
+    type: agent
+    agent: engineering-lead
+    agentOverrides:
+      model: sonnet
+      reasoningEffort: high
+      planMode: false
+    prompt: |
+      You are executing a parent multi-repo orchestration plan.
+
+      ORIGINAL REQUEST:
+      {{request}}
+
+      GLOBAL SUMMARY:
+      {{global_summary}}
+
+      EXECUTION STRATEGY:
+      {{execution_strategy}}
+
+      PHASES (advisory only — flatten this into a single list of repos
+      and dispatch ALL of them in parallel; do NOT honor depends_on or
+      blocking flags for execution ordering):
+      {{phases}}
+
+      ALLOW PARTIAL SUCCESS:
+      {{allow_partial_success}}
+
+      ── PARALLEL DISPATCH IS MANDATORY ─────────────────────────────────
+      Your single job is to fan out every repo in the plan in parallel,
+      then wait for all of them to finish. You are NOT a sequential
+      executor and you do NOT honor phase ordering, dependency arrows,
+      or blocking flags. Treat the plan as one flat list.
+
+      Hard rules — violating any of these is a workflow failure:
+      1. Flatten `phases[*].repos[*]` into a single list of N repos.
+      2. In ONE response turn, emit N `mcp__allen__run_workflow` tool
+         calls — one per repo — IN PARALLEL (multiple tool_use blocks
+         in the same assistant message). Do NOT sequence them. Do NOT
+         await one before starting the next.
+      3. For each tool call:
+           - `workflow_name`: the repo's `child_workflow` (must be
+             exactly `feature-plan-and-implement` or
+             `bug-fix-by-severity` — reject anything else and add the
+             repo to `blocked_repos` with reason "invalid child_workflow").
+           - `input`: the repo's `child_input` exactly as emitted by
+             the planner. Do not rewrite or re-derive fields.
+      4. After all dispatches are sent, wait for every execution to
+         reach a terminal state (completed / partial_success / failed /
+         needs_input). Poll via the run_workflow result, or via
+         `mcp__allen__get_execution` if needed. Do not skip waiting.
+      5. Do NOT redesign the work. Do NOT create workspaces in the
+         parent. Do NOT call any code-writing tools yourself.
+      6. Do NOT rerun a child workflow on transient failure — the
+         child has its own retry policy. Just record the outcome.
+      7. If a child execution requires human input (paused on a human
+         node), record it under `manual_follow_ups` with the execution
+         link and continue collecting the rest.
+      8. Failures NEVER block sibling repos — by design, every repo
+         runs in parallel regardless of `blocking` or `depends_on`.
+         `allow_partial_success` only affects `overall_status`:
+           - allow_partial_success=true AND some failed → partial_success
+           - allow_partial_success=false AND some failed → failed
+           - all succeeded → completed
+      9. Collect for each repo: execution_id, execution_url, pr_url
+         (when available), final outcome, and a one-line summary.
+
+      Required output JSON:
+      {
+        "overall_status": "completed",
+        "repo_results": [
+          {
+            "repo_name": "allen",
+            "repo_path": "/home/ubuntu/.allen/repositories/allen",
+            "phase": 1,
+            "status": "success",
+            "child_workflow": "feature-plan-and-implement",
+            "execution_id": "...",
+            "execution_url": "...",
+            "pr_url": "...",
+            "summary": "...",
+            "blocking": true,
+            "depends_on": []
+          }
+        ],
+        "blocked_repos": [
+          {
+            "repo_name": "...",
+            "reason": "..."
+          }
+        ],
+        "manual_follow_ups": ["..."],
+        "requirements_status": {
+          "fully_satisfied": ["..."],
+          "partially_satisfied": ["..."],
+          "not_satisfied": ["..."]
+        },
+        "execution_report_markdown": "<human-readable execution report>"
+      }
+    outputs:
+      overall_status: completed, partial_success, or failed.
+      repo_results: Array of per-repo execution results.
+      blocked_repos: Array of repos that could not be run due to failed dependencies.
+      manual_follow_ups: Array of required manual follow-ups.
+      requirements_status: Structured fulfillment status for the original request.
+      execution_report_markdown: Human-readable execution report.
+
+  final_summary:
+    type: agent
+    agent: documentation-writer
+    agentOverrides:
+      model: sonnet
+      reasoningEffort: medium
+      planMode: false
+    prompt: |
+      MODE: summary
+
+      Produce the final summary for a multi-repo orchestration workflow run.
+
+      ORIGINAL REQUEST:
+      {{request}}
+
+      GLOBAL SUMMARY:
+      {{global_summary}}
+
+      PLAN:
+      {{plan_markdown}}
+
+      EXECUTION REPORT:
+      {{execution_report_markdown}}
+
+      REPO RESULTS:
+      {{repo_results}}
+
+      BLOCKED REPOS:
+      {{blocked_repos}}
+
+      MANUAL FOLLOW-UPS:
+      {{manual_follow_ups}}
+
+      REQUIREMENTS STATUS:
+      {{requirements_status}}
+
+      Return a concise but complete markdown summary and a verdict.
+      The summary should include:
+      - overall outcome
+      - per-repo status
+      - child workflow used per repo
+      - execution links when available
+      - PR links when available
+      - blocked repos and reasons
+      - manual follow-ups
+      - whether the original request was fully or partially satisfied
+
+      End with JSON:
+      {
+        "summary_markdown": "...",
+        "workflow_verdict": "completed"
+      }
+    outputs:
+      summary_markdown: Final markdown summary.
+      workflow_verdict: completed, partial_success, or failed.
+
+edges:
+  - from: START
+    to: understand_request
+  - from: understand_request
+    to: plan_repo_changes
+    condition: "ready_to_plan == true"
+  - from: understand_request
+    to: clarify_request
+    condition: "ready_to_plan != true"
+  - from: clarify_request
+    to: understand_request
+    max_retries: 3
+    retry_context: |
+      The user answered the clarification questions:
+      {{answers}}
+  - from: plan_repo_changes
+    to: execute_repo_plan
+    condition: "trusted_mode == true"
+  - from: plan_repo_changes
+    to: review_repo_plan
+    condition: "trusted_mode != true"
+  - from: review_repo_plan
+    to: execute_repo_plan
+    condition: "decision == 'approve'"
+  - from: review_repo_plan
+    to: plan_repo_changes
+    condition: "decision == 'request_changes'"
+    max_retries: 2
+    retry_context: |
+      Human feedback on the repo plan:
+      {{feedback}}
+  - from: review_repo_plan
+    to: END
+    condition: "decision == 'reject'"
+  - from: execute_repo_plan
+    to: final_summary
+  - from: final_summary
+    to: END

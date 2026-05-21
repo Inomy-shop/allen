@@ -1,0 +1,100 @@
+name: self-healing-incident-triage
+description: >
+  Built-in self-healing triage workflow. Given a monitoring incident, analyze
+  the full evidence, decide whether it is Allen-owned, and recommend the repair
+  route. This workflow does not change code.
+
+version: 1
+
+context:
+  requires: []
+  tools: [filesystem, terminal]
+  concurrency: 2
+
+input:
+  incident_id:
+    type: string
+    required: false
+    widget: text
+    label: Incident ID
+  incident_fingerprint:
+    type: string
+    required: true
+    widget: text
+    label: Incident fingerprint
+  linear_issue_id:
+    type: string
+    required: false
+    widget: text
+  linear_url:
+    type: string
+    required: false
+    widget: text
+  source_type:
+    type: string
+    required: true
+    widget: text
+  root_cause_area:
+    type: string
+    required: true
+    widget: text
+  incident_summary:
+    type: string
+    required: true
+    widget: textarea
+  evidence:
+    type: object
+    required: false
+
+nodes:
+  analyze:
+    agent: allen-monitoring-agent
+    prompt: |
+      Analyze this Allen self-healing monitoring incident.
+
+      INCIDENT ID: {{incident_id}}
+      FINGERPRINT: {{incident_fingerprint}}
+      LINEAR: {{linear_url}}
+      SOURCE TYPE: {{source_type}}
+      ROOT CAUSE AREA: {{root_cause_area}}
+      SUMMARY: {{incident_summary}}
+
+      EVIDENCE:
+      {{evidence}}
+
+      Decide whether this is actionable, whether it is Allen-owned, and whether
+      bug-fix-by-severity or triage should handle it. Completed, failed, cancelled/canceled,
+      interrupted, and stale records are all valid evidence.
+
+      End with JSON: actionability, allen_owned, root_cause_area, severity,
+      confidence, recommended_route, summary.
+    outputs:
+      actionability: "create_ticket | update_existing_ticket | alert_only | ignore"
+      allen_owned: "Boolean."
+      recommended_route: "Built-in agent or workflow route."
+      triage_summary: "Concise triage summary."
+
+  route:
+    agent: allen-incident-router
+    prompt: |
+      Route this incident based on the analyzer output.
+
+      INCIDENT: {{incident_fingerprint}}
+      LINEAR: {{linear_url}}
+      SOURCE TYPE: {{source_type}}
+      ROOT CAUSE AREA: {{root_cause_area}}
+      TRIAGE SUMMARY: {{triage_summary}}
+      RECOMMENDED ROUTE: {{recommended_route}}
+
+      Return one built-in target and rationale. Do not fix code.
+
+      End with JSON: route_type, target_name, rationale, confidence.
+    outputs:
+      route_type: "workflow | agent"
+      target_name: "Built-in target to dispatch."
+      rationale: "Why this target should own the fix."
+
+edges:
+  - { from: START, to: analyze }
+  - { from: analyze, to: route }
+  - { from: route, to: END }

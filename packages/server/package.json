@@ -1,0 +1,52 @@
+{
+  "name": "@allen/server",
+  "version": "0.1.0",
+  "type": "module",
+  "main": "./dist/app.js",
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsx watch src/app.ts",
+    "health": "tsx src/scripts/health.ts",
+    "start": "node dist/app.js",
+    "lint": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "dependencies": {
+    "@allen/engine": "*",
+    "@anthropic-ai/claude-code": "1.0.128",
+    "@linear/sdk": "^82.0.0",
+    "@types/node-cron": "^3.0.11",
+    "@xenova/transformers": "^2.17.2",
+    "adm-zip": "^0.5.17",
+    "bcrypt": "^6.0.0",
+    "cors": "^2.8.5",
+    "cron-parser": "^5.5.0",
+    "dotenv": "^17.4.0",
+    "express": "^4.21.0",
+    "http-proxy-middleware": "^3.0.5",
+    "js-yaml": "^4.1.0",
+    "jsonwebtoken": "^9.0.3",
+    "mongodb": "^6.12.0",
+    "multer": "^1.4.5-lts.1",
+    "node-cron": "^4.2.1",
+    "node-pty": "^1.1.0",
+    "ws": "^8.20.0",
+    "zod": "^3.25.76"
+  },
+  "devDependencies": {
+    "@types/adm-zip": "^0.5.8",
+    "@types/bcrypt": "^6.0.0",
+    "@types/cors": "^2.8.17",
+    "@types/express": "^5.0.0",
+    "@types/js-yaml": "^4.0.9",
+    "@types/jsonwebtoken": "^9.0.10",
+    "@types/multer": "^1.4.12",
+    "@types/node": "^22.0.0",
+    "@types/supertest": "^7.2.0",
+    "mongodb-memory-server": "^11.0.1",
+    "supertest": "^7.2.2",
+    "tsx": "^4.19.0",
+    "vitest": "^2.1.8"
+  }
+}

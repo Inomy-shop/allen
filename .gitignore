@@ -1,0 +1,17 @@
+node_modules/
+dist/
+.turbo/
+.next/
+**/.next/
+*.tsbuildinfo
+.env
+secrets.yml
+data/
+uploads/
+mcp-servers/
+test-reports/
+test-results/
+e2e/.auth/
+infra/
+.DS_Store
+**/.DS_Store

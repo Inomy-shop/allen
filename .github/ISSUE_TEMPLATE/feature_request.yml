@@ -1,0 +1,60 @@
+name: Allen feature request
+description: Suggest a workflow, agent, workspace, trace, integration, or UI improvement for Allen.
+title: "[Feature]: "
+labels:
+  - enhancement
+body:
+  - type: textarea
+    id: use_case
+    attributes:
+      label: Allen use case
+      description: What engineering workflow should Allen support better?
+      placeholder: "Example: I want Allen to run a low-risk dependency update workflow that opens a PR only after tests pass."
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - Workflow template
+        - Agent definition or routing
+        - Workspace management
+        - Execution trace, logs, or artifacts
+        - Human checkpoints or interventions
+        - Chat
+        - GitHub integration
+        - Linear integration
+        - Slack integration
+        - MCP servers
+        - Auth, users, or teams
+        - Secrets or settings
+        - UI
+        - Docs
+        - Testing
+        - Other
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed Allen behavior
+      description: Describe the workflow, screen, API, agent behavior, or integration behavior you want.
+    validations:
+      required: true
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Acceptance criteria
+      description: What should be true in the UI, API, execution trace, workspace, or generated PR when this is done?
+  - type: textarea
+    id: risks
+    attributes:
+      label: Risks or safety concerns
+      description: Note any concerns involving repo writes, secrets, external integrations, tool access, or agent autonomy.
+  - type: checkboxes
+    id: contribution
+    attributes:
+      label: Contribution
+      options:
+        - label: I can help implement or test this in Allen.

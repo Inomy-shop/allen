@@ -1,0 +1,83 @@
+name: Allen bug report
+description: Report a reproducible problem in an Allen workflow, workspace, agent run, API route, or UI view.
+title: "[Bug]: "
+labels:
+  - bug
+  - needs reproduction
+body:
+  - type: textarea
+    id: summary
+    attributes:
+      label: What broke?
+      description: Describe the Allen behavior that failed.
+      placeholder: "Example: The feature-plan-and-implement workflow starts but the execution page never receives node log updates."
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: Allen area
+      options:
+        - Workflow execution
+        - Agent routing or prompts
+        - Workspace or terminal
+        - Execution trace, logs, or artifacts
+        - Chat
+        - Repo manager
+        - Auth or users
+        - Secrets or settings
+        - GitHub integration
+        - Linear integration
+        - Slack integration
+        - MCP servers
+        - UI rendering
+        - Build, lint, or tests
+        - Other
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Reproduction steps
+      description: Include the workflow name, repo setup, UI path, command, input values, and exact failure point.
+      placeholder: |
+        1. Start MongoDB locally (e.g. brew services start mongodb-community@7.0)
+        2. Run npm run setup, then npm start
+        3. Add repo /path/to/repo
+        4. Run packages/engine/workflows/feature-plan-and-implement.yml with task "..."
+        5. Open the execution detail page
+        6. Observe ...
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected Allen behavior
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+      description: Include sanitized server logs, browser console output, execution IDs, workspace IDs, screenshots, or stack traces.
+    validations:
+      required: true
+  - type: input
+    id: workflow
+    attributes:
+      label: Workflow or page
+      placeholder: "feature-plan-and-implement, bug-fix-by-severity, /workspaces/:id, /executions/:id"
+  - type: input
+    id: environment
+    attributes:
+      label: Environment
+      placeholder: "macOS 15, Node 22, npm 10, MongoDB 7, Claude Code CLI version, browser"
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Safety checks
+      options:
+        - label: I searched existing issues for the same Allen behavior.
+          required: true
+        - label: I removed API keys, OAuth tokens, SSH keys, private repo contents, customer data, and proprietary prompts.
+          required: true

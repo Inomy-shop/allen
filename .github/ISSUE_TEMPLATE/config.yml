@@ -1,0 +1,5 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Private vulnerability report for Allen
+    url: https://github.com/Inomy-shop/allen/security/advisories/new
+    about: Report auth, secrets, workspace isolation, agent execution, MCP, artifact exposure, or integration vulnerabilities privately.

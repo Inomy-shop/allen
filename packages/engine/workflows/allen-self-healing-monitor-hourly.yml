@@ -1,0 +1,309 @@
+name: allen-self-healing-monitor-hourly
+description: >
+  Agent-led hourly self-healing monitor for Allen. Agents collect evidence
+  through Allen MCP tools, analyze runtime behavior, create/update Linear
+  tickets through Linear MCP, route bug-fix work, and dispatch the built-in
+  bug-fix workflow through Allen MCP.
+
+version: 1
+
+context:
+  tools: [mcp]
+  concurrency: 1
+
+input:
+  mode:
+    type: string
+    required: false
+    widget: text
+  targeted_incident_id:
+    type: string
+    required: false
+    widget: text
+  targeted_incident_fingerprint:
+    type: string
+    required: false
+    widget: text
+  scan_window_hours:
+    type: number
+    required: false
+    widget: number
+  overlap_hours:
+    type: number
+    required: false
+    widget: number
+  cursor_from:
+    type: string
+    required: false
+    widget: text
+  cursor_to:
+    type: string
+    required: false
+    widget: text
+  statuses:
+    type: array
+    required: false
+  scan_surfaces:
+    type: array
+    required: false
+  max_records_per_surface:
+    type: number
+    required: false
+    widget: number
+  maxTicketsPerRun:
+    type: number
+    required: false
+    widget: number
+  auto_dispatch:
+    type: boolean
+    required: false
+    widget: checkbox
+  linear_team_key:
+    type: string
+    required: true
+    widget: text
+  linear_project_name:
+    type: string
+    required: true
+    widget: text
+  linear_assignee_email:
+    type: string
+    required: true
+    widget: text
+  stuck_thresholds:
+    type: object
+    required: false
+
+nodes:
+  plan_scan:
+    agent: allen-monitoring-agent
+    resume_on_retry: true
+    prompt: |
+      Plan an agent-led Allen self-healing scan.
+
+      MODE: {{mode}}
+      TARGETED INCIDENT ID: {{targeted_incident_id}}
+      TARGETED INCIDENT FINGERPRINT: {{targeted_incident_fingerprint}}
+      CURSOR FROM: {{cursor_from}}
+      CURSOR TO: {{cursor_to}}
+      SCAN WINDOW HOURS: {{scan_window_hours}}
+      OVERLAP HOURS: {{overlap_hours}}
+      STATUSES: {{statuses}}
+      SURFACES: {{scan_surfaces}}
+      MAX RECORDS PER SURFACE: {{max_records_per_surface}}
+      LINEAR TEAM KEY: {{linear_team_key}}
+      LINEAR PROJECT NAME: {{linear_project_name}}
+      LINEAR ASSIGNEE EMAIL: {{linear_assignee_email}}
+      STUCK THRESHOLDS: {{stuck_thresholds}}
+
+      Use Allen MCP tools. Do not use backend heuristics as conclusions.
+      First call mcp__allen__allen_monitoring_get_scan_cursor unless this is
+      a targeted incident run. Decide the actual since/until window and the
+      surfaces to inspect. Include completed, failed, canceled/cancelled,
+      interrupted, stale running, and waiting runs where relevant.
+
+      End with JSON: mode, since, until, surfaces[], statuses[],
+      max_records_per_surface, targeted_incident_id, plan_rationale.
+    outputs:
+      since: "ISO scan lower bound."
+      until: "ISO scan upper bound."
+      surfaces: "Runtime surfaces to query."
+      statuses: "Statuses to inspect."
+      plan_rationale: "Why this scan scope was chosen."
+
+  collect_evidence:
+    agent: allen-monitoring-agent
+    resume_on_retry: true
+    prompt: |
+      Collect raw Allen runtime evidence using MCP tools only.
+
+      PLAN:
+      - since: {{since}}
+      - until: {{until}}
+      - surfaces: {{surfaces}}
+      - statuses: {{statuses}}
+      - targeted incident: {{targeted_incident_id}} {{targeted_incident_fingerprint}}
+
+      Required behavior:
+      - Use mcp__allen__allen_monitoring_search_records for each relevant
+        surface.
+      - If a record looks relevant, follow its IDs with
+        mcp__allen__allen_monitoring_get_record and related search calls.
+      - For chat issues, fetch chat session/messages/logs/delegation threads.
+      - For workflow/agent issues, fetch execution row, logs, traces, activity,
+        memory audits, and tool calls recorded in traces.
+      - For memory issues, fetch memory_injection_audits and learnings.
+      - For Linear dispatch issues, fetch ticket_assignments and any related
+        execution/log/trace records.
+      - Create one or more evidence bundles with
+        mcp__allen__allen_monitoring_create_evidence_bundle.
+
+      Do not create Linear tickets in this node.
+      Do not route or dispatch bug-fix work in this node.
+
+      End with JSON: evidence_bundles[], reviewed_records[], notable_patterns[],
+      no_issue_rationale.
+    outputs:
+      evidence_bundles: "Evidence bundle ids and summaries."
+      reviewed_records: "Records reviewed."
+      notable_patterns: "Potential failures or wrong completed behavior."
+      no_issue_rationale: "Why no issue was found, if applicable."
+
+  analyze_evidence:
+    agent: allen-monitoring-agent
+    resume_on_retry: true
+    prompt: |
+      Analyze the evidence as an Allen runtime incident investigator.
+
+      EVIDENCE BUNDLES: {{evidence_bundles}}
+      REVIEWED RECORDS: {{reviewed_records}}
+      NOTABLE PATTERNS: {{notable_patterns}}
+
+      Decide from the logs/messages/traces/tool calls whether anything is
+      actually wrong. Completed runs are in scope when behavior is wrong.
+
+      Classify each issue candidate:
+      - source_type: chat | agent_execution | delegation | workflow_execution |
+        memory | tool_call | mcp | linear_dispatch | system
+      - root_cause_area: allen_repo | agent_prompt | instruction_bug |
+        workflow_definition | memory_system | tool_integration |
+        external_dependency | user_input | unknown
+      - severity: critical | high | medium | low
+      - confidence: 0.0-1.0
+      - allen_owned: true/false
+
+      Only Allen-owned issues should proceed to Linear ticketing. External
+      outages, expected user cancellations, and unsupported user requests should
+      be ignored or suppressed with a clear reason.
+
+      For each Allen-owned candidate, call
+      mcp__allen__allen_monitoring_upsert_incident to persist your decision.
+
+      End with JSON: issue_candidates[], ignored_candidates[], incidents[].
+    outputs:
+      issue_candidates: "Agent-classified issue candidates."
+      ignored_candidates: "Candidates ignored or suppressed."
+      incidents: "Monitoring incidents created or updated."
+
+  dedupe_and_ticket:
+    agent: allen-incident-router
+    resume_on_retry: true
+    prompt: |
+      Dedupe incidents and create/update Linear tickets using tools.
+
+      INCIDENTS: {{incidents}}
+      ISSUE CANDIDATES: {{issue_candidates}}
+      MAX TICKETS THIS RUN: {{maxTicketsPerRun}}
+      LINEAR TEAM KEY: {{linear_team_key}}
+      LINEAR PROJECT NAME: {{linear_project_name}}
+      LINEAR ASSIGNEE EMAIL: {{linear_assignee_email}}
+
+      For every Allen-owned incident:
+      1. Call mcp__allen__allen_monitoring_search_incidents to find duplicates.
+      2. Search Linear with mcp__linear__linear_search_issues for similar open
+         Allen self-healing tickets.
+      3. Decide create_ticket, update_ticket, suppress, or ignore.
+      4. For create/update, use Linear MCP tools directly:
+         - mcp__linear__linear_create_issue
+         - mcp__linear__linear_create_comment
+         - mcp__linear__linear_edit_issue when needed
+      5. Write Linear id/identifier/url/status back using
+         mcp__allen__allen_monitoring_update_incident.
+
+      New Linear issues must use the provided team, project, and assignee. If
+      any of those values are blank, stop and mark the run failed; do not create
+      a ticket with guessed defaults.
+
+      Ticket content must include evidence reviewed, affected links/ids,
+      suspected root cause, whether code/prompt/instruction/workflow/memory
+      changes may be needed, and whether bug-fix-by-severity or triage is
+      recommended.
+
+      Do not call backend LinearService. Linear work must happen through Linear
+      MCP tools.
+
+      End with JSON: ticket_decisions[], ticketed_incidents[],
+      suppressed_incidents[].
+    outputs:
+      ticket_decisions: "Create/update/suppress/ignore decisions."
+      ticketed_incidents: "Incidents with Linear ticket metadata."
+      suppressed_incidents: "Suppressed or ignored incidents."
+
+  route_and_dispatch_repair:
+    agent: allen-incident-router
+    resume_on_retry: true
+    prompt: |
+      Route ticketed incidents to the built-in bug-fix workflow and dispatch it
+      using Allen MCP tools.
+
+      AUTO DISPATCH: {{auto_dispatch}}
+      TICKETED INCIDENTS: {{ticketed_incidents}}
+      TICKET DECISIONS: {{ticket_decisions}}
+
+      If auto_dispatch is false, record routing recommendations only.
+
+      Routing map:
+      - memory_system -> bug-fix-by-severity
+      - tool_integration -> bug-fix-by-severity
+      - workflow_definition -> bug-fix-by-severity
+      - agent_prompt or instruction_bug -> bug-fix-by-severity
+      - allen_repo -> bug-fix-by-severity
+      - unknown -> self-healing-incident-triage
+
+      Before dispatching, call mcp__allen__allen_monitoring_resolve_repo_path.
+      Dispatch with mcp__allen__run_workflow. For bug-fix-by-severity, pass:
+      - repo_path: resolved Allen repo path
+      - bug_report: a concise synthesized report containing incident
+        id/fingerprint, Linear id/identifier/url, source_type, root_cause_area,
+        incident_summary, evidence reviewed, suspected root cause, and the
+        subsystem focus.
+      - related_pr: blank unless the evidence identifies a specific PR.
+
+      After dispatch, call mcp__allen__allen_monitoring_update_incident with
+      status=dispatched, dispatch_execution_id, and routing_target. If you do
+      not dispatch, update the incident with routing_target and a reason.
+
+      End with JSON: repair_routes[], repair_executions[], not_dispatched[].
+    outputs:
+      repair_routes: "Chosen bug-fix or triage routes."
+      repair_executions: "bug-fix-by-severity execution ids."
+      not_dispatched: "Routes not dispatched with reasons."
+
+  close_scan:
+    agent: allen-monitoring-agent
+    resume_on_retry: true
+    prompt: |
+      Close the monitoring scan.
+
+      SINCE: {{since}}
+      UNTIL: {{until}}
+      INCIDENTS: {{incidents}}
+      TICKET DECISIONS: {{ticket_decisions}}
+      REPAIR EXECUTIONS: {{repair_executions}}
+      SUPPRESSED: {{suppressed_incidents}}
+      IGNORED: {{ignored_candidates}}
+
+      Call mcp__allen__allen_monitoring_update_scan_cursor with name
+      "hourly-agent" and last_successful_scan_at={{until}} only after you have
+      recorded incident/ticket/dispatch status.
+
+      Summarize what happened. If bug-fix-by-severity failed to start
+      because of Allen itself, create a follow-up monitoring incident through
+      mcp__allen__allen_monitoring_upsert_incident.
+
+      End with JSON: final_status, incidents_count, tickets_count,
+      repairs_dispatched_count, suppressed_count, follow_up_incidents[].
+    outputs:
+      final_status: "completed | completed_with_followups | failed"
+      incidents_count: "Number of incidents analyzed."
+      tickets_count: "Number of Linear tickets created or updated."
+      repairs_dispatched_count: "Number of bug-fix workflows dispatched."
+
+edges:
+  - { from: START, to: plan_scan }
+  - { from: plan_scan, to: collect_evidence }
+  - { from: collect_evidence, to: analyze_evidence }
+  - { from: analyze_evidence, to: dedupe_and_ticket }
+  - { from: dedupe_and_ticket, to: route_and_dispatch_repair }
+  - { from: route_and_dispatch_repair, to: close_scan }
+  - { from: close_scan, to: END }

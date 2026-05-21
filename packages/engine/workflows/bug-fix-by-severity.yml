@@ -1,0 +1,902 @@
+name: bug-fix-by-severity
+description: >
+  Severity-aware bug fix workflow: the investigator classifies the bug as
+  small, medium, or large, and the workflow skips heavier nodes for smaller
+  bugs while large bugs run the full pipeline.
+
+  Routing by severity:
+    small  → implement → open_pr
+             (skips qa, implementation_validator, code_review, and summary)
+    medium → implement → qa → code_review → open_pr → summary
+             (skips implementation_validator)
+    large  → full pipeline (implement → qa → implementation_validator → code_review → open_pr → summary)
+
+  Human touches per run (steady state): 2 total —
+    1. Initial bug report
+    2. Root-cause / fix-scope / severity approval before implementation
+
+  Additional escalation touches happen when QA can't triage a failure, when
+  validation fails repeatedly, when review blocks, or when PR creation fails.
+
+  Artifact-read convention: artifact URLs in this workflow are
+  http://.../api/artifacts/<id>/content. To read an artifact, use
+  mcp__allen__allen_get_artifact(artifact_id=<id>) — extract <id> from the
+  URL (segment between /artifacts/ and /content), or use the
+  upstream-artifacts index the engine auto-injects into every agent's
+  context. Agents save with mcp__allen__allen_save_artifact.
+
+version: 1
+
+context:
+  requires: [repo]
+  tools: [filesystem, git, terminal]
+  concurrency: 3
+
+input:
+  bug_report:
+    type: string
+    required: true
+    widget: textarea
+    label: Bug report
+    description: Describe the bug — symptoms, repro steps, error messages, stack traces if you have them. The investigator uses this to reproduce the issue, trace to the root cause, and classify severity.
+    placeholder: "e.g. Clicking the Delete button on an empty workflow crashes the UI with 'Cannot read property id of undefined'. Reproduced on Chrome 120 and Firefox 125. Happens on workflows with no nodes."
+  repo_path:
+    type: string
+    required: true
+    widget: repo_picker
+    label: Target repo
+    description: The registered repo where the bug lives.
+  chat_session_id:
+    type: string
+    required: false
+    widget: text
+    description: Originating chat session ID (auto-populated from chat — leave blank when running from this form).
+  started_by_user_id:
+    type: string
+    required: false
+    widget: text
+    description: User ID who started the run (for Slack DM routing of interventions).
+
+nodes:
+  # Dedicated workspace-creation node — runs ONCE before any bug-fix
+  # agent receives the repo. Investigation is read-only, but it still
+  # runs in the isolated worktree so every downstream command and any
+  # accidental write stays out of the main clone. Retries back to
+  # `implement` skip this node entirely and reuse the existing
+  # worktree_path carried in state.
+  create_workspace:
+    type: code
+    function: create-workspace
+    config:
+      # Branch from the repo's detected default branch (workspace.ts falls
+      # back to 'main' if detection missed). 10-minute setup timeout.
+      wait_for_setup: true
+      timeout_sec: 600
+    outputs:
+      workspace_id: "Internal Allen workspace identifier."
+      worktree_path: "Absolute path to the isolated git worktree the fix specialist(s) will work inside. Downstream nodes substitute {{worktree_path}}; engine resolves it as cwd for every agent run."
+      branch_name: "Generated branch name (e.g. allen/bug-<stamp>). Substituted as {{branch_name}} in implement, code_review, open_pr, summary."
+      base_branch: "Branch the worktree was cut from (repo default)."
+      workspace_status: "Workspace setup status — 'active' or 'running' on success. Diagnostic only; not consumed by any edge condition. Renamed from `status` to avoid collision with open_pr.status which IS routed on."
+      repo_path: "Overwrites the input repo_path so the engine's cwd fallback (node-executor.ts:225-229) resolves to the worktree when worktree_path is unavailable. Not substituted directly — load-bearing as engine state."
+
+  investigate:
+    agent: bug-investigator
+    resume_on_retry: true
+    prompt: |
+      Investigate this bug, find the root cause, and classify severity.
+      This is a READ-ONLY investigation step: do not edit files.
+      Implementation happens in the downstream engineering-lead node.
+
+      BUG REPORT: {{bug_report}}
+      WORKTREE PATH: {{worktree_path}}
+      {{#if retry_context}}
+      HUMAN FEEDBACK FROM PRE-IMPLEMENTATION APPROVAL:
+      {{retry_context}}
+      {{/if}}
+
+      Follow your four-rule contract:
+        1. Reproduce first — run the reported steps in a terminal from
+           {{worktree_path}}.
+        2. Walk the call stack — don't guess.
+        3. If the issue appears to be a design gap rather than a defect,
+           say so in the root_cause and fix_description so the approval
+           gate can decide whether to continue.
+        4. Identify minimal fix scope — no while-we're-here cleanup.
+
+      Severity classification — pick exactly one and include it as
+      `severity` in the final JSON block:
+        - small  : trivial / single-file / copy fix / null check /
+                   obvious one-line bug in one subsystem.
+        - medium : single subsystem, contained blast radius, needs
+                   targeted unit/integration tests but no cross-subsystem
+                   validation.
+        - large  : cross-subsystem, regression risk, security-sensitive,
+                   data-migration touching, or unclear root cause that
+                   needs full validator + QA gating.
+
+      ARTIFACT + OUTPUT CONTRACT:
+      Write the full investigation report as a markdown artifact BEFORE
+      emitting JSON. The artifact is the single source of truth — every
+      downstream node reads this artifact via mcp__allen__allen_get_artifact. Include all of:
+
+        # Investigation report
+        ## Root cause
+        ## Fix description
+        ## Reproduction steps
+        ## Call-stack walk
+        ## Files to touch          ← list of file paths the fix will modify
+        ## Affected components     ← list of subsystems / modules touched
+        ## Security implications   ← one of none | low | medium | high, with explanation
+
+      Save it via:
+        mcp__allen__allen_save_artifact("investigation/report.md", <markdown>, content_type="markdown", overwrite=true)
+      The tool returns { artifactId, url, publicUrl, ... }. Copy the
+      `publicUrl` field into JSON as `investigation_artifact_url`.
+      Do NOT use `url` (relative) or `artifactId` (opaque).
+
+      Keep large prose, code snippets, stack traces, file lists, and
+      component lists INSIDE the artifact. The JSON output below carries
+      only the routing primitives the engine needs to pick edges.
+
+      End your response with a fenced JSON block containing EXACTLY these
+      top-level keys (the engine extracts by key name — wrong names = lost data):
+
+      ```json
+      {
+        "investigation_artifact_url": "<publicUrl from mcp__allen__allen_save_artifact>",
+        "severity": "small | medium | large",
+        "confidence": 0.0
+      }
+      ```
+    outputs:
+      investigation_artifact_url: "Public URL of the full investigation report (markdown). Contains root_cause, fix_description, reproduction_steps, files_to_touch, affected_components, security_implications, and call-stack detail. Every downstream node reads this artifact via mcp__allen__allen_get_artifact."
+      severity: "small | medium | large — drives downstream node routing."
+      confidence: "Float 0-1 confidence in the diagnosed severity / root cause."
+
+  # Fallback human gate — fires only when investigate fails to emit a
+  # valid severity (small | medium | large). Without this, a degenerate
+  # investigator output dead-ends the workflow at the qa node (qa→next
+  # edges all require severity to be one of the three known values).
+  # The human picks a severity, which overwrites state.severity and the
+  # workflow continues into the normal approval gate.
+  severity_classification_human:
+    type: human
+    fields:
+      - name: severity
+        label: "Pick a severity (the investigator did not classify this bug)"
+        type: select
+        options: [small, medium, large]
+        required: true
+    outputs:
+      severity: "small | medium | large — manually classified by human after investigator failed to emit a valid value."
+    prompt: |
+      ⚠️ The investigator did not return a valid severity classification.
+      Pick one yourself based on the investigation report below.
+
+      Bug report:
+      {{bug_report}}
+
+      📄 Full investigation report (read this before picking):
+      {{investigation_artifact_url}}
+
+      Severity guide:
+        - small  : trivial / single-file / copy fix / null check /
+                   obvious one-line bug in one subsystem.
+        - medium : single subsystem, contained blast radius, needs
+                   targeted unit/integration tests but no cross-subsystem
+                   validation.
+        - large  : cross-subsystem, regression risk, security-sensitive,
+                   data-migration touching, or unclear root cause that
+                   needs full validator + QA gating.
+
+  implementation_approval_human:
+    type: human
+    fields:
+      - name: approval_decision
+        label: "Approve this root cause and fix scope?"
+        type: select
+        options: [approve, request_changes, cancel]
+        required: true
+      - name: approval_feedback
+        label: "Feedback or reason (optional for approval)"
+        type: textarea
+        required: false
+    outputs:
+      approval_decision: "approve | request_changes | cancel"
+      approval_feedback: "Feedback passed back to the investigator or implementation lead."
+    prompt: |
+      Review the diagnosed root cause and severity classification before
+      any implementation agent starts changing code.
+
+      Original bug report:
+      {{bug_report}}
+
+      📄 Full investigation report — click to read root cause, fix
+      description, reproduction steps, files to touch, affected
+      components, security implications, and call-stack analysis:
+      {{investigation_artifact_url}}
+
+      Severity:   {{severity}}  ← drives downstream routing (small skips qa+validator, medium skips validator, large runs the full pipeline)
+      Confidence: {{confidence}}
+
+      Options:
+        approve         → start implementation with this root cause and severity
+        request_changes → send feedback back to investigation before coding
+        cancel          → abandon the workflow before implementation
+
+  implement:
+    agent: engineering-lead
+    # Resume across retries (qa-fail, code-review-fail) so engineering-lead
+    # remembers which specialist owns which file — retries become "fix
+    # what broke" not "re-do everything".
+    resume_on_retry: true
+    # Single-node dispatch: the workspace is already created by the
+    # upstream `create_workspace` code node. Engineering-lead MUST reuse
+    # {{worktree_path}} from state and MUST NOT call create_workspace
+    # again. It groups files by specialist and dispatches via spawn_agent.
+    prompt: |
+      MODE: 2 (execute — fix dispatch into an existing worktree)
+      SCOPE: implementation_only
+      REQUIREMENT SOURCE: diagnosed_bug_fix
+      DOWNSTREAM GATES: qa_handled_downstream, review_handled_downstream, pr_handled_downstream
+
+      You are the Engineering Lead dispatching a bug fix. The workspace
+      has ALREADY been created upstream — reuse it. Group the files
+      listed below by specialty, spawn the right specialist(s), collect
+      results. You DO NOT write code.
+
+      BUG REPORT: {{bug_report}}
+      📄 INVESTIGATION REPORT (single source of truth — fetch via mcp__allen__allen_get_artifact for
+        root_cause, fix_description, reproduction_steps, files_to_touch,
+        affected_components, and security_implications):
+        {{investigation_artifact_url}}
+
+      ROUTING PRIMITIVES (small, already in state — no fetch needed):
+        SEVERITY:                {{severity}}
+        HUMAN APPROVAL FEEDBACK: {{approval_feedback}}
+
+      EXISTING WORKSPACE (do NOT create a new one):
+        worktree_path: {{worktree_path}}
+        branch_name:   {{branch_name}}
+        workspace_id:  {{workspace_id}}
+        base_branch:   {{base_branch}}
+
+      Step-by-step:
+        1. DO NOT call create_workspace. The worktree above already
+           exists — all specialists must work inside {{worktree_path}}.
+        2. fetch the investigation report via mcp__allen__allen_get_artifact above. Extract from it:
+           root cause, fix description, reproduction steps, files to touch,
+           affected components, and security implications. These are NOT
+           inlined in state — the artifact is the single source of truth.
+        3. Produce a concrete implementation plan before spawning
+           specialists. The plan must include:
+             - acceptance_criteria[] derived from bug_report + the
+               investigation report
+             - ordered plan_items[] with owner specialty, target files, and
+               expected behavior change
+             - test_strategy focused on unit/integration acceptance checks,
+               not slow regression-suite execution
+             - risk_checks for security, data, concurrency, and edge cases
+        4. Group the files-to-touch list (from the investigation artifact)
+           by specialty (backend-developer / frontend-developer /
+           devops-engineer / security-specialist / test-writer for
+           test-only fixes). Most bug fixes touch one subsystem — a single
+           specialist is the common case. Do not spawn documentation-writer
+           in this workflow; docs are not part of this lean bug-fix lane
+           unless a doc file is explicitly part of the root-cause fix.
+        5. For each specialist, spawn_agent with repo_path={{worktree_path}}
+           and a prompt that PASSES THE INVESTIGATION ARTIFACT URL plus the
+           specialist's specific plan_items, acceptance_criteria, target
+           files, and approval_feedback. Sub-agents fetch the artifact via mcp__allen__allen_get_artifact
+           themselves to get root cause, fix description, reproduction
+           steps, and security implications.
+        6. Wait for each spawn via wait_for_execution. On failure, retry
+           that specialist ONCE with the error output as context.
+        7. Self-judge the completed work against every plan item and
+           acceptance criterion before returning. If any plan item or
+           acceptance criterion is not implemented, retry the responsible
+           specialist once or set any_failures=true with exact details.
+
+      ARTIFACT + OUTPUT CONTRACT:
+      Save the full implementation plan (acceptance_criteria, plan_items,
+      plan_completion_checklist, specialists_used, failure_details, test
+      strategy, risk checks) as a markdown artifact BEFORE emitting your
+      JSON output:
+        mcp__allen__allen_save_artifact("implementation/plan.md", <markdown>, content_type="markdown", overwrite=true)
+      Copy the returned `publicUrl` into JSON as `implementation_plan_artifact_url`.
+
+      End your response with a fenced JSON block containing EXACTLY these
+      top-level keys (the engine extracts by key name):
+
+      ```json
+      {
+        "implementation_plan_artifact_url": "<publicUrl>",
+        "self_judge_verdict": "pass | fail",
+        "files_changed": ["path/one", "path/two"],
+        "any_failures": false
+      }
+      ```
+
+      any_failures MUST be a JSON boolean, not a string. Do NOT re-emit
+      worktree_path / branch_name / workspace_id — the upstream
+      create_workspace node already put those in state.
+
+      HARD RULES:
+        - NEVER edit files yourself. Use spawn_agent for every change.
+        - ALWAYS pass repo_path={{worktree_path}} to every spawn_agent call.
+        - NEVER call create_workspace — the workspace is already provisioned.
+        - Do not create PRD/HLD/LLD for this node. This is a diagnosed bug
+          workflow; bug_report + the investigation report + files_to_touch
+          are the binding source of truth.
+
+      {{#if retry_context}}
+      RETRY FEEDBACK:
+      {{retry_context}}
+      {{/if}}
+    outputs:
+      implementation_plan_artifact_url: "Public URL of the full implementation plan markdown (acceptance_criteria, plan_items, plan_completion_checklist, specialists_used, failure_details). Fetch via mcp__allen__allen_get_artifact for detail."
+      self_judge_verdict: "pass | fail — engineering-lead's self-check that all plan items and acceptance criteria were implemented."
+      files_changed: "List of files changed by the fix — short string array."
+      any_failures: "Boolean — true if any specialist returned a non-recoverable failure (drives implement→escalation_review routing)."
+
+  qa:
+    agent: qa-lead
+    resume_on_retry: true
+    retries: 1
+    prompt: |
+      You are the QA orchestrator. Drive the ENTIRE quality loop in one
+      call: spawn test-writer to write targeted unit/integration tests for
+      the acceptance criteria, run build + lint + relevant unit/integration
+      tests, loop until green or fail. Do NOT run the slow regression suite
+      for this workflow.
+
+      BUG REPORT: {{bug_report}}
+      📄 INVESTIGATION REPORT (root cause, fix description, reproduction):
+        {{investigation_artifact_url}}
+      📄 IMPLEMENTATION PLAN (acceptance_criteria, plan_items, files, completion checklist):
+        {{implementation_plan_artifact_url}}
+
+      ROUTING PRIMITIVES (small, already in state):
+        DEVELOPER SELF-JUDGE: {{self_judge_verdict}}
+        FILES CHANGED:        {{files_changed}}
+        WORKTREE PATH:        {{worktree_path}}
+        TEST POLICY:          unit_and_integration_acceptance_only
+
+      Follow your five-rule contract:
+        1. fetch the implementation plan artifact via mcp__allen__allen_get_artifact above to read the
+           full acceptance_criteria and plan_completion_checklist before
+           writing tests.
+        2. Spawn test-writer with the bug context, the artifact URLs, and
+           files_changed. Ask it to write or update targeted unit/integration
+           tests that prove every acceptance criterion.
+        3. Run build + lint + relevant unit tests and integration tests
+           inside {{worktree_path}}. Do not run slow regression packs,
+           slow e2e packs, or tests tagged slow/regression.
+        4. Verify acceptance coverage: every acceptance criterion must map
+           to at least one passing unit or integration test, or an explicit
+           no-test-setup explanation when the repo has no test framework.
+        5. Loop until green (max 3 cycles).
+
+      ARTIFACT + OUTPUT CONTRACT:
+      Save the full QA report as a markdown artifact BEFORE emitting JSON.
+      Include all of:
+        # QA report
+        ## Build / lint verdicts
+        ## Unit / integration test verdicts
+        ## Verification test files (paths) and per-test summary
+        ## Covered acceptance criteria
+        ## Uncovered acceptance criteria
+        ## Cycles used (count + per-cycle deltas)
+        ## Failure details (when verdict is fail or escalate)
+        ## Failure target (engineering-lead | test-writer | null — useful for the human reviewer on escalation)
+
+      Save it via:
+        mcp__allen__allen_save_artifact("qa/report.md", <markdown>, content_type="markdown", overwrite=true)
+      Copy the returned `publicUrl` into JSON as `qa_artifact_url`.
+
+      End your response with a fenced JSON block containing EXACTLY:
+
+      ```json
+      {
+        "qa_artifact_url": "<publicUrl>",
+        "qa_verdict": "pass | fail | escalate"
+      }
+      ```
+
+      ALWAYS pass repo_path={{worktree_path}} to every spawn_agent call.
+
+      {{#if retry_context}}
+      RETRY FEEDBACK:
+      {{retry_context}}
+      {{/if}}
+    outputs:
+      qa_artifact_url: "Public URL of the full QA report (markdown). Holds build/lint/unit/integration verdicts, test files, coverage, failure details, cycles, and failure_target."
+      qa_verdict: "pass | fail | escalate — drives qa→next routing."
+
+  implementation_validator:
+    agent: implementation-validator
+    resume_on_retry: true
+    retries: 1
+    prompt: |
+      Validate that the final bug-fix diff fully satisfies the actual bug
+      report and the diagnosed root cause. Treat the BUG REPORT + the
+      investigation report (root cause + fix description) as the
+      source-of-truth requirement for this bug run.
+
+      WORKTREE PATH: {{worktree_path}}
+      BUG REPORT:    {{bug_report}}
+
+      📄 INVESTIGATION REPORT (root cause, fix description):
+        {{investigation_artifact_url}}
+      📄 IMPLEMENTATION PLAN (acceptance_criteria, plan_items, completion checklist):
+        {{implementation_plan_artifact_url}}
+      📄 QA REPORT (verification tests, coverage, build/lint/test verdicts):
+        {{qa_artifact_url}}
+
+      ROUTING PRIMITIVES (small, already in state):
+        DEVELOPER SELF-JUDGE: {{self_judge_verdict}}
+        FILES CHANGED:        {{files_changed}}
+        QA VERDICT:           {{qa_verdict}}
+
+      fetch each artifact via mcp__allen__allen_get_artifact above before running your checks — the
+      full content (root cause, plan items, test list, coverage) is in
+      those reports, not inlined here.
+
+      Run your blocking-checks against the current diff in the worktree:
+        - the diff fixes the diagnosed root cause, not only the visible symptom
+        - every implementation plan item is reflected in the diff or marked
+          unnecessary with evidence
+        - every acceptance criterion is covered by a passing unit or
+          integration test, or has a valid no-test-framework explanation
+        - the changed files are the minimal files needed for that root cause
+        - no unrelated scope creep was introduced
+        - security-sensitive paths have explicit handling if the bug touches
+          auth, authorization, secrets, crypto, user input, or data exposure
+
+      ARTIFACT + OUTPUT CONTRACT:
+      Save the full validator report as a markdown artifact BEFORE emitting JSON.
+      Include all of:
+        # Validator report
+        ## Blocking violations (with file:line evidence and per-violation rationale)
+        ## Informational deviations (non-blocking notes, minor cleanup opportunities)
+        ## Per-acceptance-criterion verdict
+        ## Validator confidence (0-1) with brief justification
+
+      Save it via:
+        mcp__allen__allen_save_artifact("validator/report.md", <markdown>, content_type="markdown", overwrite=true)
+      Copy the returned `publicUrl` into JSON as `validator_artifact_url`.
+
+      End with a fenced JSON block containing EXACTLY:
+
+      ```json
+      {
+        "validator_artifact_url": "<publicUrl>",
+        "prd_satisfied": true,
+        "blocking_violations_count": 0
+      }
+      ```
+
+      prd_satisfied=true ONLY if the bug report and root cause are fully
+      satisfied by the diff and unit/integration acceptance tests.
+
+      {{#if retry_context}}
+      RETRY FEEDBACK from a previous validator loop:
+      {{retry_context}}
+      {{/if}}
+    outputs:
+      validator_artifact_url: "Public URL of the full validator report (blocking_violations with evidence, informational_deviations, per-AC verdict, validator confidence)."
+      prd_satisfied: "Boolean — true only when the bug report/root cause is fully fixed. Drives validator→next routing."
+      blocking_violations_count: "Integer — number of blocking violations found. Full list is in the artifact."
+
+  code_review:
+    agent: code-reviewer
+    resume_on_retry: true
+    retries: 1
+    prompt: |
+      Review the bug fix diff in the worktree.
+
+      WORKTREE PATH: {{worktree_path}}
+      BRANCH:        {{branch_name}}
+      FILES CHANGED: {{files_changed}}
+      BUG REPORT:    {{bug_report}}
+      SEVERITY:      {{severity}}
+
+      📄 INVESTIGATION REPORT (root cause, fix description):
+        {{investigation_artifact_url}}
+      📄 IMPLEMENTATION PLAN (acceptance_criteria, plan_items):
+        {{implementation_plan_artifact_url}}
+      📄 QA REPORT (verification tests, coverage):
+        {{default qa_artifact_url "(qa skipped by severity policy — no QA report)"}}
+      📄 VALIDATOR REPORT (blocking violations, deviations):
+        {{default validator_artifact_url "(implementation_validator skipped by severity policy — no validator report)"}}
+
+      ROUTING PRIMITIVES from upstream nodes (small):
+        DEVELOPER SELF-JUDGE: {{self_judge_verdict}}
+        QA VERDICT:           {{default qa_verdict "(qa skipped)"}}
+        VALIDATOR VERDICT:    {{default prd_satisfied "(validator skipped)"}}
+        VALIDATOR BLOCKERS:   {{default blocking_violations_count "n/a"}}
+
+      fetch each artifact via mcp__allen__allen_get_artifact you need before running your rubric.
+      Full prose lives in the artifacts; this prompt only carries routing
+      primitives.
+
+      Run your full 15-point rubric including security checklist. Focus on:
+        - Does the fix actually address the root cause (not just the symptom)?
+        - Does the diff implement the plan without unrelated scope creep?
+        - Are the unit/integration acceptance tests meaningful?
+        - Does the fix introduce any security regression?
+        - Does the fix introduce any new deviation from the repo's conventions?
+
+      Severity-skipping note:
+        - severity == 'small'  : qa AND implementation_validator were skipped.
+          Be extra rigorous on test coverage and root-cause adequacy.
+          Request changes if either is missing or weak.
+        - severity == 'medium' : implementation_validator was skipped (qa ran).
+          Cover the "diff fixes root cause" and "no scope creep" checks
+          yourself in this review.
+        - severity == 'large'  : full pipeline ran upstream; validator and qa
+          artifacts above are populated.
+
+      ARTIFACT + OUTPUT CONTRACT:
+      Save the full review (review_feedback markdown, security_findings list,
+      doc_drift_findings list) as a markdown artifact BEFORE emitting JSON:
+        mcp__allen__allen_save_artifact("review/code-review.md", <markdown>, content_type="markdown", overwrite=true)
+      Copy the returned `publicUrl` into JSON as `code_review_artifact_url`.
+
+      End with a fenced JSON block containing EXACTLY:
+
+      ```json
+      {
+        "code_review_artifact_url": "<publicUrl>",
+        "review_verdict": "APPROVED | REQUEST_CHANGES",
+        "security_findings_count": 0
+      }
+      ```
+
+      {{#if retry_context}}
+      RETRY FEEDBACK:
+      {{retry_context}}
+      {{/if}}
+    outputs:
+      code_review_artifact_url: "Public URL of the full code review markdown (review_feedback, security_findings, doc_drift_findings)."
+      review_verdict: "APPROVED | REQUEST_CHANGES — drives code_review→next routing."
+      security_findings_count: "Integer — number of security findings. Full list is in the artifact."
+
+  open_pr:
+    agent: pr-creator
+    resume_on_retry: true
+    prompt: |
+      Create a pull request for this bug fix run.
+
+      WORKFLOW TYPE: bug
+      WORKTREE PATH: {{worktree_path}}
+      BRANCH NAME:   {{branch_name}}
+
+      BUG REPORT:    {{bug_report}}
+      SEVERITY:      {{severity}}
+      FILES CHANGED: {{files_changed}}
+
+      📄 ARTIFACTS (mcp__allen__allen_get_artifact any you need to populate the PR body):
+        INVESTIGATION:        {{investigation_artifact_url}}
+        IMPLEMENTATION PLAN:  {{implementation_plan_artifact_url}}
+        QA REPORT:            {{default qa_artifact_url "(qa skipped by severity policy)"}}
+        VALIDATOR REPORT:     {{default validator_artifact_url "(validator skipped by severity policy)"}}
+        CODE REVIEW:          {{default code_review_artifact_url "(code review skipped by severity policy)"}}
+
+      ROUTING PRIMITIVES:
+        QA VERDICT:       {{default qa_verdict "(qa skipped)"}}
+        VALIDATOR VERDICT: {{default prd_satisfied "(validator skipped)"}}
+        REVIEW VERDICT:   {{default review_verdict "(code review skipped)"}}
+        SECURITY FINDINGS: {{default security_findings_count "n/a"}} (count; full list in code_review_artifact_url when code review ran)
+
+      Follow your PR-creation contract: stage, commit with `fix: ...`
+      message, push, gh pr create, handle errors at each step, and
+      return structured JSON.
+
+      PR BODY CONTENT:
+      Pull the full root cause, fix description, acceptance criteria,
+      test evidence when present, and security findings when present from the artifact URLs above
+      (fetch them via mcp__allen__allen_get_artifact). Embed prose excerpts in the PR body AND include
+      the artifact links so reviewers can click through to the
+      full reports. For severity == 'small', do not invent skipped QA,
+      validator, or code-review evidence; state that the onboarding small-bug
+      lane intentionally implemented the fix and opened the PR without
+      downstream summary.
+    outputs:
+      pr_url: "The created (or reused) PR URL, or null on failure."
+      status: "created | reused_existing | failed — drives open_pr→next routing."
+      error: "Error message when status is failed."
+
+  # Unified escalation review — qa escalate and any retry exhaustion
+  # route here instead of silently ending. User picks retry / override
+  # / abandon.
+  escalation_review:
+    type: human
+    fields:
+      - name: decision
+        label: "What should happen?"
+        type: select
+        options: [retry_with_feedback, override_and_continue, abandon]
+        required: true
+      - name: feedback
+        label: "Feedback or reason"
+        type: textarea
+        required: true
+    outputs:
+      decision: "retry_with_feedback | override_and_continue | abandon"
+      feedback: "Free-text feedback passed to the agent on retry"
+    prompt: |
+      🔴 The bug-fix workflow paused because an agent gave up or its
+      retry budget was exhausted.
+
+      BUG REPORT: {{bug_report}}
+      SEVERITY:   {{severity}}
+
+      📄 ARTIFACTS (click to read; only the ones for nodes that ran will be set):
+        INVESTIGATION:       {{investigation_artifact_url}}
+        IMPLEMENTATION PLAN: {{default implementation_plan_artifact_url "(implement never ran)"}}
+        QA REPORT:           {{default qa_artifact_url "(qa skipped or never ran)"}}
+        VALIDATOR REPORT:    {{default validator_artifact_url "(validator skipped or never ran)"}}
+        CODE REVIEW:         {{default code_review_artifact_url "(code_review never ran)"}}
+
+      ROUTING PRIMITIVES:
+        QA VERDICT:        {{default qa_verdict "n/a"}}
+        VALIDATOR VERDICT: prd_satisfied={{default prd_satisfied "n/a"}}
+        CODE REVIEW:       {{default review_verdict "n/a"}}
+        PR STATUS:         {{default status "n/a"}}
+        PR ERROR:          {{default error ""}}
+
+      Your decision:
+        retry_with_feedback  — loop back to `implement` with your feedback.
+                               If PR creation failed, retry PR creation.
+        override_and_continue — continue past the failing stage only when
+                               you accept the risk (qa → validator,
+                               validator → code_review, code_review → PR,
+                               PR failure → final partial summary).
+        abandon              — end the run; artifacts so far are preserved.
+
+  summary:
+    agent: documentation-writer
+    resume_on_retry: true
+    prompt: |
+      MODE: summary
+
+      Produce the final implementation summary for this bug fix run.
+
+      BUG REPORT:    {{bug_report}}
+      SEVERITY:      {{severity}}
+      PR URL:        {{pr_url}}
+      PR STATUS:     {{status}}
+      PR ERROR:      {{error}}
+      BRANCH:        {{branch_name}}
+      WORKTREE PATH: {{worktree_path}}
+      FILES CHANGED: {{files_changed}}
+
+      📄 UPSTREAM ARTIFACTS (fetch each one via mcp__allen__allen_get_artifact you need to weave into the summary):
+        INVESTIGATION:       {{investigation_artifact_url}}
+        IMPLEMENTATION PLAN: {{implementation_plan_artifact_url}}
+        QA REPORT:           {{default qa_artifact_url "(qa skipped by severity policy)"}}
+        VALIDATOR REPORT:    {{default validator_artifact_url "(validator skipped by severity policy)"}}
+        CODE REVIEW:         {{code_review_artifact_url}}
+
+      ROUTING PRIMITIVES:
+        QA VERDICT:        {{default qa_verdict "(qa skipped)"}}
+        VALIDATOR VERDICT: prd_satisfied={{default prd_satisfied "(validator skipped)"}}
+        REVIEW VERDICT:    {{review_verdict}}
+
+      Follow your Mode 2 BUG contract: one-line bug, root cause, fix
+      file-by-file, severity, implementation plan completion, acceptance
+      criteria, unit/integration test evidence, security notes, how to
+      verify manually. Note in the summary which gates were skipped by
+      severity policy (small skips qa + implementation_validator; medium
+      skips implementation_validator). Link every upstream artifact in
+      the rendered summary so reviewers can click through.
+
+      ARTIFACT + OUTPUT CONTRACT:
+      Save the rendered final summary as a markdown artifact BEFORE
+      emitting JSON:
+        mcp__allen__allen_save_artifact("summary/run-summary.md", <markdown>, content_type="markdown", overwrite=true)
+      Copy the returned `publicUrl` into JSON as `summary_artifact_url`.
+
+      End with a fenced JSON block containing EXACTLY:
+
+      ```json
+      {
+        "summary_artifact_url": "<publicUrl>",
+        "workflow_verdict": "success | partial_success_with_manual_review"
+      }
+      ```
+    outputs:
+      # Terminal outputs — no in-workflow node reads these. They become the
+      # workflow's return value, consumed by external callers (chat assistant,
+      # API client, Slack bot) reading execution.output after the run reaches END.
+      summary_artifact_url: "Public URL of the final run summary markdown — the workflow's headline deliverable."
+      workflow_verdict: "success | partial_success_with_manual_review — final routing signal for callers."
+
+edges:
+  # Forward paths start by provisioning the worktree exactly once. Retry
+  # edges loop back directly to `implement` (see below) and reuse the
+  # existing worktree.
+  - { from: START, to: create_workspace }
+  - { from: create_workspace, to: investigate }
+  # If investigator emitted a valid severity, skip the fallback gate and
+  # go straight to approval. Otherwise route through the human classifier.
+  - {
+      from: investigate,
+      to: implementation_approval_human,
+      condition: "severity == 'small' OR severity == 'medium' OR severity == 'large'",
+    }
+  - {
+      from: investigate,
+      to: severity_classification_human,
+      condition: "severity != 'small' AND severity != 'medium' AND severity != 'large'",
+    }
+  - { from: severity_classification_human, to: implementation_approval_human }
+  - {
+      from: implementation_approval_human,
+      to: implement,
+      condition: "approval_decision == 'approve'",
+    }
+  - {
+      from: implementation_approval_human,
+      to: investigate,
+      condition: "approval_decision == 'request_changes'",
+      max_retries: 2,
+      retry_context: "Human requested investigation changes before implementation:\n{{approval_feedback}}",
+    }
+  - {
+      from: implementation_approval_human,
+      to: END,
+      condition: "approval_decision == 'cancel'",
+    }
+  - {
+      from: implementation_approval_human,
+      to: escalation_review,
+      condition: "approval_decision == 'request_changes' AND __retry_exhausted_from == 'implementation_approval_human'",
+    }
+
+  # Severity-based fast paths after implement:
+  #   small  → skip qa + implementation_validator + code_review, go straight to PR
+  #   medium → run qa, skip implementation_validator
+  #   large  → full pipeline (qa → implementation_validator → code_review)
+  - {
+      from: implement,
+      to: open_pr,
+      condition: "any_failures == false AND severity == 'small'",
+    }
+  - {
+      from: implement,
+      to: qa,
+      condition: "any_failures == false AND severity != 'small'",
+    }
+  - {
+      from: implement,
+      to: escalation_review,
+      condition: "any_failures == true",
+    }
+
+  # qa branches by severity on pass — medium skips the validator, large includes it
+  - {
+      from: qa,
+      to: code_review,
+      condition: "qa_verdict == 'pass' AND severity == 'medium'",
+    }
+  - {
+      from: qa,
+      to: implementation_validator,
+      condition: "qa_verdict == 'pass' AND severity == 'large'",
+    }
+  - {
+      from: qa,
+      to: implement,
+      condition: "qa_verdict == 'fail'",
+      max_retries: 2,
+      retry_context: "QA failed — build/lint/tests broken. Full failure detail in the QA report artifact:\n{{qa_artifact_url}}",
+    }
+  - { from: qa, to: escalation_review, condition: "qa_verdict == 'escalate'" }
+
+  # Retry-exhaustion fallback for qa (declared AFTER qa's retry edge above
+  # so the engine sees __retry_exhausted_from set by the retry edge in the
+  # same iteration — engine.ts iterates edges in declaration order and
+  # does NOT re-iterate after exhausting a retry).
+  - {
+      from: qa,
+      to: escalation_review,
+      condition: "qa_verdict == 'fail' AND __retry_exhausted_from == 'qa'",
+    }
+
+  # implementation_validator forward + retry + fallback. ORDER MATTERS:
+  # forward (pass) → retry (fail) → fallback (fail + exhausted). The
+  # fallback MUST come after the retry edge so __retry_exhausted_from is
+  # set in the same iteration the retry exhausts.
+  - {
+      from: implementation_validator,
+      to: code_review,
+      condition: "prd_satisfied == true",
+    }
+  - {
+      from: implementation_validator,
+      to: implement,
+      condition: "prd_satisfied != true",
+      max_retries: 2,
+      retry_context: "Validator found root-cause/blocking violations ({{blocking_violations_count}} total). Full report:\n{{validator_artifact_url}}",
+    }
+  - {
+      from: implementation_validator,
+      to: escalation_review,
+      condition: "prd_satisfied != true AND __retry_exhausted_from == 'implementation_validator'",
+    }
+
+  # code_review forward + retry + fallback. Same ordering rule as
+  # implementation_validator above: fallback AFTER retry.
+  - {
+      from: code_review,
+      to: open_pr,
+      condition: "review_verdict == 'APPROVED'",
+    }
+  - {
+      from: code_review,
+      to: implement,
+      condition: "review_verdict == 'REQUEST_CHANGES'",
+      max_retries: 2,
+      retry_context: "Code review requested changes. Full review:\n{{code_review_artifact_url}}",
+    }
+  - {
+      from: code_review,
+      to: escalation_review,
+      condition: "review_verdict == 'REQUEST_CHANGES' AND __retry_exhausted_from == 'code_review'",
+    }
+  - {
+      from: open_pr,
+      to: summary,
+      condition: "(status == 'created' OR status == 'reused_existing') AND severity != 'small'",
+    }
+  - {
+      from: open_pr,
+      to: END,
+      condition: "(status == 'created' OR status == 'reused_existing') AND severity == 'small'",
+    }
+  - { from: open_pr, to: escalation_review, condition: "status == 'failed'" }
+  - { from: summary, to: END }
+
+  # escalation_review outgoing
+  - { from: escalation_review, to: END, condition: "decision == 'abandon'" }
+  - {
+      from: escalation_review,
+      to: investigate,
+      condition: "decision == 'retry_with_feedback' AND __retry_exhausted_from == 'implementation_approval_human'",
+      retry_context: "Human intervened on pre-implementation approval feedback:\n{{feedback}}",
+    }
+  - {
+      from: escalation_review,
+      to: implement,
+      condition: "decision == 'retry_with_feedback' AND (any_failures == true OR qa_verdict == 'escalate' OR qa_verdict == 'fail' OR __retry_exhausted_from == 'implementation_validator' OR review_verdict == 'REQUEST_CHANGES')",
+      retry_context: "Human intervened on bug-fix failure. Feedback:\n{{feedback}}",
+    }
+  - {
+      from: escalation_review,
+      to: open_pr,
+      condition: "decision == 'retry_with_feedback' AND status == 'failed'",
+      retry_context: "Human intervened on PR creation failure. Feedback:\n{{feedback}}",
+    }
+  - {
+      from: escalation_review,
+      to: implementation_validator,
+      condition: "decision == 'override_and_continue' AND (qa_verdict == 'escalate' OR qa_verdict == 'fail')",
+    }
+  - {
+      from: escalation_review,
+      to: code_review,
+      condition: "decision == 'override_and_continue' AND __retry_exhausted_from == 'implementation_validator'",
+    }
+  - {
+      from: escalation_review,
+      to: open_pr,
+      condition: "decision == 'override_and_continue' AND review_verdict == 'REQUEST_CHANGES'",
+    }
+  - {
+      from: escalation_review,
+      to: summary,
+      condition: "decision == 'override_and_continue' AND status == 'failed'",
+    }
