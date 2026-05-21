@@ -351,7 +351,9 @@ async function readExecutionProgress(executionId: unknown, sinceRaw?: unknown): 
 
 async function executeTool(name: string, args: Record<string, unknown>): Promise<unknown> {
   switch (name) {
-    case 'list_workflows': return callAPI('/api/workflows');
+    // Slim summary only — name, description, version, nodeCount, isValid,
+    // updatedAt. Agents call get_workflow when they need the full graph.
+    case 'list_workflows': return callAPI('/api/workflows?summary=true');
     case 'list_executions': {
       const params = new URLSearchParams();
       if (args.status) params.set('status', String(args.status));

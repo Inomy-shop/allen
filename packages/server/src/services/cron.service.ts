@@ -21,7 +21,7 @@ import { signAccessToken } from '../auth/jwt.js';
 import type { CronJob, CronRun, CronRunStatus, SystemAction } from './cron.types.js';
 import { isSelfHealingWorkflowName, missingSelfHealingLinearEnv } from './self-healing-env.js';
 
-const PORT = parseInt(process.env.PORT ?? '4000', 10);
+const PORT = parseInt(process.env.PORT ?? '4023', 10);
 
 export function buildInternalApiHeaders(): Record<string, string> {
   const token = signAccessToken({

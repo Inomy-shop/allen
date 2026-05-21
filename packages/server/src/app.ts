@@ -61,7 +61,7 @@ import { logger } from './logger.js';
 import { requestLogger, errorLogger } from './middleware/request-logger.js';
 import { isSeedOverrideEnabled } from './services/seed-policy.js';
 
-const PORT = parseInt(process.env.PORT ?? '4000', 10);
+const PORT = parseInt(process.env.PORT ?? '4023', 10);
 
 // ── Global error handlers ─────────────────────────────────────────────
 
