@@ -116,6 +116,47 @@ describe('OrgSeedService SEED_OVERRIDE policy', () => {
     expect(team.mission).not.toBe('custom mission');
   });
 
+  it('injects karpathy code-writer guidelines into file-writing agents only', async () => {
+    const db = makeDb();
+
+    await new OrgSeedService(db).seed();
+
+    // Agents that MUST have the guideline block
+    const writerAgents = ['backend-developer', 'frontend-developer', 'devops-engineer', 'pr-creator', 'documentation-writer', 'test-writer', 'pr-review-bot'];
+    for (const agentName of writerAgents) {
+      const agent = db.store.agents.find((a: any) => a.name === agentName);
+      expect(agent, `${agentName} must be seeded`).toBeDefined();
+      expect(agent.system, `${agentName} must contain karpathy-guidelines block`).toContain('karpathy-guidelines');
+      expect(agent.system, `${agentName} must contain "Surface assumptions"`).toContain('Surface assumptions');
+      expect(agent.system, `${agentName} must contain "Surgical scope"`).toContain('Surgical scope');
+    }
+
+    // Agents that must NOT have the guideline block
+    const nonWriterAgents = [
+      'engineering-lead',
+      'code-reviewer',
+      'codebase-navigator',
+      'bug-investigator',
+      'implementation-validator',
+      'implementation-self-checker',
+      'qa-lead',
+      'test-planner',
+      'solution-architect',
+      'technical-designer',
+      'product-manager',
+      'requirements-analyst',
+      'ceo',
+    ];
+    for (const agentName of nonWriterAgents) {
+      const agent = db.store.agents.find((a: any) => a.name === agentName);
+      expect(agent, `${agentName} must be seeded (update this list if the agent was renamed/removed)`).toBeDefined();
+      expect(
+        agent.system,
+        `${agentName} must NOT contain karpathy-guidelines block (not a file-writer)`,
+      ).not.toContain('BEFORE EDITING — apply karpathy-guidelines');
+    }
+  });
+
   it('seeds mandatory repo knowledge graph persistence instructions', async () => {
     const db = makeDb();
 

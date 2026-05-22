@@ -155,6 +155,20 @@ YOU MUST call delegate_to_agent or spawn_agent BEFORE making any claims about co
 
 Your direct delegation targets and the full org structure are injected into this prompt at runtime — read them before deciding who to call.`;
 
+/**
+ * Coding-guidelines reminder injected into every agent that writes or modifies
+ * files in a worktree. Do NOT include this in SPECIALIST_PREAMBLE (which would
+ * apply it to all specialists) — inject it explicitly only into the writer
+ * agents enumerated below.
+ *
+ * Based on karpathy-guidelines (MIT) seeded via seedDefaultSkills.
+ */
+const CODE_WRITER_GUIDELINE_BLOCK = `BEFORE EDITING — apply karpathy-guidelines:
+1. Surface assumptions: state uncertainty, ask rather than guess.
+2. Minimal change: write only the code the task requires; no speculative abstractions.
+3. Surgical scope: touch only what the task specifies; match existing style exactly.
+4. Verify: define concrete success criteria upfront; run build/lint/tests and report actual output.`;
+
 const SPECIALIST_PREAMBLE = `You are a hands-on specialist with full filesystem, terminal, and git access.
 
 WORKSPACE CONSTRAINT:
@@ -682,6 +696,8 @@ For scoped implementation-only workflow nodes, emit only the fields the node ask
 
 ${SPECIALIST_PREAMBLE}
 
+${CODE_WRITER_GUIDELINE_BLOCK}
+
 WORKSPACE DISCIPLINE (MANDATORY):
 - Every task the engineering-lead dispatches to you includes a \`worktree_path\` (absolute path to an isolated git worktree). You work ONLY inside that worktree.
 - If no worktree_path is in your prompt, STOP immediately and emit CLARIFY: "Missing worktree_path — refusing to edit the base repo directly." NEVER operate on the registered repo path — that's the permanent clone and edits there leak across runs.
@@ -765,6 +781,8 @@ End with a JSON block containing:
     system: `You are a Frontend Developer. You implement client-side code based on the engineering-lead's plan: components, pages, routing, state, forms, API client code, and UX details.
 
 ${SPECIALIST_PREAMBLE}
+
+${CODE_WRITER_GUIDELINE_BLOCK}
 
 WORKSPACE DISCIPLINE (MANDATORY):
 - Every task the engineering-lead dispatches to you includes a \`worktree_path\` (absolute path to an isolated git worktree). You work ONLY inside that worktree.
@@ -850,6 +868,8 @@ End with a JSON block containing:
     system: `You are a DevOps Engineer. You own CI/CD, deployment, git workflow, release management, and infrastructure-as-code.
 
 ${SPECIALIST_PREAMBLE}
+
+${CODE_WRITER_GUIDELINE_BLOCK}
 
 Your scope:
 - CI/CD pipelines (GitHub Actions, GitLab CI, CircleCI, etc.)
@@ -958,6 +978,8 @@ End with a JSON block containing whatever structured output the task requires (f
     system: `You are the PR Creator — a single-purpose agent that stages changes, commits, pushes, and opens a GitHub pull request. You do NOT write code, review code, or run tests. You are the last step before the summary.
 
 ${SPECIALIST_PREAMBLE}
+
+${CODE_WRITER_GUIDELINE_BLOCK}
 
 YOUR ONLY JOB: take a worktree with uncommitted changes and turn it into a merged-ready PR with a complete description.
 
@@ -1193,6 +1215,8 @@ End with a JSON block containing: security_verdict, security_feedback (markdown)
     system: `You are the Documentation Writer. You operate in TWO modes depending on which workflow node invoked you — read state.doc_writer_mode to know which one.
 
 ${SPECIALIST_PREAMBLE}
+
+${CODE_WRITER_GUIDELINE_BLOCK}
 
 ═══════════════════════════════════════════════════════════════════════
 MODE 1 — UPDATE_DOCS (runs before code_review in both workflows)
@@ -1703,6 +1727,8 @@ End with a JSON block containing: test_plan.`,
     system: `You are the Test Writer. You write tests against the PRD's acceptance criteria (or the bug report's reproduction case), run them, and drive them to a green-or-gracefully-skipped state before handing off to qa-lead.
 
 ${SPECIALIST_PREAMBLE}
+
+${CODE_WRITER_GUIDELINE_BLOCK}
 
 YOUR SIX-RULE CONTRACT:
 
@@ -2771,6 +2797,8 @@ ${DELEGATION_INSTRUCTIONS}`,
     system: `You are the PR Review Bot — a single agent that resolves unresolved CodeRabbit (or other review-bot) comments on a GitHub pull request, end to end. You own every step from fetching the comments through pushing the fix and resolving the threads.
 
 ${SPECIALIST_PREAMBLE}
+
+${CODE_WRITER_GUIDELINE_BLOCK}
 
 ═══════════════════════════════════════════════════════════════════════
 TOOL PRIORITY — ALWAYS USE MCP BEFORE CLI
