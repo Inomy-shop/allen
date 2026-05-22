@@ -124,7 +124,7 @@ export default function RepoContextManagementPage() {
   const [repo, setRepo] = useState<Repo | null>(null);
   const [state, setState] = useState<ContextManagementState | null>(null);
   const [cogneeStatus, setCogneeStatus] = useState<CogneeStatus | null>(null);
-  const [activeTab, setActiveTab] = useState<'debugger' | 'graph' | 'curated' | 'mandatory'>('graph');
+  const [activeTab, setActiveTab] = useState<'playground' | 'graph' | 'curated' | 'mandatory'>('graph');
   const [loading, setLoading] = useState(true);
   const [stoppingBuild, setStoppingBuild] = useState(false);
   const [graph, setGraph] = useState<ContextGraph | undefined>();
@@ -299,7 +299,7 @@ export default function RepoContextManagementPage() {
               ['graph', Network, 'Context Graph'],
               ['curated', BookOpenCheck, 'Curated Context'],
               ['mandatory', ShieldCheck, 'Mandatory Context'],
-              ['debugger', Search, 'Search Debugger'],
+              ['playground', Search, 'Playground'],
             ] as Array<[typeof activeTab, LucideIcon, string]>).map(([tab, Icon, label]) => (
               <button
                 key={String(tab)}
@@ -312,7 +312,7 @@ export default function RepoContextManagementPage() {
             ))}
           </div>
 
-          {activeTab === 'debugger' && <SearchDebugger repoId={id} agents={state?.agents ?? []} />}
+          {activeTab === 'playground' && <ContextPlayground repoId={id} agents={state?.agents ?? []} />}
           {activeTab === 'graph' && (
             <ContextGraphSection
               repoId={id}
@@ -340,7 +340,7 @@ export default function RepoContextManagementPage() {
   );
 }
 
-function SearchDebugger({ repoId, agents }: { repoId: string; agents: Array<Record<string, any>> }) {
+function ContextPlayground({ repoId, agents }: { repoId: string; agents: Array<Record<string, any>> }) {
   const toast = useToast();
   const [query, setQuery] = useState('');
   const [agentName, setAgentName] = useState(String(agents[0]?.name ?? ''));
@@ -357,14 +357,14 @@ function SearchDebugger({ repoId, agents }: { repoId: string; agents: Array<Reco
     if (!query.trim()) return;
     setLoading(true);
     try {
-      setResult(await repoApi.debugContextSearch(repoId, {
+      setResult(await repoApi.runContextPlayground(repoId, {
         query,
         agentName,
         nodeRole: agentName,
         currentFiles: currentFiles.split(',').map((item) => item.trim()).filter(Boolean),
       }));
     } catch (err: any) {
-      toast.error(err.message ?? 'Context debug search failed');
+      toast.error(err.message ?? 'Context playground run failed');
     } finally {
       setLoading(false);
     }
@@ -1484,7 +1484,7 @@ function RefList({ title, refs }: { title: string; refs: Array<Record<string, an
               <div className="text-theme-subtle">
                 {[scoreLine(ref), ref.reason].filter(Boolean).join(' · ')}
               </div>
-              <RefDebugContent refItem={ref} />
+              <RefPlaygroundContent refItem={ref} />
             </div>
           ))}
         </div>
@@ -1515,35 +1515,35 @@ function Diagnostics({ title, items }: { title: string; items: Array<Record<stri
   );
 }
 
-function RefDebugContent({ refItem }: { refItem: Record<string, any> }) {
-  const debug = refItem.debugContent ?? {};
-  const chunks = Array.isArray(debug.chunks) ? debug.chunks : [];
-  if (debug.mandatoryOnly || refItem.mandatory === true) {
+function RefPlaygroundContent({ refItem }: { refItem: Record<string, any> }) {
+  const playground = refItem.playgroundContent ?? {};
+  const chunks = Array.isArray(playground.chunks) ? playground.chunks : [];
+  if (playground.mandatoryOnly || refItem.mandatory === true) {
     return (
       <details className="mt-2">
         <summary className="cursor-pointer text-theme-secondary">View mandatory content</summary>
         <div className="mt-2 space-y-2">
           <KeyValue rows={[
             ['provider', refItem.providerId],
-            ['path', debug.resolution?.path ?? refItem.path],
-            ['agent', debug.resolution?.agentName],
-            ['mapping', debug.resolution?.mappingId],
+            ['path', playground.resolution?.path ?? refItem.path],
+            ['agent', playground.resolution?.agentName],
+            ['mapping', playground.resolution?.mappingId],
             ['priority', refItem.score],
           ]} />
-          <TextBlock label="Mandatory context" text={debug.mandatoryContext ?? refItem.content} info={CONTEXT_FIELD_INFO.mandatoryContext} />
+          <TextBlock label="Mandatory context" text={playground.mandatoryContext ?? refItem.content} info={CONTEXT_FIELD_INFO.mandatoryContext} />
           <JsonPanel title="Ref JSON" value={refItem} compact />
         </div>
       </details>
     );
   }
   const hasDetails = Boolean(
-    debug.cogneeChunkText
-    || debug.curatedContext
-    || debug.retrievalText
-    || debug.selectedContent
-    || debug.mandatoryContext
+    playground.cogneeChunkText
+    || playground.curatedContext
+    || playground.retrievalText
+    || playground.selectedContent
+    || playground.mandatoryContext
     || chunks.length
-    || debug.resolution,
+    || playground.resolution,
   );
   if (!hasDetails) return null;
   return (
@@ -1551,20 +1551,20 @@ function RefDebugContent({ refItem }: { refItem: Record<string, any> }) {
       <summary className="cursor-pointer text-theme-secondary">View resolved content and diagnostics</summary>
       <div className="mt-2 space-y-2">
         <KeyValue rows={[
-          ['resolved entry', debug.resolution?.entryId],
-          ['label', debug.resolution?.label],
-          ['resolved path', debug.resolution?.path],
-          ['resolution method', debug.resolution?.method],
-          ['debug-only fallback', debug.resolution?.debugOnlyFallback],
-          ['curation found', debug.resolution?.curationEntryFound],
+          ['resolved entry', playground.resolution?.entryId],
+          ['label', playground.resolution?.label],
+          ['resolved path', playground.resolution?.path],
+          ['resolution method', playground.resolution?.method],
+          ['playground-only fallback', playground.resolution?.playgroundOnlyFallback],
+          ['curation found', playground.resolution?.curationEntryFound],
           ['chunk id', refItem.providerMetadata?.cogneeChunkId ?? refItem.providerMetadata?.chunkId],
           ['dataset', refItem.providerMetadata?.datasetName],
         ]} />
-        <TextBlock label="Cognee chunk text" text={debug.cogneeChunkText} info={CONTEXT_FIELD_INFO.cogneeChunkText} />
-        <TextBlock label="Curated context" text={debug.curatedContext} info={CONTEXT_FIELD_INFO.curatedContext} />
-        <TextBlock label="Retrieval text" text={debug.retrievalText} info={CONTEXT_FIELD_INFO.retrievalText} />
-        <TextBlock label="Selected ref content" text={debug.selectedContent} info={CONTEXT_FIELD_INFO.selectedRefContent} />
-        <TextBlock label="Mandatory context" text={debug.mandatoryContext} info={CONTEXT_FIELD_INFO.mandatoryContext} />
+        <TextBlock label="Cognee chunk text" text={playground.cogneeChunkText} info={CONTEXT_FIELD_INFO.cogneeChunkText} />
+        <TextBlock label="Curated context" text={playground.curatedContext} info={CONTEXT_FIELD_INFO.curatedContext} />
+        <TextBlock label="Retrieval text" text={playground.retrievalText} info={CONTEXT_FIELD_INFO.retrievalText} />
+        <TextBlock label="Selected ref content" text={playground.selectedContent} info={CONTEXT_FIELD_INFO.selectedRefContent} />
+        <TextBlock label="Mandatory context" text={playground.mandatoryContext} info={CONTEXT_FIELD_INFO.mandatoryContext} />
         {chunks.length ? (
           <div className="space-y-1">
             <div className="flex items-center gap-1 text-[10px] uppercase tracking-wide text-theme-muted">

@@ -714,8 +714,8 @@ export const repos = {
     request<any>(`/repos/${id}/cognee/stop`, { method: 'POST' }),
   getContextManagement: (id: string) =>
     request<any>(`/repos/${id}/context-management`),
-  debugContextSearch: (id: string, body: Record<string, unknown>) =>
-    request<any>(`/repos/${id}/context-management/debug-search`, { method: 'POST', body: JSON.stringify(body) }),
+  runContextPlayground: (id: string, body: Record<string, unknown>) =>
+    request<any>(`/repos/${id}/context-management/playground`, { method: 'POST', body: JSON.stringify(body) }),
   getContextGraph: (id: string, params: Record<string, string | number | undefined> = {}) => {
     const search = new URLSearchParams();
     Object.entries(params).forEach(([key, value]) => {
