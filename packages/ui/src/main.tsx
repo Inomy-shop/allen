@@ -11,6 +11,7 @@ import ExecutionListPage from './pages/ExecutionListPage';
 import ExecutionDetailPage from './pages/ExecutionDetailPage';
 import DashboardPage from './pages/DashboardPage';
 import RoleManagerPage from './pages/RoleManagerPage';
+import RepoContextManagementPage from './pages/RepoContextManagementPage';
 import SettingsPage from './pages/SettingsPage';
 import ChatPage from './pages/ChatPage';
 import ThreadsPage from './pages/ThreadsPage';
@@ -51,6 +52,8 @@ const router = createBrowserRouter([
           { path: 'workflows/:id', element: <WorkflowDetailPage /> },
           { path: 'workflows/:id/edit', element: <WorkflowBuilderPage /> },
           { path: 'repos', element: <Navigate to="/agents?section=repos" replace /> },
+          { path: 'repos/:id/context-management', element: <RepoContextManagementPage /> },
+          { path: 'repos/:id/context-dashboard', element: <Navigate to="../context-management" replace /> },
           { path: 'learnings', element: <Navigate to="/settings/learnings" replace /> },
           { path: 'executions', element: <ExecutionListPage /> },
           { path: 'executions/:id', element: <ExecutionDetailPage /> },

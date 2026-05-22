@@ -198,6 +198,71 @@ export class MandatoryGraphProvider implements KnowledgeRetrievalProvider {
   }
 }
 
+export class MandatoryContextMappingProvider implements KnowledgeRetrievalProvider {
+  readonly providerId = 'mandatory_context_mapping';
+
+  constructor(private readonly db?: Db) {}
+
+  async retrieve(input: KnowledgeRetrievalInput): Promise<KnowledgeRetrievalResult> {
+    if (!this.db) {
+      return {
+        providerId: this.providerId,
+        candidates: [],
+        selectedRefs: [],
+        rejectedRefs: [],
+        diagnostics: [{ code: 'mandatory_context_db_unavailable', severity: 'warn', message: 'Mandatory context mapping provider has no DB handle.' }],
+        trace: [],
+      };
+    }
+    const roleCandidates = Array.from(new Set([
+      input.executionKind === 'spawned_agent' ? input.targetRole : input.nodeRole,
+      input.targetRole,
+      input.nodeRole,
+      input.callerRole,
+    ].filter((value): value is string => Boolean(value))));
+    if (!roleCandidates.length) {
+      return resultFromSelected(this.providerId, []);
+    }
+    const rows = await this.db.collection('repo_mandatory_context_mappings')
+      .find({ repoId: input.repoId, enabled: true, agentName: { $in: roleCandidates } }, { sort: { agentName: 1, sourcePath: 1, title: 1 } })
+      .toArray();
+    const selectedRefs = rows.map((row, index) => {
+      const content = stringValue(row.content) ?? '';
+      const sourcePath = stringValue(row.sourcePath);
+      const title = stringValue(row.title) ?? sourcePath ?? `Mandatory context ${index + 1}`;
+      return {
+        refId: `mandatory:${String(row.mappingId ?? row._id ?? index)}`,
+        kind: 'instruction_file' as KnowledgeNodeKind,
+        title,
+        path: sourcePath,
+        summary: stringValue(row.reasoning) ?? content.slice(0, 500),
+        tags: ['mandatory_context', String(row.agentName ?? '')].filter(Boolean),
+        providerId: this.providerId,
+        source: 'mandatory_context_mapping',
+        reason: `Mandatory context mapped to Allen agent ${String(row.agentName ?? 'unknown')}.`,
+        score: 10_000 - index,
+        loadable: true,
+        mandatory: true,
+        itemType: 'provider_text' as const,
+        grounding: sourcePath ? 'repo_backed' as const : 'provider_text' as const,
+        content,
+        contentSha256: stringValue(row.contentHash),
+        targetLayer: 'system_prompt' as const,
+        providerMetadata: {
+          mappingId: String(row.mappingId ?? row._id ?? ''),
+          agentName: row.agentName,
+          sourcePath,
+          sourceHash: row.sourceHash,
+          sourceType: row.sourceType,
+          injectionDecision: 'mandatory_full',
+          injectionPolicy: 'mandatory_full',
+        },
+      };
+    });
+    return resultFromSelected(this.providerId, selectedRefs);
+  }
+}
+
 export class GraphKeywordMetadataProvider implements KnowledgeRetrievalProvider {
   readonly providerId = 'graph_keyword_metadata';
 
@@ -365,14 +430,13 @@ export function createConfiguredKnowledgeProviders(options: { db?: Db } = {}): K
   const provider = configuredContextProvider();
   if (!provider) return [];
   if (provider === 'cognee' || provider === 'cognee_memory') {
-    const providers: KnowledgeRetrievalProvider[] = [];
+    const providers: KnowledgeRetrievalProvider[] = [new MandatoryContextMappingProvider(options.db)];
     const graphFallbackEnabled = contextProviderFallback() === 'graph';
-    if (cogneeMandatoryGraphMode() !== 'off' || graphFallbackEnabled) providers.push(new MandatoryGraphProvider());
     providers.push(new CogneeMemoryProvider(options.db));
     if (graphFallbackEnabled) providers.push(new GraphKeywordMetadataProvider());
     return providers;
   }
-  if (provider === 'allen') return [new MandatoryGraphProvider(), new GraphKeywordMetadataProvider()];
+  if (provider === 'allen') return [new MandatoryContextMappingProvider(options.db), new GraphKeywordMetadataProvider()];
   return [];
 }
 
@@ -698,6 +762,10 @@ function searchWhy(node: KnowledgeNodeLike, score: number, role?: string): strin
   if (node.kind === 'production_note' || node.kind === 'runbook') return `Production/runbook context matched the query with score ${score}.`;
   if (node.kind === 'skill' || node.kind === 'skill_reference') return `Skill context matched the query with score ${score}.`;
   return `Knowledge graph ref matched the query with score ${score}.`;
+}
+
+function stringValue(value: unknown): string | undefined {
+  return typeof value === 'string' && value.trim() ? value.trim() : undefined;
 }
 
 function isPreloadLoadableKind(kind: KnowledgeNodeKind): boolean {

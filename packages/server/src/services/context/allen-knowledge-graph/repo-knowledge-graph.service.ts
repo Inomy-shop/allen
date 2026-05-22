@@ -6,7 +6,7 @@ import type { Collection, Db } from 'mongodb';
 import { withArtifactsGuidance, withNonInteractiveGuidance, normalizeModelAlias, loadAllMcpServers } from '@allen/engine';
 import type { SystemAction } from '../../cron.types.js';
 import {
-  MandatoryGraphProvider,
+  MandatoryContextMappingProvider,
   RepoContextEngine,
   type RepoContextProvider,
 } from '../core/repo-context-engine.js';
@@ -271,7 +271,7 @@ export class RepoKnowledgeGraphService {
     const provider = normalizeRepoContextProvider(input.provider);
     const contextRetrievalMode = contextRetrievalModeForNode(input);
     const contextEngine = contextRetrievalMode === 'mandatory_only'
-      ? new RepoContextEngine([new MandatoryGraphProvider({ includeBaseline: false, includeGlobs: false })], undefined, { db: this.db })
+      ? new RepoContextEngine([new MandatoryContextMappingProvider(this.db)], undefined, { db: this.db })
       : new RepoContextEngine(undefined, undefined, { db: this.db });
     const adapter = new WorkflowContextInjectionAdapter();
     const packet = await contextEngine.buildPacket({

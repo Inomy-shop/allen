@@ -3,7 +3,7 @@ import { repos as repoApi, workflows as wfApi, system as systemApi } from '../se
 import DeleteConfirmDialog from '../components/common/DeleteConfirmDialog';
 import {
   FolderGit2, Plus, RefreshCw, Trash2, Pencil, ScanSearch, X,
-  GitBranch, Package, Code2, Sparkles, ExternalLink, Loader2, Settings, Monitor, FileText, Download,
+  GitBranch, Package, Code2, Sparkles, ExternalLink, Loader2, Settings, Monitor, FileText, Download, BookOpenCheck,
 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { renderMarkdown } from '../components/chat/ChatMessageList';
@@ -36,7 +36,8 @@ interface Repo {
 
 type CogneeStatus = {
   status?: 'pending' | 'running' | 'completed' | 'partial' | 'failed' | 'stopped';
-  stage?: 'pulling' | 'collecting_markdown' | 'ingesting' | 'cognifying' | 'completed' | 'failed';
+  stage?: 'pulling' | 'collecting_curated_context' | 'collecting_markdown' | 'ingesting' | 'cognifying' | 'completed' | 'failed';
+  ingestFormat?: string;
   message?: string;
   documentCount?: number;
   candidateCount?: number;
@@ -70,6 +71,49 @@ type ContextRuntimeConfig = {
   provider: 'allen' | 'cognee' | 'cognee_memory' | null;
   cogneeEnabled: boolean;
 };
+
+type ContextCurationProfile = {
+  profileId?: string;
+  status?: 'running' | 'completed' | 'failed' | 'stopped';
+  message?: string;
+  branch?: string;
+  headSha?: string;
+  curationVersion?: number;
+  promptVersion?: number;
+  stats?: Record<string, number>;
+  diagnostics?: Array<Record<string, any>>;
+  entries?: Array<Record<string, any>>;
+  error?: string;
+  executionId?: string;
+  durationMs?: number;
+  costUsd?: number;
+  createdAt?: string;
+  completedAt?: string;
+  updatedAt?: string;
+};
+
+type ContextManagementState = {
+  entries?: Array<Record<string, any>>;
+  curationStats?: { active?: number; total?: number; excluded?: number; stale?: number };
+  mandatoryMappings?: Array<Record<string, any>>;
+  agents?: Array<Record<string, any>>;
+  cogneeStatus?: CogneeStatus | null;
+  graph?: {
+    source?: string;
+    nodes?: Array<Record<string, any>>;
+    edges?: Array<Record<string, any>>;
+    nodeCount?: number;
+    edgeCount?: number;
+    previewNodeCount?: number;
+    previewEdgeCount?: number;
+    nodeTypeCounts?: Array<Record<string, any>>;
+    relationshipCounts?: Array<Record<string, any>>;
+    limited?: boolean;
+    error?: string;
+  };
+};
+
+const CURRENT_COGNEE_INGEST_FORMAT = 'curated_context_entry_v1';
 
 /* ── Add Dialog ─────────────────────────────────────────────────────────── */
 
@@ -333,13 +377,13 @@ function contextStatusLabel(status?: CogneeStatus): string {
   if (status.status === 'running') {
     if (status.workerActive === false) return 'context interrupted';
     if (status.stage === 'pulling') return 'running: pulling';
-    if (status.stage === 'collecting_markdown') return 'running: collecting';
+    if (status.stage === 'collecting_curated_context' || status.stage === 'collecting_markdown') return 'running: collecting';
     if (status.stage === 'ingesting') return 'running: ingesting';
     if (status.stage === 'cognifying') return 'running: cognifying';
     return 'context running';
   }
   const count = status.documentCount ?? 0;
-  return `${count} md indexed`;
+  return `${count} context docs`;
 }
 
 function cogneeStatusTitle(status?: CogneeStatus): string {
@@ -417,18 +461,6 @@ function isCogneeRunning(status?: CogneeStatus): boolean {
   return status?.status === 'running';
 }
 
-function isCogneeLiveBuild(status?: CogneeStatus): boolean {
-  return status?.status === 'running' && status.workerActive !== false;
-}
-
-function cogneeActionLabel(status?: CogneeStatus): string {
-  if (isCogneeLiveBuild(status)) return 'Building context';
-  if (status?.status === 'running') return 'Retry context';
-  if (status?.status === 'failed' || status?.status === 'partial' || status?.status === 'stopped') return 'Retry context';
-  if (status?.status === 'completed') return 'Refresh context';
-  return 'Build context';
-}
-
 /* ── Main Page ──────────────────────────────────────────────────────────── */
 
 export default function RepoManagerPage() {
@@ -438,8 +470,6 @@ export default function RepoManagerPage() {
   const [editRepo, setEditRepo] = useState<Repo | null>(null);
   const [scanningId, setScanningId] = useState<string | null>(null);
   const [pullingId, setPullingId] = useState<string | null>(null);
-  const [cogneeBuildingId, setCogneeBuildingId] = useState<string | null>(null);
-  const [cogneeStoppingId, setCogneeStoppingId] = useState<string | null>(null);
   const [cogneeStatusByRepo, setCogneeStatusByRepo] = useState<Record<string, CogneeStatus>>({});
   const [contextConfig, setContextConfig] = useState<ContextRuntimeConfig>({ enabled: false, provider: null, cogneeEnabled: false });
   const [deletingRepo, setDeletingRepo] = useState<{ id: string; name: string } | null>(null);
@@ -539,40 +569,6 @@ export default function RepoManagerPage() {
     setPullingId(null);
   };
 
-  const handleBuildCognee = async (e: React.MouseEvent, id: string, options?: { cleanRebuild?: boolean }) => {
-    e.stopPropagation();
-    if (!contextConfig.cogneeEnabled) return;
-    setCogneeBuildingId(id);
-    try {
-      const status = await repoApi.refreshCognee(id, options);
-      setCogneeStatusByRepo(prev => ({ ...prev, [id]: status }));
-      if (status.status === 'running') {
-        toast.info(status.message ?? 'Context build started.');
-      } else if (status.status === 'completed') {
-        toast.success(`Context built from ${status.documentCount ?? 0} Markdown file${status.documentCount === 1 ? '' : 's'}.`);
-      } else {
-        toast.error(status.error ?? 'Context build failed');
-      }
-    } catch (err: any) {
-      toast.error(err.message ?? 'Context build failed');
-    }
-    setCogneeBuildingId(null);
-  };
-
-  const handleStopCognee = async (e: React.MouseEvent, id: string) => {
-    e.stopPropagation();
-    if (!contextConfig.cogneeEnabled) return;
-    setCogneeStoppingId(id);
-    try {
-      const status = await repoApi.stopCognee(id);
-      setCogneeStatusByRepo(prev => ({ ...prev, [id]: status }));
-      toast.info(status.message ?? 'Context build stopped.');
-    } catch (err: any) {
-      toast.error(err.message ?? 'Context stop failed');
-    }
-    setCogneeStoppingId(null);
-  };
-
   return (
     <div className="px-6 pt-5 pb-8">
       {/* Breadcrumb */}
@@ -630,9 +626,6 @@ export default function RepoManagerPage() {
             const isScanning = scanningId === repo._id;
             const isArchived = repo.status === 'archived';
             const cogneeStatus = contextConfig.cogneeEnabled ? cogneeStatusByRepo[repo._id] : undefined;
-            const isBuildRequestPending = cogneeBuildingId === repo._id;
-            const isStopRequestPending = cogneeStoppingId === repo._id;
-            const hasLiveBuild = isCogneeLiveBuild(cogneeStatus);
             return (
               <div key={repo._id} className={`card-hover p-4 group flex flex-col gap-2 ${isArchived ? 'opacity-50' : ''}`}>
                 <div className="flex items-start gap-3">
@@ -694,8 +687,9 @@ export default function RepoManagerPage() {
                 {/* Actions row — always visible, ghost icons */}
                 <div className="flex items-center gap-0.5 pl-11 -ml-1 mt-auto">
                   {contextConfig.enabled && (
-                    <button onClick={(e) => { e.stopPropagation(); setContextRepo(repo); }} className="p-1.5 rounded text-theme-muted hover:text-accent hover:bg-app-muted transition-colors" title="View Context">
+                    <button onClick={(e) => { e.stopPropagation(); navigate(`/repos/${repo._id}/context-management`); }} className="btn btn-ghost btn-sm ml-1" title="Open Context Management">
                       <FileText className="w-3.5 h-3.5" />
+                      Context Management
                     </button>
                   )}
                   <button onClick={(e) => { e.stopPropagation(); setWsCreateRepo(repo); }} className="p-1.5 rounded text-theme-muted hover:text-accent-green hover:bg-app-muted transition-colors" title="New Workspace">
@@ -707,22 +701,6 @@ export default function RepoManagerPage() {
                   <button onClick={(e) => handleScan(e, repo._id)} disabled={isScanning} className="p-1.5 rounded text-theme-muted hover:text-theme-primary hover:bg-app-muted transition-colors" title="Scan">
                     {isScanning ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <ScanSearch className="w-3.5 h-3.5" />}
                   </button>
-                  {contextConfig.cogneeEnabled && hasLiveBuild && (
-                    <button onClick={(e) => handleStopCognee(e, repo._id)} disabled={isStopRequestPending} className="p-1.5 rounded text-theme-muted hover:text-accent-red hover:bg-accent-red/10 transition-colors" title="Stop the active Cognee context build">
-                      {isStopRequestPending ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <X className="w-3.5 h-3.5" />}
-                    </button>
-                  )}
-                  {contextConfig.cogneeEnabled && (
-                    <button onClick={(e) => handleBuildCognee(e, repo._id)} disabled={isBuildRequestPending || hasLiveBuild} className="btn btn-ghost btn-sm ml-1" title="Retry resumes the existing Cognee dataset and preserves already cognified documents">
-                      {(isBuildRequestPending || hasLiveBuild) ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Sparkles className="w-3.5 h-3.5" />}
-                      {isBuildRequestPending ? 'Building context' : cogneeActionLabel(cogneeStatus)}
-                    </button>
-                  )}
-                  {contextConfig.cogneeEnabled && cogneeStatus && cogneeStatus.status !== 'pending' && !hasLiveBuild && (
-                    <button onClick={(e) => handleBuildCognee(e, repo._id, { cleanRebuild: true })} disabled={isBuildRequestPending} className="btn btn-ghost btn-sm" title="Clean rebuild creates a fresh Cognee dataset and does not continue the previous dataset">
-                      Clean rebuild context
-                    </button>
-                  )}
                   <button onClick={(e) => { e.stopPropagation(); setConfigRepoId(repo._id); }} className="p-1.5 rounded text-theme-muted hover:text-theme-primary hover:bg-app-muted transition-colors" title="Workspace Config">
                     <Settings className="w-3.5 h-3.5" />
                   </button>
@@ -751,28 +729,70 @@ export default function RepoManagerPage() {
       />
       {configRepoId && <WorkspaceConfigEditor repoId={configRepoId} onClose={() => setConfigRepoId(null)} />}
       {wsCreateRepo && <QuickWorkspaceDialog repo={wsCreateRepo} onClose={() => setWsCreateRepo(null)} onCreated={(id) => { setWsCreateRepo(null); navigate(`/workspaces/${id}`); }} />}
-      {contextRepo && contextConfig.enabled && <RepoContextViewer repoId={contextRepo._id} repoName={contextRepo.name} onClose={() => setContextRepo(null)} />}
+      {contextRepo && contextConfig.enabled && (
+        <RepoContextViewer
+          repoId={contextRepo._id}
+          repoName={contextRepo.name}
+          contextProvider={contextConfig.provider}
+          onClose={() => setContextRepo(null)}
+        />
+      )}
     </div>
   );
 }
 
 /* ── Repo Context Viewer ──────────────────────────────────────────────── */
 
-function RepoContextViewer({ repoId, repoName, onClose }: { repoId: string; repoName: string; onClose: () => void }) {
+function RepoContextViewer({
+  repoId,
+  repoName,
+  contextProvider,
+  onClose,
+}: {
+  repoId: string;
+  repoName: string;
+  contextProvider: ContextRuntimeConfig['provider'];
+  onClose: () => void;
+}) {
   const [context, setContext] = useState<any>(null);
+  const [curation, setCuration] = useState<ContextCurationProfile | null>(null);
+  const [management, setManagement] = useState<ContextManagementState | null>(null);
+  const [activeTab, setActiveTab] = useState<'summary' | 'curation' | 'management'>('curation');
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [rescanning, setRescanning] = useState(false);
+  const [curating, setCurating] = useState(false);
   const toast = useToast();
+  const graphContextEnabled = contextProvider === 'allen';
 
-  useEffect(() => {
+  const loadContext = useCallback(() => {
     setLoading(true);
     setError('');
-    repoApi.context(repoId)
-      .then((ctx) => setContext(ctx))
-      .catch((err) => setError(err.message ?? 'Failed to load context'))
+    Promise.all([
+      graphContextEnabled ? repoApi.context(repoId).catch((err) => ({ __error: err.message ?? 'Failed to load context' })) : Promise.resolve(null),
+      repoApi.getContextCuration(repoId).catch(() => null),
+      repoApi.getContextManagement(repoId).catch(() => null),
+    ])
+      .then(([ctx, curationProfile, managementState]) => {
+        if ((ctx as any)?.__error) setError((ctx as any).__error);
+        else setContext(ctx);
+        setCuration(curationProfile);
+        setManagement(managementState);
+      })
       .finally(() => setLoading(false));
-  }, [repoId]);
+  }, [repoId, graphContextEnabled]);
+
+  useEffect(() => {
+    loadContext();
+  }, [loadContext]);
+
+  useEffect(() => {
+    if (curation?.status !== 'running') return;
+    const timer = window.setInterval(() => {
+      repoApi.getContextCuration(repoId).then(setCuration).catch(() => {});
+    }, 2000);
+    return () => window.clearInterval(timer);
+  }, [repoId, curation?.status]);
 
   const handleRescan = async () => {
     setRescanning(true);
@@ -783,6 +803,34 @@ function RepoContextViewer({ repoId, repoName, onClose }: { repoId: string; repo
       toast.error(err.message ?? 'Failed to start rescan');
     } finally {
       setRescanning(false);
+    }
+  };
+
+  const handleCurate = async () => {
+    setCurating(true);
+    try {
+      const profile = await repoApi.refreshContextCuration(repoId);
+      setCuration(profile);
+      setActiveTab('curation');
+      if (profile.status === 'completed') toast.success(profile.message ?? 'Context curation is up to date.');
+      else toast.info(profile.message ?? 'Context curation started.');
+    } catch (err: any) {
+      toast.error(err.message ?? 'Failed to start context curation');
+    } finally {
+      setCurating(false);
+    }
+  };
+
+  const handleStopCuration = async () => {
+    setCurating(true);
+    try {
+      const profile = await repoApi.stopContextCuration(repoId);
+      setCuration(profile);
+      toast.info(profile.message ?? 'Context curation stopped.');
+    } catch (err: any) {
+      toast.error(err.message ?? 'Failed to stop context curation');
+    } finally {
+      setCurating(false);
     }
   };
 
@@ -799,10 +847,23 @@ function RepoContextViewer({ repoId, repoName, onClose }: { repoId: string; repo
             </div>
           </div>
           <div className="flex items-center gap-2">
-            <button onClick={handleRescan} disabled={rescanning} className="btn-ghost text-xs inline-flex items-center gap-1" title="Trigger a fresh deep scan">
-              {rescanning ? <Loader2 className="w-3 h-3 animate-spin" /> : <RefreshCw className="w-3 h-3" />}
-              Rescan
-            </button>
+            {graphContextEnabled && (
+              <button onClick={handleRescan} disabled={rescanning} className="btn-ghost text-xs inline-flex items-center gap-1" title="Trigger a fresh deep scan">
+                {rescanning ? <Loader2 className="w-3 h-3 animate-spin" /> : <RefreshCw className="w-3 h-3" />}
+                Rescan
+              </button>
+            )}
+            {curation?.status === 'running' ? (
+              <button onClick={handleStopCuration} disabled={curating} className="btn-ghost text-xs inline-flex items-center gap-1" title="Stop active curation">
+                {curating ? <Loader2 className="w-3 h-3 animate-spin" /> : <X className="w-3 h-3" />}
+                Stop curation
+              </button>
+            ) : (
+              <button onClick={handleCurate} disabled={curating} className="btn-ghost text-xs inline-flex items-center gap-1" title="Incrementally curate context metadata">
+                {curating ? <Loader2 className="w-3 h-3 animate-spin" /> : <BookOpenCheck className="w-3 h-3" />}
+                Curate
+              </button>
+            )}
             <button onClick={onClose} className="p-2 rounded-sm hover:bg-surface-200 text-theme-muted hover:text-theme-secondary transition-colors">
               <X className="w-4 h-4" />
             </button>
@@ -810,14 +871,32 @@ function RepoContextViewer({ repoId, repoName, onClose }: { repoId: string; repo
         </div>
 
         {/* Content */}
+        <div className="px-6 pt-3 border-b border-app flex gap-1 shrink-0">
+          <button onClick={() => setActiveTab('curation')} className={`px-3 py-2 text-xs rounded-t ${activeTab === 'curation' ? 'bg-app-muted text-theme-primary' : 'text-theme-muted hover:text-theme-primary'}`}>
+            Curation
+          </button>
+          <button onClick={() => setActiveTab('management')} className={`px-3 py-2 text-xs rounded-t ${activeTab === 'management' ? 'bg-app-muted text-theme-primary' : 'text-theme-muted hover:text-theme-primary'}`}>
+            Management
+          </button>
+          {graphContextEnabled && (
+            <button onClick={() => setActiveTab('summary')} className={`px-3 py-2 text-xs rounded-t ${activeTab === 'summary' ? 'bg-app-muted text-theme-primary' : 'text-theme-muted hover:text-theme-primary'}`}>
+              Repo Summary
+            </button>
+          )}
+        </div>
+
         <div className="flex-1 overflow-y-auto px-6 py-5">
           {loading ? (
             <div className="text-xs text-theme-muted animate-pulse">Loading context...</div>
+          ) : activeTab === 'curation' ? (
+            <CurationPanel profile={curation} onCurate={handleCurate} curating={curating} />
+          ) : activeTab === 'management' ? (
+            <ContextManagementPanel repoId={repoId} state={management} onReload={loadContext} />
           ) : error ? (
             <div className="space-y-3">
               <div className="text-xs text-theme-muted">{error}</div>
               <p className="text-[11px] text-theme-subtle">
-                No context available yet. Click "Rescan" to trigger a deep scan — the repo-scanner agent will explore the codebase and generate a comprehensive analysis. This runs in the background and typically takes 2-5 minutes.
+                No repo summary is available yet. Click "Rescan" to trigger a deep scan — the repo-scanner agent will explore the codebase and generate a comprehensive analysis. This runs in the background and typically takes 2-5 minutes.
               </p>
               <button onClick={handleRescan} disabled={rescanning} className="btn-primary text-xs inline-flex items-center gap-1.5">
                 {rescanning ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <ScanSearch className="w-3.5 h-3.5" />}
@@ -849,6 +928,300 @@ function RepoContextViewer({ repoId, repoName, onClose }: { repoId: string; repo
           <button onClick={onClose} className="btn-ghost text-xs">Close</button>
         </div>
       </div>
+    </div>
+  );
+}
+
+function CurationPanel({ profile, onCurate, curating }: { profile: ContextCurationProfile | null; onCurate: () => void; curating: boolean }) {
+  if (!profile) {
+    return (
+      <div className="space-y-3">
+        <div className="text-xs text-theme-muted">No context curation profile exists yet.</div>
+        <button onClick={onCurate} disabled={curating} className="btn-primary text-xs inline-flex items-center gap-1.5">
+          {curating ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <BookOpenCheck className="w-3.5 h-3.5" />}
+          {curating ? 'Starting...' : 'Curate context'}
+        </button>
+      </div>
+    );
+  }
+  const stats = profile.stats ?? {};
+  const entries = profile.entries ?? [];
+  const excluded = entries.filter(e => e.inclusion === 'exclude' || e.inclusion === 'stale' || e.injectionPolicy === 'never_full_auto');
+  const visibleEntries = entries.filter(e => e.inclusion === 'include').slice(0, 80);
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center gap-4 text-[10px] text-theme-muted font-mono flex-wrap">
+        <span>Status: <span className="text-theme-secondary">{profile.status}</span></span>
+        {profile.branch && <span>Branch: <span className="text-theme-secondary">{profile.branch}</span></span>}
+        {profile.headSha && <span>SHA: <span className="text-theme-secondary">{profile.headSha.slice(0, 8)}</span></span>}
+        {profile.curationVersion != null && <span>Version: <span className="text-theme-secondary">{profile.curationVersion}.{profile.promptVersion}</span></span>}
+        {profile.durationMs != null && <span>Duration: <span className="text-theme-secondary">{(profile.durationMs / 1000).toFixed(1)}s</span></span>}
+      </div>
+      {profile.message && <div className="text-xs text-theme-muted">{profile.message}</div>}
+      {profile.error && <div className="text-xs text-accent-red">{profile.error}</div>}
+      {profile.status === 'running' && <div className="text-xs text-theme-muted animate-pulse">Curator is processing changed context files...</div>}
+
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
+        {[
+          ['Candidates', stats.candidateFiles],
+          ['Reused', stats.reusedFiles],
+          ['Changed', stats.newOrChangedFiles],
+          ['Chunks', stats.generatedChunks],
+          ['Included', stats.includedEntries],
+          ['Excluded', stats.excludedEntries],
+          ['Stale', stats.staleEntries],
+          ['Entries', stats.totalEntries],
+        ].map(([label, value]) => (
+          <div key={String(label)} className="rounded border border-app bg-app-card/60 p-2">
+            <div className="text-[10px] text-theme-muted uppercase tracking-wide">{label}</div>
+            <div className="text-sm text-theme-primary font-mono">{Number(value ?? 0)}</div>
+          </div>
+        ))}
+      </div>
+
+      <CurationSection title="Curated Retrieval References" entries={visibleEntries} empty="No included entries." />
+      <CurationSection title="Excluded / Stale / Never Auto Inject" entries={excluded.slice(0, 80)} empty="No excluded entries." />
+
+      {profile.diagnostics?.length ? (
+        <div className="space-y-2">
+          <h3 className="text-xs font-semibold text-theme-primary">Diagnostics</h3>
+          <div className="space-y-1">
+            {profile.diagnostics.slice(0, 50).map((d, i) => (
+              <div key={i} className="text-[11px] text-theme-muted border border-app rounded p-2">
+                <span className="font-mono text-theme-secondary">{String(d.code ?? 'diagnostic')}</span>
+                <span className="mx-1">·</span>
+                <span>{String(d.message ?? '')}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function CurationSection({ title, entries, empty }: { title: string; entries: Array<Record<string, any>>; empty: string }) {
+  return (
+    <div className="space-y-2">
+      <h3 className="text-xs font-semibold text-theme-primary">{title}</h3>
+      {entries.length ? (
+        <div className="space-y-1.5">
+          {entries.map((entry, i) => (
+            <div key={`${entry.entryId ?? entry.path ?? i}`} className="border border-app rounded p-2 bg-app-card/40">
+              <div className="flex items-center gap-2 min-w-0">
+                <span className="text-xs text-theme-primary truncate">{entry.title ?? entry.path}</span>
+                <span className="text-[10px] text-theme-subtle font-mono shrink-0">{entry.category ?? 'doc'}</span>
+                <span className="text-[10px] text-theme-subtle font-mono shrink-0">{entry.injectionPolicy ?? 'manifest_only'}</span>
+                {entry.reused && <span className="text-[10px] text-accent-green font-mono shrink-0">reused</span>}
+              </div>
+              <div className="text-[10px] text-theme-muted font-mono truncate">{entry.path}</div>
+              {entry.summary && <div className="text-[11px] text-theme-muted mt-1">{entry.summary}</div>}
+              {entry.curatedContext && (
+                <pre className="text-[11px] text-theme-primary whitespace-pre-wrap max-h-48 overflow-auto border border-app rounded bg-app-muted/30 p-2 mt-2">
+                  {entry.curatedContext}
+                </pre>
+              )}
+              {entry.chunks?.length ? (
+                <div className="space-y-1 mt-2">
+                  {entry.chunks.slice(0, 5).map((chunk: Record<string, any>, idx: number) => (
+                    <div key={`${chunk.chunkId ?? idx}`} className="border border-app rounded p-2">
+                      <div className="text-[10px] text-theme-secondary font-mono">{chunk.heading ?? chunk.chunkId ?? `chunk-${idx + 1}`}</div>
+                      <div className="text-[11px] text-theme-muted whitespace-pre-wrap mt-1">{chunk.text}</div>
+                    </div>
+                  ))}
+                </div>
+              ) : null}
+              {entry.reasoning && <div className="text-[10px] text-theme-subtle mt-1">{entry.reasoning}</div>}
+            </div>
+          ))}
+        </div>
+      ) : (
+        <div className="text-xs text-theme-muted">{empty}</div>
+      )}
+    </div>
+  );
+}
+
+function ContextManagementPanel({ repoId, state, onReload }: { repoId: string; state: ContextManagementState | null; onReload: () => void }) {
+  const agents = state?.agents ?? [];
+  const entries = state?.entries ?? [];
+  const mappings = state?.mandatoryMappings ?? [];
+  const curationStats = state?.curationStats ?? {};
+  const activeCuratedCount = Number(curationStats.active ?? entries.length);
+  const cogneeStatus = state?.cogneeStatus;
+  const cogneeStatusValue = cogneeStatus?.status
+    ? cogneeStatus.status
+    : 'none';
+  const [selectedAgent, setSelectedAgent] = useState('');
+  const [title, setTitle] = useState('');
+  const [content, setContent] = useState('');
+  const [query, setQuery] = useState('');
+  const [searchResult, setSearchResult] = useState<any>(null);
+  const [saving, setSaving] = useState(false);
+  const [searching, setSearching] = useState(false);
+  const [drafts, setDrafts] = useState<Record<string, string>>({});
+  const toast = useToast();
+  const activeAgent = selectedAgent || String(agents[0]?.name ?? '');
+  const visibleMappings = activeAgent ? mappings.filter(m => m.agentName === activeAgent) : mappings;
+
+  const handleSaveNew = async () => {
+    if (!activeAgent || !content.trim()) return;
+    setSaving(true);
+    try {
+      await repoApi.saveMandatoryContext(repoId, { agentName: activeAgent, title: title.trim() || 'Manual mandatory context', content, sourceType: 'user_added', enabled: true });
+      setTitle('');
+      setContent('');
+      await onReload();
+      toast.success('Mandatory context saved.');
+    } catch (err: any) {
+      toast.error(err.message ?? 'Failed to save mandatory context');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleSaveExisting = async (mapping: Record<string, any>) => {
+    const mappingId = String(mapping.mappingId ?? '');
+    if (!mappingId) return;
+    setSaving(true);
+    try {
+      await repoApi.updateMandatoryContext(repoId, mappingId, { content: drafts[mappingId] ?? mapping.content ?? '', enabled: mapping.enabled !== false });
+      await onReload();
+      toast.success('Mandatory context updated.');
+    } catch (err: any) {
+      toast.error(err.message ?? 'Failed to update mandatory context');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleSearch = async () => {
+    if (!query.trim()) return;
+    setSearching(true);
+    try {
+      setSearchResult(await repoApi.searchContextManagement(repoId, query, activeAgent));
+    } catch (err: any) {
+      toast.error(err.message ?? 'Context search failed');
+    } finally {
+      setSearching(false);
+    }
+  };
+
+  return (
+    <div className="space-y-5">
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
+        <Metric label="Curated" value={activeCuratedCount} />
+        <Metric label="Mandatory" value={mappings.length} />
+        <Metric label="Agents" value={agents.length} />
+        <Metric label="Cognee" value={cogneeStatusValue} />
+      </div>
+      {curationStats.total != null && (
+        <div className="text-[11px] text-theme-muted font-mono">
+          curation rows: {Number(curationStats.total ?? 0)} total · {Number(curationStats.excluded ?? 0)} excluded · {Number(curationStats.stale ?? 0)} stale
+        </div>
+      )}
+
+      <div className="space-y-2">
+        <h3 className="text-xs font-semibold text-theme-primary">Context Graph</h3>
+        <div className="text-xs text-theme-muted space-y-1">
+          <div>
+            {Number(state?.graph?.nodeCount ?? 0)} nodes · {Number(state?.graph?.edgeCount ?? 0)} edges
+            {state?.graph?.source ? <span> · {String(state.graph.source)}</span> : null}
+          </div>
+          {state?.graph?.limited && (
+            <div className="text-[11px]">
+              previewing {Number(state.graph.previewNodeCount ?? state.graph.nodes?.length ?? 0)} nodes and {Number(state.graph.previewEdgeCount ?? state.graph.edges?.length ?? 0)} edges
+            </div>
+          )}
+          {state?.graph?.error && <div className="text-[11px] text-accent-red">{state.graph.error}</div>}
+          {state?.graph?.nodeTypeCounts?.length ? (
+            <div className="text-[10px] font-mono">
+              {state.graph.nodeTypeCounts.slice(0, 6).map(item => `${String(item.type ?? 'unknown')}:${Number(item.count ?? 0)}`).join(' · ')}
+            </div>
+          ) : null}
+          {state?.graph?.relationshipCounts?.length ? (
+            <div className="text-[10px] font-mono">
+              {state.graph.relationshipCounts.slice(0, 6).map(item => `${String(item.relationship ?? 'related')}:${Number(item.count ?? 0)}`).join(' · ')}
+            </div>
+          ) : null}
+        </div>
+        {state?.graph?.edges?.length ? (
+          <div className="space-y-1 max-h-40 overflow-auto border border-app rounded p-2 bg-app-card/30">
+            {state.graph.edges.slice(0, 40).map((edge, i) => (
+              <div key={String(edge.id ?? i)} className="text-[10px] font-mono text-theme-muted truncate">
+                {String(edge.source)} --{String(edge.label ?? 'related_to')}--&gt; {String(edge.target)}
+              </div>
+            ))}
+          </div>
+        ) : <div className="text-xs text-theme-muted">No context graph mappings are available yet.</div>}
+      </div>
+
+      <div className="space-y-2">
+        <h3 className="text-xs font-semibold text-theme-primary">Search Debugger</h3>
+        <div className="flex gap-2">
+          <input value={query} onChange={e => setQuery(e.target.value)} placeholder="Search context as an agent would..." className="input flex-1 text-xs" />
+          <button onClick={handleSearch} disabled={searching || !query.trim()} className="btn-primary text-xs inline-flex items-center gap-1">
+            {searching ? <Loader2 className="w-3 h-3 animate-spin" /> : <ScanSearch className="w-3 h-3" />}
+            Search
+          </button>
+        </div>
+        {searchResult?.refs?.length ? (
+          <div className="space-y-1.5">
+            {searchResult.refs.slice(0, 10).map((ref: Record<string, any>, i: number) => (
+              <div key={`${ref.refId ?? i}`} className="border border-app rounded p-2 bg-app-card/40">
+                <div className="flex gap-2 min-w-0">
+                  <span className="text-xs text-theme-primary truncate">{ref.title ?? ref.path ?? ref.refId}</span>
+                  <span className="text-[10px] text-theme-subtle font-mono shrink-0">{ref.providerId ?? ref.source}</span>
+                </div>
+                <div className="text-[10px] text-theme-muted font-mono truncate">{ref.path}</div>
+                <div className="text-[11px] text-theme-muted mt-1">{ref.why ?? ref.reason ?? ref.summary}</div>
+              </div>
+            ))}
+          </div>
+        ) : null}
+      </div>
+
+      <div className="space-y-2">
+        <h3 className="text-xs font-semibold text-theme-primary">Mandatory Context</h3>
+        <select value={activeAgent} onChange={e => setSelectedAgent(e.target.value)} className="input text-xs max-w-sm">
+          {agents.map(agent => <option key={String(agent.name)} value={String(agent.name)}>{String(agent.name)}</option>)}
+        </select>
+        <div className="grid gap-2">
+          <input value={title} onChange={e => setTitle(e.target.value)} placeholder="Title" className="input text-xs" />
+          <textarea value={content} onChange={e => setContent(e.target.value)} placeholder="Mandatory context to inject for the selected agent" className="input text-xs min-h-28 font-mono" />
+          <button onClick={handleSaveNew} disabled={saving || !activeAgent || !content.trim()} className="btn-primary text-xs w-fit">Add mandatory context</button>
+        </div>
+        {visibleMappings.length ? (
+          <div className="space-y-2">
+            {visibleMappings.map((mapping, i) => {
+              const mappingId = String(mapping.mappingId ?? i);
+              const draft = drafts[mappingId] ?? String(mapping.content ?? '');
+              return (
+                <div key={mappingId} className="border border-app rounded p-2 bg-app-card/40 space-y-2">
+                  <div className="flex items-center gap-2 min-w-0">
+                    <span className="text-xs text-theme-primary truncate">{mapping.title ?? mapping.sourcePath ?? mapping.agentName}</span>
+                    <span className="text-[10px] text-theme-subtle font-mono shrink-0">{mapping.enabled === false ? 'disabled' : 'enabled'}</span>
+                  </div>
+                  <div className="text-[10px] text-theme-muted font-mono truncate">{mapping.sourcePath}</div>
+                  <textarea value={draft} onChange={e => setDrafts(prev => ({ ...prev, [mappingId]: e.target.value }))} className="input text-xs min-h-32 font-mono" />
+                  <button onClick={() => handleSaveExisting(mapping)} disabled={saving} className="btn-ghost text-xs">Save changes</button>
+                </div>
+              );
+            })}
+          </div>
+        ) : <div className="text-xs text-theme-muted">No mandatory context mapped for this agent.</div>}
+      </div>
+
+      <CurationSection title="Curated Context Entries" entries={entries.slice(0, 80)} empty="No curated entries." />
+    </div>
+  );
+}
+
+function Metric({ label, value }: { label: string; value: string | number }) {
+  return (
+    <div className="rounded border border-app bg-app-card/60 p-2">
+      <div className="text-[10px] text-theme-muted uppercase tracking-wide">{label}</div>
+      <div className="text-sm text-theme-primary font-mono">{value}</div>
     </div>
   );
 }

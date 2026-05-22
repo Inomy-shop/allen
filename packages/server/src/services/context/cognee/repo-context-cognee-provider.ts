@@ -31,7 +31,7 @@ import {
 } from './cognee-retrieval-policy.js';
 import { enrichCogneeCandidates } from './cognee-metadata-enrichment.js';
 
-const COGNEE_INGEST_FORMAT = 'markdown_file_docmeta_v1';
+const COGNEE_INGEST_FORMAT = 'curated_context_entry_v1';
 
 export class CogneeMemoryProvider implements KnowledgeRetrievalProvider {
   readonly providerId = 'cognee_memory';
@@ -50,10 +50,26 @@ export class CogneeMemoryProvider implements KnowledgeRetrievalProvider {
       };
     }
     const status = await this.loadStatus(input.repoId);
+    if (!status?.datasetName) {
+      return {
+        providerId: this.providerId,
+        candidates: [],
+        selectedRefs: [],
+        rejectedRefs: [],
+        diagnostics: [{
+          code: 'cognee_curated_dataset_missing',
+          severity: 'warn',
+          repoId: input.repoId,
+          ingestFormat: COGNEE_INGEST_FORMAT,
+          message: 'Cognee retrieval skipped because this repo has no curated-context dataset. Run Refresh Context from Context Management.',
+        }],
+        trace: [],
+      };
+    }
     const envelope = buildRetrievalIntentEnvelope(input);
     const query = buildCogneeQuery(input);
     const output = await runCogneeSidecar('search', {
-      datasetName: firstString(status?.datasetName) ?? cogneeDatasetName(input.repoId, input.repoName),
+      datasetName: status.datasetName,
       dataDir: cogneeDataDir(),
       query,
       retrievalEnvelope: envelope,
@@ -77,6 +93,7 @@ export class CogneeMemoryProvider implements KnowledgeRetrievalProvider {
     });
     const rawCandidates = normalizeCogneeRefs(output.results, this.providerId);
     const enriched = await enrichCogneeCandidates({ db: this.db, repoId: input.repoId, candidates: rawCandidates });
+    const resolvedDiagnostics = reconcileCogneeSourceDiagnostics(normalizeUsageArray(output.diagnostics), enriched.candidates);
     const primary = selectCogneeRefs(enriched.candidates, input, envelope, 'primary');
     const graphExpansion = await this.retrieveGraphExpansion(input, envelope, status?.datasetName, primary.selectedRefs);
     const candidates = [...primary.candidates, ...graphExpansion.candidates];
@@ -107,9 +124,11 @@ export class CogneeMemoryProvider implements KnowledgeRetrievalProvider {
           querySignalSections: envelope.querySignalSections,
           querySignalLength: envelope.querySignalLength,
           renderedQueryLength: query.length,
+          datasetName: status.datasetName,
+          ingestFormat: status.ingestFormat,
           message: 'Allen built a deterministic Cognee retrieval envelope before semantic search.',
         },
-        ...normalizeUsageArray(output.diagnostics),
+        ...resolvedDiagnostics,
         ...enriched.diagnostics,
         ...primary.diagnostics,
         ...graphExpansion.diagnostics,
@@ -201,6 +220,7 @@ export class CogneeMemoryProvider implements KnowledgeRetrievalProvider {
         },
       }));
       const enriched = await enrichCogneeCandidates({ db: this.db, repoId: input.repoId, candidates: rawRefs });
+      const resolvedDiagnostics = reconcileCogneeSourceDiagnostics(normalizeUsageArray(output.diagnostics), enriched.candidates);
       const selected = selectCogneeRefs(enriched.candidates, input, envelope, 'graph_expansion');
       return {
         active: mode === 'active',
@@ -212,7 +232,7 @@ export class CogneeMemoryProvider implements KnowledgeRetrievalProvider {
           providerMetadata: { ...ref.providerMetadata, injectionDecision: 'manifest_only', injectionPolicy: 'manifest_only' },
         })),
         diagnostics: [
-          ...normalizeUsageArray(output.diagnostics),
+          ...resolvedDiagnostics,
           ...enriched.diagnostics,
           ...selected.diagnostics,
           {
@@ -245,18 +265,53 @@ export class CogneeMemoryProvider implements KnowledgeRetrievalProvider {
     }
   }
 
-  private async loadStatus(repoId: string): Promise<{ datasetName?: string } | null> {
+  private async loadStatus(repoId: string): Promise<{ datasetName?: string; ingestFormat?: string } | null> {
     if (!this.db) return null;
     const status = await this.db.collection('repo_cognee_datasets').findOne(
-      { repoId },
-      { projection: { datasetName: 1, ingestFormat: 1 } },
+      { repoId, ingestFormat: COGNEE_INGEST_FORMAT },
+      { projection: { datasetName: 1, ingestFormat: 1 }, sort: { updatedAt: -1, lastCompletedAt: -1, createdAt: -1 } },
     );
     if (!isRecord(status)) return null;
-    if (status.ingestFormat !== COGNEE_INGEST_FORMAT) return null;
     return {
       datasetName: firstString(status.datasetName),
+      ingestFormat: firstString(status.ingestFormat),
     };
   }
+}
+
+function reconcileCogneeSourceDiagnostics(
+  diagnostics: Array<Record<string, unknown>>,
+  candidates: KnowledgeCandidateRef[],
+): Array<Record<string, unknown>> {
+  const resolutionByChunkId = new Map<string, Record<string, unknown>>();
+  for (const candidate of candidates) {
+    const chunkId = firstString(candidate.providerMetadata?.cogneeChunkId, candidate.providerMetadata?.chunkId);
+    const method = firstString(candidate.providerMetadata?.curationResolutionMethod);
+    const entryId = firstString(candidate.providerMetadata?.curationEntryId);
+    if (!chunkId || !entryId || !method || method === 'unresolved') continue;
+    resolutionByChunkId.set(chunkId, { method, entryId, path: candidate.path });
+  }
+  return diagnostics.map((diagnostic) => {
+    if (diagnostic.code !== 'cognee_chunk_source_metadata_unresolved') return diagnostic;
+    const chunkId = firstString(diagnostic.chunkId);
+    const resolved = chunkId ? resolutionByChunkId.get(chunkId) : undefined;
+    if (!resolved) return diagnostic;
+    return {
+      ...diagnostic,
+      code: resolved.method === 'path_fallback'
+        ? 'cognee_chunk_source_metadata_path_fallback_resolved'
+        : resolved.method === 'label_entry_id'
+          ? 'cognee_chunk_source_metadata_label_resolved'
+          : 'cognee_chunk_source_metadata_allen_mapping_resolved',
+      severity: 'info',
+      allenResolution: resolved,
+      message: resolved.method === 'path_fallback'
+        ? 'Cognee did not return source metadata for this chunk, but Allen resolved it by the accepted unique path fallback.'
+        : resolved.method === 'label_entry_id'
+          ? 'Cognee did not return source metadata for this chunk, but Allen resolved it from the curated entry label.'
+          : 'Cognee did not return source metadata for this chunk, but Allen resolved it through persisted source mapping.',
+    };
+  });
 }
 
 export function cogneeDatasetName(repoId: string, repoName?: string): string {
@@ -330,7 +385,7 @@ const MAX_COGNEE_STDOUT_CHARS = 10_000_000;
 const MAX_COGNEE_STDERR_LINE_CHARS = 64_000;
 
 export async function runCogneeSidecar(
-  action: 'search' | 'ingest',
+  action: 'search' | 'ingest' | 'graph' | 'graph_node_detail' | 'chunk_source_mappings' | 'release_cognify_lock',
   payload: Record<string, unknown>,
   onProgress?: (progress: CogneeSidecarProgress) => void,
   options: CogneeSidecarOptions = {},
@@ -492,7 +547,8 @@ function normalizeCogneeRefs(value: unknown, providerId: string): KnowledgeCandi
     const normalizedRow = normalizeCogneeEnvelopeRow(row);
     const sourceMetadata = normalizeSourceMetadata(normalizedRow);
     const content = firstString(normalizedRow.content, normalizedRow.text, normalizedRow.body);
-    const path = firstPortablePath(sourceMetadata.path, normalizedRow.path, normalizedRow.label);
+    const label = firstString(normalizedRow.label, normalizedRow.name, sourceMetadata.label);
+    const path = firstPortablePath(sourceMetadata.path, normalizedRow.path, curatedEntryIdFromLabel(label) ? undefined : label);
     const title = firstString(normalizedRow.title, normalizedRow.name, sourceMetadata.title) ?? path ?? `Cognee memory ${index + 1}`;
     const kind = firstString(normalizedRow.kind, sourceMetadata.kind);
     const documentRole = classifyDocumentRole({ path, title, content, kind });
@@ -526,6 +582,7 @@ function normalizeCogneeRefs(value: unknown, providerId: string): KnowledgeCandi
         chunkIndex: normalizedRow.chunkIndex ?? normalizedRow.chunk_index,
         chunkSize: normalizedRow.chunkSize ?? normalizedRow.chunk_size,
         cutType: normalizedRow.cutType ?? normalizedRow.cut_type,
+        label,
         sourceMetadata,
       }),
     };
@@ -553,6 +610,7 @@ function normalizeProviderMetadata(row: Record<string, unknown>, derived: Record
   return {
     datasetId: row.datasetId ?? row.dataset_id,
     datasetName: row.datasetName ?? row.dataset_name,
+    label: row.label,
     sourceId: row.sourceId ?? row.source_id,
     chunkId: row.chunkId ?? row.chunk_id ?? row.id ?? row.uuid,
     entityIds: row.entityIds ?? row.entity_ids,
@@ -569,6 +627,7 @@ function normalizeSourceMetadata(row: Record<string, unknown>): Record<string, u
     row.external_metadata,
     row.sourceMetadata,
     row.source_metadata,
+    isRecord(row.metadata) ? row.metadata.label : undefined,
     isRecord(row.metadata) ? row.metadata.externalMetadata : undefined,
     isRecord(row.metadata) ? row.metadata.external_metadata : undefined,
     isRecord(row.document) ? row.document.externalMetadata : undefined,
@@ -581,6 +640,12 @@ function normalizeSourceMetadata(row: Record<string, unknown>): Record<string, u
     if (parsed) return parsed;
   }
   return {};
+}
+
+function curatedEntryIdFromLabel(value: unknown): string | undefined {
+  const label = firstString(value);
+  const prefix = 'allen-curated-entry:';
+  return label?.startsWith(prefix) ? firstString(label.slice(prefix.length)) : undefined;
 }
 
 function normalizeMetadataObject(value: unknown): Record<string, unknown> | undefined {

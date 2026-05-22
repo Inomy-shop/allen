@@ -2224,7 +2224,7 @@ const queryDatabase: ChatTool = {
     required: ['collection'],
   },
   async execute(args, db) {
-    const allowedCollections = ['workflows', 'executions', 'agents', 'repos', 'learnings', 'chat_sessions', 'execution_logs', 'node_traces', 'repo_knowledge_indexes', 'knowledge_nodes', 'knowledge_edges', 'context_attempts', 'context_refs', 'context_ref_events', 'context_evaluations', 'context_artifacts'];
+    const allowedCollections = ['workflows', 'executions', 'agents', 'repos', 'learnings', 'chat_sessions', 'execution_logs', 'node_traces', 'repo_knowledge_indexes', 'knowledge_nodes', 'knowledge_edges', 'repo_context_curation_profiles', 'repo_context_curation_entries', 'repo_mandatory_context_mappings', 'context_attempts', 'context_refs', 'context_ref_events', 'context_evaluations', 'context_artifacts'];
     const collection = args.collection as string;
     if (!allowedCollections.includes(collection)) {
       return { error: `Collection "${collection}" not allowed. Allowed: ${allowedCollections.join(', ')}` };
