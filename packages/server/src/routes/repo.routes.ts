@@ -117,17 +117,17 @@ function hasGeneratedCurationContent(value: Record<string, unknown>): boolean {
   );
 }
 
-const MAX_DEBUG_TEXT_CHARS = 40_000;
+const MAX_PLAYGROUND_TEXT_CHARS = 40_000;
 
-function debugText(value: unknown): string | undefined {
+function playgroundText(value: unknown): string | undefined {
   const text = stringValue(value);
   if (!text) return undefined;
-  return text.length > MAX_DEBUG_TEXT_CHARS
-    ? `${text.slice(0, MAX_DEBUG_TEXT_CHARS)}\n\n[truncated ${text.length - MAX_DEBUG_TEXT_CHARS} chars]`
+  return text.length > MAX_PLAYGROUND_TEXT_CHARS
+    ? `${text.slice(0, MAX_PLAYGROUND_TEXT_CHARS)}\n\n[truncated ${text.length - MAX_PLAYGROUND_TEXT_CHARS} chars]`
     : text;
 }
 
-async function loadLatestCurationEntryForDebug(
+async function loadLatestCurationEntryForPlayground(
   db: Db,
   repoId: string,
   entryId?: string,
@@ -146,7 +146,7 @@ async function loadLatestCurationEntryForDebug(
   return rows.find(hasGeneratedCurationContent) ?? rows[0];
 }
 
-async function enrichDebugRefs(
+async function enrichPlaygroundRefs(
   db: Db,
   repoId: string,
   refs: Array<Record<string, unknown>>,
@@ -157,7 +157,7 @@ async function enrichDebugRefs(
     if (ref.mandatory === true) {
       return {
         ...ref,
-        debugContent: {
+        playgroundContent: {
           mandatoryOnly: true,
           resolution: {
             path: stringValue(ref.path),
@@ -165,7 +165,7 @@ async function enrichDebugRefs(
             mappingId: stringValue(providerMetadata.mappingId),
             agentName: stringValue(providerMetadata.agentName),
           },
-          mandatoryContext: debugText(ref.content),
+          mandatoryContext: playgroundText(ref.content),
         },
       };
     }
@@ -177,40 +177,40 @@ async function enrichDebugRefs(
     const cacheKey = `${entryId ?? ''}\0${path ?? ''}`;
     let entry: Record<string, unknown> | undefined;
     if (entryId || path) {
-      if (!cache.has(cacheKey)) cache.set(cacheKey, loadLatestCurationEntryForDebug(db, repoId, entryId, path));
+      if (!cache.has(cacheKey)) cache.set(cacheKey, loadLatestCurationEntryForPlayground(db, repoId, entryId, path));
       entry = await cache.get(cacheKey);
     }
     const chunks = Array.isArray(entry?.chunks)
       ? entry.chunks.filter(isRecord).map((chunk) => ({
         chunkId: stringValue(chunk.chunkId),
         heading: stringValue(chunk.heading),
-        text: debugText(chunk.text),
+        text: playgroundText(chunk.text),
       }))
       : undefined;
     return {
       ...ref,
-      debugContent: {
+      playgroundContent: {
         resolution: {
           entryId,
           label,
           path,
           curationEntryFound: Boolean(entry),
-          method: providerResolutionMethod || (entry ? 'debug_display_fallback' : 'unresolved'),
-          debugOnlyFallback: !providerResolutionMethod && Boolean(entry),
+          method: providerResolutionMethod || (entry ? 'playground_display_fallback' : 'unresolved'),
+          playgroundOnlyFallback: !providerResolutionMethod && Boolean(entry),
           curationEntryLookup: entryId || path ? { repoId, entryId, path } : undefined,
         },
-        cogneeChunkText: debugText(providerMetadata.cogneeChunkText) || (ref.providerId === 'cognee_memory' ? debugText(ref.content) : undefined),
-        selectedContent: debugText(ref.content),
-        curatedContext: debugText(entry?.curatedContext),
-        retrievalText: debugText(entry?.retrievalText),
+        cogneeChunkText: playgroundText(providerMetadata.cogneeChunkText) || (ref.providerId === 'cognee_memory' ? playgroundText(ref.content) : undefined),
+        selectedContent: playgroundText(ref.content),
+        curatedContext: playgroundText(entry?.curatedContext),
+        retrievalText: playgroundText(entry?.retrievalText),
         chunks,
-        mandatoryContext: ref.mandatory ? debugText(ref.content) : undefined,
+        mandatoryContext: ref.mandatory ? playgroundText(ref.content) : undefined,
       },
     };
   }));
 }
 
-function debugRefs(value: unknown): Array<Record<string, unknown>> {
+function playgroundRefs(value: unknown): Array<Record<string, unknown>> {
   return Array.isArray(value) ? value.filter((item): item is Record<string, unknown> => isRecord(item)) : [];
 }
 
@@ -665,7 +665,7 @@ export function repoRoutes(db: Db): Router {
     }
   });
 
-  router.post('/:id/context-management/debug-search', async (req: Request, res: Response) => {
+  router.post('/:id/context-management/playground', async (req: Request, res: Response) => {
     try {
       if (!isContextEngineEnabled()) return res.status(409).json(contextProviderDisabledPayload('Context provider is disabled.'));
       const repoId = param(req, 'id');
@@ -673,20 +673,20 @@ export function repoRoutes(db: Db): Router {
       if (!repo?.path) return res.status(404).json({ error: 'Repo not found' });
       const query = String(req.body?.query ?? '').trim();
       if (!query) return res.status(400).json({ error: 'query is required' });
-      const indexId = `context-debug:${repoId}`;
+      const indexId = `context-playground:${repoId}`;
       const packet = await new RepoContextEngine(undefined, undefined, { db }).buildPacket({
-        packetId: `debug-${randomUUID()}`,
-        executionId: `debug-${randomUUID()}`,
+        packetId: `playground-${randomUUID()}`,
+        executionId: `playground-${randomUUID()}`,
         repoId,
         repoName: String(repo.name ?? ''),
         repoPath: String(repo.path),
         indexId,
         indexFreshness: 'provider_runtime',
-        workflowName: 'context_management_debug',
-        nodeName: String(req.body?.agentName ?? req.body?.nodeRole ?? 'debugger'),
-        nodeRole: String(req.body?.nodeRole ?? req.body?.agentName ?? 'debugger'),
+        workflowName: 'context_management_playground',
+        nodeName: String(req.body?.agentName ?? req.body?.nodeRole ?? 'playground'),
+        nodeRole: String(req.body?.nodeRole ?? req.body?.agentName ?? 'playground'),
         executionKind: 'chat_agent',
-        targetRole: String(req.body?.agentName ?? req.body?.nodeRole ?? 'debugger'),
+        targetRole: String(req.body?.agentName ?? req.body?.nodeRole ?? 'playground'),
         attempt: 1,
         state: { repo_path: repo.path, task: query },
         prompt: query,
@@ -702,11 +702,11 @@ export function repoRoutes(db: Db): Router {
       });
       const contextInjection = summarizeInjection(injection);
       const [candidateRefs, selectedRefs, injectableRefs, rejectedRefs, availableRefs] = await Promise.all([
-        enrichDebugRefs(db, repoId, debugRefs(packet.candidateRefs)),
-        enrichDebugRefs(db, repoId, debugRefs(packet.selectedRefs)),
-        enrichDebugRefs(db, repoId, debugRefs(packet.injectableRefs)),
-        enrichDebugRefs(db, repoId, debugRefs(packet.rejectedRefs)),
-        enrichDebugRefs(db, repoId, debugRefs(packet.availableRefs)),
+        enrichPlaygroundRefs(db, repoId, playgroundRefs(packet.candidateRefs)),
+        enrichPlaygroundRefs(db, repoId, playgroundRefs(packet.selectedRefs)),
+        enrichPlaygroundRefs(db, repoId, playgroundRefs(packet.injectableRefs)),
+        enrichPlaygroundRefs(db, repoId, playgroundRefs(packet.rejectedRefs)),
+        enrichPlaygroundRefs(db, repoId, playgroundRefs(packet.availableRefs)),
       ]);
       res.json({
         saved: false,
@@ -741,7 +741,7 @@ export function repoRoutes(db: Db): Router {
           rerankerTraces: packet.rerankerTraces,
         },
         injection: contextInjection,
-        debug: {
+        playground: {
           contextQueryIntent: packet.contextQueryIntent,
           renderedContextQuery: packet.renderedContextQuery,
           providerDiagnostics: packet.providerDiagnostics,

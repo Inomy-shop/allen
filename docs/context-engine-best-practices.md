@@ -24,7 +24,7 @@ Allen uses different context classes for different jobs:
 |---|---|---|---|
 | Mandatory guidance | Always-follow rules for a role or repo | coding guidelines, security policy, workflow output contract | Inject full body when mapped and not provider-native |
 | Domain/spec context | Product and business requirements | PRDs, API contracts, workflow specs, schema docs | Retrieve and inject when task intent needs it |
-| Orientation context | Pointers to likely relevant areas | module summaries, file refs, graph neighbors | Prefer snippet or manifest-only |
+| Orientation context | Pointers to likely relevant areas | module summaries, file refs, curated chunks | Prefer snippet or manifest-only |
 | Source evidence | Concrete implementation truth | source files, tests, diffs, logs, artifacts | Agent should read directly with tools |
 | Historical/operational context | Past learnings and production notes | incident notes, rollout constraints, known failure modes | Inject only when clearly task-relevant |
 
