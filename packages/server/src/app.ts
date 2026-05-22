@@ -217,7 +217,7 @@ async function main(): Promise<void> {
   // Slack, and email without forcing a login. Uploaded filenames are random
   // UUIDs so the link itself acts as the capability (signed-URL pattern).
   // Write operations stay behind auth via `fileRoutes()` mounted further down.
-  app.use('/api/files', publicFileRoutes());
+  app.use('/api/files', publicFileRoutes(db));
 
   // Public artifact content — same no-auth pattern as /api/files.
   // Artifact UUIDs are unguessable, so the URL itself is the capability.
@@ -269,7 +269,7 @@ async function main(): Promise<void> {
   app.use('/api/interventions', interventionRoutes(db));
   app.use('/api/linear', linearRoutes(db));
   app.use('/api/monitoring', monitoringRoutes(db));
-  app.use('/api/files', fileRoutes());
+  app.use('/api/files', fileRoutes(db));
   app.use('/api/artifacts', artifactRoutes(db));
 
   // Structured error logging — after all routes, before listen

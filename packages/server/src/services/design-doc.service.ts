@@ -15,13 +15,11 @@
  * `markApproved()`; the coding phase calls `markHandedOff()`.
  */
 
-import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
+import { writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import type { Collection, Db, ObjectId } from 'mongodb';
-
-const UPLOADS_DIR = process.env.UPLOADS_DIR ?? join(process.cwd(), '..', '..', 'uploads');
-if (!existsSync(UPLOADS_DIR)) mkdirSync(UPLOADS_DIR, { recursive: true });
+import { getUploadsDir, ensureLocalDir } from './upload-storage.js';
 
 // ── Types ────────────────────────────────────────────────────────────────
 
@@ -262,7 +260,9 @@ export class DesignDocService {
     const id = randomUUID();
     const ext = '.md';
     const storedName = `${id}-${slug}${ext}`.replace(/[^a-zA-Z0-9._-]/g, '-');
-    const fullPath = join(UPLOADS_DIR, storedName);
+    const uploadsDir = getUploadsDir();
+    ensureLocalDir(uploadsDir);
+    const fullPath = join(uploadsDir, storedName);
     writeFileSync(fullPath, body, 'utf-8');
     return `/api/files/${storedName}`;
   }
