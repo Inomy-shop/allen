@@ -1853,16 +1853,20 @@ async def search(**kwargs):
     expect(JSON.stringify(output.results)).not.toContain('search_result');
   });
 
-  it('resolves Cognee chunk ids through SQLite document metadata when search omits source metadata', async () => {
+  it('resolves Cognee chunk ids through Cognee relational document metadata when search omits source metadata', async () => {
     previousScript = process.env.ALLEN_COGNEE_SIDECAR_SCRIPT;
     previousPythonPath = process.env.PYTHONPATH;
-    scriptDir = mkdtempSync(join(tmpdir(), 'allen-cognee-sqlite-meta-'));
+    scriptDir = mkdtempSync(join(tmpdir(), 'allen-cognee-relational-meta-'));
     const fakeModuleDir = join(scriptDir, 'fake-python');
     const dataDir = join(scriptDir, 'cognee');
-    const databaseDir = join(dataDir, 'system', 'databases');
+    const cogneePackageDir = join(fakeModuleDir, 'cognee');
     mkdirSync(fakeModuleDir, { recursive: true });
-    mkdirSync(databaseDir, { recursive: true });
-    writeFileSync(join(fakeModuleDir, 'cognee.py'), `
+    mkdirSync(join(cogneePackageDir, 'infrastructure/databases'), { recursive: true });
+    writeFileSync(join(fakeModuleDir, 'sqlalchemy.py'), `
+def text(value):
+    return value
+`);
+    writeFileSync(join(cogneePackageDir, '__init__.py'), `
 class SearchType:
     CHUNKS = "CHUNKS"
 
@@ -1877,17 +1881,13 @@ config = Config()
 async def search(**kwargs):
     return [{"id": "chunk-1", "content": "Use live vendor mappings.", "score": 0.9}]
 `);
-    execFileSync('python3', ['-c', `
-import json
-import sqlite3
-from pathlib import Path
-db = Path(${JSON.stringify(join(databaseDir, 'cognee_db'))})
-connection = sqlite3.connect(db)
-connection.execute("CREATE TABLE data (id TEXT PRIMARY KEY, external_metadata TEXT)")
-connection.execute("CREATE TABLE nodes (id TEXT, slug TEXT, data_id TEXT, label TEXT, attributes TEXT)")
-connection.execute(
-    "INSERT INTO data (id, external_metadata) VALUES (?, ?)",
-    ("data-1", json.dumps({
+    writeFileSync(join(cogneePackageDir, 'infrastructure/__init__.py'), '');
+    writeFileSync(join(cogneePackageDir, 'infrastructure/databases/__init__.py'), '');
+    writeFileSync(join(cogneePackageDir, 'infrastructure/databases/relational.py'), `
+class Result:
+    def fetchall(self):
+        return [{
+            "external_metadata": {
         "repoId": "repo-id",
         "repoName": "fixture",
         "branch": "main",
@@ -1898,15 +1898,28 @@ connection.execute(
         "fileHash": "doc-hash",
         "ingestFormat": "markdown_file_docmeta_v1",
         "source": "allen_markdown_file_filter",
-    })),
-)
-connection.execute(
-    "INSERT INTO nodes (id, slug, data_id, label, attributes) VALUES (?, ?, ?, ?, ?)",
-    ("node-1", "chunk1", "data-1", "chunk-1", json.dumps({"id": "chunk-1"})),
-)
-connection.commit()
-connection.close()
-`]);
+            },
+            "node_id": "node-1",
+            "node_slug": "chunk1",
+            "node_label": "chunk-1",
+            "node_attributes": {"id": "chunk-1"},
+        }]
+
+class Session:
+    async def __aenter__(self):
+        return self
+    async def __aexit__(self, exc_type, exc, tb):
+        return False
+    async def execute(self, query, params=None):
+        return Result()
+
+class Engine:
+    def get_async_session(self):
+        return Session()
+
+def get_relational_engine():
+    return Engine()
+`);
     process.env.PYTHONPATH = fakeModuleDir;
     process.env.ALLEN_COGNEE_SIDECAR_SCRIPT = join(process.cwd(), 'src/scripts/cognee-context-provider.py');
 

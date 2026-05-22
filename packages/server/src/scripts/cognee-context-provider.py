@@ -615,12 +615,18 @@ def cognee_database_diff(
 def document_identity(document: Dict[str, Any]) -> str:
     metadata = document.get("externalMetadata") if isinstance(document.get("externalMetadata"), dict) else {}
     return str(
-        document.get("dataId")
+        document.get("path")
+        or metadata.get("path")
+        or document.get("entryId")
+        or document.get("entry_id")
+        or metadata.get("entryId")
+        or metadata.get("entry_id")
+        or document.get("label")
+        or metadata.get("label")
+        or document.get("dataId")
         or document.get("data_id")
         or metadata.get("dataId")
         or metadata.get("data_id")
-        or document.get("path")
-        or metadata.get("path")
         or document.get("title")
         or ""
     ).strip()
@@ -786,7 +792,7 @@ async def normalize_results(raw_results: Any, dataset_name: str, max_results: in
                 source_metadata, graph_trace = await resolve_chunk_source_metadata_with_trace(str(chunk_id))
                 resolution_trace.update(graph_trace)
                 resolution_trace["sourceMetadataKeys"] = sorted([str(key) for key in source_metadata.keys()]) if source_metadata else []
-                resolution_trace["resolutionStatus"] = "resolved_from_graph" if source_metadata else "unresolved"
+                resolution_trace["resolutionStatus"] = graph_trace.get("resolutionStatus") or ("resolved_from_graph" if source_metadata else "unresolved")
             if chunk_id:
                 chunk_count += 1
                 if source_metadata:
@@ -909,7 +915,17 @@ async def resolve_chunk_source_metadata(chunk_id: str) -> Dict[str, Any]:
 
 
 async def resolve_chunk_source_metadata_with_trace(chunk_id: str) -> tuple[Dict[str, Any], Dict[str, Any]]:
-    return await resolve_chunk_source_metadata_from_graph_with_trace(chunk_id)
+    metadata, trace = await resolve_chunk_source_metadata_from_graph_with_trace(chunk_id)
+    if metadata:
+        trace["resolutionStatus"] = "resolved_from_graph"
+        return metadata, trace
+
+    relational_metadata, relational_trace = await resolve_chunk_source_metadata_from_relational_with_trace(chunk_id)
+    trace.update(relational_trace)
+    if relational_metadata:
+        trace["resolutionStatus"] = "resolved_from_relational"
+        return relational_metadata, trace
+    return {}, trace
 
 
 async def resolve_chunk_source_metadata_from_graph(chunk_id: str) -> Dict[str, Any]:
@@ -994,6 +1010,84 @@ def candidate_chunk_ids(chunk_id: str) -> List[str]:
         pass
     ids.append(chunk_id.replace("-", ""))
     return list(dict.fromkeys(ids))
+
+
+async def resolve_chunk_source_metadata_from_relational_with_trace(chunk_id: str) -> tuple[Dict[str, Any], Dict[str, Any]]:
+    trace: Dict[str, Any] = {
+        "relationalLookupAttempted": True,
+        "relationalLookupResult": "not_attempted",
+        "relationalQueryAttempts": [],
+    }
+    try:
+        from sqlalchemy import text  # type: ignore
+        from cognee.infrastructure.databases.relational import get_relational_engine  # type: ignore
+    except Exception as exc:
+        trace["relationalLookupResult"] = "relational_engine_import_failed"
+        trace["relationalLookupError"] = str(exc)
+        return {}, trace
+
+    try:
+        db_engine = get_relational_engine()
+    except Exception as exc:
+        trace["relationalLookupResult"] = "relational_engine_unavailable"
+        trace["relationalLookupError"] = str(exc)
+        return {}, trace
+
+    candidates = candidate_chunk_ids(chunk_id)
+    params = {f"candidate_{index}": candidate for index, candidate in enumerate(candidates)}
+    placeholders = ", ".join(f":candidate_{index}" for index in range(len(candidates)))
+    queries = [
+        """
+        SELECT d.external_metadata AS external_metadata,
+               n.attributes AS node_attributes,
+               n.id AS node_id,
+               n.slug AS node_slug,
+               n.label AS node_label
+        FROM nodes n
+        JOIN data d ON d.id = n.data_id
+        WHERE n.id IN ({placeholders})
+           OR n.slug IN ({placeholders})
+           OR n.label IN ({placeholders})
+        LIMIT 5
+        """,
+        """
+        SELECT d.external_metadata AS external_metadata
+        FROM data d
+        WHERE d.id IN (
+            SELECT n.data_id
+            FROM nodes n
+            WHERE n.id IN ({placeholders})
+               OR n.slug IN ({placeholders})
+               OR n.label IN ({placeholders})
+        )
+        LIMIT 5
+        """,
+    ]
+    try:
+        async with db_engine.get_async_session() as session:
+            for query_index, query_template in enumerate(queries):
+                attempt: Dict[str, Any] = {"queryIndex": query_index}
+                try:
+                    result = await session.execute(text(query_template.format(placeholders=placeholders)), params)
+                    rows = result.fetchall() if hasattr(result, "fetchall") else []
+                    attempt["rowCount"] = len(rows)
+                    metadata = extract_source_metadata(rows)
+                    attempt["metadataFound"] = bool(metadata)
+                    trace["relationalQueryAttempts"].append(attempt)
+                    if metadata:
+                        trace["relationalLookupResult"] = "metadata_found"
+                        return metadata, trace
+                except Exception as exc:
+                    attempt["error"] = str(exc)
+                    trace["relationalQueryAttempts"].append(attempt)
+                    continue
+    except Exception as exc:
+        trace["relationalLookupResult"] = "relational_session_failed"
+        trace["relationalLookupError"] = str(exc)
+        return {}, trace
+
+    trace["relationalLookupResult"] = "metadata_not_found"
+    return {}, trace
 
 
 def chunk_parent_queries() -> List[str]:
