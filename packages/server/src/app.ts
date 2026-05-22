@@ -43,7 +43,6 @@ import { CronService } from './services/cron.service.js';
 import { seedCronJobs } from './services/cron-seed.service.js';
 import { createRepoScanIfChangedAction } from './services/context/scanner/repo-context-scanner.service.js';
 import { RepoService, createRepoPullAllAction } from './services/repo.service.js';
-import { createRepoKnowledgeGraphIndexIfChangedAction } from './services/context/allen-knowledge-graph/repo-knowledge-graph.service.js';
 import { createPrSyncAllAction } from './services/pull-request.service.js';
 import { createMcpBundleCleanupAction } from './services/mcp-bundle.service.js';
 import { createSelfHealingMonitorScanAction } from './services/self-healing-monitor.service.js';
@@ -142,7 +141,6 @@ async function main(): Promise<void> {
   // Boot the cron scheduler + register system actions
   const cronService = new CronService(db);
   cronService.registerSystemAction(createRepoScanIfChangedAction(db));
-  cronService.registerSystemAction(createRepoKnowledgeGraphIndexIfChangedAction(db));
   cronService.registerSystemAction(createRepoPullAllAction(db));
   cronService.registerSystemAction(createPrSyncAllAction(db));
   cronService.registerSystemAction(createMcpBundleCleanupAction(db));

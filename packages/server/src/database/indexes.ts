@@ -102,22 +102,6 @@ export async function ensureIndexes(db: Db): Promise<void> {
   // Lookup by repoId is hot — every agent spawn into a registered repo hits this.
   await db.collection('repo_contexts').createIndex({ repoId: 1 }, { unique: true });
 
-  // Repo Knowledge Graphs — structured repo/module/skill/production-knowledge graph.
-  await db.collection('repo_knowledge_indexes').createIndex({ repoId: 1, latest: 1, indexedAt: -1 });
-  await db.collection('repo_knowledge_indexes').createIndex({ repoId: 1, graphMode: 1, latest: 1, indexedAt: -1 });
-  await db.collection('repo_knowledge_indexes').createIndex(
-    { repoId: 1, graphMode: 1, headSha: 1, indexVersion: 1 },
-    { partialFilterExpression: { headSha: { $exists: true } } },
-  );
-  // Drop the early PoC unique index if present. Knowledge nodes must be
-  // versioned by indexId so old graph versions remain queryable/revertible.
-  await db.collection('knowledge_nodes').dropIndex('repoId_1_stableKey_1').catch(() => {});
-  await db.collection('knowledge_nodes').createIndex({ repoId: 1, indexId: 1, stableKey: 1 }, { unique: true });
-  await db.collection('knowledge_nodes').createIndex({ repoId: 1, indexId: 1, kind: 1 });
-  await db.collection('knowledge_nodes').createIndex({ repoId: 1, path: 1 });
-  await db.collection('knowledge_edges').createIndex({ repoId: 1, indexId: 1 });
-  await db.collection('knowledge_edges').createIndex({ repoId: 1, fromNodeId: 1 });
-  await db.collection('knowledge_edges').createIndex({ repoId: 1, toNodeId: 1 });
   await db.collection('context_attempts').createIndex({ executionId: 1, nodeName: 1, attempt: 1 });
   await db.collection('context_attempts').createIndex({ contextAttemptId: 1 }, { unique: true });
   await db.collection('context_attempts').createIndex({ rootExecutionId: 1, createdAt: 1 });

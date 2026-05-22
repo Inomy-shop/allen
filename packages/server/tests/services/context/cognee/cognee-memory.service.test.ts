@@ -58,16 +58,6 @@ describe('CogneeMemoryService', () => {
     const repoId = new ObjectId();
     await db.collection('repos').insertOne({ _id: repoId, name: 'fixture', path: repoPath, defaultBranch: 'main' });
     await seedCuratedContextEntries(db, repoId.toString());
-    await db.collection('repo_knowledge_indexes').insertOne({ repoId: repoId.toString(), indexId: 'index-1', latest: true });
-    await db.collection('knowledge_nodes').insertOne({
-      repoId: repoId.toString(),
-      indexId: 'index-1',
-      id: 'node:ignored',
-      title: 'Ignored production note',
-      summary: 'This should not be sent to Cognee.',
-      kind: 'production_note',
-    });
-
     const status = await new CogneeMemoryService(db).refreshRepo(repoId.toString());
 
     expect(status.status).toBe('completed');

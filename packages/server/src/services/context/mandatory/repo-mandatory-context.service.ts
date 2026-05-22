@@ -1,4 +1,4 @@
-import { createHash, randomUUID } from 'node:crypto';
+import { createHash } from 'node:crypto';
 import type { Collection, Db } from 'mongodb';
 import { ObjectId } from 'mongodb';
 
@@ -155,8 +155,4 @@ function normalizeSourceType(value: unknown): MandatoryContextSourceType {
   return value === 'user_added' || value === 'user_override' || value === 'agent_generated'
     ? value
     : 'user_added';
-}
-
-export function newManualMappingId(): string {
-  return `mandatory-${randomUUID()}`;
 }

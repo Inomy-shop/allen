@@ -2,7 +2,6 @@ import { spawn } from 'node:child_process';
 import { dirname, isAbsolute, normalize, relative } from 'node:path';
 import type { Db } from 'mongodb';
 import type { RepoContextProvider } from '../core/repo-context-engine.js';
-import { firstString } from './repo-knowledge-graph-utils.js';
 
 export async function resolveRepoFromPath(db: Db, pathHint: string | undefined): Promise<Record<string, unknown> | null> {
   if (!pathHint) return null;
@@ -60,61 +59,6 @@ export function normalizeRepoContextProvider(provider?: RepoContextProvider): Re
   return provider === 'claude' || provider === 'codex' ? provider : 'unknown';
 }
 
-export function isInstructionCandidatePath(path: string): boolean {
-  const p = path.toLowerCase();
-  return p === 'agents.md'
-    || p === 'agent.md'
-    || p === 'claude.md'
-    || p === '.allen.md'
-    || p === '.claude/claude.md'
-    || p === '.claude/instructions.md'
-    || p === '.claude/index.md'
-    || p.startsWith('.claude/rules/')
-    || p.startsWith('.cursor/rules/')
-    || p.startsWith('.codex/')
-    || p.startsWith('.agents/');
-}
-
-export function isSkillCandidatePath(path: string): boolean {
-  const p = path.toLowerCase();
-  return /(^|\/)(skills?)\/[^/]+\/skill\.md$/.test(p)
-    || p.startsWith('.claude/skills/')
-    || p.startsWith('.allen/skills/')
-    || p.startsWith('.codex/skills/');
-}
-
-export function isModuleRuleCandidatePath(path: string): boolean {
-  const p = path.toLowerCase();
-  return p.includes('/rules/modules/') || p.startsWith('.claude/rules/modules/') || p.startsWith('.cursor/rules/modules/');
-}
-
-export function isProductionKnowledgeCandidatePath(path: string): boolean {
-  const p = path.toLowerCase();
-  return p.includes('/knowledge/')
-    || p.includes('/runbook')
-    || p.includes('/runbooks/')
-    || p.includes('/production')
-    || p.includes('/incident')
-    || p.includes('/deployment')
-    || p.includes('/operations')
-    || p.includes('/migration')
-    || p.includes('/data-contract');
-}
-
-export function isDocsRunbookCandidatePath(path: string): boolean {
-  const p = path.toLowerCase();
-  return (p.startsWith('docs/') || p.includes('/docs/') || p.includes('/runbook') || p.includes('/runbooks/'))
-    && (p.endsWith('.md') || p.endsWith('.mdx'));
-}
-
-export function sourceModuleDir(path: string): string | undefined {
-  const parts = path.split('/');
-  if (parts[0] === 'src' && parts.length >= 2) return `src/${parts[1]}`;
-  if (parts[0] === 'packages' && parts.length >= 2) return `packages/${parts[1]}`;
-  if (parts[0] && !parts[0].startsWith('.') && parts.length >= 2 && ['src', 'lib', 'app', 'server', 'ui'].includes(parts[1])) return parts[0];
-  return undefined;
-}
-
 export function hasMeaningfulRepoPath(pathValue: string | undefined): boolean {
   if (!pathValue) return false;
   const normalized = pathValue.replace(/\/+$/, '');
@@ -122,10 +66,6 @@ export function hasMeaningfulRepoPath(pathValue: string | undefined): boolean {
     && normalized !== '/tmp/allen'
     && normalized !== '/var/tmp'
     && normalized !== '/private/tmp';
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
 export function sanitizeRepoRelativePath(pathValue: string): string {
@@ -157,15 +97,5 @@ export async function gitLsFiles(repoPath: string): Promise<string[]> {
     proc.stdout.on('data', (c: Buffer) => (out += c.toString()));
     proc.on('close', () => resolve(out.split('\n').map((line) => line.trim()).filter(Boolean).sort()));
     proc.on('error', () => resolve([]));
-  });
-}
-
-export async function gitHeadSha(repoPath: string): Promise<string | undefined> {
-  return new Promise((resolve) => {
-    const proc = spawn('git', ['rev-parse', 'HEAD'], { cwd: repoPath });
-    let out = '';
-    proc.stdout.on('data', (c: Buffer) => (out += c.toString()));
-    proc.on('close', () => resolve(out.trim() || undefined));
-    proc.on('error', () => resolve(undefined));
   });
 }

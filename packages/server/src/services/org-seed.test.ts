@@ -115,31 +115,4 @@ describe('OrgSeedService SEED_OVERRIDE policy', () => {
     expect(team.displayName).toBe('Engineering');
     expect(team.mission).not.toBe('custom mission');
   });
-
-  it('seeds mandatory repo knowledge graph persistence instructions', async () => {
-    const db = makeDb();
-
-    await new OrgSeedService(db).seed();
-
-    const indexer = db.store.agents.find((a: any) => a.name === 'repo-knowledge-graph-indexer');
-    expect(indexer.model).toBe('opus');
-    expect(indexer.system).toContain('MUST call save_repo_knowledge_graph');
-    expect(indexer.system).toContain('Every indexing job MUST specify exactly one mode');
-    expect(indexer.system).toContain('mandatory_context_map');
-    expect(indexer.system).toContain('graph_mode');
-    expect(indexer.system).toContain('mcp__allen__save_repo_knowledge_graph');
-    expect(indexer.system).toContain('allen_save_artifact');
-    expect(indexer.system).toContain('is not graph persistence');
-    expect(indexer.system).toContain('KNOWLEDGE_GRAPH_VALIDATION_FAILED');
-    expect(indexer.system).toContain('mandatoryForNodeRoles means "always-load workflow node role guideline."');
-    expect(indexer.system).toContain('mandatoryForSpawnedAgentRoles');
-    expect(indexer.system).toContain('mandatoryForSpawnerRoles');
-    expect(indexer.system).toContain('It is valid for a role to have no mandatory mapping');
-    expect(indexer.system).toContain('Command profile files such as package.json');
-    expect(indexer.system).toContain('Cognee uses this graph only to identify Allen mandatory always-load context');
-    expect(indexer.system).toContain('"mandatoryForNodeRoles": []');
-    expect(indexer.system).toContain('"mandatoryForSpawnedAgentRoles": []');
-    expect(indexer.system).toContain('"mandatoryForSpawnerRoles": []');
-    expect(indexer.system).not.toContain('"mandatoryForNodeRoles": ["backend-developer", "qa-lead"]');
-  });
 });

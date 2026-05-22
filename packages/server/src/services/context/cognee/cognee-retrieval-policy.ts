@@ -6,7 +6,7 @@ import {
   renderContextQuery,
   type ContextQueryIntent,
 } from '../core/context-query-intent.js';
-import { firstString, isRecord } from '../allen-knowledge-graph/repo-knowledge-graph-utils.js';
+import { firstString, isRecord } from '../common/context-utils.js';
 import type { CogneeInjectionDecision } from './cognee-metadata-enrichment.js';
 
 export const DEFAULT_COGNEE_CANDIDATE_LIMIT = 30;

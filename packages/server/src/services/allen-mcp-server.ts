@@ -161,7 +161,7 @@ const TOOLS = [
   { name: 'submit_execution_input', description: 'Submit input to a paused workflow execution (e.g. answer a human node).', params: { execution_id: 'string (required)', node: 'string (required)', data: 'object (required)' } },
   { name: 'get_node_trace', description: 'Get detailed trace of a specific node execution: prompt, response, outputs, cost, duration.', params: { execution_id: 'string (required)', node_name: 'string (required)' } },
   { name: 'get_execution_logs', description: 'Get execution logs filtered by node, level, or category.', params: { execution_id: 'string (required)', node: 'string', level: 'string', category: 'string', limit: 'number' } },
-  { name: 'get_node_context_usage', description: 'Get repo-knowledge context packets and usage traces captured for an execution.', params: { execution_id: 'string (required)' } },
+  { name: 'get_node_context_usage', description: 'Get repo context packets and usage traces captured for an execution.', params: { execution_id: 'string (required)' } },
 
   // ── Agents ──
   { name: 'list_agents', description: 'List all agents with minimal info: name, displayName, teamName, type, model, provider. Use get_agent for full details.', params: {} },
@@ -184,11 +184,8 @@ const TOOLS = [
   // ── Repos ──
   { name: 'list_repos', description: 'List registered repositories with tech stack.', params: {} },
   { name: 'get_repo_context', description: 'Get the deep agent-generated context document for a repo (markdown describing each module).', params: { repo_path: 'string (required) — absolute path of a registered repo or workspace worktree' } },
-  { name: 'get_repo_knowledge_graph', description: 'Get the structured repo knowledge graph for a repo: modules, instruction files, skills, production notes, commands, and relationships.', params: { repo_path: 'string (required) — absolute path of a registered repo or workspace worktree' } },
-  { name: 'search_repo_knowledge', description: 'Search the repo knowledge graph for missing or follow-up context refs by query. Use when an investigation discovers a module, file, term, or concept not covered by repo_context_selection; load useful file-backed results with get_repo_context_body/get_repo_skill_body before relying on them.', params: { repo_path: 'string (required) — absolute path of a registered repo or workspace worktree', query: 'string (required) — module, file, ticket, error, or concept to search for', node_role: 'string — optional workflow node role', current_files: 'string[] — optional repo-relative files currently being inspected', limit: 'number — optional max refs' } },
-  { name: 'get_repo_skill_body', description: 'Load the full body of a repo skill file referenced by the knowledge graph. Use when a repo_knowledge_packet summary makes a skill look useful; summaries are only a relevance filter and must not be the only source for useful skills.', params: { repo_path: 'string (required) — absolute path of a registered repo or workspace worktree', ref_id: 'string — knowledge graph refId for the skill', skill_path: 'string — repo-relative SKILL.md path alternative to ref_id' } },
-  { name: 'get_repo_context_body', description: 'Load the full body of a repo instruction, context, doc, runbook, production knowledge file, or selected Cognee ref. Use when a repo_knowledge_packet summary makes a ref look useful; summaries are only a relevance filter and must not be the only source for useful context.', params: { repo_path: 'string (required) — absolute path of a registered repo or workspace worktree', ref_id: 'string — knowledge graph or Cognee refId for the context item', context_path: 'string — repo-relative file path alternative to ref_id' } },
-  { name: 'save_repo_knowledge_graph', description: 'Save a generated repo knowledge graph as a new latest version in Allen DB. Use after repo-knowledge-graph-indexer produces graph JSON directly in chat/agent execution.', params: { repo_path: 'string (required) — absolute path of a registered repo or workspace worktree', graph_mode: 'string (required) — full_graph or mandatory_context_map', graph: 'object — parsed graph JSON with repoSummary, nodes, edges', graph_json: 'string — graph JSON string alternative to graph' } },
+  { name: 'get_repo_skill_body', description: 'Load the full body of a repo skill file by repo-relative skill_path. Use when selected context points to a useful skill; summaries are only a relevance filter and must not be the only source for useful skills.', params: { repo_path: 'string (required) — absolute path of a registered repo or workspace worktree', ref_id: 'string — selected provider refId for audit only', skill_path: 'string — repo-relative SKILL.md path' } },
+  { name: 'get_repo_context_body', description: 'Load the full body of a repo instruction, context, doc, runbook, production knowledge file, or selected Cognee ref. Use selected Cognee ref_id or a repo-relative context_path; summaries are only a relevance filter and must not be the only source for useful context.', params: { repo_path: 'string (required) — absolute path of a registered repo or workspace worktree', ref_id: 'string — selected Cognee refId', context_path: 'string — repo-relative file path alternative to ref_id' } },
   { name: 'prepare_repo_context_curation', description: 'Prepare an idempotent repo-context-curator run. The service inventories default-branch context files, compares hashes with DB, returns only missing/changed/retry files, budgets, and a staging run id.', params: { repo_id: 'string — registered repo id', repo_path: 'string — registered repo path alternative to repo_id', scope: 'object — optional {mode, pattern, force}; mode can be all/documents/docs or a path hint', force: 'boolean — recurate scoped files even when hashes match' } },
   { name: 'plan_repo_context_curation_assignments', description: 'Create and register deterministic worker assignment batches for a prepared repo context curation run. Use this before spawning repo-context-curation-worker agents; it avoids huge files_to_curate payloads and returns ready-to-spawn assignments plus a concurrency limit hard-capped at 4.', params: { run_id: 'string (required)', register: 'boolean — default true; registers returned assignments idempotently', include_all: 'boolean — optional; use all expected files instead of current retry files', max_files_per_assignment: 'number — optional batch file cap; default 20', max_bytes_per_assignment: 'number — optional batch byte cap; default 350000', concurrency_limit: 'number — optional visible worker concurrency cap; hard max 4' } },
   { name: 'register_repo_context_curation_assignments', description: 'Register worker assignments for a prepared repo context curation run before spawning workers. Idempotent by assignment id.', params: { run_id: 'string (required)', assignments: 'array of {assignmentId, workerId, files}' } },
@@ -469,37 +466,13 @@ async function executeTool(name: string, args: Record<string, unknown>): Promise
       }
       return res.json();
     }
-    case 'get_repo_knowledge_graph': {
-      const path = String(args.repo_path ?? '');
-      if (!path) return { error: 'repo_path is required' };
-      const url = `${API_BASE}/api/repos/knowledge-graph?path=${encodeURIComponent(path)}`;
-      const res = await fetch(url);
-      if (!res.ok) {
-        if (res.status === 404) return { error: `No knowledge graph found for path: ${path}. Either the repo is not registered or its first graph index has not completed yet.` };
-        return { error: `API ${res.status}: ${await res.text().catch(() => 'unknown')}` };
-      }
-      return res.json();
-    }
-    case 'search_repo_knowledge': {
-      const path = String(args.repo_path ?? '');
-      const query = String(args.query ?? '');
-      if (!path) return { error: 'repo_path is required' };
-      if (!query.trim()) return { error: 'query is required' };
-      const params = new URLSearchParams({ path, query });
-      if (args.node_role) params.set('nodeRole', String(args.node_role));
-      if (Array.isArray(args.current_files)) params.set('currentFiles', args.current_files.map(String).join(','));
-      if (args.limit) params.set('limit', String(args.limit));
-      const res = await fetch(`${API_BASE}/api/repos/search-knowledge?${params.toString()}`);
-      if (!res.ok) return { error: `API ${res.status}: ${await res.text().catch(() => 'unknown')}` };
-      return res.json();
-    }
     case 'get_repo_skill_body': {
       const path = String(args.repo_path ?? '');
       if (!path) return { error: 'repo_path is required' };
       const params = new URLSearchParams({ path });
       if (args.ref_id) params.set('refId', String(args.ref_id));
       if (args.skill_path) params.set('skillPath', String(args.skill_path));
-      if (!params.has('refId') && !params.has('skillPath')) return { error: 'ref_id or skill_path is required' };
+      if (!params.has('skillPath')) return { error: 'skill_path is required' };
       const res = await fetch(`${API_BASE}/api/repos/skill-body?${params.toString()}`);
       if (!res.ok) return { error: `API ${res.status}: ${await res.text().catch(() => 'unknown')}` };
       return res.json();
@@ -514,21 +487,6 @@ async function executeTool(name: string, args: Record<string, unknown>): Promise
       const res = await fetch(`${API_BASE}/api/repos/context-body?${params.toString()}`);
       if (!res.ok) return { error: `API ${res.status}: ${await res.text().catch(() => 'unknown')}` };
       return res.json();
-    }
-    case 'save_repo_knowledge_graph': {
-      const path = String(args.repo_path ?? '');
-      if (!path) return { error: 'repo_path is required' };
-      const graphMode = String(args.graph_mode ?? '');
-      if (graphMode !== 'full_graph' && graphMode !== 'mandatory_context_map') return { error: 'graph_mode is required and must be full_graph or mandatory_context_map' };
-      const graph = args.graph as Record<string, unknown> | undefined;
-      const graphJson = typeof args.graph_json === 'string' ? args.graph_json : undefined;
-      if (!graph && !graphJson) return { error: 'graph or graph_json is required' };
-      return callAPI(`/api/repos/knowledge-graph?path=${encodeURIComponent(path)}`, 'POST', {
-        graph,
-        graph_mode: graphMode,
-        graph_json: graphJson,
-        source_execution_id: SPAWN_ROOT_EXECUTION_ID || SPAWN_PARENT_EXECUTION_ID,
-      });
     }
     case 'prepare_repo_context_curation': {
       const repoId = String(args.repo_id ?? args.repoId ?? '');

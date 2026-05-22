@@ -16,7 +16,7 @@ vi.mock('./repo-context-curation-git.js', () => ({
   resolveDefaultBranchName: () => 'main',
 }));
 
-vi.mock('../allen-knowledge-graph/repo-knowledge-graph-indexer.js', () => ({
+vi.mock('../common/context-role-inventory.js', () => ({
   buildWorkflowRoleInventory: vi.fn(async () => []),
   buildSpawnedAgentRoleInventory: vi.fn(async () => []),
 }));
