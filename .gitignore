@@ -15,24 +15,3 @@ e2e/.auth/
 infra/
 .DS_Store
 **/.DS_Store
-__pycache__/
-**/__pycache__/
-*.py[cod]
-
-# Local context-engine planning/debug artifacts
-context-usage.json
-failed_workflow.json
-investigate_output.json
-repo-curator-context-result.json
-neo4j-ec2-commands.md
-docs/context-engine-completeness-checklist.md
-docs/context-engine-known-gaps.md
-docs/context-engine-learnings-and-allen-plan.md
-docs/context-engine-open-source-options.md
-docs/context-engine-semantic-evaluation-framework-analysis.md
-docs/plans/
-docs/progressive-repo-knowledge-loading.md
-docs/repo-knowledge-indexing-library-analysis.md
-docs/workflow-context-and-feedback.md
-docs/workflow-context-poc-execution-analysis.md
-docs/workflow-context-poc-success-analysis.md
