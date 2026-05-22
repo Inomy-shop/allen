@@ -37,13 +37,17 @@ export async function enrichCogneeCandidates(input: {
   let generated = 0;
   let joined = 0;
   let lowConfidence = 0;
+  let curationJoined = 0;
 
   for (const candidate of input.candidates) {
     const sourceMetadata = sourceMetadataFor(candidate);
-    const path = firstString(candidate.path, sourceMetadata.path);
+    const curationResolution = await loadCuratedEntry(input.db, input.repoId, candidate, sourceMetadata);
+    if (curationResolution.entry) curationJoined += 1;
+    await persistObservedChunkMapping(input.db, input.repoId, candidate, curationResolution.entry, curationResolution.method);
+    const path = firstString(candidate.path, sourceMetadata.path, firstString(curationResolution.entry?.path));
     if (!path) {
       lowConfidence += 1;
-      enriched.push(withMetadata(candidate, undefined, ['metadata_missing_path']));
+      enriched.push(withMetadata(withCuratedContext(candidate, curationResolution), undefined, ['metadata_missing_path']));
       continue;
     }
 
@@ -87,7 +91,7 @@ export async function enrichCogneeCandidates(input: {
       joined += 1;
     }
     if (metadata.confidence < 0.5) lowConfidence += 1;
-    enriched.push(withMetadata(candidate, metadata, metadata.confidence < 0.5 ? ['metadata_low_confidence'] : []));
+    enriched.push(withMetadata(withCuratedContext(candidate, curationResolution), metadata, metadata.confidence < 0.5 ? ['metadata_low_confidence'] : []));
   }
 
   diagnostics.push({
@@ -97,11 +101,214 @@ export async function enrichCogneeCandidates(input: {
     joinedMetadataCount: joined,
     generatedMetadataCount: generated,
     lowConfidenceMetadataCount: lowConfidence,
+    curationJoinedCount: curationJoined,
     schemaVersion: COGNEE_METADATA_SCHEMA_VERSION,
     message: 'Cognee candidates were joined to Allen deterministic metadata before selection.',
   });
 
   return { candidates: enriched, diagnostics };
+}
+
+type CurationResolution = {
+  entry?: Record<string, unknown>;
+  method: 'entry_id' | 'label_entry_id' | 'source_mapping' | 'path_fallback' | 'unresolved';
+  mapping?: Record<string, unknown>;
+};
+
+async function loadCuratedEntry(
+  db: Db | undefined,
+  repoId: string,
+  ref: KnowledgeCandidateRef,
+  sourceMetadata: Record<string, unknown>,
+): Promise<CurationResolution> {
+  if (!db) return { method: 'unresolved' };
+  const providerMetadata = isRecord(ref.providerMetadata) ? ref.providerMetadata : {};
+  const entryId = firstString(sourceMetadata.entryId, sourceMetadata.entry_id);
+  const label = firstString(providerMetadata.label, sourceMetadata.label);
+  const labelEntryId = curatedEntryIdFromLabel(label);
+  const path = firstString(ref.path, sourceMetadata.path);
+  const chunkId = firstString(providerMetadata.cogneeChunkId, providerMetadata.chunkId);
+  const dataId = firstString(sourceMetadata.dataId, sourceMetadata.data_id, providerMetadata.sourceId);
+  const cogneeDataId = firstString(sourceMetadata.cogneeDataId, sourceMetadata.cognee_data_id, providerMetadata.sourceId);
+  const datasetName = firstString(providerMetadata.datasetName);
+  if (entryId) {
+    const entry = await findCurationEntry(db, repoId, { entryId });
+    if (entry) return { entry, method: 'entry_id' };
+  }
+  if (labelEntryId) {
+    const entry = await findCurationEntry(db, repoId, { entryId: labelEntryId });
+    if (entry) return { entry, method: 'label_entry_id' };
+  }
+  const mapping = await loadSourceMapping(db, {
+    repoId,
+    datasetName,
+    chunkId,
+    dataId,
+    cogneeDataId,
+    label,
+    path,
+  });
+  const mappedEntryId = firstString(mapping?.entryId, mapping?.entry_id);
+  const mappedPath = firstString(mapping?.path);
+  if (mappedEntryId) {
+    const entry = await findCurationEntry(db, repoId, { entryId: mappedEntryId });
+    if (entry) return { entry, method: 'source_mapping', mapping };
+  }
+  if (mappedPath) {
+    const entry = await findCurationEntry(db, repoId, { path: mappedPath });
+    if (entry) return { entry, method: 'source_mapping', mapping };
+  }
+  if (path) {
+    const entry = await findCurationEntry(db, repoId, { path });
+    if (entry) return { entry, method: 'path_fallback' };
+  }
+  return { method: 'unresolved', mapping };
+}
+
+async function findCurationEntry(db: Db, repoId: string, filter: { entryId?: string; path?: string }): Promise<Record<string, unknown> | undefined> {
+  const clauses: Array<Record<string, unknown>> = [];
+  if (filter.entryId) clauses.push({ entryId: filter.entryId });
+  if (filter.path) clauses.push({ path: filter.path });
+  if (!clauses.length) return undefined;
+  const rows = await db.collection('repo_context_curation_entries')
+    .find({ repoId, $or: clauses })
+    .sort({ updatedAt: -1, createdAt: -1 })
+    .limit(10)
+    .toArray()
+    .catch(() => []);
+  return rows.find(hasGeneratedCurationContent) ?? rows[0];
+}
+
+async function loadSourceMapping(
+  db: Db,
+  input: {
+    repoId: string;
+    datasetName?: string;
+    chunkId?: string;
+    dataId?: string;
+    cogneeDataId?: string;
+    label?: string;
+    path?: string;
+  },
+): Promise<Record<string, unknown> | undefined> {
+  const base = {
+    repoId: input.repoId,
+    active: true,
+    ...(input.datasetName ? { datasetName: input.datasetName } : {}),
+  };
+  const candidates: Array<Record<string, unknown>> = [];
+  if (input.chunkId) candidates.push({ ...base, chunkId: input.chunkId });
+  if (input.dataId) candidates.push({ ...base, dataId: input.dataId });
+  if (input.cogneeDataId) candidates.push({ ...base, cogneeDataId: input.cogneeDataId });
+  if (input.label) candidates.push({ ...base, label: input.label });
+  if (input.path) candidates.push({ ...base, path: input.path });
+  for (const query of candidates) {
+    const row = await db.collection('repo_cognee_source_mappings')
+      .findOne(query, { sort: { mappingType: 1, updatedAt: -1, createdAt: -1 } })
+      .catch(() => null);
+    if (isRecord(row)) return row;
+  }
+  return undefined;
+}
+
+async function persistObservedChunkMapping(
+  db: Db | undefined,
+  repoId: string,
+  ref: KnowledgeCandidateRef,
+  entry: Record<string, unknown> | undefined,
+  method: CurationResolution['method'],
+): Promise<void> {
+  if (!db || !entry) return;
+  const providerMetadata = isRecord(ref.providerMetadata) ? ref.providerMetadata : {};
+  const chunkId = firstString(providerMetadata.cogneeChunkId, providerMetadata.chunkId);
+  const datasetName = firstString(providerMetadata.datasetName);
+  const label = firstString(providerMetadata.label);
+  if (!chunkId || !datasetName) return;
+  const now = new Date();
+  await db.collection('repo_cognee_source_mappings').updateOne(
+    { repoId, datasetName, chunkId, mappingType: 'chunk' },
+    {
+      $set: {
+        repoId,
+        datasetName,
+        chunkId,
+        mappingType: 'chunk',
+        ingestFormat: 'curated_context_entry_v1',
+        entryId: firstString(entry.entryId),
+        label,
+        path: firstString(entry.path),
+        title: firstString(entry.title),
+        fileHash: firstString(entry.sourceHash),
+        source: `observed_search_${method}`,
+        active: true,
+        updatedAt: now,
+      },
+      $setOnInsert: { createdAt: now },
+    },
+    { upsert: true },
+  ).catch(() => {});
+}
+
+function withCuratedContext(ref: KnowledgeCandidateRef, resolution: CurationResolution): KnowledgeCandidateRef {
+  const entry = resolution.entry;
+  if (!entry) return ref;
+  const curatedContext = firstString(entry.curatedContext);
+  const retrievalText = firstString(entry.retrievalText);
+  const entryId = firstString(entry.entryId);
+  const path = firstString(entry.path) ?? ref.path;
+  const existingSourceMetadata = isRecord(ref.providerMetadata?.sourceMetadata) ? ref.providerMetadata.sourceMetadata : {};
+  const injectionPolicy = injectionDecisionValue(entry.injectionPolicy) === 'mandatory_full'
+    ? 'snippet'
+    : injectionDecisionValue(entry.injectionPolicy);
+  return {
+    ...ref,
+    title: firstString(entry.title) ?? ref.title,
+    path,
+    summary: firstString(entry.summary) ?? ref.summary,
+    content: curatedContext ?? ref.content,
+    contentSha256: curatedContext ? sha256(curatedContext) : ref.contentSha256,
+    grounding: path ? 'repo_backed' : ref.grounding,
+    itemType: path ? 'repo_chunk' : ref.itemType,
+    loadable: true,
+    providerMetadata: {
+      ...ref.providerMetadata,
+      curationEntryId: entryId ?? entry.entryId,
+      curationSourceHash: entry.sourceHash,
+      curationCategory: entry.category,
+      curationResolutionMethod: resolution.method,
+      curationResolutionMappingId: resolution.mapping?._id,
+      curatedContextHash: curatedContext ? sha256(curatedContext) : undefined,
+      retrievalTextHash: retrievalText ? sha256(retrievalText) : undefined,
+      injectionDecision: injectionPolicy,
+      injectionPolicy,
+      cogneeChunkText: ref.content,
+      sourceMetadata: {
+        ...existingSourceMetadata,
+        repoId: firstString(existingSourceMetadata.repoId, existingSourceMetadata.repo_id) ?? firstString(entry.repoId),
+        label: firstString(ref.providerMetadata?.label, existingSourceMetadata.label),
+        path,
+        title: firstString(entry.title) ?? ref.title,
+        kind: firstString(entry.category, ref.kind),
+        entryId: entryId ?? firstString(existingSourceMetadata.entryId, existingSourceMetadata.entry_id),
+        fileHash: firstString(entry.sourceHash, existingSourceMetadata.fileHash, existingSourceMetadata.file_hash),
+        ingestFormat: firstString(existingSourceMetadata.ingestFormat) ?? 'curated_context_entry_v1',
+      },
+    },
+  };
+}
+
+function curatedEntryIdFromLabel(value: unknown): string | undefined {
+  const label = firstString(value);
+  const prefix = 'allen-curated-entry:';
+  return label?.startsWith(prefix) ? firstString(label.slice(prefix.length)) : undefined;
+}
+
+function hasGeneratedCurationContent(entry: Record<string, unknown>): boolean {
+  return Boolean(
+    firstString(entry.curatedContext)
+    || firstString(entry.retrievalText)
+    || (Array.isArray(entry.chunks) && entry.chunks.some((chunk) => isRecord(chunk) && firstString(chunk.text))),
+  );
 }
 
 export function generateDeterministicMetadata(input: {
@@ -194,7 +401,7 @@ function categoriesFor(path: string, title: string, kind: string, content?: stri
 
 function defaultInjectionDecisionFor(path: string, categories: string[], authority: CogneeContextMetadata['sourceAuthority']): CogneeInjectionDecision {
   if (categories.includes('agent_persona') || categories.includes('generated_doc')) return 'never_full_auto';
-  if (categories.includes('instruction') || (authority === 'high' && categories.includes('runbook'))) return 'mandatory_full';
+  if (categories.includes('instruction') || (authority === 'high' && categories.includes('runbook'))) return 'snippet';
   if (categories.includes('source')) return 'snippet';
   return 'manifest_only';
 }

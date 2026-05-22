@@ -189,6 +189,12 @@ const TOOLS = [
   { name: 'get_repo_skill_body', description: 'Load the full body of a repo skill file referenced by the knowledge graph. Use when a repo_knowledge_packet summary makes a skill look useful; summaries are only a relevance filter and must not be the only source for useful skills.', params: { repo_path: 'string (required) — absolute path of a registered repo or workspace worktree', ref_id: 'string — knowledge graph refId for the skill', skill_path: 'string — repo-relative SKILL.md path alternative to ref_id' } },
   { name: 'get_repo_context_body', description: 'Load the full body of a repo instruction, context, doc, runbook, production knowledge file, or selected Cognee ref. Use when a repo_knowledge_packet summary makes a ref look useful; summaries are only a relevance filter and must not be the only source for useful context.', params: { repo_path: 'string (required) — absolute path of a registered repo or workspace worktree', ref_id: 'string — knowledge graph or Cognee refId for the context item', context_path: 'string — repo-relative file path alternative to ref_id' } },
   { name: 'save_repo_knowledge_graph', description: 'Save a generated repo knowledge graph as a new latest version in Allen DB. Use after repo-knowledge-graph-indexer produces graph JSON directly in chat/agent execution.', params: { repo_path: 'string (required) — absolute path of a registered repo or workspace worktree', graph_mode: 'string (required) — full_graph or mandatory_context_map', graph: 'object — parsed graph JSON with repoSummary, nodes, edges', graph_json: 'string — graph JSON string alternative to graph' } },
+  { name: 'prepare_repo_context_curation', description: 'Prepare an idempotent repo-context-curator run. The service inventories default-branch context files, compares hashes with DB, returns only missing/changed/retry files, budgets, and a staging run id.', params: { repo_id: 'string — registered repo id', repo_path: 'string — registered repo path alternative to repo_id', scope: 'object — optional {mode, pattern, force}; mode can be all/documents/docs or a path hint', force: 'boolean — recurate scoped files even when hashes match' } },
+  { name: 'plan_repo_context_curation_assignments', description: 'Create and register deterministic worker assignment batches for a prepared repo context curation run. Use this before spawning repo-context-curation-worker agents; it avoids huge files_to_curate payloads and returns ready-to-spawn assignments plus a concurrency limit hard-capped at 4.', params: { run_id: 'string (required)', register: 'boolean — default true; registers returned assignments idempotently', include_all: 'boolean — optional; use all expected files instead of current retry files', max_files_per_assignment: 'number — optional batch file cap; default 20', max_bytes_per_assignment: 'number — optional batch byte cap; default 350000', concurrency_limit: 'number — optional visible worker concurrency cap; hard max 4' } },
+  { name: 'register_repo_context_curation_assignments', description: 'Register worker assignments for a prepared repo context curation run before spawning workers. Idempotent by assignment id.', params: { run_id: 'string (required)', assignments: 'array of {assignmentId, workerId, files}' } },
+  { name: 'get_repo_context_curation_stage_status', description: 'Validate staged repo context curation rows and return missing/invalid/retry files. Call after workers finish and before promotion.', params: { run_id: 'string (required)' } },
+  { name: 'promote_repo_context_curation_stage', description: 'Promote a fully validated temporary repo context curation run into final DB collections visible in UI. Fails if any expected file is missing or invalid.', params: { run_id: 'string (required)' } },
+  { name: 'save_repo_mandatory_context_mappings', description: 'Save agent-specific mandatory repo context mappings into Allen DB. Use only from repo-mandatory-context-mapper; this writes always-injected context for exact Allen agent names.', params: { repo_id: 'string (required)', mappings: 'array of {agentName, sourcePath, sourceHash, title, content, reasoning, enabled}' } },
   { name: 'find_repo_for_pr_url', description: 'Given a GitHub PR URL, find the registered Allen repo whose remote matches (owner/repo). Returns null if the repo is not registered.', params: { pr_url: 'string (required) — https://github.com/<owner>/<repo>/pull/<n>' } },
 
   // ── Pull Requests ──
@@ -243,6 +249,7 @@ const TOOLS = [
   { name: 'save_learning', description: 'Save a learning/correction to memory. Call when user corrects you or states a preference.', params: { content: 'string (required) — generalized rule', type: 'string (required) — fact, pattern, mistake, or preference' } },
   { name: 'get_dashboard_stats', description: 'Get dashboard statistics: workflow count, executions, success rate, agent count.', params: {} },
   { name: 'query_database', description: 'Read-only MongoDB query against any collection (e.g. workflows, executions, agents, repos, learnings, chat_sessions, chat_threads, execution_logs, node_traces, workspaces, teams, …). Pass filter/projection/sort for precise results.', params: { collection: 'string (required)', filter: 'object', projection: 'object', sort: 'object', limit: 'number (max 100, default 20)' } },
+  { name: 'save_repo_context_curation_stage', description: 'Save generated repo context into the temporary staging area for the active repo-context-curator run. Worker agents use this only; it never writes final curation collections.', params: { run_id: 'string (required)', assignment_id: 'string (required)', worker_id: 'string (required)', entries: 'array of generated context entries', file_statuses: 'array with one status per assigned file' } },
 
   // ── File upload ──
   { name: 'upload_file', description: 'Upload a file to Allen storage. Returns a permanent public URL.', params: { content: 'string (required) — file content', filename: 'string (required) — e.g. "report.md"', mime_type: 'string — MIME type (default: text/plain)' } },
@@ -521,6 +528,71 @@ async function executeTool(name: string, args: Record<string, unknown>): Promise
         graph_mode: graphMode,
         graph_json: graphJson,
         source_execution_id: SPAWN_ROOT_EXECUTION_ID || SPAWN_PARENT_EXECUTION_ID,
+      });
+    }
+    case 'prepare_repo_context_curation': {
+      const repoId = String(args.repo_id ?? args.repoId ?? '');
+      const repoPath = String(args.repo_path ?? args.repoPath ?? '');
+      if (!repoId && !repoPath) return { error: 'repo_id or repo_path is required' };
+      const scope = args.scope && typeof args.scope === 'object' ? args.scope as Record<string, unknown> : {};
+      return callAPI('/api/repos/context-curation/prepare', 'POST', {
+        repo_id: repoId || undefined,
+        repo_path: repoPath || undefined,
+        scope: { ...scope, force: args.force === true || scope.force === true },
+        source_execution_id: SPAWN_PARENT_EXECUTION_ID || SPAWN_ROOT_EXECUTION_ID,
+        source_agent: SPAWN_PARENT_CALLER,
+      });
+    }
+    case 'register_repo_context_curation_assignments': {
+      const runId = String(args.run_id ?? args.runId ?? '');
+      if (!runId) return { error: 'run_id is required' };
+      return callAPI('/api/repos/context-curation/assignments', 'POST', {
+        run_id: runId,
+        assignments: Array.isArray(args.assignments) ? args.assignments : [],
+      });
+    }
+    case 'plan_repo_context_curation_assignments': {
+      const runId = String(args.run_id ?? args.runId ?? '');
+      if (!runId) return { error: 'run_id is required' };
+      return callAPI('/api/repos/context-curation/assignment-plan', 'POST', {
+        run_id: runId,
+        register: args.register !== false,
+        max_files_per_assignment: args.max_files_per_assignment ?? args.maxFilesPerAssignment,
+        max_bytes_per_assignment: args.max_bytes_per_assignment ?? args.maxBytesPerAssignment,
+        large_file_bytes: args.large_file_bytes ?? args.largeFileBytes,
+        concurrency_limit: args.concurrency_limit ?? args.concurrencyLimit,
+        include_all: args.include_all === true || args.includeAll === true,
+      });
+    }
+    case 'get_repo_context_curation_stage_status': {
+      const runId = String(args.run_id ?? args.runId ?? '');
+      if (!runId) return { error: 'run_id is required' };
+      return callAPI('/api/repos/context-curation/stage-status', 'POST', { run_id: runId });
+    }
+    case 'promote_repo_context_curation_stage': {
+      const runId = String(args.run_id ?? args.runId ?? '');
+      if (!runId) return { error: 'run_id is required' };
+      return callAPI('/api/repos/context-curation/promote', 'POST', { run_id: runId });
+    }
+    case 'save_repo_context_curation_stage': {
+      const runId = String(args.run_id ?? args.runId ?? '');
+      const assignmentId = String(args.assignment_id ?? args.assignmentId ?? '');
+      const workerId = String(args.worker_id ?? args.workerId ?? '');
+      if (!runId || !assignmentId || !workerId) return { error: 'run_id, assignment_id, and worker_id are required' };
+      return callAPI('/api/repos/context-curation/stage', 'POST', {
+        run_id: runId,
+        assignment_id: assignmentId,
+        worker_id: workerId,
+        entries: Array.isArray(args.entries) ? args.entries : [],
+        file_statuses: Array.isArray(args.file_statuses) ? args.file_statuses : Array.isArray(args.fileStatuses) ? args.fileStatuses : [],
+      });
+    }
+    case 'save_repo_mandatory_context_mappings': {
+      const repoId = String(args.repo_id ?? args.repoId ?? '');
+      if (!repoId) return { error: 'repo_id is required' };
+      return callAPI('/api/repos/mandatory-context', 'POST', {
+        repo_id: repoId,
+        mappings: Array.isArray(args.mappings) ? args.mappings : [],
       });
     }
     case 'get_node_context_usage': {

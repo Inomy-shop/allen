@@ -229,6 +229,10 @@ function scoreCogneeRef(
   const rankBonus = Math.max(0, 0.12 - originalRank * 0.01);
   let score = cogneeRawScore + rankBonus;
   const reasons = [`cognee_raw=${round(cogneeRawScore)}`, `rank_bonus=${round(rankBonus)}`];
+  const curationResolutionMethod = firstString(ref.providerMetadata?.curationResolutionMethod);
+  if (curationResolutionMethod && curationResolutionMethod !== 'unresolved') {
+    reasons.push(`${curationResolutionMethod}_resolved`);
+  }
   if (effectiveCategories.some((candidateCategory) => envelope.requiredCategories.includes(candidateCategory))) {
     score += 0.35;
     reasons.push(`required_category:${effectiveCategories.filter((item) => envelope.requiredCategories.includes(item)).join('|')}`);

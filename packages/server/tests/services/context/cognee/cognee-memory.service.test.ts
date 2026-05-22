@@ -53,10 +53,11 @@ describe('CogneeMemoryService', () => {
     tempPaths = [];
   });
 
-  it('builds Cognee input from tracked Markdown files without Allen knowledge nodes', async () => {
+  it('builds Cognee input from active curated context entries without Allen knowledge nodes', async () => {
     repoPath = createGitFixture();
     const repoId = new ObjectId();
     await db.collection('repos').insertOne({ _id: repoId, name: 'fixture', path: repoPath, defaultBranch: 'main' });
+    await seedCuratedContextEntries(db, repoId.toString());
     await db.collection('repo_knowledge_indexes').insertOne({ repoId: repoId.toString(), indexId: 'index-1', latest: true });
     await db.collection('knowledge_nodes').insertOne({
       repoId: repoId.toString(),
@@ -70,45 +71,48 @@ describe('CogneeMemoryService', () => {
     const status = await new CogneeMemoryService(db).refreshRepo(repoId.toString());
 
     expect(status.status).toBe('completed');
-    expect(status.source).toBe('markdown_file_filter');
+    expect(status.source).toBe('allen_curated_context_entries');
     expect(status.documentCount).toBe(2);
-    expect(status.ingestFormat).toBe('markdown_file_docmeta_v1');
-    expect(mocks.runCogneeSidecar).toHaveBeenCalledOnce();
-    const payload = mocks.runCogneeSidecar.mock.calls[0][1] as any;
+    expect(status.ingestFormat).toBe('curated_context_entry_v1');
+    expect(ingestCalls()).toHaveLength(1);
+    const payload = ingestCalls()[0][1] as any;
     expect(payload.documents.map((doc: any) => doc.path)).toEqual(['AGENTS.md', 'docs/runbook.md']);
-    expect(payload.documents.map((doc: any) => doc.kind)).toEqual(['doc', 'doc']);
-    expect(payload.documents[0].content).toContain('# Agent Rules');
+    expect(payload.documents.map((doc: any) => doc.kind)).toEqual(['guideline', 'runbook']);
+    expect(payload.documents[0].content).toContain('Repository agent rules');
     expect(payload.documents[0].content).not.toContain('allen-cognee-chunk');
     expect(payload.documents[0].content.trim()).not.toMatch(/^\{/);
     expect(payload.documents[0].dataId).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-5[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
+    expect(payload.documents[0].label).toBe('allen-curated-entry:entry-agents');
     expect(payload.documents[0].externalMetadata).toEqual(expect.objectContaining({
       repoId: repoId.toString(),
       path: 'AGENTS.md',
       title: 'Agent Rules',
-      kind: 'doc',
+      kind: 'guideline',
       fileHash: expect.any(String),
-      ingestFormat: 'markdown_file_docmeta_v1',
+      entryId: 'entry-agents',
+      ingestFormat: 'curated_context_entry_v1',
     }));
     expect(payload.documents[0].externalMetadata).not.toHaveProperty('repoPath');
     expect(payload.documents[0].externalMetadata).not.toHaveProperty('sourcePath');
-    expect(payload.ingestFormat).toBe('markdown_file_docmeta_v1');
+    expect(payload.ingestFormat).toBe('curated_context_entry_v1');
     expect(payload.chunkSize).toBe(4096);
     expect(status.manifest).toEqual(expect.objectContaining({
       version: 1,
-      ingestFormat: 'markdown_file_docmeta_v1',
+      ingestFormat: 'curated_context_entry_v1',
       documentCount: 2,
       documents: expect.arrayContaining([
-        expect.objectContaining({ path: 'AGENTS.md', dataId: expect.any(String) }),
+        expect.objectContaining({ path: 'AGENTS.md', entryId: 'entry-agents', dataId: expect.any(String) }),
       ]),
     }));
     expect(JSON.stringify(payload.documents)).not.toContain('Ignored production note');
     expect(JSON.stringify(payload.documents)).not.toContain('This should not be sent to Cognee');
   });
 
-  it('sends the current Markdown set to Cognee so the sidecar can diff against Cognee DB metadata', async () => {
+  it('sends the current curated entry set to Cognee so the sidecar can diff against Cognee DB metadata', async () => {
     repoPath = createGitFixture();
     const repoId = new ObjectId();
     await db.collection('repos').insertOne({ _id: repoId, name: 'fixture', path: repoPath, defaultBranch: 'main' });
+    await seedCuratedContextEntries(db, repoId.toString());
     const service = new CogneeMemoryService(db);
 
     await service.refreshRepo(repoId.toString());
@@ -128,13 +132,13 @@ describe('CogneeMemoryService', () => {
 
     const status = await service.refreshRepo(repoId.toString());
 
-    expect(mocks.runCogneeSidecar).toHaveBeenCalledOnce();
-    const payload = mocks.runCogneeSidecar.mock.calls[0][1] as any;
+    expect(ingestCalls()).toHaveLength(1);
+    const payload = ingestCalls()[0][1] as any;
     expect(payload.documents.map((doc: any) => doc.path)).toEqual(['AGENTS.md', 'docs/runbook.md']);
     expect(payload.deletedDocuments).toBeUndefined();
     expect(status).toEqual(expect.objectContaining({
       status: 'completed',
-      message: 'Context built from 2 Markdown files',
+      message: 'Context built from 2 curated context documents',
       documentCount: 2,
       ingestedDocumentCount: 2,
       cognifiedDocumentCount: 2,
@@ -150,23 +154,22 @@ describe('CogneeMemoryService', () => {
     }));
   });
 
-  it('does not pre-filter changed and deleted Markdown documents before calling Cognee', async () => {
+  it('does not pre-filter changed and deleted curated documents before calling Cognee', async () => {
     repoPath = createGitFixture();
     const repoId = new ObjectId();
     await db.collection('repos').insertOne({ _id: repoId, name: 'fixture', path: repoPath, defaultBranch: 'main' });
+    await seedCuratedContextEntries(db, repoId.toString());
     const service = new CogneeMemoryService(db);
 
     await service.refreshRepo(repoId.toString());
-    writeFileSync(join(repoPath, 'AGENTS.md'), '# Agent Rules\n\nFollow repo rules and prefer relative paths.\n');
-    execFileSync('git', ['add', 'AGENTS.md'], { cwd: repoPath });
-    execFileSync('git', ['rm', '-f', 'docs/runbook.md'], { cwd: repoPath });
+    await db.collection('repo_context_curation_entries').deleteOne({ repoId: repoId.toString(), entryId: 'entry-runbook' });
     mocks.runCogneeSidecar.mockClear();
 
     const status = await service.refreshRepo(repoId.toString());
 
     expect(status.status).toBe('completed');
-    expect(mocks.runCogneeSidecar).toHaveBeenCalledOnce();
-    const payload = mocks.runCogneeSidecar.mock.calls[0][1] as any;
+    expect(ingestCalls()).toHaveLength(1);
+    const payload = ingestCalls()[0][1] as any;
     expect(payload.totalDocumentCount).toBe(1);
     expect(payload.documents).toEqual([
       expect.objectContaining({
@@ -184,6 +187,7 @@ describe('CogneeMemoryService', () => {
     repoPath = createGitFixture();
     const repoId = new ObjectId();
     await db.collection('repos').insertOne({ _id: repoId, name: 'fixture', path: repoPath, defaultBranch: 'main' });
+    await seedCuratedContextEntries(db, repoId.toString());
     mocks.runCogneeSidecar.mockResolvedValueOnce({
       ingestedDocumentCount: 2,
       cognifiedDocumentCount: 1,
@@ -203,8 +207,8 @@ describe('CogneeMemoryService', () => {
     const status = await service.refreshRepo(repoId.toString());
 
     expect(status.status).toBe('completed');
-    expect(mocks.runCogneeSidecar).toHaveBeenCalledOnce();
-    const payload = mocks.runCogneeSidecar.mock.calls[0][1] as any;
+    expect(ingestCalls()).toHaveLength(1);
+    const payload = ingestCalls()[0][1] as any;
     expect(payload.documents.map((doc: any) => doc.path)).toEqual(['AGENTS.md', 'docs/runbook.md']);
     expect(payload.deletedDocuments).toBeUndefined();
     expect(payload.uncognifiedRetryCount).toBeUndefined();
@@ -215,6 +219,7 @@ describe('CogneeMemoryService', () => {
     repoPath = createGitFixture();
     const repoId = new ObjectId();
     await db.collection('repos').insertOne({ _id: repoId, name: 'fixture', path: repoPath, defaultBranch: 'main' });
+    await seedCuratedContextEntries(db, repoId.toString());
     mocks.runCogneeSidecar.mockImplementationOnce((_action, _payload, onProgress) => {
       onProgress?.({
         stage: 'cognifying',
@@ -246,17 +251,15 @@ describe('CogneeMemoryService', () => {
     const status = await service.refreshRepo(repoId.toString());
 
     expect(status.status).toBe('completed');
-    expect(mocks.runCogneeSidecar).toHaveBeenCalledOnce();
-    const payload = mocks.runCogneeSidecar.mock.calls[0][1] as any;
+    expect(ingestCalls()).toHaveLength(1);
+    const payload = ingestCalls()[0][1] as any;
     expect(payload.documents.map((doc: any) => doc.path)).toEqual(['AGENTS.md', 'docs/runbook.md']);
     expect(payload.deletedDocuments).toBeUndefined();
     expect(payload.uncognifiedRetryCount).toBeUndefined();
   });
 
-  it('pulls the default branch before building canonical repo context when requested', async () => {
-    const fixture = createRemoteFixture();
-    tempPaths = [fixture.originPath, fixture.seedPath];
-    repoPath = fixture.repoPath;
+  it('ignores pullLatest because Cognee builds read curated DB entries', async () => {
+    repoPath = createGitFixture();
     const repoId = new ObjectId();
     await db.collection('repos').insertOne({
       _id: repoId,
@@ -264,21 +267,18 @@ describe('CogneeMemoryService', () => {
       path: repoPath,
       detected: { defaultBranch: 'main' },
     });
-    writeFileSync(join(fixture.seedPath, 'docs', 'latest.md'), '# Latest\n\nDefault branch update.\n');
-    execFileSync('git', ['add', 'docs/latest.md'], { cwd: fixture.seedPath });
-    execFileSync('git', ['commit', '-m', 'add latest docs'], { cwd: fixture.seedPath });
-    execFileSync('git', ['push', 'origin', 'main'], { cwd: fixture.seedPath });
+    await seedCuratedContextEntries(db, repoId.toString());
 
     const status = await new CogneeMemoryService(db).refreshRepo(repoId.toString(), { pullLatest: true });
 
     expect(status.repoId).toBe(repoId.toString());
     expect(status.sourcePath).toBe(repoPath);
-    expect(status.documentCount).toBe(3);
-    const payload = mocks.runCogneeSidecar.mock.calls[0][1] as any;
+    expect(status.documentCount).toBe(2);
+    const payload = ingestCalls()[0][1] as any;
     expect(payload.repo).toEqual(expect.objectContaining({ repoId: repoId.toString(), sourcePath: repoPath, branch: 'main' }));
-    expect(payload.documents.map((doc: any) => doc.path)).toContain('docs/latest.md');
-    expect(status.diagnostics).toEqual(expect.arrayContaining([
-      expect.objectContaining({ code: 'cognee_repo_default_branch_updated', branch: 'main', updated: true }),
+    expect(payload.documents.map((doc: any) => doc.path)).toEqual(['AGENTS.md', 'docs/runbook.md']);
+    expect(status.diagnostics ?? []).not.toEqual(expect.arrayContaining([
+      expect.objectContaining({ code: 'cognee_repo_default_branch_updated' }),
     ]));
   });
 
@@ -286,6 +286,7 @@ describe('CogneeMemoryService', () => {
     repoPath = createGitFixture();
     const repoId = new ObjectId();
     await db.collection('repos').insertOne({ _id: repoId, name: 'fixture', path: repoPath, defaultBranch: 'main' });
+    await seedCuratedContextEntries(db, repoId.toString());
     const sidecar = deferred<{ diagnostics: Array<Record<string, unknown>> }>();
     mocks.runCogneeSidecar.mockImplementationOnce((_action, _payload, onProgress) => {
       onProgress?.({
@@ -308,7 +309,7 @@ describe('CogneeMemoryService', () => {
     const started = await service.scheduleRefreshRepo(repoId.toString());
 
     expect(started.status).toBe('running');
-    expect(started.stage).toBe('collecting_markdown');
+    expect(started.stage).toBe('collecting_curated_context');
     expect(started.workerActive).toBe(true);
     await vi.waitFor(() => expect(mocks.runCogneeSidecar).toHaveBeenCalledOnce());
     const running = await service.getStatus(repoId.toString());
@@ -356,6 +357,7 @@ describe('CogneeMemoryService', () => {
     repoPath = createGitFixture();
     const repoId = new ObjectId();
     await db.collection('repos').insertOne({ _id: repoId, name: 'fixture', path: repoPath, defaultBranch: 'main' });
+    await seedCuratedContextEntries(db, repoId.toString());
     const sidecar = deferred<{ diagnostics: Array<Record<string, unknown>> }>();
     mocks.runCogneeSidecar.mockReturnValueOnce(sidecar.promise);
     const service = new CogneeMemoryService(db);
@@ -378,6 +380,7 @@ describe('CogneeMemoryService', () => {
     repoPath = createGitFixture();
     const repoId = new ObjectId();
     await db.collection('repos').insertOne({ _id: repoId, name: 'fixture', path: repoPath, defaultBranch: 'main' });
+    await seedCuratedContextEntries(db, repoId.toString());
     await db.collection('repo_cognee_datasets').insertOne({
       repoId: repoId.toString(),
       repoName: 'fixture',
@@ -387,6 +390,7 @@ describe('CogneeMemoryService', () => {
       datasetName: `allen-fixture-${repoId.toString()}`,
       status: 'running',
       stage: 'cognifying',
+      ingestFormat: 'curated_context_entry_v1',
       message: 'Cognified: 0/2',
       diagnostics: [{ code: 'previous_progress', severity: 'info' }],
       ingestedDocumentCount: 2,
@@ -410,7 +414,7 @@ describe('CogneeMemoryService', () => {
 
     expect(started).toEqual(expect.objectContaining({
       status: 'running',
-      stage: 'collecting_markdown',
+      stage: 'collecting_curated_context',
       workerActive: true,
       diagnostics: expect.arrayContaining([
         expect.objectContaining({ code: 'previous_progress' }),
@@ -439,6 +443,7 @@ describe('CogneeMemoryService', () => {
     repoPath = createGitFixture();
     const repoId = new ObjectId();
     await db.collection('repos').insertOne({ _id: repoId, name: 'fixture', path: repoPath, defaultBranch: 'main' });
+    await seedCuratedContextEntries(db, repoId.toString());
     const sidecar = deferred<{ diagnostics: Array<Record<string, unknown>> }>();
     mocks.runCogneeSidecar.mockImplementationOnce((_action, _payload, onProgress) => {
       onProgress?.({ stage: 'ingesting', processedDocumentCount: 2, ingestedDocumentCount: 2, cognifiedDocumentCount: 0, documentCount: 2, message: 'Ingested: 2/2' });
@@ -474,6 +479,7 @@ describe('CogneeMemoryService', () => {
     repoPath = createGitFixture();
     const repoId = new ObjectId();
     await db.collection('repos').insertOne({ _id: repoId, name: 'fixture', path: repoPath, defaultBranch: 'main' });
+    await seedCuratedContextEntries(db, repoId.toString());
     const sidecar = deferred<{ diagnostics: Array<Record<string, unknown>> }>();
     mocks.runCogneeSidecar.mockImplementationOnce((_action, _payload, onProgress) => {
       onProgress?.({
@@ -546,6 +552,7 @@ describe('CogneeMemoryService', () => {
       repoPath = createGitFixture();
       const repoId = new ObjectId();
       await db.collection('repos').insertOne({ _id: repoId, name: 'fixture', path: repoPath, defaultBranch: 'main' });
+      await seedCuratedContextEntries(db, repoId.toString());
       const graphDir = join(dataDir, 'system', 'databases', 'dataset-id');
       mkdirSync(graphDir, { recursive: true });
       const corruptWal = join(graphDir, 'graph.lbug.wal.checkpoint');
@@ -556,7 +563,7 @@ describe('CogneeMemoryService', () => {
 
       const status = await new CogneeMemoryService(db).refreshRepo(repoId.toString());
 
-      expect(mocks.runCogneeSidecar).toHaveBeenCalledTimes(2);
+      expect(ingestCalls()).toHaveLength(2);
       expect(existsSync(corruptWal)).toBe(false);
       expect(readdirSync(graphDir).some((name) => name.startsWith('graph.lbug.wal.checkpoint.corrupt-'))).toBe(true);
       expect(status).toEqual(expect.objectContaining({
@@ -576,6 +583,7 @@ describe('CogneeMemoryService', () => {
     repoPath = createGitFixture();
     const repoId = new ObjectId();
     await db.collection('repos').insertOne({ _id: repoId, name: 'fixture', path: repoPath, defaultBranch: 'main' });
+    await seedCuratedContextEntries(db, repoId.toString());
     mocks.runCogneeSidecar.mockImplementationOnce((_action, _payload, onProgress) => {
       setTimeout(() => {
         onProgress?.({ stage: 'ingesting', processedDocumentCount: 1, documentCount: 2, message: 'Late progress after completion' });
@@ -603,6 +611,7 @@ describe('CogneeMemoryService', () => {
     repoPath = createGitFixture();
     const repoId = new ObjectId();
     await db.collection('repos').insertOne({ _id: repoId, name: 'fixture', path: repoPath, defaultBranch: 'main' });
+    await seedCuratedContextEntries(db, repoId.toString());
     mocks.runCogneeSidecar.mockResolvedValueOnce({
       ingestedDocumentCount: 2,
       cognifiedDocumentCount: 1,
@@ -623,7 +632,7 @@ describe('CogneeMemoryService', () => {
     expect(status).toEqual(expect.objectContaining({
       status: 'partial',
       stage: 'completed',
-      message: 'Context partially built: 1/2 Markdown files cognified',
+      message: 'Context partially built: 1/2 curated context documents cognified',
       ingestedDocumentCount: 2,
       cognifiedDocumentCount: 1,
       uncognifiedDocuments: [
@@ -639,6 +648,7 @@ describe('CogneeMemoryService', () => {
     repoPath = createGitFixture();
     const repoId = new ObjectId();
     await db.collection('repos').insertOne({ _id: repoId, name: 'fixture', path: repoPath, defaultBranch: 'main' });
+    await seedCuratedContextEntries(db, repoId.toString());
     await db.collection('repo_cognee_datasets').insertOne({
       repoId: repoId.toString(),
       repoName: 'fixture',
@@ -646,6 +656,7 @@ describe('CogneeMemoryService', () => {
       sourcePath: repoPath,
       branch: 'main',
       datasetName: 'allen-fixture-previous-docmeta-v1',
+      ingestFormat: 'curated_context_entry_v1',
       status: 'partial',
       stage: 'completed',
       updatedAt: new Date(),
@@ -666,6 +677,7 @@ describe('CogneeMemoryService', () => {
     repoPath = createGitFixture();
     const repoId = new ObjectId();
     await db.collection('repos').insertOne({ _id: repoId, name: 'fixture', path: repoPath, defaultBranch: 'main' });
+    await seedCuratedContextEntries(db, repoId.toString());
     await db.collection('repo_cognee_datasets').insertOne({
       repoId: repoId.toString(),
       repoName: 'fixture',
@@ -673,6 +685,7 @@ describe('CogneeMemoryService', () => {
       sourcePath: repoPath,
       branch: 'main',
       datasetName: 'allen-fixture-previous-docmeta-v1',
+      ingestFormat: 'curated_context_entry_v1',
       status: 'partial',
       stage: 'completed',
       updatedAt: new Date(),
@@ -694,6 +707,7 @@ describe('CogneeMemoryService', () => {
     repoPath = createGitFixture();
     const repoId = new ObjectId();
     await db.collection('repos').insertOne({ _id: repoId, name: 'fixture', path: repoPath, defaultBranch: 'main' });
+    await seedCuratedContextEntries(db, repoId.toString());
     mocks.runCogneeSidecar.mockImplementationOnce((_action, _payload, onProgress, options) => {
       onProgress?.({ stage: 'cognifying', processedDocumentCount: 1, ingestedDocumentCount: 2, cognifiedDocumentCount: 1, documentCount: 2, message: 'Cognified: 1/2' });
       return new Promise((_resolve, reject) => {
@@ -729,6 +743,8 @@ describe('CogneeMemoryService', () => {
       repoPath = createGitFixture();
       const repoId = new ObjectId();
       await db.collection('repos').insertOne({ _id: repoId, name: 'fixture', path: repoPath, defaultBranch: 'main' });
+      const startedAt = new Date();
+      await new Promise((resolve) => setTimeout(resolve, 5));
       await db.collection('repo_cognee_datasets').insertOne({
         repoId: repoId.toString(),
         repoName: 'fixture',
@@ -738,10 +754,11 @@ describe('CogneeMemoryService', () => {
         datasetName: `allen-fixture-${repoId.toString()}`,
         status: 'running',
         stage: 'ingesting',
+        ingestFormat: 'curated_context_entry_v1',
         message: 'Ingested: 2/2',
-        updatedAt: new Date(Date.now() - 60_000),
-        createdAt: new Date(Date.now() - 60_000),
-        lastStartedAt: new Date(Date.now() - 60_000),
+        updatedAt: startedAt,
+        createdAt: startedAt,
+        lastStartedAt: startedAt,
       });
       const service = new CogneeMemoryService(db);
 
@@ -770,6 +787,56 @@ function deferred<T>(): { promise: Promise<T>; resolve: (value: T) => void; reje
     reject = rej;
   });
   return { promise, resolve, reject };
+}
+
+function ingestCalls(): any[] {
+  return mocks.runCogneeSidecar.mock.calls.filter(([action]) => action === 'ingest');
+}
+
+async function seedCuratedContextEntries(db: Db, repoId: string): Promise<void> {
+  const now = new Date();
+  await db.collection('repo_context_curation_entries').insertMany([
+    {
+      repoId,
+      entryId: 'entry-agents',
+      path: 'AGENTS.md',
+      title: 'Agent Rules',
+      category: 'guideline',
+      inclusion: 'include',
+      injectionPolicy: 'retrieval',
+      curatedContext: 'Repository agent rules: follow repo rules and keep changes focused.',
+      retrievalText: 'Repository agent rules for contributors and coding agents. Follow repo rules and keep changes focused.',
+      chunks: [
+        {
+          chunkId: 'entry-agents:rules',
+          heading: 'Agent Rules',
+          text: 'Repository agent rules for contributors and coding agents.',
+        },
+      ],
+      updatedAt: now,
+      createdAt: now,
+    },
+    {
+      repoId,
+      entryId: 'entry-runbook',
+      path: 'docs/runbook.md',
+      title: 'Runbook',
+      category: 'runbook',
+      inclusion: 'include',
+      injectionPolicy: 'retrieval',
+      curatedContext: 'Runbook: use idempotent retries and operational recovery steps.',
+      retrievalText: 'Runbook context for idempotent retries and operational recovery steps.',
+      chunks: [
+        {
+          chunkId: 'entry-runbook:retries',
+          heading: 'Retries',
+          text: 'Use idempotent retries for operational workflows.',
+        },
+      ],
+      updatedAt: now,
+      createdAt: now,
+    },
+  ]);
 }
 
 function createGitFixture(): string {

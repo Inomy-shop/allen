@@ -735,6 +735,36 @@ describe('CogneeMemoryProvider', () => {
     previousGraphExpansion = undefined;
   });
 
+  it('does not fall back to legacy markdown datasets for workflow retrieval', async () => {
+    const result = await new CogneeMemoryProvider(fakeCogneeStatusDb({
+      datasetName: 'allen-fixture-legacy-docmeta-v1',
+      ingestFormat: 'markdown_file_docmeta_v1',
+    }) as any).retrieve({
+      repoId: 'repo-id',
+      repoName: 'fixture',
+      repoPath: '/tmp/fixture',
+      indexId: 'index-1',
+      indexFreshness: 'fresh',
+      workflowName: 'workflow',
+      nodeName: 'implement',
+      nodeRole: 'backend-developer',
+      attempt: 1,
+      state: {},
+      prompt: 'Fix vendor mappings',
+      provider: 'claude',
+      currentFiles: [],
+      nodes: [],
+    });
+
+    expect(result.selectedRefs).toEqual([]);
+    expect(result.diagnostics).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        code: 'cognee_curated_dataset_missing',
+        ingestFormat: 'curated_context_entry_v1',
+      }),
+    ]));
+  });
+
   it('builds stable role envelopes and query hashes for spawned developer agents', () => {
     const input = {
       repoId: 'repo-id',
@@ -1357,7 +1387,10 @@ print(json.dumps({
 `);
     process.env.ALLEN_COGNEE_SIDECAR_SCRIPT = scriptPath;
 
-    const result = await new CogneeMemoryProvider().retrieve({
+    const result = await new CogneeMemoryProvider(fakeCogneeStatusDb({
+      datasetName: 'allen-fixture-repo-id-docmeta-v1',
+      ingestFormat: 'curated_context_entry_v1',
+    }) as any).retrieve({
       repoId: 'repo-id',
       repoName: 'fixture',
       repoPath: '/tmp/fixture',
@@ -1409,7 +1442,10 @@ print(json.dumps({
 `);
     process.env.ALLEN_COGNEE_SIDECAR_SCRIPT = scriptPath;
 
-    const result = await new CogneeMemoryProvider().retrieve({
+    const result = await new CogneeMemoryProvider(fakeCogneeStatusDb({
+      datasetName: 'allen-fixture-repo-id-docmeta-v1',
+      ingestFormat: 'curated_context_entry_v1',
+    }) as any).retrieve({
       repoId: 'repo-id',
       repoName: 'fixture',
       repoPath: '/tmp/fixture',
@@ -1483,7 +1519,7 @@ print(json.dumps({
         "title": "Vendor Guidelines",
         "kind": "doc",
         "fileHash": "doc-hash",
-        "ingestFormat": "markdown_file_docmeta_v1"
+        "ingestFormat": "curated_context_entry_v1"
       },
       "score": 0.9,
       "datasetName": payload.get("datasetName")
@@ -1492,16 +1528,10 @@ print(json.dumps({
 }))
 `);
     process.env.ALLEN_COGNEE_SIDECAR_SCRIPT = scriptPath;
-    const fakeDb = {
-      collection: () => ({
-        findOne: async () => ({
-          datasetName: 'allen-fixture-repo-id-docmeta-v1',
-          ingestFormat: 'markdown_file_docmeta_v1',
-        }),
-      }),
-    };
-
-    const result = await new CogneeMemoryProvider(fakeDb as any).retrieve({
+    const result = await new CogneeMemoryProvider(fakeCogneeStatusDb({
+      datasetName: 'allen-fixture-repo-id-docmeta-v1',
+      ingestFormat: 'curated_context_entry_v1',
+    }) as any).retrieve({
       repoId: 'repo-id',
       repoName: 'fixture',
       repoPath: '/tmp/fixture',
@@ -1581,7 +1611,10 @@ print(json.dumps({"diagnostics": [], "results": results}))
     process.env.ALLEN_COGNEE_SIDECAR_SCRIPT = scriptPath;
     process.env.ALLEN_COGNEE_GRAPH_EXPANSION = 'shadow';
 
-    const result = await new CogneeMemoryProvider().retrieve({
+    const result = await new CogneeMemoryProvider(fakeCogneeStatusDb({
+      datasetName: 'allen-fixture-repo-id-docmeta-v1',
+      ingestFormat: 'curated_context_entry_v1',
+    }) as any).retrieve({
       repoId: 'repo-id',
       repoName: 'fixture',
       repoPath: '/tmp/fixture',
@@ -1712,7 +1745,10 @@ print(json.dumps({
 `);
     process.env.ALLEN_COGNEE_SIDECAR_SCRIPT = scriptPath;
 
-    const result = await new CogneeMemoryProvider().retrieve({
+    const result = await new CogneeMemoryProvider(fakeCogneeStatusDb({
+      datasetName: 'allen-fixture-repo-id-docmeta-v1',
+      ingestFormat: 'curated_context_entry_v1',
+    }) as any).retrieve({
       repoId: 'repo-id',
       repoName: 'fixture',
       repoPath: '/tmp/fixture',
@@ -2707,6 +2743,25 @@ function providerRef(refId: string, path: string, contentSha256: string, summary
     providerMetadata: {
       injectionDecision: 'snippet',
       injectionPolicy: 'injectable',
+    },
+  };
+}
+
+function fakeCogneeStatusDb(status: { datasetName: string; ingestFormat: string }) {
+  return {
+    collection: (name: string) => {
+      if (name === 'repo_cognee_datasets') {
+        return {
+          findOne: async (query: Record<string, unknown>) => (
+            query.ingestFormat === status.ingestFormat ? status : null
+          ),
+        };
+      }
+      return {
+        findOne: async () => null,
+        find: () => ({ sort: () => ({ limit: () => ({ toArray: async () => [] }) }) }),
+        updateOne: async () => undefined,
+      };
     },
   };
 }

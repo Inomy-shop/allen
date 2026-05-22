@@ -6538,6 +6538,33 @@
     top: 58%;
   }
 
+  .context-graph-flow .react-flow__pane,
+  .context-graph-flow .react-flow__renderer {
+    background: rgb(var(--color-surface));
+  }
+
+  .context-graph-flow .context-graph-controls {
+    overflow: hidden;
+    border: 1px solid rgb(var(--color-border));
+    border-radius: 8px;
+    background: rgb(var(--color-surface-200));
+    box-shadow: 0 14px 36px rgb(0 0 0 / 0.22);
+  }
+
+  .context-graph-flow .context-graph-controls button {
+    border-bottom: 1px solid rgb(var(--color-border));
+    background: rgb(var(--color-surface-200));
+    color: rgb(var(--color-text-secondary));
+  }
+
+  .context-graph-flow .context-graph-controls button:hover {
+    background: rgb(var(--color-surface-300));
+    color: rgb(var(--color-text-primary));
+  }
+
+  .context-graph-flow .context-graph-controls button svg {
+    fill: currentColor;
+  }
   .cr-steps {
     display: flex;
     flex-direction: column;
