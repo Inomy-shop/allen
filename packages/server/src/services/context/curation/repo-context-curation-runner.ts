@@ -2,12 +2,6 @@ import { randomUUID } from 'node:crypto';
 import type { Db } from 'mongodb';
 import type { CandidateContextFile } from './repo-context-curation-git.js';
 
-export type StageAssignmentInput = {
-  assignmentId?: string;
-  workerId?: string;
-  files: CandidateContextFile[];
-};
-
 export type CurationAssignmentPlan = {
   runId: string;
   source: 'retry_files' | 'expected_files';
@@ -319,10 +313,11 @@ export async function getRepoContextCurationStageStatus(db: Db, runId: string): 
 }
 
 export async function markRepoContextCurationRunPromoted(db: Db, runId: string, validation: CurationStageStatus): Promise<void> {
-  await db.collection(STAGE_RUNS).updateOne(
-    { runId },
+  const result = await db.collection(STAGE_RUNS).updateOne(
+    { runId, status: { $in: ['running', 'validated'] } },
     { $set: { status: 'promoted', validation: statusForPersistence(validation), updatedAt: new Date(), completedAt: new Date() } },
   );
+  if (result.modifiedCount === 0) throw new Error('Curation staging run is not active');
 }
 
 async function validateStagingRun(db: Db, run: Record<string, unknown>): Promise<CurationStageStatus> {
@@ -452,7 +447,7 @@ function expectedFileMap(run: Record<string, unknown>): Map<string, CandidateCon
   return new Map(normalizeCandidateFiles(run.expectedFiles).map((file) => [fileKey(file), file]));
 }
 
-function normalizeCandidateFiles(value: unknown): CandidateContextFile[] {
+export function normalizeCandidateFiles(value: unknown): CandidateContextFile[] {
   if (!Array.isArray(value)) return [];
   return value
     .filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === 'object' && !Array.isArray(item))
@@ -470,7 +465,7 @@ function normalizeCandidateFiles(value: unknown): CandidateContextFile[] {
     .filter((file) => file.path && file.sourceHash);
 }
 
-function normalizeKind(value: unknown): CandidateContextFile['kind'] {
+export function normalizeKind(value: unknown): CandidateContextFile['kind'] {
   return value === 'mdx' || value === 'mdc' ? value : 'markdown';
 }
 

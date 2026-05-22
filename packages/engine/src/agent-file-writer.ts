@@ -93,7 +93,6 @@ export const REPO_CONTEXT_LOADING_GUIDANCE = `
     <rule>Use command profile context when the task involves tests, validation, package scripts, CI, Docker, deployment, runtime packaging, or dependency behavior. Do not treat command profiles as universally mandatory for unrelated investigation, design, review, or documentation work.</rule>
     <rule>For file-backed instruction files, context files, docs, runbooks, production notes, and selected Cognee refs, call get_repo_context_body, shown by some clients as mcp__allen__get_repo_context_body.</rule>
     <rule>For skills, call get_repo_skill_body, shown by some clients as mcp__allen__get_repo_skill_body.</rule>
-    <rule>If selected context does not cover the task, call search_repo_knowledge, shown by some clients as mcp__allen__search_repo_knowledge, with the module, file path, domain term, or task concept. Load any relevant returned body before relying on it.</rule>
     <rule>Do this before making code changes, final recommendations, QA conclusions, or review findings that depend on repo-specific practices.</rule>
     <rule>Do not treat a packet summary as sufficient context. The summary only decides whether the full file body needs to be loaded or whether the system-injected body already covers it.</rule>
   </tool_use_rules>

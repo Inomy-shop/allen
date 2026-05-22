@@ -1,6 +1,6 @@
 import type { Db } from 'mongodb';
-import { firstString, isRecord } from '../allen-knowledge-graph/repo-knowledge-graph-utils.js';
-import { normalizeUsageArray } from '../allen-knowledge-graph/repo-knowledge-graph-usage.js';
+import { firstString, isRecord } from '../common/context-utils.js';
+import { normalizeUsageArray } from '../common/context-usage-utils.js';
 import { ContextLifecycleStore } from '../lifecycle/context-lifecycle-store.js';
 
 type EvaluationRow = Record<string, unknown>;

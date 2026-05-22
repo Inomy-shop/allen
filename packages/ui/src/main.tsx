@@ -53,7 +53,6 @@ const router = createBrowserRouter([
           { path: 'workflows/:id/edit', element: <WorkflowBuilderPage /> },
           { path: 'repos', element: <Navigate to="/agents?section=repos" replace /> },
           { path: 'repos/:id/context-management', element: <RepoContextManagementPage /> },
-          { path: 'repos/:id/context-dashboard', element: <Navigate to="../context-management" replace /> },
           { path: 'learnings', element: <Navigate to="/settings/learnings" replace /> },
           { path: 'executions', element: <ExecutionListPage /> },
           { path: 'executions/:id', element: <ExecutionDetailPage /> },

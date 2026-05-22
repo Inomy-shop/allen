@@ -16,10 +16,9 @@ import { AgentActivityService } from './agent-activity.service.js';
 import { metaChatTools, META_DESTRUCTIVE_TOOLS } from './chat-tools-meta.js';
 import { monitoringAgentTools } from './monitoring-agent-tools.js';
 import { buildRepoContextBlock } from './context/scanner/repo-context-builder.js';
-import { RepoKnowledgeGraphService } from './context/allen-knowledge-graph/repo-knowledge-graph.service.js';
+import { RepoContextPacketService } from './context/core/repo-context-packet.service.js';
 import { ContextEvaluationService } from './context/evaluation/context-evaluation.service.js';
 import { isContextEngineEnabled } from './context/config/context-provider-config.js';
-import { withRepoKnowledgeGraphPersistenceGuidance } from './context/allen-knowledge-graph/repo-knowledge-graph-persistence-guidance.js';
 import { AGENT_FALLBACK_CWD } from './chat-providers.js';
 import { MonitoringService } from './self-healing-monitor.service.js';
 import { MCP_SERVER_NAME, normalizeModelAlias, ARTIFACTS_GUIDANCE, NON_INTERACTIVE_GUIDANCE, hasRepoContextLoadingGuidance, withMandatoryRepoContext, withRepoContextLoadingGuidance } from '@allen/engine';
@@ -51,7 +50,6 @@ interactive Claude Code harness. Therefore:
 `.trim();
 
 const ALWAYS_ON_ALLEN_CONTEXT_TOOLS = [
-  `mcp__${MCP_SERVER_NAME}__search_repo_knowledge`,
   `mcp__${MCP_SERVER_NAME}__get_repo_context_body`,
   `mcp__${MCP_SERVER_NAME}__get_repo_skill_body`,
   `mcp__${MCP_SERVER_NAME}__get_node_context_usage`,
@@ -1248,16 +1246,16 @@ async function runSpawnInBackground(
     repoId: string;
     repoName?: string;
     indexId?: string;
-    indexFreshness?: 'fresh' | 'stale' | 'partial' | 'missing';
+    indexFreshness?: string;
     mandatoryContextInjectedCount?: number;
     mandatoryContextSkippedProviderNativeCount?: number;
     mandatoryContextTargetLayer?: string;
     systemPromptContextInjected?: boolean;
   } | null = null;
   let repoKnowledgeSystemPromptBlock = '';
-  if (contextEngineEnabled && repoPath && agentName !== 'repo-knowledge-graph-indexer') {
+  if (contextEngineEnabled && repoPath) {
     try {
-      const repoKnowledge = new RepoKnowledgeGraphService(db);
+      const repoKnowledge = new RepoContextPacketService(db);
       const packet = await repoKnowledge.buildNodeContextPacket({
         executionId,
         workflowName: spawnTree?.parentCaller ? `${spawnTree.parentCaller}:spawn_agent/${agentName}` : `chat:spawn_agent/${agentName}`,
@@ -1309,17 +1307,10 @@ async function runSpawnInBackground(
 
   const initialRenderedPrompt = prompt;
   const roleSystem = (role.system as string) ?? '';
-  const roleSystemWithGraphPersistenceGuidance = contextEngineEnabled
-    ? withRepoKnowledgeGraphPersistenceGuidance(roleSystem, {
-      agentName,
-      prompt: initialRenderedPrompt,
-      repoPath,
-    })
-    : roleSystem;
-  const repoContextLoadingGuidanceAlreadyPresent = hasRepoContextLoadingGuidance(roleSystemWithGraphPersistenceGuidance);
+  const repoContextLoadingGuidanceAlreadyPresent = hasRepoContextLoadingGuidance(roleSystem);
   const roleSystemWithRepoContextGuidance = contextEngineEnabled
-    ? withRepoContextLoadingGuidance(roleSystemWithGraphPersistenceGuidance)
-    : roleSystemWithGraphPersistenceGuidance;
+    ? withRepoContextLoadingGuidance(roleSystem)
+    : roleSystem;
   const roleSystemWithMandatoryRepoContext = contextEngineEnabled
     ? withMandatoryRepoContext(roleSystemWithRepoContextGuidance, repoKnowledgeSystemPromptBlock)
     : roleSystemWithRepoContextGuidance;
@@ -1619,11 +1610,6 @@ async function runSpawnInBackground(
         extraEnv: spawnContextEnv,
         externalServerNames: externalMcpServers,
       });
-      const requiresAllenGraphPersistenceTool = agentName === 'repo-knowledge-graph-indexer';
-      if (requiresAllenGraphPersistenceTool && !mcpServers.allen) {
-        throw new Error('repo-knowledge-graph-indexer requires the built-in Allen MCP server for save_repo_knowledge_graph');
-      }
-
       const sdkOptions: Record<string, unknown> = {
         model, permissionMode: 'bypassPermissions',
         // Pin cwd so the SDK doesn't implicitly inherit the server's own
@@ -1655,7 +1641,7 @@ async function runSpawnInBackground(
 
       // Execution mode. Claude-provider spawns default to CLI mode. Explicit
       // ALLEN_AGENT_EXECUTION_MODE=cli|sdk overrides. See cli-runner.ts.
-      const useCliMode = !requiresAllenGraphPersistenceTool && resolveExecutionMode(sdkOptions.cwd as string | undefined) === 'cli';
+      const useCliMode = resolveExecutionMode(sdkOptions.cwd as string | undefined) === 'cli';
       let msgStream: AsyncIterable<any>;
       if (useCliMode) {
         const { queryViaCli } = await import('@allen/engine');
@@ -1888,7 +1874,7 @@ async function runSpawnInBackground(
     let contextEvaluationId: string | undefined;
     if (repoKnowledgePacketSummary) {
       try {
-        const repoKnowledge = new RepoKnowledgeGraphService(db);
+        const repoKnowledge = new RepoContextPacketService(db);
         const recordedUsage = await repoKnowledge.recordContextUsage({
           executionId,
           executionTraceId,
@@ -2211,11 +2197,11 @@ const getLearnings: ChatTool = {
 
 const queryDatabase: ChatTool = {
   name: 'query_database',
-  description: 'Run a read-only query against the Allen MongoDB database. Can query collections: workflows, executions, agents, repos, learnings, chat_sessions, and repo knowledge graph collections. Returns up to 20 results.',
+  description: 'Run a read-only query against the Allen MongoDB database. Can query collections: workflows, executions, agents, repos, learnings, chat_sessions, and context-engine collections. Returns up to 20 results.',
   inputSchema: {
     type: 'object',
     properties: {
-      collection: { type: 'string', description: 'MongoDB collection name (e.g., "workflows", "executions", "agents", "repos", "learnings", "knowledge_nodes")' },
+      collection: { type: 'string', description: 'MongoDB collection name (e.g., "workflows", "executions", "agents", "repos", "learnings")' },
       filter: { type: 'object', description: 'MongoDB query filter (e.g., {"status": "completed"})', additionalProperties: true },
       projection: { type: 'object', description: 'Fields to include/exclude (e.g., {"name": 1, "status": 1})', additionalProperties: true },
       sort: { type: 'object', description: 'Sort order (e.g., {"createdAt": -1})', additionalProperties: true },
@@ -2224,7 +2210,7 @@ const queryDatabase: ChatTool = {
     required: ['collection'],
   },
   async execute(args, db) {
-    const allowedCollections = ['workflows', 'executions', 'agents', 'repos', 'learnings', 'chat_sessions', 'execution_logs', 'node_traces', 'repo_knowledge_indexes', 'knowledge_nodes', 'knowledge_edges', 'repo_context_curation_profiles', 'repo_context_curation_entries', 'repo_mandatory_context_mappings', 'context_attempts', 'context_refs', 'context_ref_events', 'context_evaluations', 'context_artifacts'];
+    const allowedCollections = ['workflows', 'executions', 'agents', 'repos', 'learnings', 'chat_sessions', 'execution_logs', 'node_traces', 'repo_context_curation_profiles', 'repo_context_curation_entries', 'repo_mandatory_context_mappings', 'context_attempts', 'context_refs', 'context_ref_events', 'context_evaluations', 'context_artifacts'];
     const collection = args.collection as string;
     if (!allowedCollections.includes(collection)) {
       return { error: `Collection "${collection}" not allowed. Allowed: ${allowedCollections.join(', ')}` };
@@ -3604,8 +3590,7 @@ async function runAgentTurn(
       else sdkOptions.appendSystemPrompt = systemPrompt;
       registerExecutionProcess(convId, process.pid, () => abortController.abort());
 
-      const requiresAllenGraphPersistenceTool = targetName === 'repo-knowledge-graph-indexer';
-      const useCliMode = !requiresAllenGraphPersistenceTool && resolveExecutionMode(sdkOptions.cwd as string | undefined) === 'cli';
+      const useCliMode = resolveExecutionMode(sdkOptions.cwd as string | undefined) === 'cli';
       let messageStream: AsyncIterable<any>;
       if (useCliMode) {
         const { queryViaCli } = await import('@allen/engine');

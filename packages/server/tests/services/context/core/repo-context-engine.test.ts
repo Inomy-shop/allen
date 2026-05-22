@@ -197,29 +197,7 @@ describe('RepoContextEngine', () => {
     ]));
   });
 
-  it('searches through the same provider scoring path', () => {
-    const refs = graphEngine().search({
-      repoId: 'repo',
-      repoName: 'fixture',
-      repoPath: '/tmp/fixture',
-      indexId: 'index-1',
-      indexFreshness: 'fresh',
-      workflowName: 'search_repo_knowledge',
-      nodeName: 'search',
-      nodeRole: 'backend-developer',
-      attempt: 1,
-      state: {},
-      provider: 'unknown',
-      currentFiles: [],
-      nodes,
-      query: 'payment reconciliation',
-      limit: 5,
-    });
 
-    expect(refs).toEqual(expect.arrayContaining([
-      expect.objectContaining({ refId: 'repo:skill', source: 'search_repo_knowledge', loadable: true }),
-    ]));
-  });
 
   it('configures Cognee with Allen mandatory context before semantic retrieval by default', () => {
     process.env.ALLEN_CONTEXT_PROVIDER = 'cognee';
@@ -227,17 +205,20 @@ describe('RepoContextEngine', () => {
     delete process.env.ALLEN_CONTEXT_PROVIDER_FALLBACK;
 
     expect(createConfiguredKnowledgeProviders().map((provider) => provider.providerId)).toEqual([
-      'mandatory_graph',
+      'mandatory_context_mapping',
       'cognee_memory',
     ]);
   });
 
-  it('allows Cognee Allen mandatory context to be disabled separately from Cognee retrieval', () => {
+  it('keeps mandatory DB mappings enabled when Cognee graph fallback is disabled', () => {
     process.env.ALLEN_CONTEXT_PROVIDER = 'cognee';
     process.env.ALLEN_COGNEE_MANDATORY_GRAPH = 'off';
     delete process.env.ALLEN_CONTEXT_PROVIDER_FALLBACK;
 
-    expect(createConfiguredKnowledgeProviders().map((provider) => provider.providerId)).toEqual(['cognee_memory']);
+    expect(createConfiguredKnowledgeProviders().map((provider) => provider.providerId)).toEqual([
+      'mandatory_context_mapping',
+      'cognee_memory',
+    ]);
   });
 
   it('keeps mandatory refs protected while allowing optional semantic reranking', async () => {

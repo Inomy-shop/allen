@@ -8,7 +8,7 @@ import {
 import {
   buildSpawnedAgentRoleInventory,
   buildWorkflowRoleInventory,
-} from '../allen-knowledge-graph/repo-knowledge-graph-indexer.js';
+} from '../common/context-role-inventory.js';
 import {
   type CandidateContextFile,
   collectDefaultBranchContextFiles,
@@ -20,6 +20,7 @@ import {
   curationBudgets,
   getRepoContextCurationStageStatus,
   markRepoContextCurationRunPromoted,
+  normalizeCandidateFiles,
   planRepoContextCurationAssignments,
   registerRepoContextCurationAssignments,
   saveRepoContextCurationStage,
@@ -157,7 +158,6 @@ export class RepoContextCurationService {
   private profiles: Collection<CurationProfile>;
   private entries: Collection<CurationEntry>;
   private repos: Collection;
-  private controllers = new Map<string, AbortController>();
 
   constructor(private db: Db) {
     this.profiles = db.collection<CurationProfile>('repo_context_curation_profiles');
@@ -169,46 +169,6 @@ export class RepoContextCurationService {
     const running = await this.findActiveRunningProfile(repoId);
     if (running) return { ...running, message: running.message ?? 'Context curation is running' };
     return this.profiles.findOne({ repoId, latest: true }, { sort: { createdAt: -1 } });
-  }
-
-  async scheduleRefresh(repoId: string, options: ScheduleRefreshOptions = {}): Promise<CurationProfile> {
-    const repo = await this.repoById(repoId);
-    const prepared = await this.prepareForCoordinator({
-      repo_id: repoId,
-      scope: { force: options.forceExecution },
-      prompt: options.prompt,
-      source: options.source,
-    });
-    return (await this.profiles.findOne({ profileId: String(prepared.profile_id) })) ?? await this.createRunningProfile(
-      await this.buildRunInput(repo),
-      'Context curation coordinator prepared',
-      options,
-    );
-  }
-
-  async stop(repoId: string): Promise<CurationProfile> {
-    const controller = this.controllers.get(repoId);
-    if (controller) controller.abort();
-    const existing = await this.profiles.findOne({ repoId, status: 'running' }, { sort: { createdAt: -1 } });
-    if (!existing) throw new Error('No context curation run is active for this repo');
-    await this.profiles.updateOne(
-      { profileId: existing.profileId },
-      { $set: { status: 'stopped', message: 'Context curation stopped', updatedAt: new Date(), completedAt: new Date() } },
-    );
-    if (existing.executionId) {
-      await this.db.collection('executions').updateOne(
-        { id: existing.executionId },
-        {
-          $set: {
-            status: 'cancelled',
-            currentNodes: [],
-            durationMs: existing.createdAt ? Date.now() - new Date(existing.createdAt).getTime() : 0,
-            completedAt: new Date(),
-          },
-        },
-      );
-    }
-    return (await this.profiles.findOne({ profileId: existing.profileId }))!;
   }
 
   async saveStageFromAgent(body: Record<string, unknown>): Promise<Record<string, unknown>> {
@@ -334,6 +294,10 @@ export class RepoContextCurationService {
     if (!runId) throw new Error('run_id is required');
     const run = await this.db.collection('repo_context_curation_runs').findOne({ runId });
     if (!run) throw new Error('Curation staging run not found');
+    const runStatus = String(run.status ?? '');
+    if (!['running', 'validated'].includes(runStatus)) {
+      throw new Error(`Curation staging run is not active (${runStatus || 'unknown'}).`);
+    }
     const stage = await getRepoContextCurationStageStatus(this.db, runId);
     if (!stage.promotable) {
       throw new Error(`Curation staging run is not promotable; retry ${stage.retryFiles.length} file(s) first.`);
@@ -588,33 +552,6 @@ export class RepoContextCurationService {
       { $set: { contextCuration: { status: 'running', profileId: profile.profileId, executionId, startedAt: now } } },
     );
     return profile;
-  }
-
-  private async markFailed(profileId: string, repoId: string, err: unknown): Promise<void> {
-    const error = (err as Error).message ?? String(err);
-    const existing = await this.profiles.findOne({ profileId }, { projection: { executionId: 1, createdAt: 1 } });
-    await this.profiles.updateOne(
-      { profileId },
-      { $set: { status: 'failed', message: 'Context curation failed', error, updatedAt: new Date(), completedAt: new Date() } },
-    );
-    if (existing?.executionId) {
-      await this.db.collection('executions').updateOne(
-        { id: existing.executionId },
-        {
-          $set: {
-            status: 'failed',
-            currentNodes: [],
-            durationMs: existing.createdAt ? Date.now() - new Date(existing.createdAt).getTime() : 0,
-            errorMessage: error,
-            completedAt: new Date(),
-          },
-        },
-      );
-    }
-    await this.repos.updateOne(
-      { _id: new ObjectId(repoId) },
-      { $set: { contextCuration: { status: 'error', profileId, error, completedAt: new Date() } } },
-    );
   }
 
   private async repoById(repoId: string): Promise<Record<string, unknown>> {
@@ -930,28 +867,6 @@ function isAgentMemoryOrLearningPath(path: string): boolean {
   const basename = path.split('/').pop() ?? path;
   return /(^|\/)(memory|memories)(\/|$)/.test(path)
     || /(learning|learnings|memory|memories)/.test(basename);
-}
-
-function normalizeCandidateFiles(value: unknown): CandidateContextFile[] {
-  if (!Array.isArray(value)) return [];
-  return value
-    .filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === 'object' && !Array.isArray(item))
-    .map((item) => {
-      const path = stringValue(item.path) ?? '';
-      const sourceHash = stringValue(item.sourceHash) ?? '';
-      return {
-        path,
-        sourceHash,
-        title: stringValue(item.title) ?? path,
-        bytes: typeof item.bytes === 'number' ? item.bytes : Number(item.bytes ?? 0),
-        kind: normalizeKind(item.kind),
-      };
-    })
-    .filter((file) => file.path && file.sourceHash);
-}
-
-function normalizeKind(value: unknown): CandidateContextFile['kind'] {
-  return value === 'mdx' || value === 'mdc' ? value : 'markdown';
 }
 
 function normalizeCategory(value: unknown): string {

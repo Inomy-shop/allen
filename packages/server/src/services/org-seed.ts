@@ -22,7 +22,6 @@
  */
 
 import type { Db } from 'mongodb';
-import { buildRepoKnowledgeGraphIndexerSystemPrompt } from './context/allen-knowledge-graph/repo-knowledge-graph-indexer-prompts.js';
 import {
   buildRepoContextCuratorSystemPrompt,
   buildRepoContextCuratorWorkerSystemPrompt,
@@ -1808,25 +1807,6 @@ Rules:
 - Exactly 1 lead per team
 - All names lowercase-slug format
 - System prompts should be 200-500 chars and specific`,
-  },
-  {
-    name: 'repo-knowledge-graph-indexer',
-    reasoningEffort: 'high',
-    planMode: false,
-    displayName: 'Repo Knowledge Graph Indexer',
-    description: 'Builds a structured repo knowledge graph of modules, instruction files, skills, production notes, and validation commands.',
-    teamName: 'meta',
-    teamRole: 'member',
-    type: 'technical',
-    icon: 'network',
-    color: '#0f766e',
-    provider: 'claude-cli',
-    model: 'opus',
-    tools: [],
-    capabilities: ['repo-analysis', 'knowledge-graph', 'production-knowledge-indexing'],
-    personality: 'Precise index builder. Prefers explicit paths, stable IDs, and conservative claims.',
-    canDelegateTo: [],
-    system: buildRepoKnowledgeGraphIndexerSystemPrompt(),
   },
   {
     name: 'repo-context-curator',

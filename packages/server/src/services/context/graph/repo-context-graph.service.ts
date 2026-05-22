@@ -29,18 +29,17 @@ export class RepoContextGraphService {
 
   async getGraph(repoId: string, options: ContextGraphOptions = {}): Promise<ContextGraphPayload> {
     const cogneeStatus = await this.cogneeMemory.getStatus(repoId).catch(() => null);
-    if (cogneeStatus) {
-      return this.cogneeMemory.getGraph(repoId, options).catch((err) => ({
-        source: 'context_graph_failed',
-        provider: 'cognee',
-        nodeCount: 0,
-        edgeCount: 0,
-        nodes: [],
-        edges: [],
-        error: (err as Error).message,
+    if (cogneeStatus && ['completed', 'partial'].includes(String(cogneeStatus.status ?? ''))) {
+      return this.cogneeMemory.getGraph(repoId, options).catch(async (err) => ({
+        ...await this.getAllenGraph(repoId, options),
+        cogneeGraphError: (err as Error).message,
       }));
     }
 
+    return this.getAllenGraph(repoId, options);
+  }
+
+  private async getAllenGraph(repoId: string, options: ContextGraphOptions): Promise<Record<string, unknown>> {
     const [allEntries, mandatoryMappings, agents] = await Promise.all([
       this.db.collection('repo_context_curation_entries').find({ repoId }, { sort: { path: 1, updatedAt: -1 } }).toArray(),
       this.mandatoryContext.list(repoId),
@@ -51,7 +50,7 @@ export class RepoContextGraphService {
 
   async getNodeDetail(repoId: string, nodeId: string, options: ContextGraphNodeDetailOptions = {}): Promise<ContextGraphNodeDetailPayload> {
     const cogneeStatus = await this.cogneeMemory.getStatus(repoId).catch(() => null);
-    if (!cogneeStatus) {
+    if (!cogneeStatus || !['completed', 'partial'].includes(String(cogneeStatus.status ?? ''))) {
       return {
         source: 'context_graph_unavailable',
         provider: 'allen',

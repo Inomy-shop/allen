@@ -12,8 +12,8 @@ import type {
   KnowledgeRetrievalProvider,
   KnowledgeRetrievalResult,
 } from '../core/repo-context-engine.js';
-import { isRecord } from '../allen-knowledge-graph/repo-knowledge-graph-utils.js';
-import { normalizeUsageArray } from '../allen-knowledge-graph/repo-knowledge-graph-usage.js';
+import { isRecord } from '../common/context-utils.js';
+import { normalizeUsageArray } from '../common/context-usage-utils.js';
 import { resolveAllenPython } from '../../python-runtime.js';
 import { contextProviderDisabledError, isCogneeContextEnabled } from '../config/context-provider-config.js';
 import { resolveContextLlmConfig } from '../config/context-llm-config.js';

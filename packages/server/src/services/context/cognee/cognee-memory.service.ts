@@ -12,7 +12,7 @@ import {
   runCogneeSidecar,
   type CogneeSidecarProgress,
 } from './repo-context-cognee-provider.js';
-import { normalizeUsageArray } from '../allen-knowledge-graph/repo-knowledge-graph-usage.js';
+import { normalizeUsageArray } from '../common/context-usage-utils.js';
 import { contextProviderDisabledError, isCogneeContextEnabled } from '../config/context-provider-config.js';
 
 const exec = promisify(execFile);

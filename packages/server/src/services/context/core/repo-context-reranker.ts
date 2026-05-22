@@ -3,7 +3,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { KnowledgeCandidateRef, KnowledgeNodeKind, KnowledgeRetrievalInput } from './repo-context-engine.js';
 import { runSharedRerankerWorker } from './context-reranker-worker.js';
-import { isRecord } from '../allen-knowledge-graph/repo-knowledge-graph-utils.js';
+import { isRecord } from '../common/context-utils.js';
 import { resolveAllenPython } from '../../python-runtime.js';
 
 export { shutdownContextRerankerWorkers } from './context-reranker-worker.js';

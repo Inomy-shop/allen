@@ -712,19 +712,8 @@ export const repos = {
     request<any>(`/repos/${id}/cognee/refresh`, { method: 'POST', body: JSON.stringify({ pullLatest: false, cleanRebuild: options?.cleanRebuild === true }) }),
   stopCognee: (id: string) =>
     request<any>(`/repos/${id}/cognee/stop`, { method: 'POST' }),
-  getContextCuration: (id: string) =>
-    request<any>(`/repos/${id}/context-curation`),
-  refreshContextCuration: (id: string) =>
-    request<any>(`/repos/${id}/context-curation/refresh`, { method: 'POST' }),
-  stopContextCuration: (id: string) =>
-    request<any>(`/repos/${id}/context-curation/stop`, { method: 'POST' }),
   getContextManagement: (id: string) =>
     request<any>(`/repos/${id}/context-management`),
-  searchContextManagement: (id: string, query: string, nodeRole?: string) => {
-    const params = new URLSearchParams({ query });
-    if (nodeRole) params.set('nodeRole', nodeRole);
-    return request<any>(`/repos/${id}/context-management/search?${params.toString()}`);
-  },
   debugContextSearch: (id: string, body: Record<string, unknown>) =>
     request<any>(`/repos/${id}/context-management/debug-search`, { method: 'POST', body: JSON.stringify(body) }),
   getContextGraph: (id: string, params: Record<string, string | number | undefined> = {}) => {

@@ -1,7 +1,7 @@
 import { createConfiguredContextReranker, type ContextReranker } from './repo-context-reranker.js';
 import { CogneeMemoryProvider } from '../cognee/repo-context-cognee-provider.js';
 import { boundedScoreEnv, DEFAULT_COGNEE_MIN_INJECTION_SCORE, DEFAULT_COGNEE_MIN_SELECTION_SCORE } from '../cognee/cognee-retrieval-policy.js';
-import { cogneeMandatoryGraphMode, configuredContextProvider } from '../config/context-provider-config.js';
+import { configuredContextProvider } from '../config/context-provider-config.js';
 import {
   buildContextQueryIntent,
   contextQueryIntentHash,
@@ -315,8 +315,6 @@ export class RepoContextEngine {
       try {
         results.push(await provider.retrieve(queryInput));
       } catch (err) {
-        const mandatoryGraphRequired = provider.providerId === 'mandatory_graph'
-          && (contextProviderFallback() === 'graph' || cogneeMandatoryGraphMode() === 'required');
         results.push({
           providerId: provider.providerId,
           candidates: [],
@@ -324,7 +322,7 @@ export class RepoContextEngine {
           rejectedRefs: [],
           diagnostics: [{
             code: 'retrieval_provider_failed',
-            severity: mandatoryGraphRequired ? 'error' : 'warn',
+            severity: 'warn',
             providerId: provider.providerId,
             message: (err as Error).message,
           }],
@@ -403,27 +401,6 @@ export class RepoContextEngine {
     };
   }
 
-  search(input: KnowledgeRetrievalInput & { query: string; limit: number }): KnowledgeCandidateRef[] {
-    const taskText = `${input.query} ${input.currentFiles.join(' ')}`.toLowerCase();
-    return input.nodes
-      .map((node) => {
-        const score = scoreNode(node, taskText, input.nodeRole)
-          + (node.path && input.currentFiles.includes(node.path) ? 5 : 0)
-          + (node.access.injectPolicy === 'baseline' ? 1 : 0);
-        return { node, score };
-      })
-      .filter((entry) => entry.score > 0)
-      .sort((a, b) => b.score - a.score)
-      .slice(0, input.limit)
-      .map((entry) => toCandidateRef({
-        node: entry.node,
-        providerId: 'graph_keyword_metadata',
-        source: 'search_repo_knowledge',
-        mandatory: false,
-        score: entry.score,
-        reason: searchWhy(entry.node, entry.score, input.nodeRole),
-      }));
-  }
 }
 
 export function createConfiguredKnowledgeProviders(options: { db?: Db } = {}): KnowledgeRetrievalProvider[] {
@@ -431,17 +408,11 @@ export function createConfiguredKnowledgeProviders(options: { db?: Db } = {}): K
   if (!provider) return [];
   if (provider === 'cognee' || provider === 'cognee_memory') {
     const providers: KnowledgeRetrievalProvider[] = [new MandatoryContextMappingProvider(options.db)];
-    const graphFallbackEnabled = contextProviderFallback() === 'graph';
     providers.push(new CogneeMemoryProvider(options.db));
-    if (graphFallbackEnabled) providers.push(new GraphKeywordMetadataProvider());
     return providers;
   }
-  if (provider === 'allen') return [new MandatoryContextMappingProvider(options.db), new GraphKeywordMetadataProvider()];
+  if (provider === 'allen') return [new MandatoryContextMappingProvider(options.db)];
   return [];
-}
-
-function contextProviderFallback(): string {
-  return (process.env.ALLEN_CONTEXT_PROVIDER_FALLBACK ?? 'none').toLowerCase();
 }
 
 function composeProviderResults(results: KnowledgeRetrievalResult[], rankedRefs: KnowledgeCandidateRef[]): {
