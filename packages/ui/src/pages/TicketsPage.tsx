@@ -41,7 +41,7 @@ interface AgentAssignee {
   branch?: string;
 }
 
-interface LinearIssue {
+export interface LinearIssue {
   id: string;
   identifier: string;
   title: string;
@@ -148,7 +148,7 @@ function dispatchTargetLabel(target: DispatchTarget | null): string {
   return `agent: ${target.name}`;
 }
 
-function compactWorkflowInputForPrompt(
+export function compactWorkflowInputForPrompt(
   issue: LinearIssue,
   input?: Record<string, unknown>,
 ): Record<string, unknown> | undefined {
@@ -178,7 +178,7 @@ function compactWorkflowInputForPrompt(
   return Object.keys(compact).length > 0 ? compact : undefined;
 }
 
-function buildChatDispatchPrompt(
+export function buildChatDispatchPrompt(
   issue: LinearIssue,
   args: {
     target: DispatchTarget | null;
@@ -191,42 +191,25 @@ function buildChatDispatchPrompt(
   },
 ): string {
   const workflowInputOverrides = compactWorkflowInputForPrompt(issue, args.workflowInput);
-  const lines = [
+  const lines: (string | null | (string | null)[])[] = [
     'Dispatch this Linear ticket through Allen.',
     '',
-    'Ticket:',
-    `- Identifier: ${issue.identifier}`,
-    `- Linear issue id: ${issue.id}`,
-    `- Title: ${issue.title}`,
-    `- URL: ${issue.url}`,
-    `- Current status: ${issue.state?.name ?? 'unknown'} (${issue.state?.type ?? 'unknown'})`,
-    issue.project ? `- Project: ${issue.project.name}` : null,
-    issue.team ? `- Team: ${issue.team.name} (${issue.team.key})` : null,
-    issue.priorityLabel ? `- Priority: ${issue.priorityLabel}` : null,
-    issue.linearAssignee ? `- Linear assignee: ${issue.linearAssignee.name}` : null,
-    issue.labels.length > 0 ? `- Labels: ${issue.labels.map(label => label.name).join(', ')}` : null,
+    `${issue.identifier} · ${issue.title}`,
+    `URL: ${issue.url}`,
+    `Status: ${issue.state?.name ?? 'unknown'}`,
+    issue.priorityLabel ? `Priority: ${issue.priorityLabel}` : null,
+    args.repoName ? `Repo: ${args.repoName}` : null,
+    `Dispatch preference: ${dispatchTargetLabel(args.target)}`,
+    args.extraInstructions ? `Extra instructions: ${args.extraInstructions}` : null,
     '',
     'Description:',
     issue.description?.trim() || '(no description)',
-    '',
-    'User dispatch preference:',
-    `- Selected target: ${dispatchTargetLabel(args.target)}`,
-    `- Target kind: ${args.target?.kind ?? 'auto'}`,
-    args.repoId ? `- Repo id: ${args.repoId}` : '- Repo id: not selected',
-    args.repoName ? `- Repo name: ${args.repoName}` : null,
-    args.repoPath ? `- Repo path: ${args.repoPath}` : null,
-    args.extraInstructions ? `- Extra instructions: ${args.extraInstructions}` : '- Extra instructions: none',
     args.promptTemplate ? ['', 'Target-specific prompt override:', args.promptTemplate] : null,
-    workflowInputOverrides ? ['', 'Workflow input overrides:', '```json', JSON.stringify(workflowInputOverrides, null, 2), '```'] : null,
+    workflowInputOverrides
+      ? ['', 'Workflow input overrides:', '```json', JSON.stringify(workflowInputOverrides, null, 2), '```']
+      : null,
     '',
-    'Instructions:',
-    '1. First update the Linear ticket status from Backlog/Todo/Unstarted to In Progress if it is not already in progress.',
-    '2. Decide the best route. If a target was selected, use it as a preference, but override it if another available workflow, lead agent, or specialist agent is clearly better. If target kind is auto, choose from available workflows, lead agents, and specialists yourself.',
-    '3. Use a matching workflow if available; if the chosen workflow has a workspace/create-workspace step, do not create a separate workspace first. Pass the ticket, repo, and dispatch context into the workflow and let the workflow create or reuse its workspace.',
-    '4. If assigning a lead agent or specialist agent directly and code changes are required, create or reuse a workspace before assigning implementation work.',
-    '5. Otherwise use a lead agent for multi-agent work, or the best specialist agent for single-agent work.',
-    '6. Keep progress visible in this chat with execution, workspace, and PR links when available.',
-    '7. If human input is needed, ask clearly in this chat.',
+    'Please move the issue to In Progress if needed, route to the best workflow/lead/specialist, create or reuse a workspace for code changes, and keep progress visible here with links.',
   ];
   return lines.flat().filter((line): line is string => line != null).join('\n');
 }
