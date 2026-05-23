@@ -3,8 +3,22 @@
  * context that spawned the work (chat session, workflow run, or standalone
  * agent run).
  *
- * Physical layout:
+ * Physical layout (local storage):
  *   <UPLOADS_DIR>/artifacts/<rootType>/<rootId>/<filename>
+ *
+ * S3 layout (when S3_UPLOAD_ENABLED=true):
+ *   s3://<S3_UPLOAD_BUCKET>/[prefix/]artifacts/<rootType>/<rootId>/<filename>
+ *
+ * Storage selection at write time:
+ *   1. Try S3 when S3_UPLOAD_ENABLED=true and S3_UPLOAD_BUCKET is set.
+ *   2. On S3 failure (or when S3 is disabled) fall back to local disk.
+ *   3. The storageProvider / s3Key / s3Bucket fields on ArtifactDoc record
+ *      where the file actually ended up.
+ *
+ * Read routing:
+ *   - storageProvider === 's3'  → stream from S3 (s3Key + s3Bucket)
+ *   - storageProvider === 'local' or missing → read from absolutePath
+ *     (legacy records that pre-date S3 support always have absolutePath set)
  *
  * Metadata lives in the `artifacts` Mongo collection so the UI can list
  * files by root without stat-walking disk. Files are public via
@@ -20,10 +34,16 @@
  */
 import { randomUUID } from 'node:crypto';
 import {
-  existsSync, mkdirSync, writeFileSync, readFileSync, statSync, unlinkSync,
+  existsSync, mkdirSync, unlinkSync,
 } from 'node:fs';
 import { join, dirname } from 'node:path';
 import type { Db, Collection } from 'mongodb';
+import {
+  getUploadsDir,
+  storeContent,
+  readStoredContent,
+  type StorageProvider,
+} from './upload-storage.js';
 
 export type ArtifactRootType = 'chat' | 'workflow' | 'agent';
 export type ArtifactContentType = 'markdown' | 'json' | 'csv' | 'text' | 'code' | 'binary';
@@ -49,7 +69,8 @@ export interface ArtifactDoc {
   spawnContext: ArtifactSpawnContext;
   filename: string;
   relativePath: string;     // under the root directory
-  absolutePath: string;     // full disk path
+  /** Full disk path. Set for local artifacts; empty string for S3-only artifacts. */
+  absolutePath: string;
   contentType: ArtifactContentType;
   sizeBytes: number;
   description?: string;
@@ -57,6 +78,17 @@ export interface ArtifactDoc {
   createdAt: Date;
   createdByAgent?: string;
   createdByUserId?: string;
+  /**
+   * Where the content is physically stored.
+   * - 'local'  → read from absolutePath (default / legacy behaviour)
+   * - 's3'     → read from s3Key in s3Bucket
+   * - undefined → legacy record; treat as 'local' (absolutePath always set)
+   */
+  storageProvider?: StorageProvider;
+  /** S3 object key — populated when storageProvider === 's3'. */
+  s3Key?: string;
+  /** S3 bucket name — populated when storageProvider === 's3'. */
+  s3Bucket?: string;
 }
 
 export interface SaveArtifactInput {
@@ -76,16 +108,16 @@ export interface SaveArtifactInput {
 export interface SaveArtifactResult {
   artifactId: string;
   url: string;           // public URL for viewing/downloading
+  publicUrl?: string;    // absolute URL (set by MCP server layer)
   rootType: ArtifactRootType;
   rootId: string;
   filename: string;
   absolutePath: string;
   sizeBytes: number;
   overwritten: boolean;
-}
-
-function uploadsDir(): string {
-  return process.env.UPLOADS_DIR ?? join(process.cwd(), '..', '..', 'uploads');
+  storageProvider: StorageProvider;
+  s3Key?: string;
+  s3Bucket?: string;
 }
 
 /**
@@ -94,7 +126,7 @@ function uploadsDir(): string {
  * legacy UUID-named `upload_file` artifacts.
  */
 function artifactsRoot(): string {
-  return join(uploadsDir(), 'artifacts');
+  return join(getUploadsDir(), 'artifacts');
 }
 
 function rootDir(rootType: ArtifactRootType, rootId: string): string {
@@ -172,6 +204,7 @@ export class ArtifactService {
     const dir = rootDir(input.rootType, input.rootId);
     const absolutePath = join(dir, relativePath);
 
+    // Ensure the local directory exists (needed for local fallback and legacy).
     mkdirSync(dirname(absolutePath), { recursive: true });
 
     // Check for collision — if filename already exists for this root, we
@@ -193,8 +226,18 @@ export class ArtifactService {
       overwritten = true;
     }
 
-    writeFileSync(absolutePath, input.content, 'utf8');
-    const size = statSync(absolutePath).size;
+    // S3 key mirrors the local directory hierarchy so objects are easy to
+    // browse in the S3 console and identify by root.
+    const s3Key = `artifacts/${input.rootType}/${input.rootId}/${relativePath}`;
+
+    const location = await storeContent({
+      localPath: absolutePath,
+      s3Key,
+      content: input.content,
+    });
+
+    // Compute size from content buffer (works for both local and S3 paths).
+    const sizeBytes = Buffer.byteLength(input.content, 'utf8');
 
     const artifactId = existing?.artifactId ?? randomUUID();
     const now = new Date();
@@ -212,14 +255,18 @@ export class ArtifactService {
       },
       filename: relativePath.split('/').pop()!,
       relativePath,
-      absolutePath,
+      // absolutePath is set for local artifacts; empty string for S3-only.
+      absolutePath: location.provider === 'local' ? (location.localPath ?? absolutePath) : absolutePath,
       contentType,
-      sizeBytes: size,
+      sizeBytes,
       description: input.description,
       language,
       createdAt: existing?.createdAt ?? now,
       createdByAgent: input.createdByAgent,
       createdByUserId: input.createdByUserId,
+      storageProvider: location.provider,
+      s3Key: location.s3Key,
+      s3Bucket: location.s3Bucket,
     };
 
     if (existing) {
@@ -237,9 +284,12 @@ export class ArtifactService {
       rootType: input.rootType,
       rootId: input.rootId,
       filename: doc.filename,
-      absolutePath,
-      sizeBytes: size,
+      absolutePath: doc.absolutePath,
+      sizeBytes,
       overwritten,
+      storageProvider: location.provider,
+      s3Key: location.s3Key,
+      s3Bucket: location.s3Bucket,
     };
   }
 
@@ -250,11 +300,24 @@ export class ArtifactService {
   async readContent(artifactId: string): Promise<{ doc: ArtifactDoc; content: Buffer } | null> {
     const doc = await this.get(artifactId);
     if (!doc) return null;
-    if (!existsSync(doc.absolutePath)) {
+
+    // S3-backed artifact — stream from S3.
+    if (doc.storageProvider === 's3' && doc.s3Key && doc.s3Bucket) {
+      const content = await readStoredContent({
+        provider: 's3',
+        s3Key: doc.s3Key,
+        s3Bucket: doc.s3Bucket,
+      });
+      return { doc, content };
+    }
+
+    // Local or legacy — read from absolutePath.
+    if (!doc.absolutePath || !existsSync(doc.absolutePath)) {
       // FS orphan — metadata says we have it, disk doesn't. Surface clearly.
       throw new Error(`Artifact "${artifactId}" has metadata but the file is missing on disk`);
     }
-    return { doc, content: readFileSync(doc.absolutePath) };
+    const content = await readStoredContent({ absolutePath: doc.absolutePath });
+    return { doc, content };
   }
 
   async list(
@@ -274,7 +337,10 @@ export class ArtifactService {
   async delete(artifactId: string): Promise<boolean> {
     const doc = await this.col.findOne({ artifactId });
     if (!doc) return false;
-    try { if (existsSync(doc.absolutePath)) unlinkSync(doc.absolutePath); } catch { /* best effort */ }
+    // Best-effort local file cleanup (no-op for S3-only artifacts).
+    try {
+      if (doc.absolutePath && existsSync(doc.absolutePath)) unlinkSync(doc.absolutePath);
+    } catch { /* best effort */ }
     await this.col.deleteOne({ artifactId });
     return true;
   }

@@ -286,5 +286,11 @@ export async function ensureIndexes(db: Db): Promise<void> {
     { expireAfterSeconds: 86400 }, // 24h TTL
   );
 
+  // Uploaded Files — flat /api/files uploads metadata.
+  // fileId is the stored filename (UUID + ext) — unique lookup key for
+  // the public GET /api/files/:filename route to find the storage location.
+  await db.collection('uploaded_files').createIndex({ fileId: 1 }, { unique: true });
+  await db.collection('uploaded_files').createIndex({ createdAt: -1 });
+
   console.log('Database indexes ensured');
 }
