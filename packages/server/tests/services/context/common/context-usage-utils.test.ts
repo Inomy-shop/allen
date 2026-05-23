@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import { addSystemInjectedContextUsage, extractUsage } from '../../../../src/services/context/allen-knowledge-graph/repo-knowledge-graph-usage.js';
+import { addSystemInjectedContextUsage, extractUsage } from '../../../../src/services/context/common/context-usage-utils.js';
 
-describe('repo knowledge graph usage parsing', () => {
+describe('context usage parsing', () => {
   it('treats applied system-injected context as verified usage', () => {
     const usage = extractUsage({
       repo_context_usage: {

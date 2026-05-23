@@ -1,6 +1,17 @@
-import type { ParsedUsage, UsageToolCall } from './repo-knowledge-graph.types.js';
-import { claimRequiresBodyLoad } from './repo-knowledge-graph-validation.js';
-import { firstString, isRecord } from './repo-knowledge-graph-utils.js';
+import type { ParsedUsage, UsageToolCall } from './context-usage.types.js';
+import { firstString, isRecord } from './context-utils.js';
+
+function claimRequiresBodyLoad(kind: string): boolean {
+  return [
+    'context_file',
+    'doc',
+    'runbook',
+    'skill',
+    'skill_reference',
+    'production_note',
+    'instruction_file',
+  ].includes(kind);
+}
 
 export function extractUsage(outputs: Record<string, unknown>, rawResponse?: string, toolCalls?: UsageToolCall[]): ParsedUsage {
   const candidates: Array<{ source: string; value: Record<string, unknown> }> = [];

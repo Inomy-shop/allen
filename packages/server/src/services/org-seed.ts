@@ -1,8 +1,8 @@
 /**
  * Organisation Seed — builds the simplified 5-team Allen org chart.
  *
- * Team layout (5 teams, 20 agents):
- *   - meta (5)        — UNTOUCHED. Builds other teams and agents.
+ * Team layout (5 teams, 21 agents):
+ *   - meta (6)        — UNTOUCHED. Builds other teams and agents.
  *   - executive (1)   — ceo. Chat entry point.
  *   - product (3)     — product-manager, requirements-analyst, acceptance-tester.
  *   - engineering (8) — engineering-lead + 7 specialists (backend/frontend dev,
@@ -17,11 +17,16 @@
  * no prompt text changes.
  *
  * Safe to call on every startup — idempotent on team/agent names. Existing
- * rows are only updated when SEED_OVERRIDE=true.
+ * rows are only updated when SEED_OVERRIDE=true, except built-ins with
+ * security-sensitive orchestration contracts that must match server APIs.
  */
 
 import type { Db } from 'mongodb';
-import { buildRepoKnowledgeGraphIndexerSystemPrompt } from './context/allen-knowledge-graph/repo-knowledge-graph-indexer-prompts.js';
+import {
+  buildRepoContextCuratorSystemPrompt,
+  buildRepoContextCuratorWorkerSystemPrompt,
+} from './context/curation/repo-context-curator-prompts.js';
+import { buildRepoMandatoryContextMapperSystemPrompt } from './context/mandatory/repo-mandatory-context-mapper-prompts.js';
 import { isSeedOverrideEnabled } from './seed-policy.js';
 import { resolveAgentProviderModel } from './llm-defaults.js';
 import { CODING_GUIDELINES_BODY } from '../seed.js';
@@ -155,6 +160,12 @@ const TEAM_LEAD_PREAMBLE = `You do NOT have direct filesystem access. You coordi
 YOU MUST call delegate_to_agent or spawn_agent BEFORE making any claims about code. Every technical claim must come from an agent's actual response.
 
 Your direct delegation targets and the full org structure are injected into this prompt at runtime — read them before deciding who to call.`;
+
+const FORCE_UPDATE_AGENT_NAMES = new Set([
+  'repo-context-curator',
+  'repo-context-curation-worker',
+  'repo-mandatory-context-mapper',
+]);
 
 const SPECIALIST_PREAMBLE = `WORKSPACE CONSTRAINT:
 - ALL your changes must be inside the worktree path passed to you as context.repo_path or workspace.worktree_path. NEVER touch files outside that worktree — even files that look like they belong to "this repo" in absolute paths. The main clone is off-limits; the worktree is the ONLY place you write to.
@@ -1798,23 +1809,61 @@ Rules:
 - System prompts should be 200-500 chars and specific`,
   },
   {
-    name: 'repo-knowledge-graph-indexer',
+    name: 'repo-context-curator',
     reasoningEffort: 'high',
     planMode: false,
-    displayName: 'Repo Knowledge Graph Indexer',
-    description: 'Builds a structured repo knowledge graph of modules, instruction files, skills, production notes, and validation commands.',
+    displayName: 'Repo Context Curator',
+    description: 'Generates source-grounded repo context units from docs, instructions, skills, and knowledge for reviewable injection and retrieval.',
     teamName: 'meta',
     teamRole: 'member',
     type: 'technical',
-    icon: 'network',
-    color: '#0f766e',
-    provider: 'claude-cli',
-    model: 'opus',
+    icon: 'book-open-check',
+    color: '#2563eb',
+    provider: 'codex',
+    model: 'gpt-5.5',
     tools: [],
-    capabilities: ['repo-analysis', 'knowledge-graph', 'production-knowledge-indexing'],
-    personality: 'Precise index builder. Prefers explicit paths, stable IDs, and conservative claims.',
+    capabilities: ['repo-analysis', 'context-curation', 'retrieval-preparation'],
+    personality: 'Careful context editor. Source-backed, conservative, and allergic to prompt bloat.',
+    canDelegateTo: ['repo-context-curation-worker'],
+    system: buildRepoContextCuratorSystemPrompt(),
+  },
+  {
+    name: 'repo-context-curation-worker',
+    reasoningEffort: 'high',
+    planMode: false,
+    displayName: 'Repo Context Curation Worker',
+    description: 'Curates assigned repo context files and saves generated context to temporary staging for coordinator validation.',
+    teamName: 'meta',
+    teamRole: 'member',
+    type: 'technical',
+    icon: 'file-text',
+    color: '#0891b2',
+    provider: 'codex',
+    model: 'gpt-5.5',
+    tools: [],
+    capabilities: ['context-curation-worker', 'retrieval-preparation'],
+    personality: 'Focused context editor. Reads only assigned files and saves source-grounded staging rows.',
     canDelegateTo: [],
-    system: buildRepoKnowledgeGraphIndexerSystemPrompt(),
+    system: buildRepoContextCuratorWorkerSystemPrompt(),
+  },
+  {
+    name: 'repo-mandatory-context-mapper',
+    reasoningEffort: 'high',
+    planMode: false,
+    displayName: 'Repo Mandatory Context Mapper',
+    description: 'Maps true always-load repo context to exact Allen agents and saves mandatory injection content separately from curated retrieval context.',
+    teamName: 'meta',
+    teamRole: 'member',
+    type: 'technical',
+    icon: 'pin',
+    color: '#7c3aed',
+    provider: 'codex',
+    model: 'gpt-5.5',
+    tools: [],
+    capabilities: ['mandatory-context-mapping', 'agent-context-policy'],
+    personality: 'Conservative context policy mapper. Avoids broad mandatory injection unless clearly justified.',
+    canDelegateTo: [],
+    system: buildRepoMandatoryContextMapperSystemPrompt(),
   },
   {
     name: 'repo-scanner',
@@ -2637,7 +2686,7 @@ export class OrgSeedService {
           updatedAt: new Date(),
         });
         agentsCreated++;
-      } else if (override) {
+      } else if (override || FORCE_UPDATE_AGENT_NAMES.has(agent.name)) {
         await agentsCol.updateOne(
           { name: agent.name },
           {

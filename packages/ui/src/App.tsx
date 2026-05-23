@@ -126,6 +126,12 @@ function routeTitle(pathname: string): string {
   return match?.label ?? 'Allen';
 }
 
+function routeDetail(pathname: string, chatTopbarTitle: string | null): string | null {
+  if (/^\/repos\/[^/]+\/context-management/.test(pathname)) return 'Context Management';
+  if (/^\/chat\/[^/]+/.test(pathname)) return chatTopbarTitle;
+  return null;
+}
+
 function AppTopbar({
   title,
   detail,
@@ -375,6 +381,7 @@ export default function App() {
     '/agents': location.pathname.startsWith('/agents'),
   }));
   const [chatTopbarTitle, setChatTopbarTitle] = useState<string | null>(null);
+  const detail = routeDetail(location.pathname, chatTopbarTitle);
   const [commandOpen, setCommandOpen] = useState(false);
   const [liveCount, setLiveCount] = useState(0);
   const [healthKnown, setHealthKnown] = useState(false);
@@ -682,7 +689,7 @@ export default function App() {
       <main className="flex-1 min-w-0 bg-app relative flex flex-col overflow-hidden">
         <AppTopbar
           title={title}
-          detail={chatTopbarTitle}
+          detail={detail}
           liveCount={liveCount}
           healthy={healthKnown}
           commandOpen={commandOpen}

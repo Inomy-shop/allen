@@ -2,8 +2,8 @@ import { createHash, randomUUID } from 'node:crypto';
 import type { Collection, Db } from 'mongodb';
 import type { KnowledgeCandidateRef, RepoContextPacket } from '../core/repo-context-engine.js';
 import type { WorkflowContextInjection } from '../core/workflow-context-injection-adapter.js';
-import { firstString, isRecord } from '../allen-knowledge-graph/repo-knowledge-graph-utils.js';
-import { normalizeUsageArray } from '../allen-knowledge-graph/repo-knowledge-graph-usage.js';
+import { firstString, isRecord } from '../common/context-utils.js';
+import { normalizeUsageArray } from '../common/context-usage-utils.js';
 
 export type ContextRefEventType =
   | 'candidate'

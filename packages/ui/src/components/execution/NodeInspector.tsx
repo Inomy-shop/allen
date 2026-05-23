@@ -16,6 +16,12 @@ type ContextRefProviderMetadata = {
   containsCodeBlocks?: unknown;
   searchMode?: unknown;
   confidence?: unknown;
+  cogneeChunkText?: unknown;
+  curatedContext?: unknown;
+  retrievalText?: unknown;
+  rejectionReason?: unknown;
+  injectionDecision?: unknown;
+  injectionPolicy?: unknown;
   sourceMetadata?: {
     path?: unknown;
     fileHash?: unknown;
@@ -373,6 +379,7 @@ export default function NodeInspector({ trace, workflowEdges, contextEngineEnabl
                         <div className="text-theme-primary break-all">{r.path ?? r.title ?? r.refId}</div>
                         <div className="mt-0.5 text-theme-subtle break-all">ref {r.refId ?? 'unknown'}</div>
                         {chunkId ? <div className="mt-0.5 text-theme-subtle break-all">chunk {chunkId}</div> : null}
+                        {contextCogneePreview(r) ? <div className="mt-1 text-theme-secondary whitespace-pre-wrap break-words">{contextCogneePreview(r)}</div> : null}
                       </div>
                       <div className="shrink-0 flex items-center gap-1">
                         {r.contentAvailable && r.contentUrl ? (
@@ -381,7 +388,7 @@ export default function NodeInspector({ trace, workflowEdges, contextEngineEnabl
                             onClick={() => void toggleRefContent(r)}
                             className="px-1.5 py-0.5 rounded border border-app text-theme-secondary hover:text-theme-primary hover:bg-app-muted"
                           >
-                            {openContentRef === key ? 'Hide chunk' : 'View chunk'}
+                            {openContentRef === key ? 'Hide content' : 'View content'}
                           </button>
                         ) : null}
                         <span className="text-theme-subtle">{r.lifecycleStatus ?? 'unknown'}</span>
@@ -748,6 +755,18 @@ function contextScoreLine(ref: ContextLifecycleRefSummary): string | undefined {
     rerankerScoreLabel(ref),
   ].filter(Boolean);
   return parts.length ? parts.join(' · ') : undefined;
+}
+
+function contextCogneePreview(ref: ContextLifecycleRefSummary): string | undefined {
+  if (!ref.isCognee) return undefined;
+  const text = firstText(
+    ref.providerMetadata?.cogneeChunkText,
+    ref.providerMetadata?.curatedContext,
+    ref.providerMetadata?.retrievalText,
+  );
+  if (!text) return undefined;
+  const compact = text.replace(/\s+/g, ' ').trim();
+  return `Cognee chunk: ${compact.length > 320 ? `${compact.slice(0, 320)}...` : compact}`;
 }
 
 function rerankerScoreLabel(ref: ContextLifecycleRefSummary): string | undefined {

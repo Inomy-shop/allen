@@ -709,9 +709,37 @@ export const repos = {
   getCogneeStatus: (id: string) =>
     request<any>(`/repos/${id}/cognee`),
   refreshCognee: (id: string, options?: { cleanRebuild?: boolean }) =>
-    request<any>(`/repos/${id}/cognee/refresh`, { method: 'POST', body: JSON.stringify({ pullLatest: true, cleanRebuild: options?.cleanRebuild === true }) }),
+    request<any>(`/repos/${id}/cognee/refresh`, { method: 'POST', body: JSON.stringify({ pullLatest: false, cleanRebuild: options?.cleanRebuild === true }) }),
   stopCognee: (id: string) =>
     request<any>(`/repos/${id}/cognee/stop`, { method: 'POST' }),
+  getContextManagement: (id: string) =>
+    request<any>(`/repos/${id}/context-management`),
+  runContextPlayground: (id: string, body: Record<string, unknown>) =>
+    request<any>(`/repos/${id}/context-management/playground`, { method: 'POST', body: JSON.stringify(body) }),
+  getContextGraph: (id: string, params: Record<string, string | number | undefined> = {}) => {
+    const search = new URLSearchParams();
+    Object.entries(params).forEach(([key, value]) => {
+      if (value !== undefined && value !== '') search.set(key, String(value));
+    });
+    const suffix = search.toString() ? `?${search.toString()}` : '';
+    return request<any>(`/repos/${id}/context-management/graph${suffix}`);
+  },
+  getContextGraphNode: (id: string, nodeId: string, params: Record<string, string | number | boolean | undefined> = {}) => {
+    const search = new URLSearchParams();
+    Object.entries(params).forEach(([key, value]) => {
+      if (value !== undefined && value !== '') search.set(key, String(value));
+    });
+    const suffix = search.toString() ? `?${search.toString()}` : '';
+    return request<any>(`/repos/${id}/context-management/graph/nodes/${encodeURIComponent(nodeId)}${suffix}`);
+  },
+  createCuratedContextEntry: (id: string, body: Record<string, unknown>) =>
+    request<any>(`/repos/${id}/context-management/entries`, { method: 'POST', body: JSON.stringify(body) }),
+  updateCuratedContextEntry: (id: string, entryId: string, body: Record<string, unknown>) =>
+    request<any>(`/repos/${id}/context-management/entries/${encodeURIComponent(entryId)}`, { method: 'PATCH', body: JSON.stringify(body) }),
+  saveMandatoryContext: (id: string, body: Record<string, unknown>) =>
+    request<any>(`/repos/${id}/context-management/mandatory`, { method: 'POST', body: JSON.stringify(body) }),
+  updateMandatoryContext: (id: string, mappingId: string, body: Record<string, unknown>) =>
+    request<any>(`/repos/${id}/context-management/mandatory/${encodeURIComponent(mappingId)}`, { method: 'PATCH', body: JSON.stringify(body) }),
   getAllFiles: (id: string) => request<any[]>(`/repos/${id}/all-files`),
   getFile: (id: string, path: string) => request<any>(`/repos/${id}/file/${path}`),
   context: (id: string) =>

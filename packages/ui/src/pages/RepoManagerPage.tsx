@@ -3,10 +3,9 @@ import { repos as repoApi, workflows as wfApi, system as systemApi } from '../se
 import DeleteConfirmDialog from '../components/common/DeleteConfirmDialog';
 import {
   FolderGit2, Plus, RefreshCw, Trash2, Pencil, ScanSearch, X,
-  GitBranch, Package, Code2, Sparkles, ExternalLink, Loader2, Settings, Monitor, FileText, Download,
+  GitBranch, Sparkles, ExternalLink, Loader2, Settings, Monitor, FileText, Download,
 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
-import { renderMarkdown } from '../components/chat/ChatMessageList';
 import { WorkspaceConfigEditor } from '../components/workspace/WorkspaceConfigEditor';
 import { workspaces as wsApi } from '../services/workspaceService';
 import { SetupProgressDialog } from '../components/workspace/SetupProgressDialog';
@@ -36,7 +35,8 @@ interface Repo {
 
 type CogneeStatus = {
   status?: 'pending' | 'running' | 'completed' | 'partial' | 'failed' | 'stopped';
-  stage?: 'pulling' | 'collecting_markdown' | 'ingesting' | 'cognifying' | 'completed' | 'failed';
+  stage?: 'pulling' | 'collecting_curated_context' | 'collecting_markdown' | 'ingesting' | 'cognifying' | 'completed' | 'failed';
+  ingestFormat?: string;
   message?: string;
   documentCount?: number;
   candidateCount?: number;
@@ -333,13 +333,13 @@ function contextStatusLabel(status?: CogneeStatus): string {
   if (status.status === 'running') {
     if (status.workerActive === false) return 'context interrupted';
     if (status.stage === 'pulling') return 'running: pulling';
-    if (status.stage === 'collecting_markdown') return 'running: collecting';
+    if (status.stage === 'collecting_curated_context' || status.stage === 'collecting_markdown') return 'running: collecting';
     if (status.stage === 'ingesting') return 'running: ingesting';
     if (status.stage === 'cognifying') return 'running: cognifying';
     return 'context running';
   }
   const count = status.documentCount ?? 0;
-  return `${count} md indexed`;
+  return `${count} context docs`;
 }
 
 function cogneeStatusTitle(status?: CogneeStatus): string {
@@ -417,18 +417,6 @@ function isCogneeRunning(status?: CogneeStatus): boolean {
   return status?.status === 'running';
 }
 
-function isCogneeLiveBuild(status?: CogneeStatus): boolean {
-  return status?.status === 'running' && status.workerActive !== false;
-}
-
-function cogneeActionLabel(status?: CogneeStatus): string {
-  if (isCogneeLiveBuild(status)) return 'Building context';
-  if (status?.status === 'running') return 'Retry context';
-  if (status?.status === 'failed' || status?.status === 'partial' || status?.status === 'stopped') return 'Retry context';
-  if (status?.status === 'completed') return 'Refresh context';
-  return 'Build context';
-}
-
 /* ── Main Page ──────────────────────────────────────────────────────────── */
 
 export default function RepoManagerPage() {
@@ -438,14 +426,11 @@ export default function RepoManagerPage() {
   const [editRepo, setEditRepo] = useState<Repo | null>(null);
   const [scanningId, setScanningId] = useState<string | null>(null);
   const [pullingId, setPullingId] = useState<string | null>(null);
-  const [cogneeBuildingId, setCogneeBuildingId] = useState<string | null>(null);
-  const [cogneeStoppingId, setCogneeStoppingId] = useState<string | null>(null);
   const [cogneeStatusByRepo, setCogneeStatusByRepo] = useState<Record<string, CogneeStatus>>({});
   const [contextConfig, setContextConfig] = useState<ContextRuntimeConfig>({ enabled: false, provider: null, cogneeEnabled: false });
   const [deletingRepo, setDeletingRepo] = useState<{ id: string; name: string } | null>(null);
   const [configRepoId, setConfigRepoId] = useState<string | null>(null);
   const [wsCreateRepo, setWsCreateRepo] = useState<Repo | null>(null);
-  const [contextRepo, setContextRepo] = useState<Repo | null>(null);
   const navigate = useNavigate();
 
   const refresh = useCallback(async () => {
@@ -539,40 +524,6 @@ export default function RepoManagerPage() {
     setPullingId(null);
   };
 
-  const handleBuildCognee = async (e: React.MouseEvent, id: string, options?: { cleanRebuild?: boolean }) => {
-    e.stopPropagation();
-    if (!contextConfig.cogneeEnabled) return;
-    setCogneeBuildingId(id);
-    try {
-      const status = await repoApi.refreshCognee(id, options);
-      setCogneeStatusByRepo(prev => ({ ...prev, [id]: status }));
-      if (status.status === 'running') {
-        toast.info(status.message ?? 'Context build started.');
-      } else if (status.status === 'completed') {
-        toast.success(`Context built from ${status.documentCount ?? 0} Markdown file${status.documentCount === 1 ? '' : 's'}.`);
-      } else {
-        toast.error(status.error ?? 'Context build failed');
-      }
-    } catch (err: any) {
-      toast.error(err.message ?? 'Context build failed');
-    }
-    setCogneeBuildingId(null);
-  };
-
-  const handleStopCognee = async (e: React.MouseEvent, id: string) => {
-    e.stopPropagation();
-    if (!contextConfig.cogneeEnabled) return;
-    setCogneeStoppingId(id);
-    try {
-      const status = await repoApi.stopCognee(id);
-      setCogneeStatusByRepo(prev => ({ ...prev, [id]: status }));
-      toast.info(status.message ?? 'Context build stopped.');
-    } catch (err: any) {
-      toast.error(err.message ?? 'Context stop failed');
-    }
-    setCogneeStoppingId(null);
-  };
-
   return (
     <div className="px-6 pt-5 pb-8">
       {/* Breadcrumb */}
@@ -630,9 +581,6 @@ export default function RepoManagerPage() {
             const isScanning = scanningId === repo._id;
             const isArchived = repo.status === 'archived';
             const cogneeStatus = contextConfig.cogneeEnabled ? cogneeStatusByRepo[repo._id] : undefined;
-            const isBuildRequestPending = cogneeBuildingId === repo._id;
-            const isStopRequestPending = cogneeStoppingId === repo._id;
-            const hasLiveBuild = isCogneeLiveBuild(cogneeStatus);
             return (
               <div key={repo._id} className={`card-hover p-4 group flex flex-col gap-2 ${isArchived ? 'opacity-50' : ''}`}>
                 <div className="flex items-start gap-3">
@@ -694,8 +642,9 @@ export default function RepoManagerPage() {
                 {/* Actions row — always visible, ghost icons */}
                 <div className="flex items-center gap-0.5 pl-11 -ml-1 mt-auto">
                   {contextConfig.enabled && (
-                    <button onClick={(e) => { e.stopPropagation(); setContextRepo(repo); }} className="p-1.5 rounded text-theme-muted hover:text-accent hover:bg-app-muted transition-colors" title="View Context">
+                    <button onClick={(e) => { e.stopPropagation(); navigate(`/repos/${repo._id}/context-management`); }} className="btn btn-ghost btn-sm ml-1" title="Open Context Management">
                       <FileText className="w-3.5 h-3.5" />
+                      Context Management
                     </button>
                   )}
                   <button onClick={(e) => { e.stopPropagation(); setWsCreateRepo(repo); }} className="p-1.5 rounded text-theme-muted hover:text-accent-green hover:bg-app-muted transition-colors" title="New Workspace">
@@ -707,22 +656,6 @@ export default function RepoManagerPage() {
                   <button onClick={(e) => handleScan(e, repo._id)} disabled={isScanning} className="p-1.5 rounded text-theme-muted hover:text-theme-primary hover:bg-app-muted transition-colors" title="Scan">
                     {isScanning ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <ScanSearch className="w-3.5 h-3.5" />}
                   </button>
-                  {contextConfig.cogneeEnabled && hasLiveBuild && (
-                    <button onClick={(e) => handleStopCognee(e, repo._id)} disabled={isStopRequestPending} className="p-1.5 rounded text-theme-muted hover:text-accent-red hover:bg-accent-red/10 transition-colors" title="Stop the active Cognee context build">
-                      {isStopRequestPending ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <X className="w-3.5 h-3.5" />}
-                    </button>
-                  )}
-                  {contextConfig.cogneeEnabled && (
-                    <button onClick={(e) => handleBuildCognee(e, repo._id)} disabled={isBuildRequestPending || hasLiveBuild} className="btn btn-ghost btn-sm ml-1" title="Retry resumes the existing Cognee dataset and preserves already cognified documents">
-                      {(isBuildRequestPending || hasLiveBuild) ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Sparkles className="w-3.5 h-3.5" />}
-                      {isBuildRequestPending ? 'Building context' : cogneeActionLabel(cogneeStatus)}
-                    </button>
-                  )}
-                  {contextConfig.cogneeEnabled && cogneeStatus && cogneeStatus.status !== 'pending' && !hasLiveBuild && (
-                    <button onClick={(e) => handleBuildCognee(e, repo._id, { cleanRebuild: true })} disabled={isBuildRequestPending} className="btn btn-ghost btn-sm" title="Clean rebuild creates a fresh Cognee dataset and does not continue the previous dataset">
-                      Clean rebuild context
-                    </button>
-                  )}
                   <button onClick={(e) => { e.stopPropagation(); setConfigRepoId(repo._id); }} className="p-1.5 rounded text-theme-muted hover:text-theme-primary hover:bg-app-muted transition-colors" title="Workspace Config">
                     <Settings className="w-3.5 h-3.5" />
                   </button>
@@ -751,104 +684,6 @@ export default function RepoManagerPage() {
       />
       {configRepoId && <WorkspaceConfigEditor repoId={configRepoId} onClose={() => setConfigRepoId(null)} />}
       {wsCreateRepo && <QuickWorkspaceDialog repo={wsCreateRepo} onClose={() => setWsCreateRepo(null)} onCreated={(id) => { setWsCreateRepo(null); navigate(`/workspaces/${id}`); }} />}
-      {contextRepo && contextConfig.enabled && <RepoContextViewer repoId={contextRepo._id} repoName={contextRepo.name} onClose={() => setContextRepo(null)} />}
-    </div>
-  );
-}
-
-/* ── Repo Context Viewer ──────────────────────────────────────────────── */
-
-function RepoContextViewer({ repoId, repoName, onClose }: { repoId: string; repoName: string; onClose: () => void }) {
-  const [context, setContext] = useState<any>(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState('');
-  const [rescanning, setRescanning] = useState(false);
-  const toast = useToast();
-
-  useEffect(() => {
-    setLoading(true);
-    setError('');
-    repoApi.context(repoId)
-      .then((ctx) => setContext(ctx))
-      .catch((err) => setError(err.message ?? 'Failed to load context'))
-      .finally(() => setLoading(false));
-  }, [repoId]);
-
-  const handleRescan = async () => {
-    setRescanning(true);
-    try {
-      await repoApi.rescanContext(repoId);
-      toast.success('Deep scan started — this runs in the background and may take a few minutes.');
-    } catch (err: any) {
-      toast.error(err.message ?? 'Failed to start rescan');
-    } finally {
-      setRescanning(false);
-    }
-  };
-
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-md" onClick={onClose}>
-      <div className="card w-full max-w-4xl max-h-[90vh] overflow-hidden shadow-popover animate-in fade-in zoom-in-95 duration-200 flex flex-col" onClick={e => e.stopPropagation()}>
-        {/* Header */}
-        <div className="px-6 py-4 border-b border-app shrink-0 flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <FileText className="w-5 h-5 text-accent-blue" />
-            <div>
-              <h2 className="text-[14px] font-semibold text-theme-primary tracking-tight">Repo Context</h2>
-              <p className="text-[10px] text-theme-muted font-mono">{repoName} — agent-generated codebase analysis</p>
-            </div>
-          </div>
-          <div className="flex items-center gap-2">
-            <button onClick={handleRescan} disabled={rescanning} className="btn-ghost text-xs inline-flex items-center gap-1" title="Trigger a fresh deep scan">
-              {rescanning ? <Loader2 className="w-3 h-3 animate-spin" /> : <RefreshCw className="w-3 h-3" />}
-              Rescan
-            </button>
-            <button onClick={onClose} className="p-2 rounded-sm hover:bg-surface-200 text-theme-muted hover:text-theme-secondary transition-colors">
-              <X className="w-4 h-4" />
-            </button>
-          </div>
-        </div>
-
-        {/* Content */}
-        <div className="flex-1 overflow-y-auto px-6 py-5">
-          {loading ? (
-            <div className="text-xs text-theme-muted animate-pulse">Loading context...</div>
-          ) : error ? (
-            <div className="space-y-3">
-              <div className="text-xs text-theme-muted">{error}</div>
-              <p className="text-[11px] text-theme-subtle">
-                No context available yet. Click "Rescan" to trigger a deep scan — the repo-scanner agent will explore the codebase and generate a comprehensive analysis. This runs in the background and typically takes 2-5 minutes.
-              </p>
-              <button onClick={handleRescan} disabled={rescanning} className="btn-primary text-xs inline-flex items-center gap-1.5">
-                {rescanning ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <ScanSearch className="w-3.5 h-3.5" />}
-                {rescanning ? 'Starting...' : 'Generate Context'}
-              </button>
-            </div>
-          ) : context?.contextMarkdown ? (
-            <div className="space-y-3">
-              {/* Metadata bar */}
-              <div className="flex items-center gap-4 text-[10px] text-theme-muted font-mono flex-wrap">
-                {context.branch && <span>Branch: <span className="text-theme-secondary">{context.branch}</span></span>}
-                {context.headSha && <span>SHA: <span className="text-theme-secondary">{context.headSha?.slice(0, 8)}</span></span>}
-                {context.scannedAt && <span>Scanned: <span className="text-theme-secondary">{new Date(context.scannedAt).toLocaleString()}</span></span>}
-                {context.scanDurationMs && <span>Duration: <span className="text-theme-secondary">{(context.scanDurationMs / 1000).toFixed(1)}s</span></span>}
-                {context.scanCostUsd != null && <span>Cost: <span className="text-theme-secondary">${context.scanCostUsd.toFixed(4)}</span></span>}
-              </div>
-              {/* Rendered markdown */}
-              <div className="prose-allen text-sm text-theme-secondary leading-relaxed">
-                {renderMarkdown(context.contextMarkdown)}
-              </div>
-            </div>
-          ) : (
-            <div className="text-xs text-theme-muted">Context exists but is empty. Try rescanning.</div>
-          )}
-        </div>
-
-        {/* Footer */}
-        <div className="px-6 py-3 border-t border-app bg-app-card/50 shrink-0">
-          <button onClick={onClose} className="btn-ghost text-xs">Close</button>
-        </div>
-      </div>
     </div>
   );
 }

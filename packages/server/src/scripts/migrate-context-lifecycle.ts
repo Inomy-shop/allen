@@ -2,8 +2,8 @@ import { createHash } from 'node:crypto';
 import dotenv from 'dotenv';
 import { connectDB, disconnectDB } from '../database/mongo.js';
 import { ContextLifecycleStore } from '../services/context/lifecycle/context-lifecycle-store.js';
-import { firstString, isRecord } from '../services/context/allen-knowledge-graph/repo-knowledge-graph-utils.js';
-import { normalizeUsageArray } from '../services/context/allen-knowledge-graph/repo-knowledge-graph-usage.js';
+import { firstString, isRecord } from '../services/context/common/context-utils.js';
+import { normalizeUsageArray } from '../services/context/common/context-usage-utils.js';
 
 dotenv.config();
 

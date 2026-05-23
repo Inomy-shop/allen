@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import type { KnowledgeRetrievalInput } from './repo-context-engine.js';
-import { firstString, isRecord } from '../allen-knowledge-graph/repo-knowledge-graph-utils.js';
+import { firstString, isRecord } from '../common/context-utils.js';
 
 const TASK_SIGNAL_MAX_CHARS = 3600;
 const RAW_PROMPT_FALLBACK_MAX_CHARS = 2400;

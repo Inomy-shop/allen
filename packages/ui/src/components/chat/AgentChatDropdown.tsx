@@ -19,6 +19,7 @@ interface AgentChatDropdownProps {
   disabled?: boolean;
   loading?: boolean;
   variant?: 'default' | 'composer';
+  showAssistant?: boolean;
 }
 
 export default function AgentChatDropdown({
@@ -28,6 +29,7 @@ export default function AgentChatDropdown({
   disabled = false,
   loading = false,
   variant = 'default',
+  showAssistant = true,
 }: AgentChatDropdownProps) {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState('');
@@ -86,7 +88,9 @@ export default function AgentChatDropdown({
   const selectedAgent = agents.find(a => a.name === value) ?? null;
   const displayLabel = selectedAgent
     ? (selectedAgent.displayName ?? selectedAgent.name)
-    : 'Assistant';
+    : showAssistant
+      ? 'Assistant'
+      : 'Select agent';
   const isComposer = variant === 'composer';
 
   const handleOpen = () => {
@@ -146,7 +150,7 @@ export default function AgentChatDropdown({
   }, [agents, query]);
 
   const totalVisible = grouped.reduce((acc, g) => acc + g.agents.length, 0);
-  const showAssistant = !query || 'assistant'.includes(query.toLowerCase());
+  const showAssistantOption = showAssistant && (!query || 'assistant'.includes(query.toLowerCase()));
 
   return (
     <div className="relative inline-block">
@@ -219,7 +223,7 @@ export default function AgentChatDropdown({
               ) : (
                 <>
                   {/* Assistant option (always at top) */}
-                  {showAssistant && (
+                  {showAssistantOption && (
                     <button
                       type="button"
                       onClick={() => pick(null, null)}
@@ -267,7 +271,7 @@ export default function AgentChatDropdown({
                   ))}
 
                   {/* Empty state */}
-                  {!showAssistant && totalVisible === 0 && (
+                  {!showAssistantOption && totalVisible === 0 && (
                     <div className="px-3 py-6 text-center text-xs text-theme-muted italic">
                       No agents found
                     </div>
