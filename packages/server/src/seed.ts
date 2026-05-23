@@ -12,7 +12,48 @@ import type { SkillInput } from './services/skill.service.js';
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
 /**
- * Seed the database with default agents from agents.yml.
+ * Full text of the coding-guidelines skill body. Exported so OrgSeedService can
+ * inline the same content into the system prompts of code-writing and
+ * design/planning specialist agents — keeping the skill row and the inlined
+ * prompt copies in lock-step from a single source.
+ */
+export const CODING_GUIDELINES_BODY = `# Coding Guidelines
+
+These guidelines exist to reduce common failure modes when LLMs write or modify code. Apply them whenever you are editing, creating, or refactoring files — not for routing decisions, planning, or investigation work.
+
+## Think Before Coding
+
+Before touching any file:
+1. **Surface assumptions** — state every assumption explicitly. If you are not sure about scope, intent, or expected behaviour, surface the uncertainty and ask rather than guess.
+2. **Define success criteria** — articulate what "done" looks like in concrete, verifiable terms before you start. "The build passes and the test for AC-003 goes green" is good; "looks right" is not.
+3. **Read the existing code** — always read the files you intend to change before changing them. Match existing conventions, naming patterns, and import style.
+
+## Simplicity First
+
+- **Minimum code** — write the least code that correctly satisfies the requirement. No speculative abstractions, no unused helpers, no "we'll need this later" scaffolding.
+- **No over-engineering** — if a simple imperative block works, prefer it over a generic abstraction. Introduce abstractions only when they directly reduce duplication that exists *today*.
+- **Boring is good** — prefer well-understood patterns and library features over novel or clever constructs.
+
+## Surgical Changes
+
+- **Touch only what you must** — change only the files and lines the task requires. Do not fix style issues, rename symbols, or refactor code that is not in your task unless explicitly asked.
+- **One concern per change** — do not bundle unrelated fixes into a single diff. If you spot a secondary issue, note it in your output but do not change it without instruction.
+- **Match the existing style** — indentation, quote style, import order, line length — match what is already there, even if your preference differs.
+
+## Goal-Driven Execution
+
+- **Every changed line traces to the request** — if you cannot name the requirement, acceptance criterion, or task item that justifies a line of code, remove that line.
+- **Verify before reporting done** — run the build, the lint, and the relevant tests. Report the concrete command output, not "it should work". If a check fails, fix it or escalate; never silently skip it.
+- **Fail loudly** — if a constraint cannot be met (type error, missing dependency, conflicting requirement), surface the exact error and stop rather than working around it silently.`;
+
+/**
+ * Seed the database with agents returned by loadAgents().
+ *
+ * NOTE: loadAgents() no longer reads agents.yml by default — the legacy
+ * fallback was removed in favour of OrgSeedService (org-seed.ts), which is
+ * the authoritative agent seed called at startup. This function is kept for
+ * compatibility but is NOT invoked by app.ts (see the commented-out call
+ * there). Calling it without a customPath argument will produce zero agents.
  */
 export async function seedDefaultAgents(db: Db): Promise<void> {
   const col = db.collection('agents');
@@ -624,6 +665,25 @@ Builder agents typically present a blueprint via ask_delegator before creating a
 
 ## Output
 Return: the builder agent you chose (as discovered at runtime), the blueprint preview verbatim from the builder when available, the created record IDs and names, and a clickable link to each new team/agent/workflow/skill when the UI route is known. Never paste raw create_* outputs without context.`,
+  },
+  {
+    // ─────────────────────────────────────────────────────────────────────────
+    // IMPLEMENTATION GUIDELINES — secondary behavioural guardrail for
+    // code-writing / file-modifying agents. Purposely low priority (40) so it
+    // never outbids the domain routing skills (72-92). Not in ALWAYS_RESYNC
+    // because operator body edits should survive reboots. Seeded only so the
+    // skill is available in the DB for knowledge-graph indexers and agents that
+    // load it explicitly; it is NOT a top-level routing skill.
+    // ─────────────────────────────────────────────────────────────────────────
+    name: 'coding-guidelines',
+    displayName: 'Coding Guidelines',
+    category: 'implementation-guidelines',
+    description: 'Behavioral guidelines to reduce common LLM coding mistakes: avoid overcomplication, make surgical changes, surface assumptions, and define verifiable success criteria. Use when writing, modifying, or refactoring code — not for routing, planning, or investigation.',
+    triggers: ['coding guidelines', 'implementation guidelines'],
+    excludes: [],
+    priority: 40,
+    allowedRoutes: ['direct_answer'],
+    body: CODING_GUIDELINES_BODY,
   },
   {
     name: 'team-delegation-routing',

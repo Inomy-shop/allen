@@ -1,10 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { seedDefaultWorkflows } from './seed.js';
+import { seedDefaultWorkflows, seedDefaultSkills } from './seed.js';
 
 function makeDb(seed: Record<string, Record<string, unknown>[]> = {}): any {
   const store: Record<string, Record<string, unknown>[]> = {
     agents: [],
     workflows: [],
+    skills: [],
     agent_conversations: [],
     ...seed,
   };
@@ -36,6 +37,75 @@ function makeDb(seed: Record<string, Record<string, unknown>[]> = {}): any {
     }),
   };
 }
+
+describe('seedDefaultSkills', () => {
+  const originalSeedOverride = process.env.SEED_OVERRIDE;
+
+  beforeEach(() => {
+    delete process.env.SEED_OVERRIDE;
+  });
+
+  afterEach(() => {
+    if (originalSeedOverride === undefined) delete process.env.SEED_OVERRIDE;
+    else process.env.SEED_OVERRIDE = originalSeedOverride;
+  });
+
+  it('seeds coding-guidelines as a low-priority implementation-guidelines skill', async () => {
+    const db = makeDb();
+
+    await seedDefaultSkills(db);
+
+    const skill = db.store.skills?.find((s: any) => s.name === 'coding-guidelines');
+    expect(skill, 'coding-guidelines skill must be seeded').toBeDefined();
+    expect(skill.category).toBe('implementation-guidelines');
+    expect(skill.priority).toBeLessThan(72); // must not outbid routing skills
+    expect(skill.body).toContain('Coding Guidelines');
+    expect(skill.body).toContain('Surface assumptions');
+    expect(skill.body).toContain('Minimum code');
+    expect(skill.body).toContain('Surgical Changes');
+    expect(skill.body).toContain('Verify before reporting done');
+  });
+
+  it('seeds coding-guidelines with a low enough priority not to outbid routing skills', async () => {
+    const db = makeDb();
+
+    await seedDefaultSkills(db);
+
+    // Collect all seeded skills and verify coding-guidelines has lower priority
+    const skills: any[] = db.store.skills ?? [];
+    const codingGuidelines = skills.find((s: any) => s.name === 'coding-guidelines');
+    expect(codingGuidelines).toBeDefined();
+
+    // All domain routing skills (bug-fix-routing, feature-routing, etc.) should
+    // have higher priority than the guideline skill.
+    const routingSkills = skills.filter((s: any) =>
+      ['bug-fix-routing', 'feature-routing', 'capability-routing', 'review-routing', 'workspace-pr-routing', 'team-delegation-routing'].includes(s.name),
+    );
+    for (const routing of routingSkills) {
+      expect(routing.priority).toBeGreaterThan(codingGuidelines.priority);
+    }
+  });
+
+  it('does not overwrite a user-edited coding-guidelines body when SEED_OVERRIDE is false', async () => {
+    const db = makeDb({
+      skills: [
+        {
+          _id: 'skill-coding-guidelines',
+          name: 'coding-guidelines',
+          body: 'custom user body',
+          createdBy: 'user',
+          version: 1,
+        },
+      ],
+    });
+
+    await seedDefaultSkills(db);
+
+    const skill = db.store.skills?.find((s: any) => s.name === 'coding-guidelines');
+    // User-owned skill must not be overwritten
+    expect(skill.body).toBe('custom user body');
+  });
+});
 
 describe('seedDefaultWorkflows SEED_OVERRIDE policy', () => {
   const originalSeedOverride = process.env.SEED_OVERRIDE;

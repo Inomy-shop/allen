@@ -1,25 +1,18 @@
 /**
- * Team Seed & Migration
+ * Team Seed & Migration — LEGACY, NOT CALLED BY app.ts
  *
- * Idempotent startup migration that:
+ * This migrator predates OrgSeedService and is no longer invoked at startup.
+ * app.ts calls OrgSeedService.seed() instead, which is the authoritative
+ * source of all built-in teams and agents. TeamSeedService is kept for
+ * reference but should be considered deprecated and will be removed in a
+ * future cleanup.
  *
- * 1. Creates the 7 built-in teams (Executive, Product, Engineering, Quality,
- *    Data, Operations, Coding) and the special `meta` team that holds the
- *    builder agents.
- *
- * 2. Backfills the existing default agents (CEO, PM, Engineer, QA, Data Analyst,
- *    DevOps + the 7 coding-* technical agents) with `teamName` and `teamRole`
- *    fields based on the static mapping below.
- *
- * 3. Seeds the 4 meta team agents (research-agent, planner-agent,
- *    team-builder-agent, agent-builder-agent) with their system prompts.
- *    These have `tools: []` for now — phase 4 wires the actual team management
- *    chat tools to them via per-agent permission gating.
- *
- * 4. Logs but does NOT auto-fix any `canDelegateTo` violations of the team
- *    isolation rules (those get enforced in phase 2).
- *
- * Safe to call on every startup. Does nothing if already migrated.
+ * Original behaviour (preserved for historical context):
+ * 1. Created 7 built-in teams + meta team.
+ * 2. Backfilled legacy agents (CEO, PM, Engineer, QA, DevOps, coding-*)
+ *    with teamName/teamRole from a static mapping.
+ * 3. Seeded 4 meta team agents with system prompts.
+ * 4. Logged canDelegateTo violations without auto-fixing them.
  */
 
 import type { Db } from 'mongodb';
