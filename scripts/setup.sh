@@ -332,6 +332,67 @@ set_env_key() {
   ok "Set ${key}=${val}"
 }
 
+env_value() {
+  local key="$1"
+  if [ ! -f .env ]; then
+    return 0
+  fi
+  awk -v k="$key" '
+    BEGIN { FS = "=" }
+    $0 !~ /^#/ && $1 == k {
+      sub("^[^=]*=", "", $0)
+      gsub(/^[[:space:]]+|[[:space:]]+$/, "", $0)
+      print $0
+      exit
+    }
+  ' .env
+}
+
+valid_llm_provider() {
+  case "$1" in
+    codex|claude-cli) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+default_model_for_provider() {
+  case "$1" in
+    claude-cli) printf "%s" "sonnet" ;;
+    codex|*) printf "%s" "gpt-5.5" ;;
+  esac
+}
+
+valid_model_for_provider() {
+  local provider="$1"
+  local model="$2"
+  case "$provider:$model" in
+    claude-cli:sonnet|claude-cli:opus|claude-cli:haiku) return 0 ;;
+    codex:gpt-5.5|codex:gpt-5.4|codex:o3|codex:o4-mini|codex:codex-mini) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+resolve_context_llm_defaults() {
+  local provider=""
+  local model=""
+
+  provider="$(env_value ALLEN_DEFAULT_CHAT_PROVIDER)"
+  if ! valid_llm_provider "$provider"; then
+    provider="$(env_value ALLEN_DEFAULT_AGENT_PROVIDER)"
+  fi
+  if ! valid_llm_provider "$provider"; then
+    provider="codex"
+  fi
+
+  model="$(env_value ALLEN_DEFAULT_AGENT_MODEL)"
+  if ! valid_model_for_provider "$provider" "$model"; then
+    model="$(default_model_for_provider "$provider")"
+  fi
+
+  CONTEXT_LLM_PROVIDER_DEFAULT="$provider"
+  CONTEXT_LLM_MODEL_DEFAULT="$model"
+}
+
 # ---------------------------------------------------------------------------
 # CLAUDE_BIN auto-detection
 #
@@ -469,6 +530,38 @@ elif [ "$CHOICE_MODE" = "preserve" ]; then
 fi
 
 # ---------------------------------------------------------------------------
+# Optional context engine
+#
+# Context engine setup installs a Python venv plus Cognee, embeddings, and
+# reranker packages. Keep the base setup fast by asking before doing that work.
+# ---------------------------------------------------------------------------
+step "Optional context engine setup"
+resolve_context_llm_defaults
+CONTEXT_ENGINE_SETUP="skipped"
+
+if [ -t 0 ]; then
+  printf "\n  Install the Cognee-backed context engine now? This creates a Python venv,\n"
+  printf "  installs context packages, and warms local embedding/reranker models.\n"
+  printf "  Context LLM default: ${C_BOLD}%s / %s${C_RESET}\n" "$CONTEXT_LLM_PROVIDER_DEFAULT" "$CONTEXT_LLM_MODEL_DEFAULT"
+  printf "  Install context engine? [y/N]: "
+  read -r context_choice
+  case "$context_choice" in
+    y|Y|yes|YES)
+      bash scripts/setup-context-engine.sh \
+        --llm-provider "$CONTEXT_LLM_PROVIDER_DEFAULT" \
+        --llm-model "$CONTEXT_LLM_MODEL_DEFAULT"
+      CONTEXT_ENGINE_SETUP="installed"
+      ;;
+    *)
+      ok "Skipped context engine setup. Run npm run setup:context later to install it."
+      ;;
+  esac
+else
+  warn "Non-interactive shell — skipping context engine setup."
+  warn "Run npm run setup:context later to install it."
+fi
+
+# ---------------------------------------------------------------------------
 # Health check
 #
 # Run the full health check so the user sees PASS/FAIL on each runtime
@@ -550,4 +643,19 @@ EOF
 
 EOF
   fi
+fi
+
+if [ "${CONTEXT_ENGINE_SETUP:-skipped}" = "installed" ]; then
+  cat <<EOF
+  ${C_BOLD}Context engine:${C_RESET} installed
+    - Context LLM default: ${C_BOLD}${CONTEXT_LLM_PROVIDER_DEFAULT} / ${CONTEXT_LLM_MODEL_DEFAULT}${C_RESET}
+    - Rebuild context from the repo UI after Allen starts.
+
+EOF
+else
+  cat <<EOF
+  ${C_BOLD}Context engine:${C_RESET} not installed by this run
+    - Install later with: ${C_BOLD}npm run setup:context${C_RESET}
+
+EOF
 fi

@@ -6,7 +6,13 @@ For manual Python/database setup details, see [Context engine installation](cont
 
 ## 1. Install The Context Engine
 
-Run the setup script from the repo root:
+The main setup script asks whether to install the context engine. Pressing Enter skips it, and answering yes runs the context setup with the default LLM provider/model selected during setup:
+
+```bash
+./scripts/setup.sh
+```
+
+You can also install the context engine later from the repo root:
 
 ```bash
 npm run setup:context
@@ -20,9 +26,10 @@ This runs `scripts/setup-context-engine.sh`, which idempotently:
 - installs `sentence-transformers` and the default BGE reranker;
 - warms `BAAI/bge-small-en-v1.5` and `BAAI/bge-reranker-base`;
 - creates `.env` from `.env.example` when needed;
-- adds missing context defaults without overwriting existing `.env` values.
+- adds missing context defaults without overwriting existing `.env` values;
+- uses the current Allen default provider/model for `ALLEN_CONTEXT_LLM_PROVIDER` and `ALLEN_CONTEXT_LLM_MODEL` when context-specific values are not already configured.
 
-The default provider written by the script is:
+The default context provider written by the script is:
 
 ```bash
 ALLEN_CONTEXT_PROVIDER=cognee
@@ -42,14 +49,17 @@ npm run setup:context -- --python /path/to/python3
 
 # Install packages but skip model downloads during setup.
 npm run setup:context -- --skip-warmup
+
+# Pin the context engine LLM default when context-specific values are unset.
+npm run setup:context -- --llm-provider claude-cli --llm-model opus
 ```
 
 ## 2. Start Allen
 
-Ensure Codex is authenticated, then start Allen normally:
+Ensure the configured LLM CLI is authenticated, then start Allen normally:
 
 ```bash
-codex
+claude  # or codex, depending on the configured default
 npm start
 ```
 

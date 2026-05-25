@@ -29,6 +29,9 @@ Options:
   --external-db      Install Cognee Postgres/Neo4j extras and print DB setup reminders.
   --without-reranker Skip sentence-transformers, BGE reranker warmup, and reranker .env defaults.
   --with-reranker    Kept for compatibility; reranker setup is enabled by default.
+  --llm-provider PROVIDER
+                    Context LLM provider to write when no context LLM provider is configured.
+  --llm-model MODEL Context LLM model to write when no context LLM model is configured.
   --python PATH      Python executable to use for creating the context venv.
   --skip-warmup      Install packages but skip model warmup downloads.
   -h, --help         Show this help.
@@ -45,6 +48,8 @@ VENV_DIR="${ALLEN_CONTEXT_VENV_DIR:-$HOME/.allen/python/context-eval}"
 COGNEE_DATA_DIR_DEFAULT="$HOME/.allen/cognee"
 EMBEDDING_MODEL_DEFAULT="BAAI/bge-small-en-v1.5"
 RERANKER_MODEL_DEFAULT="BAAI/bge-reranker-base"
+LLM_PROVIDER_ARG=""
+LLM_MODEL_ARG=""
 
 while [ "$#" -gt 0 ]; do
   case "$1" in
@@ -55,6 +60,22 @@ while [ "$#" -gt 0 ]; do
     --with-reranker)
       WITH_RERANKER=1
       shift
+      ;;
+    --llm-provider)
+      if [ "$#" -lt 2 ]; then
+        err "--llm-provider requires a provider"
+        exit 1
+      fi
+      LLM_PROVIDER_ARG="$2"
+      shift 2
+      ;;
+    --llm-model)
+      if [ "$#" -lt 2 ]; then
+        err "--llm-model requires a model"
+        exit 1
+      fi
+      LLM_MODEL_ARG="$2"
+      shift 2
       ;;
     --without-reranker|--skip-reranker)
       WITH_RERANKER=0
@@ -196,13 +217,91 @@ set_env_default() {
   fi
 }
 
+env_value() {
+  local key="$1"
+  if [ ! -f .env ]; then
+    return 0
+  fi
+  awk -v k="$key" '
+    BEGIN { FS = "=" }
+    $0 !~ /^#/ && $1 == k {
+      sub("^[^=]*=", "", $0)
+      gsub(/^[[:space:]]+|[[:space:]]+$/, "", $0)
+      print $0
+      exit
+    }
+  ' .env
+}
+
+valid_provider() {
+  case "$1" in
+    codex|claude-cli) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+default_model_for_provider() {
+  case "$1" in
+    claude-cli) printf "%s" "sonnet" ;;
+    codex|*) printf "%s" "gpt-5.5" ;;
+  esac
+}
+
+valid_model_for_provider() {
+  local provider="$1"
+  local model="$2"
+  case "$provider:$model" in
+    claude-cli:sonnet|claude-cli:opus|claude-cli:haiku) return 0 ;;
+    codex:gpt-5.5|codex:gpt-5.4|codex:o3|codex:o4-mini|codex:codex-mini) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+resolve_context_llm_defaults() {
+  local provider=""
+  local model=""
+
+  provider="$(env_value ALLEN_CONTEXT_LLM_PROVIDER)"
+  model="$(env_value ALLEN_CONTEXT_LLM_MODEL)"
+
+  if ! valid_provider "$provider"; then
+    if valid_provider "$LLM_PROVIDER_ARG"; then
+      provider="$LLM_PROVIDER_ARG"
+    else
+      provider="$(env_value ALLEN_DEFAULT_CHAT_PROVIDER)"
+      if ! valid_provider "$provider"; then
+        provider="$(env_value ALLEN_DEFAULT_AGENT_PROVIDER)"
+      fi
+      if ! valid_provider "$provider"; then
+        provider="codex"
+      fi
+    fi
+  fi
+
+  if ! valid_model_for_provider "$provider" "$model"; then
+    if valid_model_for_provider "$provider" "$LLM_MODEL_ARG"; then
+      model="$LLM_MODEL_ARG"
+    else
+      model="$(env_value ALLEN_DEFAULT_AGENT_MODEL)"
+      if ! valid_model_for_provider "$provider" "$model"; then
+        model="$(default_model_for_provider "$provider")"
+      fi
+    fi
+  fi
+
+  CONTEXT_LLM_PROVIDER_DEFAULT="$provider"
+  CONTEXT_LLM_MODEL_DEFAULT="$model"
+}
+
+resolve_context_llm_defaults
+
 set_env_default "ALLEN_CONTEXT_PROVIDER" "cognee"
 set_env_default "ALLEN_PYTHON" "$ALLEN_PYTHON_PATH"
 set_env_default "ALLEN_COGNEE_DATA_DIR" "$COGNEE_DATA_DIR_DEFAULT"
 set_env_default "ALLEN_COGNEE_EMBEDDING_PROVIDER" "local"
 set_env_default "ALLEN_COGNEE_EMBEDDING_MODEL" "$EMBEDDING_MODEL_DEFAULT"
-set_env_default "ALLEN_CONTEXT_LLM_PROVIDER" "codex"
-set_env_default "ALLEN_CONTEXT_LLM_MODEL" "gpt-5.5"
+set_env_default "ALLEN_CONTEXT_LLM_PROVIDER" "$CONTEXT_LLM_PROVIDER_DEFAULT"
+set_env_default "ALLEN_CONTEXT_LLM_MODEL" "$CONTEXT_LLM_MODEL_DEFAULT"
 
 if [ "$WITH_RERANKER" -eq 1 ]; then
   set_env_default "ALLEN_CONTEXT_RERANKER" "bge"
@@ -245,10 +344,10 @@ cat <<EOF
   Cognee data dir:       $COGNEE_DATA_DIR_DEFAULT
   Embedding model:       $EMBEDDING_MODEL_DEFAULT
   Reranker:              $([ "$WITH_RERANKER" -eq 1 ] && printf "%s" "$RERANKER_MODEL_DEFAULT" || printf "%s" "disabled")
-  Context LLM:           codex / gpt-5.5
+  Context LLM:           $CONTEXT_LLM_PROVIDER_DEFAULT / $CONTEXT_LLM_MODEL_DEFAULT
 
   Next:
-    1. Ensure Codex is authenticated: ${C_BOLD}codex${C_RESET}
+    1. Ensure the selected LLM CLI is authenticated.
     2. Start Allen:                    ${C_BOLD}npm start${C_RESET}
     3. Rebuild context from the repo UI.
 

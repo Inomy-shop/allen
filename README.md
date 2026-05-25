@@ -91,7 +91,8 @@ The setup script, in order:
 4. Installs the Codex CLI via npm if missing.
 5. Runs `npm install` across all workspace packages.
 6. Creates `.env` from `.env.example`, generates `JWT_ACCESS_SECRET` / `JWT_REFRESH_SECRET`, and auto-pins `CLAUDE_BIN` to the verified standalone CLI.
-7. Runs `npm run health` and prints PASS/FAIL per dependency.
+7. Prompts whether to install the optional Cognee-backed context engine. Pressing Enter skips it; run `npm run setup:context` later to install it.
+8. Runs `npm run health` and prints PASS/FAIL per dependency.
 
 Re-running is safe — it skips work already done and preserves your `.env`. If a step fails the script exits with a red error line; see [docs/troubleshooting.md → Setup Script Fails](docs/troubleshooting.md#setup-script-fails) for the fix matrix.
 
