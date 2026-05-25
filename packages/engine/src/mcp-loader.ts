@@ -17,6 +17,7 @@
 import { type Db, ObjectId } from 'mongodb';
 import { resolve, join, dirname, extname, isAbsolute } from 'node:path';
 import { existsSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 
 import { ensureInstalled, ensurePythonVenv, resolvePythonInterpreter } from './mcp-install.js';
 
@@ -338,20 +339,117 @@ export async function buildSingleServerConfig(
 
 // ── Allen built-in MCP server ──────────────────────────────────────────────
 
+// Anchor server-file resolution to this module's location, not process.cwd().
+// cwd is whatever shell launched the engine — in deployed envs it's almost
+// never the monorepo root, which is why the previous cwd-based candidate
+// list silently returned null and dropped Allen MCP from every agent spawn.
+// See the 2026-05-24 ENG-1737 incident: the `bug-investigator` ran for 7
+// minutes, then logged "The artifact MCP tool isn't available in this
+// environment" — every workflow / delegation agent that day was missing
+// `mcp__allen__*` for the same reason.
+const MODULE_DIR = dirname(fileURLToPath(import.meta.url));
+
+/**
+ * True when the process is running compiled JS from a `dist/` directory
+ * (systemd `node dist/app.js`, `npm start`), false for source-running
+ * tools (`tsx watch`, vitest, ts-node, scripts). Used as a deployment
+ * discriminator that does NOT require NODE_ENV to be set — the current
+ * Allen production deploy (infra/templates/allen.service) doesn't set
+ * NODE_ENV, so NODE_ENV-gated behavior never kicks in.
+ *
+ * Heuristic: process.argv[1] is the entry file path. systemd invokes
+ * `/usr/bin/node /home/ubuntu/allen/packages/server/dist/app.js`, so
+ * argv[1] ends in `/dist/<name>.js`. `tsx watch src/app.ts` sets argv[1]
+ * to the tsx binary (under node_modules/.bin or node_modules/tsx/dist),
+ * never matching the regex.
+ */
+export function isRunningBuiltCode(): boolean {
+  const argv1 = process.argv[1] ?? '';
+  if (!argv1.endsWith('.js')) return false;
+  // Exclude node_modules so test runners and CLIs (vitest, jest, eslint,
+  // tsx itself) — all of which live under node_modules/*/dist/cli.js —
+  // don't get misclassified as production runs.
+  if (/[/\\]node_modules[/\\]/.test(argv1)) return false;
+  // Require the path to traverse a `dist` segment so ad-hoc `node foo.js`
+  // in random places doesn't get misclassified either.
+  return /[/\\]dist[/\\]/.test(argv1);
+}
+
+function resolveAllenMcpServerPath(): { path: string; tried: string[] } | { path: null; tried: string[] } {
+  const tried: string[] = [];
+  const tryPath = (p: string | undefined): string | null => {
+    if (!p) return null;
+    tried.push(p);
+    return existsSync(p) ? p : null;
+  };
+  // 1. Explicit override — set in deploy configs that ship the MCP server
+  //    outside the standard monorepo layout (e.g. flattened bundles).
+  const override = tryPath(process.env.ALLEN_MCP_SERVER_PATH);
+  if (override) return { path: override, tried };
+  // 2. Module-anchored. From packages/engine/{src,dist}, the server lives at
+  //    ../../server/{src,dist}/services/allen-mcp-server.{ts,js}.
+  //    Order depends on whether we're running built code or live source.
+  //    Prod-like (systemd `node dist/app.js`, `npm start`): prefer the
+  //    .js build artifact — faster startup, no per-spawn tsx overhead.
+  //    Dev (`tsx watch src/app.ts`, vitest, ad-hoc scripts): prefer .ts so
+  //    edits to the MCP server take effect without a rebuild.
+  //    Discriminator is process.argv[1] — works without NODE_ENV (which
+  //    the current deployment doesn't set).
+  const runningBuiltCode = isRunningBuiltCode();
+  const moduleAnchored = runningBuiltCode
+    ? [
+        resolve(MODULE_DIR, '../../server/dist/services/allen-mcp-server.js'),
+        resolve(MODULE_DIR, '../../server/src/services/allen-mcp-server.ts'),
+        resolve(MODULE_DIR, 'allen-mcp-server.js'),
+        resolve(MODULE_DIR, 'allen-mcp-server.ts'),
+      ]
+    : [
+        resolve(MODULE_DIR, '../../server/src/services/allen-mcp-server.ts'),
+        resolve(MODULE_DIR, '../../server/dist/services/allen-mcp-server.js'),
+        resolve(MODULE_DIR, 'allen-mcp-server.ts'),
+        resolve(MODULE_DIR, 'allen-mcp-server.js'),
+      ];
+  for (const p of moduleAnchored) {
+    const hit = tryPath(p);
+    if (hit) return { path: hit, tried };
+  }
+  // 3. Legacy cwd-anchored fallbacks for dev shells that cd into the server
+  //    package directly.
+  const cwdAnchored = [
+    resolve(process.cwd(), 'src/services/allen-mcp-server.ts'),
+    resolve(process.cwd(), 'dist/services/allen-mcp-server.js'),
+    resolve(process.cwd(), 'packages/server/src/services/allen-mcp-server.ts'),
+    resolve(process.cwd(), 'packages/server/dist/services/allen-mcp-server.js'),
+  ];
+  for (const p of cwdAnchored) {
+    const hit = tryPath(p);
+    if (hit) return { path: hit, tried };
+  }
+  return { path: null, tried };
+}
+
 export function getAllenMcpConfig(
   extraEnv?: Record<string, string>,
 ): Record<string, unknown> | null {
-  const apiUrl = process.env.ALLEN_API_URL ?? `http://localhost:${process.env.PORT ?? '4023'}`;
+  const resolution = resolveAllenMcpServerPath();
+  if (!resolution.path) {
+    const msg = `[mcp-loader] Allen MCP server file not found — agents will lack mcp__allen__* tools. ` +
+                `Tried: ${resolution.tried.join(', ')}. Set ALLEN_MCP_SERVER_PATH to the absolute path, ` +
+                `or ensure the server package is built (packages/server/dist).`;
+    if (process.env.ALLEN_REQUIRE_BUILTIN_MCP === '1') throw new Error(msg);
+    console.warn(msg);
+    return null;
+  }
 
-  const candidates = [
-    resolve(process.cwd(), 'src/services/allen-mcp-server.ts'),
-    resolve(process.cwd(), '../server/src/services/allen-mcp-server.ts'),
-    resolve(process.cwd(), 'packages/server/src/services/allen-mcp-server.ts'),
-    resolve(process.cwd(), 'dist/services/allen-mcp-server.js'),
-    resolve(process.cwd(), 'packages/server/dist/services/allen-mcp-server.js'),
-  ];
-  const serverPath = candidates.find(p => existsSync(p));
-  if (!serverPath) return null;
+  const serverPath = resolution.path;
+  const apiUrl = process.env.ALLEN_API_URL ?? `http://localhost:${process.env.PORT ?? '4023'}`;
+  // .ts source runs via `npx tsx`; .js built file runs via `node`. Picking
+  // the wrong runner here is what made the chat-tools.ts delegation path
+  // fail in prod (hardcoded `npx tsx <serverPath.ts>` against a file that
+  // only exists as .js after the build step).
+  const runner = serverPath.endsWith('.ts')
+    ? { command: 'npx', args: ['tsx', serverPath] }
+    : { command: 'node', args: [serverPath] };
 
   const env: Record<string, string> = {
     ALLEN_API_URL: apiUrl,
@@ -364,8 +462,8 @@ export function getAllenMcpConfig(
 
   return {
     type: 'stdio',
-    command: 'npx',
-    args: ['tsx', serverPath],
+    command: runner.command,
+    args: runner.args,
     env,
   };
 }

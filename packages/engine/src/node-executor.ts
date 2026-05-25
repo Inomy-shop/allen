@@ -212,6 +212,15 @@ export interface NodeResult {
       sha256: string;
       byteLength: number;
       containsMandatoryRepoContext: boolean;
+      /**
+       * Exact `tools:` allowlist written into the agent file's YAML
+       * frontmatter. Authoritative record of what we put on disk —
+       * the SDK's `system/init` tools array (captured separately as
+       * `toolsAvailable`) can race with MCP `tools/list` discovery and
+       * under-report. Cross-checking the two distinguishes a true
+       * "MCP tool dropped" bug from an init-race artifact.
+       */
+      tools: string[];
       createdAt: Date;
     };
     resolvedModel?: string;
@@ -800,6 +809,26 @@ ${context}
               createdAt: metadata.createdAt,
             },
           });
+          // Dedicated audit event — what tools we passed into the agent file.
+          // Greppable prefix lets ops filter the log stream:
+          //   GET /api/executions/<id>/logs?category=system  → then filter
+          //   message starting with "[agent-tools]".
+          // Pairs with the post-init "[agent-tools] runtime" log below so
+          // file-passed vs runtime-reported can be diffed for the same node.
+          emitLog(deps, nodeName, {
+            level: 'info',
+            category: 'system',
+            message: `[agent-tools] passed to agent file (${metadata.tools.length} tools)`,
+            data: {
+              source: 'frontmatter',
+              agent: nodeDef.agent ?? null,
+              subagentName: metadata.subagentName,
+              toolCount: metadata.tools.length,
+              nativeCount: metadata.tools.filter((t) => !t.startsWith('mcp__')).length,
+              mcpCount: metadata.tools.filter((t) => t.startsWith('mcp__')).length,
+              tools: metadata.tools,
+            },
+          });
         },
         stderr: (chunk) => emitLog(deps, nodeName, { level: 'debug', category: 'system', message: `[claude-cli stderr] ${chunk.slice(0, 4000)}` }),
       });
@@ -916,7 +945,45 @@ ${context}
         // one for the trace.
         if (!capturedToolsAvailable) {
           const tools = (message as any).tools;
-          if (Array.isArray(tools)) capturedToolsAvailable = tools as string[];
+          if (Array.isArray(tools)) {
+            capturedToolsAvailable = tools as string[];
+            // Audit log — what tools the SDK actually exposed at first
+            // init. Pairs with the "[agent-tools] passed" log above (CLI
+            // path) so ops can diff intent vs runtime for any node.
+            const initTools = capturedToolsAvailable;
+            emitLog(deps, nodeName, {
+              level: 'info',
+              category: 'system',
+              message: `[agent-tools] available at runtime (${initTools.length} tools)`,
+              data: {
+                source: 'sdk-init',
+                agent: nodeDef.agent ?? null,
+                toolCount: initTools.length,
+                nativeCount: initTools.filter((t) => !t.startsWith('mcp__')).length,
+                mcpCount: initTools.filter((t) => t.startsWith('mcp__')).length,
+                tools: initTools,
+              },
+            });
+            // Mismatch detector — CLI path only, since SDK path has no
+            // frontmatter to compare against. Catches the known SDK init
+            // race (engineering-lead reported 7 vs the 88 we wrote) so
+            // ops aren't left guessing whether MCP tools got dropped.
+            if (materializedAgentFile && materializedAgentFile.tools.length > initTools.length) {
+              const missing = materializedAgentFile.tools.filter((t) => !initTools.includes(t));
+              emitLog(deps, nodeName, {
+                level: 'warn',
+                category: 'system',
+                message: `[agent-tools] runtime tools (${initTools.length}) < frontmatter tools (${materializedAgentFile.tools.length}) — ${missing.length} entries missing from SDK init (likely race with MCP tools/list; later tool calls may still succeed)`,
+                data: {
+                  agent: nodeDef.agent ?? null,
+                  frontmatterCount: materializedAgentFile.tools.length,
+                  runtimeCount: initTools.length,
+                  missingCount: missing.length,
+                  missing,
+                },
+              });
+            }
+          }
         }
       }
     }

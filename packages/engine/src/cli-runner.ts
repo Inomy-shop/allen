@@ -65,6 +65,8 @@ export type MaterializedAgentFileMetadata = {
   sha256: string;
   byteLength: number;
   containsMandatoryRepoContext: boolean;
+  /** Exact `tools:` allowlist written into the YAML frontmatter. */
+  tools: string[];
   createdAt: Date;
 };
 
@@ -117,6 +119,7 @@ export async function* queryViaCli(opts: CliQueryOptions): AsyncGenerator<any, v
     sha256: materialized.sha256,
     byteLength: materialized.byteLength,
     containsMandatoryRepoContext: materialized.containsMandatoryRepoContext,
+    tools: materialized.tools,
     createdAt: materialized.createdAt,
   });
 
