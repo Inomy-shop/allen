@@ -26,12 +26,14 @@ const originalCogneeMandatoryGraph = process.env.ALLEN_COGNEE_MANDATORY_GRAPH;
 const originalContextProviderFallback = process.env.ALLEN_CONTEXT_PROVIDER_FALLBACK;
 const originalCogneeMinSelectionScore = process.env.ALLEN_COGNEE_MIN_SELECTION_SCORE;
 const originalContextMinRerankScore = process.env.ALLEN_CONTEXT_MIN_RERANK_SCORE;
+const originalContextMinFinalScore = process.env.ALLEN_CONTEXT_MIN_FINAL_SCORE;
 const originalCogneeMinInjectionScore = process.env.ALLEN_COGNEE_MIN_INJECTION_SCORE;
 
 beforeEach(() => {
   process.env.ALLEN_CONTEXT_PROVIDER = 'cognee';
   delete process.env.ALLEN_COGNEE_MIN_SELECTION_SCORE;
   delete process.env.ALLEN_CONTEXT_MIN_RERANK_SCORE;
+  delete process.env.ALLEN_CONTEXT_MIN_FINAL_SCORE;
   delete process.env.ALLEN_COGNEE_MIN_INJECTION_SCORE;
 });
 
@@ -46,6 +48,8 @@ afterEach(() => {
   else process.env.ALLEN_COGNEE_MIN_SELECTION_SCORE = originalCogneeMinSelectionScore;
   if (originalContextMinRerankScore === undefined) delete process.env.ALLEN_CONTEXT_MIN_RERANK_SCORE;
   else process.env.ALLEN_CONTEXT_MIN_RERANK_SCORE = originalContextMinRerankScore;
+  if (originalContextMinFinalScore === undefined) delete process.env.ALLEN_CONTEXT_MIN_FINAL_SCORE;
+  else process.env.ALLEN_CONTEXT_MIN_FINAL_SCORE = originalContextMinFinalScore;
   if (originalCogneeMinInjectionScore === undefined) delete process.env.ALLEN_COGNEE_MIN_INJECTION_SCORE;
   else process.env.ALLEN_COGNEE_MIN_INJECTION_SCORE = originalCogneeMinInjectionScore;
 });
@@ -320,6 +324,15 @@ describe('RepoContextEngine', () => {
         },
       },
       {
+        ...providerRef('cognee-low-final', 'docs/low-final.md', 'hash-cognee-low-final', 'passes reranker but weak blended score', 95),
+        providerId: 'cognee_memory',
+        providerMetadata: {
+          retrievalScore: 0.7,
+          injectionDecision: 'snippet',
+          injectionPolicy: 'injectable',
+        },
+      },
+      {
         ...providerRef('mandatory-ref', 'AGENTS.md', 'hash-mandatory', 'mandatory rules', 1),
         providerId: 'mandatory_graph',
         mandatory: true,
@@ -333,6 +346,7 @@ describe('RepoContextEngine', () => {
         'cognee-strong': 0.9,
         'cognee-mid-rerank': 0.4,
         'cognee-low-rerank': 0.05,
+        'cognee-low-final': 0.1,
       }),
     ).buildPacket({
       packetId: 'packet-threshold',
@@ -365,10 +379,75 @@ describe('RepoContextEngine', () => {
         rerank: expect.objectContaining({ rerankScore: 0.05 }),
         providerMetadata: expect.objectContaining({ rejectionReason: 'below_rerank_threshold' }),
       }),
+      expect.objectContaining({
+        refId: 'cognee-low-final',
+        rerank: expect.objectContaining({ rerankScore: 0.1 }),
+        providerMetadata: expect.objectContaining({ rejectionReason: 'below_final_score_threshold' }),
+      }),
     ]));
     expect(packet.providerDiagnostics).toEqual(expect.arrayContaining([
       expect.objectContaining({ code: 'context_relevance_thresholds_applied', thresholdRejectedCount: expect.any(Number) }),
     ]));
+  });
+
+  it('prioritizes reranker score over retrieval score when optional Cognee refs conflict', async () => {
+    const refs: KnowledgeCandidateRef[] = [
+      {
+        ...providerRef('rerank-wins', 'docs/rerank-wins.md', 'hash-rerank-wins', 'higher rerank lower retrieval', 80),
+        providerId: 'cognee_memory',
+        providerMetadata: {
+          retrievalScore: 0.5,
+          injectionDecision: 'snippet',
+          injectionPolicy: 'injectable',
+        },
+      },
+      {
+        ...providerRef('retrieval-heavy', 'docs/retrieval-heavy.md', 'hash-retrieval-heavy', 'lower rerank higher retrieval', 95),
+        providerId: 'cognee_memory',
+        providerMetadata: {
+          retrievalScore: 0.95,
+          injectionDecision: 'snippet',
+          injectionPolicy: 'injectable',
+        },
+      },
+    ];
+
+    const packet = await new RepoContextEngine(
+      [new StaticContextProvider(refs)],
+      new FixedScoreReranker({
+        'rerank-wins': 0.5,
+        'retrieval-heavy': 0.3,
+      }),
+    ).buildPacket({
+      packetId: 'packet-rerank-priority',
+      executionId: 'exec-rerank-priority',
+      repoId: 'repo',
+      repoName: 'fixture',
+      repoPath: '/tmp/fixture',
+      indexId: 'index-1',
+      indexFreshness: 'fresh',
+      workflowName: 'workflow',
+      nodeName: 'implement',
+      nodeRole: 'backend-developer',
+      attempt: 1,
+      state: {},
+      prompt: 'Fix vendor category mappings',
+      provider: 'claude',
+      currentFiles: [],
+      nodes: [],
+    });
+
+    expect(packet.selectedRefs.map((ref) => ref.refId)).toEqual(['rerank-wins', 'retrieval-heavy']);
+    expect(packet.selectedRefs[0]?.rerank).toEqual(expect.objectContaining({
+      rerankScore: 0.5,
+      retrievalScore: 0.5,
+      finalRelevanceScore: 0.5,
+    }));
+    expect(packet.selectedRefs[1]?.rerank).toEqual(expect.objectContaining({
+      rerankScore: 0.3,
+      retrievalScore: 0.95,
+      finalRelevanceScore: expect.closeTo(0.43, 5),
+    }));
   });
 });
 
@@ -2613,7 +2692,7 @@ class FixedScoreReranker implements ContextReranker {
       .map((ref, originalRank) => {
         const score = this.scores[ref.refId] ?? 0;
         const retrievalScore = Number(ref.providerMetadata?.retrievalScore ?? ref.providerMetadata?.retrievalPolicyScore ?? ref.score ?? 0);
-        const finalRelevanceScore = ref.mandatory ? 1 : Math.max(0, Math.min(1, (score * 0.55) + (retrievalScore * 0.45)));
+        const finalRelevanceScore = ref.mandatory ? 1 : Math.max(0, Math.min(1, (score * 0.8) + (retrievalScore * 0.2)));
         return {
           ...ref,
           rerank: {

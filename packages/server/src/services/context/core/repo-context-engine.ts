@@ -11,7 +11,8 @@ import {
 } from './context-query-intent.js';
 import type { Db } from 'mongodb';
 
-const DEFAULT_CONTEXT_MIN_RERANK_SCORE = 0.45;
+const DEFAULT_CONTEXT_MIN_RERANK_SCORE = 0.1;
+const DEFAULT_CONTEXT_MIN_FINAL_SCORE = 0.24;
 
 export type RepoContextProvider = 'claude' | 'codex' | 'unknown';
 
@@ -477,6 +478,7 @@ function composeProviderResults(results: KnowledgeRetrievalResult[], rankedRefs:
       severity: 'info',
       minCogneeSelectionScore: thresholds.minCogneeSelectionScore,
       minRerankScore: thresholds.minRerankScore,
+      minFinalScore: thresholds.minFinalScore,
       minInjectionScore: thresholds.minInjectionScore,
       thresholdRejectedCount: rejected.filter((ref) => typeof ref.providerMetadata?.rejectionReason === 'string' && String(ref.providerMetadata.rejectionReason).startsWith('below_')).length,
       selectedCount: selected.length,
@@ -486,35 +488,40 @@ function composeProviderResults(results: KnowledgeRetrievalResult[], rankedRefs:
   };
 }
 
-function contextRelevanceThresholds(): { minCogneeSelectionScore: number; minRerankScore: number; minInjectionScore: number } {
+function contextRelevanceThresholds(): { minCogneeSelectionScore: number; minRerankScore: number; minFinalScore: number; minInjectionScore: number } {
   return {
     minCogneeSelectionScore: boundedScoreEnv('ALLEN_COGNEE_MIN_SELECTION_SCORE', DEFAULT_COGNEE_MIN_SELECTION_SCORE),
     minRerankScore: boundedScoreEnv('ALLEN_CONTEXT_MIN_RERANK_SCORE', DEFAULT_CONTEXT_MIN_RERANK_SCORE),
+    minFinalScore: boundedScoreEnv('ALLEN_CONTEXT_MIN_FINAL_SCORE', DEFAULT_CONTEXT_MIN_FINAL_SCORE),
     minInjectionScore: boundedScoreEnv('ALLEN_COGNEE_MIN_INJECTION_SCORE', DEFAULT_COGNEE_MIN_INJECTION_SCORE),
   };
 }
 
 function contextRefThresholdRejection(
   ref: KnowledgeCandidateRef,
-  thresholds: { minCogneeSelectionScore: number; minRerankScore: number },
+  thresholds: { minCogneeSelectionScore: number; minRerankScore: number; minFinalScore: number },
 ): { code: string; threshold: number } | null {
   if (!isOptionalCogneeRef(ref)) return null;
   if (retrievalScoreFor(ref) < thresholds.minCogneeSelectionScore) {
     return { code: 'below_cognee_selection_threshold', threshold: thresholds.minCogneeSelectionScore };
   }
-  if (finalRelevanceScoreFor(ref) < thresholds.minRerankScore) {
+  if (rerankScoreFor(ref) < thresholds.minRerankScore) {
     return { code: 'below_rerank_threshold', threshold: thresholds.minRerankScore };
+  }
+  if (finalRelevanceScoreFor(ref) < thresholds.minFinalScore) {
+    return { code: 'below_final_score_threshold', threshold: thresholds.minFinalScore };
   }
   return null;
 }
 
 function passesInjectionThreshold(
   ref: KnowledgeCandidateRef,
-  thresholds: { minInjectionScore: number; minRerankScore: number },
+  thresholds: { minInjectionScore: number; minRerankScore: number; minFinalScore: number },
 ): boolean {
   if (!isOptionalCogneeRef(ref)) return true;
   return retrievalScoreFor(ref) >= thresholds.minInjectionScore
-    && finalRelevanceScoreFor(ref) >= thresholds.minRerankScore;
+    && rerankScoreFor(ref) >= thresholds.minRerankScore
+    && finalRelevanceScoreFor(ref) >= thresholds.minFinalScore;
 }
 
 function withThresholdRejection(ref: KnowledgeCandidateRef, rejection: { code: string; threshold: number }): KnowledgeCandidateRef {
@@ -531,7 +538,8 @@ function withThresholdRejection(ref: KnowledgeCandidateRef, rejection: { code: s
 }
 
 function thresholdScoreFor(ref: KnowledgeCandidateRef, code: string): number {
-  if (code === 'below_rerank_threshold') return finalRelevanceScoreFor(ref);
+  if (code === 'below_rerank_threshold') return rerankScoreFor(ref);
+  if (code === 'below_final_score_threshold') return finalRelevanceScoreFor(ref);
   return retrievalScoreFor(ref);
 }
 
