@@ -198,6 +198,17 @@ else
   ok ".env already exists"
 fi
 
+ensure_context_env_section() {
+  if grep -qF "# Context engine defaults" .env; then
+    return 0
+  fi
+  if [ -s .env ]; then
+    printf "\n# Context engine defaults (managed by scripts/setup-context-engine.sh)\n" >> .env
+  else
+    printf "# Context engine defaults (managed by scripts/setup-context-engine.sh)\n" >> .env
+  fi
+}
+
 set_env_default() {
   local key="$1"
   local value="$2"
@@ -207,6 +218,7 @@ set_env_default() {
     awk -v k="$key" -v v="$value" 'BEGIN{FS=OFS="="} $1==k{$0=k"="v} {print}' .env > .env.tmp && mv .env.tmp .env
     ok "Set empty $key"
   else
+    ensure_context_env_section
     printf "%s=%s\n" "$key" "$value" >> .env
     ok "Added $key"
   fi
