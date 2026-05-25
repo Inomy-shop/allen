@@ -192,13 +192,8 @@ fi
 
 step "Preparing .env"
 if [ ! -f .env ]; then
-  if [ -f .env.example ]; then
-    cp .env.example .env
-    ok "Created .env from .env.example"
-  else
-    err ".env.example missing; cannot create .env."
-    exit 1
-  fi
+  touch .env
+  ok "Created .env"
 else
   ok ".env already exists"
 fi

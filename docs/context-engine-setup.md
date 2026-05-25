@@ -25,7 +25,7 @@ This runs `scripts/setup-context-engine.sh`, which idempotently:
 - installs `fastembed` and the default BGE embedding model;
 - installs `sentence-transformers` and the default BGE reranker;
 - warms `BAAI/bge-small-en-v1.5` and `BAAI/bge-reranker-base`;
-- creates `.env` from `.env.example` when needed;
+- creates a minimal `.env` when needed;
 - adds missing context defaults without overwriting existing `.env` values;
 - uses the current Allen default provider/model for `ALLEN_CONTEXT_LLM_PROVIDER` and `ALLEN_CONTEXT_LLM_MODEL` when context-specific values are not already configured.
 
