@@ -60,6 +60,7 @@ import { userRoutes } from './routes/users.routes.js';
 import { requireAuth } from './middleware/requireAuth.js';
 import { blockIfMustReset } from './middleware/blockIfMustReset.js';
 import { logger } from './logger.js';
+import { getAllenMcpConfig, isRunningBuiltCode } from '@allen/engine';
 import { requestLogger, errorLogger } from './middleware/request-logger.js';
 import { isSeedOverrideEnabled } from './services/seed-policy.js';
 
@@ -272,6 +273,31 @@ async function main(): Promise<void> {
 
   // Structured error logging — after all routes, before listen
   app.use(errorLogger());
+
+  // Boot smoke: confirm the Allen MCP server file is resolvable. If it
+  // isn't, every workflow agent spawn and every chat delegation drops the
+  // `mcp__allen__*` toolset, with no log line at the failure point —
+  // agents say "tool not available" 7+ minutes into a run. See ENG-1737
+  // (2026-05-24): the deployed bug-fix-by-severity workflow stalled this
+  // way, but only because `getAllenMcpConfig` silently returned null when
+  // process.cwd() didn't match any of its 5 hard-coded candidate paths.
+  // Catch the same class of failure at boot, not mid-workflow.
+  {
+    const allenCfg = getAllenMcpConfig();
+    if (!allenCfg) {
+      // Hard-fail when running the compiled deploy (`node dist/app.js`) or
+      // when the operator explicitly demands it. Matches what production
+      // wants without depending on NODE_ENV — see isRunningBuiltCode().
+      if (isRunningBuiltCode() || process.env.ALLEN_REQUIRE_BUILTIN_MCP === '1') {
+        logger.error('[boot] Allen MCP server unresolvable — refusing to start (set ALLEN_MCP_SERVER_PATH or build packages/server)');
+        process.exit(1);
+      }
+      logger.warn('[boot] Allen MCP server unresolvable — agents will lack mcp__allen__* tools');
+    } else {
+      const args = (allenCfg as { args?: string[] }).args ?? [];
+      logger.info('[boot] Allen MCP server resolved', { runner: (allenCfg as { command?: string }).command, target: args[args.length - 1] });
+    }
+  }
 
   const httpServer = app.listen(PORT, () => {
     logger.info('Allen server started', { port: PORT, env: process.env.NODE_ENV, pid: process.pid });

@@ -211,6 +211,13 @@ export type MaterializedAgent = {
   byteLength: number;
   /** Whether the rendered body contains Allen's mandatory repo context block. */
   containsMandatoryRepoContext: boolean;
+  /**
+   * Exact tool allowlist written into the YAML frontmatter's `tools:` line.
+   * Persisted on the node trace as the authoritative record of what the
+   * agent file actually contained — independent of the Claude CLI's
+   * (race-prone) `system/init` tools array.
+   */
+  tools: string[];
   /** Timestamp captured immediately after the file body was rendered. */
   createdAt: Date;
   /** idempotent unlink — never throws. */
@@ -265,8 +272,24 @@ function slugify(s: string): string {
   return s.toLowerCase().replace(/[^a-z0-9-]+/g, '-').replace(/^-+|-+$/g, '');
 }
 
-/** Render the markdown file body (frontmatter + prompt body). */
-export function renderAgentFile(agent: AgentSpec): { subagentName: string; body: string } {
+/**
+ * Render the markdown file body (frontmatter + prompt body).
+ *
+ * Returns `tools` — the exact allowlist that ends up in the `tools:` line of
+ * the YAML frontmatter. Callers (writeAgentFile → MaterializedAgent → the
+ * cli-runner callback → node-executor's runtimeContext) carry this forward so
+ * the trace document can record what we actually wrote to disk, independent
+ * of what the Claude CLI's `system/init` message later reports as available.
+ *
+ * Why both fields matter: the SDK's init `tools` array sometimes lands before
+ * MCP `tools/list` completes (observed on engineering-lead, 7 vs 88 mismatch).
+ * Comparing `materializedAgentFile.tools` to `toolsAvailable` lets the UI
+ * tell that race apart from a real "MCP tool dropped" bug.
+ *
+ * Returns the empty array when no allowlist is emitted (omitted frontmatter
+ * line == Claude treats it as "all tools").
+ */
+export function renderAgentFile(agent: AgentSpec): { subagentName: string; body: string; tools: string[] } {
   const suffix = agent.materializedNameSuffix ? `-${slugify(agent.materializedNameSuffix)}` : '';
   const subagentName = `allen-${slugify(agent.name)}${suffix}`;
   const description = agent.description ?? `Allen agent: ${agent.name}`;
@@ -343,7 +366,7 @@ export function renderAgentFile(agent: AgentSpec): { subagentName: string; body:
   ].join('\n');
 
   const body = `${frontmatter}\n\n${safeSystem}\n`;
-  return { subagentName, body };
+  return { subagentName, body, tools: expandedTools };
 }
 
 /**
@@ -351,7 +374,7 @@ export function renderAgentFile(agent: AgentSpec): { subagentName: string; body:
  * Always overwrites. Caller must invoke `cleanup()` in a finally block.
  */
 export function writeAgentFile(agent: AgentSpec): MaterializedAgent {
-  const { subagentName, body } = renderAgentFile(agent);
+  const { subagentName, body, tools } = renderAgentFile(agent);
   const outDir = resolvePath(homedir(), '.claude', 'agents');
   mkdirSync(outDir, { recursive: true });
   const path = resolvePath(outDir, `${subagentName}.md`);
@@ -364,6 +387,7 @@ export function writeAgentFile(agent: AgentSpec): MaterializedAgent {
     sha256: createHash('sha256').update(bodyBuffer).digest('hex'),
     byteLength: bodyBuffer.byteLength,
     containsMandatoryRepoContext: hasMandatoryRepoContext(body),
+    tools,
     createdAt: new Date(),
     cleanup() {
       try {

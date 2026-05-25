@@ -21,7 +21,7 @@ import { ContextEvaluationService } from './context/evaluation/context-evaluatio
 import { isContextEngineEnabled } from './context/config/context-provider-config.js';
 import { AGENT_FALLBACK_CWD } from './chat-providers.js';
 import { MonitoringService } from './self-healing-monitor.service.js';
-import { MCP_SERVER_NAME, normalizeModelAlias, ARTIFACTS_GUIDANCE, NON_INTERACTIVE_GUIDANCE, hasRepoContextLoadingGuidance, withMandatoryRepoContext, withRepoContextLoadingGuidance } from '@allen/engine';
+import { MCP_SERVER_NAME, normalizeModelAlias, ARTIFACTS_GUIDANCE, NON_INTERACTIVE_GUIDANCE, hasRepoContextLoadingGuidance, withMandatoryRepoContext, withRepoContextLoadingGuidance, getAllenMcpConfig } from '@allen/engine';
 
 /**
  * Claude-spawn-only system-prompt notice. Appended (via appendSystemPrompt
@@ -3538,36 +3538,27 @@ async function runAgentTurn(
     } else {
       // ── Claude provider with MCP — full streaming ──
       const { query } = await import('@anthropic-ai/claude-code');
-      const { resolve, dirname } = await import('node:path');
 
       const mcpServers: Record<string, unknown> = {};
-      const serverPath = resolve(dirname(new URL(import.meta.url).pathname), 'allen-mcp-server.ts');
-      mcpServers[MCP_SERVER_NAME] = {
-        type: 'stdio',
-        command: 'npx',
-        args: ['tsx', serverPath],
-        env: {
-          ALLEN_API_URL: `http://localhost:${process.env.PORT ?? '4023'}`,
-          JWT_ACCESS_SECRET: process.env.JWT_ACCESS_SECRET ?? '',
-          ALLEN_PUBLIC_URL: process.env.ALLEN_PUBLIC_URL ?? `http://localhost:${process.env.PORT ?? '4023'}`,
-          // Artifact-root context so `allen_save_artifact` inside this
-          // delegated agent routes files to the parent chat's Artifacts
-          // panel instead of failing with "env vars not set". The Claude
-          // SDK passes this object verbatim to the MCP subprocess — it
-          // does NOT inherit from the host Node env — so these MUST be
-          // listed here.
-          ...(chatSessionId
-            ? {
-                ALLEN_ARTIFACT_ROOT_TYPE: 'chat',
-                ALLEN_ARTIFACT_ROOT_ID: chatSessionId,
-                ALLEN_ARTIFACT_AGENT_NAME: targetName,
-                ALLEN_ARTIFACT_PARENT_ID: convId,
-                // Session marker — see Codex delegation path above.
-                ALLEN_CHAT_SESSION_ID: chatSessionId,
-              }
-            : {}),
-        },
-      };
+      // Allen MCP — delegation-scoped. Same helper as chat-llm.ts so path
+      // resolution stays in one place. Previously this branch hardcoded
+      // `npx tsx <serverPath.ts>` against a path that only existed in dev
+      // checkouts; in production (where the server ships as .js under
+      // dist/) the subprocess silently failed to start and the delegated
+      // agent saw "No such tool available" for every mcp__allen__* call.
+      const allenConfig = getAllenMcpConfig(
+        chatSessionId
+          ? {
+              ALLEN_ARTIFACT_ROOT_TYPE: 'chat',
+              ALLEN_ARTIFACT_ROOT_ID: chatSessionId,
+              ALLEN_ARTIFACT_AGENT_NAME: targetName,
+              ALLEN_ARTIFACT_PARENT_ID: convId,
+              // Session marker — see Codex delegation path above.
+              ALLEN_CHAT_SESSION_ID: chatSessionId,
+            }
+          : undefined,
+      );
+      if (allenConfig) mcpServers[MCP_SERVER_NAME] = allenConfig;
       const { loadExternalMcpServers } = await import('./chat-mcp.js');
       const externalMcpServers = externalMcpServersForAgent(targetAgent as Record<string, unknown>);
       const disabledMcpTools = disabledMcpToolsForAgent(targetAgent as Record<string, unknown>);
