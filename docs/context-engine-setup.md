@@ -115,11 +115,12 @@ Relevant thresholds:
 
 ```bash
 ALLEN_COGNEE_MIN_SELECTION_SCORE=0.45
-ALLEN_CONTEXT_MIN_RERANK_SCORE=0.45
+ALLEN_CONTEXT_MIN_RERANK_SCORE=0.10
+ALLEN_CONTEXT_MIN_FINAL_SCORE=0.24
 ALLEN_COGNEE_MIN_INJECTION_SCORE=0.60
 ```
 
-Tune these only after checking Context Management diagnostics. Mandatory context is not filtered by optional Cognee relevance thresholds.
+The final relevance score is `0.8 * rerankScore + 0.2 * retrievalScore + policyAdjustment`. Tune thresholds only after checking Context Management diagnostics. Mandatory context is not filtered by optional Cognee relevance thresholds.
 
 ## References
 

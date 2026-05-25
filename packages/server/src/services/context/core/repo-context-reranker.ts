@@ -155,7 +155,7 @@ function mergeSemanticScores(
       const policy = contextPolicyAdjustment(ref, input);
       const finalRelevanceScore = ref.mandatory
         ? 1
-        : clampScore((rerankScore * 0.55) + (retrievalScore * 0.45) + policy.adjustment);
+        : clampScore((rerankScore * 0.8) + (retrievalScore * 0.2) + policy.adjustment);
       const sortScore = ref.mandatory ? deterministicScore : finalRelevanceScore;
       return {
         ref,
