@@ -39,6 +39,8 @@ ALLEN_CONTEXT_LLM_PROVIDER=codex
 ALLEN_CONTEXT_LLM_MODEL=gpt-5.5
 ```
 
+`ALLEN_CONTEXT_LLM_PROVIDER` and `ALLEN_CONTEXT_LLM_MODEL` are the common LLM defaults for Cognee callbacks, semantic context evaluation, and context indexing. The setup script preserves existing context-specific values; otherwise it inherits the current Allen default provider/model from `.env` before falling back to `codex / gpt-5.5`.
+
 Manual package install:
 
 ```bash
