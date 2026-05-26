@@ -69,6 +69,7 @@ export class ContextLifecycleStore {
   async recordAttemptBuildStarted(input: {
     contextAttemptId: string;
     executionId: string;
+    executionTraceId?: string;
     workflowName: string;
     nodeName: string;
     nodeRole?: string;
@@ -101,6 +102,7 @@ export class ContextLifecycleStore {
         },
         $set: {
           executionId: input.executionId,
+          executionTraceId: input.executionTraceId,
           workflowName: input.workflowName,
           nodeName: input.nodeName,
           nodeRole: input.nodeRole,

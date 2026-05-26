@@ -1676,6 +1676,8 @@ function ChatContextPanel({ sessionId }: { sessionId?: string | null }) {
         const attemptId = String(attempt.contextAttemptId ?? index);
         const open = openAttemptId === attemptId;
         const counts = chatContextAttemptCounts(attempt);
+        const skipped = String(attempt.status ?? '').toLowerCase() === 'skipped';
+        const skipReason = attempt.error ?? attempt.contextInjection?.skipReason ?? 'skipped';
         return (
           <div key={attempt.contextAttemptId ?? index} className="rounded-lg border border-app bg-app-card">
             <button
@@ -1693,20 +1695,29 @@ function ChatContextPanel({ sessionId }: { sessionId?: string | null }) {
                     <div className="mt-0.5 text-[10px] font-mono text-theme-subtle break-all">
                       {[attempt.repoName ?? attempt.indexId, attempt.messageId ? `message ${attempt.messageId}` : undefined].filter(Boolean).join(' · ')}
                     </div>
+                    {skipped ? (
+                      <div className="mt-1 text-[10px] text-theme-subtle">
+                        Skipped: {humanChatContextSkipReason(skipReason)}
+                      </div>
+                    ) : null}
                   </div>
                 </div>
                 <span className="shrink-0 rounded border border-app px-1.5 py-0.5 text-[10px] font-mono text-theme-subtle">
-                  {counts.injected} injected · {counts.selected} selected · {counts.filtered} filtered
+                  {skipped ? 'skipped · ' : ''}{counts.injected} injected · {counts.selected} selected · {counts.filtered} filtered
                 </span>
               </div>
             </button>
             {open ? (
               <div className="border-t border-app p-2">
-                <RepoContextInjectionPanel
-                  contextAttempt={attempt}
-                  title={attempt.contextInjection?.targetLayer === 'user_prompt' ? 'User-turn context injection' : 'Repo context injection'}
-                  emptyText="No context refs captured for this chat turn."
-                />
+                {skipped ? (
+                  <div className="cr-empty">Context retrieval skipped for this chat turn: {humanChatContextSkipReason(skipReason)}.</div>
+                ) : (
+                  <RepoContextInjectionPanel
+                    contextAttempt={attempt}
+                    title={attempt.contextInjection?.targetLayer === 'user_prompt' ? 'User-turn context injection' : 'Repo context injection'}
+                    emptyText="No context refs captured for this chat turn."
+                  />
+                )}
               </div>
             ) : null}
           </div>
@@ -1714,6 +1725,11 @@ function ChatContextPanel({ sessionId }: { sessionId?: string | null }) {
       })}
     </div>
   );
+}
+
+function humanChatContextSkipReason(reason: any): string {
+  if (String(reason ?? '') === 'low_signal_action_turn') return 'low-signal action turn';
+  return String(reason ?? 'skipped').replace(/_/g, ' ');
 }
 
 function chatContextAttemptCounts(attempt: any): { injected: number; selected: number; filtered: number } {

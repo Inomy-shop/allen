@@ -19,6 +19,13 @@ import {
 import type { UsageToolCall } from '../common/context-usage.types.js';
 import { RepoContextPacketService } from './repo-context-packet.service.js';
 
+export type ChatContextRetrievalDecision = {
+  shouldSkip: boolean;
+  reason?: 'low_signal_action_turn';
+  normalizedText: string;
+  wordCount: number;
+};
+
 export class ChatContextPacketService {
   private lifecycle: ContextLifecycleStore;
 
@@ -41,6 +48,66 @@ export class ChatContextPacketService {
     traceSummary: Record<string, unknown>;
   } | null> {
     if (!isCogneeContextEnabled()) return null;
+    const retrievalDecision = classifyChatContextRetrievalPrompt(input.prompt);
+    if (retrievalDecision.shouldSkip) {
+      const packetId = randomUUID();
+      const nowAttempt = Date.now();
+      await this.lifecycle.recordAttemptBuildStarted({
+        contextAttemptId: packetId,
+        executionId: input.sessionId,
+        executionTraceId: input.messageId,
+        workflowName: 'chat',
+        nodeName: input.agentName || 'assistant',
+        nodeRole: input.agentName || 'assistant',
+        executionKind: 'chat_agent',
+        targetRole: input.agentName || 'assistant',
+        attempt: nowAttempt,
+        repoId: '__chat_context_skipped__',
+        repoName: 'Chat context skipped',
+        repoPath: '',
+        indexId: 'chat:cognee:skipped',
+        indexFreshness: 'provider_runtime',
+        taskPrompt: input.prompt,
+        currentFiles: [],
+        contextProvider: 'cognee_memory',
+        contextRetrievalMode: 'chat_skipped_low_signal',
+      });
+      await this.lifecycle.markAttemptBuildStatus(packetId, 'skipped', {
+        error: retrievalDecision.reason,
+        skipReason: retrievalDecision.reason,
+        skipDetails: retrievalDecision,
+      });
+      return {
+        packetId,
+        promptBlock: '',
+        injectedPromptBlock: '',
+        userTurnContextBlock: '',
+        traceSummary: {
+          packetId,
+          executionId: input.sessionId,
+          executionTraceId: input.messageId,
+          repoId: '__chat_context_skipped__',
+          repoName: 'Chat context skipped',
+          indexId: 'chat:cognee:skipped',
+          indexFreshness: 'provider_runtime',
+          contextScope: 'skipped',
+          status: 'skipped',
+          skipReason: retrievalDecision.reason,
+          skipDetails: retrievalDecision,
+          retrievalProviders: [],
+          selectedContextCount: 0,
+          injectableContextCount: 0,
+          injectedContextCount: 0,
+          rejectedContextCount: 0,
+          contextInjection: {
+            injectedCount: 0,
+            selectedCount: 0,
+            skippedCount: 0,
+            skipReason: retrievalDecision.reason,
+          },
+        },
+      };
+    }
     const repo = await this.resolveRepo(input.state);
     const repoScoped = Boolean(repo);
     const repoId = repoScoped ? String(repo!._id) : '__multi_repo_chat__';
@@ -180,4 +247,95 @@ export class ChatContextPacketService {
     const pathHint = firstString(state.worktree_path, state.worktreePath, state.repo_path, state.repoPath);
     return resolveRepoFromPath(this.db, pathHint);
   }
+}
+
+export function classifyChatContextRetrievalPrompt(prompt: string): ChatContextRetrievalDecision {
+  const normalizedText = prompt
+    .replace(/[`*_~>#\[\](){}]/g, ' ')
+    .replace(/[.!?,;:]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .toLowerCase();
+  const words = normalizedText ? normalizedText.split(' ').filter(Boolean) : [];
+  const wordCount = words.length;
+  const base = { normalizedText, wordCount };
+  if (!normalizedText || wordCount > 3) return { ...base, shouldSkip: false };
+  if (hasRetrievalBearingSignal(prompt)) return { ...base, shouldSkip: false };
+  if (LOW_SIGNAL_ACTION_PHRASES.has(normalizedText)) {
+    return { ...base, shouldSkip: true, reason: 'low_signal_action_turn' };
+  }
+  const [verb, second, third] = words;
+  const object = third && second === 'the' ? third : second;
+  if (LOW_SIGNAL_ACTION_VERBS.has(verb) && (!object || LOW_SIGNAL_ACTION_OBJECTS.has(object))) {
+    return { ...base, shouldSkip: true, reason: 'low_signal_action_turn' };
+  }
+  return { ...base, shouldSkip: false };
+}
+
+const LOW_SIGNAL_ACTION_PHRASES = new Set([
+  'approved',
+  'continue',
+  'continue this',
+  'do it',
+  'execute',
+  'go ahead',
+  'implement',
+  'implement changes',
+  'implement it',
+  'implement plan',
+  'implement the plan',
+  'make it happen',
+  'ok',
+  'okay',
+  'please continue',
+  'please proceed',
+  'proceed',
+  'retry',
+  'rerun',
+  'resume',
+  'run agent',
+  'run it',
+  'run the agent',
+  'run the workflow',
+  'run workflow',
+  'ship it',
+  'start',
+  'start agent',
+  'yes',
+  'no',
+]);
+
+const LOW_SIGNAL_ACTION_VERBS = new Set([
+  'continue',
+  'execute',
+  'implement',
+  'proceed',
+  'retry',
+  'rerun',
+  'resume',
+  'run',
+  'start',
+]);
+
+const LOW_SIGNAL_ACTION_OBJECTS = new Set([
+  'agent',
+  'changes',
+  'it',
+  'plan',
+  'task',
+  'that',
+  'this',
+  'workflow',
+  'work',
+]);
+
+function hasRetrievalBearingSignal(prompt: string): boolean {
+  return /https?:\/\//i.test(prompt)
+    || /(^|\s)@\S+/.test(prompt)
+    || /\b[A-Z][A-Z0-9]+-\d+\b/.test(prompt)
+    || /[`'"][^`'"]{3,}[`'"]/.test(prompt)
+    || /(^|\s)[\w.-]+\/[\w./-]+/.test(prompt)
+    || /\b\w+\.\w{1,6}\b/.test(prompt)
+    || /\b[a-z]+[A-Z][A-Za-z0-9]*\b/.test(prompt)
+    || /\b\w+[-_]\w+\b/.test(prompt);
 }
