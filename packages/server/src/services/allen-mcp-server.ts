@@ -170,7 +170,7 @@ const TOOLS = [
   { name: 'update_agent', description: 'Update an agent: system prompt, model, provider, tools, capabilities, canDelegateTo, personality, displayName, description.', params: { name: 'string (required)', displayName: 'string', description: 'string', system: 'string', tools: 'object', capabilities: 'object', canDelegateTo: 'object', personality: 'string', model: 'string', provider: 'string' } },
   { name: 'delete_agent', description: 'Delete an agent. Refuses built-in agents and team leads. Requires confirm=true.', params: { name: 'string (required)', confirm: 'boolean (required) — must be true' } },
   { name: 'move_agent_to_team', description: 'Move one or more agents to a different team. Works for any cross-team move including unassigned → team.', params: { agent_names: 'object — array of agent name strings (required)', team_name: 'string (required) — target team slug' } },
-  { name: 'spawn_agent', description: 'Spawn an agent in the background. Returns immediately with execution_id. Pass session_id to resume a previous session.', params: { agent_name: 'string (required)', prompt: 'string (required)', repo_path: 'string — optional repo path', session_id: 'string — session ID from previous spawn to resume' } },
+  { name: 'spawn_agent', description: 'Spawn an agent in the background. Returns immediately with execution_id. Pass context_query as structured retrieval-only metadata; do not embed context query XML/JSON in prompt.', params: { agent_name: 'string (required)', prompt: 'string (required)', context_query: 'object — optional structured retrieval query, not sent to the agent prompt', repo_path: 'string — optional repo path', session_id: 'string — session ID from previous spawn to resume' } },
 
   // ── Teams ──
   { name: 'list_teams', description: 'List all teams: name, displayName, mission, lead, parent, isBuiltIn.', params: {} },
@@ -835,6 +835,7 @@ async function executeTool(name: string, args: Record<string, unknown>): Promise
         body: JSON.stringify({
           agent_name: args.agent_name,
           prompt: args.prompt,
+          context_query: args.context_query,
           repo_path: args.repo_path,
           session_id: args.session_id,
           // Spawn-tree linkage — lets the execution row carry its caller

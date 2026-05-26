@@ -279,6 +279,7 @@ function withCuratedContext(ref: KnowledgeCandidateRef, resolution: CurationReso
       curationResolutionMappingId: resolution.mapping?._id,
       curatedContextHash: curatedContext ? sha256(curatedContext) : undefined,
       retrievalTextHash: retrievalText ? sha256(retrievalText) : undefined,
+      curatedInjectionPolicy: injectionPolicy,
       injectionDecision: injectionPolicy,
       injectionPolicy,
       cogneeChunkText: ref.content,
@@ -353,6 +354,7 @@ function withMetadata(ref: KnowledgeCandidateRef, metadata: CogneeContextMetadat
       metadataCategories: metadata?.categories,
       metadataConfidence: metadata?.confidence,
       sourceAuthority: metadata?.sourceAuthority,
+      defaultInjectionPolicy: metadata?.injectionDecision,
       metadataWarnings: warnings,
     },
   };

@@ -751,6 +751,8 @@ export function repoRoutes(db: Db): Router {
             requiredCategories: packet.contextQueryIntent?.requiredCategories,
             preferredCategories: packet.contextQueryIntent?.preferredCategories,
             exclusionCategories: packet.contextQueryIntent?.exclusionCategories,
+            pathScopes: packet.contextQueryIntent?.pathScopes,
+            categoryDiagnostics: packet.contextQueryIntent?.categoryDiagnostics,
             currentFiles: packet.currentFiles,
           },
           candidateRefs,

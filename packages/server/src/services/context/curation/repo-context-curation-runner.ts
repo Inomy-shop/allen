@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import type { Db } from 'mongodb';
 import type { CandidateContextFile } from './repo-context-curation-git.js';
+import { shouldBlockAgentAdjacentInjection } from './repo-context-agent-adjacent.js';
 
 export type CurationAssignmentPlan = {
   runId: string;
@@ -422,9 +423,12 @@ async function validateStagingRun(db: Db, run: Record<string, unknown>): Promise
   };
 }
 
-function validateStageEntry(entry: Record<string, unknown>): { ok: boolean; errors: string[] } {
+export function validateStageEntry(entry: Record<string, unknown>): { ok: boolean; errors: string[] } {
   const errors: string[] = [];
   const inclusion = stringValue(entry.inclusion) ?? 'include';
+  const category = stringValue(entry.category) ?? 'doc';
+  const injectionPolicy = stringValue(entry.injectionPolicy) ?? 'manifest_only';
+  const path = stringValue(entry.path) ?? '';
   const curatedContext = stringValue(entry.curatedContext) ?? '';
   const retrievalText = stringValue(entry.retrievalText) ?? '';
   const chunks = Array.isArray(entry.chunks) ? entry.chunks as Record<string, unknown>[] : [];
@@ -439,6 +443,21 @@ function validateStageEntry(entry: Record<string, unknown>): { ok: boolean; erro
     if (!text) errors.push('chunk missing text');
     if (text.length > MAX_CHUNK_TEXT_CHARS) errors.push('chunk text exceeds budget');
   }
+  const agentAdjacentBlock = shouldBlockAgentAdjacentInjection({
+    path,
+    category,
+    inclusion,
+    injectionPolicy,
+    text: [
+      entry.title,
+      entry.summary,
+      curatedContext,
+      retrievalText,
+      ...chunks.map((chunk) => stringValue(chunk.text) ?? ''),
+      entry.reasoning,
+    ].map((value) => String(value ?? '')).join('\n'),
+  });
+  if (agentAdjacentBlock) errors.push(agentAdjacentBlock.code);
   if (totalGenerated > MAX_GENERATED_CHARS_PER_FILE) errors.push('generated text per file exceeds budget');
   return { ok: errors.length === 0, errors };
 }

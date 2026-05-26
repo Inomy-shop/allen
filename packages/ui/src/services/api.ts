@@ -460,6 +460,7 @@ export const executions = {
     runContext?: RunStatus | null;
   }>>(`/executions/chat/${sessionId}`),
   context: (id: string) => request<RunStatus>(`/executions/${id}/context`),
+  contextUsage: (id: string) => request<any>(`/executions/${id}/context-usage`),
   start: (
     workflowId: string,
     input: Record<string, unknown>,
@@ -896,6 +897,8 @@ export const chat = {
     request<void>(`/chat/sessions/${id}`, { method: 'DELETE' }),
   getThreads: (id: string) =>
     request<any[]>(`/chat/sessions/${id}/threads`),
+  getContextUsage: (id: string) =>
+    request<any>(`/chat/sessions/${id}/context-usage`),
   // Replay persisted activity for a single delegation (conversation).
   // Called from useChat on initial load to repopulate liveActivity for
   // still-running threads so a page refresh doesn't erase their visible

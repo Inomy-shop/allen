@@ -152,6 +152,7 @@ export function agentRoutes(db: Db): Router {
     try {
       const agentName = param(req, 'name');
       const prompt = req.body?.prompt as string | undefined;
+      const contextQuery = req.body?.context_query;
       const repoPath = req.body?.repo_path as string | undefined;
       const sessionId = req.body?.session_id as string | undefined;
       if (!prompt || !prompt.trim()) {
@@ -159,7 +160,7 @@ export function agentRoutes(db: Db): Router {
       }
       const result = await executeChatTool(
         'spawn_agent',
-        { agent_name: agentName, prompt, repo_path: repoPath, session_id: sessionId },
+        { agent_name: agentName, prompt, context_query: contextQuery, repo_path: repoPath, session_id: sessionId },
         db,
       );
       if (result.error) return res.status(400).json(result);

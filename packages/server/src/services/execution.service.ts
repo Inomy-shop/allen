@@ -1269,6 +1269,7 @@ export class ExecutionService {
   }
 
   async cancel(id: string): Promise<void> {
+    const execBeforeCancel = await this.stateManager.getExecution(id).catch(() => null);
     // Kill workflow engine if running
     const engine = runningEngines.get(id);
     if (engine) {
@@ -1288,6 +1289,64 @@ export class ExecutionService {
       completedAt: new Date(),
       currentNodes: [],
     });
+    await this.ensureCancelledSpawnTrace(execBeforeCancel).catch((err) => {
+      logger.warn('failed to persist cancelled spawned-agent trace fallback', { executionId: id, error: (err as Error).message });
+    });
+  }
+
+  private async ensureCancelledSpawnTrace(exec: ExecutionState | null): Promise<void> {
+    if (!exec) return;
+    const workflowName = String(exec.workflowName ?? '');
+    const source = String((exec as unknown as Record<string, unknown>).source ?? '');
+    const isSpawnedAgent = workflowName.includes(':spawn_agent/') || source === 'spawn';
+    if (!isSpawnedAgent) return;
+    const input = (exec.input ?? {}) as Record<string, unknown>;
+    const agentName = workflowName.includes(':spawn_agent/')
+      ? workflowName.split(':spawn_agent/')[1]
+      : String(input.agent_name ?? exec.currentNodes?.[0] ?? 'agent');
+    if (!agentName) return;
+    const existing = await this.db.collection('execution_traces')
+      .find({ executionId: exec.id, node: agentName }, { projection: { attempt: 1 } })
+      .sort({ attempt: -1 })
+      .limit(1)
+      .toArray();
+    const attempt = Math.max(1, Number(existing[0]?.attempt ?? 0) + 1);
+    const contextAttempt = await this.db.collection('context_attempts').findOne(
+      { executionId: exec.id, nodeName: agentName },
+      { sort: { createdAt: -1 }, projection: { contextAttemptId: 1 } },
+    );
+    const now = new Date();
+    const startedAt = exec.startedAt ? new Date(exec.startedAt) : now;
+    const durationMs = Math.max(0, now.getTime() - startedAt.getTime());
+    await this.db.collection('execution_traces').updateOne(
+      { executionId: exec.id, node: agentName, attempt },
+      {
+        $setOnInsert: {
+          executionId: exec.id,
+          executionTraceId: randomUUID(),
+          node: agentName,
+          attempt,
+          status: 'cancelled',
+          type: 'agent',
+          agent: agentName,
+          inputState: { prompt: input.prompt },
+          renderedPrompt: typeof input.prompt === 'string' ? input.prompt : '',
+          rawResponse: '',
+          output: { cancelled: true, reason: 'Execution cancelled by user.', session_id: input.session_id },
+          toolCalls: [],
+          activity: [],
+          contextAttemptId: typeof contextAttempt?.contextAttemptId === 'string' ? contextAttempt.contextAttemptId : undefined,
+          runtimeContext: {
+            mandatoryRepoContextInjected: Boolean(contextAttempt),
+          },
+          cost: { actual: 0, estimated: 0, method: 'cancelled_fallback' },
+          durationMs,
+          startedAt,
+          completedAt: now,
+        },
+      },
+      { upsert: true },
+    );
   }
 
   async pause(id: string): Promise<void> {

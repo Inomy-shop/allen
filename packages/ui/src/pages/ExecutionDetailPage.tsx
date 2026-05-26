@@ -6,6 +6,7 @@ import {
   CheckCircle, AlertCircle, Wrench, ChevronDown, ChevronRight,
   ArrowRight, AlertTriangle, Save, Activity,
   MessageSquare, FileText, FolderGit2, GitPullRequest, ExternalLink, Cpu,
+  BookOpen,
   Copy, Check,
 } from 'lucide-react';
 import { useExecution, type TimelineEvent, type NodeState } from '../hooks/useExecution';
@@ -18,6 +19,7 @@ import { renderMarkdown } from '../components/chat/ChatMessageList';
 import LiveGraph from '../components/execution/LiveGraph';
 import Timeline from '../components/execution/Timeline';
 import NodeDetail from '../components/execution/NodeDetail';
+import { RepoContextInjectionPanel, groupContextRefs } from '../components/execution/NodeInspector';
 import ArtifactsPanel from '../components/artifacts/ArtifactsPanel';
 import ArtifactViewer from '../components/artifacts/ArtifactViewer';
 import { artifacts as artifactsApi, type ArtifactDoc } from '../services/api';
@@ -986,6 +988,175 @@ function AgentResumeDrawer({
   );
 }
 
+export function agentTraceHasContext(trace: any): boolean {
+  return Boolean(
+    trace?.contextLifecycleAttempt
+    || trace?.contextAttemptId
+    || trace?.repoKnowledgeInjected
+    || trace?.contextUsage,
+  );
+}
+
+export function agentTraceContextCount(trace: any): number | null {
+  if (!trace) return null;
+  if (trace.contextLifecycleAttempt) {
+    const groups = groupContextRefs(trace.contextLifecycleAttempt);
+    if (groups.injected.length > 0) return groups.injected.length;
+    if (groups.selected.length > 0) return groups.selected.length;
+    if (groups.filtered.length > 0) return groups.filtered.length;
+  }
+  const legacyInjected = trace.repoKnowledgeInjected?.contextInjection?.injectedRefs?.length
+    ?? trace.repoKnowledgeInjected?.contextInjection?.providerNativeRefs?.length
+    ?? 0;
+  if (legacyInjected > 0) return legacyInjected;
+  if (trace.contextAttemptId) return 1;
+  return null;
+}
+
+export function agentContextAttemptCount(contextAttempt: any): number | null {
+  if (!contextAttempt) return null;
+  const groups = groupContextRefs(contextAttempt);
+  if (groups.injected.length > 0) return groups.injected.length;
+  if (groups.selected.length > 0) return groups.selected.length;
+  if (groups.filtered.length > 0) return groups.filtered.length;
+  return null;
+}
+
+export function findAgentContextAttempt(report: any, agentName: string, selectedAttempt: number): any | null {
+  const attempts = Array.isArray(report?.nodeAttempts)
+    ? report.nodeAttempts
+    : Array.isArray(report?.packets)
+      ? report.packets
+      : [];
+  const named = attempts.filter((attempt: any) => {
+    const nodeName = String(attempt?.nodeName ?? attempt?.node ?? attempt?.agent ?? '');
+    return nodeName === agentName;
+  });
+  if (named.length === 0) return null;
+  const exact = named.find((attempt: any) => Number(attempt?.attempt ?? 1) === selectedAttempt);
+  if (exact) return exact;
+  return [...named].sort((a: any, b: any) => {
+    const attemptDiff = Number(b?.attempt ?? 1) - Number(a?.attempt ?? 1);
+    if (attemptDiff !== 0) return attemptDiff;
+    return new Date(b?.startedAt ?? b?.createdAt ?? 0).getTime() - new Date(a?.startedAt ?? a?.createdAt ?? 0).getTime();
+  })[0] ?? null;
+}
+
+export function agentHasContextEvidence(trace: any, contextAttempt?: any | null, contextExpected = false): boolean {
+  return agentTraceHasContext(trace) || Boolean(contextAttempt?.contextAttemptId ?? contextAttempt?.packetId) || contextExpected;
+}
+
+function AgentContextDrawer({
+  open,
+  onClose,
+  trace,
+  contextAttempt,
+  contextReportLoading,
+  contextReportError,
+  contextExpected,
+  contextEngineEnabled,
+}: {
+  open: boolean;
+  onClose: () => void;
+  trace: any | null;
+  contextAttempt?: any | null;
+  contextReportLoading?: boolean;
+  contextReportError?: string | null;
+  contextExpected?: boolean;
+  contextEngineEnabled: boolean;
+}) {
+  useEffect(() => {
+    if (!open) return;
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
+    window.addEventListener('keydown', onKey);
+    return () => {
+      document.body.style.overflow = prev;
+      window.removeEventListener('keydown', onKey);
+    };
+  }, [open, onClose]);
+
+  if (!open) return null;
+
+  const hydratedAttempt = trace?.contextLifecycleAttempt ?? contextAttempt;
+  const effectiveAttemptId = trace?.contextAttemptId ?? contextAttempt?.contextAttemptId ?? contextAttempt?.packetId;
+  const hasPacketDetails = Boolean(hydratedAttempt || trace?.repoKnowledgeInjected);
+  const hasContextAttemptId = Boolean(effectiveAttemptId);
+  const effectiveContextEnabled = contextEngineEnabled || agentTraceHasContext(trace) || Boolean(contextAttempt);
+  const usageMissing = Boolean(hasContextAttemptId && !trace?.contextUsageTraceId && trace?.status !== 'running' && contextAttempt?.status === 'ready');
+  const contextStatus = String(contextAttempt?.status ?? '');
+
+  return (
+    <div className="fixed inset-0 z-50 bg-black/30 p-6" role="dialog" aria-modal="true" aria-label="Agent context injection">
+      <button className="absolute inset-0" type="button" onClick={onClose} aria-label="Close context" />
+      <aside
+        className="relative ml-auto flex h-full w-[min(940px,calc(100vw-48px))] flex-col overflow-hidden rounded-lg border border-app-strong bg-app-card shadow-2xl"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="flex items-center justify-between gap-3 border-b border-app px-4 py-3">
+          <div>
+            <div className="text-[13px] font-semibold text-theme-primary">Context injection</div>
+            <div className="font-mono text-[10px] text-theme-muted">
+              {trace || contextAttempt ? `Attempt ${trace?.attempt ?? contextAttempt?.attempt ?? 1}` : 'No attempt selected'}
+              {effectiveAttemptId ? ` · ${String(effectiveAttemptId).slice(0, 8)}` : ''}
+              {contextStatus ? ` · ${contextStatus}` : ''}
+            </div>
+          </div>
+          <button type="button" onClick={onClose} className="rounded p-1.5 text-theme-muted hover:bg-app-muted hover:text-theme-primary" aria-label="Close context">
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+        <div className="min-h-0 flex-1 overflow-y-auto p-4">
+          {!effectiveContextEnabled ? (
+            <div className="text-xs text-theme-muted font-mono">Context injection is disabled and no context packet was captured for this attempt.</div>
+          ) : hasPacketDetails ? (
+            <div className="space-y-3">
+              <RepoContextInjectionPanel
+                contextAttempt={hydratedAttempt}
+                repoKnowledgeInjected={trace?.repoKnowledgeInjected}
+                contextEngineEnabled={effectiveContextEnabled}
+                title="Repo context injection"
+                emptyText="No repo context packet details were hydrated for this agent attempt."
+              />
+              {contextStatus && contextStatus !== 'ready' && (
+                <div className="rounded-md border border-app bg-app-muted/40 px-3 py-2 text-[11px] font-mono text-theme-secondary">
+                  Context attempt status: {contextStatus}
+                  {contextAttempt?.error ? ` · ${contextAttempt.error}` : ''}
+                </div>
+              )}
+              {usageMissing && (
+                <div className="rounded-md border border-amber-500/30 bg-amber-500/5 px-3 py-2 text-[11px] font-mono text-accent-yellow">
+                  Context was injected, but no usage trace was recorded for this attempt. This can happen for older failed spawned-agent runs.
+                </div>
+              )}
+            </div>
+          ) : hasContextAttemptId ? (
+            <div className="space-y-2">
+              <div className="rounded-md border border-app bg-app-muted/40 px-3 py-2 text-[11px] font-mono text-theme-secondary">
+                Context packet id exists, but packet details were not hydrated for this trace.
+              </div>
+              <div className="text-[10px] font-mono text-theme-muted">
+                contextAttemptId: {effectiveAttemptId}
+              </div>
+            </div>
+          ) : contextReportLoading ? (
+            <div className="text-xs text-theme-muted font-mono animate-pulse">Checking context injection trace...</div>
+          ) : contextReportError ? (
+            <div className="rounded-md border border-amber-500/30 bg-amber-500/5 px-3 py-2 text-[11px] font-mono text-accent-yellow">
+              Context usage report could not be loaded: {contextReportError}
+            </div>
+          ) : contextExpected ? (
+            <div className="text-xs text-theme-muted font-mono">No context packet has been captured yet for this agent attempt.</div>
+          ) : (
+            <div className="text-xs text-theme-muted font-mono">No repo context packet was captured for this agent attempt.</div>
+          )}
+        </div>
+      </aside>
+    </div>
+  );
+}
+
 function phaseLabel(value: string | undefined): string {
   return (value ?? 'running').replace(/_/g, ' ');
 }
@@ -1572,8 +1743,8 @@ function AgentPanel({
   );
 }
 
-function AgentExecutionView({ execution, agentName, traces, id, liveToolCalls, refresh, runContext }: {
-  execution: any; agentName: string; traces: any[]; id: string; liveToolCalls?: any[]; refresh: () => void; runContext?: RunStatus | null;
+function AgentExecutionView({ execution, agentName, traces, id, liveToolCalls, refresh, runContext, contextEngineEnabled }: {
+  execution: any; agentName: string; traces: any[]; id: string; liveToolCalls?: any[]; refresh: () => void; runContext?: RunStatus | null; contextEngineEnabled: boolean;
 }) {
   // Attempt selector — when the user has resumed the agent at least once,
   // traces has multiple rows (one per attempt). The latest attempt is
@@ -1603,6 +1774,10 @@ function AgentExecutionView({ execution, agentName, traces, id, liveToolCalls, r
   const [agentArtifactsLoading, setAgentArtifactsLoading] = useState(true);
   const [agentArtifactPreview, setAgentArtifactPreview] = useState<ArtifactDoc | null>(null);
   const [registeredRepos, setRegisteredRepos] = useState<ExecutionRepoSummary[]>([]);
+  const [agentContextOpen, setAgentContextOpen] = useState(false);
+  const [agentContextReport, setAgentContextReport] = useState<any | null>(null);
+  const [agentContextLoading, setAgentContextLoading] = useState(false);
+  const [agentContextError, setAgentContextError] = useState<string | null>(null);
 
   const prompt = trace?.renderedPrompt ?? execution.input?.prompt ?? '';
   const response = trace?.rawResponse ?? '';
@@ -1768,6 +1943,34 @@ function AgentExecutionView({ execution, agentName, traces, id, liveToolCalls, r
     }
   };
 
+  useEffect(() => {
+    if (!id || !contextEngineEnabled) return;
+    let alive = true;
+    const fetchContextReport = async () => {
+      setAgentContextLoading(true);
+      try {
+        const report = await api.contextUsage(id);
+        if (!alive) return;
+        setAgentContextReport(report);
+        setAgentContextError(null);
+      } catch (err) {
+        if (!alive) return;
+        setAgentContextError((err as Error).message);
+      } finally {
+        if (alive) setAgentContextLoading(false);
+      }
+    };
+    const poll = async () => {
+      while (alive) {
+        await fetchContextReport();
+        if (execution.status !== 'running' && execution.status !== 'waiting_for_input') break;
+        await new Promise(r => setTimeout(r, 2000));
+      }
+    };
+    poll();
+    return () => { alive = false; };
+  }, [id, execution.status, contextEngineEnabled]);
+
   // Build the Activity Log stream. Order of precedence:
   //   1. persisted execution_logs rows (liveLogs)
   //   2. live SSE tool-call records (liveToolCalls) — injected as
@@ -1830,6 +2033,10 @@ function AgentExecutionView({ execution, agentName, traces, id, liveToolCalls, r
   const modelLabel = [meta.provider ?? 'claude', meta.model ?? cost.model ?? 'sonnet'].filter(Boolean).join(' / ');
   const startedLabel = execution.startedAt ? new Date(execution.startedAt).toLocaleString() : 'n/a';
   const completedLabel = execution.completedAt ? new Date(execution.completedAt).toLocaleString() : 'n/a';
+  const selectedContextAttempt = findAgentContextAttempt(agentContextReport, agentName, selectedAttempt);
+  const contextExpected = contextEngineEnabled && Boolean(execution.input?.repo_path || execution.input?.repoPath || execution.worktreePath || meta.worktreePath);
+  const hasAgentContext = agentHasContextEvidence(trace, selectedContextAttempt, contextExpected);
+  const agentContextCount = agentTraceContextCount(trace) ?? agentContextAttemptCount(selectedContextAttempt);
 
   return (
     <div className="h-full overflow-y-auto bg-app">
@@ -1894,6 +2101,22 @@ function AgentExecutionView({ execution, agentName, traces, id, liveToolCalls, r
                 {allLogs.length > 0 && (
                   <span className="rounded-sm bg-app-muted px-1.5 py-0.5 font-mono text-[10px] text-theme-muted tabular-nums">
                     {allLogs.length}
+                  </span>
+                )}
+              </button>
+            )}
+            {hasAgentContext && (
+              <button
+                type="button"
+                onClick={() => setAgentContextOpen(true)}
+                className="inline-flex h-9 items-center gap-2 rounded-md border border-app bg-app-card px-3 text-[12px] font-medium text-theme-secondary transition-colors hover:border-app-strong hover:bg-app-muted hover:text-theme-primary"
+                title="Inspect injected context"
+              >
+                <BookOpen className="h-3.5 w-3.5" />
+                Context
+                {agentContextCount != null && (
+                  <span className="rounded-sm bg-app-muted px-1.5 py-0.5 font-mono text-[10px] text-theme-muted tabular-nums">
+                    {agentContextCount}
                   </span>
                 )}
               </button>
@@ -2152,6 +2375,17 @@ function AgentExecutionView({ execution, agentName, traces, id, liveToolCalls, r
         logs={allLogs}
         toolCalls={toolCalls as ToolCall[]}
         executionStatus={execution.status}
+      />
+
+      <AgentContextDrawer
+        open={agentContextOpen}
+        onClose={() => setAgentContextOpen(false)}
+        trace={trace}
+        contextAttempt={selectedContextAttempt}
+        contextReportLoading={agentContextLoading}
+        contextReportError={agentContextError}
+        contextExpected={contextExpected}
+        contextEngineEnabled={contextEngineEnabled}
       />
 
       <AgentResumeDrawer
@@ -2539,6 +2773,7 @@ export default function ExecutionDetailPage() {
       liveToolCalls={liveToolCallsByNode.get(agentName)}
       refresh={refresh}
       runContext={runContext}
+      contextEngineEnabled={contextEngineEnabled}
     />;
   }
 

@@ -24,9 +24,11 @@ vi.mock('../common/context-role-inventory.js', () => ({
 import { RepoContextCurationService } from './repo-context-curation.service.js';
 import {
   buildRepoContextCuratorSystemPrompt,
+  buildRepoContextCuratorWorkerSystemPrompt,
 } from './repo-context-curator-prompts.js';
 import {
   buildRepoContextCurationAssignmentPlan,
+  validateStageEntry,
 } from './repo-context-curation-runner.js';
 
 function candidate(path: string, sourceHash: string) {
@@ -196,7 +198,7 @@ describe('RepoContextCurationService reuse selection', () => {
     expect(input.newOrChangedFiles.map((file: any) => file.path)).toEqual(['docs/a.md']);
   });
 
-  it('excludes subagent persona files from default curation', async () => {
+  it('keeps agent-adjacent files in default curation so workers can classify mixed content', async () => {
     mockInventory.candidates = [
       candidate('.claude/agents/chief.md', 'hash-chief'),
       candidate('.claude/agents/engineering-lead.md', 'hash-lead'),
@@ -212,17 +214,23 @@ describe('RepoContextCurationService reuse selection', () => {
     const input = await buildInput([]);
 
     expect(input.candidates.map((file: any) => file.path)).toEqual([
+      '.claude/agents/chief.md',
+      '.claude/agents/engineering-lead.md',
       '.claude/agents/chief/memory/team-learnings.md',
       '.claude/agents/engineering/agents/memory/git-ops-manager-memory.md',
       '.claude/agents/learnings-agent-template.md',
+      '.agents/backend-developer.md',
       'AGENTS.md',
       'CLAUDE.md',
       'docs/agent-memory/lessons.md',
     ]);
     expect(input.newOrChangedFiles.map((file: any) => file.path)).toEqual([
+      '.claude/agents/chief.md',
+      '.claude/agents/engineering-lead.md',
       '.claude/agents/chief/memory/team-learnings.md',
       '.claude/agents/engineering/agents/memory/git-ops-manager-memory.md',
       '.claude/agents/learnings-agent-template.md',
+      '.agents/backend-developer.md',
       'AGENTS.md',
       'CLAUDE.md',
       'docs/agent-memory/lessons.md',
@@ -374,5 +382,47 @@ describe('Repo context curator prompt contract', () => {
     expect(prompt).toContain('Call plan_repo_context_curation_assignments');
     expect(prompt).toContain('Fire those mcp__allen__spawn_agent calls back-to-back before waiting');
     expect(prompt).toContain('Do not run a single pilot/test worker unless');
+  });
+
+  it('instructs workers to keep production learnings and omit agent persona instructions', () => {
+    const coordinatorPrompt = buildRepoContextCuratorSystemPrompt();
+    const workerPrompt = buildRepoContextCuratorWorkerSystemPrompt();
+
+    expect(coordinatorPrompt).toContain('Treat agent-adjacent files such as .claude/agents/** and .agents/** as mixed-source files');
+    expect(coordinatorPrompt).toContain('Memory/learnings entries should use production categories');
+    expect(workerPrompt).toContain('stage only the production-learning chunks');
+    expect(workerPrompt).toContain('omit persona/system sections from curatedContext, retrievalText, and chunks');
+  });
+});
+
+describe('Repo context curation stage validation', () => {
+  it('rejects injectable agent persona snippets', () => {
+    const validation = validateStageEntry({
+      path: '.agents/backend-developer.md',
+      title: 'Backend developer persona',
+      category: 'agent_persona',
+      inclusion: 'include',
+      injectionPolicy: 'snippet',
+      curatedContext: 'You are the backend developer subagent. Use allowed tools and delegate when needed.',
+    });
+
+    expect(validation.ok).toBe(false);
+    expect(validation.errors).toContain('agent_persona_not_injectable');
+  });
+
+  it('allows source-grounded learnings from agent-adjacent files under production categories', () => {
+    const validation = validateStageEntry({
+      path: '.claude/agents/chief/memory/team-learnings.md',
+      title: 'Team learnings',
+      category: 'production_note',
+      inclusion: 'include',
+      injectionPolicy: 'snippet',
+      curatedContext: [
+        'Learning: Product grouping failures usually trace back to product_group_temp table joins.',
+        'Debugging pattern: check the identifier config service, grouping module, schema columns, and query filters before changing matcher behavior.',
+      ].join(' '),
+    });
+
+    expect(validation.ok).toBe(true);
   });
 });

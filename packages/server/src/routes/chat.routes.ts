@@ -12,6 +12,7 @@ import { UserService } from '../services/user.service.js';
 import type { AuthedRequest } from '../middleware/requireAuth.js';
 import { listSlashCommands, type SlashCommandProvider } from '../services/slash-commands.js';
 import { buildHumanResumeInput, type HumanInterventionPayload } from '@allen/engine';
+import { ChatContextPacketService } from '../services/context/core/chat-context-packet.service.js';
 
 // Simple in-memory rate limiter for the automation-message endpoint.
 // Limits each authenticated caller (by sub) to 60 requests per minute.
@@ -667,6 +668,16 @@ export function chatRoutes(db: Db): Router {
         .toArray();
       logs.reverse();
       res.json(logs);
+    } catch (err: unknown) {
+      res.status(500).json({ error: (err as Error).message });
+    }
+  });
+
+  // GET /api/chat/sessions/:id/context-usage — repo context attempts captured
+  // for top-level chat-agent turns, grouped by assistant message id.
+  router.get('/sessions/:id/context-usage', async (req: Request, res: Response) => {
+    try {
+      res.json(await new ChatContextPacketService(db).getChatContextUsageReport(param(req, 'id')));
     } catch (err: unknown) {
       res.status(500).json({ error: (err as Error).message });
     }

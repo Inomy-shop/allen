@@ -21,6 +21,7 @@ import { LinearService } from './linear.service.js';
 import { runPersistentCodexSlashCommand } from './chat-runtime-manager.js';
 import { listSlashCommands, type SlashCommandInfo } from './slash-commands.js';
 import type { RuntimeSlashCommand } from './chat-runtime-types.js';
+import { ChatContextPacketService } from './context/core/chat-context-packet.service.js';
 // Note: embedding.service.ts re-exports from @allen/engine — single implementation shared by engine + server
 
 // ── Types ──
@@ -415,6 +416,7 @@ IMPORTANT RULES:
 7. Capability discovery before route selection: before proposing an execution route, inspect the available Allen workflows, specialized team leads/agents, and relevant external MCP tools that could do the job. Use list_workflows/get_workflow, list_teams/list_agents/get_team/get_agent, and any relevant external MCP discovery/list tools when available. Prefer the most specific workflow or specialized lead/agent that owns the end-to-end task; use raw external MCP tools directly only for simple tool-native queries/actions or as evidence for the selected route.
 8. Intent clarity and confirmation: if the user intent, target repo/resource, scope, desired outcome, or best route is unclear, ask a concise clarifying question instead of guessing. Before starting execution that changes state or consumes a specialist/workflow run, present the selected route, short plan, required inputs, expected outputs, and risks/unknowns, then ask the user to confirm. Read-only answers and read-only data queries may proceed without confirmation after evidence is checked.
 9. Tool contract: before run_workflow, inspect get_workflow and use exact parsed.input field names. After run_workflow, spawn_agent, or delegate_to_agent, wait/monitor until complete, blocked, or clearly still running. Surface progress, human-input pauses, workspace links, PR links, artifacts, and final output with clickable links.
+9a. Context query for spawned agents: when calling spawn_agent for repo-related work, pass a compact context_query object as a separate tool argument. Include user_request, task_type, retrieval-relevant requirements, topics, target_files/path_hints, and required_categories/preferred_categories when obvious. Consolidate relevant prior chat discussion so phrases like "implement what we discussed" still carry the actual retrieval intent. Never embed context query XML/JSON in prompt. Keep execution guardrails, artifact instructions, no-edit/no-commit/no-PR constraints, and process constraints in prompt, not context_query.
 10. Interrupted reruns: if this chat has interrupted/cancelled tasks and the user asks to rerun, retry, continue, or restart that work, ask whether they want a fresh start or to resume the cancelled execution. If they choose resume, use resume_execution. If they choose fresh start, route again from the user's current intent.
 11. For product brainstorming or improvement requests about a known repo/system, first decide whether the answer depends on the existing implementation. If it does, inspect the repo first unless the user explicitly asks for product-level brainstorming only. If the user asks specifically about improving an existing product area, prefer a short repo-grounded inspection before recommendations.
 12. Keep routing details, skill choice, workflow names, and confirmation plans out of normal answers unless the user asks how work will be routed or you are proposing execution.
@@ -1515,7 +1517,32 @@ User: ${userMessage.slice(0, 500)}`;
       });
 
       const interruptedContext = await interruptedTaskContext(this.db, sessionId);
-      const allContext = [mentionContext, workspaceContext, interruptedContext].filter(Boolean).join('\n');
+      let chatRepoContextPacket: Awaited<ReturnType<ChatContextPacketService['buildChatContextPacket']>> | null = null;
+      try {
+        chatRepoContextPacket = await new ChatContextPacketService(this.db).buildChatContextPacket({
+          sessionId,
+          messageId: assistantMsgId,
+          agentName: effectiveAgent ?? 'assistant',
+          prompt: content,
+          provider: provider === 'codex' ? 'codex' : 'claude',
+          state: {
+            chatSessionId: sessionId,
+            chatMessageId: assistantMsgId,
+            repoId: session?.repoId,
+            repoPath: session?.repoPath,
+            repoName: session?.repoName,
+            repo_path: session?.repoPath,
+            worktree_path: resolvedCwd,
+            worktreePath: resolvedCwd,
+          },
+        });
+        if (chatRepoContextPacket?.packetId) {
+          console.log(`[chat-context] Resolved packet ${chatRepoContextPacket.packetId} for session ${sessionId}`);
+        }
+      } catch (err) {
+        console.warn(`[chat-context] Failed to build chat context packet: ${(err as Error).message}`);
+      }
+      const allContext = [mentionContext, workspaceContext, interruptedContext, chatRepoContextPacket?.userTurnContextBlock].filter(Boolean).join('\n');
       const enrichedContent = allContext
         ? `CONTEXT:\n${allContext}\n\nUSER MESSAGE:\n${content}`
         : content;
@@ -1714,9 +1741,21 @@ User: ${userMessage.slice(0, 500)}`;
         durationMs,
         toolCalls: entry.toolCalls,
         trace: result.trace,
+        repoKnowledgeInjected: chatRepoContextPacket?.traceSummary,
         status: 'completed',
         timestamp: new Date(),
       }).catch(() => {});
+
+      if (chatRepoContextPacket?.packetId) {
+        new ChatContextPacketService(this.db).recordChatContextUsage({
+          sessionId,
+          messageId: assistantMsgId,
+          agentName: effectiveAgent ?? 'assistant',
+          packetId: chatRepoContextPacket.packetId,
+          rawResponse: result.text,
+          toolCalls: entry.toolCalls,
+        }).catch((err) => console.warn(`[chat-context] Failed to record usage: ${(err as Error).message}`));
+      }
 
       // Save llmSessionId for session resume on next message
       const sessionUpdate: Record<string, unknown> = { updatedAt: new Date() };
@@ -2004,6 +2043,7 @@ RULES:
 10. If you don't know the answer to an agent's question, call ask_user to ask the user.
 11. NEVER respond to the user before ALL delegations are complete.
 12. Use report_to_user for progress updates. When wait_for_execution or wait_for_delegation returns status="waiting" with progress_message or activity_summary, call report_to_user with a short human-readable update before waiting again. Pass activity_cursor back as activity_since on the next wait call so updates move forward instead of repeating old activity.
+12a. Context query for spawned agents: when calling spawn_agent for repo-related work, pass a compact context_query object as a separate tool argument. Include user_request, task_type, retrieval-relevant requirements, topics, target_files/path_hints, and required_categories/preferred_categories when obvious. Consolidate relevant prior chat discussion so phrases like "implement what we discussed" still carry the actual retrieval intent. Never embed context query XML/JSON in prompt. Keep execution guardrails, artifact instructions, no-edit/no-commit/no-PR constraints, and process constraints in prompt, not context_query.
 13. RESOURCE LINKS — every PR, ticket, issue, commit, uploaded file, artifact, or deploy you mention MUST be rendered as a clickable markdown link when a URL is available. Use html_url / permalink / publicUrl from the tool response verbatim for external resources; never invent external URLs. For Allen internal resources such as workflow runs, executions, agents, and chat threads, prefer a UI link when one is provided or the route is known with confidence; otherwise present readable names/statuses and include raw IDs only when useful. Do not expose URL/tool fallback reasoning to the user.
 14. INTERRUPTED RERUNS — if this chat has interrupted/cancelled tasks and the user asks to rerun, retry, continue, or restart that work, ask whether to start fresh or resume the cancelled execution. Use resume_execution only after the user chooses resume.
 15. ARTIFACTS — when you or a spawned agent produces a standalone document (plan, design, investigation notes, CSV results, JSON config, scratch output), save it via allen_save_artifact. Files are filed under this chat session and appear in the Artifacts panel. Prefer allen_save_artifact over upload_file for in-conversation deliverables — it renders inline (markdown/JSON/CSV) and is scoped to the chat. When spawning sub-agents, tell them to save their own work the same way.

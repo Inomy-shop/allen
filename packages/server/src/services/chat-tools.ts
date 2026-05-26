@@ -117,6 +117,19 @@ const ALWAYS_ON_ALLEN_CONTEXT_TOOLS = [
   `mcp__${MCP_SERVER_NAME}__get_node_context_usage`,
 ];
 
+function stripUnsupportedInlineContextQuery(prompt: string): { prompt: string; stripped: boolean } {
+  const stripped = prompt.replace(/<allen_context_query>\s*[\s\S]*?\s*<\/allen_context_query>\s*/gi, '');
+  return {
+    prompt: stripped.trimStart(),
+    stripped: stripped !== prompt,
+  };
+}
+
+function normalizeSpawnContextQuery(value: unknown): Record<string, unknown> | undefined {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
+  return value as Record<string, unknown>;
+}
+
 // Codex CLI spawn lifecycle controls. Without these, a hung codex child
 // (or one blocked writing to stderr because nobody drains the pipe) holds
 // the spawning Promise's closure alive forever — see the workspace
@@ -950,6 +963,10 @@ const spawnAgent: ChatTool = {
     properties: {
       agent_name: { type: 'string', description: 'Name of the agent to spawn (e.g., "coding-reviewer", "coding-investigator", "coding-planner")' },
       prompt: { type: 'string', description: 'The task/prompt to send to the spawned agent' },
+      context_query: {
+        type: 'object',
+        description: 'Optional structured retrieval-only context query. This is used by the context engine and is not sent as part of the agent prompt.',
+      },
       repo_path: { type: 'string', description: 'Optional repo path for the agent to work in' },
       session_id: { type: 'string', description: 'Session ID from a previous spawn to resume with context. The agent picks up where it left off.' },
     },
@@ -957,7 +974,10 @@ const spawnAgent: ChatTool = {
   },
   async execute(args, db, context) {
     const agentName = args.agent_name as string;
-    const prompt = args.prompt as string;
+    const rawPrompt = args.prompt as string;
+    const promptSanitization = stripUnsupportedInlineContextQuery(rawPrompt);
+    const prompt = promptSanitization.prompt;
+    const contextQuery = normalizeSpawnContextQuery(args.context_query);
     const resumeSession = args.session_id as string | undefined;
 
     const role = await db.collection('agents').findOne({ name: agentName });
@@ -1041,7 +1061,13 @@ const spawnAgent: ChatTool = {
       workflowVersion: 0,
       status: 'running',
       source: parentCaller ? 'spawn' : 'chat',
-      input: { prompt, agent_name: agentName, repo_path: repoPath, session_id: resumeSession },
+      input: {
+        prompt,
+        ...(contextQuery ? { context_query: contextQuery } : {}),
+        agent_name: agentName,
+        repo_path: repoPath,
+        session_id: resumeSession,
+      },
       // Execution metadata for tracing
       meta: {
         cwd: repoPath || AGENT_FALLBACK_CWD,
@@ -1050,6 +1076,10 @@ const spawnAgent: ChatTool = {
         spawnedBy: activeCtxForMeta?.currentAgent ?? parentCaller ?? 'user',
         chatSessionId: chatSessionIdForMeta,
         parentMessageId: activeCtxForMeta?.parentMessageId,
+        contextQuery: {
+          source: contextQuery ? 'tool_arg' : 'prompt_fallback',
+          inlineBlockStripped: promptSanitization.stripped,
+        },
         repoKnowledgeParent: providedRepoKnowledgePacketId ? {
           packetId: providedRepoKnowledgePacketId,
           repoId: providedRepoKnowledgeRepoId,
@@ -1115,6 +1145,8 @@ const spawnAgent: ChatTool = {
       repoKnowledgeIndexId: providedRepoKnowledgeIndexId,
       repoKnowledgeRepoName: providedRepoKnowledgeRepoName,
       repoKnowledgeFreshness: providedRepoKnowledgeFreshness,
+      contextQuery,
+      inlineContextQueryStripped: promptSanitization.stripped,
     }, 1, context).catch(() => {});
 
     return {
@@ -1149,6 +1181,8 @@ interface SpawnTreeContext {
   repoKnowledgeIndexId?: string | null;
   repoKnowledgeRepoName?: string | null;
   repoKnowledgeFreshness?: string | null;
+  contextQuery?: Record<string, unknown>;
+  inlineContextQueryStripped?: boolean;
 }
 
 async function markSpawnCompletedUnlessTerminal(
@@ -1361,6 +1395,7 @@ async function runSpawnInBackground(
   let repoKnowledgeSystemPromptBlock = '';
   if (contextEngineEnabled && repoPath) {
     try {
+      liveLog({ type: 'started', content: 'Building repo knowledge packet' });
       const repoKnowledge = new RepoContextPacketService(db);
       const packet = await repoKnowledge.buildNodeContextPacket({
         executionId,
@@ -1373,6 +1408,7 @@ async function runSpawnInBackground(
         attempt: baseAttempt,
         state: { repo_path: repoPath, worktree_path: repoPath },
         prompt,
+        contextQuery: spawnTree?.contextQuery,
         parentPacketId: spawnTree?.repoKnowledgePacketId ?? undefined,
         parentExecutionId: spawnTree?.parentExecutionId ?? undefined,
         rootExecutionId: spawnTree?.rootExecutionId ?? executionId,
@@ -1382,8 +1418,11 @@ async function runSpawnInBackground(
         repoKnowledgeSystemPromptBlock = packet.systemPromptBlock ?? '';
         repoKnowledgePacketSummary = packet.traceSummary;
         liveLog({ type: 'started', content: `Resolved repo knowledge packet ${packet.packetId}` });
+      } else {
+        liveLog({ type: 'started', content: 'No repo knowledge packet resolved before agent start' });
       }
     } catch (err) {
+      liveLog({ type: 'started', content: `Repo knowledge packet build failed: ${(err as Error).message}` });
       logger.warn('[spawn] failed to build repo knowledge packet', { executionId, agentName, error: (err as Error).message });
     }
   }
@@ -1428,11 +1467,11 @@ async function runSpawnInBackground(
   let currentResumeSession = resumeSession;
 
   for (let attempt = 0; attempt <= MAX_SPAWN_RETRIES; attempt++) {
-  try {
-    let response = '';
-    let costUsd = 0;
-    let sessionId: string | undefined = currentResumeSession;
-    const toolCalls: { tool: string; args: Record<string, unknown>; result?: Record<string, unknown> }[] = [];
+    let toolCalls: { tool: string; args: Record<string, unknown>; result?: Record<string, unknown> }[] = [];
+    try {
+      let response = '';
+      let costUsd = 0;
+      let sessionId: string | undefined = currentResumeSession;
 
     // On retry, update prompt to "continue"
     if (attempt > 0) {
@@ -2034,7 +2073,7 @@ async function runSpawnInBackground(
     // collide with the base attempt of the run that spawned it.
     await db.collection('execution_traces').insertOne({
       executionId, executionTraceId, node: agentName, attempt: baseAttempt + attempt, status: 'completed', type: 'agent', agent: agentName,
-      inputState: { prompt: initialRenderedPrompt }, renderedPrompt: initialRenderedPrompt, rawResponse: response,
+      inputState: { prompt: initialRenderedPrompt, ...(spawnTree?.contextQuery ? { context_query: spawnTree.contextQuery } : {}) }, renderedPrompt: initialRenderedPrompt, rawResponse: response,
       output: traceOutput,
       toolCalls,
       activity: activity.map(a => ({ ...a, type: a.type as any, content: a.tool ?? '' })),
@@ -2074,8 +2113,126 @@ async function runSpawnInBackground(
       { projection: { status: 1 } },
     ).catch(() => null);
     if (currentExec?.status === 'cancelled') {
+      const cancelledOutput: Record<string, unknown> = { cancelled: true, reason: errorMsg, session_id: failedSessionId };
+      const executionTraceId = randomUUID();
+      let contextUsageTrace: { traceId?: string; preselectedCount?: number; loadedCount: number; appliedCount: number; skippedCount: number } | null = null;
+      let contextEvaluationId: string | undefined;
+      if (repoKnowledgePacketSummary) {
+        try {
+          const repoKnowledge = new RepoContextPacketService(db);
+          const recordedUsage = await repoKnowledge.recordContextUsage({
+            executionId,
+            executionTraceId,
+            workflowName: spawnTree?.parentCaller ? `${spawnTree.parentCaller}:spawn_agent/${agentName}` : `chat:spawn_agent/${agentName}`,
+            nodeName: agentName,
+            nodeRole: agentName,
+            executionKind: 'spawned_agent',
+            targetRole: agentName,
+            callerRole: spawnTree?.parentCaller ?? undefined,
+            attempt: baseAttempt + attempt,
+            packetId: repoKnowledgePacketSummary.packetId,
+            outputs: cancelledOutput,
+            rawResponse: '',
+            toolCalls,
+            parentPacketId: spawnTree?.repoKnowledgePacketId ?? null,
+            parentExecutionId: spawnTree?.parentExecutionId ?? null,
+            rootExecutionId: spawnTree?.rootExecutionId ?? executionId,
+            parentNodeName: spawnTree?.parentCaller ?? undefined,
+            agentName,
+          });
+          contextUsageTrace = recordedUsage ? {
+            traceId: recordedUsage.traceId,
+            preselectedCount: recordedUsage.preselectedCount,
+            loadedCount: recordedUsage.loadedCount,
+            appliedCount: recordedUsage.appliedCount,
+            skippedCount: recordedUsage.skippedCount,
+          } : null;
+          contextEvaluationId = typeof recordedUsage?.contextEvaluation?.evaluationId === 'string'
+            ? recordedUsage.contextEvaluation.evaluationId
+            : typeof recordedUsage?.contextEvaluation?.traceId === 'string'
+              ? recordedUsage.contextEvaluation.traceId
+              : undefined;
+          if (recordedUsage?.repoContextUsage && !hasMeaningfulRepoContextUsage(cancelledOutput.repo_context_usage)) {
+            cancelledOutput.repo_context_usage = recordedUsage.repoContextUsage;
+          }
+        } catch (usageErr) {
+          logger.warn('[spawn] failed to record repo knowledge usage for cancelled run', { executionId, agentName, error: (usageErr as Error).message });
+        }
+      }
+      await db.collection('execution_traces').updateOne(
+        { executionId, node: agentName, attempt: baseAttempt + attempt },
+        {
+          $set: {
+            executionId, executionTraceId, node: agentName, attempt: baseAttempt + attempt, status: 'cancelled', type: 'agent', agent: agentName,
+            inputState: { prompt: initialRenderedPrompt, ...(spawnTree?.contextQuery ? { context_query: spawnTree.contextQuery } : {}) }, renderedPrompt: initialRenderedPrompt, rawResponse: '',
+            output: cancelledOutput,
+            toolCalls,
+            activity: activity.map(a => ({ ...a, type: a.type as any, content: a.tool ?? '' })),
+            contextAttemptId: repoKnowledgePacketSummary?.packetId,
+            contextUsageTraceId: contextUsageTrace?.traceId,
+            contextEvaluationId,
+            runtimeContext: {
+              repoContextLoadingGuidancePresent,
+              repoContextLoadingGuidanceInjected,
+              mandatoryRepoContextInjected: Boolean(repoKnowledgeSystemPromptBlock),
+              mandatoryRepoContextInjectedCount: repoKnowledgePacketSummary?.mandatoryContextInjectedCount,
+              mandatoryRepoContextSkippedProviderNativeCount: repoKnowledgePacketSummary?.mandatoryContextSkippedProviderNativeCount,
+              mandatoryRepoContextTargetLayer: provider === 'codex' && repoKnowledgeSystemPromptBlock ? 'codex_prompt_instruction_prefix' : repoKnowledgePacketSummary?.mandatoryContextTargetLayer,
+            },
+            cost: { actual: 0, estimated: 0, model, method: 'sdk_reported' as const },
+            durationMs, startedAt: new Date(startMs), completedAt: new Date(),
+          },
+        },
+        { upsert: true },
+      );
       if (activeCtx) activeCtx.pendingBackgroundTasks--;
       return;
+    }
+    const failedTraceOutput: Record<string, unknown> = { error: errorMsg, session_id: failedSessionId };
+    const executionTraceId = randomUUID();
+    let contextUsageTrace: { traceId?: string; preselectedCount?: number; loadedCount: number; appliedCount: number; skippedCount: number } | null = null;
+    let contextEvaluationId: string | undefined;
+    if (repoKnowledgePacketSummary) {
+      try {
+        const repoKnowledge = new RepoContextPacketService(db);
+        const recordedUsage = await repoKnowledge.recordContextUsage({
+          executionId,
+          executionTraceId,
+          workflowName: spawnTree?.parentCaller ? `${spawnTree.parentCaller}:spawn_agent/${agentName}` : `chat:spawn_agent/${agentName}`,
+          nodeName: agentName,
+          nodeRole: agentName,
+          executionKind: 'spawned_agent',
+          targetRole: agentName,
+          callerRole: spawnTree?.parentCaller ?? undefined,
+          attempt: baseAttempt + attempt,
+          packetId: repoKnowledgePacketSummary.packetId,
+          outputs: failedTraceOutput,
+          rawResponse: '',
+          toolCalls,
+          parentPacketId: spawnTree?.repoKnowledgePacketId ?? null,
+          parentExecutionId: spawnTree?.parentExecutionId ?? null,
+          rootExecutionId: spawnTree?.rootExecutionId ?? executionId,
+          parentNodeName: spawnTree?.parentCaller ?? undefined,
+          agentName,
+        });
+        contextUsageTrace = recordedUsage ? {
+          traceId: recordedUsage.traceId,
+          preselectedCount: recordedUsage.preselectedCount,
+          loadedCount: recordedUsage.loadedCount,
+          appliedCount: recordedUsage.appliedCount,
+          skippedCount: recordedUsage.skippedCount,
+        } : null;
+        contextEvaluationId = typeof recordedUsage?.contextEvaluation?.evaluationId === 'string'
+          ? recordedUsage.contextEvaluation.evaluationId
+          : typeof recordedUsage?.contextEvaluation?.traceId === 'string'
+            ? recordedUsage.contextEvaluation.traceId
+            : undefined;
+        if (recordedUsage?.repoContextUsage && !hasMeaningfulRepoContextUsage(failedTraceOutput.repo_context_usage)) {
+          failedTraceOutput.repo_context_usage = recordedUsage.repoContextUsage;
+        }
+      } catch (usageErr) {
+        logger.warn('[spawn] failed to record repo knowledge usage for failed run', { executionId, agentName, error: (usageErr as Error).message });
+      }
     }
     await db.collection('executions').updateOne(
       { id: executionId },
@@ -2085,11 +2242,14 @@ async function runSpawnInBackground(
       } },
     );
     await db.collection('execution_traces').insertOne({
-      executionId, executionTraceId: randomUUID(), node: agentName, attempt: baseAttempt + attempt, status: 'failed', type: 'agent', agent: agentName,
-      inputState: { prompt: initialRenderedPrompt }, renderedPrompt: initialRenderedPrompt, rawResponse: '',
-      output: { error: errorMsg, session_id: failedSessionId },
+      executionId, executionTraceId, node: agentName, attempt: baseAttempt + attempt, status: 'failed', type: 'agent', agent: agentName,
+      inputState: { prompt: initialRenderedPrompt, ...(spawnTree?.contextQuery ? { context_query: spawnTree.contextQuery } : {}) }, renderedPrompt: initialRenderedPrompt, rawResponse: '',
+      output: failedTraceOutput,
+      toolCalls,
       activity: activity.map(a => ({ ...a, type: a.type as any, content: a.tool ?? '' })),
       contextAttemptId: repoKnowledgePacketSummary?.packetId,
+      contextUsageTraceId: contextUsageTrace?.traceId,
+      contextEvaluationId,
       runtimeContext: {
         repoContextLoadingGuidancePresent,
         repoContextLoadingGuidanceInjected,
@@ -2113,6 +2273,7 @@ async function runSpawnInBackground(
 // Test-injection seam — allows unit tests to spy on runSpawnInBackground.
 // The function is called via __internalsForTest so tests can replace the reference.
 export const __internalsForTest = {
+  stripUnsupportedInlineContextQuery,
   runSpawnInBackground: (...args: Parameters<typeof runSpawnInBackground>) =>
     runSpawnInBackground(...args),
   markSpawnCompletedUnlessTerminal,
