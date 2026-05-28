@@ -45,6 +45,14 @@ extraResources:
       - '**/*'
       - '!.gitkeep'
       - '!.gitignore'
+  - from: scripts/setup-context-engine.sh
+    to: scripts/setup-context-engine.sh
+  - from: packages/server/src/scripts/cognee-context-provider.py
+    to: server-scripts/cognee-context-provider.py
+  - from: packages/server/src/scripts/cognee_context_provider
+    to: server-scripts/cognee_context_provider
+    filter:
+      - '**/*.py'
 
 asar: true
 asarUnpack:

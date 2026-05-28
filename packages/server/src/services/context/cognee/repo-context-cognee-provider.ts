@@ -732,7 +732,9 @@ function normalizeKind(value: unknown): KnowledgeNodeKind {
 function resolveCogneeScript(): string {
   if (process.env.ALLEN_COGNEE_SIDECAR_SCRIPT) return process.env.ALLEN_COGNEE_SIDECAR_SCRIPT;
   const here = dirname(fileURLToPath(import.meta.url));
+  const resourcesPath = (process as NodeJS.Process & { resourcesPath?: string }).resourcesPath;
   const candidates = [
+    ...(resourcesPath ? [join(resourcesPath, 'server-scripts/cognee-context-provider.py')] : []),
     join(here, '../../../scripts/cognee-context-provider.py'),
     ...(process.env.ALLEN_DESKTOP === '1' ? [join(here, '../../../../src/scripts/cognee-context-provider.py')] : []),
     join(process.cwd(), 'packages/server/src/scripts/cognee-context-provider.py'),

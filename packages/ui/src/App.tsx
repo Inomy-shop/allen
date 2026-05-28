@@ -152,7 +152,6 @@ function AppTopbar({
   commandOpen,
   onCommandOpen,
   onRunningOpen,
-  onApprovalsOpen,
   onSidebarToggle,
   onBack,
   canGoBack,
@@ -167,7 +166,6 @@ function AppTopbar({
   commandOpen: boolean;
   onCommandOpen: () => void;
   onRunningOpen: () => void;
-  onApprovalsOpen: () => void;
   onSidebarToggle: () => void;
   onBack: () => void;
   canGoBack: boolean;
@@ -221,15 +219,13 @@ function AppTopbar({
           <span className={`dot ${liveCount > 0 ? 'dot-run' : 'dot-idle'} ${liveCount > 0 ? 'animate-pulse' : ''}`} />
           {liveCount} running
         </button>
-        <button
-          type="button"
-          onClick={onApprovalsOpen}
+        <span
           className="chip topbar-chip"
           title="Pending approvals and questions"
         >
           <span className={`dot ${approvalCount > 0 ? 'dot-warn' : 'dot-idle'}`} />
           {approvalCount} approvals
-        </button>
+        </span>
         <span className={healthy ? 'chip topbar-chip chip-ok' : 'chip topbar-chip chip-warn'}>
           <span className={healthy ? 'dot dot-ok' : 'dot dot-warn'} />
           {healthy ? 'Connected' : 'Reconnecting'}
@@ -802,7 +798,6 @@ export default function App() {
           commandOpen={commandOpen}
           onCommandOpen={() => setCommandOpen(true)}
           onRunningOpen={() => navigate('/executions?status=running')}
-          onApprovalsOpen={() => navigate('/interventions')}
           onSidebarToggle={navPanel.toggle}
           onBack={() => navigate(-1)}
           canGoBack={canGoBack}

@@ -453,7 +453,9 @@ function updateRuntimeProviderValue(key: string, value: string | undefined): voi
 
 function findContextSetupScript(): string | null {
   const here = dirname(fileURLToPath(import.meta.url));
+  const resourcesPath = (process as NodeJS.Process & { resourcesPath?: string }).resourcesPath;
   const candidates = [
+    ...(resourcesPath ? [resolve(resourcesPath, 'scripts/setup-context-engine.sh')] : []),
     resolve(process.cwd(), 'scripts/setup-context-engine.sh'),
     resolve(process.cwd(), '../../scripts/setup-context-engine.sh'),
     resolve(here, '../../../../scripts/setup-context-engine.sh'),
